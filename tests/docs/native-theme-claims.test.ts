@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Tripwires for the three cross-boundary claims #992 rev2 introduced, none of
- * which any compiler or type-checker can see.
+ * Tripwires for the cross-boundary claims #992 introduced, none of which any
+ * compiler or type-checker can see.
  *
  *  1. **The command name.** `set_native_theme` is a bare string on the client
  *     (`invoke("set_native_theme", …)`) and an identifier in Rust
@@ -67,7 +67,7 @@ function rustFnBody(src: string, name: string): string {
   throw new Error(`unbalanced braces in fn ${name}`);
 }
 
-describe("native theme (#992 rev2) cross-boundary claims", () => {
+describe("native theme (#992) cross-boundary claims", () => {
   it("every Tauri command this hook invokes is defined and registered in Rust", () => {
     const client = readFileSync(CLIENT_HOOK, "utf-8");
 
@@ -80,10 +80,19 @@ describe("native theme (#992 rev2) cross-boundary claims", () => {
     const invoked = [
       ...new Set([...client.matchAll(/\binvoke(?:<[^>]*>)?\(\s*"([a-z_]+)"/g)].map((m) => m[1])),
     ];
-    expect(
-      invoked,
-      "useTauriTheme.svelte.ts no longer contains any invoke() call",
-    ).not.toHaveLength(0);
+    // Name the commands we care about explicitly. A non-empty floor is NOT a
+    // substitute: hoisting the command to `const PUSH_CMD = "set_native_theme"`
+    // and calling `invoke(PUSH_CMD, …)` — an ordinary refactor — drops it from
+    // this extraction entirely, and the floor still passed on the remaining
+    // `invoke<string>("get_app_theme")` literal. Measured; this file's own
+    // header calls that the highest-value guard here, and it was off.
+    for (const required of ["set_native_theme", "get_app_theme"]) {
+      expect(
+        invoked,
+        `${required} is no longer invoked as a string literal in useTauriTheme.svelte.ts — ` +
+          "if it moved to a constant, this extraction stopped covering it",
+      ).toContain(required);
+    }
 
     const handlerStart = RUST.indexOf("tauri::generate_handler![");
     expect(handlerStart, "lib.rs no longer calls tauri::generate_handler!").toBeGreaterThan(-1);
@@ -96,6 +105,60 @@ describe("native theme (#992 rev2) cross-boundary claims", () => {
         new RegExp(`#\\[tauri::command\\][\\s\\S]{0,200}?\\bfn ${command}\\s*\\(`),
       );
       expect(handlerList, `${command} is not registered in generate_handler!`).toContain(command);
+    }
+  });
+
+  it("the set_native_theme argument name matches the Rust parameter", () => {
+    // `invoke("set_native_theme", { theme: pref })` on one side,
+    // `fn set_native_theme(window, theme: String)` on the other. Rename either
+    // and Tauri's argument deserialization fails at runtime — where the push's
+    // `.catch(console.warn)` swallows it, in a release build with no reachable
+    // console. Measured: renaming the Rust parameter to `pref` passed all
+    // three tests in this file.
+    const client = readFileSync(CLIENT_HOOK, "utf-8");
+    const call = client.match(/invoke(?:<[^>]*>)?\(\s*"set_native_theme"\s*,\s*\{([^}]*)\}/);
+    expect(call, "no invoke('set_native_theme', { … }) call found").not.toBeNull();
+    const argKeys = [...(call?.[1] ?? "").matchAll(/(\w+)\s*:/g)].map((m) => m[1]);
+    expect(argKeys.length, "extracted no argument keys — the parser broke").toBeGreaterThan(0);
+
+    const sig = RUST.match(/fn set_native_theme\(([\s\S]*?)\)\s*->/);
+    expect(sig, "lib.rs no longer declares fn set_native_theme(..) -> ..").not.toBeNull();
+    // Only a name at the start of a parameter, followed by a SINGLE colon —
+    // otherwise `window: tauri::WebviewWindow` also yields "tauri" from the
+    // path separator. Then drop the injected `window`, which Tauri supplies
+    // and which is not part of the JS payload.
+    const rustParams = [...(sig?.[1] ?? "").matchAll(/(?:^|,)\s*(\w+)\s*:(?!:)/g)]
+      .map((m) => m[1])
+      .filter((n) => n !== "window");
+    expect(rustParams.length, "extracted no Rust parameters — the parser broke").toBeGreaterThan(0);
+
+    expect([...argKeys].sort()).toEqual([...rustParams].sort());
+  });
+
+  it("NativeThemeOutcome is serialized camelCase, matching the keys the client reads", () => {
+    // The nastiest silent failure in this feature. Drop
+    // `#[serde(rename_all = "camelCase")]` and Rust sends `override_active` /
+    // `os_theme` while the client reads `outcome.overrideActive` — `undefined`,
+    // which is falsy, so the macOS override gate is off FOREVER and `osTheme`
+    // never writes through. The promise still resolves, so nothing logs and
+    // nothing throws. Measured: removing the attribute passed everything.
+    const struct = RUST.match(/((?:#\[[^\]]*\]\s*)*)struct NativeThemeOutcome\s*\{([\s\S]*?)\n\}/);
+    expect(struct, "lib.rs no longer declares struct NativeThemeOutcome").not.toBeNull();
+    expect(struct?.[1] ?? "", "NativeThemeOutcome lost its camelCase serde rename").toMatch(
+      /rename_all\s*=\s*"camelCase"/,
+    );
+
+    const rustFields = [...(struct?.[2] ?? "").matchAll(/^\s*(?:pub\s+)?(\w+)\s*:/gm)].map(
+      (m) => m[1],
+    );
+    expect(rustFields.length, "extracted no struct fields — the parser broke").toBeGreaterThan(1);
+    const camel = rustFields.map((f) => f.replace(/_(\w)/g, (_m, c: string) => c.toUpperCase()));
+
+    // Every serialized key must be one the client actually reads, so a field
+    // rename on either side is caught rather than silently read as undefined.
+    const client = readFileSync(CLIENT_HOOK, "utf-8");
+    for (const key of camel) {
+      expect(client, `the client never reads outcome.${key}`).toContain(key);
     }
   });
 

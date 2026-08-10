@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemTheme } from "../../src/client/hooks/useTheme.svelte.js";
 
-// B0 (#1362 rev2): a `vi.doMock` used to override this mock for a single
+// (#992) a `vi.doMock` used to override this mock for a single
 // test survived `vi.resetModules()` for the REST of the file, so every
 // later `.mockReturnValue()` call on the statically-imported spy configured
 // a DIFFERENT module instance than the one the freshly re-imported SUT
@@ -125,12 +125,40 @@ describe("useTauriTheme", () => {
     vi.resetModules();
   });
 
-  it("_resetForTests() also clears window.__TANDEM_INITIAL_THEME__ and resets _initialized", async () => {
+  it("_resetForTests() clears window.__TANDEM_INITIAL_THEME__", async () => {
     isTauri.mockReturnValue(false);
     vi.stubGlobal("window", { __TANDEM_INITIAL_THEME__: "dark" });
     const { _resetForTests } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
     _resetForTests();
     expect((window as any).__TANDEM_INITIAL_THEME__).toBeUndefined();
+  });
+
+  it("_resetForTests() resets _initialized so initTauriTheme can run again", async () => {
+    // The name of the test above used to claim this too, while asserting only
+    // the window seed. Without the `_initialized = false` reset, the bridge is
+    // un-reinitializable after the first test that touches it, and every later
+    // test in a file silently shares one initialization.
+    isTauri.mockReturnValue(true);
+    const core = await import("@tauri-apps/api/core");
+    const invoke = vi.mocked(core.invoke) as unknown as { mock: { calls: unknown[][] } };
+    vi.mocked(core.invoke).mockClear();
+    const { initTauriTheme, _resetForTests } = await import(
+      "../../src/client/hooks/useTauriTheme.svelte.js"
+    );
+    vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+
+    initTauriTheme();
+    await flushAsync();
+    expect(callsFor(invoke, "get_app_theme")).toHaveLength(1);
+
+    initTauriTheme(); // guarded by _initialized — must not re-run
+    await flushAsync();
+    expect(callsFor(invoke, "get_app_theme")).toHaveLength(1);
+
+    _resetForTests();
+    initTauriTheme();
+    await flushAsync();
+    expect(callsFor(invoke, "get_app_theme")).toHaveLength(2);
   });
 
   it("initTauriTheme() writes through to window.__TANDEM_INITIAL_THEME__ on invoke resolve", async () => {
@@ -163,7 +191,7 @@ describe("useTauriTheme", () => {
   });
 
   it("_resetForTests() clears the 3s poll interval so it does not leak across tests", async () => {
-    // Pre-existing leak (#1362 rev2, B5): initTauriTheme's setInterval was
+    // Pre-existing leak (#992): initTauriTheme's setInterval was
     // never captured/cleared by _resetForTests, so every test that called
     // initTauriTheme left a live timer ticking into the next test — exactly
     // what a filtered call-count assertion elsewhere in this file would
@@ -199,7 +227,7 @@ describe("useTauriTheme", () => {
   });
 });
 
-describe("setNativeTheme (#992 rev2)", () => {
+describe("setNativeTheme (#992)", () => {
   let invoke: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
@@ -259,7 +287,7 @@ describe("setNativeTheme (#992 rev2)", () => {
     expect(callsFor(invoke, "set_native_theme")).toHaveLength(1);
   });
 
-  it("rolls back the dedupe latch on rejection, so a retry is not silently swallowed", async () => {
+  it("clears the dedupe latch on rejection, so a retry is not silently swallowed", async () => {
     const { setNativeTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
     invoke.mockImplementationOnce(() => Promise.reject(new Error("ipc failed")));
 
@@ -267,12 +295,67 @@ describe("setNativeTheme (#992 rev2)", () => {
     await flushAsync();
     expect(callsFor(invoke, "set_native_theme")).toHaveLength(1);
 
-    // Rev1 regression: committing lastPushedPref before the await meant this
-    // second call — the SAME pref, retried after a failure — was silently
-    // deduped away forever. It must go through again.
+    // Committing lastPushedPref before the await, with no clear on failure,
+    // meant this second call — the SAME pref, retried after a failure — was
+    // silently deduped away forever. It must go through again.
     setNativeTheme("dark");
     await flushAsync();
     expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
+  });
+
+  it("clears the latch even when the rejection is already superseded", async () => {
+    // The wedge the seq-guarded rollback left open. A(dark) and B(light) are
+    // both in flight; B rejects first and (under the old code) restored the
+    // latch to "dark", then A's rejection was skipped as stale and restored
+    // nothing. The latch then claimed "dark" — a value that never landed —
+    // and re-picking dark was deduped away permanently.
+    const { setNativeTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+    let rejectA!: (e: Error) => void;
+    let rejectB!: (e: Error) => void;
+    invoke.mockImplementationOnce(() => new Promise((_r, rej) => (rejectA = rej)));
+    setNativeTheme("dark"); // seq 1
+    invoke.mockImplementationOnce(() => new Promise((_r, rej) => (rejectB = rej)));
+    setNativeTheme("light"); // seq 2 supersedes
+    await flushAsync();
+    expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
+
+    rejectB(new Error("b failed"));
+    await flushAsync();
+    rejectA(new Error("a failed")); // stale — but still invalidates the latch
+    await flushAsync();
+
+    const before = callsFor(invoke, "set_native_theme").length;
+    setNativeTheme("dark");
+    await flushAsync();
+    expect(callsFor(invoke, "set_native_theme").length).toBeGreaterThan(before);
+  });
+
+  it("does not touch overrideActive on a rejected push", async () => {
+    // A rejected push means the native override state is UNKNOWN. Clearing
+    // the flag would open the read-back gate onto a possibly still-forced
+    // appearance, and the poll would then write an echo of our own force in
+    // as if it were an OS reading.
+    const { setNativeTheme, initTauriTheme } = await import(
+      "../../src/client/hooks/useTauriTheme.svelte.js"
+    );
+    vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_app_theme") return Promise.resolve("light");
+      return Promise.resolve({ overrideActive: true, osTheme: null });
+    });
+    initTauriTheme();
+    setNativeTheme("dark"); // resolves with overrideActive: true
+    await flushAsync();
+
+    // Now a release that fails before the native override is actually let go.
+    invoke.mockImplementationOnce(() => Promise.reject(new Error("release failed")));
+    setNativeTheme("system");
+    await flushAsync();
+
+    // The gate must still be shut: this echo of the forced theme is discarded.
+    themeChangedCapture.current?.({ payload: "dark" });
+    await flushAsync();
+    expect(systemTheme()).toBe("light");
   });
 
   it("discards a stale resolved outcome once superseded by a later push", async () => {
@@ -292,8 +375,12 @@ describe("setNativeTheme (#992 rev2)", () => {
     setNativeTheme("system"); // seq 2 — different pref, so this issues too
     await flushAsync();
 
-    // Resolve the FIRST (now-stale) push with a contradictory outcome.
-    resolveFirst({ overrideActive: true, osTheme: null });
+    // Resolve the FIRST (now-stale) push with an outcome that CONTRADICTS
+    // seq 2's. `osTheme: null` here would make the assertion below pass
+    // whether or not the staleness guard exists — the un-guarded path would
+    // write nothing either way — which is exactly how this test used to pass
+    // for the wrong reason.
+    resolveFirst({ overrideActive: true, osTheme: "dark" });
     await flushAsync();
 
     // seq 2's outcome must win — seq 1's is discarded, not applied.
