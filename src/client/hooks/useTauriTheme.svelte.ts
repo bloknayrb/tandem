@@ -11,17 +11,23 @@ declare global {
 }
 
 /**
- * Response shape for the `set_native_theme` Tauri command (#992 rev2).
+ * Response shape for the `set_native_theme` Tauri command (#992).
  * `osTheme` is non-null ONLY when `overrideActive` is false — i.e. only when
  * the reading is authoritative, because Rust reads `window.theme()` AFTER
  * applying/releasing the override. That is the mechanism that lets a
  * transition back to `"system"` resolve correctly in the SAME round trip
  * instead of waiting on the 3s poll below (see `setNativeTheme`).
+ *
+ * Expressed as a discriminated union rather than a flat struct so that
+ * contract is enforced by the compiler instead of by this comment:
+ * `{ overrideActive: true, osTheme: "dark" }` is exactly the pair that would
+ * write an echo of our own force into `tauriTheme.current`, and it must not
+ * type-check. Serde cannot express this from the Rust side's flat struct, but
+ * TypeScript is the consumer and is free to be stricter than the producer.
  */
-interface NativeThemeOutcome {
-  overrideActive: boolean;
-  osTheme: "light" | "dark" | null;
-}
+type NativeThemeOutcome =
+  | { overrideActive: true; osTheme: null }
+  | { overrideActive: false; osTheme: "light" | "dark" | null };
 
 class TauriThemeStore {
   current = $state<ResolvedTheme | null>(
@@ -33,7 +39,13 @@ export const tauriTheme = new TauriThemeStore();
 
 let _initialized = false;
 
-// ----- Module-scope push/read-back state (#992 rev2, B1-B3) ---------------
+// ----- Module-scope push/read-back state (#992) ---------------------------
+//
+// NOTE: these encode one concept — the state of the push pipeline — as
+// separate fields whose cross-invariants are held by the comments below
+// rather than by the types. #1369 restructures them into `inFlight` /
+// `lastResolved`, which makes those invariants structural. Do that BEFORE
+// adding another variable here, not after.
 //
 // One cached `invoke` import, reused by both the initial `get_app_theme`
 // fetch/poll (in `initTauriTheme`) and every `setNativeTheme` push, instead
@@ -41,9 +53,7 @@ let _initialized = false;
 let invokePromise: Promise<InvokeFn> | null = null;
 
 // The 3s poll interval handle, held here (not just closed over inside
-// `initTauriTheme`) so `_resetForTests()` can clear it. Pre-existing leak:
-// nothing cleared this between tests, so every test that called
-// `initTauriTheme()` left a live timer ticking into the next one.
+// `initTauriTheme`) so `_resetForTests()` can clear it.
 let pollIntervalHandle: ReturnType<typeof setInterval> | null = null;
 
 // Monotonic counter, bumped on every `setNativeTheme` call. Doubles as a
@@ -52,20 +62,47 @@ let pollIntervalHandle: ReturnType<typeof setInterval> | null = null;
 // issue time — see `acceptReadback` below.
 let pushSeq = 0;
 
-// The last preference sent to `set_native_theme` (dedupe latch). Set
-// optimistically, before the `invoke` settles, so a rerun while a push is
-// still in flight short-circuits instead of duplicating it — and rolled
-// back in the `.catch` so a rejected push never leaves the latch claiming a
-// preference the native layer did not receive. Optimistic WITHOUT the
-// rollback was a blocking rev1 finding: one rejected invoke during early
-// boot would have permanently deduped away every retry.
+// The last preference sent to `set_native_theme` (dedupe latch), set
+// optimistically before the `invoke` settles so a rerun while a push is
+// still in flight short-circuits instead of duplicating it.
+//
+// On rejection it is cleared to `null` — NOT restored to its previous value.
+// Restoring the previous value is a *guess* that the failed push never
+// landed, and the guess inverts in the case that actually happens: a
+// `recv_timeout` in Rust's `apply_app_mode` abandons the wait but does not
+// cancel the queued closure, so the mode can apply a moment later. The latch
+// would then claim the old preference while the OS holds the new one, and
+// re-picking the old one would be deduped away forever. `null` means "no
+// claim", which is the only honest state after a failure and guarantees the
+// next push proceeds whatever its value.
 let lastPushedPref: ThemePreference | null = null;
 
-// Mirrors the last-resolved outcome's `overrideActive`. Gates read-backs
-// (see `acceptReadback`) so an OS notification arriving while an explicit
-// override is forced (macOS only — Windows always resolves `false` per the
-// rev2 platform contract) isn't mistaken for a real user-driven OS change.
+// Mirrors the last-RESOLVED outcome's `overrideActive`, and is never written
+// from a rejected push: it describes what the native layer actually did, which
+// is precisely what the client cannot guess. Gates read-backs (see
+// `acceptReadback`) so an OS notification arriving while an explicit override
+// is forced (macOS only — Windows always resolves `false`) isn't mistaken for
+// a real user-driven OS change.
 let overrideActive = false;
+
+// Bounded retry for a rejected push. Without this, a failed *release* would
+// leave `overrideActive` true, which suppresses both the 3s poll and every
+// `onThemeChanged` — so `tauriTheme.current` would stop moving and the app's
+// own `data-theme` would stop following the OS for the rest of the session.
+// Capped and cancelled on supersession so a persistently failing invoke
+// cannot hot-loop.
+const MAX_PUSH_RETRIES = 3;
+const RETRY_BASE_MS = 500;
+let retryHandle: ReturnType<typeof setTimeout> | null = null;
+let retryAttempts = 0;
+
+/** Cancels a scheduled push retry, if any. Idempotent. */
+function cancelRetry(): void {
+  if (retryHandle !== null) {
+    clearTimeout(retryHandle);
+    retryHandle = null;
+  }
+}
 
 /** Stops the 3s poll if it is running. Idempotent. */
 function stopPoll(): void {
@@ -83,6 +120,8 @@ export function _resetForTests(): void {
   pushSeq = 0;
   lastPushedPref = null;
   overrideActive = false;
+  retryAttempts = 0;
+  cancelRetry();
   stopPoll();
   if (typeof window !== "undefined") window.__TANDEM_INITIAL_THEME__ = undefined;
 }
@@ -158,12 +197,14 @@ function acceptReadback(seqAtIssue: number, next: "light" | "dark"): void {
 /**
  * Pushes the app's theme preference to the native window (#992) so real OS
  * surfaces match an explicit override instead of always following the OS.
- * Per the rev2 platform contract: on Windows this forces the process-wide
- * uxtheme app mode (context menus, tray menu, common dialogs, scrollbars)
- * but `overrideActive` always comes back `false` (`window.theme()` stays
- * honest, since nothing there tracks a Tandem-specific override); on macOS
- * it forces `NSApp.appearance` app-wide and `overrideActive` is `true`
- * while an explicit theme is set; on Linux this is a no-op (#1363). Called
+ * Per the platform contract: on Windows this forces the process-wide
+ * uxtheme app mode (context menus and the tray menu) but `overrideActive`
+ * always comes back `false` (`window.theme()` stays honest -- tao reads the
+ * `AppsUseLightTheme` registry value before consulting uxtheme, so our app
+ * mode cannot echo into it); on macOS it forces `NSApp.appearance` app-wide
+ * and `overrideActive` is `true` while an explicit theme is set; on Linux
+ * the Rust side resolves to a no-op action (#1363) -- the client pushes
+ * identically on every platform. Called
  * on every `settings.theme` change: an explicit preference forces that
  * theme, and `"system"` clears the override so native surfaces resume
  * following the OS -- the raw, UNRESOLVED `ThemePreference` is sent
@@ -173,38 +214,47 @@ function acceptReadback(seqAtIssue: number, next: "light" | "dark"): void {
  * `lastPushedPref` dedupes so the effect this feeds (`createTheme`'s merged
  * `$effect`, which also reruns on `lightVariant` churn) doesn't re-push an
  * unchanged preference. It is set OPTIMISTICALLY, before the `invoke`
- * settles, so a rerun while a push is still in flight short-circuits rather
- * than duplicating it -- and the `.catch` rolls it back, so the very next
- * call (the user re-picking the same theme, or the effect re-running) is
- * not silently swallowed by a latch describing a push that never landed.
- * `overrideActive` is the opposite: only ever assigned from a RESOLVED
- * outcome, because it describes what the native layer actually DID, and
- * that is precisely what the client must not guess -- Linux skips the push
- * entirely and Windows High Contrast declines to force. Optimistic without
- * the rollback was a blocking rev1 finding: it would have frozen both the
- * retry path and the OS read-back gate above.
+ * settles, and cleared to `null` on rejection -- see its declaration for why
+ * `null` rather than the previous value. `overrideActive` is deliberately
+ * NOT touched on rejection: a failed push means the native override state is
+ * UNKNOWN, and leaving read-backs suppressed is stale-but-recoverable, where
+ * admitting an echo of a force we may not have released is corrupt and
+ * self-reinforcing via the poll.
+ *
+ * Note the latch does not prevent duplicate *concurrent* pushes: a stale
+ * rejection can clear it while a newer push is still in flight. That is
+ * harmless -- the native operation is idempotent.
  */
 export function setNativeTheme(pref: ThemePreference): void {
   if (!isTauriRuntime() || pref === lastPushedPref) return;
   const seq = ++pushSeq;
-  const prev = lastPushedPref;
+  cancelRetry(); // a newer push supersedes any pending retry
   lastPushedPref = pref;
   getInvoke()
     .then((invoke) => invoke<NativeThemeOutcome>("set_native_theme", { theme: pref }))
     .then((outcome) => {
       if (seq !== pushSeq) return; // superseded by a later push -- discard
       overrideActive = outcome.overrideActive;
+      retryAttempts = 0;
       // Authoritative: Rust reads the theme AFTER applying/releasing the
       // override, so on release this is already correct as part of THIS
       // round trip -- no need to wait on the 3s poll (acceptReadback above).
       if (outcome.osTheme) setTauriTheme(outcome.osTheme);
     })
     .catch((e) => {
-      if (seq === pushSeq) {
-        lastPushedPref = prev;
-        overrideActive = false;
+      // Clear the latch unconditionally, superseded or not: a rejected push
+      // may have left the latch describing a preference the native layer
+      // never received, and `null` guarantees the next call re-pushes.
+      lastPushedPref = null;
+      if (seq === pushSeq && retryAttempts < MAX_PUSH_RETRIES) {
+        const delay = RETRY_BASE_MS * 2 ** retryAttempts;
+        retryAttempts++;
+        retryHandle = setTimeout(() => {
+          retryHandle = null;
+          setNativeTheme(pref);
+        }, delay);
       }
-      console.warn("[useTauriTheme] set_native_theme failed:", e);
+      console.warn(`[useTauriTheme] set_native_theme("${pref}") failed:`, e);
     });
 }
 
@@ -221,6 +271,16 @@ export function initTauriTheme(): void {
       invokeRef = invoke;
       invoke<string>("get_app_theme")
         .then((theme) => {
+          // Gated on `overrideActive` ONLY -- deliberately not stamped with a
+          // `pushSeq` and routed through `acceptReadback`. This fetch and the
+          // first `setNativeTheme` push are both microtask-scheduled from the
+          // same `createTheme` setup, so a seq captured here is stale before
+          // it is compared and the boot reading is discarded every time
+          // (measured: a dark-OS boot landed as `null`). The real hazard this
+          // needs to avoid is narrower: on macOS `window.theme()` echoes our
+          // own force, so skip the seed while an override is live and let
+          // `systemTheme` fall through to the honest Rust-provided seed.
+          if (overrideActive) return;
           setTauriTheme(theme === "dark" ? "dark" : "light");
         })
         .catch((e) => {
@@ -256,8 +316,27 @@ export function initTauriTheme(): void {
   // discarded by acceptReadback's overrideActive check, so there's no
   // reason to make the IPC call at all.
   let pollErrorLogged = false;
+  let pollImportAttempts = 0;
+  const MAX_POLL_IMPORT_ATTEMPTS = 3;
   pollIntervalHandle = setInterval(() => {
-    if (!document.hasFocus() || !invokeRef || overrideActive) return;
+    if (!document.hasFocus() || overrideActive) return;
+    // Re-acquire `invoke` if the init import failed, so a transient failure
+    // doesn't kill the poll for the whole session -- but only a few times.
+    // `getInvoke()` clears its cache on rejection, so retrying every tick
+    // forever would re-attempt a dynamic import every 3s indefinitely.
+    if (!invokeRef) {
+      if (pollImportAttempts >= MAX_POLL_IMPORT_ATTEMPTS) return;
+      pollImportAttempts++;
+      getInvoke()
+        .then((invoke) => {
+          invokeRef = invoke;
+          pollImportAttempts = 0;
+        })
+        .catch(() => {
+          /* already logged by the init path; next tick may retry */
+        });
+      return;
+    }
     const seq = pushSeq; // captured BEFORE the async invoke -- see acceptReadback
     invokeRef("get_app_theme")
       .then((theme) => {
@@ -284,8 +363,11 @@ export function initTauriTheme(): void {
   // module swap. So immediately after a hot-reload, this module may believe
   // nothing has been pushed yet while the OS surfaces are still showing a
   // theme forced before the reload, until the next real `setNativeTheme`
-  // call reconciles it. (Rev1 conflated HMR dispose with app teardown --
-  // they are not the same event.)
-  window.addEventListener("pagehide", stopPoll, { once: true });
-  import.meta.hot?.dispose(stopPoll);
+  // call reconciles it.
+  const teardown = (): void => {
+    stopPoll();
+    cancelRetry();
+  };
+  window.addEventListener("pagehide", teardown, { once: true });
+  import.meta.hot?.dispose(teardown);
 }
