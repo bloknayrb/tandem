@@ -43,6 +43,17 @@ describe.skipIf(!WIN_ONLY)("acl-win — Windows DACL hardening", () => {
     await expect(assertNoBroadAce(filePath)).resolves.toBeUndefined();
   });
 
+  it("cancels ACL subprocess work when the caller aborts", async () => {
+    const filePath = path.join(tmpDir, "cancelled.json");
+    fs.writeFileSync(filePath, '{"token":"sentinel"}');
+    const controller = new AbortController();
+    controller.abort(new DOMException("refresh deadline", "TimeoutError"));
+
+    await expect(setRestrictiveAcl(filePath, { signal: controller.signal })).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+  });
+
   // Table-driven coverage for every broad-principal SID — a future drop of
   // any entry from BROAD_SDDL_FRAGMENTS would silently weaken the gate.
   const BROAD_CASES: Array<{ name: string; sid: string }> = [

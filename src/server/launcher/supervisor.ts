@@ -1532,7 +1532,7 @@ function homeConfines(homeReal: string, candidate: string): boolean {
  * `opts.homeOverride` is a test-only seam: passing an explicit "home" lets
  * cross-platform unit tests stand up a tmpdir, treat it as $HOME, and
  * assert outside-home rejection deterministically on every platform.
- * Mirrors the `refreshSkillIfStale(opts: { homeOverride? })` pattern in
+ * Mirrors the `refreshExistingSkillIfStale(opts: { homeOverride? })` pattern in
  * `src/server/integrations/apply.ts`. Production callers leave it unset
  * and get `os.homedir()`. */
 export function resolveRouteCwd(

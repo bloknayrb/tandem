@@ -46,6 +46,7 @@ import { fileURLToPath } from "node:url";
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import { targetPushSupport } from "../../shared/integrations/contract.js";
+import type { SkillRefreshError } from "../../shared/launcher/contract.js";
 import { resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
 import { backupDir, pruneOldBackups, shouldBackup, writeBackup } from "./backup.js";
@@ -520,22 +521,60 @@ export {
  *    operators can diagnose a leaked tempfile or dest from a single log
  *    line rather than chasing a stray `console.error`.
  */
-async function atomicWrite(content: string, dest: string): Promise<void> {
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+  }
+}
+
+async function atomicWrite(
+  content: string,
+  dest: string,
+  opts: {
+    signal?: AbortSignal;
+    /** Refresh-only guard: do not recreate a destination removed mid-operation. */
+    requireExistingDest?: boolean;
+    /** Test-only seam immediately before the refresh commit guard. */
+    beforeCommitForTests?: () => Promise<void>;
+  } = {},
+): Promise<void> {
+  const { signal } = opts;
+  throwIfAborted(signal);
   const tmp = join(dirname(dest), `.tandem-setup-${randomUUID()}.tmp`);
   // mode at create, not chmod-after: on POSIX a plain writeFile lands at
   // 0o666 & ~umask, leaving sibling vendors' tokens world-readable until the
   // tighten below. Windows ignores mode (the ACL step is the protection).
-  await writeFile(tmp, content, { encoding: "utf-8", mode: 0o600 });
+  try {
+    await writeFile(tmp, content, { encoding: "utf-8", mode: 0o600, signal });
+  } catch (writeErr) {
+    await unlinkOrLeak(tmp, writeErr);
+    throw writeErr;
+  }
 
   try {
     if (process.platform === "win32") {
-      await setRestrictiveAcl(tmp);
+      await setRestrictiveAcl(tmp, { signal });
     } else {
+      throwIfAborted(signal);
       await chmod(tmp, 0o600);
     }
+    // The deadline may have fired while the ACL/chmod was in flight. Never
+    // cross the commit boundary after cancellation: the stale destination is
+    // safer than a late replacement racing server readiness.
+    throwIfAborted(signal);
   } catch (tightenErr) {
     await unlinkOrLeak(tmp, tightenErr);
     throw tightenErr;
+  }
+
+  try {
+    if (process.env.VITEST === "true") await opts.beforeCommitForTests?.();
+    throwIfAborted(signal);
+    if (opts.requireExistingDest) await stat(dest);
+    throwIfAborted(signal);
+  } catch (commitGuardErr) {
+    await unlinkOrLeak(tmp, commitGuardErr);
+    throw commitGuardErr;
   }
 
   try {
@@ -570,6 +609,7 @@ async function unlinkOrLeak(path: string, originalErr: unknown): Promise<void> {
   try {
     await unlink(path);
   } catch (cleanupErr) {
+    if ((cleanupErr as NodeJS.ErrnoException).code === "ENOENT") return;
     if (originalErr instanceof Error && originalErr.cause === undefined) {
       (originalErr as { cause?: unknown }).cause = cleanupErr;
     }
@@ -1146,16 +1186,15 @@ function readSkillVersion(skillContent: string): number {
 }
 
 const BUNDLED_SKILL_VERSION = readSkillVersion(SKILL_CONTENT);
+const SKILL_REFRESH_TIMEOUT_MS = 5_000;
 
 /** Module-scoped last-failure record. Cleared on successful refresh; set on
- * read/write failure. Surfaced via `GET /api/launcher/status` (loopback only)
- * so the palette/settings UI can warn the user that the bundled skill is
- * out of date. `null` when last refresh succeeded or was a no-op. */
-let lastSkillRefreshError: { code: "write-failed" | "read-failed"; message: string } | null = null;
-export function getSkillRefreshError(): {
-  code: "write-failed" | "read-failed";
-  message: string;
-} | null {
+ * path, read, write, or deadline failure. Surfaced via
+ * `GET /api/launcher/status` (loopback only) so the palette/settings UI can
+ * warn the user that the bundled skill is out of date. `null` when last
+ * refresh succeeded or was a no-op. */
+let lastSkillRefreshError: SkillRefreshError | null = null;
+export function getSkillRefreshError(): SkillRefreshError | null {
   return lastSkillRefreshError;
 }
 /** Test-only — reset module state between tests. */
@@ -1165,17 +1204,30 @@ export function _resetSkillRefreshErrorForTests(): void {
 }
 
 /**
- * Idempotent skill refresh — called from supervisor startup so existing
- * users (who already ran `tandem setup` once) pick up bundled-skill
- * updates without re-running the wizard.
+ * Idempotently refresh an existing setup-managed skill.
  *
  * Compares the bundled `version:` against the on-disk file. Writes only
- * if bundled > on-disk. Silently no-ops on any error (read failure,
- * write failure, missing parent dir) — this is a best-effort refresh,
- * not a critical path. The wizard-driven `installSkill()` remains the
- * authoritative installer.
+ * if bundled > on-disk. A missing file is an intentional no-op: generic
+ * server startup must not install a standalone copy for plugin-only users.
+ * Failures are recorded for the loopback launcher-status route but never
+ * thrown. A cancellation deadline reaches signal-aware file writes and
+ * Windows ACL subprocesses, and an abort check immediately before rename
+ * prevents those phases from committing after cancellation. Node does not
+ * make every filesystem primitive cancellable, so this is not an absolute
+ * wall-clock bound. The wizard-driven `installSkill()` remains the
+ * authoritative, consent-bearing installer.
  */
-export async function refreshSkillIfStale(opts: { homeOverride?: string } = {}): Promise<void> {
+export async function refreshExistingSkillIfStale(
+  opts: {
+    homeOverride?: string;
+    /** Cancellation deadline for signal-aware phases. Production defaults to five seconds. */
+    timeoutMs?: number;
+    /** Filesystem-boundary test seam; ignored outside Vitest. */
+    _writeSkillForTests?: (content: string, dest: string, signal: AbortSignal) => Promise<void>;
+    /** Test-only seam immediately before the existing-file commit guard. */
+    _beforeSkillCommitForTests?: () => Promise<void>;
+  } = {},
+): Promise<void> {
   if (BUNDLED_SKILL_VERSION === 0) return; // Bundled skill has no version stamp — nothing to compare.
   const home = opts.homeOverride ?? homedir();
   const skillPath = join(home, ".claude", "skills", "tandem", "SKILL.md");
@@ -1183,44 +1235,71 @@ export async function refreshSkillIfStale(opts: { homeOverride?: string } = {}):
     assertPathSafe(skillPath, {
       allowedRoots: opts.homeOverride ? [opts.homeOverride] : undefined,
     });
-  } catch {
-    return;
-  }
-  let onDiskVersion = -1; // -1 = file missing (treat as needing install)
-  let readErr: unknown;
-  try {
-    const fs = await import("node:fs/promises");
-    const current = await fs.readFile(skillPath, "utf8");
-    onDiskVersion = readSkillVersion(current);
   } catch (err) {
-    // ENOENT is expected (first run); any other error is a real read failure.
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") readErr = err;
-  }
-  if (onDiskVersion >= BUNDLED_SKILL_VERSION) {
-    // No-op path — clear any prior failure only if read succeeded.
-    if (readErr === undefined) lastSkillRefreshError = null;
-    else
-      lastSkillRefreshError = {
-        code: "read-failed",
-        message: readErr instanceof Error ? readErr.message : String(readErr),
-      };
+    lastSkillRefreshError = {
+      code: "path-rejected",
+      message: err instanceof Error ? err.message : String(err),
+    };
+    console.error(
+      `[Tandem] Skill refresh rejected unsafe path (non-fatal): ${err instanceof Error ? err.message : err}`,
+    );
     return;
   }
+  const timeoutMs = opts.timeoutMs ?? SKILL_REFRESH_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(
+      new DOMException(`Skill refresh timed out after ${timeoutMs}ms`, "TimeoutError"),
+    );
+  }, timeoutMs);
+  timeout.unref?.();
+  const { signal } = controller;
+  let stage: "read" | "write" = "read";
   try {
+    const current = await readFile(skillPath, { encoding: "utf8", signal });
+    const onDiskVersion = readSkillVersion(current);
+    if (onDiskVersion >= BUNDLED_SKILL_VERSION) {
+      lastSkillRefreshError = null;
+      return;
+    }
+
+    stage = "write";
     await mkdir(dirname(skillPath), { recursive: true });
-    await atomicWrite(SKILL_CONTENT, skillPath);
+    throwIfAborted(signal);
+    const writeSkill =
+      process.env.VITEST === "true" && opts._writeSkillForTests
+        ? opts._writeSkillForTests
+        : (content: string, dest: string, writeSignal: AbortSignal) =>
+            atomicWrite(content, dest, {
+              signal: writeSignal,
+              requireExistingDest: true,
+              beforeCommitForTests: opts._beforeSkillCommitForTests,
+            });
+    await writeSkill(SKILL_CONTENT, skillPath, signal);
     lastSkillRefreshError = null;
     console.error(
       `[Tandem] Refreshed bundled skill at ${skillPath} (v${onDiskVersion} → v${BUNDLED_SKILL_VERSION}).`,
     );
   } catch (err) {
+    // Generic server startup must never cross the standalone-skill install
+    // boundary. Only the wizard / `tandem setup` may create this file.
+    if (stage === "read" && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      lastSkillRefreshError = null;
+      return;
+    }
+    const timedOut = signal.aborted;
+    const message = timedOut
+      ? `Skill refresh timed out after ${timeoutMs}ms`
+      : err instanceof Error
+        ? err.message
+        : String(err);
     lastSkillRefreshError = {
-      code: "write-failed",
-      message: err instanceof Error ? err.message : String(err),
+      code: timedOut ? "timed-out" : stage === "read" ? "read-failed" : "write-failed",
+      message,
     };
-    console.error(
-      `[Tandem] Skill refresh failed (non-fatal): ${err instanceof Error ? err.message : err}`,
-    );
+    console.error(`[Tandem] Skill refresh failed (non-fatal): ${message}`);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

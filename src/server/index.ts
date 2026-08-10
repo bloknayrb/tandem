@@ -140,11 +140,6 @@ async function startLauncherSupervisor(): Promise<void> {
     launcherSupervisor = createSupervisor({
       integrationsBase: resolveAppDataDir(),
     });
-    // Refresh the bundled skill on-disk if the version stamp moved
-    // forward — existing users pick up skill updates without re-running
-    // `tandem setup`. Best-effort, non-blocking.
-    const { refreshSkillIfStale } = await import("./integrations/apply.js");
-    void refreshSkillIfStale();
     await launcherSupervisor.start();
   } catch (err) {
     launcherUnavailableReason = "spawn-failed";
@@ -573,6 +568,22 @@ async function main() {
   const resolvedLanIP = bindCheck.resolvedLanIP;
 
   if (transportMode === "http") {
+    // Refresh only a standalone skill that Tandem setup already installed.
+    // This is intentionally outside every launcher branch: hand-started
+    // Claude sessions are the population that needs the current instructions,
+    // including TANDEM_DISABLE_LAUNCHER and deferred-autostart boots. Await it
+    // before bind/readiness so a freshly-started session cannot load stale
+    // bytes while the refresh is still racing. The operation records ordinary
+    // read/write failures itself; this catch keeps even an unexpected module
+    // load failure best-effort and non-fatal.
+    await import("./integrations/apply.js")
+      .then(({ refreshExistingSkillIfStale }) => refreshExistingSkillIfStale())
+      .catch((err) =>
+        console.error(
+          `[Tandem] Skill refresh failed (non-fatal): ${err instanceof Error ? err.message : err}`,
+        ),
+      );
+
     // HTTP mode: no startup-order constraint — start both concurrently
     freePort(wsPort);
     freePort(mcpPort);

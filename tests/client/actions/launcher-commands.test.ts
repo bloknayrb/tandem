@@ -60,7 +60,11 @@ function jsonResponse(status: number, body: unknown): Response {
  * running, available launcher so the happy path proceeds to the POST.
  */
 function installFetchStub(
-  opts: { available?: boolean; rejectCwd?: boolean } = {},
+  opts: {
+    available?: boolean;
+    rejectCwd?: boolean;
+    skillRefresh?: { code: "read-failed" | "write-failed"; message: string };
+  } = {},
 ): ReturnType<typeof vi.fn> {
   const available = opts.available ?? true;
   const fetchSpy = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -74,7 +78,11 @@ function installFetchStub(
             sessionId: "<set>",
             resuming: false,
           })
-        : jsonResponse(200, { available: false, reason: "stdio-mode" });
+        : jsonResponse(200, {
+            available: false,
+            reason: "stdio-mode",
+            ...(opts.skillRefresh ? { skillRefresh: opts.skillRefresh } : {}),
+          });
     }
     if (u === NONCE_URL) {
       return jsonResponse(200, { nonce: TEST_NONCE });
@@ -246,6 +254,22 @@ describe("launcher-relaunch-here", () => {
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(STATUS_URL));
     await new Promise((r) => setTimeout(r, 0));
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === RELAUNCH_URL)).toBe(false);
+  });
+
+  it("warns about a failed skill refresh even when the launcher is unavailable", async () => {
+    const fetchSpy = installFetchStub({
+      available: false,
+      skillRefresh: { code: "write-failed", message: "simulated disk failure" },
+    });
+
+    getAction("launcher-relaunch-here").run();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(STATUS_URL));
+    await vi.waitFor(() =>
+      expect(notify).toHaveBeenCalledWith(
+        "warning",
+        expect.stringContaining("Bundled skill refresh failed: simulated disk failure"),
+      ),
+    );
   });
 });
 
