@@ -1,13 +1,8 @@
 <script lang="ts">
 import { TANDEM_REPO_URL } from "../../shared/constants";
 import { formatCoworkError, writeCoworkOnboardingSkipped } from "../cowork/cowork-helpers";
-import {
-  coworkPreflightSubnet,
-  coworkToggleIntegration,
-  type InvokeFn,
-  loadInvoke,
-  type SubnetPreflight,
-} from "../cowork/cowork-invoke";
+import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke";
+import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte";
 import type { CoworkStatus } from "../types";
 
 interface Props {
@@ -21,9 +16,6 @@ let { status, onAdvance, onLearnMore }: Props = $props();
 let confirming = $state(false);
 let busy = $state(false);
 let error = $state<string | null>(null);
-let preflight = $state<SubnetPreflight | null>(null);
-let probing = $state(false);
-
 // #1298: the enable path detects the Hyper-V subnet as its second step, and a
 // failure there used to surface as a blanket "is Cowork set up on this
 // machine?" — under a title, two lines above, that says it is. Probe first so
@@ -33,32 +25,11 @@ let probing = $state(false);
 // On confirm rather than on mount: a mount-time probe spawns PowerShell for
 // every Windows user on first launch, including everyone who will hit Skip, and
 // its answer can go stale before the click it exists to inform.
-let probeToken = 0;
-
-async function runPreflight(): Promise<void> {
-  const token = ++probeToken;
-  probing = true;
-  preflight = null;
-  try {
-    const invoke = await loadInvoke();
-    const result = await coworkPreflightSubnet(invoke);
-    // A user can open confirm, cancel, and reopen faster than PowerShell
-    // answers. Only the newest probe may write.
-    if (token !== probeToken) return;
-    preflight = result;
-  } catch {
-    if (token !== probeToken) return;
-    // The bridge itself didn't load. That says nothing about whether enabling
-    // would work, so fall through to the unguarded button.
-    preflight = { status: "unknown" };
-  } finally {
-    if (token === probeToken) probing = false;
-  }
-}
+const probe = createSubnetPreflight();
 
 function openConfirm(): void {
   confirming = true;
-  void runPreflight();
+  void probe.run();
 }
 
 async function withInvoke(
@@ -118,23 +89,23 @@ function handleSkip(): void {
         can connect back — admin is required once. To check it worked afterward, ask Claude in a
         Cowork session to open or list your documents.
       </div>
-      {#if preflight?.status === "blocked"}
+      {#if probe.preflight?.status === "blocked"}
         <!-- Say what stopped us and offer a retry, rather than an Enable button
              whose failure we have already observed. -->
         <div class="cos-preflight" data-testid="cowork-onboarding-preflight-blocked" role="status">
-          {preflight.hint}
+          {probe.preflight.hint}
         </div>
       {/if}
       <div class="cos-actions">
-        {#if preflight?.status === "blocked"}
+        {#if probe.preflight?.status === "blocked"}
           <button
             data-testid="cowork-onboarding-preflight-retry-btn"
             class="cos-btn cos-btn--primary"
             type="button"
-            onclick={() => void runPreflight()}
-            disabled={busy || probing}
+            onclick={() => void probe.run()}
+            disabled={busy || probe.probing}
           >
-            {probing ? "Checking…" : "Check again"}
+            {probe.probing ? "Checking…" : "Check again"}
           </button>
         {:else}
           <button
@@ -151,7 +122,7 @@ function handleSkip(): void {
           data-testid="cowork-onboarding-enable-cancel-btn"
           class="cos-btn cos-btn--ghost"
           type="button"
-          onclick={() => { confirming = false; probeToken++; probing = false; }}
+          onclick={() => { confirming = false; probe.reset(); }}
           disabled={busy}
         >
           Cancel

@@ -234,6 +234,16 @@ fn classify_subnet_output(exit_ok: bool, stdout: &str) -> Result<String, Firewal
     let mut adapter_count: Option<usize> = None;
     let mut saw_candidate_line = false;
 
+    // Scanning every line for the marker, rather than reading it off the first
+    // one, is deliberate. Our script emits it first and a flatter formulation
+    // would be shorter — but PowerShell can prepend output nobody asked for (a
+    // module autoload notice, a progress record landing in the stream), and
+    // "the first line is the marker" would then read that instead, fail to
+    // parse a count, and report QueryFailed. That collapses NoAdapter into
+    // NoIpv4: the one distinction the marker exists to make, lost in exactly
+    // the messy environment it was added for. The captured real-hardware
+    // fixture shows a clean stream today; this survives the day it isn't.
+    //
     // `lines()` strips a trailing `\r`, so CRLF needs no special handling.
     for line in stdout.lines() {
         let line = line.trim();
@@ -710,6 +720,27 @@ mod tests {
         // assumption about what PowerShell really emits.
         let real = "TANDEM_ADAPTERS 2\r\n172.18.192.1/20\r\n172.28.80.1/20\r\n";
         assert_eq!(classify_subnet_output(true, real).unwrap(), "172.18.192.0/20");
+    }
+
+    #[test]
+    fn classify_finds_the_marker_behind_unsolicited_leading_output() {
+        // The marker is scanned for, not read off line one. PowerShell can
+        // prepend output nobody asked for, and treating the first line as the
+        // marker would parse no count and report QueryFailed — collapsing
+        // NoAdapter into NoIpv4, the exact distinction the marker adds.
+        let noisy = "Loading personal and system profiles took 812ms.\r\nTANDEM_ADAPTERS 0\r\n";
+        assert_eq!(
+            reason_of(true, noisy),
+            SubnetDetectionReason::NoAdapter,
+            "a leading noise line must not hide the adapter count behind it"
+        );
+
+        // Positive control on the same sample: strip only the marker and the
+        // identical noise falls to QueryFailed. Without it, the assertion above
+        // would still pass if the marker were ignored entirely and NoAdapter
+        // were simply what this input defaults to.
+        let noise_only = "Loading personal and system profiles took 812ms.\r\n";
+        assert_eq!(reason_of(true, noise_only), SubnetDetectionReason::QueryFailed);
     }
 
     #[test]

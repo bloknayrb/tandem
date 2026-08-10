@@ -18,14 +18,13 @@ import {
   workspaceFileStatusLabel,
 } from "../cowork/cowork-helpers";
 import {
-  coworkPreflightSubnet,
   coworkRescan,
   coworkSetLanIpOverride,
   coworkToggleIntegration,
   type InvokeFn,
   loadInvoke,
-  type SubnetPreflight,
 } from "../cowork/cowork-invoke";
+import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte";
 import type { WorkspaceFileStatus, WorkspaceStatus } from "../types";
 
@@ -59,46 +58,24 @@ const { refetch } = coworkState;
 let inlineToastMessage = $state<string | null>(null);
 let confirming = $state<"enable" | null>(null);
 let busy = $state(false);
-let preflight = $state<SubnetPreflight | null>(null);
-let probing = $state(false);
-
 // #1298: probe the Hyper-V subnet before offering Enable, so a detection
 // failure says what is wrong instead of blaming the Cowork install. See
 // CoworkOnboardingStep for why this runs on confirm rather than on mount.
 //
-// The staleness guard matters more here than there: this component stays
-// mounted after enabling, so a late probe write is user-visible rather than a
-// no-op on a component the user has left.
-let probeToken = 0;
-
-async function runPreflight(): Promise<void> {
-  const token = ++probeToken;
-  probing = true;
-  preflight = null;
-  try {
-    const invoke = await loadInvoke();
-    const result = await coworkPreflightSubnet(invoke);
-    if (token !== probeToken) return;
-    preflight = result;
-  } catch {
-    if (token !== probeToken) return;
-    preflight = { status: "unknown" };
-  } finally {
-    if (token === probeToken) probing = false;
-  }
-}
+// The hook's staleness guard matters more here than it does there: this
+// component stays mounted after enabling, so a late probe write is
+// user-visible rather than a no-op on a component the user has left.
+const probe = createSubnetPreflight();
 
 function openEnableConfirm(): void {
   confirming = "enable";
-  void runPreflight();
+  void probe.run();
 }
 
 /** Abandon any in-flight probe so its result can't land on a closed banner. */
 function closeEnableConfirm(): void {
   confirming = null;
-  probeToken++;
-  probing = false;
-  preflight = null;
+  probe.reset();
 }
 
 const debouncer = makeDebouncer(COWORK_RESCAN_DEBOUNCE_MS);
@@ -265,23 +242,23 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
           Cowork can reach your open documents. This adds a Windows firewall rule so the Cowork VM
           can connect back — admin is required once.
         </div>
-        {#if preflight?.status === "blocked"}
+        {#if probe.preflight?.status === "blocked"}
           <!-- #1298: we already watched detection fail, so offer a retry rather
                than an Enable button whose outcome we know. -->
           <div class="cs-confirm-body" data-testid="cowork-preflight-blocked" role="status">
-            {preflight.hint}
+            {probe.preflight.hint}
           </div>
         {/if}
         <div class="cs-actions">
-          {#if preflight?.status === "blocked"}
+          {#if probe.preflight?.status === "blocked"}
             <button
               class="cs-btn cs-btn--primary"
               data-testid="cowork-preflight-retry-btn"
               type="button"
-              onclick={() => void runPreflight()}
-              disabled={busy || probing}
+              onclick={() => void probe.run()}
+              disabled={busy || probe.probing}
             >
-              {probing ? "Checking…" : "Check again"}
+              {probe.probing ? "Checking…" : "Check again"}
             </button>
           {:else}
             <button
