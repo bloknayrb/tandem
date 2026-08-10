@@ -13,8 +13,8 @@ import { isSafeExternalHref } from "./utils/url-safety";
 // Full `editorProps` factory (A5). Tiptap's `editor.setOptions({ editorProps
 // })` replaces `editorProps` wholesale — it is NOT a shallow merge — so
 // toggling spellcheck without recreating the editor requires re-supplying
-// every existing prop (attributes, clipboardTextParser, handlePaste) plus
-// the new `spellcheck` attribute, not just the changed piece.
+// every existing prop (attributes, clipboardTextParser, clipboardTextSerializer,
+// handlePaste) plus the new `spellcheck` attribute, not just the changed piece.
 export function makeEditorProps(spellcheckOnValue: boolean): EditorProps {
   return {
     attributes: {
@@ -44,6 +44,27 @@ export function makeEditorProps(spellcheckOnValue: boolean): EditorProps {
       // diverge.
       return buildPlainTextSlice(text, view.state.schema, $context.marks());
     },
+    // Copy out with single newlines between blocks (#1365). ProseMirror's
+    // default serializer is `textBetween(…, "\n\n")`, which puts a blank line
+    // between EVERY block — including consecutive list items — so a bulleted
+    // list pasted anywhere plain arrives double-spaced, and prose arrives with
+    // a blank line after every paragraph.
+    //
+    // Only the `text/plain` flavor is affected. ProseMirror writes `text/html`
+    // on every copy too, and rich targets (Word, Google Docs, Outlook) read
+    // that instead — so real paragraph structure survives there regardless of
+    // what we do here. A single `\n` is what those apps themselves put on
+    // `text/plain`. The tradeoff is deliberate: pasting into a markdown file,
+    // which needs a blank line to separate paragraphs, now merges them.
+    //
+    // The `leafText` arm fixes a second, independent default. `hardBreak` is
+    // an inline leaf carrying no text and no `leafText` spec, so `textBetween`
+    // contributes nothing for it and "a<br>b" copied as "ab" — a silently
+    // lost line break, unrelated to the separator above.
+    clipboardTextSerializer: (slice) =>
+      slice.content.textBetween(0, slice.content.size, "\n", (leaf) =>
+        leaf.type.name === "hardBreak" ? "\n" : "",
+      ),
     // Paste URL over a non-empty selection → link the selected text instead
     // of replacing it. Direct `editorProps` handlers run BEFORE both
     // `clipboardTextParser` above and Link's own `pasteHandler` plugin, so

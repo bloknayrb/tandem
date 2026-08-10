@@ -85,6 +85,19 @@ function ungatedMutatingRouteModules(): string[] {
 const PATH_TAKING = ["convert", "open", "save", "upload"];
 
 /**
+ * Budget for the corpus walk, well above vitest's 15s default.
+ *
+ * Measured: ~5s for this file alone, ~22-25s inside the full suite on Windows,
+ * where vitest's own transforms are already saturating the disk. The default
+ * turned that gap into a red run that reproduced on master and passed on CI —
+ * a timing verdict wearing the costume of a security-invariant failure, which
+ * is the most expensive kind of false alarm to debug. Generous on purpose: this
+ * number exists to stop the machine's load deciding the outcome, so it should
+ * only ever fail if the walk is genuinely broken.
+ */
+const CORPUS_TIMEOUT_MS = 90_000;
+
+/**
  * Source and test comments are scanned too, not just prose docs: #1293's own
  * report counted ~10 *comments* making this claim, and the last carrier the
  * manual sweep turned up was a header comment in `tests/server/`.
@@ -100,30 +113,60 @@ function scannedFiles(): string[] {
   return [...docs, ...code].filter((p) => !p.endsWith("loopback-gate-claims.test.ts"));
 }
 
+/**
+ * Read every scanned file ONCE, shared across the tests below.
+ *
+ * This scan walks ~1500 `.ts` files with synchronous I/O, and each test used to
+ * repeat the whole walk. Under the full suite — where vitest is already
+ * saturating the disk with its own transforms — that pushed a single test past
+ * vitest's 15s default and failed the run on timing alone, on Windows, while
+ * passing in isolation and on CI. A test whose verdict depends on how busy the
+ * machine is reports nothing useful about the claim it exists to check.
+ *
+ * Memoized at module scope rather than in a `beforeAll` so the cost lands once
+ * per file, not once per suite. Memoizing alone is not sufficient — whichever
+ * test runs first still pays the full walk, which is why the test consuming it
+ * also carries {@link CORPUS_TIMEOUT_MS}.
+ */
+let cachedCorpus: Array<{ rel: string; lines: string[] }> | null = null;
+function corpus(): Array<{ rel: string; lines: string[] }> {
+  if (!cachedCorpus) {
+    cachedCorpus = scannedFiles().map((rel) => ({
+      rel,
+      lines: readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n"),
+    }));
+  }
+  return cachedCorpus;
+}
+
 describe("loopback-gate documentation claims (#1293 / #1322)", () => {
-  it("nothing live describes the gate as inert without tensing that as history", () => {
-    const offenders: string[] = [];
+  it(
+    "nothing live describes the gate as inert without tensing that as history",
+    () => {
+      const offenders: string[] = [];
 
-    for (const rel of scannedFiles()) {
-      const lines = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n");
-      lines.forEach((line, i) => {
-        if (!/assertLoopbackForMutation/.test(line)) return;
-        const claimsInert =
-          /no-op|only rejects when|would not fire|is inert|dead code|does not (?:fire|gate)/i.test(
-            line,
-          );
-        // A historical note is fine, but naming #1293 is not enough on its own:
-        // the roadmap entry that survived the first sweep described the gate in
-        // the PRESENT tense on a line that opened with the issue number. The
-        // past-tense marker is what distinguishes "this was true once" from
-        // "this is true", so both are required.
-        const dated = /#1293/.test(line) && /\bwas\b|\bwere\b|\buntil\b|\bbefore\b|~~/i.test(line);
-        if (claimsInert && !dated) offenders.push(`${rel}:${i + 1}`);
-      });
-    }
+      for (const { rel, lines } of corpus()) {
+        lines.forEach((line, i) => {
+          if (!/assertLoopbackForMutation/.test(line)) return;
+          const claimsInert =
+            /no-op|only rejects when|would not fire|is inert|dead code|does not (?:fire|gate)/i.test(
+              line,
+            );
+          // A historical note is fine, but naming #1293 is not enough on its own:
+          // the roadmap entry that survived the first sweep described the gate in
+          // the PRESENT tense on a line that opened with the issue number. The
+          // past-tense marker is what distinguishes "this was true once" from
+          // "this is true", so both are required.
+          const dated =
+            /#1293/.test(line) && /\bwas\b|\bwere\b|\buntil\b|\bbefore\b|~~/i.test(line);
+          if (claimsInert && !dated) offenders.push(`${rel}:${i + 1}`);
+        });
+      }
 
-    expect(offenders).toEqual([]);
-  });
+      expect(offenders).toEqual([]);
+    },
+    CORPUS_TIMEOUT_MS,
+  );
 
   it("the ungated mutating set derived from source is exactly what the docs enumerate", () => {
     const derived = ungatedMutatingRouteModules();

@@ -269,8 +269,8 @@ $effect(() => {
 // -- A5: spellcheck toggling without recreating the editor ------------------
 // `setOptions({ editorProps })` replaces `editorProps` wholesale (not a
 // shallow merge), so `makeEditorProps` always rebuilds the full object
-// (attributes + clipboardTextParser + handlePaste), not just the spellcheck
-// bit. No last-value guard needed here (unlike `_lastReadOnly` above):
+// (attributes + clipboardTextParser + clipboardTextSerializer + handlePaste),
+// not just the spellcheck bit. No last-value guard needed here (unlike `_lastReadOnly` above):
 // `spellcheckOn` is a memoized `$derived` of a primitive, so this effect only
 // re-fires on a real toggle — or on editor recreation, where the one
 // same-value `setOptions` call is harmless (the new editor was already

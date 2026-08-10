@@ -15,6 +15,7 @@ import { FootnoteRefMark } from "./extensions/footnote-ref";
 import { ListItemCheckbox } from "./extensions/list-item-checkbox";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { RawMarkdownMark } from "./extensions/raw-markdown";
+import { isSafeExternalHref } from "./utils/url-safety";
 
 // Link mark that surfaces the destination URL on hover via a native `title`
 // tooltip (issue #996). The base `@tiptap/extension-link` renderHTML emits the
@@ -27,6 +28,10 @@ import { RawMarkdownMark } from "./extensions/raw-markdown";
 // the base output rather than the raw HTMLAttributes means a disallowed scheme is
 // never given a title and never resurrected. Pointer-cursor styling lives in
 // editor.css (`.tandem-editor a[href]`).
+//
+// It also strips the configured `target="_blank"` from non-external hrefs — see
+// the comment at that branch for why the attribute is a double-open on internal
+// links but a safety net on external ones.
 const LinkWithHoverTitle = Link.extend({
   renderHTML(props) {
     const out = this.parent?.(props) ?? [
@@ -35,11 +40,28 @@ const LinkWithHoverTitle = Link.extend({
       0,
     ];
     if (Array.isArray(out) && out.length >= 2 && out[1] && typeof out[1] === "object") {
-      const attrs = out[1] as Record<string, unknown>;
+      const attrs = { ...(out[1] as Record<string, unknown>) };
       const href = attrs.href;
       if (typeof href === "string" && href.length > 0 && attrs.title == null) {
-        (out as unknown[])[1] = { ...attrs, title: href };
+        attrs.title = href;
       }
+      // Drop `target="_blank"` on anything that is not a safe external URL
+      // (#1343). Clicking a relative link to a local `.md` opened it as a
+      // Tandem tab AND popped the system browser: `handleEditorClick`
+      // preventDefaults and routes the click through `openHref`, but WebView2
+      // treats a `_blank` anchor as a new-window request in its own right, and
+      // no `on_new_window` handler is registered, so it falls through to the OS.
+      //
+      // Kept for external hrefs deliberately, even though `openHref` already
+      // calls `window.open` itself and the attribute is redundant on the happy
+      // path: if the intercept ever fails to run, `_blank` degrades to "opens a
+      // new tab" instead of navigating the editor frame away and taking the
+      // session with it. Internal links have no such consolation — their
+      // fallback is the double-open being fixed here.
+      if (typeof href === "string" && !isSafeExternalHref(href)) {
+        delete attrs.target;
+      }
+      (out as unknown[])[1] = attrs;
     }
     return out;
   },
