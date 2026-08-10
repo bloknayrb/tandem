@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-08-10
+
 Most of this release is Tandem telling you the truth about itself.
 
 The largest single thread is real-time updates — how your AI finds out that you commented on something. Tandem's setup wizard, its README, its `doctor` command and its troubleshooting guide all described a mechanism that had never worked the way they said, recommended a flag that did nothing, and installed a helper most people were in no position to use. Worse, that helper's presence was silencing the warning built to tell you nothing was listening. All of that is corrected, and the option that needs no installation and no flag now leads. Separately, the updates themselves stopped carrying your document's contents into your AI's context uninvited.
