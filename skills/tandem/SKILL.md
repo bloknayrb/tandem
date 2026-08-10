@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 9
+version: 10
 description: >
   Use when tandem_* MCP tools are available, the user asks about Tandem
   document editing, or iterating on text collaboratively. Provides workflow
@@ -84,9 +84,9 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 Polling is the reliable path and stays the authority on what you see. But between your turns nothing polls, so a comment the user leaves while you sit idle waits until your next turn — which may never come.
 
-If your host offers a `Monitor` tool, you can arm a watch on Tandem's wake stream so idle time doesn't swallow the user's messages. **If it does not, say so plainly and stop there** — the tool is enabled per account rather than per version, so there is nothing the user can install or upgrade to get it, and Tandem's server cannot see whether you have it. Tell them the channel shim is the setup that does not need it (`tandem setup --apply --with-channel-shim`), and that the plugin monitor will not help because it depends on the same host feature. Then keep polling. **Arm it at most once per session**, and only if Tandem's tool output has told you nothing is subscribed — **or if the user asks you to.**
+In a **hand-started session**, after the first successful read-mode `tandem_status`, if your host offers a `Monitor` tool, read `wakeUrl` from that response and arm one persistent watch. **Arm it at most once per session. Do not use Tandem's process-global subscriber count to decide whether this session is covered.** Other sessions and inert channel shims appear in that count, and the plugin monitor triggered by this skill can attach after the status response, so the count is stale by construction.
 
-That second clause is not politeness, it is the fix for a real hole. Tandem can only tell you when *nothing at all* is subscribed, and a legacy channel shim that never negotiated the channel stays subscribed forever while delivering nothing. For that user the count never reaches zero, so on the first clause alone you would decline to arm in exactly the session that needs it most. If the user says they are not getting your replies to comments, or asks you to watch for updates, arm — do not check the count first.
+If the Monitor tool is absent or the attempt fails, say so once and stop trying. The tool is enabled per account rather than per version, so upgrading may not add it, and Tandem's server cannot see whether you have it. On Windows, the built-in Monitor tool additionally requires Git Bash. The plugin monitor shares the same per-account feature gate, so it cannot help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it can help when Git Bash is the missing precondition. Tell the user that the channel shim is the setup that does not need Monitor (`tandem setup --apply --with-channel-shim`), then keep polling. Asking Claude to watch is recovery only: if this first-use attempt was skipped, make the same attempt when asked, but never start a second watch.
 
 **Read the URL from `tandem_status`, don't assume it.** Read mode returns `wakeUrl` — the live address of the wake stream, reported by the server that is running it. It is usually `ws://127.0.0.1:3479/api/wake`, but the port is configurable and guessing it is a *silent* failure: you would open a socket to whatever unrelated service holds 3479 and sit there believing you were armed. If `wakeUrl` is absent, this Tandem has no wake transport and there is nothing to arm — keep polling.
 

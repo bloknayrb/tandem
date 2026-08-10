@@ -19,10 +19,11 @@ import { describe, expect, it } from "vitest";
  *     that gets re-added to a new surface by someone summarising the feature.
  *     The first sweep missed CHANGELOG.md and the setup wizard for exactly that
  *     reason: they phrase it differently every time.
- *  2. The obvious fallback is wrong. The plugin monitor reads the *same* remote
- *     gate, so "if that fails, install the plugin" moves the reader from one
- *     unavailable remedy to another. Only the channel shim is independent, and
- *     nothing but a test will keep that distinction alive in copy.
+ *  2. The obvious fallback is only conditionally useful. The plugin monitor
+ *     reads the same remote account gate, so it cannot help when that gate is
+ *     off. It does not share the built-in Monitor's Windows Git Bash requirement,
+ *     however, so it can help when that is the missing precondition. Only the
+ *     channel shim is independent of both, and the copy must preserve that split.
  *
  * Scoped to the PARAGRAPH, not the file, so a caveat buried in an unrelated
  * section three screens away does not count as qualifying the claim. Note the
@@ -53,6 +54,12 @@ function paragraphs(text: string): string[] {
   return text.split(/\n\s*\n/);
 }
 
+function expectPullAuthorityContract(text: string): void {
+  expect(text).not.toMatch(/without needing to poll `tandem_checkInbox`/i);
+  expect(text).toMatch(/best-effort wake signal/i);
+  expect(text).toMatch(/`tandem_checkInbox`[^.]*remains authoritative/i);
+}
+
 describe("wake-availability claims stay qualified", () => {
   for (const rel of CARRIERS) {
     it(`${rel} does not promise the watch without naming its precondition`, () => {
@@ -67,10 +74,10 @@ describe("wake-availability claims stay qualified", () => {
     });
   }
 
-  it("names the channel shim — not the plugin — as the fallback when the tool is absent", () => {
-    // The plugin monitor reads the same remote gate (ADR-049 amendment,
-    // 2026-08-09), so routing a Monitor-less reader to it is advice that cannot
-    // work. Asserted on the two surfaces that actually give a next step.
+  it("names the channel shim as the fallback independent of every Monitor precondition", () => {
+    // A plugin can cover the Windows Git Bash-only gap, but not the shared
+    // remote account gate. Assert the two user-facing surfaces still name the
+    // one route that works independently of either failure.
     for (const rel of ["README.md", "docs/troubleshooting.md"]) {
       const text = readFileSync(join(ROOT, rel), "utf-8");
       const paras = paragraphs(text).filter((p) => /Monitor/.test(p) && ABOUT_THE_WATCH.test(p));
@@ -79,6 +86,48 @@ describe("wake-availability claims stay qualified", () => {
         paras.some((p) => /shim|third option/i.test(p)),
         `${rel}: qualified the watch but pointed at no gate-independent fallback`,
       ).toBe(true);
+    }
+  });
+});
+
+describe("real-time push does not replace the authoritative inbox", () => {
+  it("keeps pull authority explicit in the user guide", () => {
+    expectPullAuthorityContract(readFileSync(join(ROOT, "docs/user-guide.md"), "utf-8"));
+  });
+
+  it("rejects the previous claim that push eliminates polling", () => {
+    const shipped = readFileSync(join(ROOT, "docs/user-guide.md"), "utf-8");
+    const authoritative =
+      "Real-time push is a best-effort wake signal, not the authority on what Claude sees. Wakes can be dropped or rate-limited and carry no message content, so Claude still polls `tandem_checkInbox`; that inbox remains authoritative and de-duplicates items already pushed.";
+    const mutant = shipped.replace(
+      authoritative,
+      "With channel push active, Claude receives events automatically without needing to poll `tandem_checkInbox`.",
+    );
+
+    expect(mutant, "the mutation did not alter the guarded documentation").not.toBe(shipped);
+    expect(() => expectPullAuthorityContract(mutant)).toThrow();
+  });
+});
+
+describe("hand-started sessions get the automatic first-use contract", () => {
+  it("describes the built-in watch as automatic rather than user-requested", () => {
+    for (const rel of ["README.md", "docs/user-guide.md"]) {
+      const text = readFileSync(join(ROOT, rel), "utf-8");
+      expect(text, `${rel}: still tells the user to request the default watch`).not.toMatch(
+        /ask Claude to watch(?: Tandem)? for updates/i,
+      );
+      expect(text, `${rel}: does not say when the automatic attempt happens`).toMatch(
+        /first (?:successful read-mode )?`?tandem_status`?|first (?:Tandem|skill) use/i,
+      );
+      expect(text, `${rel}: omits the built-in Monitor precondition`).toMatch(/built-in Monitor/i);
+    }
+  });
+
+  it("keeps unavoidable plugin overlap and recovery visible in both guides", () => {
+    for (const rel of ["README.md", "docs/user-guide.md"]) {
+      const text = readFileSync(join(ROOT, rel), "utf-8");
+      expect(text).toMatch(/plugin[^.]*built-in (?:watch|Monitor)[^.]*both automatically/i);
+      expect(text).toMatch(/TaskStop/);
     }
   });
 });
