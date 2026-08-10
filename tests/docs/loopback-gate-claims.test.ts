@@ -100,12 +100,35 @@ function scannedFiles(): string[] {
   return [...docs, ...code].filter((p) => !p.endsWith("loopback-gate-claims.test.ts"));
 }
 
+/**
+ * Read every scanned file ONCE, shared across the tests below.
+ *
+ * This scan walks ~1500 `.ts` files with synchronous I/O, and each test used to
+ * repeat the whole walk. Under the full suite — where vitest is already
+ * saturating the disk with its own transforms — that pushed a single test past
+ * vitest's 15s default and failed the run on timing alone, on Windows, while
+ * passing in isolation and on CI. A test whose verdict depends on how busy the
+ * machine is reports nothing useful about the claim it exists to check.
+ *
+ * Memoized at module scope rather than in a `beforeAll` so the cost lands once
+ * per file, not once per suite.
+ */
+let cachedCorpus: Array<{ rel: string; lines: string[] }> | null = null;
+function corpus(): Array<{ rel: string; lines: string[] }> {
+  if (!cachedCorpus) {
+    cachedCorpus = scannedFiles().map((rel) => ({
+      rel,
+      lines: readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n"),
+    }));
+  }
+  return cachedCorpus;
+}
+
 describe("loopback-gate documentation claims (#1293 / #1322)", () => {
   it("nothing live describes the gate as inert without tensing that as history", () => {
     const offenders: string[] = [];
 
-    for (const rel of scannedFiles()) {
-      const lines = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n");
+    for (const { rel, lines } of corpus()) {
       lines.forEach((line, i) => {
         if (!/assertLoopbackForMutation/.test(line)) return;
         const claimsInert =
