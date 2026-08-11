@@ -297,4 +297,14 @@ export const diagnosticsOutputShape = {
   arch: z.string().describe("process.arch"),
   nodeVersion: z.string().describe("process.version"),
   tauriSidecar: z.boolean().describe("True when running as the Tauri desktop sidecar"),
+  // Host facts from `collectHostInfo()` (host-info.ts). Every one is OPTIONAL
+  // by necessity, not politeness: `os.cpus()` returns [] under some
+  // cgroup-restricted containers and `os.version()` can throw, so a required
+  // key here would fail structured-output validation on exactly those hosts.
+  osRelease: z.string().optional().describe("os.release() — e.g. '10.0.26100'"),
+  osVersion: z.string().optional().describe("os.version() — e.g. 'Windows 11 Pro'"),
+  cpuModel: z.string().optional().describe("First CPU's model string"),
+  cpuCount: z.number().optional().describe("Logical CPU count"),
+  totalMemoryMb: z.number().optional().describe("Total physical memory, MiB"),
+  freeMemoryMb: z.number().optional().describe("Free physical memory, MiB"),
 };

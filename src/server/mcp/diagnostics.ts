@@ -21,6 +21,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { DoctorReport, RunDoctorOptions } from "../../cli/doctor.js";
 import { runDoctor } from "../../cli/doctor.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../../shared/constants.js";
+import { collectHostInfo } from "./host-info.js";
 import { diagnosticsOutputShape } from "./output-schemas.js";
 import { mcpStructured, withErrorBoundary, withStructuredErrors } from "./response.js";
 import { filterDevRepoChecks } from "./routes/diagnostics.js";
@@ -65,15 +66,11 @@ export function registerDiagnosticsTools(server: McpServer, deps: DiagnosticsToo
     withStructuredErrors(
       withErrorBoundary("tandem_diagnostics", async () => {
         const report = filterDevRepoChecks(await collect({ wsPort, mcpPort }));
-        return mcpStructured({
-          ...report,
-          version,
-          transport,
-          platform: process.platform,
-          arch: process.arch,
-          nodeVersion: process.version,
-          tauriSidecar: process.env.TANDEM_TAURI_SIDECAR === "1",
-        });
+        // Note the shape difference from the HTTP route, which nests the report
+        // under `report`: here it is spread flat. The host fields sit at top
+        // level in both. Home-dir paths are NOT redacted here — that is the
+        // route's concern, since only the route feeds a public issue body.
+        return mcpStructured({ ...report, version, transport, ...collectHostInfo() });
       }),
     ),
   );
