@@ -23,7 +23,7 @@ function gettingWokenSection(skill: string): string {
 function expectPerSessionAutoArmContract(skill: string): void {
   const wake = gettingWokenSection(skill);
 
-  expect(skill).toMatch(/^version:\s*10$/m);
+  expect(skill).toMatch(/^version:\s*11$/m);
   expect(wake).toMatch(/hand-started session/i);
   expect(wake).toMatch(/first successful read-mode `tandem_status`/i);
   expect(wake).toMatch(/read `wakeUrl`/i);
