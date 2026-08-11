@@ -164,10 +164,10 @@ Full enumeration: [docs/semantic-tokens.md](docs/semantic-tokens.md). `check-tok
 ### Testing & E2E
 - **E2E tests start their own server** via Playwright `webServer`. `freePort()` kills existing :3478/:3479 -- running E2E alongside `dev:server` will terminate your dev server.
 - **Uploaded files (`upload://` paths) are read-only.** `tandem_save` returns a session-only save.
-- **`cargo test` requires sidecar stubs + GTK libs — and the pre-push hook runs it**, so a fresh clone cannot push until both are in place. `tauri_build::build()` checks all declared `resources` (`dist/client`, `dist/server`, `dist/channel`, `dist/monitor`) and both `externalBin`s:
+- **`cargo test` requires sidecar stubs + GTK libs — and the pre-push hook runs it**, so a fresh clone cannot push until both are in place. `tauri_build::build()` checks all declared `resources` (`dist/client`, `dist/server`, `dist/channel`, `dist/stdio-bridge`) and both `externalBin`s. **`dist/monitor` is NOT a declared resource** — it was listed here for months and is not in `tauri.conf.json`, so `mkdir`ing it is harmless but proves nothing; `.github/workflows/ci.yml` omits it and passes. Keep this list synced with `bundle.resources`, not with `dist/`:
   ```sh
   TRIPLE=$(rustc -vV | sed -n 's/host: //p')
-  mkdir -p src-tauri/binaries dist/{channel,server,client,monitor}
+  mkdir -p src-tauri/binaries dist/{channel,server,client,stdio-bridge}
   touch src-tauri/binaries/{node-sidecar,tandem-reaper}-$TRIPLE{,.exe}
   apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev
   ```

@@ -1,8 +1,8 @@
-import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, extname, join } from "node:path";
 
 import type { ClaudeCliPresence } from "./contract.js";
+import { binNamesFor as binNamesForStem, isFile } from "./path-lookup.js";
 
 /**
  * Pure-built-ins probe for the `claude` CLI binary, extracted to a shared leaf
@@ -21,53 +21,20 @@ export interface DetectClaudeCliOptions {
 }
 
 /**
- * Does this path name a FILE?
- *
- * Not `existsSync`, which is also true for a directory — and one of the names
- * probed below is the extensionless `claude`, so a PATH entry holding an
- * ordinary `claude/` folder (a source checkout on a `PATH`-listed parent, say)
- * would otherwise read as an installed CLI. `statSync` follows symlinks, so a
- * link to a real binary still counts; `throwIfNoEntry: false` keeps a dangling
- * one from throwing.
- *
- * Total by construction — it answers `false` rather than throwing when it
- * cannot tell. `throwIfNoEntry: false` suppresses only the "no entry" case;
- * `EACCES` on a locked-down directory, `ELOOP` on a symlink cycle, and a
- * disconnected network share named in `PATH` (routine on Windows) all still
- * throw. Both callers walk every `PATH` entry, so one unreadable directory
- * anywhere on it would otherwise abort the whole walk — and these run inside
- * `tandem doctor`, a LAN-reachable status route, and the launcher's crash
- * handler, where an exception is respectively a crashed CLI, a 500, and a
- * dead server process. "I could not read it" is not evidence of an install,
- * so `false` is the honest answer as well as the safe one.
- */
-function isFile(path: string): boolean {
-  try {
-    return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Every filename `claude` can be installed under, in the order a shell would
- * find them.
- *
- * On Windows the native installer drops `claude.exe`, while
- * `npm i -g @anthropic-ai/claude-code` writes cmd-shim wrappers (`claude.cmd` /
- * `claude.ps1`) plus a bare `claude` bash shim. Probing `claude.exe` alone
- * reported a perfectly usable npm-global install as NOT_INSTALLED — the exact
- * false "not installed" warning this check exists to avoid — so we check every
- * candidate. POSIX only ever has the bare `claude`.
+ * find them. Thin default-arg wrapper over the shared rule in `path-lookup.ts`,
+ * which owns the Windows candidate set and the `isFile` probe both walks below
+ * depend on.
  *
  * `stem` is `"claude"` for the detector; {@link isBareNameLaunchable} passes the
  * `TANDEM_CLAUDE_CMD` override's basename, since that is the name the launcher
  * will actually search PATH for.
+ *
+ * The two walks in this file stay here rather than moving to
+ * `resolveOnPath`: neither has first-hit semantics. See that module's header.
  */
 function binNamesFor(platform: NodeJS.Platform, stem = "claude"): string[] {
-  return platform === "win32"
-    ? [`${stem}.exe`, `${stem}.cmd`, `${stem}.bat`, `${stem}.ps1`, stem]
-    : [stem];
+  return binNamesForStem(platform, stem);
 }
 
 /**

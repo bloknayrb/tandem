@@ -246,7 +246,52 @@ Two things worth knowing:
 There is no fix Tandem can ship in the plugin manifest for this: the monitor command is one
 static string used on every platform, and a form that picks up a login shell's PATH
 (`sh -lc '…'`) does not exist on Windows, where the same `shell: true` resolves to
-`cmd.exe`.
+`cmd.exe`. The entries Tandem's *own* setup writes are a different story — those no longer
+go through `npx` at all; see the next section.
+
+## `Failed to spawn process: No such file or directory` (Claude Desktop)
+
+Claude Desktop's MCP log (`~/Library/Logs/Claude/mcp-server-tandem.log` on macOS,
+`%APPDATA%\Claude\logs\` on Windows) shows something like:
+
+```
+[tandem] [info] Using MCP server command: npx with path: { metadata: { paths: [ … ] } }
+Failed to spawn process: No such file or directory
+[tandem] [error] Server disconnected.
+```
+
+**Same cause as the exit-127 section above**, different symptom. An MCP `command` with no
+path separator is resolved through the *client's* PATH at spawn time. A GUI-launched client
+never reads your shell profile, so on macOS it gets roughly `/usr/bin:/bin:/usr/sbin:/sbin`
+— no Homebrew, no nvm, no `~/.local/bin`, and therefore no Node. `npx` is not found, the
+transport dies before it can even handshake, and nothing appears in Tandem's own logs
+because Tandem's server was never contacted.
+
+The `paths` array in that log line is the whole diagnosis: if it contains no directory with
+a `node` in it, this is what you are looking at.
+
+**Entries Tandem manages are fixed.** `tandem setup --apply` (and the desktop app's
+integration wizard) now write an absolute Node binary and an absolute script path, so no
+PATH lookup happens at all. In the desktop app that Node is Tandem's own bundled copy,
+which means the entry works on a machine with no Node installed whatsoever. To pick up the
+change on an existing install:
+
+```bash
+tandem setup --apply
+```
+
+then **restart Claude Desktop** — it does not reload MCP config while running. Your previous
+config is backed up first. `tandem doctor` reports the state of this entry, including
+whether it has gone stale.
+
+**Entries Tandem does not manage still use `npx`**, and cannot be fixed this way — a static
+manifest cannot carry a path that only makes sense on one machine:
+
+- the **Tandem plugin**'s two MCP servers and two monitors (see the previous section),
+- the **Cowork** guest registry, where a host path would be meaningless anyway.
+
+For those, the remedies are the same as the exit-127 section: start the client from a
+terminal, or put Node on the PATH the GUI launcher provides.
 
 ## `claude plugin install` fails to clone (SSH vs HTTPS)
 

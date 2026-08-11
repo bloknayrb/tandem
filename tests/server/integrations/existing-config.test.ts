@@ -340,6 +340,56 @@ describe("validateTandemEntry", () => {
     );
   });
 
+  // The Node-shaped branch is now the PRIMARY stdio shape (absolute Node +
+  // the bundled stdio bridge), not a legacy leftover. The wizard re-reads its
+  // own freshly written entry through this validator and turns any non-`valid`
+  // verdict into `apply: "skip"`, so a regression here makes Tandem refuse to
+  // write its own correct config.
+  it("accepts the absolute-Node + bridge shape buildMcpEntries now emits", () => {
+    expect(
+      validateTandemEntry({
+        command: "/opt/homebrew/bin/node",
+        args: ["/usr/local/lib/node_modules/tandem-editor/dist/stdio-bridge/index.js"],
+      }).status,
+    ).toBe("valid");
+    // …including the desktop app's bundled sidecar, whose basename is not `node`.
+    expect(
+      validateTandemEntry({
+        command: "/Applications/Tandem.app/Contents/MacOS/node-sidecar-aarch64-apple-darwin",
+        args: ["/Applications/Tandem.app/Contents/Resources/dist/stdio-bridge/index.js"],
+      }).status,
+    ).toBe("valid");
+  });
+
+  it("rejects a Node-shaped entry carrying a trailing subcommand", () => {
+    // This is the 1-arg limit doing its job. `<node> <…>/dist/cli/index.js
+    // mcp-stdio` is a shape a user might hand-write, but widening the branch to
+    // accept trailing tokens would also admit `<node> <…>/dist/cli/index.js`
+    // with the subcommand dropped — which routes to `runStart()` and spawns a
+    // whole Tandem server onto the MCP wire.
+    expect(
+      validateTandemEntry({
+        command: "/usr/bin/node",
+        args: ["/opt/tandem/dist/cli/index.js", "mcp-stdio"],
+      }).status,
+    ).toBe("invalid-args");
+  });
+
+  it("accepts an absolute npx command (the tier-2 fallback)", () => {
+    expect(
+      validateTandemEntry({
+        command: "/opt/homebrew/bin/npx",
+        args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"],
+      }).status,
+    ).toBe("valid");
+  });
+
+  it("rejects an absolute path that is neither Node- nor npx-shaped", () => {
+    expect(validateTandemEntry({ command: "/usr/bin/curl", args: ["-y"] }).status).toBe(
+      "invalid-command",
+    );
+  });
+
   it("accepts the canonical npx stdio shape", () => {
     expect(
       validateTandemEntry({ command: "npx", args: ["-y", "tandem-editor", "mcp-stdio"] }).status,

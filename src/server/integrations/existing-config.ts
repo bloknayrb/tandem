@@ -12,8 +12,11 @@
  * `buildMcpEntries` produces:
  * - HTTP `tandem`: `LoopbackUrl.safeParse(url)` rejects credential URLs,
  *   IPv6 loopback, decimal/hex IP obfuscation, NFC/NFD homoglyphs.
- * - stdio `tandem`: `npx -y tandem-editor[@<version>] mcp-stdio` (the middle
- *   token may be bare or exact-version-pinned).
+ * - stdio `tandem`: EITHER `isValidNodeBinary` command + a single `.js` arg
+ *   (the primary shape — an absolute Node running the bundled stdio bridge),
+ *   OR `npx -y tandem-editor[@<version>] mcp-stdio` where the command is the
+ *   bare `npx` or an absolute path whose basename is `npx` (the fallback
+ *   shapes; the middle token may be bare or exact-version-pinned).
  * - stdio `tandem-channel`: `isValidNodeBinary` command + `.js` first arg.
  *
  * Invalid entries are still surfaced (so the user sees what's on disk),
@@ -27,7 +30,10 @@
 
 import { readFile } from "node:fs/promises";
 
-import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
+import {
+  isValidNodeBinary,
+  isValidNpxCommand,
+} from "../../shared/integrations/node-binary-name.js";
 import { type DetectedTarget, type DetectOptions, detectTargets, type McpEntry } from "./apply.js";
 import { LoopbackUrl } from "./schema.js";
 
@@ -86,12 +92,25 @@ const TANDEM_EDITOR_SPEC_RE = /^tandem-editor(@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?
 const TANDEM_STDIO_NPX_ARGS = [...TANDEM_STDIO_NPX_HEAD, "tandem-editor", ...TANDEM_STDIO_NPX_TAIL];
 
 /**
- * Validate an existing `tandem` mcpServers entry against the canonical
- * shapes `buildMcpEntries` produces. HTTP entries must be loopback (via
- * the same Zod schema that gates new entries); stdio entries must be
- * either the canonical `npx -y tandem-editor[@<version>] mcp-stdio` tuple
- * (bare or exact-version-pinned), or a Node-shaped command (for legacy
- * sidecar invocations from older Tauri builds).
+ * Validate an existing `tandem` mcpServers entry against the canonical shapes
+ * `buildMcpEntries` produces. HTTP entries must be loopback (via the same Zod
+ * schema that gates new entries). For stdio, note which branch is canonical —
+ * it changed, and reading it the old way would get the wrong one deleted:
+ *
+ *   - **Node-shaped command + exactly one `.js` arg is the PRIMARY shape**, an
+ *     absolute Node running the bundled stdio bridge. It was introduced for
+ *     legacy sidecar invocations from older Tauri builds, and `buildMcpEntries`
+ *     now emits it deliberately, because a bare command word is resolved
+ *     through the MCP client's PATH at spawn time and a GUI-launched client's
+ *     PATH routinely contains no Node at all.
+ *   - **`npx -y tandem-editor[@<version>] mcp-stdio` is the FALLBACK**, for
+ *     hosts where no absolute Node/bridge pair can be built. The command may be
+ *     the bare `npx` or an absolute path whose basename is `npx`.
+ *
+ * The 1-arg limit on the Node branch is load-bearing, not incidental: it is
+ * what keeps a `<node> <…>/dist/cli/index.js` entry — which would fall through
+ * to `runStart()` and spawn a whole Tandem server onto the MCP wire — from
+ * being widened into validity by a later "accept trailing tokens" change.
  */
 export function validateTandemEntry(entry: McpEntry): EntryValidation {
   // HTTP variant: { type: "http", url: "http://127.0.0.1:..." }
@@ -112,8 +131,22 @@ export function validateTandemEntry(entry: McpEntry): EntryValidation {
   }
   const args = Array.isArray(entry.args) ? entry.args : [];
 
-  // Canonical: npx -y tandem-editor[@<version>] mcp-stdio
-  if (entry.command === "npx") {
+  // Primary: absolute Node + the bundled stdio bridge. Checked FIRST so the
+  // shape `buildMcpEntries` prefers is the one the reader reaches first; the
+  // two branches are disjoint (no basename is both `node*` and `npx*`), so the
+  // order is for legibility, not correctness.
+  if (isValidNodeBinary(entry.command)) {
+    if (args.length !== 1 || typeof args[0] !== "string" || !args[0].endsWith(".js")) {
+      return {
+        status: "invalid-args",
+        reason: "node-shaped stdio entry must take exactly one .js arg",
+      };
+    }
+    return { status: "valid" };
+  }
+
+  // Fallback: npx -y tandem-editor[@<version>] mcp-stdio, bare or absolute.
+  if (isValidNpxCommand(entry.command)) {
     const argsOk =
       args.length === 3 &&
       args[0] === TANDEM_STDIO_NPX_HEAD[0] &&
@@ -129,20 +162,9 @@ export function validateTandemEntry(entry: McpEntry): EntryValidation {
     return { status: "valid" };
   }
 
-  // Legacy sidecar invocation: node-shaped binary + a .js path arg.
-  if (isValidNodeBinary(entry.command)) {
-    if (args.length !== 1 || typeof args[0] !== "string" || !args[0].endsWith(".js")) {
-      return {
-        status: "invalid-args",
-        reason: "node-shaped stdio entry must take exactly one .js arg",
-      };
-    }
-    return { status: "valid" };
-  }
-
   return {
     status: "invalid-command",
-    reason: `command must be 'npx' or a Node-shaped binary; got '${entry.command}'`,
+    reason: `command must be a Node-shaped binary or 'npx'; got '${entry.command}'`,
   };
 }
 

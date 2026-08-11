@@ -7,9 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   evaluateAbsentChannelEntry,
   evaluateClaudeCli,
+  evaluateNodeToolchain,
   evaluateNpmStaleness,
   evaluateOrphanedVite,
   evaluatePushPath,
+  evaluateSpawnedEntryCommand,
   evaluateStaleGlobal,
   evaluateTandemPlugin,
   globalTandemEditorVersion,
@@ -1497,6 +1499,109 @@ describe("evaluateTandemPlugin", () => {
     for (const outcome of out) {
       expect(outcome.fix).toContain("claude plugin uninstall tandem@some-local-marketplace");
       expect(outcome.fix).not.toContain("tandem@tandem-editor");
+    }
+  });
+});
+
+/**
+ * The two checks that exist because a beta tester's client could not spawn
+ * `npx` and `tandem doctor` had nothing to say about it.
+ *
+ * Both are deliberately separate from the staleness probe, which returns early
+ * on a bare command by design — so before these, the most common broken shape
+ * was the one shape no check examined.
+ */
+describe("evaluateSpawnedEntryCommand", () => {
+  it("warns on a bare command, naming the symptom the user actually sees", () => {
+    const outcome = evaluateSpawnedEntryCommand(
+      { command: "npx", args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"] },
+      "tandem",
+      "Claude Desktop config",
+    );
+    expect(outcome?.status).toBe("warn");
+    expect(outcome?.message).toContain("npx");
+    expect(outcome?.message).toContain("Claude Desktop config");
+    // The remedy has to cover BOTH surfaces: the entry Tandem manages (fixable
+    // by re-running setup) and the plugin/Cowork ones (not fixable at all).
+    expect(outcome?.fix).toContain("tandem setup --apply");
+    expect(outcome?.fix).toMatch(/plugin|Cowork/);
+  });
+
+  it("stays silent on an absolute command (that is the staleness probe's job)", () => {
+    expect(
+      evaluateSpawnedEntryCommand(
+        { command: "/opt/homebrew/bin/node", args: ["/opt/t/dist/stdio-bridge/index.js"] },
+        "tandem",
+        "Claude Desktop config",
+      ),
+    ).toBeNull();
+  });
+
+  it("stays silent on an HTTP entry, which spawns nothing", () => {
+    expect(
+      evaluateSpawnedEntryCommand(
+        { type: "http", url: "http://127.0.0.1:3479/mcp" },
+        "tandem",
+        "~/.claude.json",
+      ),
+    ).toBeNull();
+    expect(evaluateSpawnedEntryCommand(null, "tandem", "~/.claude.json")).toBeNull();
+  });
+
+  it("never echoes the entry's env, which carries the bearer token", () => {
+    const outcome = evaluateSpawnedEntryCommand(
+      {
+        command: "npx",
+        args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"],
+        env: { TANDEM_AUTH_TOKEN: "supersecrettokenvalue0123456789ab" },
+      },
+      "tandem",
+      "Claude Desktop config",
+    );
+    // Doctor output reaches /api/diagnostics and the Copy Diagnostics
+    // clipboard, i.e. public issues.
+    const rendered = `${outcome?.message} ${outcome?.fix}`;
+    expect(rendered).not.toContain("supersecrettokenvalue0123456789ab");
+    expect(rendered).not.toContain("TANDEM_AUTH_TOKEN");
+  });
+});
+
+describe("evaluateNodeToolchain", () => {
+  it("passes WITH the caveat when both resolve — a green tick alone would mislead", () => {
+    const outcome = evaluateNodeToolchain({ node: true, npx: true });
+    expect(outcome.status).toBe("pass");
+    // This is the whole point: doctor reads the PATH of the shell it was
+    // launched from, which is not the PATH a GUI-launched client inherits. The
+    // tester would have run doctor, seen green, and learned nothing.
+    expect(outcome.message).toMatch(/GUI-launched/);
+    expect(outcome.message).toMatch(/narrower/);
+  });
+
+  it.each([
+    [{ node: false, npx: true }, "node"],
+    [{ node: true, npx: false }, "npx"],
+  ])("warns when %o is missing", (present, expected) => {
+    const outcome = evaluateNodeToolchain(present);
+    expect(outcome.status).toBe("warn");
+    expect(outcome.message).toContain(expected);
+  });
+
+  it("names both when neither resolves", () => {
+    const outcome = evaluateNodeToolchain({ node: false, npx: false });
+    expect(outcome.status).toBe("warn");
+    expect(outcome.message).toContain("node and npx");
+    expect(outcome.fix).toBeDefined();
+  });
+
+  it("never enumerates PATH directories in its output", () => {
+    // Same enum-only posture as GET /api/integrations/claude-cli-status (F6):
+    // this report is LAN-reachable and must not leak the user's home layout.
+    for (const present of [
+      { node: true, npx: true },
+      { node: false, npx: false },
+    ]) {
+      const outcome = evaluateNodeToolchain(present);
+      expect(`${outcome.message} ${outcome.fix ?? ""}`).not.toContain("/usr/bin");
     }
   });
 });

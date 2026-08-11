@@ -42,3 +42,28 @@ export function isValidNodeBinary(nodeBinary: string): boolean {
   if (hasUncPrefix(nodeBinary)) return false;
   return VALID_NODE_BASENAME_RE.test(crossBasename(nodeBinary));
 }
+
+/**
+ * Every filename `npx` ships under. Windows npm writes cmd-shim wrappers, so a
+ * hand-edited config there can legitimately name `npx.cmd`. Tandem itself only
+ * ever *writes* the absolute form on POSIX (see `buildStdioTandemEntry` for
+ * why), but the re-reader must not reject a shape a user could reasonably have.
+ */
+const VALID_NPX_BASENAME_RE = /^npx(\.(exe|cmd|bat|ps1))?$/;
+
+/**
+ * Is this command the `npx` launcher — bare, or named by absolute path?
+ *
+ * Same basename-allowlist rule as {@link isValidNodeBinary}, for the `tandem`
+ * entry's fallback tiers. An absolute `npx` is what `buildStdioTandemEntry`
+ * emits when it cannot build the preferred absolute-Node shape but can still
+ * find `npx` on this process's PATH; a bare `npx` is the floor tier. Both must
+ * re-read as valid, or the wizard would flag Tandem's own freshly written entry
+ * and pre-select `apply: "skip"`.
+ */
+export function isValidNpxCommand(command: string): boolean {
+  if (!command) return false;
+  if (command.includes("..")) return false;
+  if (hasUncPrefix(command)) return false;
+  return VALID_NPX_BASENAME_RE.test(crossBasename(command));
+}

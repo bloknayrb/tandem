@@ -87,6 +87,33 @@ export default defineConfig([
     ...selfContained,
   },
   {
+    // The `tandem` stdio entry's script, kept out of `dist/cli` because that
+    // bundle is deliberately NOT self-contained (see the CLI block below) and
+    // therefore cannot run from a Tauri resource dir, which ships no
+    // `node_modules`. Same shape and same reason as `dist/channel`.
+    //
+    // No `define` block: nothing in this entry's import closure reads
+    // `__TANDEM_VERSION__` / `__APP_VERSION__` / `__LICENSE_GATE_ENABLED__`.
+    // If that changes, add them — esbuild leaves an absent define as a bare
+    // free global, which is a runtime ReferenceError with no build error.
+    entry: ["src/stdio-bridge/index.ts"],
+    outDir: "dist/stdio-bridge",
+    format: ["esm"],
+    target: "node22",
+    platform: "node",
+    splitting: false,
+    clean: true,
+    dts: false,
+    sourcemap: true,
+    ...selfContained,
+  },
+  {
+    // NOT `...selfContained`, deliberately: `noExternal: [/.*/]` would inline
+    // `src/cli/start.ts` and with it a second copy of the whole server, and
+    // `selfContained`'s `createRequire` banner would be overwritten by the
+    // shebang banner below. The cost is that this bundle needs a sibling
+    // `node_modules` — fine for an npm global install, which is the only place
+    // it ships. Anything that must run without one gets its own entry above.
     entry: ["src/cli/index.ts"],
     outDir: "dist/cli",
     format: ["esm"],

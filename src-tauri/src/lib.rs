@@ -2230,6 +2230,19 @@ async fn start_sidecar(
         log::warn!("Channel shim path unresolved — Claude Code push may fall back to polling");
     }
 
+    // Same problem, different artifact: the `tandem` stdio entry Tandem writes
+    // for Claude Desktop needs an absolute script path, or it falls back to a
+    // bare `npx` the client cannot resolve on a GUI-launched PATH. Deliberately
+    // a SEPARATE Option from `channel_dist` — a partial `dist/` can carry one
+    // and not the other, and folding them together would let a missing channel
+    // bundle silently disable the stdio fix.
+    let stdio_bridge_dist: Option<String> = resolve_stdio_bridge_dist(handle);
+    if stdio_bridge_dist.is_none() {
+        log::warn!(
+            "stdio-bridge path unresolved — the Claude Desktop MCP entry will fall back to npx"
+        );
+    }
+
     for attempt in 0..=MAX_RESTARTS {
         if attempt > 0 {
             let backoff = Duration::from_secs(2u64.pow(attempt - 1));
@@ -2253,6 +2266,10 @@ async fn start_sidecar(
 
         if let Some(ref cd) = channel_dist {
             cmd = cmd.env("TANDEM_CHANNEL_DIST", cd.as_str());
+        }
+
+        if let Some(ref sb) = stdio_bridge_dist {
+            cmd = cmd.env("TANDEM_STDIO_BRIDGE_DIST", sb.as_str());
         }
 
         // Crash reporting (#921): forward the opt-in DSN so the sidecar reports
@@ -2502,6 +2519,36 @@ fn resolve_channel_dist(handle: &tauri::AppHandle) -> Option<String> {
     let cwd_channel = std::env::current_dir().ok()?.join("dist/channel/index.js");
     if cwd_channel.exists() {
         Some(strip_win_prefix(&cwd_channel))
+    } else {
+        None
+    }
+}
+
+/// Resolve the bundled stdio-bridge JS path, injected into the sidecar as
+/// `TANDEM_STDIO_BRIDGE_DIST` so the generated `mcpServers.tandem` entry for
+/// Claude Desktop can name an absolute script instead of a bare `npx` the
+/// client may not be able to resolve. Exact sibling of `resolve_channel_dist`
+/// — same precedence, same `strip_win_prefix` (Node cannot resolve `\\?\`),
+/// same `None`-means-fall-back-to-the-server's-own-derivation contract.
+///
+/// Deliberately not folded into `resolve_channel_dist` with a parameter: the
+/// two are injected independently and their absence has different
+/// consequences (degraded push vs an unspawnable tool surface), so they warn
+/// separately at the call site.
+fn resolve_stdio_bridge_dist(handle: &tauri::AppHandle) -> Option<String> {
+    let resource_bridge = handle
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|d| d.join("dist/stdio-bridge/index.js"));
+    if let Some(p) = resource_bridge {
+        if p.exists() {
+            return Some(strip_win_prefix(&p));
+        }
+    }
+    let cwd_bridge = std::env::current_dir().ok()?.join("dist/stdio-bridge/index.js");
+    if cwd_bridge.exists() {
+        Some(strip_win_prefix(&cwd_bridge))
     } else {
         None
     }
