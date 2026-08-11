@@ -2,29 +2,20 @@
 // client bundle — this is the wire shape of GET /api/diagnostics' `report`.
 import type { DoctorReport, DoctorStatus } from "../../cli/doctor";
 import { TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
+import type { HostInfo } from "../../shared/diagnostics";
 
 /**
  * Wire shape of `GET /api/diagnostics` (see `makeDiagnosticsHandler`).
  *
- * Everything below `tauriSidecar` comes from `collectHostInfo()` and is
- * OPTIONAL — `os.cpus()` legitimately returns `[]` on some hosts, and an older
- * server predates the fields entirely. `formatDiagnostics` therefore drops each
- * one individually rather than printing `undefined`.
+ * Extends `HostInfo` rather than re-declaring its ten fields: the host block is
+ * the server's to define, and a hand-copy here would be the one copy nothing
+ * type-checks. `formatDiagnostics` drops each optional field individually
+ * rather than printing `undefined`.
  */
-export interface DiagnosticsPayload {
+export interface DiagnosticsPayload extends HostInfo {
   report: DoctorReport;
   version: string;
   transport: string;
-  platform: string;
-  arch: string;
-  nodeVersion: string;
-  tauriSidecar: boolean;
-  osRelease?: string;
-  osVersion?: string;
-  cpuModel?: string;
-  cpuCount?: number;
-  totalMemoryMb?: number;
-  freeMemoryMb?: number;
 }
 
 /** Client-side facts the server cannot see. */
@@ -64,6 +55,11 @@ const UA_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
   ["HeadlessChrome", /\bHeadlessChrome\/(\d+)/],
   ["Chrome", /\bChrome\/(\d+)/],
   ["Safari", /\bVersion\/(\d+)[.\d]*\s+Safari\//],
+  // Terminal fallback, and it carries the desktop app. macOS WKWebView sends no
+  // `Chrome/`, no `Edg/`, and often no `Version/… Safari/` token, so without
+  // this the Browser line vanishes for exactly the distribution whose engine
+  // version a bug report most needs.
+  ["WebKit", /\bAppleWebKit\/(\d+)/],
 ];
 
 /**
@@ -109,15 +105,14 @@ function hardwareLine(payload: DiagnosticsPayload): string | null {
   else if (model) parts.push(`CPU: ${model}`);
   else if (count) parts.push(`CPU: x${count}`);
 
-  const total = payload.totalMemoryMb;
-  const free = payload.freeMemoryMb;
-  if (total !== undefined && free !== undefined) {
-    parts.push(`RAM: ${formatMemoryMb(total)} total, ${formatMemoryMb(free)} free`);
-  } else if (total !== undefined) {
-    parts.push(`RAM: ${formatMemoryMb(total)} total`);
-  } else if (free !== undefined) {
-    parts.push(`RAM: ${formatMemoryMb(free)} free`);
+  const ram: string[] = [];
+  if (payload.totalMemoryMb !== undefined) {
+    ram.push(`${formatMemoryMb(payload.totalMemoryMb)} total`);
   }
+  if (payload.freeMemoryMb !== undefined) {
+    ram.push(`${formatMemoryMb(payload.freeMemoryMb)} free`);
+  }
+  if (ram.length > 0) parts.push(`RAM: ${ram.join(", ")}`);
 
   return parts.length > 0 ? parts.join(", ") : null;
 }
@@ -215,26 +210,20 @@ export function buildBugReportUrl(diagnostics?: string | null): string {
     // Truncate by whole lines, never mid-string: slicing a JS string can split
     // a surrogate pair, and `encodeURIComponent` throws URIError on a lone
     // surrogate. Line boundaries sidestep that entirely.
+    //
+    // A linear shrink rather than a binary search: reports run 20-40 lines, and
+    // even the pathological 400-line case measures well under a millisecond in
+    // a `.then` continuation off the click path. Not worth the lo/hi/sentinel
+    // bookkeeping.
     const lines = text.split("\n");
-    const candidate = (kept: number): string =>
-      `${lines.slice(0, kept).join("\n")}\n${TRUNCATION_MARKER}`;
-
-    let lo = 1;
-    let hi = lines.length;
-    let best = 0;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (issueUrlFor(candidate(mid)).length <= MAX_ISSUE_URL_LENGTH) {
-        best = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
+    for (let kept = lines.length - 1; kept > 0; kept--) {
+      const url = issueUrlFor(`${lines.slice(0, kept).join("\n")}\n${TRUNCATION_MARKER}`);
+      if (url.length <= MAX_ISSUE_URL_LENGTH) return url;
     }
 
     // Not even one line fits — a single pathologically long line. An issue with
     // only a truncation notice is worse than none, so fall back to the bare URL.
-    return best > 0 ? issueUrlFor(candidate(best)) : TANDEM_ISSUES_NEW_URL;
+    return TANDEM_ISSUES_NEW_URL;
   } catch {
     // encodeURIComponent throws URIError on a lone surrogate anywhere in the
     // report. Losing the prefill beats losing the link.

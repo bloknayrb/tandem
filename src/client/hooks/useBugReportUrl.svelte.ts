@@ -2,16 +2,11 @@ import { TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
 import { buildBugReportUrl, formatDiagnostics, summarizeUserAgent } from "../utils/diagnostics";
 import { fetchDiagnostics } from "../utils/diagnostics-fetch";
 
-/** `runDoctor` does port probes and HTTP self-probes; 3s (useAppInfo's budget) is too tight. */
-const PREFETCH_TIMEOUT_MS = 8000;
-
 export interface BugReportUrlState {
   /** Always a usable issue URL — bare until the prefetch lands. */
   readonly url: string;
   /** Start the prefetch. Idempotent; safe to call on every hover/focus. */
   prime(): void;
-  /** Abort, and drop any captured diagnostics. */
-  reset(): void;
 }
 
 /**
@@ -32,23 +27,39 @@ export interface BugReportUrlState {
  * majority of opens that never touch this link, would be an unforced
  * regression. Hover and focus both precede the click by enough to win the race
  * on a warm path; touch-only interaction fires neither and keeps the bare URL.
+ *
+ * Takes `getOpen` so the hook owns its own teardown, matching `createAppInfo`
+ * and the rest of this directory — priming is the caller's business, forgetting
+ * to reset should not be.
  */
-export function createBugReportUrl(): BugReportUrlState {
+export function createBugReportUrl(getOpen: () => boolean): BugReportUrlState {
   let url = $state(TANDEM_ISSUES_NEW_URL);
   let primed = false;
-  let controller: AbortController | null = null;
+  // Bumped on close so a report still in flight cannot land afterwards.
+  let generation = 0;
+
+  $effect(() => {
+    if (getOpen()) return;
+    // Diagnostics captured during an earlier session of the modal would be
+    // stale by the next open, and stale readings in a bug report are worse
+    // than none.
+    generation++;
+    primed = false;
+    url = TANDEM_ISSUES_NEW_URL;
+  });
 
   function prime(): void {
     if (primed) return;
     primed = true;
+    const token = generation;
 
-    const ctrl = new AbortController();
-    controller = ctrl;
-    const timeout = setTimeout(() => ctrl.abort(), PREFETCH_TIMEOUT_MS);
-
-    fetchDiagnostics(ctrl.signal)
+    // No timeout and no abort: the request is shared (see `diagnostics-fetch`),
+    // so cancelling it could kill a Copy-Diagnostics click's fetch. A late
+    // result is harmless — the link works throughout, and `token` is what stops
+    // a stale one from being applied.
+    void fetchDiagnostics()
       .then((result) => {
-        if (ctrl.signal.aborted || !result.ok) return;
+        if (token !== generation || !result.ok) return;
         url = buildBugReportUrl(
           formatDiagnostics(result.payload, {
             browser: summarizeUserAgent(navigator.userAgent),
@@ -59,21 +70,7 @@ export function createBugReportUrl(): BugReportUrlState {
         // No toast: the user asked for an issue form, not a diagnostic report.
         // A banner on every hover of an offline app would be pure noise.
         console.warn("[useBugReportUrl] diagnostics prefetch failed:", err);
-      })
-      .finally(() => {
-        clearTimeout(timeout);
-        if (controller === ctrl) controller = null;
       });
-  }
-
-  function reset(): void {
-    controller?.abort();
-    controller = null;
-    primed = false;
-    // Diagnostics captured during an earlier session of the modal would be
-    // stale by the next open, and stale readings in a bug report are worse
-    // than none.
-    url = TANDEM_ISSUES_NEW_URL;
   }
 
   return {
@@ -81,6 +78,5 @@ export function createBugReportUrl(): BugReportUrlState {
       return url;
     },
     prime,
-    reset,
   };
 }

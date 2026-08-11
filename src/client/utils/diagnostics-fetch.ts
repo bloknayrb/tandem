@@ -21,17 +21,38 @@ export type DiagnosticsFetchResult =
   | { ok: false; reason: "unreachable" | "server" };
 
 /**
- * Single shared in-flight request. `runDoctor` behind this route spawns
- * `npm ls -g`, probes ports, and stats the annotation store, so a hover-prefetch
- * racing a Copy-Diagnostics click should cost one run, not two. Cleared on
- * settle rather than cached with a TTL: a later click deserves fresh readings.
+ * How long a successful report may be reused.
+ *
+ * Without this, the ordinary sequence — hover the Report-a-bug link (primes,
+ * settles), then click Copy Diagnostics a few seconds later — runs the whole
+ * collector twice, where before the prefetch existed it ran once. In-flight
+ * sharing alone does not help, because those two requests do not overlap. The
+ * staleness is not a real cost: the hook already serves the user a prefetched
+ * report of exactly this age when they click through to the issue form.
+ */
+const CACHE_TTL_MS = 15_000;
+
+/**
+ * Deliberately NO AbortSignal parameter.
+ *
+ * An earlier version took one, and because the promise is shared, whichever
+ * caller *started* the request owned its lifetime: the hover prefetch would
+ * start it, a Copy-Diagnostics click would join it, and then the prefetch's
+ * timeout — or the modal closing — aborted the fetch the click was still
+ * awaiting. `run()` maps AbortError to "unreachable", so the user saw
+ * "Couldn't reach the server — is it running?" for a perfectly healthy server,
+ * and a nearly-complete collector run was thrown away.
+ *
+ * A caller that wants to stop *waiting* can ignore a late result; nobody gets
+ * to cancel work another caller is depending on.
  */
 let inFlight: Promise<DiagnosticsFetchResult> | null = null;
+let cached: { at: number; result: DiagnosticsFetchResult } | null = null;
 
-async function run(signal?: AbortSignal): Promise<DiagnosticsFetchResult> {
+async function run(): Promise<DiagnosticsFetchResult> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${API_DIAGNOSTICS}`, { signal });
+    res = await fetch(`${API_BASE}${API_DIAGNOSTICS}`);
   } catch {
     return { ok: false, reason: "unreachable" };
   }
@@ -44,21 +65,31 @@ async function run(signal?: AbortSignal): Promise<DiagnosticsFetchResult> {
 }
 
 /**
- * Fetch diagnostics, joining any request already in flight.
- *
- * Note that `signal` only applies to a request this call actually starts — a
- * joined caller cannot abort someone else's fetch. That is the intended
- * behavior: the hook's timeout should stop *waiting*, not cancel the click-path
- * request it happened to piggyback on.
+ * Fetch diagnostics, reusing a recent success or joining a request already in
+ * flight. The route runs the full `tandem doctor` collector — an `npm ls -g`
+ * subprocess, port probes, a directory scan — so duplicate runs are the thing
+ * worth avoiding here. (The server single-flights *overlapping* requests too;
+ * this layer additionally covers sequential ones and saves the round-trip.)
  */
-export function fetchDiagnostics(signal?: AbortSignal): Promise<DiagnosticsFetchResult> {
-  inFlight ??= run(signal).finally(() => {
-    inFlight = null;
-  });
+export function fetchDiagnostics(): Promise<DiagnosticsFetchResult> {
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    return Promise.resolve(cached.result);
+  }
+  inFlight ??= run()
+    .then((result) => {
+      // Only successes are cached. Pinning a transient failure for 15s would
+      // make a retry look broken.
+      if (result.ok) cached = { at: Date.now(), result };
+      return result;
+    })
+    .finally(() => {
+      inFlight = null;
+    });
   return inFlight;
 }
 
-/** Test seam — drops any shared in-flight promise. */
-export function _resetDiagnosticsInFlight(): void {
+/** Test seam — drops the cached report and any shared in-flight promise. */
+export function _resetDiagnosticsCache(): void {
   inFlight = null;
+  cached = null;
 }

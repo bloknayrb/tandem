@@ -4,6 +4,7 @@ import type { DoctorReport, RunDoctorOptions } from "../../../cli/doctor.js";
 import { runDoctor, summarizeDoctorResults } from "../../../cli/doctor.js";
 import { isLoopback } from "../../auth/middleware.js";
 import { collectHostInfo } from "../host-info.js";
+import { escapeRegex } from "../response.js";
 import type { Handler } from "./_shared.js";
 
 /**
@@ -59,10 +60,6 @@ export function filterDevRepoChecks(report: DoctorReport): DoctorReport {
   };
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /** Recursively apply `scrub` to every string in a free-form value. */
 function scrubDeep(value: unknown, scrub: (s: string) => string): unknown {
   if (typeof value === "string") return scrub(value);
@@ -88,11 +85,20 @@ function scrubDeep(value: unknown, scrub: (s: string) => string): unknown {
  * what to paste. The Report-a-bug link prefills a public issue body, which turns
  * that review step into an opt-out, so the redaction happens here instead.
  *
- * Scrubs the per-check `data` bag too, not just `message`/`fix`. `data` is
- * free-form and several checks put the raw directory in it (`annotation-store`
- * carries `data.dir`), so a message-only pass leaves the path on the wire — the
- * formatter does not print `data`, but the route's own response is the thing
- * being promised as redacted.
+ * Walks the WHOLE report rather than enumerating `message`/`fix`. The per-check
+ * `data` bag is free-form and several checks put the raw directory in it
+ * (`annotation-store` carries `data.dir`), so a message-only pass leaves the
+ * path on the wire — and enumerating fields means a new string field on
+ * `DoctorResult` silently escapes redaction with nothing to fail. Rewriting
+ * only the home prefix is safe on any string, so the general walk is both
+ * shorter and closed.
+ *
+ * Note this is NOT `scrubPathForCaller` (`routes/_shared.ts`): that one is
+ * caller-conditional (a loopback caller gets the real path) and reduces to a
+ * basename. It would be a no-op here, since this route 403s every non-loopback
+ * caller — and basenaming the report would destroy its diagnostic value. The
+ * adversary is different: not a LAN peer, but the public issue the loopback
+ * user is about to paste into.
  *
  * Applied to the HTTP route ONLY. The `tandem_diagnostics` MCP tool serves an
  * agent that may need to act on the real path, and it does not feed an issue
@@ -107,8 +113,8 @@ export function redactHomePaths(report: DoctorReport): DoctorReport {
     return report;
   }
   // Guard against a root/empty homedir, where a blind replace would corrupt
-  // every absolute path in the report.
-  if (!home || home.length < 2 || home === "/" || /^[A-Za-z]:[/\\]?$/.test(home)) return report;
+  // every absolute path in the report. (`length < 2` already covers "/".)
+  if (!home || home.length < 2 || /^[A-Za-z]:[/\\]?$/.test(home)) return report;
 
   const trimmed = home.replace(/[/\\]+$/, "");
   const variants = [...new Set([trimmed, trimmed.replace(/\\/g, "/")])];
@@ -118,19 +124,9 @@ export function redactHomePaths(report: DoctorReport): DoctorReport {
   // The lookahead requires the next character (if any) to be a separator, so a
   // short home like `/root` cannot swallow the prefix of an unrelated
   // `/rootfs/...`.
-  const pattern = new RegExp(`(?:${variants.map(escapeRegExp).join("|")})(?![^/\\\\])`, flags);
-  const scrub = (s: string): string => s.replace(pattern, "~");
+  const pattern = new RegExp(`(?:${variants.map(escapeRegex).join("|")})(?![^/\\\\])`, flags);
 
-  return {
-    ...report,
-    error: report.error ? scrub(report.error) : report.error,
-    results: report.results.map((res) => ({
-      ...res,
-      message: scrub(res.message),
-      ...(res.fix ? { fix: scrub(res.fix) } : {}),
-      ...(res.data ? { data: scrubDeep(res.data, scrub) as Record<string, unknown> } : {}),
-    })),
-  };
+  return scrubDeep(report, (s) => s.replace(pattern, "~")) as DoctorReport;
 }
 
 /**

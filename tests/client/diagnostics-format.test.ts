@@ -229,6 +229,26 @@ describe("summarizeUserAgent", () => {
     ).toBe("HeadlessChrome 141");
   });
 
+  it("falls back to WebKit for the macOS desktop WebView", () => {
+    // The Tauri build is the primary distribution, and macOS WKWebView sends no
+    // Chrome/, no Edg/, and often no "Version/… Safari/" token. Without the
+    // AppleWebKit fallback the Browser line vanishes for exactly the users
+    // whose engine version a bug report most needs.
+    expect(
+      summarizeUserAgent(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+      ),
+    ).toBe("WebKit 605");
+  });
+
+  it("still prefers a named browser over the WebKit fallback", () => {
+    expect(
+      summarizeUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+      ),
+    ).toBe("Chrome 141");
+  });
+
   it("returns an empty string for an unrecognized agent, which drops the line", () => {
     expect(summarizeUserAgent("")).toBe("");
     expect(summarizeUserAgent("SomeCrawler/1.0")).toBe("");

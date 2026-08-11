@@ -2,9 +2,9 @@
  * Host environment facts shared by the two diagnostics producers: the
  * `GET /api/diagnostics` HTTP route (`routes/diagnostics.ts`) and the
  * `tandem_diagnostics` MCP tool (`diagnostics.ts`). Both used to inline the
- * same four `process.*` reads; collapsing them here means two of the three
- * lockstep files (the third is the zod shape in `output-schemas.ts`) cannot
- * drift apart.
+ * same four `process.*` reads; collapsing them here means the producers cannot
+ * drift apart. The wire type lives in `shared/diagnostics.ts` so the client
+ * formatter shares it too.
  *
  * Privacy: this output reaches a public GitHub issue — Copy Diagnostics puts it
  * on the clipboard, and the Report-a-bug link prefills it into an issue body.
@@ -23,34 +23,19 @@
  * `undefined` rather than failing the whole diagnostics call. `os.cpus()`
  * returns `[]` under some cgroup-restricted containers, which is exactly why
  * the CPU fields are optional rather than defaulted.
+ *
+ * Not memoized. The reads total ~60µs, against a route whose collector spawns
+ * `npm ls -g`, probes two ports and stats a directory — caching them would buy
+ * under 0.01% and cost module state plus a reset seam.
  */
 
 import os from "node:os";
+import type { HostInfo } from "../../shared/diagnostics.js";
+
+export type { HostInfo };
 
 /** Upper bound on `os.version()`. Darwin's kernel banner is ~100 chars. */
 const MAX_OS_VERSION_LENGTH = 120;
-
-export interface HostInfo {
-  platform: string;
-  arch: string;
-  nodeVersion: string;
-  tauriSidecar: boolean;
-  /** `os.release()` — e.g. "10.0.26100", "23.5.0". */
-  osRelease?: string;
-  /** `os.version()` — e.g. "Windows 11 Pro", or a kernel banner. */
-  osVersion?: string;
-  /** First CPU's model string, whitespace-collapsed. */
-  cpuModel?: string;
-  /** Logical CPU count. */
-  cpuCount?: number;
-  /** Total physical memory, MiB. */
-  totalMemoryMb?: number;
-  /** Free physical memory, MiB. */
-  freeMemoryMb?: number;
-}
-
-/** The subset that never changes for the process lifetime. */
-type StaticHostInfo = Omit<HostInfo, "freeMemoryMb">;
 
 function tryValue<T>(read: () => T | undefined): T | undefined {
   try {
@@ -64,11 +49,13 @@ function toMb(bytes: number): number {
   return Math.round(bytes / 1024 / 1024);
 }
 
-function collectStatic(): StaticHostInfo {
+/** Collect the host environment fields. Side-effect free; safe to call per request. */
+export function collectHostInfo(): HostInfo {
+  // One `os.cpus()` call — it allocates an object per core, and both CPU fields
+  // read from the same array.
   const cpus = tryValue(() => os.cpus()) ?? [];
   const model = cpus[0]?.model?.trim().replace(/\s+/g, " ");
   const version = tryValue(() => os.version())?.slice(0, MAX_OS_VERSION_LENGTH);
-  const totalMemoryMb = tryValue(() => toMb(os.totalmem()));
 
   return {
     platform: process.platform,
@@ -79,23 +66,9 @@ function collectStatic(): StaticHostInfo {
     osVersion: version || undefined,
     cpuModel: model || undefined,
     cpuCount: cpus.length || undefined,
-    totalMemoryMb,
+    // No `|| undefined` on the memory fields: 0 MB free is a real, and rather
+    // interesting, reading — unlike a 0 CPU count, which only means "unknown".
+    totalMemoryMb: tryValue(() => toMb(os.totalmem())),
+    freeMemoryMb: tryValue(() => toMb(os.freemem())),
   };
-}
-
-let cachedStatic: StaticHostInfo | null = null;
-
-/**
- * Collect the host environment fields. Static values are memoized (`os.cpus()`
- * is a syscall and this runs on every diagnostics request); free memory is read
- * fresh each call because it is the only field that moves.
- */
-export function collectHostInfo(): HostInfo {
-  cachedStatic ??= collectStatic();
-  return { ...cachedStatic, freeMemoryMb: tryValue(() => toMb(os.freemem())) };
-}
-
-/** Test seam — drops the memoized static block. */
-export function _resetHostInfoCache(): void {
-  cachedStatic = null;
 }

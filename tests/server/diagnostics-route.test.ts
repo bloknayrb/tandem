@@ -66,6 +66,17 @@ function makeHandler(collect: (opts: unknown) => Promise<DoctorReport>) {
   }) as unknown as AnyHandler;
 }
 
+/** Drive a one-shot handler and return what it wrote. */
+async function invoke(
+  collect: (opts: unknown) => Promise<DoctorReport>,
+  remoteAddress = "127.0.0.1",
+): Promise<{ status: number; body: Record<string, unknown>; report: DoctorReport }> {
+  const res = makeMockRes();
+  await makeHandler(collect)(makeMockReq(remoteAddress), res, () => {});
+  const body = (res._body ?? {}) as Record<string, unknown>;
+  return { status: res.statusCode, body, report: body.report as DoctorReport };
+}
+
 describe("GET /api/diagnostics — loopback happy path", () => {
   it("returns 200 with the report and environment fields", async () => {
     const collect = vi.fn(async () => makeReport([result("node-version", "pass")]));
@@ -94,12 +105,9 @@ describe("GET /api/diagnostics — loopback happy path", () => {
     // set — instead of `not.toContain(os.hostname())`, which flakes whenever
     // CI's hostname is a common substring — is what catches an accidental
     // `hostname` / `homedir` / `env` field added to `collectHostInfo`.
-    const collect = vi.fn(async () => makeReport([result("node-version", "pass")]));
-    const res = makeMockRes();
+    const { body } = await invoke(async () => makeReport([result("node-version", "pass")]));
 
-    await makeHandler(collect)(makeMockReq("127.0.0.1"), res, () => {});
-
-    expect(Object.keys(res._body as object).sort()).toEqual([
+    expect(Object.keys(body).sort()).toEqual([
       "arch",
       "cpuCount",
       "cpuModel",
@@ -119,9 +127,7 @@ describe("GET /api/diagnostics — loopback happy path", () => {
   it("types the optional host fields when present, without pinning values", async () => {
     // CI containers legitimately omit cpuModel/cpuCount (`os.cpus()` returns []),
     // so assert shape rather than content.
-    const res = makeMockRes();
-    await makeHandler(async () => makeReport([]))(makeMockReq("127.0.0.1"), res, () => {});
-    const body = res._body as Record<string, unknown>;
+    const { body } = await invoke(async () => makeReport([]));
 
     for (const key of ["osRelease", "osVersion", "cpuModel"]) {
       if (body[key] !== undefined) expect(typeof body[key]).toBe("string");
@@ -164,13 +170,10 @@ describe("GET /api/diagnostics — home-path redaction", () => {
           data: { dir, docCount: 0, nested: { paths: [dir] } },
         },
       ]);
-    const res = makeMockRes();
+    const { body, report } = await invoke(collect);
 
-    await makeHandler(collect)(makeMockReq("127.0.0.1"), res, () => {});
-
-    const wire = JSON.stringify(res._body);
-    expect(wire).not.toContain(home);
-    const [only] = (res._body as { report: DoctorReport }).report.results;
+    expect(JSON.stringify(body)).not.toContain(home);
+    const [only] = report.results;
     expect(only.message).toContain("~");
     expect(only.fix).toContain("~");
     // The rest of the path must survive — redaction, not deletion.
@@ -187,11 +190,9 @@ describe("GET /api/diagnostics — home-path redaction", () => {
       ...makeReport([]),
       error: `EACCES: permission denied, open '${path.join(home, "secret.json")}'`,
     });
-    const res = makeMockRes();
+    const { report } = await invoke(collect);
 
-    await makeHandler(collect)(makeMockReq("127.0.0.1"), res, () => {});
-
-    const { error } = (res._body as { report: DoctorReport }).report;
+    const { error } = report;
     expect(error).not.toContain(home);
     expect(error).toContain("~");
   });
@@ -201,22 +202,18 @@ describe("GET /api/diagnostics — home-path redaction", () => {
     const home = os.homedir();
     const decoy = `${home}fs/mount/data`;
     const collect = async () => makeReport([result("ports", "pass", `scanned ${decoy}`)]);
-    const res = makeMockRes();
+    const { report } = await invoke(collect);
 
-    await makeHandler(collect)(makeMockReq("127.0.0.1"), res, () => {});
-
-    const [only] = (res._body as { report: DoctorReport }).report.results;
+    const [only] = report.results;
     expect(only.message).toBe(`scanned ${decoy}`);
   });
 
   it("leaves messages without a home path untouched", async () => {
-    const collect = async () =>
-      makeReport([result("ports", "pass", "Hocuspocus :3478 and MCP :3479 are listening")]);
-    const res = makeMockRes();
+    const { report } = await invoke(async () =>
+      makeReport([result("ports", "pass", "Hocuspocus :3478 and MCP :3479 are listening")]),
+    );
 
-    await makeHandler(collect)(makeMockReq("127.0.0.1"), res, () => {});
-
-    const [only] = (res._body as { report: DoctorReport }).report.results;
+    const [only] = report.results;
     expect(only.message).toBe("Hocuspocus :3478 and MCP :3479 are listening");
     expect(only.fix).toBeUndefined();
   });

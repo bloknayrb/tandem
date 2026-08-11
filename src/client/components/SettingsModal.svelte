@@ -242,11 +242,9 @@ let modalEl: HTMLDivElement | undefined = $state();
 let hamburgerEl: HTMLButtonElement | undefined = $state();
 const appInfo = createAppInfo(() => open);
 // Primed from the Report-a-bug link's hover/focus, not from `open` — see the
-// hook's docstring for why the modal opening is the wrong trigger.
-const bugReport = createBugReportUrl();
-$effect(() => {
-  if (!open) bugReport.reset();
-});
+// hook's docstring for why the modal opening is the wrong trigger. The getter
+// is for teardown, which the hook owns.
+const bugReport = createBugReportUrl(() => open);
 let changelogLoading = $state(false);
 let changelogError = $state<string | null>(null);
 let replayLoading = $state(false);
