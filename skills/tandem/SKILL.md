@@ -1,11 +1,12 @@
 ---
 name: tandem
-version: 10
+version: 11
 description: >
-  Use when tandem_* MCP tools are available, the user asks about Tandem
-  document editing, or iterating on text collaboratively. Provides workflow
-  guidance, annotation strategy, and tool usage patterns for the Tandem
-  collaborative editor.
+  Use before the first tandem_* call in a session — including a lone status
+  check — or when the user asks about Tandem document editing or iterating on
+  text collaboratively. Covers being woken while idle so the user's comments
+  and chat reach you between turns, plus annotation strategy, editing
+  workflow, and tool usage patterns for the Tandem collaborative editor.
 ---
 
 # Tandem — Collaborative Document Editor
