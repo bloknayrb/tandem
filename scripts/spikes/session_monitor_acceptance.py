@@ -112,6 +112,13 @@ DIRECT_LIVE_CAPTURE = "direct-live"
 FAILED_LIVE_CAPTURE = "failed-live"
 DIAGNOSTIC_IMPORT = "diagnostic-import"
 ATTESTATION_FIELD = "capture_attestation"
+# Rig failures travel in the row's free-text `notes`, which also carries the capture's
+# own failure code. Both are segments of one `"; "`-joined string, so neither may be
+# written by assignment and neither may be read with `startswith` -- doing either makes
+# the other invisible, which is the anonymity this field exists to remove.
+NOTE_SEPARATOR = "; "
+RIG_NOTE_PREFIX = "rig: "
+ARCHIVED_ATTESTATION_REASON_FIELD = "attestation_void_reason"
 ATTESTATION_KEY_FILE = "capture-attestation.key"
 AUTH_TOKEN_FILE = "acceptance-auth-token.txt"
 CAPTURE_ARTIFACT_ROLES = frozenset(
@@ -291,8 +298,9 @@ def dispatch_signals_seen(
       prompt. It is the control arm's only first-class signal -- evidence from the host
       that ``/tandem`` ran, rather than an inference from a process having spawned. Added
       2026-08-11 and NOT yet seen in a capture: the fixture did not subscribe to this hook
-      when the stored bundle was taken, so the ten traces contain none. It is additive, so
-      a wrong guess about its payload can only fail to fire, never fire falsely.
+      when the stored bundle was taken, so the ten traces contain none. Because the field
+      is unknown, every string value is examined -- see ``typed_tandem_command`` for why
+      that is a prefix test on the value rather than a substring search over the payload.
 
     Taking the union is what makes a broken ``on-skill-invoke`` trigger (#1354) visible:
     marker absent while a `Skill` event exists means the model did invoke the skill and
@@ -304,11 +312,7 @@ def dispatch_signals_seen(
         return True
     if any(
         str(event.get("hook_event_name", "")) == "UserPromptExpansion"
-        # Which field carries the command name is not documented, so match the whole
-        # payload -- but on the typed form `/tandem`, not the bare word. A natural prompt
-        # names Tandem in prose and must never be read as an explicit dispatch; the matrix
-        # guarantees no natural prompt contains the slash form.
-        and "/tandem" in json.dumps(event, sort_keys=True, default=str).lower()
+        and typed_tandem_command(event)
         and (at := event_at(event)) is not None
         and at >= prompt_submitted_at
         for event in events
@@ -408,6 +412,45 @@ def _record_rig_failure(server_log: dict[str, Any], reason: str) -> None:
     failures = server_log.setdefault("failures", [])
     if reason not in failures:
         failures.append(reason)
+
+
+def typed_tandem_command(event: Any) -> bool:
+    """True when some value in the event is the typed command `/tandem` itself.
+
+    Which field carries the command is not documented, so every string value is examined
+    -- but a value must *begin* with the slash form to count. A substring search over the
+    serialized payload would match this repository's own posix path (`.../GitHub/tandem`)
+    in any incidental `cwd` or `transcript_path`, turning a prose trial into a false
+    control dispatch. That is the direction this module cannot afford: a natural prompt
+    names Tandem in prose and must never read as an explicit dispatch.
+    """
+
+    if isinstance(event, str):
+        head = event.strip().lower()
+        return head == "/tandem" or head.startswith("/tandem ") or head.startswith("/tandem\t")
+    if isinstance(event, dict):
+        return any(typed_tandem_command(value) for value in event.values())
+    if isinstance(event, (list, tuple)):
+        return any(typed_tandem_command(value) for value in event)
+    return False
+
+
+def append_note(existing: Any, addition: str) -> str:
+    """Add one segment to a row's `notes` without displacing what is already there."""
+
+    return NOTE_SEPARATOR.join(part for part in [str(existing or ""), addition] if part)
+
+
+def rig_note_of(row: dict[str, Any]) -> str | None:
+    """The row's rig-failure segment, wherever it sits in the joined note."""
+
+    notes = row.get("notes")
+    if not isinstance(notes, str):
+        return None
+    for segment in notes.split(NOTE_SEPARATOR):
+        if segment.startswith(RIG_NOTE_PREFIX):
+            return segment
+    return None
 
 
 def silent_monitor_teardown_proven(
@@ -1452,8 +1495,12 @@ class ConptyTrialDriver:
                 # read. `bypassPermissions` should prevent it, but a config that
                 # silently stops working must not be able to masquerade as latency
                 # again -- so name it the moment it appears.
-                if self._permission_dialog_blocking("".join(transcript_chunks)):
+                transcript = "".join(transcript_chunks)
+                if self._permission_dialog_blocking(transcript):
                     raise RuntimeError("permission-dialog-blocked-turn")
+                interrupted = self._turn_interrupted(transcript)
+                if interrupted is not None:
+                    raise RuntimeError(f"turn-interrupted-{interrupted}")
                 if self._structured_monitor_is_idle(self._read_hook_events(trace_path)):
                     return True
                 # A turn that completed without dispatching the skill has nothing left
@@ -1485,6 +1532,12 @@ class ConptyTrialDriver:
             )
             if outcome == SETTLE_UNOBSERVED:
                 raise RuntimeError("structured-monitor-idle-not-observed")
+            # Re-checked after the settle window, which is where a decline is finalised: an
+            # interruption printed during those seconds would otherwise be the one that
+            # gets recorded as the model's choice.
+            interrupted = self._turn_interrupted("".join(transcript_chunks))
+            if interrupted is not None:
+                raise RuntimeError(f"turn-interrupted-{interrupted}")
             declined = outcome == DISPATCH_DECLINED
             if not declined:
                 if armed_count < after_count + 1:
@@ -1863,6 +1916,36 @@ class ConptyTrialDriver:
         return "Doyouwanttoproceed?" in squashed
 
     @staticmethod
+    def _turn_interrupted(transcript: str) -> str | None:
+        """The host-side reason this turn ended early, or None if it ran to its own end.
+
+        A turn cut short by the host -- a usage limit, an API error, a compaction -- ends
+        with a normal `Stop` event after `tandem_status` has already succeeded, so it is
+        indistinguishable at the row level from a model that read the skill's description
+        and chose not to arm. That is the one thing a decline must never be confused with:
+        the sample exists to measure the model's choice, and this turn never got to make
+        one. Named here so the capture fails loudly instead of contributing a negative.
+
+        Matched on squashed lowercase text for the same reason as the dialog check above.
+        A false positive costs one re-run; a false negative is a fabricated measurement.
+        """
+
+        squashed = re.sub(r"\s+", "", ANSI_RE.sub("", transcript)).lower()
+        for marker, reason in (
+            ("claudeusagelimitreached", "usage-limit"),
+            ("apierror:", "api-error"),
+            ("rate_limit_error", "rate-limited"),
+            ("overloaded_error", "overloaded"),
+            # The steady-state "context left until auto-compact" hint is deliberately not
+            # matched -- it is a budget readout, not an interruption.
+            ("compactingconversation", "compacted"),
+            ("reachedmaximumturns", "max-turns"),
+        ):
+            if marker in squashed:
+                return reason
+        return None
+
+    @staticmethod
     def _dispatch_prompt(trial: dict[str, Any]) -> str:
         """The single dispatch for one trial: explicit for control, prose for natural."""
 
@@ -2073,7 +2156,11 @@ def produce_trial(
         )
         if failure_code is not None:
             row["capture_healthy"] = False
-            row["notes"] = f"capture failed: {failure_code}"
+            # Appended, not assigned: a rig failure recorded before the raise has already
+            # written its own segment here, and overwriting it would erase the one thing
+            # that says WHY this capture failed -- on exactly the rows where that answer
+            # matters most.
+            row["notes"] = append_note(row.get("notes"), f"capture failed: {failure_code}")
             row[ATTESTATION_FIELD] = sign_evidence_row(row, _load_attestation_key(root))
         _replace_evidence_row(root, row)
     if failure_code is not None:
@@ -2117,8 +2204,8 @@ def _row_from_capture(
     # anonymity being fixed.
     rig_failures = capture.server_log.get("failures")
     if isinstance(rig_failures, list) and rig_failures:
-        row["notes"] = "; ".join(
-            part for part in [row.get("notes") or "", f"rig: {', '.join(rig_failures)}"] if part
+        row["notes"] = append_note(
+            row.get("notes"), f"{RIG_NOTE_PREFIX}{', '.join(rig_failures)}"
         )
     for field in (
         "refreshed_before_ready",
@@ -2162,8 +2249,16 @@ def _repoint_artifact_paths(
     old_prefix = artifact_dir.relative_to(root).as_posix()
     new_prefix = supersede_dir.relative_to(root).as_posix()
     repointed = dict(payload)
+    if "artifacts" not in payload:
+        # Absence is preserved rather than normalised to []. Writing an empty list would
+        # claim this capture produced no artifacts, which is a different statement from
+        # "this payload never recorded any" -- and the same silent-substitution the
+        # prefix rewrite above exists to prevent.
+        return repointed
+    if not isinstance(payload["artifacts"], list):
+        raise TypeError(f"archived payload's artifacts is {type(payload['artifacts']).__name__}")
     artifacts = []
-    for entry in payload.get("artifacts") or []:
+    for entry in payload["artifacts"]:
         moved = dict(entry)
         path = str(entry.get("path", ""))
         if path == old_prefix or path.startswith(f"{old_prefix}/"):
@@ -2171,6 +2266,24 @@ def _repoint_artifact_paths(
         artifacts.append(moved)
     repointed["artifacts"] = artifacts
     return repointed
+
+
+def _void_archived_attestation(row: dict[str, Any], manifest_sha: str | None) -> dict[str, Any]:
+    """Make an archived row internally honest about being a rewritten copy.
+
+    Re-pointing the paths changes bytes covered by both the attestation and the row's
+    recorded manifest hash. The hash can be restated truthfully -- it describes a file
+    sitting right there -- so it is recomputed. The signature cannot: leaving it makes
+    every verification of the archive fail identically to tampering, which is the exact
+    misreading that costs an auditor their trust in the whole bundle.
+    """
+
+    voided = dict(row)
+    if manifest_sha is not None and "capture_manifest_sha256" in voided:
+        voided["capture_manifest_sha256"] = manifest_sha
+    voided.pop(ATTESTATION_FIELD, None)
+    voided[ARCHIVED_ATTESTATION_REASON_FIELD] = "repointed-on-supersede"
+    return voided
 
 
 def _supersede_prior_capture(
@@ -2183,29 +2296,34 @@ def _supersede_prior_capture(
     artifact directory would leave the load-bearing half unprotected.
 
     Both archived payloads are re-pointed at the supersede slot (see
-    `_repoint_artifact_paths`). The evidence row's attestation deliberately is *not*
-    re-signed: it was signed over the row as captured, the signature is what makes it
-    auditable, and the archived copy is a diagnostic record rather than an input to
-    `evaluate`. A reader verifying it must therefore compare artifact bytes by sha256
-    from the rewritten path, not re-derive the attestation from the archived file.
+    `_repoint_artifact_paths`), which changes bytes the row was signed over, so the
+    archived row cannot carry a valid attestation and is not re-signed either -- a
+    re-signature would assert that this session vouched for a capture it only moved.
+    Instead the dead signature is removed and replaced with a reason (see
+    `_void_archived_attestation`), because a signature that always fails verification
+    reads as tampering rather than as a knowingly-rewritten diagnostic copy.
     """
 
     if supersede_dir.exists():
         raise RuntimeError(f"supersede slot {supersede_dir.name} is no longer free")
     artifact_dir.rename(supersede_dir)
     manifest_path = supersede_dir / "capture-manifest.json"
+    manifest_sha: str | None = None
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         _write_json(
             manifest_path, _repoint_artifact_paths(manifest, root, artifact_dir, supersede_dir)
         )
+        manifest_sha = _sha256(manifest_path.read_bytes())
     evidence_path = _safe_mutation_path(root, root / "evidence.json")
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     prior = next((entry for entry in evidence if entry.get("id") == trial_id), None)
     if prior is not None:
         _write_json(
             supersede_dir / "superseded-evidence-row.json",
-            _repoint_artifact_paths(prior, root, artifact_dir, supersede_dir),
+            _void_archived_attestation(
+                _repoint_artifact_paths(prior, root, artifact_dir, supersede_dir), manifest_sha
+            ),
         )
 
 
@@ -2797,9 +2915,7 @@ def _evaluate_shape(
         # missing chain link; what it could not do before was say WHY, which is the
         # difference between "the model never polled" and "our injector never ran".
         "rig_failures": [
-            f"{row['id']}: {row['notes']}"
-            for row in rows
-            if isinstance(row.get("notes"), str) and row["notes"].startswith("rig: ")
+            f"{row['id']}: {note}" for row in rows if (note := rig_note_of(row)) is not None
         ],
     }
 

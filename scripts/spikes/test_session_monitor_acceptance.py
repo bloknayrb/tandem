@@ -879,6 +879,141 @@ class FixtureSafetyTests(unittest.TestCase):
                         f"{entry['role']} still points at the live slot",
                     )
 
+    def test_an_archived_row_does_not_carry_a_signature_that_must_fail(self):
+        """Re-pointing the paths invalidates the row's own attestation and manifest hash.
+
+        Both cover bytes the supersede rewrites, so the archived copy cannot verify. Left
+        alone, `verify_evidence_row` fails on it identically to tampering -- the worst
+        available outcome for a bundle whose whole purpose is being auditable later. The
+        hash describes a file sitting right there and is restated; the signature is
+        removed with a reason, because this session moved the capture and did not vouch
+        for it.
+        """
+
+        subject = load_subject()
+
+        class Driver:
+            def capture(self, _context):
+                return subject.MachineTrialCapture(
+                    pty_capture="x",
+                    observations={key: True for key in subject.OBSERVATION_FIELDS},
+                    decoy_log={},
+                    server_log={},
+                    process_tree={},
+                )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = Path(__file__).resolve().parents[2]
+            subject.prepare_fixture_root(root, repo)
+            manifest_path = subject.produce_trial(
+                root, repo, "plugin-control", timeout_seconds=30, driver=Driver()
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            evidence_path = root / "evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            for entry in evidence:
+                if entry["id"] == "plugin-control":
+                    entry["artifacts"] = manifest["artifacts"]
+                    entry["capture_manifest_sha256"] = subject._sha256(manifest_path.read_bytes())
+                    entry[subject.ATTESTATION_FIELD] = "signature-over-the-live-slot"
+            evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+
+            subject.produce_trial(
+                root, repo, "plugin-control", timeout_seconds=30, driver=Driver(), overwrite=True
+            )
+
+            superseded = root / "artifacts" / "plugin-control.superseded-1"
+            archived = json.loads(
+                (superseded / "superseded-evidence-row.json").read_text(encoding="utf-8")
+            )
+            self.assertNotIn(
+                subject.ATTESTATION_FIELD,
+                archived,
+                "archived row keeps a signature that can only ever fail",
+            )
+            self.assertEqual(
+                archived[subject.ARCHIVED_ATTESTATION_REASON_FIELD], "repointed-on-supersede"
+            )
+            self.assertEqual(
+                archived["capture_manifest_sha256"],
+                subject._sha256((superseded / "capture-manifest.json").read_bytes()),
+                "archived row's manifest hash does not describe the manifest beside it",
+            )
+
+    def test_a_rig_failure_survives_a_capture_that_also_failed(self):
+        """The failure code was assigned over the note, erasing the reason.
+
+        `notes` carries both segments, and the gate reads the rig one to say WHY a row is
+        empty. On a row that recorded a rig failure and then raised, assignment dropped
+        that segment -- on exactly the rows where the reason is most load-bearing. The
+        extraction is equally at fault for matching only at position zero: it made the
+        second segment invisible whichever order they were written in.
+        """
+
+        subject = load_subject()
+        rig = f"{subject.RIG_NOTE_PREFIX}wake-injection-failed"
+
+        class Driver:
+            def capture(self, _context):
+                raise subject.TrialCaptureFailure(
+                    "turn-interrupted-usage-limit",
+                    subject.MachineTrialCapture(
+                        pty_capture="x",
+                        observations={key: False for key in subject.OBSERVATION_FIELDS},
+                        decoy_log={},
+                        server_log={"failures": ["wake-injection-failed"]},
+                        process_tree={},
+                    ),
+                )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = Path(__file__).resolve().parents[2]
+            subject.prepare_fixture_root(root, repo)
+            with self.assertRaises(RuntimeError):
+                subject.produce_trial(
+                    root, repo, "plugin-control", timeout_seconds=30, driver=Driver()
+                )
+
+            row = next(
+                entry
+                for entry in json.loads((root / "evidence.json").read_text(encoding="utf-8"))
+                if entry["id"] == "plugin-control"
+            )
+            self.assertIn("capture failed: turn-interrupted-usage-limit", row["notes"])
+            self.assertEqual(subject.rig_note_of(row), rig)
+
+        # The extraction is order-independent on purpose: whichever segment lands first,
+        # the other must stay findable. Matching at position zero alone made that a
+        # coin flip.
+        self.assertEqual(
+            subject.rig_note_of({"notes": subject.append_note("capture failed: x", rig)}), rig
+        )
+        self.assertIsNone(subject.rig_note_of({"notes": "capture failed: something else"}))
+        self.assertIsNone(subject.rig_note_of({"notes": None}))
+
+    def test_an_archived_payload_without_artifacts_is_not_given_an_empty_list(self):
+        """Absence and "produced none" are different claims about a capture."""
+
+        subject = load_subject()
+        root = Path("C:/fixture") if os.name == "nt" else Path("/fixture")
+        repointed = subject._repoint_artifact_paths(
+            {"trial_id": "plugin-control"},
+            root,
+            root / "artifacts" / "plugin-control",
+            root / "artifacts" / "plugin-control.superseded-1",
+        )
+
+        self.assertNotIn("artifacts", repointed)
+        with self.assertRaises(TypeError):
+            subject._repoint_artifact_paths(
+                {"artifacts": "artifacts/plugin-control/pty.txt"},
+                root,
+                root / "artifacts" / "plugin-control",
+                root / "artifacts" / "plugin-control.superseded-1",
+            )
+
     def test_ingest_preserves_direct_live_eligibility_but_only_for_its_own_manifest(self):
         """Ingesting a directly-captured trial must not downgrade it.
 
@@ -1592,11 +1727,72 @@ class NaturalDeclineTests(unittest.TestCase):
                 }
             )
         )
+        # A path that merely ends in `/tandem` is not a dispatch. Which field carries the
+        # command is undocumented, so every string value is examined -- and this repository
+        # is checked out at a path ending in `/tandem`, which a substring search over the
+        # serialized payload would have read as a control dispatch in every prose trial.
+        self.assertFalse(
+            dispatched(
+                {
+                    "hook_event_name": "UserPromptExpansion",
+                    "cwd": "/home/runner/work/tandem/tandem",
+                    "transcript_path": "/home/u/.claude/skills/tandem/SKILL.md",
+                    "prompt": "Use Tandem to report the current collaboration state.",
+                    subject.HOOK_EVENT_TIME_KEY: 105.0,
+                }
+            )
+        )
         # And the fixture must actually subscribe to the hook, or the signal never arrives.
         self.assertIn(
             '"UserPromptExpansion"',
             inspect.getsource(subject._install_structured_trace_hooks),
         )
+
+    def test_a_host_interrupted_turn_is_not_a_model_decline(self):
+        """A turn the host cut short produces the same row as a considered decline.
+
+        A usage limit, an API error or a compaction ends the turn with a normal `Stop`
+        after `tandem_status` already succeeded, so `status_succeeded` -- the attribution
+        signal -- reads true and the row counts as the model choosing not to arm. It never
+        got to choose. Named at capture time so the trial fails loudly instead of
+        contributing a negative to the sample.
+
+        The steady-state context readout is deliberately not a marker: it is printed by
+        every healthy long turn, and matching it would fail all of them.
+        """
+
+        subject = load_subject()
+        interrupted = subject.ConptyTrialDriver._turn_interrupted
+
+        self.assertEqual(interrupted("Claude usage limit reached, resets at 9pm"), "usage-limit")
+        self.assertEqual(interrupted("API Error: 500 internal"), "api-error")
+        self.assertEqual(interrupted('{"type":"rate_limit_error"}'), "rate-limited")
+        self.assertEqual(interrupted("Compacting conversation..."), "compacted")
+        self.assertIsNone(interrupted("Context left until auto-compact: 24%"))
+        self.assertIsNone(interrupted("Tandem is in tandem mode with 1 subscriber."))
+
+    def test_every_stored_capture_ran_to_its_own_end(self):
+        """The interruption markers must not fire on the bundle the gate's PASS rests on.
+
+        A detector added after the measurement can retroactively invalidate it, so this
+        pins the negative control: if any of the ten stored transcripts matched, the PASS
+        would have been resting on a turn the host cut short, and the fix would be the
+        measurement rather than the code. Skipped rather than failed when the bundle is
+        absent -- it lives outside the repository, and its absence is not a defect.
+        """
+
+        subject = load_subject()
+        bundle = os.environ.get("TANDEM_ACCEPTANCE_BUNDLE")
+        if not bundle or not Path(bundle, "artifacts").is_dir():
+            self.skipTest("no evidence bundle available; set TANDEM_ACCEPTANCE_BUNDLE")
+
+        captures = sorted(Path(bundle, "artifacts").glob("*/pty_capture.txt"))
+        self.assertTrue(captures, "bundle has no pty captures to check")
+        for capture in captures:
+            reason = subject.ConptyTrialDriver._turn_interrupted(
+                capture.read_text(encoding="utf-8", errors="replace")
+            )
+            self.assertIsNone(reason, f"{capture.parent.name} was interrupted: {reason}")
 
     def test_only_the_tandem_skill_counts_as_a_tandem_dispatch(self):
         """`tool_name` alone made any skill invocation a Tandem dispatch.
