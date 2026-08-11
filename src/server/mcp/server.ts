@@ -187,12 +187,60 @@ const WELCOME_PATH: string | undefined = findRepoFile(__dirname, "sample/welcome
 let sessions: McpSessionRegistry<McpServer, StreamableHTTPServerTransport> | null = null;
 let idleReaper: ReturnType<typeof setInterval> | null = null;
 
+/**
+ * Server instructions, surfaced into the session's context at startup.
+ *
+ * ## Why this field, for this problem
+ *
+ * PR #1393 measured natural first-use dispatch of the `tandem` skill at 3 of 6 sessions, so the
+ * arming instruction that lives in `SKILL.md` was never read in half of them. The traces say why:
+ * every declining session called `ToolSearch` *before* `tandem_status`. With tool search on (the
+ * default) only tool NAMES and server instructions load upfront — so at the moment the behaviour
+ * was decided, the model had Tandem's tool names and an empty instructions string. Nothing about
+ * wake monitoring was in context at all. This field is the documented mechanism for that gap
+ * ("help Claude understand when to search for your tools, similar to how skills work"), and unlike
+ * a skill it needs no discovery step and no judgment about whether guidance is worth loading.
+ *
+ * ADR-049 recorded this field's behaviour as UNVERIFIED because nothing sent one. Verified
+ * 2026-08-11: a live session's context carries an "MCP Server Instructions" section rendering the
+ * attached servers' strings verbatim. The channel shim already ships one (`src/channel/run.ts`).
+ *
+ * ## Constraints, each load-bearing
+ *
+ * - **Truncated at 2KB**, so the authority-of-checkInbox line comes first.
+ * - **No arm command.** `wake-advisory.ts` refuses to emit one so Tandem output never teaches Claude
+ *   that its responses carry commands to run — an imported Word comment could imitate that. A second
+ *   emitter would re-open the pattern even though this text is metadata rather than tool content.
+ * - **The launcher carve-out is not optional.** `SKILL.md` says do not arm if Tandem launched you: a
+ *   launcher-spawned session is already woken on its stdin (#1266) and a second watch double-wakes
+ *   every event. That caveat otherwise lives only in the skill body, which is read *second* and only
+ *   if the skill is invoked — while these instructions arrive before any skill decision. An
+ *   unconditional "arm one" here would regress the population that already works.
+ * - **No coverage claim.** The server cannot know whether THIS session is armed; the subscriber count
+ *   is stale by construction since #1354. So this is a standing instruction with an at-most-once
+ *   bound, never "you are not covered" — that judgement belongs to `wake-advisory.ts`, which fires
+ *   only on the one sound negative (nothing attached at all).
+ * - **Client-agnostic.** A non-Claude MCP client gets no `SKILL.md`, so this must not require a
+ *   Claude-Code-specific tool by name — hence "if your client can hold a persistent watch".
+ */
+export const SERVER_INSTRUCTIONS = [
+  "Tandem is a collaborative document editor — the user edits the same document alongside you.",
+  "Always treat tandem_checkInbox as the authority on user activity, and poll it every few tool calls.",
+  "Nothing polls between your turns: if your client can hold a persistent watch, arm one (at most once",
+  "per session) on the wakeUrl from tandem_status. Skip that if Tandem launched this session — it is",
+  "already woken on its input, and a second watch double-wakes every event.",
+  "In solo mode, hold annotations rather than surfacing them.",
+].join(" ");
+
 /** Create an McpServer with all tool groups registered (no transport). */
 function createMcpServer(diagnostics: DiagnosticsToolDeps = {}): McpServer {
-  const server = new McpServer({
-    name: "tandem",
-    version: APP_VERSION,
-  });
+  const server = new McpServer(
+    {
+      name: "tandem",
+      version: APP_VERSION,
+    },
+    { instructions: SERVER_INSTRUCTIONS },
+  );
 
   registerDocumentTools(server);
   registerAnnotationTools(server);

@@ -108,6 +108,17 @@ unconsumed, and it is re-reported later.
   command could live in `instructions`; that is net-new work on `server.ts`,
   and **whether Claude Code surfaces the field to the model is still
   UNVERIFIED** — it could not be tested because nothing sends one.
+  > **Resolved 2026-08-11 — the host DOES surface it.** Two independent grounds.
+  > (1) Documented: with tool search on (the default) only tool *names* and
+  > server instructions load upfront, full schemas deferred; instructions are
+  > truncated at 2KB and delivered once per session at startup, and exist to
+  > "help Claude understand when to search for your tools, similar to how skills
+  > work". (2) Observed: a live session's context carries an "MCP Server
+  > Instructions" section rendering the attached servers' strings verbatim.
+  > The main server now sends one (`SERVER_INSTRUCTIONS` in `server.ts`) — but
+  > **not** the arm command, which stays in `SKILL.md` for the reason
+  > `wake-advisory.ts` gives. The prompt for this change was PR #1393's
+  > measurement that natural first-use skill dispatch is 3 of 6.
 - **UNVERIFIED:** CLI N-2, desktop-app-started sessions, each permission mode.
   One session cannot produce those configurations.
 
@@ -157,6 +168,8 @@ run exercised.
    wrong. The payload-free contract is load-bearing, not stylistic.
 4. **D-1's `instructions` plan needs a prior step** — the server sends none
    today, and whether the host surfaces them is still unknown.
+   *[Prior step done 2026-08-11: the host surfaces them (see P-A2 above), and the
+   main server now sends one. The arm command still does not live there.]*
 
 ## Not run
 
