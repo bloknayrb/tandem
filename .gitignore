@@ -69,3 +69,18 @@ docs/design-system-impl/preview/baselines/baselines.html
 # generator, so the artifact itself is noise in the history. The GENERATOR is tracked;
 # this output is not. See docs/roadmap.md §"Performance gate".
 tests/perf/.generated/
+
+# WhatsApp MCP (piwapp) session artifacts. These are LIVE CREDENTIALS -- the JSON
+# holds noise_key, signed_identity_key, signed_pre_key and adv_secret_key, and the
+# sibling .keys file is the encrypted keystore. The server writes them into
+# whatever directory it was started from, which for an MCP server configured at
+# user level is the repo you happen to be working in. Untracked-but-committable is
+# the dangerous state: one `git add -A` publishes a working WhatsApp session.
+# Ignored rather than deleted -- removing them unpairs the device.
+piwapp_auth.json
+piwapp_auth.json.keys
+piwapp_qr.png
+
+# Python bytecode from the spike harnesses under scripts/spikes/.
+__pycache__/
+*.pyc
