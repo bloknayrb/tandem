@@ -157,6 +157,25 @@ describe("GET /api/launcher/status", () => {
     expect(res.body).toEqual({ available: false, reason: "stdio-mode" });
   });
 
+  it("surfaces refresh failures to loopback when the supervisor is unavailable", async () => {
+    const deps: LauncherRoutesDeps = {
+      ...baseDeps(null, "disabled-by-env"),
+      getSkillRefreshError: () => ({ code: "write-failed", message: "EACCES" }),
+    };
+
+    const { app: loopbackApp } = makeApp(deps);
+    const loopback = await request(loopbackApp, "GET", "/api/launcher/status");
+    expect(loopback.body).toEqual({
+      available: false,
+      reason: "disabled-by-env",
+      skillRefresh: { code: "write-failed", message: "EACCES" },
+    });
+
+    const { app: lanApp } = makeApp(deps, { remoteAddress: "192.168.1.50" });
+    const lan = await request(lanApp, "GET", "/api/launcher/status");
+    expect(lan.body).toEqual({ available: false });
+  });
+
   it("returns full status payload to loopback callers when running", async () => {
     const sup = makeFakeSupervisor({ running: true, cwd: "/home/test" });
     const { app } = makeApp(baseDeps(sup));

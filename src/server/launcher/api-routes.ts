@@ -211,6 +211,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
   return (req: Request, res: Response) => {
     const sup = deps.getSupervisor();
     const loopback = isLoopback(req.socket.remoteAddress);
+    const skillRefresh = loopback ? (deps.getSkillRefreshError?.() ?? null) : undefined;
     if (sup === null) {
       // `reason` is loopback-only. `deferred-autostart` in particular is a live
       // presence oracle — it says "this machine auto-booted at login and the
@@ -218,12 +219,15 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
       // (rather than filtering that one value) also future-proofs the enum
       // against the next reason that turns out to leak something.
       const body: LauncherStatus = loopback
-        ? { available: false, reason: deps.unavailableReason() }
+        ? {
+            available: false,
+            reason: deps.unavailableReason(),
+            ...(skillRefresh ? { skillRefresh } : {}),
+          }
         : { available: false };
       res.json(body);
       return;
     }
-    const skillRefresh = loopback ? (deps.getSkillRefreshError?.() ?? null) : undefined;
     let raw: ReturnType<Supervisor["status"]>;
     try {
       raw = sup.status();

@@ -44,6 +44,12 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+  }
+}
+
 /**
  * Resolve a Windows system binary by absolute path under `%SystemRoot%`.
  * Bypasses `PATH` so a git-bash / MSYS / Cygwin shadow (e.g. their own
@@ -66,16 +72,23 @@ function systemBin(name: string): string {
  * (admin's policy is a real security boundary). The original error is
  * preserved as `cause` on the fallback's failure for log forensics.
  */
-async function runPowerShell(script: string, env: NodeJS.ProcessEnv): Promise<{ stdout: string }> {
+async function runPowerShell(
+  script: string,
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+): Promise<{ stdout: string }> {
   const args = ["-NoProfile", "-NonInteractive", "-Command", script];
+  throwIfAborted(signal);
   try {
-    return await execFileAsync("pwsh.exe", args, { env });
+    return await execFileAsync("pwsh.exe", args, { env, signal });
   } catch (err) {
+    if (signal?.aborted) throw signal.reason ?? err;
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") throw err;
     try {
-      return await execFileAsync("powershell.exe", args, { env });
+      return await execFileAsync("powershell.exe", args, { env, signal });
     } catch (fallbackErr) {
+      if (signal?.aborted) throw signal.reason ?? fallbackErr;
       throw new Error(
         `runPowerShell: both pwsh.exe and powershell.exe failed (pwsh: ${(err as Error).message})`,
         { cause: fallbackErr },
@@ -117,9 +130,13 @@ export function _resetCurrentUserSidForTests(): void {
  * Resolve the SID of the current user via `whoami /user /fo csv /nh`. CSV
  * output is locale-independent and parses cleanly without PowerShell.
  */
-async function getCurrentUserSid(): Promise<string> {
+async function getCurrentUserSid(signal?: AbortSignal): Promise<string> {
   if (cachedCurrentUserSid !== null) return cachedCurrentUserSid;
-  const { stdout } = await execFileAsync(systemBin("whoami.exe"), ["/user", "/fo", "csv", "/nh"]);
+  throwIfAborted(signal);
+  const { stdout } = await execFileAsync(systemBin("whoami.exe"), ["/user", "/fo", "csv", "/nh"], {
+    signal,
+  });
+  throwIfAborted(signal);
   // CSV row format: `"DOMAIN\user","S-1-5-21-..."` — extract the second column.
   const match = stdout.match(/"(S-[\d-]+)"\s*$/m);
   if (!match) {
@@ -158,11 +175,13 @@ async function getCurrentUserSid(): Promise<string> {
  */
 export async function setRestrictiveAcl(
   path: string,
-  opts: { inheritable?: boolean } = {},
+  opts: { inheritable?: boolean; signal?: AbortSignal } = {},
 ): Promise<void> {
   if (process.platform !== "win32") return;
+  const { signal } = opts;
+  throwIfAborted(signal);
 
-  const sid = await getCurrentUserSid();
+  const sid = await getCurrentUserSid(signal);
 
   // icacls processes flags left-to-right in one invocation:
   //   /inheritance:r — remove ALL inherited entries (`:d` would copy them
@@ -176,19 +195,20 @@ export async function setRestrictiveAcl(
   //                    the rights when `inheritable` — see the docblock.
   const rights = opts.inheritable ? "(OI)(CI)F" : "F";
   try {
-    await execFileAsync(systemBin("icacls.exe"), [
-      path,
-      "/inheritance:r",
-      "/grant:r",
-      `*${sid}:${rights}`,
-    ]);
+    await execFileAsync(
+      systemBin("icacls.exe"),
+      [path, "/inheritance:r", "/grant:r", `*${sid}:${rights}`],
+      { signal },
+    );
   } catch (err) {
+    if (signal?.aborted) throw signal.reason ?? err;
     throw new Error(`setRestrictiveAcl: icacls failed on ${path}: ${(err as Error).message}`, {
       cause: err,
     });
   }
 
-  await assertNoBroadAce(path);
+  throwIfAborted(signal);
+  await assertNoBroadAce(path, { signal });
 }
 
 /**
@@ -198,8 +218,13 @@ export async function setRestrictiveAcl(
  *
  * @throws if any broad-principal SDDL shortcut appears in the file's ACL.
  */
-export async function assertNoBroadAce(path: string): Promise<void> {
+export async function assertNoBroadAce(
+  path: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
   if (process.platform !== "win32") return;
+  const { signal } = opts;
+  throwIfAborted(signal);
 
   // `-LiteralPath` ensures wildcards in the path are not expanded. The
   // explicit `Import-Module` is defensive — `Get-Acl` lives in
@@ -209,10 +234,15 @@ export async function assertNoBroadAce(path: string): Promise<void> {
   const script =
     "Import-Module Microsoft.PowerShell.Security; (Get-Acl -LiteralPath $env:TANDEM_ACL_PATH).Sddl";
 
-  const { stdout } = await runPowerShell(script, {
-    ...process.env,
-    TANDEM_ACL_PATH: path,
-  });
+  const { stdout } = await runPowerShell(
+    script,
+    {
+      ...process.env,
+      TANDEM_ACL_PATH: path,
+    },
+    signal,
+  );
+  throwIfAborted(signal);
 
   const sddl = stdout.trim();
   for (const fragment of BROAD_SDDL_FRAGMENTS) {

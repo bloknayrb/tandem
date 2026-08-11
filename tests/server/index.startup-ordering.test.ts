@@ -49,4 +49,53 @@ describe("index.ts startup ordering invariant", () => {
       "maybeOpenStartupFile must be awaited (fire-and-forget would race the bind)",
     ).toMatch(/\bawait\s+maybeOpenStartupFile\b/);
   });
+
+  it("awaits best-effort existing-skill refresh before HTTP readiness in every launcher mode", async () => {
+    const indexPath = path.resolve(fileURLToPath(import.meta.url), "../../../src/server/index.ts");
+    const src = await readFile(indexPath, "utf8");
+
+    const supervisorStart = src.indexOf("async function startLauncherSupervisor()");
+    const supervisorEnd = src.indexOf("// Swallow known Hocuspocus/ws protocol errors");
+    const supervisorBody = src.slice(supervisorStart, supervisorEnd);
+    expect(supervisorBody).not.toContain("refreshSkillIfStale");
+    expect(supervisorBody).not.toContain("refreshExistingSkillIfStale");
+
+    const httpStart = src.indexOf('if (transportMode === "http")');
+    const stdioStart = src.indexOf("} else {\n    // Stdio mode", httpStart);
+    const httpBody = src.slice(httpStart, stdioStart);
+    const refreshIdx = httpBody.indexOf("refreshExistingSkillIfStale");
+    expect(refreshIdx, "HTTP startup must refresh an existing standalone skill").toBeGreaterThan(
+      -1,
+    );
+
+    const bindIdx = httpBody.indexOf("startMcpServerHttp(");
+    expect(bindIdx, "HTTP bind call must exist").toBeGreaterThan(-1);
+    expect(refreshIdx, "skill refresh must finish before Tandem can report ready").toBeLessThan(
+      bindIdx,
+    );
+
+    for (const launcherMarker of [
+      'launcherUnavailableReason === "deferred-autostart"',
+      'launcherUnavailableReason !== "disabled-by-env"',
+      "await startLauncherSupervisor()",
+    ]) {
+      const markerIdx = httpBody.indexOf(launcherMarker);
+      expect(markerIdx, `expected launcher branch marker: ${launcherMarker}`).toBeGreaterThan(-1);
+      expect(
+        refreshIdx,
+        `skill refresh must precede ${launcherMarker} so launcher mode cannot suppress it`,
+      ).toBeLessThan(markerIdx);
+    }
+
+    const refreshThroughBind = httpBody.slice(refreshIdx, bindIdx);
+    expect(httpBody, "skill refresh import must be awaited, not fire-and-forget").toMatch(
+      /\bawait\s+import\("\.\/integrations\/apply\.js"\)[\s\S]*?refreshExistingSkillIfStale\(\)/,
+    );
+    expect(refreshThroughBind, "unexpected refresh failures must be caught before bind").toMatch(
+      /refreshExistingSkillIfStale\(\)\)[\s\S]*?\.catch\(/,
+    );
+    expect(refreshThroughBind, "unexpected refresh failures must stay non-fatal").toContain(
+      "Skill refresh failed (non-fatal)",
+    );
+  });
 });

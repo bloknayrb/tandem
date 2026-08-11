@@ -130,4 +130,12 @@ describe("hand-started sessions get the automatic first-use contract", () => {
       expect(text).toMatch(/TaskStop/);
     }
   });
+
+  it("records the combined release behavior and plugin-only timing under Unreleased", () => {
+    const text = readFileSync(join(ROOT, "CHANGELOG.md"), "utf-8");
+    const unreleased = text.slice(text.indexOf("## [Unreleased]"), text.indexOf("## [0.21.0]"));
+    expect(unreleased).toMatch(/automatically/i);
+    expect(unreleased).toMatch(/missing[^.]*skill[^.]*not install/i);
+    expect(unreleased).toMatch(/plugin-only[^.]*Claude Code[^.]*cache/i);
+  });
 });
