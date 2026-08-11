@@ -9,6 +9,12 @@ function readRepoText(relativePath: string): string {
   return readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
 }
 
+function frontmatter(skill: string): string {
+  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(skill)?.[1];
+  expect(block, "the shipped skill has no frontmatter").toBeDefined();
+  return block ?? "";
+}
+
 function gettingWokenSection(skill: string): string {
   const section = /^## Getting Woken While Idle\r?\n([\s\S]*?)(?=^## )/m.exec(skill)?.[1];
   expect(section, "the shipped skill has no idle-wake instructions").toBeDefined();
@@ -49,6 +55,28 @@ function expectPerSessionAutoArmContract(skill: string): void {
 describe("shipped Tandem skill instruction contract", () => {
   it("attempts one session-local persistent wake watch on first hand-started use", () => {
     expectPerSessionAutoArmContract(readShippedSkill());
+  });
+
+  /**
+   * The description is what decides whether the skill is invoked at all, so it is the
+   * load-bearing half of the first-use fix — and it was unpinned: reverting it while
+   * keeping the version bump passed every other test in this file. #1393 measured natural
+   * first-use dispatch at 3 of 6, and every declining trace called `ToolSearch` before
+   * `tandem_status`, so the description is read (if at all) before any tool call exists.
+   */
+  it("states the trigger as a precondition in time, not as an offering", () => {
+    // Collapsed: the YAML folded block wraps mid-phrase, so a literal match would be
+    // asserting on where the line breaks fall rather than on what the text says.
+    const front = frontmatter(readShippedSkill()).replace(/\s+/g, " ");
+
+    expect(front).toMatch(/before the first tandem_\* call/i);
+    // A lone status check was the exact case a model rationalised as too small to
+    // warrant the skill, so it is named rather than left to inference.
+    expect(front).toMatch(/lone status check/i);
+    expect(front).toMatch(/woken while idle/i);
+    // "Provides workflow guidance…" described what the skill offers, which a model that
+    // can answer from one `tandem_status` call correctly reads as skippable.
+    expect(front).not.toMatch(/\bprovides workflow guidance\b/i);
   });
 
   it("rejects the version-9 process-global subscriber precondition", () => {

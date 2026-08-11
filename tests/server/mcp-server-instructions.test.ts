@@ -69,5 +69,9 @@ describe("MCP server instructions", () => {
 
   it("states the Solo contract, which gates AI surfacing", () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/solo/i);
+    // Direction, not topic: /solo/i alone passes if "hold annotations" becomes "surface
+    // annotations", which inverts the contract while still mentioning the mode.
+    expect(SERVER_INSTRUCTIONS).toMatch(/hold annotations/i);
+    expect(SERVER_INSTRUCTIONS).not.toMatch(/surface annotations|reveal annotations/i);
   });
 });
