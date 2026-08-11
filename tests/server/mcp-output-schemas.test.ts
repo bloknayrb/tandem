@@ -54,6 +54,7 @@ import {
   searchOutputShape,
   statusOutputShape,
 } from "../../src/server/mcp/output-schemas.js";
+import { makeDiagnosticsHandler } from "../../src/server/mcp/routes/diagnostics.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
@@ -532,5 +533,99 @@ describe("error envelopes from outputSchema'd tools", () => {
     expect(result.isError).toBe(true);
     const envelope = textEnvelope(result) as { error: boolean; code?: string };
     expect(envelope.code).toBe("NO_DOCUMENT");
+  });
+});
+
+describe("diagnostics payload lockstep (route ↔ MCP tool ↔ zod shape)", () => {
+  /**
+   * The three diagnostics producers must agree on their field set, and the
+   * failure mode is not cosmetic: `response.ts` emits several tool schemas with
+   * `additionalProperties: false`, so a field present in the payload but absent
+   * from `diagnosticsOutputShape` makes a spec-compliant client REJECT the call.
+   *
+   * `output-schemas.ts` states the lockstep requirement in a comment; this is
+   * the test that enforces it.
+   */
+  it("declares every host field the HTTP route puts on the wire", async () => {
+    const handler = makeDiagnosticsHandler({
+      version: "0.0.0-test",
+      transport: "http",
+      wsPort: 1,
+      mcpPort: 2,
+      collect: async () => ({
+        ok: true,
+        crashed: false,
+        failures: 0,
+        warnings: 0,
+        summary: "All checks passed. Tandem is ready.",
+        error: null,
+        results: [],
+      }),
+    }) as unknown as (req: unknown, res: unknown, next: unknown) => Promise<void>;
+
+    let body: Record<string, unknown> = {};
+    const res = {
+      status() {
+        return res;
+      },
+      json(payload: Record<string, unknown>) {
+        body = payload;
+      },
+    };
+    await handler({ socket: { remoteAddress: "127.0.0.1" } }, res, () => {});
+
+    // The route NESTS the doctor report under `report`; the MCP tool spreads it
+    // flat and the zod shape describes that flat form. Compare the host fields
+    // only, which is the part the two payload shapes genuinely share.
+    const doctorReportKeys = [
+      "ok",
+      "crashed",
+      "failures",
+      "warnings",
+      "summary",
+      "error",
+      "results",
+    ];
+    const routeHostKeys = Object.keys(body)
+      .filter((k) => k !== "report")
+      .sort();
+    const shapeHostKeys = Object.keys(diagnosticsOutputShape)
+      .filter((k) => !doctorReportKeys.includes(k))
+      .sort();
+
+    expect(routeHostKeys).toEqual(shapeHostKeys);
+  });
+
+  it("emits the same host fields from the MCP tool as the route and the shape", async () => {
+    // Without this half, the describe block's name is a lie: dropping
+    // `...collectHostInfo()` from `mcp/diagnostics.ts` would leave the route and
+    // the zod shape in perfect agreement, the test above green, and
+    // `tandem_diagnostics` silently reporting no OS/CPU/memory at all.
+    const result = (await client.callTool({
+      name: "tandem_diagnostics",
+      arguments: {},
+    })) as ToolResult;
+    const sc = result.structuredContent as Record<string, unknown>;
+
+    const doctorReportKeys = [
+      "ok",
+      "crashed",
+      "failures",
+      "warnings",
+      "summary",
+      "error",
+      "results",
+    ];
+    const toolHostKeys = Object.keys(sc)
+      .filter((k) => !doctorReportKeys.includes(k))
+      .sort();
+    const shapeHostKeys = Object.keys(diagnosticsOutputShape)
+      .filter((k) => !doctorReportKeys.includes(k))
+      .sort();
+
+    expect(toolHostKeys).toEqual(shapeHostKeys);
+    // And the host block is actually populated, not merely declared.
+    expect(sc.platform).toBe(process.platform);
+    expect(sc.arch).toBe(process.arch);
   });
 });
