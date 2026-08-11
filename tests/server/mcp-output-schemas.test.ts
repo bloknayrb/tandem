@@ -595,4 +595,37 @@ describe("diagnostics payload lockstep (route ↔ MCP tool ↔ zod shape)", () =
 
     expect(routeHostKeys).toEqual(shapeHostKeys);
   });
+
+  it("emits the same host fields from the MCP tool as the route and the shape", async () => {
+    // Without this half, the describe block's name is a lie: dropping
+    // `...collectHostInfo()` from `mcp/diagnostics.ts` would leave the route and
+    // the zod shape in perfect agreement, the test above green, and
+    // `tandem_diagnostics` silently reporting no OS/CPU/memory at all.
+    const result = (await client.callTool({
+      name: "tandem_diagnostics",
+      arguments: {},
+    })) as ToolResult;
+    const sc = result.structuredContent as Record<string, unknown>;
+
+    const doctorReportKeys = [
+      "ok",
+      "crashed",
+      "failures",
+      "warnings",
+      "summary",
+      "error",
+      "results",
+    ];
+    const toolHostKeys = Object.keys(sc)
+      .filter((k) => !doctorReportKeys.includes(k))
+      .sort();
+    const shapeHostKeys = Object.keys(diagnosticsOutputShape)
+      .filter((k) => !doctorReportKeys.includes(k))
+      .sort();
+
+    expect(toolHostKeys).toEqual(shapeHostKeys);
+    // And the host block is actually populated, not merely declared.
+    expect(sc.platform).toBe(process.platform);
+    expect(sc.arch).toBe(process.arch);
+  });
 });

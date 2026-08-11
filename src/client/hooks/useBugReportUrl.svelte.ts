@@ -3,26 +3,38 @@ import { buildBugReportUrl, formatDiagnostics, summarizeUserAgent } from "../uti
 import { fetchDiagnostics } from "../utils/diagnostics-fetch";
 
 /**
- * How long the pointer must rest on the link before the collector runs.
+ * How long pointer or focus must rest on the link before the collector runs.
  *
  * `/api/diagnostics` is not an inert read: `runDoctor`'s SSE check opens a real
  * connection to `/api/events`, which registers and immediately drops an
  * `"external"` subscriber — the same count `takeWakeAdvisory` and the Solo
- * forwarding gate read. A mouse merely crossing the sidebar on its way
+ * forwarding gate read. A pointer merely crossing the sidebar on its way
  * somewhere else should not do that, and should not spawn `npm ls -g` either.
- * Resting on the link is intent; passing over it is not. Keyboard focus skips
- * the delay — tabbing to a link is already unambiguous.
+ *
+ * Keyboard focus is gated the same way, and for the same reason: this link is
+ * the last focusable element in the sidebar, with the content pane next in DOM
+ * order inside the modal's focus trap, so *every* keyboard user tabbing from
+ * the sidebar into the content passes focus through it. Focus in transit is no
+ * more a statement of intent than a pointer in transit.
  */
-const POINTER_INTENT_MS = 150;
+const INTENT_DWELL_MS = 150;
+
+/**
+ * How long to wait before a failed prefetch may be retried.
+ *
+ * The latch is released on failure so a later hover can try again — but without
+ * a cooldown, moving the pointer in and out of the link while the endpoint is
+ * failing spawns one full collector run per entry, each with its own `npm ls -g`
+ * subprocess and `/api/events` subscriber registration.
+ */
+const RETRY_COOLDOWN_MS = 10_000;
 
 export interface BugReportUrlState {
   /** Always a usable issue URL — bare until the prefetch lands. */
   readonly url: string;
-  /** Start the prefetch now. Idempotent. For unambiguous intent (focus). */
-  prime(): void;
   /** Arm the prefetch after a short dwell. Idempotent. */
   primeOnDwell(): void;
-  /** Cancel a dwell that has not fired yet (pointer left before it elapsed). */
+  /** Cancel a dwell that has not fired yet (pointer or focus left in transit). */
   cancelDwell(): void;
 }
 
@@ -36,14 +48,15 @@ export interface BugReportUrlState {
  * popup-blocked in the browser build. Failure needs no branch either: the
  * fallback IS the initial value.
  *
- * `prime()` is wired to hover/focus rather than to the modal opening.
+ * Priming is wired to a pointer/focus dwell rather than to the modal opening.
  * `/api/diagnostics` runs the full `tandem doctor` collector — an `npm ls -g`
  * subprocess with a 4s timeout, port probes, a directory scan — which
  * `doctor.ts` notes runs "inside the synchronous Copy-Diagnostics path", i.e.
  * only on an explicit click. Paying that on every Settings open, for the large
  * majority of opens that never touch this link, would be an unforced
- * regression. Hover and focus both precede the click by enough to win the race
- * on a warm path; touch-only interaction fires neither and keeps the bare URL.
+ * regression. A dwell precedes the click by enough to win the race on a warm
+ * path. Touch taps do fire `pointerenter`, but the dwell resolves after the
+ * navigation has already used the bare URL, so touch effectively keeps it.
  *
  * Takes `getOpen` so the hook owns its own teardown, matching `createAppInfo`
  * and the rest of this directory — priming is the caller's business, forgetting
@@ -55,6 +68,7 @@ export function createBugReportUrl(getOpen: () => boolean): BugReportUrlState {
   // Bumped on close so a report still in flight cannot land afterwards.
   let generation = 0;
   let dwellTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryAllowedAt = 0;
 
   function cancelDwell(): void {
     if (dwellTimer === null) return;
@@ -73,9 +87,21 @@ export function createBugReportUrl(getOpen: () => boolean): BugReportUrlState {
     url = TANDEM_ISSUES_NEW_URL;
   });
 
+  // Unmount teardown, separate from the close-transition effect above: that one
+  // returns early while the modal is open, so a dwell armed during an open
+  // session would outlive a destroy that never passes through `open === false`.
+  $effect(() => cancelDwell);
+
+  function unlatchAfterFailure(): void {
+    // Released so a later dwell can retry, but not instantly — see
+    // RETRY_COOLDOWN_MS.
+    primed = false;
+    retryAllowedAt = Date.now() + RETRY_COOLDOWN_MS;
+  }
+
   function prime(): void {
     cancelDwell();
-    if (primed) return;
+    if (primed || Date.now() < retryAllowedAt) return;
     primed = true;
     const token = generation;
 
@@ -87,10 +113,10 @@ export function createBugReportUrl(getOpen: () => boolean): BugReportUrlState {
       .then((result) => {
         if (token !== generation) return;
         if (!result.ok) {
-          // Unlatch so a later hover can retry. The fetch layer deliberately
-          // does not cache failures; latching here would undo that and leave
-          // the prefill dead for the rest of the session after one blip.
-          primed = false;
+          // The fetch layer deliberately does not cache failures; latching here
+          // permanently would undo that and leave the prefill dead for the rest
+          // of the session after one blip.
+          unlatchAfterFailure();
           return;
         }
         url = buildBugReportUrl(
@@ -100,7 +126,7 @@ export function createBugReportUrl(getOpen: () => boolean): BugReportUrlState {
         );
       })
       .catch((err: unknown) => {
-        if (token === generation) primed = false;
+        if (token === generation) unlatchAfterFailure();
         // No toast: the user asked for an issue form, not a diagnostic report.
         // A banner on every hover of an offline app would be pure noise.
         console.warn("[useBugReportUrl] diagnostics prefetch failed:", err);
@@ -112,14 +138,13 @@ export function createBugReportUrl(getOpen: () => boolean): BugReportUrlState {
     dwellTimer = setTimeout(() => {
       dwellTimer = null;
       prime();
-    }, POINTER_INTENT_MS);
+    }, INTENT_DWELL_MS);
   }
 
   return {
     get url() {
       return url;
     },
-    prime,
     primeOnDwell,
     cancelDwell,
   };

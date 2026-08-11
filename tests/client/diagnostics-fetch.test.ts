@@ -59,6 +59,41 @@ describe("fetchDiagnostics", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not join an in-flight run that is already too old for the caller", async () => {
+    // The scenario: a hover starts a run, the user fixes the problem while it
+    // is still going, then clicks Copy Diagnostics. Joining would hand them
+    // probes that predate the fix. A fresh run must be chained instead.
+    let releaseFirst: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          releaseFirst = resolve;
+        }),
+    );
+
+    const hover = fetchDiagnostics();
+    await vi.advanceTimersByTimeAsync(1_000); // the run is now 1s old
+
+    const click = fetchDiagnostics({ maxAgeMs: 0 });
+    releaseFirst(jsonResponse({ version: "stale" }));
+
+    await expect(hover).resolves.toEqual({ ok: true, payload: { version: "stale" } });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(click).resolves.toEqual({ ok: true, payload: { version: "1.2.3" } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("still joins an in-flight run that is fresh enough", async () => {
+    const both = Promise.all([
+      fetchDiagnostics({ maxAgeMs: 0 }),
+      fetchDiagnostics({ maxAgeMs: 0 }),
+    ]);
+    await both;
+    // Both asked for maximum freshness, but the second arrives in the same tick
+    // as the first started — no staleness to avoid, so one run serves both.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("refetches once the cache has aged out", async () => {
     await fetchDiagnostics();
     vi.advanceTimersByTime(20_000);

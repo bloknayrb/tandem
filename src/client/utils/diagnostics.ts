@@ -175,14 +175,26 @@ const TRUNCATION_MARKER =
   "… (truncated — use Copy Diagnostics in Settings → About for the full report)";
 
 /**
- * Tilde fence, not backticks. Doctor `fix` strings embed backticks verbatim
- * (e.g. "run via `npx`"), so a ``` fence is not escape-safe against content we
- * do not control.
+ * Build a fence long enough to contain `text`.
+ *
+ * Tildes rather than backticks because doctor `fix` strings embed backticks
+ * verbatim (e.g. "run via `npx`"). But swapping the character only moves the
+ * problem: report text is not ours either. `checkAnnotationStore` interpolates
+ * raw `store.lock` bytes (doctor.ts:1520), and `stripControlChars` preserves
+ * newlines, so a lock file containing a `~~~` line would close the fence and
+ * let everything after it render as markdown in a public issue.
+ *
+ * CommonMark closes a fence only on a run at least as long as the opener, so
+ * one tilde more than the longest run present is sufficient.
  */
-const FENCE = "~~~";
+function fenceFor(text: string): string {
+  const longest = Math.max(0, ...[...text.matchAll(/~+/g)].map((m) => m[0].length));
+  return "~".repeat(Math.max(3, longest + 1));
+}
 
 function issueUrlFor(text: string): string {
-  const body = `\n\n${BUG_REPORT_BODY_HEADING}\n\n${FENCE}\n${text}\n${FENCE}`;
+  const fence = fenceFor(text);
+  const body = `\n\n${BUG_REPORT_BODY_HEADING}\n\n${fence}\n${text}\n${fence}`;
   return `${TANDEM_ISSUES_NEW_URL}?body=${encodeURIComponent(body)}`;
 }
 

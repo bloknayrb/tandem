@@ -46,7 +46,8 @@ const CACHE_TTL_MS = 15_000;
  * A caller that wants to stop *waiting* can ignore a late result; nobody gets
  * to cancel work another caller is depending on.
  */
-let inFlight: Promise<DiagnosticsFetchResult> | null = null;
+/** The single run currently in progress, with when its probes began. */
+let inFlight: { promise: Promise<DiagnosticsFetchResult>; startedAt: number } | null = null;
 let cached: { at: number; result: DiagnosticsFetchResult } | null = null;
 
 async function run(): Promise<DiagnosticsFetchResult> {
@@ -64,36 +65,53 @@ async function run(): Promise<DiagnosticsFetchResult> {
   }
 }
 
+/** Start a run now and register it as the in-flight one. */
+function startRun(): Promise<DiagnosticsFetchResult> {
+  const entry = {
+    startedAt: Date.now(),
+    promise: run()
+      .then((result) => {
+        // Only successes are cached. Pinning a transient failure for the TTL
+        // would make a retry look broken.
+        if (result.ok) cached = { at: Date.now(), result };
+        return result;
+      })
+      .finally(() => {
+        if (inFlight === entry) inFlight = null;
+      }),
+  };
+  inFlight = entry;
+  return entry.promise;
+}
+
 /**
  * Fetch diagnostics, reusing a recent success or joining a request already in
  * flight. The route runs the full `tandem doctor` collector — an `npm ls -g`
  * subprocess, port probes, a directory scan — so duplicate runs are the thing
  * worth avoiding here. (The server single-flights *overlapping* requests too;
  * this layer additionally covers sequential ones and saves the round-trip.)
+ *
+ * `maxAgeMs: 0` opts out of reuse entirely. The Copy Diagnostics button uses
+ * it: that click is an explicit "tell me the state now", and a user who fixes a
+ * reported problem and clicks again must not be handed the pre-fix report.
+ *
+ * Note that opting out has to reject a stale *in-flight* run as well as a stale
+ * cache entry. A hover starts a run at t=0; the user fixes the problem at
+ * t=0.5s and clicks at t=1s. Joining the running one would hand them probes
+ * that predate the fix — the very thing being ruled out. When the running one
+ * is too old for the caller, a fresh run is chained behind it rather than
+ * started alongside it, so two collectors never compete.
  */
 export function fetchDiagnostics(
   opts: { maxAgeMs?: number } = {},
 ): Promise<DiagnosticsFetchResult> {
-  // `maxAgeMs: 0` opts out of the cache. The Copy Diagnostics button uses it:
-  // that click is an explicit "tell me the state now", and a user who fixes a
-  // reported problem and clicks again must not be handed the pre-fix report.
-  // In-flight sharing still applies, so opting out costs a run only when there
-  // isn't one already going.
   const maxAge = opts.maxAgeMs ?? CACHE_TTL_MS;
-  if (cached && Date.now() - cached.at < maxAge) {
-    return Promise.resolve(cached.result);
-  }
-  inFlight ??= run()
-    .then((result) => {
-      // Only successes are cached. Pinning a transient failure for 15s would
-      // make a retry look broken.
-      if (result.ok) cached = { at: Date.now(), result };
-      return result;
-    })
-    .finally(() => {
-      inFlight = null;
-    });
-  return inFlight;
+  const now = Date.now();
+
+  if (cached && now - cached.at < maxAge) return Promise.resolve(cached.result);
+  if (inFlight && now - inFlight.startedAt <= maxAge) return inFlight.promise;
+  if (inFlight) return inFlight.promise.then(() => fetchDiagnostics(opts));
+  return startRun();
 }
 
 /** Test seam — drops the cached report and any shared in-flight promise. */

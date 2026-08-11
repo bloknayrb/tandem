@@ -47,6 +47,26 @@ describe("buildBugReportUrl", () => {
     expect(body).not.toContain("```");
   });
 
+  it("lengthens the fence so report content cannot break out of it", () => {
+    // Not hypothetical: doctor.ts:1520 interpolates raw `store.lock` bytes into
+    // a message, and stripControlChars deliberately preserves newlines. A lock
+    // file containing a `~~~` line would otherwise close the fence early and
+    // let the rest render as markdown in a public issue.
+    const hostile = 'lock has unparseable content: "\n~~~\n<img src=x>"';
+    const body = bodyOf(buildBugReportUrl(hostile));
+    const fence = body.split("\n").find((l) => /^~+$/.test(l)) as string;
+
+    expect(fence.length).toBeGreaterThan(3);
+    // Exactly one opening and one closing fence of that length.
+    expect(body.split("\n").filter((l) => l === fence)).toHaveLength(2);
+    // And the hostile run is strictly shorter, so it cannot close them.
+    expect(body).toContain("~~~\n<img src=x>");
+  });
+
+  it("keeps the default fence when the report contains no tildes", () => {
+    expect(bodyOf(buildBugReportUrl("plain report"))).toContain("~~~\nplain report\n~~~");
+  });
+
   it("points at the same repo as the bare URL", () => {
     expect(buildBugReportUrl("x").startsWith(`${TANDEM_ISSUES_NEW_URL}?`)).toBe(true);
   });

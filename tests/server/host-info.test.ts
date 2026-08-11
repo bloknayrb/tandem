@@ -68,8 +68,13 @@ describe("collectHostInfo", () => {
   });
 
   it("carries nothing identifying", () => {
-    const info = collectHostInfo() as Record<string, unknown>;
-    expect(Object.keys(info).sort()).toEqual([
+    // The exact key set IS the contract — a `hostname` / `homedir` / `env`
+    // field added to the collector fails here. Deliberately NOT paired with
+    // `not.toContain(os.hostname())`: that assertion flakes whenever CI's
+    // hostname is a short common substring (and `os.homedir()` is `/` on some
+    // images), which is why tests/server/diagnostics-route.test.ts rejects it
+    // too.
+    expect(Object.keys(collectHostInfo()).sort()).toEqual([
       "arch",
       "cpuCount",
       "cpuModel",
@@ -81,8 +86,17 @@ describe("collectHostInfo", () => {
       "tauriSidecar",
       "totalMemoryMb",
     ]);
-    const wire = JSON.stringify(info);
-    expect(wire).not.toContain(os.hostname());
-    expect(wire).not.toContain(os.homedir());
+  });
+
+  it("collapses whitespace so a multi-line kernel banner stays one line", () => {
+    // `stripControlChars` on the client deliberately preserves `\n`, so an
+    // interior newline here would inject an unlabelled extra line into the
+    // clipboard text and the fenced issue body.
+    vi.spyOn(os, "version").mockReturnValue("Darwin Kernel Version 23.5.0:\n  Wed May  1 2024");
+    vi.spyOn(os, "release").mockReturnValue(" 23.5.0\n");
+    const info = collectHostInfo();
+
+    expect(info.osVersion).toBe("Darwin Kernel Version 23.5.0: Wed May 1 2024");
+    expect(info.osRelease).toBe("23.5.0");
   });
 });

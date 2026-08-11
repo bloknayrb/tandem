@@ -2,9 +2,10 @@ import os from "node:os";
 import type { Request, Response } from "express";
 import type { DoctorReport, RunDoctorOptions } from "../../../cli/doctor.js";
 import { runDoctor, summarizeDoctorResults } from "../../../cli/doctor.js";
+import type { RedactRoot } from "../../../shared/redact-user-paths.js";
+import { diagnosticsRedactRoots, redactUserPaths } from "../../../shared/redact-user-paths.js";
 import { isLoopback } from "../../auth/middleware.js";
 import { collectHostInfo } from "../host-info.js";
-import { escapeRegex } from "../response.js";
 import type { Handler } from "./_shared.js";
 
 /**
@@ -73,25 +74,30 @@ function scrubDeep(value: unknown, scrub: (s: string) => string): unknown {
 }
 
 /**
- * Replace the user's home directory with `~` everywhere in the report.
+ * Collapse user-identifying paths everywhere in the report.
  *
- * Several checks interpolate absolute app-data paths — `doctor.ts` lines ~1420
- * ("Annotation store dir not yet created (${dir})", a *passing* check on the
- * common first run), ~1434, ~1497 and ~1535 — and `resolveAppDataDir()`
- * resolves those under `C:\Users\<username>\AppData\Local\…` or
- * `/Users/<username>/Library/…`. The username is the leak.
+ * Several checks interpolate the app-data dir — `doctor.ts` ~1420 ("Annotation
+ * store dir not yet created (${dir})", a *passing* check on the common first
+ * run), ~1434, ~1497, ~1535 — and the username is the leak.
  *
  * This mattered less when Copy Diagnostics was the only consumer: a human chose
  * what to paste. The Report-a-bug link prefills a public issue body, which turns
  * that review step into an opt-out, so the redaction happens here instead.
  *
+ * **`$HOME` alone is not enough**, which is why this delegates rather than
+ * doing a one-line prefix swap. `resolveAppDataDir()` (doctor.ts:1386) honours
+ * `TANDEM_APP_DATA_DIR`, `XDG_DATA_HOME` and `LOCALAPPDATA`, any of which can
+ * resolve outside home — a redirected Windows profile, a custom XDG root on
+ * another volume — and those paths still carry the username. Two checks also
+ * interpolate a raw `fs` error (`errMsg` at doctor.ts:1434 and :1541), whose
+ * text embeds an absolute path no prefix list is guaranteed to cover; that is
+ * what `redactUserPaths`' generic second pass is for.
+ *
  * Walks the WHOLE report rather than enumerating `message`/`fix`. The per-check
  * `data` bag is free-form and several checks put the raw directory in it
  * (`annotation-store` carries `data.dir`), so a message-only pass leaves the
  * path on the wire — and enumerating fields means a new string field on
- * `DoctorResult` silently escapes redaction with nothing to fail. Rewriting
- * only the home prefix is safe on any string, so the general walk is both
- * shorter and closed.
+ * `DoctorResult` silently escapes redaction with nothing to fail.
  *
  * Note this is NOT `scrubPathForCaller` (`routes/_shared.ts`): that one is
  * caller-conditional (a loopback caller gets the real path) and reduces to a
@@ -106,27 +112,13 @@ function scrubDeep(value: unknown, scrub: (s: string) => string): unknown {
  * config URLs still make the full report unfit for a LAN caller.
  */
 export function redactHomePaths(report: DoctorReport): DoctorReport {
-  let home: string;
+  let roots: RedactRoot[];
   try {
-    home = os.homedir();
+    roots = diagnosticsRedactRoots(os.homedir(), process.env);
   } catch {
     return report;
   }
-  // Guard against a root/empty homedir, where a blind replace would corrupt
-  // every absolute path in the report. (`length < 2` already covers "/".)
-  if (!home || home.length < 2 || /^[A-Za-z]:[/\\]?$/.test(home)) return report;
-
-  const trimmed = home.replace(/[/\\]+$/, "");
-  const variants = [...new Set([trimmed, trimmed.replace(/\\/g, "/")])];
-  // Windows paths are case-insensitive and the drive letter's case varies by
-  // which API produced the string.
-  const flags = process.platform === "win32" ? "gi" : "g";
-  // The lookahead requires the next character (if any) to be a separator, so a
-  // short home like `/root` cannot swallow the prefix of an unrelated
-  // `/rootfs/...`.
-  const pattern = new RegExp(`(?:${variants.map(escapeRegex).join("|")})(?![^/\\\\])`, flags);
-
-  return scrubDeep(report, (s) => s.replace(pattern, "~")) as DoctorReport;
+  return scrubDeep(report, (s) => redactUserPaths(s, roots)) as DoctorReport;
 }
 
 /**

@@ -49,25 +49,38 @@ function toMb(bytes: number): number {
   return Math.round(bytes / 1024 / 1024);
 }
 
+/** Trim and fold all runs of whitespace — including newlines — to one space. */
+function collapse(s: string | undefined): string {
+  return s?.trim().replace(/\s+/g, " ") ?? "";
+}
+
 /** Collect the host environment fields. Side-effect free; safe to call per request. */
 export function collectHostInfo(): HostInfo {
   // One `os.cpus()` call — it allocates an object per core, and both CPU fields
   // read from the same array.
   const cpus = tryValue(() => os.cpus()) ?? [];
-  const model = cpus[0]?.model?.trim().replace(/\s+/g, " ");
+  const model = collapse(cpus[0]?.model);
+  // Collapse BEFORE truncating: `os.version()` returns a multi-line kernel
+  // banner on some Darwin/Linux builds, and an interior newline survives the
+  // client's `stripControlChars` (which deliberately preserves `\n`), so it
+  // would inject an unlabelled extra line into the clipboard text and the
+  // fenced issue body.
+  //
   // Spread-then-slice truncates on code points, not UTF-16 units. A plain
   // `.slice()` can bisect a surrogate pair, and the lone surrogate that leaves
   // behind makes `encodeURIComponent` throw — which silently drops the entire
   // Report-a-bug prefill. Same hazard `buildBugReportUrl` avoids by cutting on
   // line boundaries.
-  const version = tryValue(() => [...os.version()].slice(0, MAX_OS_VERSION_LENGTH).join(""));
+  const version = tryValue(() =>
+    [...collapse(os.version())].slice(0, MAX_OS_VERSION_LENGTH).join(""),
+  );
 
   return {
     platform: process.platform,
     arch: process.arch,
     nodeVersion: process.version,
     tauriSidecar: process.env.TANDEM_TAURI_SIDECAR === "1",
-    osRelease: tryValue(() => os.release()) || undefined,
+    osRelease: tryValue(() => collapse(os.release())) || undefined,
     osVersion: version || undefined,
     cpuModel: model || undefined,
     cpuCount: cpus.length || undefined,

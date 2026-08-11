@@ -197,6 +197,51 @@ describe("GET /api/diagnostics — home-path redaction", () => {
     expect(error).toContain("~");
   });
 
+  it("redacts an app-data dir that resolves OUTSIDE the home directory", async () => {
+    // `resolveAppDataDir()` honours TANDEM_APP_DATA_DIR / XDG_DATA_HOME /
+    // LOCALAPPDATA, any of which can point off-home (redirected Windows
+    // profile, custom XDG root on another volume). A $HOME-only redaction
+    // leaves the username on the wire in exactly that configuration.
+    vi.stubEnv("TANDEM_APP_DATA_DIR", "/srv/exports/bryan/tandem");
+    const dir = "/srv/exports/bryan/tandem/annotations";
+    const { body, report } = await invoke(async () =>
+      makeReport([
+        {
+          check: "annotation-store",
+          status: "pass",
+          message: `Annotation store dir not yet created (${dir}) — first open will create it`,
+          data: { dir },
+        },
+      ]),
+    );
+
+    expect(JSON.stringify(body)).not.toContain("/srv/exports/bryan");
+    const [only] = report.results;
+    expect(only.message).toContain("<app-data>/annotations");
+    vi.unstubAllEnvs();
+  });
+
+  it("redacts a user path that reached the report inside a raw fs error", async () => {
+    // doctor.ts:1434 and :1541 interpolate `errMsg(err)`, whose text embeds an
+    // absolute path no prefix list is guaranteed to cover.
+    const { report } = await invoke(async () =>
+      makeReport([
+        {
+          check: "annotation-store",
+          status: "fail",
+          message:
+            "Annotation store dir unreadable: EACCES: permission denied, scandir '/home/someoneelse/.local/share/tandem'",
+          fix: "Check permissions on /home/someoneelse/.local/share/tandem",
+        },
+      ]),
+    );
+
+    const [only] = report.results;
+    expect(only.message).not.toContain("someoneelse");
+    expect(only.fix).not.toContain("someoneelse");
+    expect(only.message).toContain("/home/[user]/.local/share/tandem");
+  });
+
   it("does not swallow an unrelated path that merely starts with the home string", async () => {
     // With home = "/root", a naive replace turns "/rootfs/x" into "~fs/x".
     const home = os.homedir();

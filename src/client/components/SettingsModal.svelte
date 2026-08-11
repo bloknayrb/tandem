@@ -722,7 +722,8 @@ async function handleReplayTutorial(): Promise<void> {
           href={bugReport.url}
           onpointerenter={bugReport.primeOnDwell}
           onpointerleave={bugReport.cancelDwell}
-          onfocus={bugReport.prime}
+          onfocus={bugReport.primeOnDwell}
+          onblur={bugReport.cancelDwell}
           target="_blank"
           rel="noreferrer"
           data-testid="settings-modal-report-bug-link"
