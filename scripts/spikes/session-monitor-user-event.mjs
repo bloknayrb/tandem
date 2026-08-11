@@ -6,6 +6,7 @@
  * It never reads or writes Claude configuration.
  */
 import { HocuspocusProvider } from "@hocuspocus/provider";
+import WebSocket from "ws";
 import * as Y from "yjs";
 
 const [httpBase, wsBase, eventId, eventText] = process.argv.slice(2);
@@ -37,14 +38,31 @@ if (typeof info.generationId !== "string" || info.generationId.length === 0) {
   throw new Error("isolated server returned no generationId");
 }
 
+// Hocuspocus rejects any connection whose Origin header is missing, not just one
+// whose origin is disallowed (`assertAllowedOrigin` in src/server/yjs/provider.ts) --
+// and a bare Node WebSocket sends no Origin at all. Without this the connection is
+// refused on origin and surfaces as `authenticationFailed`, which reads like a
+// generation-token mismatch and sent one investigation looking at the wrong thing.
+// A browser would send its page origin here; the loopback HTTP base is the
+// equivalent for this fixture, and only the hostname is checked.
+const originHeader = httpUrl.origin;
+
+class OriginBearingWebSocket extends WebSocket {
+  constructor(address, protocols) {
+    super(address, protocols, { headers: { Origin: originHeader } });
+  }
+}
+
 const doc = new Y.Doc();
 const provider = new HocuspocusProvider({
   url: wsBase,
   name: "__tandem_ctrl__",
   document: doc,
   token: info.generationId,
+  WebSocketPolyfill: OriginBearingWebSocket,
 });
 
+let exitCode = 0;
 try {
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("control-room sync timed out")), 10_000);
@@ -68,7 +86,15 @@ try {
   }, "tandem-acceptance-user");
   await new Promise((resolve) => setTimeout(resolve, 750));
   process.stdout.write(`${JSON.stringify({ eventId, eventText })}\n`);
+} catch (error) {
+  // Letting this propagate crashed Node inside libuv teardown ("Assertion failed:
+  // !(handle->flags & UV_HANDLE_CLOSING)") and surfaced to the harness as exit code
+  // 3221226505 -- a Windows stack-overrun code that says nothing about the cause.
+  // Report the reason and fail with an exit code the caller can read.
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  exitCode = 1;
 } finally {
   provider.destroy();
   doc.destroy();
 }
+process.exit(exitCode);

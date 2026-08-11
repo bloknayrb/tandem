@@ -53,6 +53,17 @@ CHAIN_FIELDS = (
     "monitor_persistent",
     "wake_seen",
     "inbox_checked",
+    # These three were in PRECONDITION_FIELDS until 2026-08-11, which made the gate
+    # unable to reach its own PASS state. They are consequences of the model arming a
+    # monitor, not facts about whether the harness had control of the host, but
+    # `missing_precondition` applies preconditions to EVERY row and then skips the
+    # chain logic -- so on a legitimate natural decline (no dispatch, so nothing to
+    # arm, so no idle/growth/autonomous turn) they were unconditionally false and every
+    # such row was inconclusive. That vetoed PASS even at `natural_successes: 1`, which
+    # is the exact ratio the bounded n=3 sample exists to permit.
+    "turn_idle_after_monitor",
+    "subscriber_growth_proven",
+    "autonomous_turn_seen",
 )
 PRECONDITION_FIELDS = (
     "capture_healthy",
@@ -60,9 +71,33 @@ PRECONDITION_FIELDS = (
     "workspace_trusted",
     "fixture_onboarded",
     "prompt_submitted",
+)
+# Chain fields that can only be true as a CONSEQUENCE of the skill being dispatched.
+# Deliberately NOT `CHAIN_FIELDS - skill_dispatched`: `status_succeeded` merely records
+# that a `tandem_status` response carried a wakeUrl, and wakeUrl ships in every
+# read-mode status response (src/server/mcp/document.ts) regardless of arming. A model
+# that declines the skill still calls `tandem_status` to answer the prose prompt -- both
+# stored decline rows show `status_succeeded: true` -- so including it here would make
+# every honest decline look self-contradictory. `status_succeeded` stays in
+# `CHAIN_FIELDS` because the control-completeness and natural-full-chain checks do
+# require it.
+DISPATCH_CONSEQUENT_FIELDS = (
+    "monitor_attempted",
+    "monitor_persistent",
+    "wake_seen",
+    "inbox_checked",
     "turn_idle_after_monitor",
     "subscriber_growth_proven",
     "autonomous_turn_seen",
+)
+# The first three preconditions are the PTY-derived health signals; the rest come from
+# the structured trace. Named rather than sliced -- this was `PRECONDITION_FIELDS[:3]`,
+# which happened to stay correct across the re-homing above only because the moved
+# fields sat at the tuple's end.
+TRANSCRIPT_HEALTH_FIELDS = (
+    "capture_healthy",
+    "host_authenticated",
+    "workspace_trusted",
 )
 OBSERVATION_FIELDS = PRECONDITION_FIELDS + CHAIN_FIELDS
 CAPTURE_ELIGIBILITY_FIELD = "capture_eligibility"
@@ -83,6 +118,18 @@ LIVE_CAPTURE_PRODUCER_AVAILABLE = True
 LIVE_CAPTURE_PRODUCER_BLOCKER = (
     "release-incomplete: the authenticated ten-session ConPTY matrix has not passed"
 )
+# Held back from the monitor-idle wait for the wake injection and the
+# tandem_checkInbox observation that follow it. Everything else in the caller's
+# --timeout-seconds is available to out-wait the armed Monitor call, whose
+# duration is host-side and not ours to predict (measured: 45s to 664s).
+INJECTION_RESERVE_SECONDS = 120.0
+# Grace period before a turn with no dispatch signal is committed to as a decline.
+# Both signals lag their cause -- trace lines come from per-event hook subprocesses and
+# the marker from a spawned plugin monitor -- so this absorbs write latency rather than
+# model latency, which the monitor-idle wait above already covers.
+DISPATCH_SETTLE_SECONDS = 15.0
+# Opened before each trial so the document-scoped inbox poll has something to report.
+ACCEPTANCE_DOCUMENT = "acceptance.md"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 STRUCTURED_TOOL_RE = re.compile(r"^\s*tool:\s*([A-Za-z0-9_:]+)\b(.*)$", re.IGNORECASE)
@@ -156,6 +203,81 @@ def build_trial_matrix() -> list[dict[str, Any]]:
     return trials
 
 
+DISPATCH_OBSERVED = "dispatched"
+DISPATCH_DECLINED = "declined"
+DISPATCH_PENDING = "pending"
+
+
+def dispatch_signals_seen(
+    events: list[dict[str, Any]],
+    *,
+    prompt_submitted_at: float,
+    dispatch_marker_seen: bool,
+) -> bool:
+    """Report whether the skill was dispatched, by either observable route.
+
+    The two routes are not redundant, and neither alone is sufficient:
+
+    * ``PreToolUse Skill`` fires when the *model* invokes the skill. A typed ``/tandem``
+      slash dispatch does not produce one -- measured from the plugin-control trace,
+      which contains a `Monitor` call and no `Skill` event -- so this signal alone is
+      blind to the entire control arm.
+    * The marker file is written by the plugin fixture's ``experimental.monitors``
+      command, which arms on ``on-skill-invoke``. It is therefore the plugin runtime
+      observing an invocation however it was reached, but it additionally requires that
+      trigger to fire and the process to spawn.
+
+    Taking the union is what makes a broken ``on-skill-invoke`` trigger (#1354) visible:
+    marker absent while a `Skill` event exists means the model did invoke the skill and
+    the trigger did not fire. Under the marker alone that reads as a model decline and
+    is laundered into a benign negative.
+    """
+
+    if dispatch_marker_seen:
+        return True
+    return any(
+        str(event.get("hook_event_name", "")) == "PreToolUse"
+        and str(event.get("tool_name", "")).lower() == "skill"
+        and isinstance(event.get("at"), (int, float))
+        and event["at"] >= prompt_submitted_at
+        for event in events
+    )
+
+
+def classify_dispatch(
+    events: list[dict[str, Any]],
+    *,
+    prompt_submitted_at: float,
+    dispatch_marker_seen: bool,
+) -> str:
+    """Classify a turn as dispatched, declined, or still pending.
+
+    ``declined`` requires POSITIVE proof the turn completed -- a ``Stop`` after the
+    prompt -- not merely the absence of a dispatch signal. Absence alone also matches a
+    crash, a hang, a skill that never became invocable, and an unanswered permission
+    dialog, and recording any of those as a benign negative would launder exactly the
+    regression class this harness exists to detect. A hung turn stays ``pending`` and
+    times out with a named failure instead.
+
+    Extracted as a pure function so the decline branch is testable without driving a
+    real PTY session; ``capture`` had no seam at which this decision could be observed.
+    """
+
+    if dispatch_signals_seen(
+        events,
+        prompt_submitted_at=prompt_submitted_at,
+        dispatch_marker_seen=dispatch_marker_seen,
+    ):
+        return DISPATCH_OBSERVED
+    turn_completed = any(
+        str(event.get("hook_event_name", "")) == "Stop"
+        and isinstance(event.get("at"), (int, float))
+        and event["at"] > prompt_submitted_at
+        for event in events
+    )
+    return DISPATCH_DECLINED if turn_completed else DISPATCH_PENDING
+
+
 def parse_trial_transcript(
     transcript: str,
     *,
@@ -197,6 +319,7 @@ def derive_structured_observations(
     transcript_health: dict[str, bool],
     decoy_count: int,
     armed_count: int,
+    prompt_submitted_at: float = 0.0,
 ) -> dict[str, bool]:
     """Derive release observations only from Claude hook events and server counts."""
 
@@ -262,7 +385,11 @@ def derive_structured_observations(
         "turn_idle_after_monitor": stop_after_monitor,
         "subscriber_growth_proven": decoy_count >= 1 and armed_count >= decoy_count + 1,
         "autonomous_turn_seen": bool(inbox_events),
-        "skill_dispatched": dispatch_marker_seen,
+        "skill_dispatched": dispatch_signals_seen(
+            events,
+            prompt_submitted_at=prompt_submitted_at,
+            dispatch_marker_seen=dispatch_marker_seen,
+        ),
         "status_succeeded": wake_url is not None and status_at is not None,
         "monitor_attempted": monitor is not None,
         "monitor_persistent": monitor_persistent,
@@ -421,6 +548,22 @@ def prepare_fixture_root(root: Path, repo: Path | None = None) -> Path:
     ):
         _safe_mutation_path(root, directory).mkdir(parents=True, exist_ok=True)
 
+    # A trial needs an open document, because `tandem_checkInbox` bails out with
+    # `noDocumentError()` when there is no active one -- and that bail-out is why the
+    # wake half of the chain read as a failure for a while: `tandem_status` needs no
+    # document and succeeded, so only the inbox call failed, and it failed without
+    # completing. A user doing ordinary Tandem work always has a document open, so a
+    # fixture with an empty workspace is not modelling the case under test.
+    document_path = _safe_mutation_path(root, root / "workspace" / ACCEPTANCE_DOCUMENT)
+    if not document_path.exists():
+        document_path.write_text(
+            "# Session monitor acceptance\n\n"
+            "This document exists so a trial has an active document: the inbox poll is\n"
+            "document-scoped, and a wake is only observable once it can report one.\n",
+            encoding="utf-8",
+            newline="",
+        )
+
     attestation_key_path = root / "backups" / ATTESTATION_KEY_FILE
     if not attestation_key_path.exists():
         _safe_mutation_path(root, attestation_key_path).write_bytes(secrets.token_bytes(32))
@@ -453,6 +596,7 @@ def prepare_fixture_root(root: Path, repo: Path | None = None) -> Path:
     projects[str(root / "workspace")] = {"hasTrustDialogAccepted": True}
     claude_state.update({"hasCompletedOnboarding": True, "projects": projects})
     _write_json(claude_state_path, claude_state)
+    _install_structured_trace_hooks(root)
 
     matrix_path = root / "matrix.json"
     evidence_path = root / "evidence.json"
@@ -475,6 +619,85 @@ def prepare_fixture_root(root: Path, repo: Path | None = None) -> Path:
 def _read_skill_version(content: str) -> int | None:
     match = re.search(r"(?m)^version:\s*(\d+)\s*$", content)
     return int(match.group(1)) if match else None
+
+
+def _install_structured_trace_hooks(root: Path) -> None:
+    """Install fixture instrumentation in Claude's effective user settings.
+
+    Claude can discover plugin hook declarations without executing them in some
+    launch modes. User settings live directly under ``CLAUDE_CONFIG_DIR``, so
+    they provide the deterministic evidence boundary while ``--plugin-dir``
+    remains responsible only for the candidate plugin behavior under test.
+    """
+
+    root = assert_owned_fixture_root(root)
+    helper = _safe_mutation_path(
+        root, root / "home" / ".claude" / "harness-hooks" / "capture-event.mjs"
+    )
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    helper.write_text(
+        'import { appendFileSync } from "node:fs";\n'
+        "if (!process.env.TANDEM_ACCEPTANCE_TRACE) process.exit(0);\n"
+        "const chunks = [];\nfor await (const chunk of process.stdin) chunks.push(chunk);\n"
+        'const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));\n'
+        "appendFileSync(process.env.TANDEM_ACCEPTANCE_TRACE, "
+        "`${JSON.stringify({ at: Date.now() / 1000, ...payload })}\\n`);\n",
+        encoding="utf-8",
+        newline="",
+    )
+
+    settings_path = _safe_mutation_path(root, root / "home" / ".claude" / "settings.json")
+    settings: dict[str, Any] = {}
+    if settings_path.is_file():
+        try:
+            existing = json.loads(settings_path.read_text(encoding="utf-8"))
+            if isinstance(existing, dict):
+                settings.update(existing)
+        except json.JSONDecodeError:
+            pass
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+    command = f'node "{helper.resolve()}"'
+    for event in ("SessionStart", "PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit"):
+        hooks[event] = [
+            {"hooks": [{"type": "command", "command": command, "timeout": 10}]}
+        ]
+    settings["hooks"] = hooks
+    # A fresh fixture HOME has never approved anything, so any un-approved tool call
+    # stops on a "Do you want to proceed?" dialog that nothing in this harness
+    # answers -- the turn then never ends, and the failure surfaces as an
+    # unexplained multi-minute stall rather than as a blocked prompt.
+    #
+    # The list below is an ENUMERATION OF CONSUMERS, and it has already failed once by
+    # omission: `Monitor` -- the tool this whole gate exists to observe -- was missing,
+    # so the skill's own arming call sat on the dialog for over 22 minutes and was
+    # misread as host latency across seven live sessions.
+    #
+    # `defaultMode: "bypassPermissions"` looks like the way out of guessing, and it is
+    # not: it raises its own "you accept all responsibility" acceptance screen that
+    # defaults to *exit*, and its warning restricts it to a sandboxed container/VM
+    # with limited network. This fixture is an isolated HOME on a real workstation
+    # with real network, so that is the wrong instrument here.
+    #
+    # What breaks the enumerate-and-miss cycle is not a longer list but
+    # `_permission_dialog_blocking`, which turns the next omission into a named
+    # failure within seconds instead of a silent multi-minute stall.
+    permissions = settings.get("permissions")
+    if not isinstance(permissions, dict):
+        permissions = {}
+    # A previous revision set this; leaving it behind would strand the fixture on the
+    # bypass acceptance screen with no way to answer it.
+    permissions.pop("defaultMode", None)
+    allow = permissions.get("allow")
+    if not isinstance(allow, list):
+        allow = []
+    for pattern in ("mcp__tandem__*", "mcp__plugin_tandem_tandem__*", "Monitor"):
+        if pattern not in allow:
+            allow.append(pattern)
+    permissions["allow"] = allow
+    settings["permissions"] = permissions
+    _write_json(settings_path, settings)
 
 
 def _sha256(content: bytes) -> str:
@@ -530,7 +753,9 @@ def build_plugin_fixture(root: Path, repo: Path) -> Path:
     plugin = root / "fixtures" / "candidate-plugin-v10"
     _safe_mutation_path(root, plugin / ".claude-plugin").mkdir(parents=True, exist_ok=True)
     _safe_mutation_path(root, plugin / "skills" / "tandem").mkdir(parents=True, exist_ok=True)
-    _safe_mutation_path(root, plugin / "hooks").mkdir(parents=True, exist_ok=True)
+    stale_plugin_hooks = _safe_mutation_path(root, plugin / "hooks")
+    if stale_plugin_hooks.exists():
+        shutil.rmtree(stale_plugin_hooks)
     manifest = json.loads((repo / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     mcp_servers = manifest.get("mcpServers", {})
     tandem_mcp = mcp_servers.get("tandem")
@@ -562,30 +787,6 @@ def build_plugin_fixture(root: Path, repo: Path) -> Path:
         'import { appendFileSync } from "node:fs";\n'
         'appendFileSync(new URL("./silent-monitor-pids.log", import.meta.url), `${process.pid}\\n`);\n'
         "setInterval(() => {}, 60_000);\n",
-        encoding="utf-8",
-        newline="",
-    )
-    hook_command = 'node "${CLAUDE_PLUGIN_ROOT}/hooks/capture-event.mjs"'
-    hooks = {
-        "description": "Fixture-only structured acceptance trace",
-        "hooks": {
-            event: [{"hooks": [{"type": "command", "command": hook_command, "timeout": 10}]}]
-            for event in (
-                "SessionStart",
-                "PreToolUse",
-                "PostToolUse",
-                "Stop",
-                "UserPromptSubmit",
-            )
-        },
-    }
-    _write_json(_safe_mutation_path(root, plugin / "hooks" / "hooks.json"), hooks)
-    _safe_mutation_path(root, plugin / "hooks" / "capture-event.mjs").write_text(
-        'import { appendFileSync } from "node:fs";\n'
-        'const chunks = [];\nfor await (const chunk of process.stdin) chunks.push(chunk);\n'
-        'const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));\n'
-        'appendFileSync(process.env.TANDEM_ACCEPTANCE_TRACE, '
-        '`${JSON.stringify({ at: Date.now() / 1000, ...payload })}\\n`);\n',
         encoding="utf-8",
         newline="",
     )
@@ -657,13 +858,69 @@ def _reserve_local_port() -> int:
 
 
 def _pid_alive(pid: int | None) -> bool:
+    """Report whether a pid is running, WITHOUT disturbing it.
+
+    `os.kill(pid, 0)` is the POSIX idiom for this and is wrong on Windows: CPython
+    implements `os.kill` there via `TerminateProcess`, so signal 0 does not probe the
+    process -- it *terminates* it with exit code 0. Used as a liveness check it
+    destroys what it measures, which is how the teardown proof came to report a clean
+    trial as dirty: every pid it asked about was killed by the asking, so the answer
+    described the probe rather than the teardown.
+    """
+
     if not isinstance(pid, int) or pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    # SYNCHRONIZE is required to wait on the handle; querying alone yields WAIT_FAILED,
+    # which would make every running process read as dead.
+    SYNCHRONIZE = 0x00100000
+    STILL_ACTIVE = 259
+    WAIT_TIMEOUT = 0x102
+    WAIT_FAILED = 0xFFFFFFFF
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # Declare the signatures: without a HANDLE restype ctypes assumes c_int and
+    # truncates the 64-bit handle, so every subsequent call fails and a running
+    # process reports as dead.
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid
+    )
+    if not handle:
         return False
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        if code.value != STILL_ACTIVE:
+            return False
+        # A process that genuinely exited with code 259 is indistinguishable from a
+        # running one by exit code alone, so confirm against the wait state: only a
+        # still-running process fails to signal its handle. If the wait itself cannot
+        # be performed, fall back to STILL_ACTIVE rather than reporting a live process
+        # dead -- this check exists to catch survivors, so it must err toward "alive".
+        waited = kernel32.WaitForSingleObject(handle, 0)
+        return waited in (WAIT_TIMEOUT, WAIT_FAILED)
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _descendant_pids(root_pid: int | None) -> tuple[list[int], bool]:
@@ -848,6 +1105,9 @@ class ConptyTrialDriver:
             ).start()
             health_before = self._wait_health(base_url, server, deadline)
             server_ready_at = time.time()
+            server_log["opened_document"] = self._open_acceptance_document(
+                base_url, context.root / "workspace" / ACCEPTANCE_DOCUMENT
+            )
             launcher_status = self._read_json(f"{base_url}/api/launcher/status")
             server_log["observed_launcher_mode"] = self._launcher_mode(launcher_status)
 
@@ -930,22 +1190,56 @@ class ConptyTrialDriver:
                         return
 
             threading.Thread(target=read_pty, daemon=True).start()
-            if not self._wait_until(
-                lambda: self._structured_event_after(
+            trust_prompt_accepted = False
+
+            def session_started() -> bool:
+                nonlocal trust_prompt_accepted
+                if self._structured_event_after(
                     self._read_hook_events(trace_path), "SessionStart", claude_started_at
-                ),
+                ):
+                    return True
+                trust_prompt_accepted = self._accept_workspace_trust_prompt_if_selected(
+                    pty,
+                    "".join(transcript_chunks),
+                    already_accepted=trust_prompt_accepted,
+                )
+                return False
+
+            if not self._wait_until(
+                session_started,
                 deadline,
                 30,
             ):
                 raise RuntimeError("plugin-session-start-not-observed")
-            if context.trial["prompt_kind"] == "control":
-                pty.write("/tandem")
-                time.sleep(1)
-                pty.write("\r")
-                time.sleep(3)
-            prompt = "Use Tandem to report the current collaboration state."
+            # SessionStart fires on process start, independent of TTY rendering, so it
+            # can be observed while a first-run interstitial (e.g. the fullscreen
+            # renderer opt-in) is still on screen and would otherwise swallow the
+            # command keystrokes below. Dismiss it without opting in.
+            interstitial_dismissed = False
+
+            def interstitial_clear() -> bool:
+                nonlocal interstitial_dismissed
+                interstitial_dismissed = self._dismiss_interstitial_prompt_if_shown(
+                    pty,
+                    "".join(transcript_chunks),
+                    already_dismissed=interstitial_dismissed,
+                )
+                return interstitial_dismissed
+
+            self._wait_until(interstitial_clear, deadline, 5)
+            # Exactly one dispatch per trial. The control arm dispatches the skill
+            # explicitly; the natural arm dispatches it by asking for Tandem work in
+            # prose. Sending both -- as this did until 2026-08-11 -- conflates the two
+            # arms of the matrix and races the second write against the first turn,
+            # which is still occupied by the blocking Monitor call it just armed.
+            # Nothing in the evidence model needs the prose text on a control trial:
+            # `prompt_submitted` reads any UserPromptSubmit, `skill_dispatched` reads
+            # the marker file, and the wake fields read the autonomous turn that the
+            # injected event provokes.
+            prompt = self._dispatch_prompt(context.trial)
             prompt_submitted_at = time.time()
             pty.write(prompt)
+            time.sleep(1)
             pty.write("\r")
             if not self._wait_until(
                 lambda: self._structured_event_after(
@@ -957,49 +1251,110 @@ class ConptyTrialDriver:
                 15,
             ):
                 raise RuntimeError("user-prompt-submit-not-observed")
+            # `min(90, timeout * 0.55)` used to cap this, which is always exactly 90
+            # for any --timeout-seconds >= 164 -- so this wait never scaled with the
+            # budget at all. Derive it from the deadline instead, so one knob
+            # (--timeout-seconds) governs how long a trial may take.
+            def classify_turn() -> str:
+                return classify_dispatch(
+                    self._read_hook_events(trace_path),
+                    prompt_submitted_at=prompt_submitted_at,
+                    dispatch_marker_seen=marker_path.is_file(),
+                )
+
+            def monitor_idle_or_blocked() -> bool:
+                # An unanswered permission dialog stalls the turn with no event and no
+                # error, which reads identically to a slow host: it cost seven live
+                # sessions and a wrong latency diagnosis before the transcript was
+                # read. `bypassPermissions` should prevent it, but a config that
+                # silently stops working must not be able to masquerade as latency
+                # again -- so name it the moment it appears.
+                if self._permission_dialog_blocking("".join(transcript_chunks)):
+                    raise RuntimeError("permission-dialog-blocked-turn")
+                if self._structured_monitor_is_idle(self._read_hook_events(trace_path)):
+                    return True
+                # A turn that completed without dispatching the skill has nothing left
+                # to wait for: no monitor was armed, so monitor-idle can never become
+                # true and this wait would burn the entire remaining budget before
+                # aborting the capture. That abort is what made a legitimate model
+                # decline unrecordable -- it forced capture_healthy false and
+                # FAILED_LIVE_CAPTURE, which the gate rejects unconditionally, so a
+                # bounded n=3 sample could never contain a decline and still pass.
+                return classify_turn() == DISPATCH_DECLINED
+
             self._wait_until(
-                lambda: self._structured_monitor_is_idle(self._read_hook_events(trace_path)),
+                monitor_idle_or_blocked,
                 deadline,
-                min(90, context.timeout_seconds * 0.55),
+                max(60.0, deadline - time.monotonic() - INJECTION_RESERVE_SECONDS),
             )
             status_observed_at = time.time()
             health_armed = self._wait_health(base_url, server, deadline)
             armed_count = self._subscriber_count(health_armed)
-            if not self._structured_monitor_is_idle(self._read_hook_events(trace_path)):
-                raise RuntimeError("structured-monitor-idle-not-observed")
-            if armed_count < after_count + 1:
-                raise RuntimeError("monitor-subscriber-not-observed")
-            injected_at = time.time()
-            injector = subprocess.run(
-                [
-                    node,
-                    str(context.repo / "scripts" / "spikes" / "session-monitor-user-event.mjs"),
-                    base_url,
-                    ws_url,
-                    event_id,
-                    event_text,
-                ],
-                cwd=context.repo,
-                env=server_env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=min(20, remaining()),
-                check=False,
-            )
-            server_log["injector"] = {
-                "returncode": injector.returncode,
-                "stdout": injector.stdout,
-                "stderr": injector.stderr,
-            }
-            self._wait_until(
-                lambda: self._structured_inbox_saw(
-                    self._read_hook_events(trace_path), event_text, injected_at
-                ),
-                deadline,
-                remaining(),
-            )
+            monitor_idle = self._structured_monitor_is_idle(self._read_hook_events(trace_path))
+            declined = False
+            if not monitor_idle:
+                # Settle before committing. Both dispatch signals lag their cause: trace
+                # lines are appended by per-event hook subprocesses, and the marker is
+                # written by a spawned plugin monitor process. A tick that sees `Stop`
+                # flushed but the `Skill` line not yet would classify a real dispatch as
+                # a decline -- laundering the arming regression this is built to catch,
+                # one layer further down. `_wait_until` polls, so a dispatch signal
+                # arriving anywhere in the window wins; only a window that stays empty
+                # throughout is treated as a decline.
+                self._wait_until(
+                    lambda: classify_turn() == DISPATCH_OBSERVED,
+                    deadline,
+                    DISPATCH_SETTLE_SECONDS,
+                )
+                declined = classify_turn() == DISPATCH_DECLINED
+                if not declined:
+                    raise RuntimeError("structured-monitor-idle-not-observed")
+            if not declined:
+                if armed_count < after_count + 1:
+                    raise RuntimeError("monitor-subscriber-not-observed")
+            if declined:
+                # Skip injection and the subscriber assertion: there is no armed monitor
+                # to wake, and asserting on one would fail a trial for an outcome the
+                # sample size exists to measure. `injected_at` stays unset, so the
+                # dispatch-consequent observations derive false -- `stop_after_monitor`
+                # is guarded on a real `monitor_at`, so the float("inf") default cannot
+                # read true here. Teardown and artifact writing proceed normally, which
+                # is what makes this a healthy direct-live row carrying a negative
+                # rather than a failed capture.
+                server_log["dispatch_classification"] = DISPATCH_DECLINED
+            else:
+                server_log["dispatch_classification"] = DISPATCH_OBSERVED
+                injected_at = time.time()
+                injector = subprocess.run(
+                    [
+                        node,
+                        str(context.repo / "scripts" / "spikes" / "session-monitor-user-event.mjs"),
+                        base_url,
+                        ws_url,
+                        event_id,
+                        event_text,
+                    ],
+                    cwd=context.repo,
+                    env=server_env,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=min(20, remaining()),
+                    check=False,
+                )
+                server_log["injector"] = {
+                    "returncode": injector.returncode,
+                    "stdout": injector.stdout,
+                    "stderr": injector.stderr,
+                }
+                self._wait_until(
+                    lambda: self._structured_inbox_saw(
+                        self._read_hook_events(trace_path), event_text, injected_at
+                    ),
+                    deadline,
+                    remaining(),
+                )
         except Exception as exc:
             capture_failure = exc
         finally:
@@ -1040,9 +1395,12 @@ class ConptyTrialDriver:
             dispatch_marker_seen=marker_path.is_file(),
             event_text=event_text,
             injected_at=locals().get("injected_at", float("inf")),
-            transcript_health={field: transcript_health[field] for field in PRECONDITION_FIELDS[:3]},
+            transcript_health={
+                field: transcript_health[field] for field in TRANSCRIPT_HEALTH_FIELDS
+            },
             decoy_count=after_count,
             armed_count=locals().get("armed_count", -1),
+            prompt_submitted_at=locals().get("prompt_submitted_at", 0.0),
         )
         observed_pids = list(
             dict.fromkeys(
@@ -1056,14 +1414,34 @@ class ConptyTrialDriver:
                 if isinstance(pid, int)
             )
         )
-        remaining_pids = [pid for pid in observed_pids if _pid_alive(pid)]
+        # Killing a process tree is not synchronous on Windows: a terminated pid stays
+        # visible briefly after the kill returns. Reading liveness once, right after a
+        # flat 0.5s sleep, therefore reported a perfectly clean teardown as dirty --
+        # both "surviving" pids were already gone by the time they were investigated.
+        # Poll for exit instead, so this stays a real check (a process that genuinely
+        # survives still fails it) without failing on reap latency.
+        for _ in range(50):
+            remaining_pids = [pid for pid in observed_pids if _pid_alive(pid)]
+            if not remaining_pids:
+                break
+            time.sleep(0.2)
         process_tree = {
             "claude_process_tree_teardown_verified": (
                 process_tree_snapshot_healthy
                 and isinstance(claude_pid, int)
                 and all(not _pid_alive(pid) for pid in [claude_pid, *claude_descendants])
             ),
-            "silent_monitor_teardown_verified": bool(silent_pids)
+            # `bool(silent_pids)` is here so a trial that DID dispatch cannot claim
+            # teardown proof it never earned -- but a trial where the model declined the
+            # skill spawns no plugin monitor at all (the marker is written by the
+            # on-skill-invoke command), so requiring a non-empty list would fail every
+            # honest decline on a process that was never supposed to exist. Vacuous only
+            # on the declined branch; a dispatching trial with an empty list is still
+            # unproven, and is separately a hard failure via skill_dispatched.
+            "silent_monitor_teardown_verified": (
+                bool(silent_pids)
+                or server_log.get("dispatch_classification") == DISPATCH_DECLINED
+            )
             and all(not _pid_alive(pid) for pid in silent_pids),
             "process_tree_snapshot_healthy": process_tree_snapshot_healthy,
             "observed_claude_pids": [claude_pid, *claude_descendants],
@@ -1079,6 +1457,15 @@ class ConptyTrialDriver:
             "subscriber_count_after": after_count,
             **decoy_state,
         }
+        # How long the armed Monitor call held the turn. Deliberately recorded here
+        # and NOT added to OBSERVATION_FIELDS: that tuple is the gate's boolean
+        # criteria set, and the product invariant promises an arming *attempt*, not a
+        # speed, so a duration threshold nobody has justified must not decide
+        # PASS/FAIL. But it is the most user-visible fact these sessions produce --
+        # measured between 45s and 664s, with the growth across runs still
+        # unexplained -- so it belongs in the redacted, hashed, attested bundle
+        # rather than only in a raw artifact somebody has to think to open.
+        server_log["monitor_timing"] = self._monitor_timing(self._read_hook_events(trace_path))
         capture = MachineTrialCapture(
             pty_capture=transcript,
             observations=observations,
@@ -1097,6 +1484,7 @@ class ConptyTrialDriver:
                     "user-prompt-submit-not-observed",
                     "structured-monitor-idle-not-observed",
                     "monitor-subscriber-not-observed",
+                    "permission-dialog-blocked-turn",
                 }
                 else "capture-runtime-failure"
             )
@@ -1112,6 +1500,50 @@ class ConptyTrialDriver:
                 return True
             time.sleep(0.2)
         return bool(predicate())
+
+    @staticmethod
+    def _accept_workspace_trust_prompt_if_selected(
+        pty: Any, transcript: str, *, already_accepted: bool
+    ) -> bool:
+        """Accept only Claude's unmistakable, positively selected trust prompt."""
+
+        if already_accepted:
+            return True
+        # Claude renders this screen with absolute cursor-column jumps (\x1b[<n>G)
+        # between words instead of literal spaces; stripping ANSI codes collapses
+        # "Accessing workspace" into "Accessingworkspace", so matching must be
+        # whitespace-insensitive on both sides.
+        clean = ANSI_RE.sub("", transcript)
+        squashed = re.sub(r"\s+", "", clean)
+        if "Accessingworkspace" not in squashed or "Quicksafetycheck" not in squashed:
+            return False
+        selected_yes = re.search(r"(?:❯|>)1\.?Yes,?Itrustthisfolder", squashed)
+        if selected_yes is None:
+            return False
+        pty.write("\r")
+        return True
+
+    @staticmethod
+    def _dismiss_interstitial_prompt_if_shown(
+        pty: Any, transcript: str, *, already_dismissed: bool
+    ) -> bool:
+        """Dismiss known first-run tip dialogs without opting into anything.
+
+        These are unrelated to the workspace-trust prompt and appear only once per
+        fresh HOME. Escape declines without recording acceptance, so the fixture's
+        behavior stays independent of whichever option happens to be pre-selected.
+        The accumulated transcript never loses this text once shown (a screen clear
+        does not erase earlier bytes from the log), so dismissal must be tracked by
+        the caller rather than re-derived from the transcript on every poll.
+        """
+
+        if already_dismissed:
+            return True
+        squashed = re.sub(r"\s+", "", ANSI_RE.sub("", transcript))
+        if "Trythenewfullscreenrenderer" not in squashed:
+            return False
+        pty.write("\x1b")
+        return True
 
     @staticmethod
     def _preflight_claude_auth(
@@ -1217,6 +1649,78 @@ class ConptyTrialDriver:
         )
 
     @staticmethod
+    def _open_acceptance_document(base_url: str, path: Path) -> dict[str, Any]:
+        """Open the fixture document so the document-scoped inbox poll can report.
+
+        Loopback POST, which `/api/open` requires. Recorded rather than raised: a
+        failure here should surface as a false `inbox_checked` with a visible reason,
+        not as a capture crash that hides which half of the chain broke.
+        """
+
+        request = urllib.request.Request(
+            f"{base_url}/api/open",
+            # `filePath`, not `path` -- the route 400s on anything else
+            # (src/server/mcp/routes/open.ts).
+            data=json.dumps({"filePath": str(path)}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return {"status": response.status, "path": str(path)}
+        except Exception as exc:
+            return {"error": str(exc), "path": str(path)}
+
+    @staticmethod
+    def _permission_dialog_blocking(transcript: str) -> bool:
+        """True when a tool-approval dialog is on screen awaiting an answer.
+
+        Matches whitespace-insensitively: Claude renders these screens with absolute
+        cursor-column jumps rather than literal spaces, so ANSI-stripped text collapses
+        "Do you want to proceed?" into "Doyouwanttoproceed?".
+        """
+
+        squashed = re.sub(r"\s+", "", ANSI_RE.sub("", transcript))
+        return "Doyouwanttoproceed?" in squashed
+
+    @staticmethod
+    def _dispatch_prompt(trial: dict[str, Any]) -> str:
+        """The single dispatch for one trial: explicit for control, prose for natural."""
+
+        return (
+            "/tandem"
+            if trial["prompt_kind"] == "control"
+            else "Use Tandem to report the current collaboration state."
+        )
+
+    @staticmethod
+    def _monitor_timing(events: list[dict[str, Any]]) -> dict[str, Any]:
+        """Measure how long the first armed Monitor call held the turn."""
+
+        def first_at(hook: str) -> float | None:
+            for event in events:
+                if (
+                    event.get("hook_event_name") == hook
+                    and str(event.get("tool_name", "")).lower() == "monitor"
+                    and isinstance(event.get("at"), (int, float))
+                ):
+                    return float(event["at"])
+            return None
+
+        armed_at = first_at("PreToolUse")
+        resolved_at = first_at("PostToolUse")
+        resolution_seconds: float | None = None
+        if armed_at is not None and resolved_at is not None and resolved_at >= armed_at:
+            resolution_seconds = round(resolved_at - armed_at, 3)
+        return {
+            "monitor_armed_at": armed_at,
+            # None means the call was still blocking when the trial ended, which is
+            # itself the observation -- do not coerce it to a number.
+            "monitor_resolved_at": resolved_at,
+            "monitor_resolution_seconds": resolution_seconds,
+        }
+
+    @staticmethod
     def _structured_inbox_saw(events: list[dict[str, Any]], text: str, after: float) -> bool:
         return any(
             event.get("hook_event_name") == "PostToolUse"
@@ -1259,6 +1763,7 @@ def produce_trial(
     *,
     timeout_seconds: int,
     driver: Any | None = None,
+    overwrite: bool = False,
 ) -> Path:
     """Run exactly one bounded trial and emit the five-artifact capture contract."""
 
@@ -1268,11 +1773,34 @@ def produce_trial(
     trial = trials.get(trial_id)
     if trial is None:
         raise RuntimeError(f"unknown trial id {trial_id!r}")
-    if timeout_seconds < 10 or timeout_seconds > 600:
-        raise RuntimeError("trial timeout must be between 10 and 600 seconds")
+    # The ceiling exists to keep a hung trial from running forever, not to bound
+    # normal duration: a single control dispatch has been measured taking over
+    # seven minutes to resolve its Monitor call, so 600s was itself the failure.
+    if timeout_seconds < 10 or timeout_seconds > 1800:
+        raise RuntimeError("trial timeout must be between 10 and 1800 seconds")
     plugin_dir = root / "fixtures" / "candidate-plugin-v10"
     if not plugin_dir.is_dir():
         raise RuntimeError("candidate plugin fixture is absent; run prepare with --repo first")
+    # Decide the already-captured question BEFORE driving a live session. This check
+    # used to sit after the capture, which on 2026-08-11 spent a full twelve-minute
+    # authenticated session and then refused to write its artifacts -- destroying the
+    # transcript needed to diagnose the run, and discarding the failure row the
+    # harness otherwise preserves for failed live trials.
+    artifact_dir = _safe_mutation_path(root, root / "artifacts" / trial_id)
+    manifest_path = artifact_dir / "capture-manifest.json"
+    supersede_dir: Path | None = None
+    if manifest_path.exists():
+        if not overwrite:
+            raise RuntimeError(
+                f"capture already exists for {trial_id}; "
+                "pass --overwrite to supersede it, or use a fresh fixture root"
+            )
+        # Reserve the slot now so the live session is not spent only to find the
+        # supersede target unavailable, but do not move anything yet: the rename
+        # happens once a capture is actually in hand (see below). Renaming here would
+        # leave evidence.json's existing row pointing at a path that no longer exists
+        # if the managed-skill seed then failed on its own backup guard.
+        supersede_dir = _reserve_supersede_dir(root, trial_id)
     startup_mode = (
         trial["startup_mode"] if trial["install_shape"] == MANAGED_SHAPE else "launcher-disabled"
     )
@@ -1303,10 +1831,18 @@ def produce_trial(
             restore_managed_skill(root)
 
     artifact_dir = _safe_mutation_path(root, root / "artifacts" / trial_id)
+    if supersede_dir is not None:
+        _supersede_prior_capture(root, trial_id, artifact_dir, supersede_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = artifact_dir / "capture-manifest.json"
-    if manifest_path.exists():
-        raise RuntimeError(f"capture already exists for {trial_id}; use a fresh fixture root")
+    if supersede_dir is not None:
+        # The live hook trace is written *inside* the artifact directory, so the
+        # supersede rename above just carried this run's own trace into the
+        # superseded slot alongside the previous run's artifacts. Put it back with
+        # the capture it belongs to -- it is the highest-value diagnostic here, and
+        # filing it under "superseded" is exactly the evidence loss Defect A fixed.
+        moved_trace = supersede_dir / "claude-hook-events.jsonl"
+        if moved_trace.is_file():
+            moved_trace.replace(artifact_dir / "claude-hook-events.jsonl")
     redacted_observations = redact_capture_value(capture.observations)
     redacted_decoy = redact_capture_value(capture.decoy_log)
     redacted_server = redact_capture_value(capture.server_log)
@@ -1409,6 +1945,36 @@ def _row_from_capture(
             row[field] = capture.server_log[field]
     row[ATTESTATION_FIELD] = sign_evidence_row(row, _load_attestation_key(root))
     return row
+
+
+def _reserve_supersede_dir(root: Path, trial_id: str) -> Path:
+    """Pick the lowest free `artifacts/<trial>.superseded-<n>` slot."""
+
+    for index in range(1, 1000):
+        candidate = _safe_mutation_path(root, root / "artifacts" / f"{trial_id}.superseded-{index}")
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"too many superseded captures for {trial_id}; use a fresh fixture root")
+
+
+def _supersede_prior_capture(
+    root: Path, trial_id: str, artifact_dir: Path, supersede_dir: Path
+) -> None:
+    """Move a prior capture aside, carrying its evidence row with it.
+
+    Never deletes. A re-attempt supersedes evidence; it does not erase it -- and the
+    `evidence.json` row is what `evaluate` actually reads, so protecting only the
+    artifact directory would leave the load-bearing half unprotected.
+    """
+
+    if supersede_dir.exists():
+        raise RuntimeError(f"supersede slot {supersede_dir.name} is no longer free")
+    artifact_dir.rename(supersede_dir)
+    evidence_path = _safe_mutation_path(root, root / "evidence.json")
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    prior = next((entry for entry in evidence if entry.get("id") == trial_id), None)
+    if prior is not None:
+        _write_json(supersede_dir / "superseded-evidence-row.json", prior)
 
 
 def _replace_evidence_row(root: Path, row: dict[str, Any]) -> None:
@@ -1709,8 +2275,36 @@ def ingest_capture(root: Path, manifest_path: Path) -> dict[str, Any]:
         if field in server_log:
             row[field] = server_log[field]
     row["artifacts"] = sorted(normalized_artifacts, key=lambda item: item["role"])
-    row["capture_manifest_sha256"] = _sha256(manifest_bytes)
-    row[CAPTURE_ELIGIBILITY_FIELD] = DIAGNOSTIC_IMPORT
+    manifest_hash = _sha256(manifest_bytes)
+    row["capture_manifest_sha256"] = manifest_hash
+    # Importing a manifest cannot earn release eligibility -- this adapter is not a
+    # trusted Claude runner, so a hand-supplied bundle stays diagnostic. But `capture`
+    # writes its own direct-live row for a trial it drove itself, and stamping
+    # unconditionally here DOWNGRADED that row: following the sequence the tool
+    # prints ("Next: ... ingest-capture") destroyed the very eligibility the live run
+    # had just earned, turning four passing trials into an INCONCLUSIVE verdict.
+    #
+    # Preserve direct-live only when this exact manifest is the one that row was
+    # built from. Both conditions are load-bearing: without the hash match, swapping
+    # a different bundle in would inherit an eligibility it never earned.
+    prior = next(
+        (
+            entry
+            for entry in json.loads(
+                _safe_mutation_path(root, root / "evidence.json").read_text(encoding="utf-8")
+            )
+            if entry.get("id") == trial_id
+        ),
+        None,
+    )
+    inherits_direct_live = (
+        isinstance(prior, dict)
+        and prior.get(CAPTURE_ELIGIBILITY_FIELD) == DIRECT_LIVE_CAPTURE
+        and prior.get("capture_manifest_sha256") == manifest_hash
+    )
+    row[CAPTURE_ELIGIBILITY_FIELD] = (
+        DIRECT_LIVE_CAPTURE if inherits_direct_live else DIAGNOSTIC_IMPORT
+    )
     row[ATTESTATION_FIELD] = sign_evidence_row(row, _load_attestation_key(root))
     _replace_evidence_row(root, row)
     return row
@@ -1887,13 +2481,30 @@ def _evaluate_shape(
             inconclusive.append(f"{trial_id}: chain observations are incomplete")
             continue
         if row["prompt_kind"] == "control":
-            if not all(chain.values()):
+            # A control dispatches via `/tandem`, which emits no `Skill` tool event, so
+            # its only dispatch signal is the marker -- and the marker requires the
+            # plugin's on-skill-invoke trigger to have fired AND its process to have
+            # spawned. Without this branch, "the skill ran and instructed a Monitor call
+            # but the trigger broke" is indistinguishable from "the harness never sent
+            # /tandem at all", and both land in the generic bucket below. A `Monitor`
+            # call carrying the wake URL is only ever made on the skill's instruction,
+            # so it is independent proof the dispatch happened.
+            if chain["monitor_attempted"] and not chain["skill_dispatched"]:
+                hard_failures.append(
+                    f"{trial_id}: control armed a monitor without an observed dispatch signal"
+                )
+            elif not all(chain.values()):
                 inconclusive.append(f"{trial_id}: explicit /tandem control did not complete the chain")
             continue
         if chain["skill_dispatched"] and not all(chain.values()):
             hard_failures.append(f"{trial_id}: natural run declined or failed after dispatch")
         elif not chain["skill_dispatched"] and any(
-            chain[field] for field in CHAIN_FIELDS if field != "skill_dispatched"
+            # Ranges over DISPATCH_CONSEQUENT_FIELDS, not all of CHAIN_FIELDS: a
+            # declining model still calls `tandem_status`, whose response always carries
+            # a wakeUrl, so `status_succeeded` is true on an honest decline and would
+            # make every one of them look self-contradictory here.
+            chain[field]
+            for field in DISPATCH_CONSEQUENT_FIELDS
         ):
             inconclusive.append(f"{trial_id}: later chain evidence exists without observed dispatch")
 
@@ -1982,6 +2593,7 @@ def _command_capture(args: argparse.Namespace) -> int:
         Path(args.repo),
         args.trial,
         timeout_seconds=args.timeout_seconds,
+        overwrite=args.overwrite,
     )
     print(f"Machine capture manifest: {manifest}")
     print(
@@ -2018,10 +2630,12 @@ def _command_runbook(args: argparse.Namespace) -> int:
     print(
         f'uv run python "{script}" prepare --root "$Fixture" --repo "$Repo"'
     )
+    print(r"# Structured evidence hooks: $Fixture\home\.claude\settings.json")
     print(f'uv run python "{script}" fixture-login --root "$Fixture"')
     print(
         f'uv run --with pywinpty python "{script}" capture --root "$Fixture" '
         f'--repo "$Repo" --trial "{args.trial}" --timeout-seconds {args.timeout_seconds}'
+        f'{" --overwrite" if args.overwrite else ""}'
     )
     print(
         f'uv run python "{script}" ingest-capture --root "$Fixture" '
@@ -2087,13 +2701,23 @@ def make_parser() -> argparse.ArgumentParser:
     capture.add_argument("--root", required=True)
     capture.add_argument("--repo", default=str(Path(__file__).resolve().parents[2]))
     capture.add_argument("--trial", choices=tuple(trial["id"] for trial in build_trial_matrix()), required=True)
-    capture.add_argument("--timeout-seconds", type=int, default=180)
+    capture.add_argument("--timeout-seconds", type=int, default=900)
+    capture.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="re-attempt a trial, moving its prior capture to artifacts/<trial>.superseded-<n>",
+    )
     capture.set_defaults(handler=_command_capture)
     runbook = sub.add_parser("runbook", help="print the exact PowerShell commands for one trial")
     runbook.add_argument("--root", required=True)
     runbook.add_argument("--repo", default=str(Path(__file__).resolve().parents[2]))
     runbook.add_argument("--trial", choices=tuple(trial["id"] for trial in build_trial_matrix()), required=True)
-    runbook.add_argument("--timeout-seconds", type=int, default=180)
+    runbook.add_argument("--timeout-seconds", type=int, default=900)
+    runbook.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="print the capture step as a re-attempt that supersedes a prior capture",
+    )
     runbook.set_defaults(handler=_command_runbook)
     env = sub.add_parser("print-env", help="print the isolated environment for a live run")
     env.add_argument("--root", required=True)

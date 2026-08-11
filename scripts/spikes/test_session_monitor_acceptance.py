@@ -6,6 +6,7 @@ import json
 import io
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -550,7 +551,7 @@ class FixtureSafetyTests(unittest.TestCase):
             self.assertIn("other", state["projects"])
             self.assertTrue(state["projects"][str(root / "workspace")]["hasTrustDialogAccepted"])
 
-    def test_plugin_hook_fixture_includes_session_start_sentinel(self):
+    def test_prepare_installs_structured_trace_hooks_in_effective_claude_settings(self):
         subject = load_subject()
         repo = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as td:
@@ -558,12 +559,34 @@ class FixtureSafetyTests(unittest.TestCase):
             subject.prepare_fixture_root(root, repo)
 
             hooks = json.loads(
-                (root / "fixtures" / "candidate-plugin-v10" / "hooks" / "hooks.json").read_text(
-                    encoding="utf-8"
-                )
+                (root / "home" / ".claude" / "settings.json").read_text(encoding="utf-8")
             )
+            helper = (
+                root / "home" / ".claude" / "harness-hooks" / "capture-event.mjs"
+            ).resolve()
 
             self.assertIn("SessionStart", hooks["hooks"])
+            self.assertIn("UserPromptSubmit", hooks["hooks"])
+            command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            self.assertIn(str(helper), command)
+            self.assertTrue(helper.is_file())
+            self.assertFalse(
+                (root / "fixtures" / "candidate-plugin-v10" / "hooks" / "hooks.json").exists()
+            )
+
+    def test_prepare_removes_stale_plugin_trace_hooks_to_avoid_duplicate_events(self):
+        subject = load_subject()
+        repo = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subject.prepare_fixture_root(root, repo)
+            stale_hooks = root / "fixtures" / "candidate-plugin-v10" / "hooks"
+            stale_hooks.mkdir()
+            (stale_hooks / "hooks.json").write_text("{}\n", encoding="utf-8", newline="")
+
+            subject.prepare_fixture_root(root, repo)
+
+            self.assertFalse(stale_hooks.exists())
 
     def test_auth_preflight_uses_exact_child_environment_and_rejects_logged_out(self):
         subject = load_subject()
@@ -621,6 +644,343 @@ class FixtureSafetyTests(unittest.TestCase):
         self.assertTrue(driver._structured_event_after(events, "SessionStart", 0))
         self.assertFalse(driver._structured_event_after(events, "UserPromptSubmit", 2))
         self.assertTrue(driver._structured_event_after(events, "UserPromptSubmit", 1.5))
+
+    def test_accepts_only_selected_workspace_trust_prompt_once(self):
+        subject = load_subject()
+        driver = subject.ConptyTrialDriver()
+
+        class FakePty:
+            def __init__(self):
+                self.writes = []
+
+            def write(self, value):
+                self.writes.append(value)
+
+        pty = FakePty()
+        transcript = (
+            "Accessing workspace C:\\fixture\\workspace\n"
+            "Quick safety check: Is this a project you created or one you trust?\n"
+            "  ❯ 1. Yes, I trust this folder\n"
+            "    2. No, exit\n"
+        )
+
+        accepted = driver._accept_workspace_trust_prompt_if_selected(
+            pty, transcript, already_accepted=False
+        )
+        accepted = driver._accept_workspace_trust_prompt_if_selected(
+            pty, transcript, already_accepted=accepted
+        )
+
+        self.assertTrue(accepted)
+        self.assertEqual(pty.writes, ["\r"])
+
+    def test_does_not_accept_ambiguous_or_unselected_dialogs(self):
+        subject = load_subject()
+        driver = subject.ConptyTrialDriver()
+
+        class FakePty:
+            def __init__(self):
+                self.writes = []
+
+            def write(self, value):
+                self.writes.append(value)
+
+        transcripts = [
+            "Quick safety check\n❯ 1. Yes, continue\n",
+            "Accessing workspace C:\\fixture\\workspace\n❯ 1. Yes, I trust this folder\n",
+            (
+                "Accessing workspace C:\\fixture\\workspace\n"
+                "Quick safety check\n"
+                "  1. Yes, I trust this folder\n"
+                "❯ 2. No, exit\n"
+            ),
+        ]
+
+        for transcript in transcripts:
+            with self.subTest(transcript=transcript):
+                pty = FakePty()
+                accepted = driver._accept_workspace_trust_prompt_if_selected(
+                    pty, transcript, already_accepted=False
+                )
+                self.assertFalse(accepted)
+                self.assertEqual(pty.writes, [])
+
+    def test_existing_capture_is_rejected_without_driving_a_session(self):
+        """The already-captured check must precede the live session, not follow it.
+
+        Until 2026-08-11 this guard sat after the ConPTY run, so a re-attempt spent a
+        full authenticated session and then discarded its artifacts.
+        """
+
+        subject = load_subject()
+
+        class CountingDriver:
+            def __init__(self):
+                self.calls = 0
+
+            def capture(self, _context):
+                self.calls += 1
+                return subject.MachineTrialCapture(
+                    pty_capture="",
+                    observations={key: True for key in subject.OBSERVATION_FIELDS},
+                    decoy_log={},
+                    server_log={},
+                    process_tree={},
+                )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = Path(__file__).resolve().parents[2]
+            subject.prepare_fixture_root(root, repo)
+            driver = CountingDriver()
+            subject.produce_trial(
+                root, repo, "plugin-control", timeout_seconds=30, driver=driver
+            )
+            self.assertEqual(driver.calls, 1)
+
+            with self.assertRaisesRegex(RuntimeError, "capture already exists"):
+                subject.produce_trial(
+                    root, repo, "plugin-control", timeout_seconds=30, driver=driver
+                )
+
+            self.assertEqual(driver.calls, 1, "rejected re-attempt still drove a session")
+
+    def test_overwrite_supersedes_prior_artifacts_and_evidence_row(self):
+        subject = load_subject()
+
+        def driver_returning(pty_text):
+            class Driver:
+                def capture(self, _context):
+                    return subject.MachineTrialCapture(
+                        pty_capture=pty_text,
+                        observations={key: True for key in subject.OBSERVATION_FIELDS},
+                        decoy_log={},
+                        server_log={},
+                        process_tree={},
+                    )
+
+            return Driver()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = Path(__file__).resolve().parents[2]
+            subject.prepare_fixture_root(root, repo)
+
+            subject.produce_trial(
+                root, repo, "plugin-control", timeout_seconds=30, driver=driver_returning("first")
+            )
+            subject.produce_trial(
+                root,
+                repo,
+                "plugin-control",
+                timeout_seconds=30,
+                driver=driver_returning("second"),
+                overwrite=True,
+            )
+
+            live = root / "artifacts" / "plugin-control" / "pty_capture.txt"
+            superseded = root / "artifacts" / "plugin-control.superseded-1"
+            self.assertIn("second", live.read_text(encoding="utf-8"))
+            self.assertIn("first", (superseded / "pty_capture.txt").read_text(encoding="utf-8"))
+            # The evidence row is what `evaluate` reads, so it is preserved too.
+            self.assertTrue((superseded / "superseded-evidence-row.json").is_file())
+
+            subject.produce_trial(
+                root,
+                repo,
+                "plugin-control",
+                timeout_seconds=30,
+                driver=driver_returning("third"),
+                overwrite=True,
+            )
+            self.assertTrue((root / "artifacts" / "plugin-control.superseded-2").is_dir())
+            self.assertIn("first", (superseded / "pty_capture.txt").read_text(encoding="utf-8"))
+
+    def test_ingest_preserves_direct_live_eligibility_but_only_for_its_own_manifest(self):
+        """Ingesting a directly-captured trial must not downgrade it.
+
+        `ingest-capture` stamped DIAGNOSTIC_IMPORT unconditionally, so running the
+        sequence the tool itself prints turned passing live trials into an
+        INCONCLUSIVE verdict. The hash match is what keeps this honest: a substituted
+        bundle must not inherit eligibility it never earned.
+        """
+
+        subject = load_subject()
+
+        class PassingDriver:
+            def capture(self, _context):
+                return subject.MachineTrialCapture(
+                    # Ingest requires a plausibly-sized transcript (>=200 bytes).
+                    pty_capture="interactive session transcript line\n" * 20,
+                    observations={key: True for key in subject.OBSERVATION_FIELDS},
+                    decoy_log={},
+                    server_log={},
+                    process_tree={
+                        "claude_process_tree_teardown_verified": True,
+                        "silent_monitor_teardown_verified": True,
+                        "remaining_pids": [],
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = Path(__file__).resolve().parents[2]
+            subject.prepare_fixture_root(root, repo)
+            manifest = subject.produce_trial(
+                root, repo, "plugin-control", timeout_seconds=30, driver=PassingDriver()
+            )
+
+            def eligibility():
+                evidence = json.loads((root / "evidence.json").read_text(encoding="utf-8"))
+                row = next(item for item in evidence if item["id"] == "plugin-control")
+                return row[subject.CAPTURE_ELIGIBILITY_FIELD]
+
+            # Only a real ConPTY run is release-eligible, so stand in for what one
+            # leaves behind: the row `capture` writes for a trial it drove itself.
+            evidence_path = root / "evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            for entry in evidence:
+                if entry["id"] == "plugin-control":
+                    entry[subject.CAPTURE_ELIGIBILITY_FIELD] = subject.DIRECT_LIVE_CAPTURE
+                    entry["capture_manifest_sha256"] = subject._sha256(manifest.read_bytes())
+            evidence_path.write_text(
+                json.dumps(evidence, indent=2) + "\n", encoding="utf-8", newline=""
+            )
+            self.assertEqual(eligibility(), subject.DIRECT_LIVE_CAPTURE)
+            subject.ingest_capture(root, manifest)
+            self.assertEqual(
+                eligibility(),
+                subject.DIRECT_LIVE_CAPTURE,
+                "ingest downgraded a directly-captured trial",
+            )
+
+            # A manifest that is not the one the row was built from must not inherit.
+            tampered = json.loads(manifest.read_text(encoding="utf-8"))
+            tampered["trial_id"] = "plugin-control"
+            tampered["artifacts"] = sorted(
+                tampered["artifacts"], key=lambda item: item["role"], reverse=True
+            )
+            manifest.write_text(json.dumps(tampered, indent=2) + "\n", encoding="utf-8", newline="")
+            subject.ingest_capture(root, manifest)
+            self.assertEqual(eligibility(), subject.DIAGNOSTIC_IMPORT)
+
+    def test_pid_alive_observes_without_killing_the_process(self):
+        """The liveness probe must not be an observer effect.
+
+        `os.kill(pid, 0)` terminates on Windows (CPython routes os.kill through
+        TerminateProcess), so the original probe killed every pid it was asked about
+        and the teardown proof described the probe instead of the teardown.
+        """
+
+        subject = load_subject()
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            self.assertTrue(subject._pid_alive(child.pid))
+            # The second call is the real assertion: if probing kills, this is False.
+            self.assertTrue(subject._pid_alive(child.pid))
+            self.assertIsNone(child.poll(), "probing the pid terminated the process")
+        finally:
+            child.kill()
+            child.wait(timeout=10)
+
+        self.assertFalse(subject._pid_alive(child.pid))
+        self.assertFalse(subject._pid_alive(None))
+        self.assertFalse(subject._pid_alive(0))
+
+    def test_permission_dialog_is_named_not_mistaken_for_host_latency(self):
+        """A blocked turn must be reported, never left to look like a slow host.
+
+        Verbatim from the live transcript that cost seven sessions to read: Claude
+        renders the dialog with cursor-column jumps, so ANSI-stripping collapses the
+        spaces out of "Do you want to proceed?".
+        """
+
+        subject = load_subject()
+        driver = subject.ConptyTrialDriver()
+
+        blocked = (
+            "Monitor\n\n  OpenWebSocketws://127.0.0.1:56602/api/wake\n"
+            "   Tandem wake events (comments, chat, document activity)\n\n"
+            "Doyouwanttoproceed?\n❯1.Yes\n2.No\n"
+        )
+        self.assertTrue(driver._permission_dialog_blocking(blocked))
+        # Same screen with the spaces intact, as a plain terminal would render it.
+        self.assertTrue(
+            driver._permission_dialog_blocking("Monitor\n\nDo you want to proceed?\n1. Yes\n")
+        )
+        self.assertFalse(driver._permission_dialog_blocking("Clauding... 12s\n❯ \n"))
+        self.assertFalse(driver._permission_dialog_blocking(""))
+
+    def test_each_trial_has_exactly_one_dispatch_distinguishing_the_two_arms(self):
+        """Control dispatches explicitly, natural dispatches in prose -- never both.
+
+        Sending both conflated the arms of the matrix and raced the second write
+        against the turn the first one had just occupied with a blocking Monitor call.
+        """
+
+        subject = load_subject()
+        driver = subject.ConptyTrialDriver()
+        prompts = {
+            trial["id"]: driver._dispatch_prompt(trial) for trial in subject.build_trial_matrix()
+        }
+
+        for trial in subject.build_trial_matrix():
+            with self.subTest(trial=trial["id"]):
+                prompt = prompts[trial["id"]]
+                if trial["prompt_kind"] == "control":
+                    self.assertEqual(prompt, "/tandem")
+                else:
+                    self.assertNotIn("/tandem", prompt)
+                    self.assertIn("Tandem", prompt)
+
+        self.assertEqual(len(set(prompts.values())), 2, "expected one prompt per matrix arm")
+
+    def test_monitor_idle_wait_scales_with_the_timeout_not_a_90_second_constant(self):
+        """`min(90, timeout * 0.55)` was always exactly 90 above a 164s timeout.
+
+        An armed Monitor call blocks the turn for minutes, so a fixed 90s wait could
+        never observe the idle it looks for -- and it was the *only* wait a natural
+        trial ever got.
+        """
+
+        subject = load_subject()
+        reserve = subject.INJECTION_RESERVE_SECONDS
+
+        def budget(timeout_seconds):
+            # Mirrors the call site: whatever the deadline still allows, less the
+            # reserve held back for wake injection and the inbox observation.
+            return max(60.0, timeout_seconds - reserve)
+
+        self.assertGreater(budget(900), 664, "cannot out-wait a measured 664s arm")
+        self.assertGreater(budget(1800), budget(900), "budget must track the timeout")
+        self.assertNotEqual(budget(900), 90)
+
+    def test_monitor_timing_measures_the_blocking_arm_without_gating_on_it(self):
+        subject = load_subject()
+        driver = subject.ConptyTrialDriver()
+
+        timing = driver._monitor_timing(
+            [
+                {"hook_event_name": "PreToolUse", "tool_name": "Monitor", "at": 100.0},
+                {"hook_event_name": "PostToolUse", "tool_name": "Monitor", "at": 764.0},
+            ]
+        )
+        self.assertEqual(timing["monitor_resolution_seconds"], 664.0)
+
+        # Still blocking when the trial ended: that is the observation, so it must not
+        # be coerced into a number.
+        unresolved = driver._monitor_timing(
+            [{"hook_event_name": "PreToolUse", "tool_name": "Monitor", "at": 100.0}]
+        )
+        self.assertIsNone(unresolved["monitor_resolved_at"])
+        self.assertIsNone(unresolved["monitor_resolution_seconds"])
+
+        # Duration must never become a gate criterion.
+        self.assertNotIn("monitor_resolution_seconds", subject.OBSERVATION_FIELDS)
 
     def test_runtime_failure_persists_redacted_five_artifact_inconclusive_bundle(self):
         subject = load_subject()
@@ -789,6 +1149,7 @@ class FixtureSafetyTests(unittest.TestCase):
             self.assertLess(text.index("fixture-login --root"), text.index("capture --root"))
             self.assertIn("capture --root", text)
             self.assertIn('--trial "plugin-control" --timeout-seconds 90', text)
+            self.assertIn("Structured evidence hooks: $Fixture\\home\\.claude\\settings.json", text)
             self.assertIn("ingest-capture --root", text)
             self.assertIn("evaluate --root", text)
 
@@ -993,6 +1354,313 @@ def passing_evidence(
         for key in subject.CHAIN_FIELDS:
             natural[key] = True
     return evidence
+
+
+class NaturalDeclineTests(unittest.TestCase):
+    """A bounded n=3 sample must be able to contain a decline and still pass.
+
+    Until 2026-08-11 it could not: a natural trial that never invoked the skill never
+    armed a monitor, so the monitor-idle wait burned the whole budget and aborted the
+    capture -- forcing `capture_healthy: false` and `FAILED_LIVE_CAPTURE`, both of which
+    the gate rejects outright. The gate reported `natural_successes: 1, controls_pass:
+    true` (literally its own PASS predicate) and still returned INCONCLUSIVE.
+    """
+
+    @staticmethod
+    def _events(*, prompt_at=100.0, skill_at=None, stop_at=None, monitor_at=None):
+        events = [{"hook_event_name": "UserPromptSubmit", "at": prompt_at}]
+        if skill_at is not None:
+            events.append({"hook_event_name": "PreToolUse", "tool_name": "Skill", "at": skill_at})
+        if monitor_at is not None:
+            events.append(
+                {"hook_event_name": "PreToolUse", "tool_name": "Monitor", "at": monitor_at}
+            )
+        if stop_at is not None:
+            events.append({"hook_event_name": "Stop", "at": stop_at})
+        return events
+
+    def test_declined_turn_needs_positive_proof_it_completed_not_merely_no_skill_event(self):
+        subject = load_subject()
+
+        declined = subject.classify_dispatch(
+            self._events(stop_at=140.0), prompt_submitted_at=100.0, dispatch_marker_seen=False
+        )
+        hung = subject.classify_dispatch(
+            self._events(), prompt_submitted_at=100.0, dispatch_marker_seen=False
+        )
+
+        self.assertEqual(declined, subject.DISPATCH_DECLINED)
+        # No Stop: a crash, a hang, a skill that never became invocable, or an unanswered
+        # dialog. Absence of a dispatch signal alone must never read as a benign decline.
+        self.assertEqual(hung, subject.DISPATCH_PENDING)
+
+    def test_slash_dispatch_is_observed_through_the_marker_with_no_skill_tool_event(self):
+        subject = load_subject()
+
+        # Measured from the real plugin-control trace: `/tandem` emits no `Skill` event,
+        # yet the skill demonstrably ran (the same trace contains a `Monitor` call).
+        # Deriving dispatch from the `Skill` event alone would pin every control row
+        # false and make `controls_pass` unreachable forever.
+        self.assertEqual(
+            subject.classify_dispatch(
+                self._events(stop_at=140.0, monitor_at=120.0),
+                prompt_submitted_at=100.0,
+                dispatch_marker_seen=True,
+            ),
+            subject.DISPATCH_OBSERVED,
+        )
+
+    def test_skill_event_without_the_marker_is_dispatch_not_decline(self):
+        subject = load_subject()
+
+        # The marker also requires the plugin's on-skill-invoke trigger to fire and its
+        # process to spawn. If that breaks (#1354) while the model did invoke the skill,
+        # the marker alone would call it a decline and launder the regression.
+        self.assertEqual(
+            subject.classify_dispatch(
+                self._events(skill_at=112.0, stop_at=140.0),
+                prompt_submitted_at=100.0,
+                dispatch_marker_seen=False,
+            ),
+            subject.DISPATCH_OBSERVED,
+        )
+
+    def test_a_dispatch_signal_arriving_after_stop_still_wins(self):
+        subject = load_subject()
+
+        # Trace lines are appended by per-event hook subprocesses, so a poll that reads
+        # `Stop` before the `Skill` line has flushed must not lock in "declined".
+        self.assertEqual(
+            subject.classify_dispatch(
+                self._events(stop_at=140.0, skill_at=112.0),
+                prompt_submitted_at=100.0,
+                dispatch_marker_seen=False,
+            ),
+            subject.DISPATCH_OBSERVED,
+        )
+
+    def test_capture_settles_before_committing_to_a_decline(self):
+        subject = load_subject()
+        source = inspect.getsource(subject.ConptyTrialDriver.capture)
+
+        self.assertIn("DISPATCH_SETTLE_SECONDS", source)
+        settle = source.index("DISPATCH_SETTLE_SECONDS")
+        window = source[max(0, settle - 600) : settle]
+        # The settle must poll for the OBSERVED classification rather than sleep once,
+        # and it must re-read both signals -- the marker is a filesystem check that lags
+        # independently of the trace.
+        self.assertIn("DISPATCH_OBSERVED", window)
+        self.assertIn("_wait_until", window)
+        self.assertIn("marker_path.is_file()", inspect.getsource(subject.ConptyTrialDriver.capture))
+
+    def test_decline_skips_injection_so_it_cannot_fail_on_an_unarmed_monitor(self):
+        subject = load_subject()
+        source = inspect.getsource(subject.ConptyTrialDriver.capture)
+
+        injector = source.index("session-monitor-user-event.mjs")
+        subscriber = source.index("monitor-subscriber-not-observed")
+        declined = source.index("if declined:")
+        self.assertLess(declined, injector)
+        self.assertLess(source.index("if not declined:"), subscriber)
+
+    @staticmethod
+    def _make_realistic_decline(subject, row):
+        """Shape a row the way a real declined trial actually reads.
+
+        `passing_evidence` marks every precondition true on every row, so its
+        non-dispatching naturals claim `turn_idle_after_monitor: True` -- impossible for a
+        trial that armed no monitor, since that field requires a Stop strictly after a
+        `Monitor` call. The suite's own 1-of-3 PASS test therefore passed against a row
+        shape that cannot occur, which is how a gate unable to pass on real evidence
+        shipped unnoticed.
+        """
+
+        row["skill_dispatched"] = False
+        # wakeUrl ships in every read-mode tandem_status response regardless of arming,
+        # and a declining model still calls tandem_status to answer the prose prompt --
+        # both real stored decline rows show this true.
+        row["status_succeeded"] = True
+        for field in subject.DISPATCH_CONSEQUENT_FIELDS:
+            row[field] = False
+        return row
+
+    def test_status_succeeded_does_not_make_an_honest_decline_self_contradictory(self):
+        subject = load_subject()
+        evidence = passing_evidence(subject)
+        self._make_realistic_decline(
+            subject, next(item for item in evidence if item["id"] == "plugin-natural-2")
+        )
+
+        result = evaluate(subject, evidence)
+
+        self.assertEqual(result["plugin_only"]["verdict"], "PASS")
+        self.assertNotIn("without observed dispatch", " ".join(result["plugin_only"]["reasons"]))
+
+    def test_pass_is_reachable_with_two_of_three_naturals_declining(self):
+        subject = load_subject()
+        evidence = passing_evidence(subject)
+        for trial_id in ("plugin-natural-2", "plugin-natural-3"):
+            self._make_realistic_decline(
+                subject, next(item for item in evidence if item["id"] == trial_id)
+            )
+
+        result = evaluate(subject, evidence)
+
+        self.assertEqual(result["plugin_only"]["verdict"], "PASS")
+        self.assertEqual(result["plugin_only"]["natural_successes"], 1)
+        self.assertEqual(result["plugin_only"]["natural_sample_size"], 3)
+        self.assertEqual(result["plugin_only"]["reasons"], [])
+
+    def test_a_decline_claiming_post_arming_evidence_is_still_contradictory(self):
+        subject = load_subject()
+        evidence = passing_evidence(subject)
+        row = self._make_realistic_decline(
+            subject, next(item for item in evidence if item["id"] == "plugin-natural-2")
+        )
+        # The physically impossible shape `passing_evidence` produces by default: no
+        # dispatch, yet a Stop after a monitor that was never armed.
+        row["turn_idle_after_monitor"] = True
+
+        result = evaluate(subject, evidence)
+
+        self.assertEqual(result["plugin_only"]["verdict"], "INCONCLUSIVE")
+        self.assertIn(
+            "later chain evidence exists without observed dispatch",
+            " ".join(result["plugin_only"]["reasons"]),
+        )
+
+    def test_control_that_armed_without_an_observed_dispatch_is_a_hard_failure(self):
+        subject = load_subject()
+        evidence = passing_evidence(subject)
+        control = next(
+            item
+            for item in evidence
+            if item["install_shape"] == "plugin-only" and item["prompt_kind"] == "control"
+        )
+        # A control's only dispatch signal is the marker, which needs the on-skill-invoke
+        # trigger AND its process spawn. Arming a monitor proves the skill ran, so this
+        # combination is a broken trigger -- not the same thing as a control that was
+        # never dispatched, which is a rig failure. They used to share one bucket.
+        control["skill_dispatched"] = False
+
+        result = evaluate(subject, evidence)
+
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertIn("armed a monitor without an observed dispatch", " ".join(result["reasons"]))
+
+    def test_rehoming_preserves_the_attested_observation_set(self):
+        subject = load_subject()
+
+        # The union is what `ingest_capture` and `machine_derived` compare against, and
+        # `_attestation_payload` sorts keys -- so moving a field between the two tuples
+        # must not invalidate already-signed rows.
+        self.assertEqual(
+            set(subject.PRECONDITION_FIELDS + subject.CHAIN_FIELDS),
+            set(subject.OBSERVATION_FIELDS),
+        )
+        for field in ("turn_idle_after_monitor", "subscriber_growth_proven", "autonomous_turn_seen"):
+            self.assertIn(field, subject.CHAIN_FIELDS)
+            self.assertNotIn(field, subject.PRECONDITION_FIELDS)
+        # status_succeeded stays in CHAIN_FIELDS (the control-completeness and
+        # natural-full-chain checks require it) but must not gate the contradiction check.
+        self.assertIn("status_succeeded", subject.CHAIN_FIELDS)
+        self.assertNotIn("status_succeeded", subject.DISPATCH_CONSEQUENT_FIELDS)
+
+    def test_a_declined_capture_produces_a_release_eligible_row_end_to_end(self):
+        """The whole point: a decline must be recordable, not a capture failure.
+
+        This walks the real `produce_trial` writer with a declined capture and asserts the
+        row the gate will actually read. Four separate things had to be true at once and
+        only one of them was the schema -- eligibility, capture_healthy, the process-tree
+        teardown proof, and the precondition set. Each was found the expensive way.
+        """
+
+        subject = load_subject()
+        observations = {key: False for key in subject.OBSERVATION_FIELDS}
+        observations.update(
+            {field: True for field in subject.PRECONDITION_FIELDS},
+            # True on a real decline: wakeUrl rides along in every status response.
+            status_succeeded=True,
+        )
+
+        class DecliningDriver:
+            def capture(self, context):
+                hashes = json.loads(
+                    (context.root / "fixtures" / "skill-hashes.json").read_text(encoding="utf-8")
+                )
+                return subject.MachineTrialCapture(
+                    pty_capture="Claude Code ready\n" * 20,
+                    observations=observations,
+                    decoy_log={
+                        "subscriber_id": "decoy-declined",
+                        "attached": True,
+                        "attached_at": 100,
+                        "status_observed_at": 200,
+                    },
+                    server_log={
+                        "refreshed_before_ready": None,
+                        "candidate_skill_sha256": hashes["plugin_candidate"],
+                        "ready_skill_sha256": hashes["plugin_candidate"],
+                        "dispatch_classification": subject.DISPATCH_DECLINED,
+                    },
+                    process_tree={
+                        "claude_process_tree_teardown_verified": True,
+                        # No skill invocation means no on-skill-invoke monitor to reap.
+                        "silent_monitor_teardown_verified": True,
+                        "remaining_pids": [],
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = Path(__file__).resolve().parents[2]
+            subject.prepare_fixture_root(root, repo)
+            with patch.object(subject, "ConptyTrialDriver", return_value=DecliningDriver()):
+                subject.produce_trial(root, repo, "plugin-natural-2", timeout_seconds=30)
+
+            evidence = json.loads((root / "evidence.json").read_text(encoding="utf-8"))
+            row = next(item for item in evidence if item["id"] == "plugin-natural-2")
+
+        self.assertEqual(row["capture_eligibility"], subject.DIRECT_LIVE_CAPTURE)
+        self.assertTrue(row["capture_healthy"])
+        self.assertFalse(row["skill_dispatched"])
+        # None of the four blockers that made a decline unrecordable may survive.
+        # Re-signed with the suite key via `evaluate`; the producer signed with the
+        # fixture's own generated key, which this assertion is not about. Asserting on
+        # these four rather than an empty reason list keeps the test off the fake
+        # driver's unrelated launcher-mode and skill-hash plumbing.
+        merged = [
+            row if item["id"] == "plugin-natural-2" else item
+            for item in passing_evidence(subject)
+        ]
+        reasons = " ".join(evaluate(subject, merged)["plugin_only"]["reasons"])
+        for blocker in (
+            "release evidence requires direct live capture",
+            "process-tree teardown proof is absent",
+            "host control preconditions not established",
+            "later chain evidence exists without observed dispatch",
+        ):
+            self.assertNotIn(blocker, reasons)
+
+    def test_silent_monitor_teardown_is_vacuous_only_when_the_skill_was_declined(self):
+        subject = load_subject()
+        source = inspect.getsource(subject.ConptyTrialDriver.capture)
+
+        marker = source.index("silent_monitor_teardown_verified")
+        window = source[marker : marker + 400]
+        # A dispatching trial with no observed monitor pid must stay unproven; only a
+        # decline may satisfy this with an empty list.
+        self.assertIn("DISPATCH_DECLINED", window)
+        self.assertIn("bool(silent_pids)", window)
+
+    def test_transcript_health_fields_are_named_not_positionally_sliced(self):
+        subject = load_subject()
+
+        self.assertNotIn(
+            "PRECONDITION_FIELDS[:3]", inspect.getsource(subject.ConptyTrialDriver.capture)
+        )
+        for field in subject.TRANSCRIPT_HEALTH_FIELDS:
+            self.assertIn(field, subject.PRECONDITION_FIELDS)
 
 
 def evaluate(subject, evidence):
