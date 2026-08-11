@@ -17,6 +17,11 @@ diagnostics but cannot produce a release PASS. HOME, USERPROFILE, and
 CLAUDE_CONFIG_DIR all point inside the owned fixture; authentication relies on
 the OS keychain rather than the operator's real Claude files.
 
+``--root`` must be a durable path you chose, never a session-scoped scratchpad. The
+signed bundle is the only thing that makes a PASS auditable after the run, and an agent
+scratchpad is deleted without warning when its session ends -- a ten-trial bundle was
+briefly believed lost for exactly that reason.
+
 Run ``uv run python scripts/spikes/session_monitor_acceptance.py --help`` for commands.
 """
 
@@ -38,7 +43,7 @@ import time
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any, Iterable, NamedTuple
+from typing import Any, Callable, Iterable, NamedTuple
 
 
 FIXTURE_MARKER = ".tandem-session-monitor-acceptance"
@@ -74,8 +79,10 @@ PRECONDITION_FIELDS = (
 )
 # Chain fields that can only be true as a CONSEQUENCE of the skill being dispatched.
 # Deliberately NOT `CHAIN_FIELDS - skill_dispatched`: `status_succeeded` merely records
-# that a `tandem_status` response carried a wakeUrl, and wakeUrl ships in every
-# read-mode status response (src/server/mcp/document.ts) regardless of arming. A model
+# that a `tandem_status` response carried a wakeUrl, which a read-mode status response
+# includes whenever a wake transport is running -- always true here, since every trial
+# drives the HTTP server; it is spread in conditionally and absent under stdio
+# (src/server/mcp/document.ts). Carrying one is independent of arming. A model
 # that declines the skill still calls `tandem_status` to answer the prose prompt -- both
 # stored decline rows show `status_succeeded: true` -- so including it here would make
 # every honest decline look self-contradictory. `status_succeeded` stays in
@@ -120,14 +127,21 @@ LIVE_CAPTURE_PRODUCER_BLOCKER = (
 )
 # Held back from the monitor-idle wait for the wake injection and the
 # tandem_checkInbox observation that follow it. Everything else in the caller's
-# --timeout-seconds is available to out-wait the armed Monitor call, whose
-# duration is host-side and not ours to predict (measured: 45s to 664s).
+# --timeout-seconds is available to out-wait the armed Monitor call, whose duration is
+# host-side and not ours to predict: 45s to 664s across the ten-trial bundle, per each
+# row's server_log.monitor_timing, with the growth across runs still unexplained.
 INJECTION_RESERVE_SECONDS = 120.0
+# Floor for that wait, so a nearly-exhausted deadline still gives the turn a usable
+# window instead of zero.
+MIN_ARMING_WAIT_SECONDS = 60.0
 # Grace period before a turn with no dispatch signal is committed to as a decline.
 # Both signals lag their cause -- trace lines come from per-event hook subprocesses and
 # the marker from a spawned plugin monitor -- so this absorbs write latency rather than
 # model latency, which the monitor-idle wait above already covers.
 DISPATCH_SETTLE_SECONDS = 15.0
+# The harness's own arrival timestamp on each captured hook event. Namespaced so a host
+# payload key can never shadow it -- see `event_at`.
+HOOK_EVENT_TIME_KEY = "harness_at"
 # Opened before each trial so the document-scoped inbox poll has something to report.
 ACCEPTANCE_DOCUMENT = "acceptance.md"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -206,6 +220,52 @@ def build_trial_matrix() -> list[dict[str, Any]]:
 DISPATCH_OBSERVED = "dispatched"
 DISPATCH_DECLINED = "declined"
 DISPATCH_PENDING = "pending"
+# Neither arming nor a completed non-dispatching turn could be proven. Deliberately a
+# distinct value from DISPATCH_PENDING: pending is a classification of the trace, this is
+# the settled verdict that the capture must fail rather than record a negative.
+SETTLE_UNOBSERVED = "unobserved"
+
+
+def event_at(event: dict[str, Any]) -> float | None:
+    """Read the harness's own arrival timestamp off a hook event, or None.
+
+    The key is `harness_at`, not `at`: the trace writer emits
+    `JSON.stringify({ harness_at: ..., ...payload })` with the host payload spread
+    *second*, so any key the harness picks can be overwritten by a host field of the same
+    name -- silently, and every ordering comparison downstream would then be reading host
+    data in unknown units. No `at` appears in the documented `PreToolUse`/`Stop` schemas,
+    so this was never exploitable, but the real traces carry `background_tasks`,
+    `session_crons`, `model` and `duration_ms`, none of them documented either. The
+    schemas are visibly still growing, so the harness keeps a name of its own.
+    """
+
+    value = event.get(HOOK_EVENT_TIME_KEY)
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def dispatched_skill_is_tandem(tool_input: Any) -> bool:
+    """Report whether a `Skill` tool event invoked *our* skill.
+
+    Without this the check read `tool_name` alone, so any skill the model happened to
+    invoke counted as a Tandem dispatch. Measured from the ten-trial bundle: `tool_name`
+    is bare `Skill` and the skill's identity lives in `tool_input.skill`, whose observed
+    value is bare `tandem` even with the plugin fixture installed. Matching the final
+    `:`-delimited segment also covers the plugin-qualified `tandem:tandem` form that
+    `.claude-plugin/plugin.json` uses in its own `on-skill-invoke` triggers, so this does
+    not depend on which form the host emits.
+
+    A missing or malformed `tool_input` is treated as ours on purpose. The alternative
+    fails closed, which would make every dispatch invisible if the host ever stopped
+    sending the field -- and an invisible dispatch is laundered into a decline, the one
+    failure direction this module refuses. Counting a foreign skill instead produces a
+    loud hard failure ("declined or failed after dispatch"), which is the survivable way
+    to be wrong here.
+    """
+
+    if not isinstance(tool_input, dict) or "skill" not in tool_input:
+        return True
+    name = str(tool_input.get("skill", "")).strip().lower()
+    return name.rsplit(":", 1)[-1] == "tandem"
 
 
 def dispatch_signals_seen(
@@ -227,6 +287,13 @@ def dispatch_signals_seen(
       observing an invocation however it was reached, but it additionally requires that
       trigger to fire and the process to spawn.
 
+    * ``UserPromptExpansion`` is what the host emits when a typed command expands into a
+      prompt. It is the control arm's only first-class signal -- evidence from the host
+      that ``/tandem`` ran, rather than an inference from a process having spawned. Added
+      2026-08-11 and NOT yet seen in a capture: the fixture did not subscribe to this hook
+      when the stored bundle was taken, so the ten traces contain none. It is additive, so
+      a wrong guess about its payload can only fail to fire, never fire falsely.
+
     Taking the union is what makes a broken ``on-skill-invoke`` trigger (#1354) visible:
     marker absent while a `Skill` event exists means the model did invoke the skill and
     the trigger did not fire. Under the marker alone that reads as a model decline and
@@ -235,11 +302,24 @@ def dispatch_signals_seen(
 
     if dispatch_marker_seen:
         return True
+    if any(
+        str(event.get("hook_event_name", "")) == "UserPromptExpansion"
+        # Which field carries the command name is not documented, so match the whole
+        # payload -- but on the typed form `/tandem`, not the bare word. A natural prompt
+        # names Tandem in prose and must never be read as an explicit dispatch; the matrix
+        # guarantees no natural prompt contains the slash form.
+        and "/tandem" in json.dumps(event, sort_keys=True, default=str).lower()
+        and (at := event_at(event)) is not None
+        and at >= prompt_submitted_at
+        for event in events
+    ):
+        return True
     return any(
         str(event.get("hook_event_name", "")) == "PreToolUse"
         and str(event.get("tool_name", "")).lower() == "skill"
-        and isinstance(event.get("at"), (int, float))
-        and event["at"] >= prompt_submitted_at
+        and dispatched_skill_is_tandem(event.get("tool_input"))
+        and event_at(event) is not None
+        and event_at(event) >= prompt_submitted_at
         for event in events
     )
 
@@ -271,11 +351,99 @@ def classify_dispatch(
         return DISPATCH_OBSERVED
     turn_completed = any(
         str(event.get("hook_event_name", "")) == "Stop"
-        and isinstance(event.get("at"), (int, float))
-        and event["at"] > prompt_submitted_at
+        and event_at(event) is not None
+        and event_at(event) > prompt_submitted_at
         for event in events
     )
     return DISPATCH_DECLINED if turn_completed else DISPATCH_PENDING
+
+
+def settle_and_classify(
+    classify_turn: Callable[[], str],
+    *,
+    monitor_idle: bool,
+    settle: Callable[[], Any],
+) -> str:
+    """Decide what a finished wait means: armed, declined, or not provable either way.
+
+    Returns ``DISPATCH_OBSERVED`` when arming was seen, ``DISPATCH_DECLINED`` for a turn
+    that provably completed without dispatching, and ``SETTLE_UNOBSERVED`` when neither
+    is provable -- which the caller must treat as a capture failure and never as a
+    decline. That third outcome is the whole point: a hung or crashed session looks
+    identical to a decline except that it never emits a ``Stop``, so collapsing the two
+    would launder a rig failure into a measured negative.
+
+    ``settle`` runs before the classification because both dispatch signals lag their
+    cause -- trace lines are appended by per-event hook subprocesses, the marker by a
+    spawned plugin monitor process. A tick that sees ``Stop`` flushed but the ``Skill``
+    line not yet would read a real dispatch as a decline. The caller's ``settle`` polls,
+    so a signal arriving anywhere in the window wins; only a window that stays empty
+    throughout becomes a decline.
+
+    Extracted from ``capture`` so this control flow is testable. Every driver stand-in in
+    the suite replaces ``ConptyTrialDriver`` wholesale and so cannot reach the branch in
+    place -- a test written against a stand-in would only re-prove that a raised
+    ``TrialCaptureFailure`` becomes a failed-live row, and an inverted comparator here
+    would pass it.
+    """
+
+    if monitor_idle:
+        return DISPATCH_OBSERVED
+    settle()
+    if classify_turn() == DISPATCH_DECLINED:
+        return DISPATCH_DECLINED
+    return SETTLE_UNOBSERVED
+
+
+def _record_rig_failure(server_log: dict[str, Any], reason: str) -> None:
+    """Name a harness-side failure so it survives into the gate's own output.
+
+    These failures all degrade in the safe direction -- an observation goes false rather
+    than fabricated true -- so none of them can manufacture a pass. What they *can* do is
+    become indistinguishable from the thing being measured: a failed wake injection and a
+    model that never polled its inbox produce the same row. `evaluate` reads this list and
+    names it, instead of leaving the reason in a raw artifact nobody opens.
+    """
+
+    failures = server_log.setdefault("failures", [])
+    if reason not in failures:
+        failures.append(reason)
+
+
+def silent_monitor_teardown_proven(
+    silent_pids: Iterable[int],
+    *,
+    dispatch_classification: str | None,
+    pid_alive: Callable[[int], bool],
+) -> bool:
+    """Whether the plugin monitor's processes are proven gone.
+
+    Requiring a non-empty pid list is what stops a trial that DID dispatch from claiming
+    teardown proof it never earned. But a trial where the model declined the skill spawns
+    no plugin monitor at all -- the marker and the process both come from the
+    on-skill-invoke command -- so on that branch the requirement would fail every honest
+    decline over a process that was never supposed to exist. Hence vacuous on the declined
+    branch only: a dispatching trial with an empty list stays unproven, and is separately a
+    hard failure via `skill_dispatched`.
+    """
+
+    pids = list(silent_pids)
+    expected = bool(pids) or dispatch_classification == DISPATCH_DECLINED
+    return expected and all(not pid_alive(pid) for pid in pids)
+
+
+def injection_budget(
+    deadline: float, now: float, reserve: float = INJECTION_RESERVE_SECONDS
+) -> float:
+    """Seconds to spend waiting for the arming turn, keeping ``reserve`` for injection.
+
+    Floored so a nearly-exhausted deadline still gives the turn a usable window rather
+    than zero. Extracted because the test that pinned this arithmetic re-implemented it
+    instead of calling it, and its copy had already drifted -- it approximated
+    ``deadline - now`` as the whole ``--timeout-seconds`` value.
+    """
+
+    return max(MIN_ARMING_WAIT_SECONDS, deadline - now - reserve)
 
 
 def parse_trial_transcript(
@@ -344,7 +512,7 @@ def derive_structured_observations(
         match = re.search(r"ws://127\.0\.0\.1:\d+/api/wake", serialized(event.get("tool_response")))
         if match:
             wake_url = match.group(0)
-            status_at = event.get("at") if isinstance(event.get("at"), (int, float)) else None
+            status_at = event_at(event)
             break
     monitor_events = [
         event
@@ -355,14 +523,14 @@ def derive_structured_observations(
         and wake_url in serialized(event.get("tool_input"))
     ]
     monitor = monitor_events[0] if monitor_events else None
-    monitor_at = monitor.get("at") if isinstance(monitor, dict) else None
+    monitor_at = event_at(monitor) if isinstance(monitor, dict) else None
     monitor_input = serialized(monitor.get("tool_input")) if isinstance(monitor, dict) else ""
     stop_after_monitor = any(
         event_name(event) == "Stop"
-        and isinstance(event.get("at"), (int, float))
+        and event_at(event) is not None
         and isinstance(monitor_at, (int, float))
-        and event["at"] > monitor_at
-        and event["at"] < injected_at
+        and event_at(event) > monitor_at
+        and event_at(event) < injected_at
         for event in events
     )
     inbox_events = [
@@ -370,8 +538,8 @@ def derive_structured_observations(
         for event in events
         if event_name(event) == "PostToolUse"
         and tool_name(event).endswith("tandem_checkinbox")
-        and isinstance(event.get("at"), (int, float))
-        and event["at"] > injected_at
+        and event_at(event) is not None
+        and event_at(event) > injected_at
         and event_text in serialized(event.get("tool_response"))
     ]
     prompt_submitted = bool(prompt_events)
@@ -641,7 +809,9 @@ def _install_structured_trace_hooks(root: Path) -> None:
         "const chunks = [];\nfor await (const chunk of process.stdin) chunks.push(chunk);\n"
         'const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));\n'
         "appendFileSync(process.env.TANDEM_ACCEPTANCE_TRACE, "
-        "`${JSON.stringify({ at: Date.now() / 1000, ...payload })}\\n`);\n",
+        "`${JSON.stringify({ "
+        + HOOK_EVENT_TIME_KEY
+        + ": Date.now() / 1000, ...payload })}\\n`);\n",
         encoding="utf-8",
         newline="",
     )
@@ -659,30 +829,33 @@ def _install_structured_trace_hooks(root: Path) -> None:
     if not isinstance(hooks, dict):
         hooks = {}
     command = f'node "{helper.resolve()}"'
-    for event in ("SessionStart", "PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit"):
+    # `UserPromptExpansion` is what the host emits when a typed command expands into a
+    # prompt -- the control arm's only first-class evidence that `/tandem` ran. Without it
+    # a control's dispatch is provable solely through the marker file, which requires the
+    # plugin's on-skill-invoke trigger to fire AND its process to spawn, so control
+    # evidence rested on a process side effect rather than on the host reporting the
+    # command.
+    for event in (
+        "SessionStart",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "UserPromptSubmit",
+        "UserPromptExpansion",
+    ):
         hooks[event] = [
             {"hooks": [{"type": "command", "command": command, "timeout": 10}]}
         ]
     settings["hooks"] = hooks
-    # A fresh fixture HOME has never approved anything, so any un-approved tool call
-    # stops on a "Do you want to proceed?" dialog that nothing in this harness
-    # answers -- the turn then never ends, and the failure surfaces as an
-    # unexplained multi-minute stall rather than as a blocked prompt.
-    #
-    # The list below is an ENUMERATION OF CONSUMERS, and it has already failed once by
-    # omission: `Monitor` -- the tool this whole gate exists to observe -- was missing,
-    # so the skill's own arming call sat on the dialog for over 22 minutes and was
-    # misread as host latency across seven live sessions.
-    #
-    # `defaultMode: "bypassPermissions"` looks like the way out of guessing, and it is
-    # not: it raises its own "you accept all responsibility" acceptance screen that
-    # defaults to *exit*, and its warning restricts it to a sandboxed container/VM
-    # with limited network. This fixture is an isolated HOME on a real workstation
-    # with real network, so that is the wrong instrument here.
-    #
-    # What breaks the enumerate-and-miss cycle is not a longer list but
-    # `_permission_dialog_blocking`, which turns the next omission into a named
-    # failure within seconds instead of a silent multi-minute stall.
+    # A fresh fixture HOME has approved nothing, so an un-approved tool call stalls on a
+    # "Do you want to proceed?" dialog nothing here answers. This list is an enumeration of
+    # consumers and has already failed by omission once: `Monitor`, the tool the gate
+    # exists to observe, was missing, and its arming call sat on the dialog for 22 minutes
+    # across seven sessions, misread as host latency. `_permission_dialog_blocking` is what
+    # breaks that cycle -- it turns the next omission into a named failure in seconds --
+    # not a longer list. `defaultMode: "bypassPermissions"` is not the way out: it raises
+    # its own acceptance screen that defaults to exit, and it is documented for a sandboxed
+    # container, not an isolated HOME on a networked workstation.
     permissions = settings.get("permissions")
     if not isinstance(permissions, dict):
         permissions = {}
@@ -1108,6 +1281,16 @@ class ConptyTrialDriver:
             server_log["opened_document"] = self._open_acceptance_document(
                 base_url, context.root / "workspace" / ACCEPTANCE_DOCUMENT
             )
+            if isinstance(server_log["opened_document"], dict) and server_log[
+                "opened_document"
+            ].get("error"):
+                # Degrades safely -- the inbox poll simply has nothing to report, so the
+                # observations go false rather than true. Named anyway: without this the
+                # reason sits in a JSON blob that nothing reads, and a broken /api/open
+                # is indistinguishable from a model that never polled.
+                _record_rig_failure(
+                    server_log, f"acceptance-document-open-failed ({ACCEPTANCE_DOCUMENT})"
+                )
             launcher_status = self._read_json(f"{base_url}/api/launcher/status")
             server_log["observed_launcher_mode"] = self._launcher_mode(launcher_status)
 
@@ -1285,30 +1468,24 @@ class ConptyTrialDriver:
             self._wait_until(
                 monitor_idle_or_blocked,
                 deadline,
-                max(60.0, deadline - time.monotonic() - INJECTION_RESERVE_SECONDS),
+                injection_budget(deadline, time.monotonic()),
             )
             status_observed_at = time.time()
             health_armed = self._wait_health(base_url, server, deadline)
             armed_count = self._subscriber_count(health_armed)
             monitor_idle = self._structured_monitor_is_idle(self._read_hook_events(trace_path))
-            declined = False
-            if not monitor_idle:
-                # Settle before committing. Both dispatch signals lag their cause: trace
-                # lines are appended by per-event hook subprocesses, and the marker is
-                # written by a spawned plugin monitor process. A tick that sees `Stop`
-                # flushed but the `Skill` line not yet would classify a real dispatch as
-                # a decline -- laundering the arming regression this is built to catch,
-                # one layer further down. `_wait_until` polls, so a dispatch signal
-                # arriving anywhere in the window wins; only a window that stays empty
-                # throughout is treated as a decline.
-                self._wait_until(
+            outcome = settle_and_classify(
+                classify_turn,
+                monitor_idle=monitor_idle,
+                settle=lambda: self._wait_until(
                     lambda: classify_turn() == DISPATCH_OBSERVED,
                     deadline,
                     DISPATCH_SETTLE_SECONDS,
-                )
-                declined = classify_turn() == DISPATCH_DECLINED
-                if not declined:
-                    raise RuntimeError("structured-monitor-idle-not-observed")
+                ),
+            )
+            if outcome == SETTLE_UNOBSERVED:
+                raise RuntimeError("structured-monitor-idle-not-observed")
+            declined = outcome == DISPATCH_DECLINED
             if not declined:
                 if armed_count < after_count + 1:
                     raise RuntimeError("monitor-subscriber-not-observed")
@@ -1348,6 +1525,15 @@ class ConptyTrialDriver:
                     "stdout": injector.stdout,
                     "stderr": injector.stderr,
                 }
+                if injector.returncode != 0:
+                    # The injector's failure cannot fabricate a pass -- `wake_seen` and
+                    # `inbox_checked` come from server truth, so a failed injection just
+                    # degrades them to false. But it lands in the same bucket as "the
+                    # model never checked its inbox", and only this list distinguishes
+                    # the two without someone thinking to open a raw artifact.
+                    _record_rig_failure(
+                        server_log, f"wake-injection-failed (exit {injector.returncode})"
+                    )
                 self._wait_until(
                     lambda: self._structured_inbox_saw(
                         self._read_hook_events(trace_path), event_text, injected_at
@@ -1431,18 +1617,11 @@ class ConptyTrialDriver:
                 and isinstance(claude_pid, int)
                 and all(not _pid_alive(pid) for pid in [claude_pid, *claude_descendants])
             ),
-            # `bool(silent_pids)` is here so a trial that DID dispatch cannot claim
-            # teardown proof it never earned -- but a trial where the model declined the
-            # skill spawns no plugin monitor at all (the marker is written by the
-            # on-skill-invoke command), so requiring a non-empty list would fail every
-            # honest decline on a process that was never supposed to exist. Vacuous only
-            # on the declined branch; a dispatching trial with an empty list is still
-            # unproven, and is separately a hard failure via skill_dispatched.
-            "silent_monitor_teardown_verified": (
-                bool(silent_pids)
-                or server_log.get("dispatch_classification") == DISPATCH_DECLINED
-            )
-            and all(not _pid_alive(pid) for pid in silent_pids),
+            "silent_monitor_teardown_verified": silent_monitor_teardown_proven(
+                silent_pids,
+                dispatch_classification=server_log.get("dispatch_classification"),
+                pid_alive=_pid_alive,
+            ),
             "process_tree_snapshot_healthy": process_tree_snapshot_healthy,
             "observed_claude_pids": [claude_pid, *claude_descendants],
             "observed_silent_monitor_pids": silent_pids,
@@ -1627,24 +1806,24 @@ class ConptyTrialDriver:
     def _structured_event_after(events: list[dict[str, Any]], name: str, after: float) -> bool:
         return any(
             event.get("hook_event_name") == name
-            and isinstance(event.get("at"), (int, float))
-            and event["at"] > after
+            and event_at(event) is not None
+            and event_at(event) > after
             for event in events
         )
 
     @staticmethod
     def _structured_monitor_is_idle(events: list[dict[str, Any]]) -> bool:
         monitor_times = [
-            event.get("at")
+            event_at(event)
             for event in events
             if event.get("hook_event_name") == "PreToolUse"
             and str(event.get("tool_name", "")).lower() == "monitor"
-            and isinstance(event.get("at"), (int, float))
+            and event_at(event) is not None
         ]
         return bool(monitor_times) and any(
             event.get("hook_event_name") == "Stop"
-            and isinstance(event.get("at"), (int, float))
-            and event["at"] > monitor_times[0]
+            and event_at(event) is not None
+            and event_at(event) > monitor_times[0]
             for event in events
         )
 
@@ -1702,9 +1881,9 @@ class ConptyTrialDriver:
                 if (
                     event.get("hook_event_name") == hook
                     and str(event.get("tool_name", "")).lower() == "monitor"
-                    and isinstance(event.get("at"), (int, float))
+                    and event_at(event) is not None
                 ):
-                    return float(event["at"])
+                    return float(event_at(event))
             return None
 
         armed_at = first_at("PreToolUse")
@@ -1725,8 +1904,8 @@ class ConptyTrialDriver:
         return any(
             event.get("hook_event_name") == "PostToolUse"
             and str(event.get("tool_name", "")).lower().endswith("tandem_checkinbox")
-            and isinstance(event.get("at"), (int, float))
-            and event["at"] > after
+            and event_at(event) is not None
+            and event_at(event) > after
             and text in json.dumps(event.get("tool_response"))
             for event in events
         )
@@ -1931,6 +2110,16 @@ def _row_from_capture(
             CAPTURE_ELIGIBILITY_FIELD: eligibility,
         }
     )
+    # Rig failures ride into the row's notes so `evaluate` can name them. Deliberately
+    # NOT a gate field: they degrade observations toward false, never toward a fabricated
+    # true, so they cannot manufacture a pass -- and making them a precondition would let
+    # one flaky trial veto an otherwise clean shape, which is a worse failure than the
+    # anonymity being fixed.
+    rig_failures = capture.server_log.get("failures")
+    if isinstance(rig_failures, list) and rig_failures:
+        row["notes"] = "; ".join(
+            part for part in [row.get("notes") or "", f"rig: {', '.join(rig_failures)}"] if part
+        )
     for field in (
         "refreshed_before_ready",
         "seeded_skill_sha256",
@@ -1957,6 +2146,33 @@ def _reserve_supersede_dir(root: Path, trial_id: str) -> Path:
     raise RuntimeError(f"too many superseded captures for {trial_id}; use a fresh fixture root")
 
 
+def _repoint_artifact_paths(
+    payload: dict[str, Any], root: Path, artifact_dir: Path, supersede_dir: Path
+) -> dict[str, Any]:
+    """Rewrite an archived payload's artifact paths to the superseded location.
+
+    Paths are recorded relative to the fixture root (`artifacts/<trial_id>/role.txt`),
+    so a payload carried into the supersede slot verbatim still points at the *live*
+    slot -- which the next capture repopulates. Following the archived manifest would
+    then return a different capture's bytes while its recorded sha256 still matches
+    nothing, i.e. silently wrong rather than absent. Rewrite so an archived bundle
+    resolves to the bytes it was actually signed over.
+    """
+
+    old_prefix = artifact_dir.relative_to(root).as_posix()
+    new_prefix = supersede_dir.relative_to(root).as_posix()
+    repointed = dict(payload)
+    artifacts = []
+    for entry in payload.get("artifacts") or []:
+        moved = dict(entry)
+        path = str(entry.get("path", ""))
+        if path == old_prefix or path.startswith(f"{old_prefix}/"):
+            moved["path"] = new_prefix + path[len(old_prefix) :]
+        artifacts.append(moved)
+    repointed["artifacts"] = artifacts
+    return repointed
+
+
 def _supersede_prior_capture(
     root: Path, trial_id: str, artifact_dir: Path, supersede_dir: Path
 ) -> None:
@@ -1965,16 +2181,32 @@ def _supersede_prior_capture(
     Never deletes. A re-attempt supersedes evidence; it does not erase it -- and the
     `evidence.json` row is what `evaluate` actually reads, so protecting only the
     artifact directory would leave the load-bearing half unprotected.
+
+    Both archived payloads are re-pointed at the supersede slot (see
+    `_repoint_artifact_paths`). The evidence row's attestation deliberately is *not*
+    re-signed: it was signed over the row as captured, the signature is what makes it
+    auditable, and the archived copy is a diagnostic record rather than an input to
+    `evaluate`. A reader verifying it must therefore compare artifact bytes by sha256
+    from the rewritten path, not re-derive the attestation from the archived file.
     """
 
     if supersede_dir.exists():
         raise RuntimeError(f"supersede slot {supersede_dir.name} is no longer free")
     artifact_dir.rename(supersede_dir)
+    manifest_path = supersede_dir / "capture-manifest.json"
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        _write_json(
+            manifest_path, _repoint_artifact_paths(manifest, root, artifact_dir, supersede_dir)
+        )
     evidence_path = _safe_mutation_path(root, root / "evidence.json")
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     prior = next((entry for entry in evidence if entry.get("id") == trial_id), None)
     if prior is not None:
-        _write_json(supersede_dir / "superseded-evidence-row.json", prior)
+        _write_json(
+            supersede_dir / "superseded-evidence-row.json",
+            _repoint_artifact_paths(prior, root, artifact_dir, supersede_dir),
+        )
 
 
 def _replace_evidence_row(root: Path, row: dict[str, Any]) -> None:
@@ -2500,13 +2732,27 @@ def _evaluate_shape(
             hard_failures.append(f"{trial_id}: natural run declined or failed after dispatch")
         elif not chain["skill_dispatched"] and any(
             # Ranges over DISPATCH_CONSEQUENT_FIELDS, not all of CHAIN_FIELDS: a
-            # declining model still calls `tandem_status`, whose response always carries
-            # a wakeUrl, so `status_succeeded` is true on an honest decline and would
-            # make every one of them look self-contradictory here.
+            # declining model still calls `tandem_status`, whose response carries a
+            # wakeUrl whenever a wake transport is running (so: in every trial here), so
+            # `status_succeeded` is true on an honest decline and would make every one of
+            # them look self-contradictory here.
             chain[field]
             for field in DISPATCH_CONSEQUENT_FIELDS
         ):
             inconclusive.append(f"{trial_id}: later chain evidence exists without observed dispatch")
+        elif not chain["skill_dispatched"] and not chain["status_succeeded"]:
+            # A decline is only evidence about the model if the model actually reached
+            # Tandem. `status_succeeded` means a read-mode `tandem_status` returned a
+            # wakeUrl (present whenever a wake transport is running, as it is in every
+            # trial here), so the session had everything it needed and still did not arm --
+            # attributable, and exactly the measurement. Without it the session never got
+            # a usable status response, so its negative says nothing about arming and
+            # must not be counted as a model choice. (Broken installs and failed
+            # refreshes are already caught above by the skill-hash proofs; this covers
+            # the remaining case, a session that reached the tool and got nothing back.)
+            inconclusive.append(
+                f"{trial_id}: decline is not attributable -- no successful tandem_status in this session"
+            )
 
     controls = [row for row in rows if row["prompt_kind"] == "control"]
     naturals = [row for row in rows if row["prompt_kind"] == "natural"]
@@ -2546,6 +2792,15 @@ def _evaluate_shape(
         "natural_sample_size": len(naturals),
         "controls_pass": controls_pass,
         "reasons": reasons,
+        # Named harness-side failures, reported beside the verdict but never an input to
+        # it. A rig failure makes a row's observations false, so it already shows up as a
+        # missing chain link; what it could not do before was say WHY, which is the
+        # difference between "the model never polled" and "our injector never ran".
+        "rig_failures": [
+            f"{row['id']}: {row['notes']}"
+            for row in rows
+            if isinstance(row.get("notes"), str) and row["notes"].startswith("rig: ")
+        ],
     }
 
 

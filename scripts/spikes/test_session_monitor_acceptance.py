@@ -51,11 +51,11 @@ class AcceptanceMatrixTests(unittest.TestCase):
             event_text=event_text,
         )
         events = [
-            {"at": 1, "hook_event_name": "UserPromptSubmit", "prompt": "neutral"},
-            {"at": 2, "hook_event_name": "PostToolUse", "tool_name": "mcp__tandem__tandem_status", "tool_response": {"wakeUrl": "ws://127.0.0.1:43079/api/wake"}},
-            {"at": 3, "hook_event_name": "PreToolUse", "tool_name": "Monitor", "tool_input": {"ws": {"url": "ws://127.0.0.1:43079/api/wake"}, "persistent": True}},
-            {"at": 4, "hook_event_name": "Stop"},
-            {"at": 6, "hook_event_name": "PostToolUse", "tool_name": "mcp__tandem__tandem_checkInbox", "tool_response": {"text": event_text}},
+            {"harness_at": 1, "hook_event_name": "UserPromptSubmit", "prompt": "neutral"},
+            {"harness_at": 2, "hook_event_name": "PostToolUse", "tool_name": "mcp__tandem__tandem_status", "tool_response": {"wakeUrl": "ws://127.0.0.1:43079/api/wake"}},
+            {"harness_at": 3, "hook_event_name": "PreToolUse", "tool_name": "Monitor", "tool_input": {"ws": {"url": "ws://127.0.0.1:43079/api/wake"}, "persistent": True}},
+            {"harness_at": 4, "hook_event_name": "Stop"},
+            {"harness_at": 6, "hook_event_name": "PostToolUse", "tool_name": "mcp__tandem__tandem_checkInbox", "tool_response": {"text": event_text}},
         ]
         observed = subject.derive_structured_observations(
             events,
@@ -637,8 +637,8 @@ class FixtureSafetyTests(unittest.TestCase):
         subject = load_subject()
         driver = subject.ConptyTrialDriver()
         events = [
-            {"at": 1, "hook_event_name": "SessionStart"},
-            {"at": 2, "hook_event_name": "UserPromptSubmit"},
+            {"harness_at": 1, "hook_event_name": "SessionStart"},
+            {"harness_at": 2, "hook_event_name": "UserPromptSubmit"},
         ]
 
         self.assertTrue(driver._structured_event_after(events, "SessionStart", 0))
@@ -796,6 +796,89 @@ class FixtureSafetyTests(unittest.TestCase):
             self.assertTrue((root / "artifacts" / "plugin-control.superseded-2").is_dir())
             self.assertIn("first", (superseded / "pty_capture.txt").read_text(encoding="utf-8"))
 
+    def test_a_superseded_bundle_resolves_to_its_own_bytes(self):
+        """An archived capture must not resolve to the capture that replaced it.
+
+        Both archived payloads record artifact paths relative to the fixture root, so
+        carrying them into the supersede slot verbatim left them pointing at
+        `artifacts/<trial_id>/` -- the live slot, which the *next* capture repopulates.
+        Following an archived manifest then returned different bytes than the ones its
+        sha256 was taken over: silently wrong, in a module whose contract is that a
+        re-attempt supersedes evidence without erasing it.
+
+        Asserting the paths merely exist would have passed against that bug, because the
+        live slot exists too. Every payload here is varied per capture on purpose: with
+        the default empty `decoy_log`/`server_log`/`process_tree`, two captures produce
+        byte-identical artifacts for those roles, so a sha256 comparison cannot tell the
+        archived bundle from the one that replaced it and only the path prefix would
+        catch the bug.
+        """
+
+        subject = load_subject()
+
+        def driver_returning(marker):
+            class Driver:
+                def capture(self, _context):
+                    return subject.MachineTrialCapture(
+                        pty_capture=marker,
+                        observations={key: True for key in subject.OBSERVATION_FIELDS},
+                        decoy_log={"marker": marker},
+                        server_log={"marker": marker},
+                        process_tree={"marker": marker},
+                    )
+
+            return Driver()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = Path(__file__).resolve().parents[2]
+            subject.prepare_fixture_root(root, repo)
+            manifest_path = subject.produce_trial(
+                root, repo, "plugin-control", timeout_seconds=30, driver=driver_returning("first")
+            )
+
+            # An injected driver is never release-eligible (`release_eligible = driver is
+            # None`), so it leaves the evidence row empty and the row half of this
+            # contract would go untested. Give the row the artifact list a real capture
+            # would have written -- the manifest's, verbatim -- so both archived payloads
+            # carry live-slot paths going into the supersede.
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            evidence_path = root / "evidence.json"
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            for entry in evidence:
+                if entry["id"] == "plugin-control":
+                    entry["artifacts"] = manifest["artifacts"]
+            evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+
+            subject.produce_trial(
+                root,
+                repo,
+                "plugin-control",
+                timeout_seconds=30,
+                driver=driver_returning("second"),
+                overwrite=True,
+            )
+
+            superseded = root / "artifacts" / "plugin-control.superseded-1"
+            archived = [
+                json.loads((superseded / name).read_text(encoding="utf-8"))
+                for name in ("capture-manifest.json", "superseded-evidence-row.json")
+            ]
+            for payload in archived:
+                self.assertTrue(payload["artifacts"], "archived payload lists no artifacts")
+                for entry in payload["artifacts"]:
+                    resolved = root / entry["path"]
+                    self.assertTrue(resolved.is_file(), f"{entry['path']} does not resolve")
+                    self.assertEqual(
+                        subject._sha256(resolved.read_bytes()),
+                        entry["sha256"],
+                        f"{entry['role']} resolves to bytes it was not hashed over",
+                    )
+                    self.assertTrue(
+                        entry["path"].startswith("artifacts/plugin-control.superseded-1/"),
+                        f"{entry['role']} still points at the live slot",
+                    )
+
     def test_ingest_preserves_direct_live_eligibility_but_only_for_its_own_manifest(self):
         """Ingesting a directly-captured trial must not downgrade it.
 
@@ -948,16 +1031,25 @@ class FixtureSafetyTests(unittest.TestCase):
         """
 
         subject = load_subject()
-        reserve = subject.INJECTION_RESERVE_SECONDS
 
+        # Calls the real computation. The previous version of this test re-implemented
+        # the formula, so it verified its own copy -- and the copy had already drifted,
+        # approximating `deadline - now` as the whole timeout.
         def budget(timeout_seconds):
-            # Mirrors the call site: whatever the deadline still allows, less the
-            # reserve held back for wake injection and the inbox observation.
-            return max(60.0, timeout_seconds - reserve)
+            return subject.injection_budget(deadline=timeout_seconds, now=0.0)
 
         self.assertGreater(budget(900), 664, "cannot out-wait a measured 664s arm")
         self.assertGreater(budget(1800), budget(900), "budget must track the timeout")
         self.assertNotEqual(budget(900), 90)
+        # The reserve is genuinely held back, and the floor genuinely floors.
+        self.assertEqual(
+            budget(900), 900 - subject.INJECTION_RESERVE_SECONDS, "reserve not withheld"
+        )
+        self.assertEqual(
+            subject.injection_budget(deadline=10.0, now=0.0),
+            subject.MIN_ARMING_WAIT_SECONDS,
+            "an exhausted deadline must still leave a usable window",
+        )
 
     def test_monitor_timing_measures_the_blocking_arm_without_gating_on_it(self):
         subject = load_subject()
@@ -965,8 +1057,8 @@ class FixtureSafetyTests(unittest.TestCase):
 
         timing = driver._monitor_timing(
             [
-                {"hook_event_name": "PreToolUse", "tool_name": "Monitor", "at": 100.0},
-                {"hook_event_name": "PostToolUse", "tool_name": "Monitor", "at": 764.0},
+                {"hook_event_name": "PreToolUse", "tool_name": "Monitor", "harness_at": 100.0},
+                {"hook_event_name": "PostToolUse", "tool_name": "Monitor", "harness_at": 764.0},
             ]
         )
         self.assertEqual(timing["monitor_resolution_seconds"], 664.0)
@@ -974,7 +1066,7 @@ class FixtureSafetyTests(unittest.TestCase):
         # Still blocking when the trial ended: that is the observation, so it must not
         # be coerced into a number.
         unresolved = driver._monitor_timing(
-            [{"hook_event_name": "PreToolUse", "tool_name": "Monitor", "at": 100.0}]
+            [{"hook_event_name": "PreToolUse", "tool_name": "Monitor", "harness_at": 100.0}]
         )
         self.assertIsNone(unresolved["monitor_resolved_at"])
         self.assertIsNone(unresolved["monitor_resolution_seconds"])
@@ -1343,6 +1435,12 @@ def passing_evidence(
             item[key] = True
         for key in subject.CHAIN_FIELDS:
             item[key] = trial["prompt_kind"] == "control"
+        # A declining natural still calls `tandem_status` and still gets a wakeUrl back
+        # (present whenever a wake transport is running, as it is in every trial) --
+        # both real stored declines show this true, and the gate now reads a decline with
+        # `status_succeeded` false as unattributable rather than as a model choice. Left
+        # false, every fixture decline was a shape the harness cannot actually produce.
+        item["status_succeeded"] = True
         evidence.append(item)
 
     for shape in ("managed-double", "plugin-only"):
@@ -1353,7 +1451,29 @@ def passing_evidence(
         )
         for key in subject.CHAIN_FIELDS:
             natural[key] = True
+    for item in evidence:
+        _assert_plausible_row(subject, item)
     return evidence
+
+
+def _assert_plausible_row(subject, row):
+    """Reject a fixture row the harness itself could never produce.
+
+    Scoped deliberately to `passing_evidence`'s own output and never applied to a row a
+    test has since modified: two tests build the forbidden shape on purpose, to prove
+    `evaluate`'s contradiction check fires on it. A guard that rejected those would delete
+    coverage of the check rather than add any.
+    """
+
+    if row.get("skill_dispatched"):
+        return
+    impossible = [
+        field for field in subject.DISPATCH_CONSEQUENT_FIELDS if row.get(field) is True
+    ]
+    if impossible:
+        raise AssertionError(
+            f"{row['id']}: fixture claims {impossible} without a dispatch, which no capture can produce"
+        )
 
 
 class NaturalDeclineTests(unittest.TestCase):
@@ -1368,15 +1488,15 @@ class NaturalDeclineTests(unittest.TestCase):
 
     @staticmethod
     def _events(*, prompt_at=100.0, skill_at=None, stop_at=None, monitor_at=None):
-        events = [{"hook_event_name": "UserPromptSubmit", "at": prompt_at}]
+        events = [{"hook_event_name": "UserPromptSubmit", "harness_at": prompt_at}]
         if skill_at is not None:
-            events.append({"hook_event_name": "PreToolUse", "tool_name": "Skill", "at": skill_at})
+            events.append({"hook_event_name": "PreToolUse", "tool_name": "Skill", "harness_at": skill_at})
         if monitor_at is not None:
             events.append(
-                {"hook_event_name": "PreToolUse", "tool_name": "Monitor", "at": monitor_at}
+                {"hook_event_name": "PreToolUse", "tool_name": "Monitor", "harness_at": monitor_at}
             )
         if stop_at is not None:
-            events.append({"hook_event_name": "Stop", "at": stop_at})
+            events.append({"hook_event_name": "Stop", "harness_at": stop_at})
         return events
 
     def test_declined_turn_needs_positive_proof_it_completed_not_merely_no_skill_event(self):
@@ -1425,6 +1545,152 @@ class NaturalDeclineTests(unittest.TestCase):
             subject.DISPATCH_OBSERVED,
         )
 
+    def test_a_typed_control_is_observed_through_prompt_expansion(self):
+        """The control arm gets a host-reported signal, not just a spawned process.
+
+        A typed `/tandem` emits `UserPromptExpansion`, never `PreToolUse Skill`, so before
+        this the only proof a control ran was the marker file -- which needs the plugin's
+        on-skill-invoke trigger to fire and its process to spawn. Purely additive: a
+        natural prompt names Tandem in prose but never in the slash form, so prose cannot
+        be misread as an explicit dispatch.
+        """
+
+        subject = load_subject()
+
+        def dispatched(event):
+            return subject.dispatch_signals_seen(
+                [event], prompt_submitted_at=100.0, dispatch_marker_seen=False
+            )
+
+        self.assertTrue(
+            dispatched(
+                {
+                    "hook_event_name": "UserPromptExpansion",
+                    "command": "tandem",
+                    "prompt": "/tandem",
+                    subject.HOOK_EVENT_TIME_KEY: 105.0,
+                }
+            )
+        )
+        # Prose that merely mentions Tandem is not a dispatch.
+        self.assertFalse(
+            dispatched(
+                {
+                    "hook_event_name": "UserPromptExpansion",
+                    "prompt": "Open the Tandem document and summarise it",
+                    subject.HOOK_EVENT_TIME_KEY: 105.0,
+                }
+            )
+        )
+        # Nor is an expansion of some other command.
+        self.assertFalse(
+            dispatched(
+                {
+                    "hook_event_name": "UserPromptExpansion",
+                    "prompt": "/simplify",
+                    subject.HOOK_EVENT_TIME_KEY: 105.0,
+                }
+            )
+        )
+        # And the fixture must actually subscribe to the hook, or the signal never arrives.
+        self.assertIn(
+            '"UserPromptExpansion"',
+            inspect.getsource(subject._install_structured_trace_hooks),
+        )
+
+    def test_only_the_tandem_skill_counts_as_a_tandem_dispatch(self):
+        """`tool_name` alone made any skill invocation a Tandem dispatch.
+
+        Ground truth from the ten-trial bundle: host tool names are bare (`Skill` x3,
+        `Monitor` x7, `ToolSearch` x20) while MCP tools are prefixed
+        (`mcp__plugin_tandem_tandem__*` x38), so the exact `tool_name` match is right --
+        but the skill's identity lives in `tool_input.skill`, and nothing was reading it.
+        """
+
+        subject = load_subject()
+
+        def dispatched(tool_input):
+            return subject.dispatch_signals_seen(
+                [
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "tool_name": "Skill",
+                        "tool_input": tool_input,
+                        "harness_at": 112.0,
+                    }
+                ],
+                prompt_submitted_at=100.0,
+                dispatch_marker_seen=False,
+            )
+
+        self.assertTrue(dispatched({"skill": "tandem"}), "the observed real value")
+        self.assertTrue(dispatched({"skill": "tandem:tandem"}), "plugin-qualified form")
+        self.assertFalse(dispatched({"skill": "superpowers:brainstorming"}))
+        self.assertFalse(dispatched({"skill": "simplify"}))
+        # Fails open, deliberately: closed would make a dispatch invisible if the host
+        # dropped the field, and an invisible dispatch becomes a laundered decline.
+        self.assertTrue(dispatched(None), "a missing tool_input must not hide a dispatch")
+
+    def test_a_host_payload_cannot_shadow_the_harness_timestamp(self):
+        """The trace writer spreads the host payload second, so its keys win.
+
+        `at` was the harness's own key. No documented `PreToolUse`/`Stop` field is named
+        that, so it was never exploitable -- but the real traces carry `background_tasks`,
+        `session_crons`, `model` and `duration_ms`, none of them documented either, so the
+        schemas are still growing into whatever name the harness claims.
+        """
+
+        subject = load_subject()
+        hostile = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Skill",
+            "tool_input": {"skill": "tandem"},
+            subject.HOOK_EVENT_TIME_KEY: 112.0,
+            # A host field named like the old key must be inert now.
+            "at": 10**12,
+        }
+
+        self.assertEqual(subject.event_at(hostile), 112.0)
+        self.assertTrue(
+            subject.dispatch_signals_seen(
+                [hostile], prompt_submitted_at=100.0, dispatch_marker_seen=False
+            )
+        )
+        # And the writer the fixture actually installs emits the namespaced key, so a
+        # capture and its readers cannot disagree about which key carries the time.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / subject.FIXTURE_MARKER).write_text(
+                json.dumps(
+                    {
+                        "kind": "tandem-session-monitor-acceptance",
+                        "version": subject.FIXTURE_VERSION,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            subject._install_structured_trace_hooks(root)
+            writer = (
+                root / "home" / ".claude" / "harness-hooks" / "capture-event.mjs"
+            ).read_text(encoding="utf-8")
+
+        self.assertIn(f"{subject.HOOK_EVENT_TIME_KEY}: Date.now() / 1000", writer)
+        self.assertNotIn("{ at:", writer)
+        # The spread stays last -- the payload is copied verbatim, host keys and all.
+        self.assertLess(writer.index(subject.HOOK_EVENT_TIME_KEY), writer.index("...payload"))
+
+    def test_host_tool_names_are_matched_bare_and_mcp_tools_by_suffix(self):
+        subject = load_subject()
+        source = inspect.getsource(subject)
+
+        # Both exact matches are load-bearing and both are correct per the bundle; pinned
+        # together so a well-meant "make it consistent with the endswith calls" rewrite
+        # has to confront the evidence.
+        self.assertIn('str(event.get("tool_name", "")).lower() == "skill"', source)
+        self.assertIn('str(event.get("tool_name", "")).lower() == "monitor"', source)
+        # And the MCP side stays suffix-matched, because those names are prefixed.
+        self.assertIn('.endswith("tandem_status")', source)
+
     def test_a_dispatch_signal_arriving_after_stop_still_wins(self):
         subject = load_subject()
 
@@ -1439,19 +1705,57 @@ class NaturalDeclineTests(unittest.TestCase):
             subject.DISPATCH_OBSERVED,
         )
 
-    def test_capture_settles_before_committing_to_a_decline(self):
+    def test_a_turn_that_never_completed_is_a_failure_not_a_decline(self):
+        """The invariant the whole decline path rests on, tested through real code.
+
+        A hung or crashed session is indistinguishable from a decline except that it never
+        emits a `Stop`. If that case were classified as declined, a rig failure would be
+        recorded as a measured negative -- the exact laundering this harness exists to
+        prevent, one layer below the behaviour it measures.
+
+        This could not be tested before the decision was extracted from `capture`: every
+        driver stand-in in this suite replaces `ConptyTrialDriver` wholesale, so none of
+        them reaches the branch. A test written against a stand-in would only re-prove
+        that a raised failure becomes a failed-live row, and an inverted comparator in the
+        branch would still pass it.
+        """
+
+        subject = load_subject()
+        settles = []
+
+        def outcome(classification, *, monitor_idle=False):
+            return subject.settle_and_classify(
+                lambda: classification,
+                monitor_idle=monitor_idle,
+                settle=lambda: settles.append(classification),
+            )
+
+        self.assertEqual(outcome(subject.DISPATCH_PENDING), subject.SETTLE_UNOBSERVED)
+        self.assertEqual(outcome(subject.DISPATCH_DECLINED), subject.DISPATCH_DECLINED)
+        self.assertEqual(outcome(subject.DISPATCH_OBSERVED), subject.SETTLE_UNOBSERVED)
+        # Arming already observed: no settle needed, and no classification consulted.
+        self.assertEqual(
+            subject.settle_and_classify(
+                lambda: self.fail("classified despite an observed arm"),
+                monitor_idle=True,
+                settle=lambda: self.fail("settled despite an observed arm"),
+            ),
+            subject.DISPATCH_OBSERVED,
+        )
+        # The settle runs before the classification is read, every time it runs at all.
+        self.assertEqual(len(settles), 3)
+
+    def test_only_the_unobserved_outcome_aborts_the_capture(self):
         subject = load_subject()
         source = inspect.getsource(subject.ConptyTrialDriver.capture)
 
-        self.assertIn("DISPATCH_SETTLE_SECONDS", source)
-        settle = source.index("DISPATCH_SETTLE_SECONDS")
-        window = source[max(0, settle - 600) : settle]
-        # The settle must poll for the OBSERVED classification rather than sleep once,
-        # and it must re-read both signals -- the marker is a filesystem check that lags
-        # independently of the trace.
-        self.assertIn("DISPATCH_OBSERVED", window)
-        self.assertIn("_wait_until", window)
-        self.assertIn("marker_path.is_file()", inspect.getsource(subject.ConptyTrialDriver.capture))
+        # `SETTLE_UNOBSERVED` is the one outcome that must raise; a decline continues into
+        # the row it is entitled to. Kept as a source check because the surrounding branch
+        # lives inside the 470-line PTY method, with no seam of its own.
+        self.assertIn("if outcome == SETTLE_UNOBSERVED:", source)
+        self.assertIn("declined = outcome == DISPATCH_DECLINED", source)
+        self.assertIn('raise RuntimeError("structured-monitor-idle-not-observed")', source)
+        self.assertIn("marker_path.is_file()", source)
 
     def test_decline_skips_injection_so_it_cannot_fail_on_an_unarmed_monitor(self):
         subject = load_subject()
@@ -1462,6 +1766,10 @@ class NaturalDeclineTests(unittest.TestCase):
         declined = source.index("if declined:")
         self.assertLess(declined, injector)
         self.assertLess(source.index("if not declined:"), subscriber)
+        # Substring *order* is unchanged by inverting either comparator, so pin the
+        # comparators themselves. The behavioural half is
+        # test_a_turn_that_never_completed_is_a_failure_not_a_decline.
+        self.assertIn("declined = outcome == DISPATCH_DECLINED", source)
 
     @staticmethod
     def _make_realistic_decline(subject, row):
@@ -1476,7 +1784,8 @@ class NaturalDeclineTests(unittest.TestCase):
         """
 
         row["skill_dispatched"] = False
-        # wakeUrl ships in every read-mode tandem_status response regardless of arming,
+        # a read-mode tandem_status response carries a wakeUrl whenever a wake transport
+        # is running -- true in every trial here, absent under stdio -- regardless of arming,
         # and a declining model still calls tandem_status to answer the prose prompt --
         # both real stored decline rows show this true.
         row["status_succeeded"] = True
@@ -1579,7 +1888,8 @@ class NaturalDeclineTests(unittest.TestCase):
         observations = {key: False for key in subject.OBSERVATION_FIELDS}
         observations.update(
             {field: True for field in subject.PRECONDITION_FIELDS},
-            # True on a real decline: wakeUrl rides along in every status response.
+            # True on a real decline: the status response carries a wakeUrl whenever a
+            # wake transport is running, which it is in every trial.
             status_succeeded=True,
         )
 
@@ -1644,14 +1954,58 @@ class NaturalDeclineTests(unittest.TestCase):
 
     def test_silent_monitor_teardown_is_vacuous_only_when_the_skill_was_declined(self):
         subject = load_subject()
-        source = inspect.getsource(subject.ConptyTrialDriver.capture)
 
-        marker = source.index("silent_monitor_teardown_verified")
-        window = source[marker : marker + 400]
-        # A dispatching trial with no observed monitor pid must stay unproven; only a
-        # decline may satisfy this with an empty list.
-        self.assertIn("DISPATCH_DECLINED", window)
-        self.assertIn("bool(silent_pids)", window)
+        def proven(pids, classification, alive=()):
+            return subject.silent_monitor_teardown_proven(
+                pids,
+                dispatch_classification=classification,
+                pid_alive=lambda pid: pid in alive,
+            )
+
+        # A decline spawns no plugin monitor, so an empty list is the honest observation.
+        self.assertTrue(proven([], subject.DISPATCH_DECLINED))
+        # A dispatching trial with no observed pid stays unproven -- that is the case the
+        # non-empty requirement exists for, and the vacuity must not reach it.
+        self.assertFalse(proven([], subject.DISPATCH_OBSERVED))
+        self.assertFalse(proven([], None))
+        # Observed pids must actually be gone, on either branch.
+        self.assertTrue(proven([4321], subject.DISPATCH_OBSERVED))
+        self.assertFalse(proven([4321], subject.DISPATCH_OBSERVED, alive={4321}))
+        self.assertFalse(proven([4321], subject.DISPATCH_DECLINED, alive={4321}))
+
+    def test_a_rig_failure_is_named_beside_the_verdict_without_changing_it(self):
+        """A broken injector and a model that never polled produced the same row.
+
+        Both leave `inbox_checked` false, and the reason lived only in a `server_log` blob
+        nothing reads. Naming it must not make it a gate input, though: a rig failure that
+        could veto a shape would be a worse defect than the anonymity.
+        """
+
+        subject = load_subject()
+        evidence = passing_evidence(subject)
+        clean = evaluate(subject, evidence)
+
+        for row in evidence:
+            if row["id"] == "plugin-natural-1":
+                row["notes"] = "rig: wake-injection-failed (exit 1)"
+        named = evaluate(subject, evidence)
+
+        self.assertEqual(named["verdict"], clean["verdict"])
+        self.assertEqual(named["plugin_only"]["reasons"], clean["plugin_only"]["reasons"])
+        self.assertIn(
+            "plugin-natural-1: rig: wake-injection-failed (exit 1)",
+            named["plugin_only"]["rig_failures"],
+        )
+        self.assertEqual(clean["plugin_only"]["rig_failures"], [])
+
+    def test_the_settle_window_is_long_enough_to_absorb_a_hook_write(self):
+        subject = load_subject()
+
+        # Pinned by value, not just by name: the previous assertion was
+        # `assertIn("DISPATCH_SETTLE_SECONDS", source)`, which passes at 0.15 -- short
+        # enough that a hook subprocess's write would lose the race and a real dispatch
+        # would be recorded as a decline.
+        self.assertGreaterEqual(subject.DISPATCH_SETTLE_SECONDS, 15.0)
 
     def test_transcript_health_fields_are_named_not_positionally_sliced(self):
         subject = load_subject()
