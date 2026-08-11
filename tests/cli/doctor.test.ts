@@ -1330,15 +1330,16 @@ describe("evaluatePushPath", () => {
     // it — naming only the launch flag would send the reader to a flag with no
     // server entry behind it.
     expect(out?.fix).toMatch(/--with-channel-shim/);
-    expect(out?.fix).toMatch(/not several/i);
+    expect(out?.fix).toMatch(/choose one setup route where possible/i);
+    expect(out?.fix).toMatch(/plugin[^.]*built-in Monitor[^.]*both automatically/i);
+    expect(out?.fix).toMatch(/TaskStop/);
     expect(out?.data).toMatchObject({ subscribers: 0, eventCount: 0 });
   });
 
-  it("qualifies the leading remedy, and redirects to the ONE fallback that survives it", () => {
-    // The watch leads because it needs no install — but it needs a `Monitor`
-    // tool, and the same remote gate governs the plugin monitor, so the two fail
-    // together. The first version of this fix said "use one of the others",
-    // which moved a Monitor-less reader from one dead remedy to another.
+  it("qualifies the leading remedy and always names the Monitor-free fallback", () => {
+    // The watch leads because it needs no install, but it needs a `Monitor`
+    // tool. The shim is the only remedy that avoids every Monitor precondition;
+    // the plugin shares the account gate but not the Windows Git Bash one.
     //
     // Asserted as "the sentence naming Monitor also redirects", so a reword of
     // either clause survives while deleting either one fails.
@@ -1351,7 +1352,9 @@ describe("evaluatePushPath", () => {
     const redirect = out?.fix?.split(/(?<=\.)\s+/).find((s) => /has none/i.test(s));
     expect(redirect, "nothing tells the reader what to do when the tool is absent").toBeDefined();
     expect(redirect).toMatch(/shim/i);
-    expect(redirect, "must warn that the plugin shares the gate").toMatch(/will not help/i);
+    expect(out?.fix, "must warn that the plugin shares the account gate").toMatch(
+      /plugin monitor shares (?:that|the) per-account (?:feature )?gate/i,
+    );
     // And it must not send them to the path behind the same gate.
     expect(out?.fix).not.toMatch(/use one of the others/i);
   });
@@ -1367,12 +1370,22 @@ describe("evaluatePushPath", () => {
     expect(out?.fix).toMatch(/per account/i);
   });
 
+  it("distinguishes the shared account gate from the Monitor-only Git Bash requirement", () => {
+    const out = evaluatePushPath({ subscribers: 0, eventCount: 0, lastEventAt: null });
+
+    expect(out?.fix).toMatch(/on Windows it also needs Git Bash/i);
+    expect(out?.fix).toMatch(/plugin monitor shares (?:that|the) per-account (?:feature )?gate/i);
+    expect(out?.fix).toMatch(/plugin monitor does not require Git Bash on Windows/i);
+    expect(out?.fix).toMatch(/PowerShell/i);
+  });
+
   it("passes without alarm when attached but nothing delivered yet", () => {
     const out = evaluatePushPath({ subscribers: 2, eventCount: 0, lastEventAt: null });
     expect(out?.status).toBe("pass");
     // Expected in Solo (the Solo filter sits above the heartbeat) and before any
     // edit — must not read as a fault.
     expect(out?.message).toMatch(/Solo/);
+    expect(out?.message).toMatch(/NOT that this Claude session is covered/);
     expect(out?.data).toMatchObject({ subscribers: 2, eventCount: 0 });
   });
 
@@ -1385,7 +1398,8 @@ describe("evaluatePushPath", () => {
     expect(out?.status).toBe("pass");
     expect(out?.message).toMatch(/4[01]s ago/);
     // The load-bearing disclaimer: an attached consumer may be inert.
-    expect(out?.message).toMatch(/NOT that Claude sees them/);
+    expect(out?.message).toMatch(/NOT that this Claude session is covered/);
+    expect(out?.message).toMatch(/or saw them/);
   });
 
   it("tolerates a malformed push object rather than throwing", () => {

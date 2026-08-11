@@ -1,0 +1,119 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+function readShippedSkill(): string {
+  return readFileSync(new URL("../skills/tandem/SKILL.md", import.meta.url), "utf8");
+}
+
+function readRepoText(relativePath: string): string {
+  return readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
+}
+
+function gettingWokenSection(skill: string): string {
+  const section = /^## Getting Woken While Idle\r?\n([\s\S]*?)(?=^## )/m.exec(skill)?.[1];
+  expect(section, "the shipped skill has no idle-wake instructions").toBeDefined();
+  return section ?? "";
+}
+
+/**
+ * Instruction guard: this tests the behavior Claude is told to perform. It is
+ * intentionally lexical because SKILL.md is the public interface delivered to
+ * the host; there is no executable implementation behind these instructions.
+ */
+function expectPerSessionAutoArmContract(skill: string): void {
+  const wake = gettingWokenSection(skill);
+
+  expect(skill).toMatch(/^version:\s*10$/m);
+  expect(wake).toMatch(/hand-started session/i);
+  expect(wake).toMatch(/first successful read-mode `tandem_status`/i);
+  expect(wake).toMatch(/read `wakeUrl`/i);
+  expect(wake).toContain(
+    "Monitor({ ws: { url: <wakeUrl from tandem_status> }, persistent: true })",
+  );
+  expect(wake).toMatch(/Arm it at most once per session/i);
+  expect(wake).toMatch(/Do not use Tandem's process-global subscriber count/i);
+  expect(wake).not.toMatch(/only if Tandem's tool output has told you nothing is subscribed/i);
+
+  expect(wake).toMatch(/Do not arm one if Tandem launched you/i);
+  expect(wake).toMatch(/wake tells you \*that\* something happened, never \*what\*/i);
+  expect(wake).toMatch(/Always call `tandem_checkInbox`/i);
+  expect(wake).toMatch(/Keep polling every 2-3 tool calls regardless/i);
+  expect(wake).toMatch(/If every wake arrives twice/i);
+  expect(wake).toMatch(/(?:^|[.!?]\s+)Stop your watch with `TaskStop` and keep polling/i);
+  expect(wake).toMatch(
+    /If the Monitor tool is absent or the attempt fails, say so once and stop trying/i,
+  );
+  expect(wake).toMatch(/channel shim/i);
+}
+
+describe("shipped Tandem skill instruction contract", () => {
+  it("attempts one session-local persistent wake watch on first hand-started use", () => {
+    expectPerSessionAutoArmContract(readShippedSkill());
+  });
+
+  it("rejects the version-9 process-global subscriber precondition", () => {
+    const shipped = readShippedSkill();
+    const mutant = shipped.replace(
+      "Do not use Tandem's process-global subscriber count to decide whether this session is covered.",
+      "Only arm if Tandem's tool output has told you nothing is subscribed.",
+    );
+
+    expect(mutant, "the mutation did not alter the guarded instruction").not.toBe(shipped);
+    expect(() => expectPerSessionAutoArmContract(mutant)).toThrow();
+  });
+
+  it.each([
+    [
+      "the once-per-session limit",
+      "Arm it at most once per session.",
+      "Arm a persistent watch for this turn.",
+    ],
+    [
+      "the failed-attempt stop rule",
+      "If the Monitor tool is absent or the attempt fails, say so once and stop trying.",
+      "If the Monitor tool is absent or the attempt fails, retry it on every turn.",
+    ],
+    [
+      "the duplicate-watch stand-down direction",
+      "Stop your watch with `TaskStop` and keep polling",
+      "Never stop your watch with `TaskStop`; keep polling",
+    ],
+  ])("rejects a mutation that reverses %s", (_contract, from, to) => {
+    const shipped = readShippedSkill();
+    const mutant = shipped.replace(from, to);
+
+    expect(mutant, "the mutation did not alter the guarded instruction").not.toBe(shipped);
+    expect(() => expectPerSessionAutoArmContract(mutant)).toThrow();
+  });
+
+  it.each([
+    ["shipped skill", readShippedSkill()],
+    ["README", readRepoText("README.md")],
+    ["troubleshooting guide", readRepoText("docs/troubleshooting.md")],
+  ])("%s distinguishes the account gate from the Git Bash requirement", (_surface, text) => {
+    expect(text).toMatch(
+      /(?:built-in )?Monitor tool(?:(?!\n\n)[\s\S]){0,250}(?:needs|requires|wants) Git Bash|on Windows(?:(?!\n\n)[\s\S]){0,150}(?:needs|requires|wants) Git Bash/i,
+    );
+    expect(text).toMatch(
+      /plugin monitor shares (?:that|the) (?:same )?per-account (?:feature )?gate/i,
+    );
+    expect(text).toMatch(/plugin monitor does not require Git Bash on Windows/i);
+    expect(text).toMatch(/PowerShell/i);
+  });
+
+  it.each([
+    ["README", readRepoText("README.md")],
+    ["troubleshooting guide", readRepoText("docs/troubleshooting.md")],
+  ])("%s describes the three transports as routes with automatic overlap", (_surface, text) => {
+    expect(text).toMatch(/choose one setup route where possible/i);
+    expect(text).toMatch(/plugin[^.]*built-in Monitor[^.]*start both automatically/i);
+    expect(text).not.toMatch(
+      /want exactly one of them|Use ONE of the three|alternatives — not layers/i,
+    );
+  });
+
+  it("does not narrow automatic plugin/watch overlap to double-installed sessions", () => {
+    const troubleshooting = readRepoText("docs/troubleshooting.md");
+    expect(troubleshooting).toMatch(/plugin-only or double-installed session/i);
+  });
+});

@@ -305,21 +305,23 @@ Claude can check the connection with `tandem_status`, which reports open documen
 
 ### Real-Time Push (Recommended)
 
-Chat messages, annotation accepts/dismisses, and text selections can push to Claude in real time rather than waiting for it to poll. Sessions Tandem launches for you already get this and need no setup; a session you start yourself needs one of three things — see [Real-time updates](../README.md#real-time-updates).
+Chat messages, annotation accepts/dismisses, and text selections can push to Claude in real time rather than waiting for it to poll. Sessions Tandem launches for you already get this and need no setup. In a session you start yourself, first Tandem use runs the bundled skill; after its first successful read-mode `tandem_status`, the skill automatically makes one persistent built-in Monitor attempt using the returned wake-stream address.
 
-The easier is the **Tandem plugin**, which needs no flag — install it once and every `claude` you start afterwards picks it up, though it begins watching only when Claude first uses Tandem's skill in that session. Ask for Tandem by name and it starts; a session that has never heard of Tandem is not listening yet. Start `claude` from a terminal, since its monitor uses that session's program path to find Node.
+The **built-in Monitor watch** needs no installation or flag and lasts only for that session. It requires a Claude Code account where Monitor is enabled and, on Windows, Git Bash. Asking Claude to watch is recovery if the automatic attempt was skipped, not a required setup step.
 
-The other is the **channel flag**, on every session:
+The **Tandem plugin** also needs no flag — install it once and every `claude` you start afterwards picks it up, though it begins watching only when Claude first uses Tandem's skill in that session. Ask for Tandem by name and it starts; a session that has never heard of Tandem is not listening yet. Start `claude` from a terminal, since its monitor uses that session's program path to find Node.
+
+The **channel flag** is the third route and must be present on every session:
 
 ```bash
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-Use one or the other, not both, or every event arrives twice. The flag is Claude Code's marker for unstable APIs; it stays necessary for this transport regardless of how the Channels API matures, because the allowlist that would make it optional covers plugins only and `tandem-channel` is a plain MCP server. It also has no effect outside an interactive session.
+Choose one setup route where possible. A session with the plugin and built-in Monitor available may start both automatically on first Tandem use. Wakes carry no message content and the inbox de-duplicates what Claude reads, but the overlap can waste a turn; if doubled wakes make it visible, ask Claude to stop the built-in watch with `TaskStop`. The channel flag is Claude Code's marker for unstable APIs; it stays necessary for this transport regardless of how the Channels API matures, because the allowlist that would make it optional covers plugins only and `tandem-channel` is a plain MCP server. It also has no effect outside an interactive session.
 
-### Polling Fallback
+### Polling Remains Authoritative
 
-If channels aren't available, use the `/loop` skill in Claude Code to poll for messages:
+Push wakes an idle Claude, but it can be dropped or rate-limited and never carries the message itself. Claude should keep calling `tandem_checkInbox` during active work. If no push route is available and you want periodic checks while otherwise idle, use the `/loop` skill in Claude Code:
 
 ```
 /loop 30s check tandem inbox and respond to any new messages
@@ -334,7 +336,7 @@ Two tools form the core of how Claude and the user communicate:
 - **`tandem_checkInbox`** — Claude calls this to see user actions: chat messages, annotation accepts/dismisses, text selections, and document switches. Returns everything since the last check.
 - **`tandem_reply`** — Claude sends a chat message back to the user. Appears in the Chat panel.
 
-With channel push active, Claude receives events automatically without needing to poll `tandem_checkInbox`.
+Real-time push is a best-effort wake signal, not the authority on what Claude sees. Wakes can be dropped or rate-limited and carry no message content, so Claude still polls `tandem_checkInbox`; that inbox remains authoritative and de-duplicates items already pushed.
 
 ### Session Handoff
 
