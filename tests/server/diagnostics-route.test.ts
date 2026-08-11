@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { DoctorReport, DoctorResult } from "../../src/cli/doctor.js";
 import {
@@ -85,6 +87,52 @@ describe("GET /api/diagnostics — loopback happy path", () => {
     expect(report.ok).toBe(true);
   });
 
+  it("emits exactly the allowed key set — no hostname, username, or home path", async () => {
+    // This payload reaches a public GitHub issue (Copy Diagnostics puts it on
+    // the clipboard; Report-a-bug prefills it into an issue body), so the key
+    // set is a privacy contract rather than a convenience. Asserting the whole
+    // set — instead of `not.toContain(os.hostname())`, which flakes whenever
+    // CI's hostname is a common substring — is what catches an accidental
+    // `hostname` / `homedir` / `env` field added to `collectHostInfo`.
+    const collect = vi.fn(async () => makeReport([result("node-version", "pass")]));
+    const res = makeMockRes();
+
+    await makeHandler(collect)(makeMockReq("127.0.0.1"), res, () => {});
+
+    expect(Object.keys(res._body as object).sort()).toEqual([
+      "arch",
+      "cpuCount",
+      "cpuModel",
+      "freeMemoryMb",
+      "nodeVersion",
+      "osRelease",
+      "osVersion",
+      "platform",
+      "report",
+      "tauriSidecar",
+      "totalMemoryMb",
+      "transport",
+      "version",
+    ]);
+  });
+
+  it("types the optional host fields when present, without pinning values", async () => {
+    // CI containers legitimately omit cpuModel/cpuCount (`os.cpus()` returns []),
+    // so assert shape rather than content.
+    const res = makeMockRes();
+    await makeHandler(async () => makeReport([]))(makeMockReq("127.0.0.1"), res, () => {});
+    const body = res._body as Record<string, unknown>;
+
+    for (const key of ["osRelease", "osVersion", "cpuModel"]) {
+      if (body[key] !== undefined) expect(typeof body[key]).toBe("string");
+    }
+    for (const key of ["cpuCount", "totalMemoryMb", "freeMemoryMb"]) {
+      if (body[key] !== undefined) expect(typeof body[key]).toBe("number");
+    }
+    // os.version() is bounded so a long kernel banner can't dominate the report.
+    if (typeof body.osVersion === "string") expect(body.osVersion.length).toBeLessThanOrEqual(120);
+  });
+
   it("threads the live ports into the collector", async () => {
     const collect = vi.fn(async () => makeReport([]));
     const handler = makeHandler(collect);
@@ -92,6 +140,85 @@ describe("GET /api/diagnostics — loopback happy path", () => {
     await handler(makeMockReq("::1"), makeMockRes(), () => {});
 
     expect(collect).toHaveBeenCalledExactlyOnceWith({ wsPort: 1234, mcpPort: 5678 });
+  });
+});
+
+describe("GET /api/diagnostics — home-path redaction", () => {
+  it("replaces the home directory with ~ in messages and fixes", async () => {
+    // Several doctor checks interpolate the app-data dir, which sits under the
+    // user's home and therefore carries their username — including on a PASSING
+    // check that fires on the common first run.
+    const home = os.homedir();
+    const dir = path.join(home, "AppData", "Local", "tandem", "annotations");
+    const collect = async () =>
+      makeReport([
+        {
+          check: "annotation-store",
+          status: "warn",
+          message: `Annotation store dir not yet created (${dir})`,
+          fix: `Check permissions on ${dir}`,
+          // The `data` bag is free-form and the real annotation-store check puts
+          // the raw directory in it. A message-only redaction leaves the
+          // username on the wire — this is why the assertion below stringifies
+          // the WHOLE body rather than checking the two obvious fields.
+          data: { dir, docCount: 0, nested: { paths: [dir] } },
+        },
+      ]);
+    const res = makeMockRes();
+
+    await makeHandler(collect)(makeMockReq("127.0.0.1"), res, () => {});
+
+    const wire = JSON.stringify(res._body);
+    expect(wire).not.toContain(home);
+    const [only] = (res._body as { report: DoctorReport }).report.results;
+    expect(only.message).toContain("~");
+    expect(only.fix).toContain("~");
+    // The rest of the path must survive — redaction, not deletion.
+    expect(only.message).toContain("annotations");
+    // Deep scrub reaches nested objects and arrays inside `data`.
+    const data = only.data as { dir: string; nested: { paths: string[] } };
+    expect(data.dir.startsWith("~")).toBe(true);
+    expect(data.nested.paths[0].startsWith("~")).toBe(true);
+  });
+
+  it("scrubs a collector-level error message", async () => {
+    const home = os.homedir();
+    const collect = async () => ({
+      ...makeReport([]),
+      error: `EACCES: permission denied, open '${path.join(home, "secret.json")}'`,
+    });
+    const res = makeMockRes();
+
+    await makeHandler(collect)(makeMockReq("127.0.0.1"), res, () => {});
+
+    const { error } = (res._body as { report: DoctorReport }).report;
+    expect(error).not.toContain(home);
+    expect(error).toContain("~");
+  });
+
+  it("does not swallow an unrelated path that merely starts with the home string", async () => {
+    // With home = "/root", a naive replace turns "/rootfs/x" into "~fs/x".
+    const home = os.homedir();
+    const decoy = `${home}fs/mount/data`;
+    const collect = async () => makeReport([result("ports", "pass", `scanned ${decoy}`)]);
+    const res = makeMockRes();
+
+    await makeHandler(collect)(makeMockReq("127.0.0.1"), res, () => {});
+
+    const [only] = (res._body as { report: DoctorReport }).report.results;
+    expect(only.message).toBe(`scanned ${decoy}`);
+  });
+
+  it("leaves messages without a home path untouched", async () => {
+    const collect = async () =>
+      makeReport([result("ports", "pass", "Hocuspocus :3478 and MCP :3479 are listening")]);
+    const res = makeMockRes();
+
+    await makeHandler(collect)(makeMockReq("127.0.0.1"), res, () => {});
+
+    const [only] = (res._body as { report: DoctorReport }).report.results;
+    expect(only.message).toBe("Hocuspocus :3478 and MCP :3479 are listening");
+    expect(only.fix).toBeUndefined();
   });
 });
 

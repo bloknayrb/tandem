@@ -1,7 +1,9 @@
+import os from "node:os";
 import type { Request, Response } from "express";
 import type { DoctorReport, RunDoctorOptions } from "../../../cli/doctor.js";
 import { runDoctor, summarizeDoctorResults } from "../../../cli/doctor.js";
 import { isLoopback } from "../../auth/middleware.js";
+import { collectHostInfo } from "../host-info.js";
 import type { Handler } from "./_shared.js";
 
 /**
@@ -57,13 +59,89 @@ export function filterDevRepoChecks(report: DoctorReport): DoctorReport {
   };
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Recursively apply `scrub` to every string in a free-form value. */
+function scrubDeep(value: unknown, scrub: (s: string) => string): unknown {
+  if (typeof value === "string") return scrub(value);
+  if (Array.isArray(value)) return value.map((v) => scrubDeep(v, scrub));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, scrubDeep(v, scrub)]),
+    );
+  }
+  return value;
+}
+
+/**
+ * Replace the user's home directory with `~` everywhere in the report.
+ *
+ * Several checks interpolate absolute app-data paths — `doctor.ts` lines ~1420
+ * ("Annotation store dir not yet created (${dir})", a *passing* check on the
+ * common first run), ~1434, ~1497 and ~1535 — and `resolveAppDataDir()`
+ * resolves those under `C:\Users\<username>\AppData\Local\…` or
+ * `/Users/<username>/Library/…`. The username is the leak.
+ *
+ * This mattered less when Copy Diagnostics was the only consumer: a human chose
+ * what to paste. The Report-a-bug link prefills a public issue body, which turns
+ * that review step into an opt-out, so the redaction happens here instead.
+ *
+ * Scrubs the per-check `data` bag too, not just `message`/`fix`. `data` is
+ * free-form and several checks put the raw directory in it (`annotation-store`
+ * carries `data.dir`), so a message-only pass leaves the path on the wire — the
+ * formatter does not print `data`, but the route's own response is the thing
+ * being promised as redacted.
+ *
+ * Applied to the HTTP route ONLY. The `tandem_diagnostics` MCP tool serves an
+ * agent that may need to act on the real path, and it does not feed an issue
+ * form. This does not change the route's loopback posture — PIDs, ports and
+ * config URLs still make the full report unfit for a LAN caller.
+ */
+export function redactHomePaths(report: DoctorReport): DoctorReport {
+  let home: string;
+  try {
+    home = os.homedir();
+  } catch {
+    return report;
+  }
+  // Guard against a root/empty homedir, where a blind replace would corrupt
+  // every absolute path in the report.
+  if (!home || home.length < 2 || home === "/" || /^[A-Za-z]:[/\\]?$/.test(home)) return report;
+
+  const trimmed = home.replace(/[/\\]+$/, "");
+  const variants = [...new Set([trimmed, trimmed.replace(/\\/g, "/")])];
+  // Windows paths are case-insensitive and the drive letter's case varies by
+  // which API produced the string.
+  const flags = process.platform === "win32" ? "gi" : "g";
+  // The lookahead requires the next character (if any) to be a separator, so a
+  // short home like `/root` cannot swallow the prefix of an unrelated
+  // `/rootfs/...`.
+  const pattern = new RegExp(`(?:${variants.map(escapeRegExp).join("|")})(?![^/\\\\])`, flags);
+  const scrub = (s: string): string => s.replace(pattern, "~");
+
+  return {
+    ...report,
+    error: report.error ? scrub(report.error) : report.error,
+    results: report.results.map((res) => ({
+      ...res,
+      message: scrub(res.message),
+      ...(res.fix ? { fix: scrub(res.fix) } : {}),
+      ...(res.data ? { data: scrubDeep(res.data, scrub) as Record<string, unknown> } : {}),
+    })),
+  };
+}
+
 /**
  * GET /api/diagnostics — embedded `tandem doctor` for the client's
  * "Copy diagnostics" button.
  *
- * Loopback-only, unconditionally: the report embeds absolute paths (which
- * include the username) and PIDs — and the unfiltered collector additionally
- * sees MCP config URLs. This is deliberately stricter than /api/info's
+ * Loopback-only, unconditionally: the report embeds absolute paths and PIDs —
+ * and the unfiltered collector additionally sees MCP config URLs. (Home-dir
+ * paths are `~`-redacted by {@link redactHomePaths} before they go on the wire,
+ * because this payload reaches a public issue body; that narrows the leak, it
+ * does not change the posture.) This is deliberately stricter than /api/info's
  * per-field stripping — there is no useful LAN subset of this report. The
  * hand-rolled check predates #1293, which made `assertLoopbackForMutation`
  * unconditional; either would work now, and this one is kept only because a
@@ -92,15 +170,12 @@ export function makeDiagnosticsHandler(deps: DiagnosticsHandlerDeps): Handler {
           inFlight = null;
         });
       }
-      const report = filterDevRepoChecks(await inFlight);
+      const report = redactHomePaths(filterDevRepoChecks(await inFlight));
       res.json({
         report,
         version: deps.version,
         transport: deps.transport,
-        platform: process.platform,
-        arch: process.arch,
-        nodeVersion: process.version,
-        tauriSidecar: process.env.TANDEM_TAURI_SIDECAR === "1",
+        ...collectHostInfo(),
       });
     } catch (err) {
       // Check crashes propagate out of runDoctor (only runDoctorCli converts

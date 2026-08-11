@@ -1,11 +1,10 @@
 <script lang="ts">
-import { API_DIAGNOSTICS } from "../../../shared/api-paths";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { loadInvoke } from "../../cowork/cowork-invoke";
 import { createAppInfo } from "../../hooks/useAppInfo.svelte";
 import { isCrashReportingEnabled } from "../../sentry";
-import { type DiagnosticsPayload, formatDiagnostics } from "../../utils/diagnostics";
-import { API_BASE } from "../../utils/fileUpload";
+import { formatDiagnostics, summarizeUserAgent } from "../../utils/diagnostics";
+import { fetchDiagnostics } from "../../utils/diagnostics-fetch";
 import { openServerPath } from "../../utils/server-paths";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
@@ -24,21 +23,24 @@ async function handleCopyDiagnostics(): Promise<void> {
   diagLoading = true;
   let text: string;
   try {
-    let res: Response;
-    try {
-      res = await fetch(`${API_BASE}${API_DIAGNOSTICS}`);
-    } catch {
-      ctx.notify("error", "Couldn't reach the server — is it running?");
-      return;
-    }
-    if (!res.ok) {
-      // The server WAS reached — an "is it running?" message would misdirect.
-      ctx.notify("error", "Diagnostics failed on the server — try `tandem doctor` in a terminal");
+    // No AbortSignal: this is the explicit-click path and has always been
+    // untimed, with "Collecting…" standing in for progress.
+    const result = await fetchDiagnostics();
+    if (!result.ok) {
+      ctx.notify(
+        "error",
+        result.reason === "unreachable"
+          ? "Couldn't reach the server — is it running?"
+          : // The server WAS reached — an "is it running?" message would misdirect.
+            "Diagnostics failed on the server — try `tandem doctor` in a terminal",
+      );
       return;
     }
     // Format before entering the clipboard try, so a malformed payload isn't
     // misreported as a clipboard-permission problem.
-    text = formatDiagnostics((await res.json()) as DiagnosticsPayload);
+    text = formatDiagnostics(result.payload, {
+      browser: summarizeUserAgent(navigator.userAgent),
+    });
   } catch {
     ctx.notify("error", "Diagnostics failed on the server — try `tandem doctor` in a terminal");
     return;

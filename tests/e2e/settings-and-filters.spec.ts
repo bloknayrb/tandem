@@ -214,7 +214,14 @@ test("settings dialog sections and About panel reflect the redesign closeout", a
   await expect(about).toContainText("sessions");
   await expect(about).toContainText("Token rotated");
   await expect(modal.locator("[data-testid='settings-modal-view-changelog-btn']")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Report a bug" })).toBeVisible();
+  // The href is upgraded in place once the hover-primed diagnostics prefetch
+  // lands. Assert only what holds in BOTH states — a `body=` assertion would
+  // depend on a real `runDoctor` (npm ls -g, port probes) finishing in time and
+  // would flake on a loaded runner. The prefill itself is unit-tested in
+  // tests/client/bug-report-url.test.ts.
+  const reportBug = page.getByRole("link", { name: "Report a bug" });
+  await expect(reportBug).toBeVisible();
+  await expect(reportBug).toHaveAttribute("href", /\/issues\/new/);
 });
 
 test("selection toolbar toggle persists and drives toolbar visibility", async ({ page }) => {
