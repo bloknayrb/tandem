@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DoctorReport, DoctorResult } from "../../src/cli/doctor.js";
 import {
   filterDevRepoChecks,
@@ -150,6 +150,12 @@ describe("GET /api/diagnostics — loopback happy path", () => {
 });
 
 describe("GET /api/diagnostics — home-path redaction", () => {
+  // Failure-safe: an inline unstub at the end of a test does not run when the
+  // test fails, which would leak a fake app-data root into later cases.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("replaces the home directory with ~ in messages and fixes", async () => {
     // Several doctor checks interpolate the app-data dir, which sits under the
     // user's home and therefore carries their username — including on a PASSING
@@ -218,7 +224,6 @@ describe("GET /api/diagnostics — home-path redaction", () => {
     expect(JSON.stringify(body)).not.toContain("/srv/exports/bryan");
     const [only] = report.results;
     expect(only.message).toContain("<app-data>/annotations");
-    vi.unstubAllEnvs();
   });
 
   it("redacts a user path that reached the report inside a raw fs error", async () => {
@@ -242,12 +247,19 @@ describe("GET /api/diagnostics — home-path redaction", () => {
     expect(only.message).toContain("/home/[user]/.local/share/tandem");
   });
 
-  it("does not swallow an unrelated path that merely starts with the home string", async () => {
-    // With home = "/root", a naive replace turns "/rootfs/x" into "~fs/x".
-    const home = os.homedir();
-    const decoy = `${home}fs/mount/data`;
-    const collect = async () => makeReport([result("ports", "pass", `scanned ${decoy}`)]);
-    const { report } = await invoke(collect);
+  it("does not swallow an unrelated path that merely starts with a redaction root", async () => {
+    // A naive replace turns "/var/lib/tandemfs/..." into "<app-data>fs/...".
+    // The root is stubbed rather than derived from `os.homedir()`: a decoy built
+    // from the real home is environment-dependent — under `/root` it is
+    // `/rootfs/...` (untouched), but under `/home/runner` it is
+    // `/home/runnerfs/...`, which the generic `/home/<x>` pass redacts on
+    // purpose. `tests/shared/redact-user-paths.test.ts` covers the home-root
+    // boundary deterministically.
+    vi.stubEnv("TANDEM_APP_DATA_DIR", "/var/lib/tandem");
+    const decoy = "/var/lib/tandemfs/mount/data";
+    const { report } = await invoke(async () =>
+      makeReport([result("ports", "pass", `scanned ${decoy}`)]),
+    );
 
     const [only] = report.results;
     expect(only.message).toBe(`scanned ${decoy}`);
