@@ -5,7 +5,7 @@ This module deliberately separates two claims that cannot share a setup:
 * ``managed-double`` proves a setup-managed v9 skill was byte-for-byte refreshed
   to the candidate skill before the server reported ready, then exercises the
   first-use behavior with the plugin also present.
-* ``plugin-only`` loads an explicit candidate-v10 plugin fixture and exercises
+* ``plugin-only`` loads an explicit candidate-skill plugin fixture and exercises
   behavior only. Tandem cannot refresh Claude Code's plugin cache, so plugin-only
   evidence is rejected if it claims PR2 performed a refresh.
 
@@ -119,6 +119,11 @@ ATTESTATION_FIELD = "capture_attestation"
 NOTE_SEPARATOR = "; "
 RIG_NOTE_PREFIX = "rig: "
 ARCHIVED_ATTESTATION_REASON_FIELD = "attestation_void_reason"
+# The managed skill the fixture seeds, taken from tag v0.21.0: the last shipped version
+# that lacked the auto-arm instruction, which is what makes a refresh to the candidate
+# observable. Pinned; the candidate is only required to be newer.
+SEEDED_SKILL_VERSION = 9
+SEEDED_SKILL_TAG = "v0.21.0"
 ATTESTATION_KEY_FILE = "capture-attestation.key"
 AUTH_TOKEN_FILE = "acceptance-auth-token.txt"
 CAPTURE_ARTIFACT_ROLES = frozenset(
@@ -926,10 +931,19 @@ def snapshot_skill_fixtures(root: Path, repo: Path) -> dict[str, str]:
     candidate_path = repo / "skills" / "tandem" / "SKILL.md"
     candidate = candidate_path.read_bytes()
     candidate_text = candidate.decode("utf-8")
-    if _read_skill_version(candidate_text) != 10:
-        raise RuntimeError(f"candidate skill must be version 10: {candidate_path}")
+    # Newer than the seeded baseline, not one exact number. The claim this fixture
+    # supports is "the managed copy was refreshed from v9 to the candidate before the
+    # server reported ready", which needs the candidate to be *newer* -- pinning the
+    # literal 10 made every future bump of the shipped skill fail the harness instead,
+    # and #1397 bumping it to 11 is what surfaced that.
+    candidate_version = _read_skill_version(candidate_text)
+    if candidate_version is None or candidate_version <= SEEDED_SKILL_VERSION:
+        raise RuntimeError(
+            f"candidate skill must be newer than v{SEEDED_SKILL_VERSION}, "
+            f"got {candidate_version}: {candidate_path}"
+        )
     proc = subprocess.run(
-        ["git", "show", "v0.21.0:skills/tandem/SKILL.md"],
+        ["git", "show", f"{SEEDED_SKILL_TAG}:skills/tandem/SKILL.md"],
         cwd=repo,
         check=False,
         stdout=subprocess.PIPE,
@@ -937,15 +951,17 @@ def snapshot_skill_fixtures(root: Path, repo: Path) -> dict[str, str]:
     )
     if proc.returncode != 0:
         raise RuntimeError(
-            "cannot read immutable v9 fixture from tag v0.21.0: "
-            + proc.stderr.decode("utf-8", errors="replace")
+            f"cannot read immutable v{SEEDED_SKILL_VERSION} fixture from tag "
+            f"{SEEDED_SKILL_TAG}: " + proc.stderr.decode("utf-8", errors="replace")
         )
     v9 = proc.stdout
-    if _read_skill_version(v9.decode("utf-8")) != 9:
-        raise RuntimeError("v0.21.0 skill fixture is not version 9")
+    if _read_skill_version(v9.decode("utf-8")) != SEEDED_SKILL_VERSION:
+        raise RuntimeError(
+            f"{SEEDED_SKILL_TAG} skill fixture is not version {SEEDED_SKILL_VERSION}"
+        )
     fixture_dir = root / "fixtures"
     _safe_mutation_path(root, fixture_dir / "managed-v9-SKILL.md").write_bytes(v9)
-    _safe_mutation_path(root, fixture_dir / "candidate-v10-SKILL.md").write_bytes(candidate)
+    _safe_mutation_path(root, fixture_dir / "candidate-SKILL.md").write_bytes(candidate)
     hashes = {"v9": _sha256(v9), "candidate": _sha256(candidate)}
     _safe_mutation_path(root, fixture_dir / "skill-hashes.json").write_text(
         json.dumps(hashes, indent=2) + "\n", encoding="utf-8", newline=""
@@ -986,7 +1002,7 @@ def build_plugin_fixture(root: Path, repo: Path) -> Path:
     candidate = (repo / "skills" / "tandem" / "SKILL.md").read_text(encoding="utf-8")
     instrumented = (
         candidate.rstrip()
-        + "\n\n<!-- acceptance-source: plugin-only-candidate-v10; fixture only -->\n"
+        + "\n\n<!-- acceptance-source: plugin-only-candidate; fixture only -->\n"
     )
     _safe_mutation_path(root, plugin / "skills" / "tandem" / "SKILL.md").write_text(
         instrumented + "\n", encoding="utf-8", newline=""

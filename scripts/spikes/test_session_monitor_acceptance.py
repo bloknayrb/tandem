@@ -1389,9 +1389,18 @@ class FixtureSafetyTests(unittest.TestCase):
             subject.prepare_fixture_root(root, repo)
 
             self.assertIn("version: 9", (root / "fixtures" / "managed-v9-SKILL.md").read_text(encoding="utf-8"))
-            self.assertIn("version: 10", (root / "fixtures" / "candidate-v10-SKILL.md").read_text(encoding="utf-8"))
+            # The candidate is whatever the repository ships, asserted against the shipped
+            # file rather than a literal: pinning the number here is what broke every
+            # fixture the moment #1397 bumped the skill to 11.
+            shipped = (repo / "skills" / "tandem" / "SKILL.md").read_text(encoding="utf-8")
+            candidate_version = subject._read_skill_version(shipped)
+            self.assertGreater(candidate_version, subject.SEEDED_SKILL_VERSION)
+            self.assertIn(
+                f"version: {candidate_version}",
+                (root / "fixtures" / "candidate-SKILL.md").read_text(encoding="utf-8"),
+            )
             plugin_skill = root / "fixtures" / "candidate-plugin-v10" / "skills" / "tandem" / "SKILL.md"
-            self.assertIn("acceptance-source: plugin-only-candidate-v10", plugin_skill.read_text(encoding="utf-8"))
+            self.assertIn("acceptance-source: plugin-only-candidate", plugin_skill.read_text(encoding="utf-8"))
             hashes = json.loads((root / "fixtures" / "skill-hashes.json").read_text(encoding="utf-8"))
             self.assertEqual(
                 hashes["plugin_candidate"],
