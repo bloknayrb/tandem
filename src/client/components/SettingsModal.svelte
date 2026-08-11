@@ -720,7 +720,8 @@ async function handleReplayTutorial(): Promise<void> {
              prefetch; if it hasn't landed, this is still the plain issue URL. -->
         <a
           href={bugReport.url}
-          onpointerenter={bugReport.prime}
+          onpointerenter={bugReport.primeOnDwell}
+          onpointerleave={bugReport.cancelDwell}
           onfocus={bugReport.prime}
           target="_blank"
           rel="noreferrer"

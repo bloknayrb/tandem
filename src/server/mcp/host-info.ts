@@ -55,7 +55,12 @@ export function collectHostInfo(): HostInfo {
   // read from the same array.
   const cpus = tryValue(() => os.cpus()) ?? [];
   const model = cpus[0]?.model?.trim().replace(/\s+/g, " ");
-  const version = tryValue(() => os.version())?.slice(0, MAX_OS_VERSION_LENGTH);
+  // Spread-then-slice truncates on code points, not UTF-16 units. A plain
+  // `.slice()` can bisect a surrogate pair, and the lone surrogate that leaves
+  // behind makes `encodeURIComponent` throw — which silently drops the entire
+  // Report-a-bug prefill. Same hazard `buildBugReportUrl` avoids by cutting on
+  // line boundaries.
+  const version = tryValue(() => [...os.version()].slice(0, MAX_OS_VERSION_LENGTH).join(""));
 
   return {
     platform: process.platform,

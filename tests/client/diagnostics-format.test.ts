@@ -167,12 +167,17 @@ describe("formatDiagnostics — host information", () => {
     expect(hostLines({ cpuCount: 4 })).toEqual(["CPU: x4"]);
   });
 
-  it("strips control characters from OS and CPU strings", () => {
+  it("strips control characters from every OS-supplied string", () => {
+    // All three come from the host and all three reach a terminal paste and a
+    // public issue body — osRelease is not exempt.
     const lines = hostLines({
       osVersion: "Windows\x1b[31m 11",
+      osRelease: "10.0\x1b]0;spoofed\x07.26100",
       cpuModel: "Fake\x07 CPU",
     });
-    expect(lines).toEqual(["OS: Windows[31m 11", "CPU: Fake CPU"]);
+    expect(lines).toEqual(["OS: Windows[31m 11 (10.0]0;spoofed.26100)", "CPU: Fake CPU"]);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting their absence
+    expect(lines.join("\n")).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f]/);
   });
 
   it("collapses whitespace-only host strings rather than printing empty labels", () => {

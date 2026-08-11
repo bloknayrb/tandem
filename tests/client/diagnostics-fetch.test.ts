@@ -50,6 +50,15 @@ describe("fetchDiagnostics", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("maxAgeMs: 0 bypasses the cache — the explicit click must see current state", async () => {
+    // A user who reads the report, fixes the problem, and clicks again must not
+    // be handed the pre-fix report.
+    await fetchDiagnostics();
+    vi.advanceTimersByTime(1_000);
+    await fetchDiagnostics({ maxAgeMs: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("refetches once the cache has aged out", async () => {
     await fetchDiagnostics();
     vi.advanceTimersByTime(20_000);

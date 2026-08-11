@@ -23,9 +23,10 @@ async function handleCopyDiagnostics(): Promise<void> {
   diagLoading = true;
   let text: string;
   try {
-    // No AbortSignal: this is the explicit-click path and has always been
-    // untimed, with "Collecting…" standing in for progress.
-    const result = await fetchDiagnostics();
+    // `maxAgeMs: 0` — an explicit click means "the state right now". Serving a
+    // cached report here would hand a user who just fixed something the report
+    // from before the fix.
+    const result = await fetchDiagnostics({ maxAgeMs: 0 });
     if (!result.ok) {
       ctx.notify(
         "error",

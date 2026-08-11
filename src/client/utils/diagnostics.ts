@@ -89,7 +89,9 @@ export function formatMemoryMb(mb: number): string {
 /** `OS: Windows 11 Pro (10.0.26100)` — either half may be missing. */
 function osLine(payload: DiagnosticsPayload): string | null {
   const version = payload.osVersion ? stripControlChars(payload.osVersion).trim() : "";
-  const release = payload.osRelease?.trim() ?? "";
+  // `osRelease` needs the same strip as the other two: it is an OS-supplied
+  // string on the same path to a terminal paste and a public issue body.
+  const release = payload.osRelease ? stripControlChars(payload.osRelease).trim() : "";
   if (version && release) return `OS: ${version} (${release})`;
   if (version || release) return `OS: ${version || release}`;
   return null;

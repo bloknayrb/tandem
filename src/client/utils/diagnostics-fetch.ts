@@ -71,8 +71,16 @@ async function run(): Promise<DiagnosticsFetchResult> {
  * worth avoiding here. (The server single-flights *overlapping* requests too;
  * this layer additionally covers sequential ones and saves the round-trip.)
  */
-export function fetchDiagnostics(): Promise<DiagnosticsFetchResult> {
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+export function fetchDiagnostics(
+  opts: { maxAgeMs?: number } = {},
+): Promise<DiagnosticsFetchResult> {
+  // `maxAgeMs: 0` opts out of the cache. The Copy Diagnostics button uses it:
+  // that click is an explicit "tell me the state now", and a user who fixes a
+  // reported problem and clicks again must not be handed the pre-fix report.
+  // In-flight sharing still applies, so opting out costs a run only when there
+  // isn't one already going.
+  const maxAge = opts.maxAgeMs ?? CACHE_TTL_MS;
+  if (cached && Date.now() - cached.at < maxAge) {
     return Promise.resolve(cached.result);
   }
   inFlight ??= run()
