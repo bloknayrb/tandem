@@ -28,8 +28,6 @@
  * this bundle cannot drift apart.
  */
 
-import { resolve as resolvePath } from "node:path";
-import { fileURLToPath } from "node:url";
 // Importing this module installs its own `uncaughtException` /
 // `unhandledRejection` handlers and calls `redirectConsoleToStderr()` at module
 // scope. Do NOT add a second pair here the way `src/channel/index.ts` does —
@@ -38,35 +36,14 @@ import { fileURLToPath } from "node:url";
 // `process.exit(1)` calls for one fault.
 import { runMcpStdio } from "../cli/mcp-stdio.js";
 
-const IS_VITEST = process.env.VITEST === "true";
-
-// Auto-run only when invoked directly, and never under vitest, so a test can
-// import this entry to assert its shape without spawning a live bridge.
-//
-// The guard is load-bearing beyond tests: `tandem mcp-stdio` reaches the same
-// runtime through a dynamic import, and in the bundled `dist/cli/index.js` both
-// `process.argv[1]` and an imported module's `import.meta.url` collapse onto the
-// CLI bundle. Without this check a future bundling change could start the bridge
-// twice — once here, once from the subcommand dispatch — and two
-// `StdioServerTransport`s reading the same stdin corrupt the JSON-RPC wire.
-// Mirrors `src/monitor/index.ts`, which documents the same hazard.
-//
-// Compare resolved paths, not URL strings: Windows `file://` URLs normalize
-// differently from `process.argv[1]` backslashes, and drive-letter case drifts
-// depending on how the process was launched.
-function normalizeForCompare(p: string): string {
-  const r = resolvePath(p);
-  return process.platform === "win32" ? r.toLowerCase() : r;
-}
-const __thisFileNormalized = normalizeForCompare(fileURLToPath(import.meta.url));
-const isDirectRun =
-  typeof process.argv[1] === "string" &&
-  normalizeForCompare(process.argv[1]) === __thisFileNormalized;
-
-if (isDirectRun && !IS_VITEST) {
-  runMcpStdio().catch((err) => {
-    // stderr only — stdout is the MCP wire (Critical Rule 3).
-    console.error("[Tandem stdio-bridge] Fatal error:", err);
-    process.exit(1);
-  });
-}
+// Run unconditionally. `src/monitor/index.ts` guards its equivalent with an
+// `isDirectRun` check, and that guard is load-bearing THERE because it
+// re-exports its runtime and is imported by `tests/monitor/*` — importing it
+// must not start a monitor. This file exports nothing and nothing imports it;
+// it exists only to be `node dist/stdio-bridge/index.js`. Copying the guard
+// across would be ceremony protecting against a caller that cannot exist.
+runMcpStdio().catch((err) => {
+  // stderr only — stdout is the MCP wire (Critical Rule 3).
+  console.error("[Tandem stdio-bridge] Fatal error:", err);
+  process.exit(1);
+});

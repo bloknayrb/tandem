@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, extname, join } from "node:path";
 
 import type { ClaudeCliPresence } from "./contract.js";
-import { binNamesFor as binNamesForStem, isFile } from "./path-lookup.js";
+import { binNamesFor, isFile, isOnPath } from "./path-lookup.js";
 
 /**
  * Pure-built-ins probe for the `claude` CLI binary, extracted to a shared leaf
@@ -18,23 +18,6 @@ export interface DetectClaudeCliOptions {
   pathOverride?: string;
   /** Override `process.platform` — tests exercise the win32 `.exe` branch. */
   platformOverride?: NodeJS.Platform;
-}
-
-/**
- * Every filename `claude` can be installed under, in the order a shell would
- * find them. Thin default-arg wrapper over the shared rule in `path-lookup.ts`,
- * which owns the Windows candidate set and the `isFile` probe both walks below
- * depend on.
- *
- * `stem` is `"claude"` for the detector; {@link isBareNameLaunchable} passes the
- * `TANDEM_CLAUDE_CMD` override's basename, since that is the name the launcher
- * will actually search PATH for.
- *
- * The two walks in this file stay here rather than moving to
- * `resolveOnPath`: neither has first-hit semantics. See that module's header.
- */
-function binNamesFor(platform: NodeJS.Platform, stem = "claude"): string[] {
-  return binNamesForStem(platform, stem);
 }
 
 /**
@@ -61,17 +44,16 @@ export function detectClaudeCli(opts: DetectClaudeCliOptions = {}): ClaudeCliPre
   const platform = opts.platformOverride ?? process.platform;
   const home = opts.homeOverride ?? homedir();
 
-  const binNames = binNamesFor(platform);
-  const foundIn = (dir: string): boolean => binNames.some((name) => isFile(join(dir, name)));
-
-  // `delimiter` is platform-specific (`;` on win32, `:` elsewhere). When a
-  // platformOverride disagrees with the host, the override is for test
-  // ergonomics only — real callers never pass it, so host `delimiter` is fine.
-  const pathVar = opts.pathOverride ?? process.env.PATH ?? "";
-  for (const dir of pathVar.split(delimiter)) {
-    if (dir.length === 0) continue;
-    if (foundIn(dir)) return "INSTALLED_ON_PATH";
+  // First-hit over PATH is exactly `isOnPath`'s semantics, so this half shares
+  // it. The OTHER walk in this file (`isBareNameLaunchable`) does not and keeps
+  // its own loop — it must see the whole PATH to distinguish "a shim, and no
+  // `.exe` anywhere" from "a shim ahead of a real `.exe`".
+  if (isOnPath("claude", { pathOverride: opts.pathOverride, platformOverride: platform })) {
+    return "INSTALLED_ON_PATH";
   }
+
+  const foundIn = (dir: string): boolean =>
+    binNamesFor(platform, "claude").some((name) => isFile(join(dir, name)));
 
   // Native install location — same `~/.local/bin` on every platform per the
   // official installer's documented uninstall paths (Windows included).

@@ -30,10 +30,7 @@
 
 import { readFile } from "node:fs/promises";
 
-import {
-  isValidNodeBinary,
-  isValidNpxCommand,
-} from "../../shared/integrations/node-binary-name.js";
+import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
 import { type DetectedTarget, type DetectOptions, detectTargets, type McpEntry } from "./apply.js";
 import { LoopbackUrl } from "./schema.js";
 
@@ -104,8 +101,10 @@ const TANDEM_STDIO_NPX_ARGS = [...TANDEM_STDIO_NPX_HEAD, "tandem-editor", ...TAN
  *     through the MCP client's PATH at spawn time and a GUI-launched client's
  *     PATH routinely contains no Node at all.
  *   - **`npx -y tandem-editor[@<version>] mcp-stdio` is the FALLBACK**, for
- *     hosts where no absolute Node/bridge pair can be built. The command may be
- *     the bare `npx` or an absolute path whose basename is `npx`.
+ *     hosts where no absolute Node/bridge pair can be built. Bare `npx` only —
+ *     an absolute one is never written, because its `#!/usr/bin/env node`
+ *     shebang re-introduces the very PATH lookup the absolute form exists to
+ *     avoid.
  *
  * The 1-arg limit on the Node branch is load-bearing, not incidental: it is
  * what keeps a `<node> <…>/dist/cli/index.js` entry — which would fall through
@@ -145,8 +144,13 @@ export function validateTandemEntry(entry: McpEntry): EntryValidation {
     return { status: "valid" };
   }
 
-  // Fallback: npx -y tandem-editor[@<version>] mcp-stdio, bare or absolute.
-  if (isValidNpxCommand(entry.command)) {
+  // Fallback: npx -y tandem-editor[@<version>] mcp-stdio.
+  //
+  // Bare only. An absolute `npx` is deliberately never written — its shebang is
+  // `#!/usr/bin/env node`, so naming it by path still resolves `node` through
+  // the client's PATH and fails exactly where the bare name does. See
+  // `buildStdioTandemEntry`.
+  if (entry.command === "npx") {
     const argsOk =
       args.length === 3 &&
       args[0] === TANDEM_STDIO_NPX_HEAD[0] &&

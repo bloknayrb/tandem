@@ -293,6 +293,29 @@ manifest cannot carry a path that only makes sense on one machine:
 For those, the remedies are the same as the exit-127 section: start the client from a
 terminal, or put Node on the PATH the GUI launcher provides.
 
+### Why "just use the full path to npx" does not work
+
+It is the obvious hand-fix and it fails for the same reason the bare name does. `npx` is not
+a binary — it is a symlink to `npm/bin/npx-cli.js`, whose first line is
+`#!/usr/bin/env node`. Naming it by absolute path still makes the kernel run `env`, which
+searches **the client's PATH** for `node`:
+
+```console
+$ env -i PATH=/usr/bin:/bin /opt/homebrew/bin/npx --version
+/usr/bin/env: 'node': No such file or directory
+```
+
+If you are hand-editing a plugin or Cowork entry, point it at an absolute **node** plus an
+absolute script instead — that is exactly what `tandem setup --apply` now writes for the
+entries it owns:
+
+```json
+"command": "/opt/homebrew/bin/node",
+"args": ["/usr/local/lib/node_modules/tandem-editor/dist/stdio-bridge/index.js"]
+```
+
+(`npm root -g` prints the directory to use, and `which node` the interpreter.)
+
 ## `claude plugin install` fails to clone (SSH vs HTTPS)
 
 Claude Code clones GitHub-hosted plugins over SSH (`git@github.com:…`) by default. If you haven't added an SSH key to your GitHub account, the clone fails with a permission/authentication error even though the repo is public and reachable over HTTPS in a browser.

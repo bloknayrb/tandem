@@ -41,6 +41,29 @@ const selfContained = {
   },
 } as const;
 
+/**
+ * A standalone sidecar bundle: one entry, self-contained, spawned by something
+ * that is not us (an MCP client, a plugin host) and therefore unable to rely on
+ * a sibling `node_modules`.
+ *
+ * Three of these exist and they differed only in `entry`/`outDir`, so the shape
+ * is the factory rather than a block to copy. The CLI is deliberately NOT one of
+ * them — see its own note below.
+ */
+const sidecarBundle = (name: string) =>
+  ({
+    entry: [`src/${name}/index.ts`],
+    outDir: `dist/${name}`,
+    format: ["esm"],
+    target: "node22",
+    platform: "node",
+    splitting: false,
+    clean: true,
+    dts: false,
+    sourcemap: true,
+    ...selfContained,
+  }) as const;
+
 export default defineConfig([
   {
     entry: ["src/server/index.ts"],
@@ -62,51 +85,18 @@ export default defineConfig([
       __LICENSE_GATE_ENABLED__: JSON.stringify(LICENSE_GATE_ENABLED),
     },
   },
-  {
-    entry: ["src/channel/index.ts"],
-    outDir: "dist/channel",
-    format: ["esm"],
-    target: "node22",
-    platform: "node",
-    splitting: false,
-    clean: true,
-    dts: false,
-    sourcemap: true,
-    ...selfContained,
-  },
-  {
-    entry: ["src/monitor/index.ts"],
-    outDir: "dist/monitor",
-    format: ["esm"],
-    target: "node22",
-    platform: "node",
-    splitting: false,
-    clean: true,
-    dts: false,
-    sourcemap: true,
-    ...selfContained,
-  },
-  {
-    // The `tandem` stdio entry's script, kept out of `dist/cli` because that
-    // bundle is deliberately NOT self-contained (see the CLI block below) and
-    // therefore cannot run from a Tauri resource dir, which ships no
-    // `node_modules`. Same shape and same reason as `dist/channel`.
-    //
-    // No `define` block: nothing in this entry's import closure reads
-    // `__TANDEM_VERSION__` / `__APP_VERSION__` / `__LICENSE_GATE_ENABLED__`.
-    // If that changes, add them — esbuild leaves an absent define as a bare
-    // free global, which is a runtime ReferenceError with no build error.
-    entry: ["src/stdio-bridge/index.ts"],
-    outDir: "dist/stdio-bridge",
-    format: ["esm"],
-    target: "node22",
-    platform: "node",
-    splitting: false,
-    clean: true,
-    dts: false,
-    sourcemap: true,
-    ...selfContained,
-  },
+  sidecarBundle("channel"),
+  sidecarBundle("monitor"),
+  // The `tandem` stdio entry's script, kept out of `dist/cli` because that
+  // bundle is deliberately NOT self-contained (see the CLI block below) and so
+  // cannot run from a Tauri resource dir, which ships no `node_modules`.
+  //
+  // No `define` block, like its siblings: nothing in this entry's import
+  // closure reads `__TANDEM_VERSION__` / `__APP_VERSION__` /
+  // `__LICENSE_GATE_ENABLED__`. If that changes, add them — esbuild leaves an
+  // absent define as a bare free global, a runtime ReferenceError with no
+  // build error.
+  sidecarBundle("stdio-bridge"),
   {
     // NOT `...selfContained`, deliberately: `noExternal: [/.*/]` would inline
     // `src/cli/start.ts` and with it a second copy of the whole server, and

@@ -375,13 +375,20 @@ describe("validateTandemEntry", () => {
     ).toBe("invalid-args");
   });
 
-  it("accepts an absolute npx command (the tier-2 fallback)", () => {
+  it("rejects an absolute npx command — it is never a shape we write", () => {
+    // An absolute `npx` looks like a stronger fallback than the bare name and
+    // is not one: `npx` is a symlink to `npm/bin/npx-cli.js`, whose shebang is
+    // `#!/usr/bin/env node`, so naming it by path still resolves `node` through
+    // the client's PATH and dies exactly where the bare name does. Measured:
+    //   $ env -i PATH=/usr/bin:/bin /opt/node22/bin/npx --version
+    //   /usr/bin/env: 'node': No such file or directory
+    // Keeping it invalid is what stops it being reintroduced as an "improvement".
     expect(
       validateTandemEntry({
         command: "/opt/homebrew/bin/npx",
         args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"],
       }).status,
-    ).toBe("valid");
+    ).toBe("invalid-command");
   });
 
   it("rejects an absolute path that is neither Node- nor npx-shaped", () => {

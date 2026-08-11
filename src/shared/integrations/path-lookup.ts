@@ -85,19 +85,51 @@ export interface ResolveOnPathOptions {
  * one. Both callers say so in their user-facing text.
  */
 export function resolveOnPath(stem: string, opts: ResolveOnPathOptions = {}): string | null {
+  return resolveManyOnPath([stem], opts)[stem] ?? null;
+}
+
+/**
+ * {@link resolveOnPath} for several programs in ONE walk of PATH.
+ *
+ * Asking separately is the obvious shape and the wasteful one: programs that
+ * travel together (`node` and `npx`, say) live in the same directory, so each
+ * extra `resolveOnPath` re-`stat`s the very directories the previous call
+ * already visited to find a sibling. On Windows that is 5 candidate names per
+ * directory per program. Callers that ask about more than one program are on a
+ * request path (`GET /api/diagnostics` runs the whole doctor with no caching),
+ * so the difference is not academic.
+ *
+ * Same first-hit semantics and the same caveat as {@link resolveOnPath}: this
+ * answers a question about THIS process's PATH.
+ */
+export function resolveManyOnPath(
+  stems: string[],
+  opts: ResolveOnPathOptions = {},
+): Record<string, string | null> {
   const platform = opts.platformOverride ?? process.platform;
-  const names = binNamesFor(platform, stem);
+  const found: Record<string, string | null> = {};
+  for (const stem of stems) found[stem] = null;
+  let remaining = stems.length;
+
   // `delimiter` is the host's, not the override's. A platformOverride is a test
   // ergonomic; real callers never pass one, and tests pass a matching PATH.
   const pathVar = opts.pathOverride ?? process.env.PATH ?? "";
   for (const dir of pathVar.split(delimiter)) {
     if (dir.length === 0) continue;
-    for (const name of names) {
-      const candidate = join(dir, name);
-      if (isFile(candidate)) return candidate;
+    for (const stem of stems) {
+      if (found[stem] !== null) continue;
+      for (const name of binNamesFor(platform, stem)) {
+        const candidate = join(dir, name);
+        if (isFile(candidate)) {
+          found[stem] = candidate;
+          remaining--;
+          break;
+        }
+      }
     }
+    if (remaining === 0) break;
   }
-  return null;
+  return found;
 }
 
 /** Convenience predicate over {@link resolveOnPath}. Same caveat applies. */

@@ -36,10 +36,13 @@ import {
   probeNodeBinary,
 } from "../server/integrations/node-binary.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
-import { claudeDesktopConfigPath } from "../shared/integrations/client-config-paths.js";
+import {
+  claudeCodeConfigPath,
+  claudeDesktopConfigPath,
+} from "../shared/integrations/client-config-paths.js";
 import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
-import { isOnPath } from "../shared/integrations/path-lookup.js";
+import { resolveManyOnPath } from "../shared/integrations/path-lookup.js";
 
 // Injected by tsup into dist/cli. Absent in tsx dev / vitest (typeof-guarded at
 // use). This is the version the `npx` bridge entries are pinned to.
@@ -637,7 +640,7 @@ function checkMcpJson(r: Recorder): void {
     }
     // Same stale-path check as the user-config branch — the condition is
     // identical here and previously went unreported for project configs.
-    reportSpawnedCommand(
+    reportEntryCommand(
       r,
       channel,
       "tandem-channel",
@@ -663,7 +666,10 @@ function checkUserMcpConfig(r: Recorder): void {
   // `mcpServers`), which is exactly where `tandem setup` writes them. The
   // legacy ~/.claude/mcp_settings.json is not the file Claude Code consults,
   // so checking it produced false warnings even on a correct install (#985).
-  const claudeCodePath = join(home, ".claude.json");
+  //
+  // Path from the shared leaf, so doctor inspects the file `detectTargets`
+  // writes rather than a second hand-maintained copy of the same rule.
+  const claudeCodePath = claudeCodeConfigPath({ homeOverride: home || undefined });
 
   if (!existsSync(claudeCodePath)) {
     r.warn(
@@ -690,19 +696,10 @@ function checkUserMcpConfig(r: Recorder): void {
     r.warn("tandem not registered in ~/.claude.json", "Run: tandem setup --apply");
   } else {
     r.pass("tandem registered in ~/.claude.json");
-    // Normally an HTTP entry here, which both helpers ignore. A stdio entry in
+    // Normally an HTTP entry here, which the helper ignores. A stdio entry in
     // this file means a hand-edit or a plugin-managed shape, and both can carry
-    // the failure modes below.
-    const bare = evaluateSpawnedEntryCommand(servers.tandem, "tandem", "~/.claude.json");
-    if (bare) r.warn(bare.message, bare.fix);
-    reportSpawnedCommand(
-      r,
-      servers.tandem,
-      "tandem",
-      "~/.claude.json",
-      "Run: tandem setup --apply (Tandem also attempts this at startup, but skips it when it " +
-        "has no valid Node path to substitute, or when another instance holds the store lock)",
-    );
+    // the failure modes it reports.
+    reportEntryCommand(r, servers.tandem, "tandem", "~/.claude.json", SETUP_APPLY_FIX);
   }
   if (!servers["tandem-channel"]) {
     r.pass(evaluateAbsentChannelEntry("~/.claude.json"));
@@ -717,22 +714,54 @@ function checkUserMcpConfig(r: Recorder): void {
     r.pass(
       "tandem-channel registered in ~/.claude.json (a hand-launched session also needs the flag)",
     );
-    reportSpawnedCommand(
+    reportEntryCommand(
       r,
       servers["tandem-channel"],
       "tandem-channel",
       "~/.claude.json",
-      // Lead with the remedy that always works. The boot repair is real but
-      // conditional in two ways doctor cannot see and the user cannot act on:
-      // `refreshChannelNodeBinary` deliberately declines when the only
-      // replacement it could offer is the bare name, and the whole sweep is
-      // skipped while another instance holds the annotation-store lock. Under
-      // either, "restart Tandem" is a loop with no exit — the shape of false
-      // promise this check exists to replace.
-      "Run: tandem setup --apply (Tandem also attempts this at startup, but skips it when it " +
-        "has no valid Node path to substitute, or when another instance holds the store lock)",
+      SETUP_APPLY_FIX,
     );
   }
+}
+
+/**
+ * The remedy for any Tandem-managed entry that has gone wrong.
+ *
+ * Leads with the thing that always works. The boot repair is real but
+ * conditional in two ways doctor cannot see and the user cannot act on:
+ * `refreshMcpEntryBinary` deliberately declines when the only replacement it
+ * could offer is the bare name, and the whole sweep is skipped while another
+ * instance holds the annotation-store lock. Under either, "restart Tandem" is a
+ * loop with no exit — the shape of false promise these checks exist to replace.
+ */
+const SETUP_APPLY_FIX =
+  "Run: tandem setup --apply (Tandem also attempts this at startup, but skips it when it " +
+  "has no valid Node path to substitute, or when another instance holds the store lock)";
+
+/**
+ * Report whatever is wrong with an entry's `command`, at every call site.
+ *
+ * The two underlying checks partition the same input on `isRecordedPathAbsolute`
+ * — bare names go to one, absolute paths to the other — so calling only one of
+ * them leaves a hole rather than a gap in coverage. That hole was real: the
+ * bare-command check was wired only to the two `tandem` sites, while
+ * `buildMcpEntries` can emit a bare-`node` `tandem-channel` entry whenever
+ * `resolveNodeBinary` falls back (a Debian-lineage `nodejs` basename, a `..` in
+ * HOME). Pairing them here means a new call site cannot be half-wired.
+ */
+function reportEntryCommand(
+  r: Recorder,
+  entry: unknown,
+  entryName: string,
+  label: string,
+  fix: string,
+): void {
+  const bare = evaluateSpawnedEntryCommand(entry, entryName, label);
+  if (bare) {
+    r.warn(bare.message, bare.fix);
+    return;
+  }
+  reportSpawnedCommand(r, entry, entryName, label, fix);
 }
 
 // ── Check: Claude Desktop MCP config ───────────────────────────────
@@ -750,17 +779,21 @@ function checkUserMcpConfig(r: Recorder): void {
 
 function checkDesktopMcpConfig(r: Recorder): void {
   const desktopPath = claudeDesktopConfigPath();
-  if (!existsSync(desktopPath)) return;
 
   let config: { mcpServers?: Record<string, unknown> };
   try {
+    // No `existsSync` guard: the read has to be in a `try` regardless, so a
+    // separate stat would be a second syscall answering a question this one
+    // already answers — plus a TOCTOU window. ENOENT is the "no Claude Desktop"
+    // case and stays silent; anything else is a real problem worth naming.
     config = JSON.parse(readFileSync(desktopPath, "utf-8"));
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return;
     // No parse detail, same rule as `~/.claude.json`: V8 SyntaxErrors embed a
     // snippet of the source, and this file holds `env.TANDEM_AUTH_TOKEN`. This
     // message reaches the Copy Diagnostics clipboard and public issues.
     r.warn(
-      "Claude Desktop config is malformed JSON",
+      "Claude Desktop config could not be read as JSON",
       "Run: tandem setup --apply to rewrite it (Tandem backs the file up first)",
     );
     return;
@@ -773,16 +806,12 @@ function checkDesktopMcpConfig(r: Recorder): void {
   }
   r.pass("tandem registered in the Claude Desktop config");
 
-  const bare = evaluateSpawnedEntryCommand(tandem, "tandem", "Claude Desktop config");
-  if (bare) r.warn(bare.message, bare.fix);
-  reportSpawnedCommand(
+  reportEntryCommand(
     r,
     tandem,
     "tandem",
     "Claude Desktop config",
-    "Run: tandem setup --apply (Tandem also attempts this at startup, but skips it when it " +
-      "has no valid Node path to substitute, or when another instance holds the store lock). " +
-      "Restart Claude Desktop afterwards — it does not reload MCP config while running.",
+    `${SETUP_APPLY_FIX}. Restart Claude Desktop afterwards — it does not reload MCP config while running.`,
   );
 }
 
@@ -828,7 +857,15 @@ export function evaluateNodeToolchain(present: { node: boolean; npx: boolean }):
 }
 
 function checkNodeToolchain(r: Recorder): void {
-  const result = evaluateNodeToolchain({ node: isOnPath("node"), npx: isOnPath("npx") });
+  // One walk, not two. `node` and `npx` almost always sit in the same directory,
+  // so two `resolveOnPath` calls re-`stat` the same dirs to find a sibling — and
+  // `runDoctor` backs `GET /api/diagnostics` with no caching, so this is on a
+  // request path, not just a CLI one.
+  const found = resolveManyOnPath(["node", "npx"]);
+  const result = evaluateNodeToolchain({
+    node: found.node !== null,
+    npx: found.npx !== null,
+  });
   if (result.status === "pass") r.pass(result.message);
   else r.warn(result.message, result.fix);
 }
@@ -1117,7 +1154,7 @@ function checkTandemPlugin(r: Recorder): void {
   let wizardTandemEntry = false;
   try {
     const config: { mcpServers?: Record<string, unknown> } = JSON.parse(
-      readFileSync(join(home, ".claude.json"), "utf-8"),
+      readFileSync(claudeCodeConfigPath({ homeOverride: home || undefined }), "utf-8"),
     );
     wizardTandemEntry = config?.mcpServers?.tandem !== undefined;
   } catch {

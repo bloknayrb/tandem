@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSetup } from "../../src/cli/setup.js";
 // These helpers moved to src/server/integrations/apply.ts in #477 PR 3c-ii-a;
@@ -104,11 +104,12 @@ describe("buildMcpEntries", () => {
     expect(entries["tandem-channel"]?.env?.TANDEM_URL).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}`);
   });
 
-  // The `tandem` stdio entry is built as the best of three shapes — see
-  // `buildStdioTandemEntry`. The ladder exists because its bottom rung is the
-  // bug: a bare command word is resolved through the MCP client's PATH at spawn
-  // time, and a GUI-launched client's PATH routinely holds no Node at all.
-  describe("claude-desktop stdio entry: the fallback ladder", () => {
+  // The `tandem` stdio entry is an absolute pair when one can be built and the
+  // historical npx tuple when it cannot — see `buildStdioTandemEntry`. The
+  // fallback IS the bug: a bare command word is resolved through the MCP
+  // client's PATH at spawn time, and a GUI-launched client's PATH routinely
+  // holds no Node at all.
+  describe("claude-desktop stdio entry: absolute pair, else npx", () => {
     const NPX_ARGS = ["-y", `tandem-editor@${resolveCliVersion()}`, "mcp-stdio"];
 
     beforeEach(() => {
@@ -139,7 +140,7 @@ describe("buildMcpEntries", () => {
       }
     });
 
-    it("tier 2/3: falls back to the pinned npx tuple when the bridge is missing", () => {
+    it("falls back to the BARE pinned npx tuple when the bridge is missing", () => {
       const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
         targetKind: "claude-desktop",
         stdioBridgePath: join(tmpdir(), "definitely-not-here-stdio-bridge.js"),
@@ -148,10 +149,12 @@ describe("buildMcpEntries", () => {
       // any stale global tandem-editor. `resolveCliVersion()` is the same source
       // the code uses, so this tracks releases without rotting.
       expect(entries.tandem.args).toEqual(NPX_ARGS);
-      // Which npx tier we land on depends on whether this machine has one on
-      // PATH, so assert the invariant that holds either way: the command is
-      // *some* npx, never a bare `node` and never a path that isn't there.
-      expect(basename(entries.tandem.command ?? "")).toMatch(/^npx(\.(exe|cmd|bat|ps1))?$/);
+      // BARE, on every host — even one with npx sitting on this process's PATH.
+      // Embedding the absolute npx looks like a free improvement and is not:
+      // `npx` is a `#!/usr/bin/env node` script, so an absolute path still
+      // resolves `node` through the CLIENT's PATH and fails exactly where the
+      // bare name does. This assertion is what keeps it from coming back.
+      expect(entries.tandem.command).toBe("npx");
       expect(entries.tandem.env?.TANDEM_URL).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}`);
     });
 

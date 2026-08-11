@@ -67,32 +67,3 @@ export function claudeDesktopConfigPath(opts: ClientConfigPathOptions = {}): str
   }
   return join(home, ".config", "claude", "claude_desktop_config.json");
 }
-
-/**
- * Directory Claude Desktop writes its per-MCP-server logs into, or `null` where
- * it does not keep any we know the location of.
- *
- * The spawn failure this module's callers diagnose is reported *there*, not
- * anywhere in Tandem's own logs — `mcp-server-tandem.log` carries the literal
- * `Failed to spawn process: No such file or directory` while Tandem's server
- * sees a client that simply never connected. Being able to read the client's
- * own evidence is what turns "it doesn't work" into a one-command answer.
- */
-export function claudeDesktopLogDir(opts: ClientConfigPathOptions = {}): string | null {
-  const platform = opts.platformOverride ?? process.platform;
-  const home = opts.homeOverride ?? homedir();
-
-  if (platform === "darwin") return join(home, "Library", "Logs", "Claude");
-  if (platform === "win32") {
-    const appdata =
-      opts.appDataOverride ??
-      (opts.homeOverride
-        ? join(opts.homeOverride, "AppData", "Roaming")
-        : (process.env.APPDATA ?? join(home, "AppData", "Roaming")));
-    return join(appdata, "Claude", "logs");
-  }
-  // Linux Claude Desktop is unofficial and its log location is not something we
-  // can claim to know. `null` means "do not guess", which is the honest answer
-  // and keeps the check silent rather than warning about an absent directory.
-  return null;
-}

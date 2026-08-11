@@ -667,7 +667,7 @@ async function main() {
     console.error("");
 
     // Repair a channel entry whose recorded paths no longer exist (a removed
-    // nvm version, a relocated sidecar) — see `refreshChannelNodeBinary` for
+    // nvm version, a relocated sidecar) — see `refreshMcpEntryBinary` for
     // why write-time validation alone is not enough.
     //
     // Ordered BEFORE the launcher, not after: the supervisor spawns Claude Code
@@ -699,7 +699,7 @@ async function main() {
     // the server is already listening.
     if (!isStoreReadOnly()) {
       await import("./integrations/apply.js")
-        .then(({ refreshAllChannelNodeBinaries }) => refreshAllChannelNodeBinaries())
+        .then(({ refreshAllMcpEntryBinaries }) => refreshAllMcpEntryBinaries())
         .catch((err) =>
           console.error(
             `[Tandem] Channel entry refresh failed (non-fatal): ${err instanceof Error ? err.message : err}`,
