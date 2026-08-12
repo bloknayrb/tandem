@@ -262,6 +262,8 @@ Cold start, macOS:
   OS double-click  ──▶  Tandem.app launched  ──▶  setup() spawns sidecar
                                               ──▶  Apple Event kAEOpenDocuments
                                                     fires as RunEvent::Opened
+                                              ──▶  lib.rs:classify_opened_url
+                                                    (scheme/host/ext/is_file)
                                               ──▶  handle_opened_urls() queues
                                                     path in PendingOpens
                                               ──▶  wait_for_health() returns Ok
@@ -280,6 +282,8 @@ Warm start, Windows / Linux:
 Warm start, macOS:
   OS double-click  ──▶  LaunchServices reactivates app
                                               ──▶  RunEvent::Opened
+                                              ──▶  lib.rs:classify_opened_url
+                                                    (scheme/host/ext/is_file)
                                               ──▶  SIDECAR_HEALTHY=true path:
                                                     POST /api/open directly
 ```
@@ -287,6 +291,8 @@ Warm start, macOS:
 File associations are declared in `src-tauri/tauri.conf.json#bundle.fileAssociations`. Tauri's bundler writes the Windows NSIS registry keys (`HKCR\.<ext>\OpenWithProgids` + ProgID class), the macOS `Info.plist` `CFBundleDocumentTypes`, and the Linux `.desktop` `MimeType=` entries. Registering an extension makes Tandem *eligible* — the OS user opts in to "always open with Tandem" via Settings or "Open With → Always".
 
 Known limitation: macOS cold-start may briefly show `welcome.md` before the requested file becomes active, because Apple Events arrive after `setup()` schedules the sidecar spawn. This window is typically 100–300 ms.
+
+Both OS entry points share one path validator, `validate_open_candidate` (extension against `SUPPORTED_FILE_ASSOC_EXTS` + `is_file()`), so the extension and regular-file checks cannot diverge per platform (#1344). Until that fix those two checks existed only inline in `extract_file_arg`, so the macOS `RunEvent::Opened` surface performed neither: a double-clicked `.pdf`, a folder, or a stale path reached `/api/open`, was refused server-side, and produced nothing but a `log::warn!` while the user sat on `welcome.md`. Delivery of the rejection is also two-surfaced now, because the single `RunEvent::Opened` arm serves cold and warm start alike: a rejected Opened event **buffers** into `STARTUP_REJECTION` for the mount poll when the WebView has not yet polled `get_startup_rejection` (which is the only signal Rust has that the `startup-file-rejected` listener is wired — that same 100–300 ms window is exactly when a cold-start emit would drop), and **emits live** otherwise. So the `startup-file-rejected` warning toast now fires on macOS cold start too. One asymmetry inherited by sharing the validator: the Rust list is deliberately narrower than the server's `SUPPORTED_EXTENSIONS` (it omits `.htm`), so a `.htm` dropped on the Dock icon or sent via "Open With" is refused by the shell even though the server would accept it — the same file dropped on the window still opens, because `useTauriFileDrop.svelte.ts` validates against the wider list.
 
 ### Start-at-login (#1236, ADR-046)
 

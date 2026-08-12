@@ -144,9 +144,19 @@ static LAUNCHER_DEFERRED: AtomicBool = AtomicBool::new(false);
 /// classified in `setup()` — which runs BEFORE the Svelte `App.svelte`
 /// `onMount` listener exists. Emitting a Tauri event there drops silently on
 /// the exact failure mode it's meant to surface. So the reason is buffered
-/// here and polled via `get_startup_rejection()` on mount. The runtime
-/// `RunEvent::Opened` (macOS) path, which fires while the app is already
-/// running, ALSO emits the `startup-file-rejected` event for the live case.
+/// here and polled via `get_startup_rejection()` on mount.
+///
+/// The macOS `RunEvent::Opened` path uses BOTH surfaces, because the single
+/// `RunEvent::Opened` arm serves cold start AND warm start alike. On warm start
+/// the WebView is mounted and a live emit is exactly right; on cold start the
+/// Apple Event lands 100–300 ms after launch (see
+/// `docs/architecture.md` "OS File-Association Open"), before the deferred
+/// dynamic import in `App.svelte` has wired the `startup-file-rejected`
+/// listener, so an emit-only rejection drops on the same failure mode this
+/// buffer exists to fix. `REJECTION_POLLED` is the discriminator: a completed
+/// `get_startup_rejection()` poll means the listener is wired, so
+/// `record_opened_url_rejection` buffers only *before* that poll and the emit
+/// carries every later rejection.
 ///
 /// ## Why a `Mutex<Option<_>>` and not a `OnceLock`
 ///
@@ -161,6 +171,27 @@ static LAUNCHER_DEFERRED: AtomicBool = AtomicBool::new(false);
 /// diagnostics, and the human-readable toast message is composed client-side
 /// (mirrors the path-free `sidecar-restart-failed` toast contract).
 static STARTUP_REJECTION: Mutex<Option<String>> = Mutex::new(None);
+
+/// Set once the WebView has polled [`get_startup_rejection`], which is the only
+/// honest signal Rust has that the `startup-file-rejected` listener exists.
+///
+/// `get_startup_rejection` is invoked from exactly one place (`App.svelte`, the
+/// `@tauri-apps/api/core` import) in the same tick that wires the
+/// `startup-file-rejected` listener (the `@tauri-apps/api/event` import right
+/// above it), so a completed poll is a readiness signal for both. Read by
+/// [`record_opened_url_rejection`] to decide buffer-vs-emit for a macOS Opened
+/// rejection.
+///
+/// Deliberately NOT reset by `clear_startup_rejection`: the WebView outlives a
+/// sidecar restart, so the listener is still wired after one. Resetting it there
+/// would make every post-restart Opened rejection buffer a code that the
+/// already-mounted App never polls, and that stale code would replay as a
+/// phantom toast on the next WebView mount.
+///
+/// `SIDECAR_HEALTHY` is deliberately NOT used for this: the WebView loads from
+/// the app bundle (`frontendDist` is `../dist/client`), not from the sidecar, so
+/// sidecar health is a proxy for WebView readiness that can drift.
+static REJECTION_POLLED: AtomicBool = AtomicBool::new(false);
 
 /// Tauri event name for a startup-file rejection surfaced to the WebView.
 /// The payload is a stable reason code (see `rejection_reason_code`).
@@ -177,11 +208,11 @@ fn rejection_reason_code(reason: &RejectionReason) -> &'static str {
     }
 }
 
-/// Record a cold-start rejection in the buffer for the WebView to poll on mount.
-/// Last-write-wins (a single argv carries at most one candidate, so this only
-/// ever holds one). Path-free by construction.
-fn buffer_startup_rejection(reason: &RejectionReason) {
-    let code = rejection_reason_code(reason);
+/// Record an already-mapped, path-free reason CODE in the buffer for the WebView
+/// to poll on mount. Last-write-wins. The typed entry points
+/// ([`buffer_startup_rejection`] for argv, [`record_opened_url_rejection`] for
+/// the macOS Opened event) both funnel through here so there is one writer.
+fn buffer_startup_rejection_code(code: &str) {
     match STARTUP_REJECTION.lock() {
         Ok(mut guard) => *guard = Some(code.to_string()),
         Err(poisoned) => {
@@ -189,6 +220,38 @@ fn buffer_startup_rejection(reason: &RejectionReason) {
             *poisoned.into_inner() = Some(code.to_string());
         }
     }
+}
+
+/// Record a cold-start rejection in the buffer for the WebView to poll on mount.
+/// Last-write-wins (a single argv carries at most one candidate, so this only
+/// ever holds one). Path-free by construction.
+fn buffer_startup_rejection(reason: &RejectionReason) {
+    buffer_startup_rejection_code(rejection_reason_code(reason));
+}
+
+/// Buffer a macOS Opened-event rejection code iff the WebView has not yet
+/// polled — i.e. iff the `startup-file-rejected` listener cannot be assumed to
+/// exist. Returns whether it buffered.
+///
+/// Factored out of the macOS-gated `handle_opened_urls` deliberately: the
+/// buffer-vs-emit decision is the whole substance of the cold-start fix, and
+/// keeping it in an unconditionally-compiled helper makes it unit-testable on
+/// every platform (the Apple-Event plumbing around it is not).
+///
+/// Buffering only before the poll is what keeps the buffer residue-free. A warm-
+/// start rejection that buffered as well would leave a code nobody polls, to be
+/// replayed as a phantom toast on the next WebView mount.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn record_opened_url_rejection(code: &str) -> bool {
+    if REJECTION_POLLED.load(Ordering::Acquire) {
+        log::debug!(
+            "Opened-event rejection ({code}) not buffered — WebView already polled"
+        );
+        return false;
+    }
+    log::debug!("Opened-event rejection ({code}) buffered for the mount poll");
+    buffer_startup_rejection_code(code);
+    true
 }
 
 /// Clear any buffered cold-start rejection. Called from `restart_sidecar` so a
@@ -209,8 +272,15 @@ fn clear_startup_rejection() {
 /// re-mount (e.g. an in-WebView reload) doesn't replay a toast the user already
 /// saw. The `App.svelte` `onMount` poll consumes it; the runtime
 /// `startup-file-rejected` event covers post-mount rejections.
+///
+/// Polling also latches `REJECTION_POLLED`, which is how the macOS Opened path
+/// knows the `startup-file-rejected` listener is wired and it can stop buffering
+/// (see [`record_opened_url_rejection`]). The store happens BEFORE the take, so
+/// a rejection racing this call cannot slip into a buffer nobody will read
+/// again.
 #[tauri::command]
 fn get_startup_rejection() -> Option<String> {
+    REJECTION_POLLED.store(true, Ordering::Release);
     match STARTUP_REJECTION.lock() {
         Ok(mut guard) => guard.take(),
         Err(poisoned) => poisoned.into_inner().take(),
@@ -404,8 +474,9 @@ impl std::fmt::Display for RejectionReason {
 /// already-parsed `tauri::Url` values from the Opened-event surface. See issue
 /// #630, sub-task #3 (`classify_opened_url` extraction).
 ///
-/// The helper itself is unconditionally compiled and pure so it can be
-/// unit-tested cross-platform; only its caller (`handle_opened_urls`) is
+/// The helper itself is unconditionally compiled and free of Tauri /
+/// Apple-Event plumbing (it reads only the filesystem), so it can be unit-tested
+/// cross-platform with tempfiles; only its caller (`handle_opened_urls`) is
 /// macOS-gated.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum OpenedUrlRejection {
@@ -420,6 +491,19 @@ pub(crate) enum OpenedUrlRejection {
     /// `url.to_file_path()` failed to produce a filesystem path (e.g. a
     /// `cannot-be-a-base` `file:` URL with no path component).
     ConversionFailed,
+    /// The URL converted to a filesystem path, but that path failed the shared
+    /// [`validate_open_candidate`] checks (extension / regular-file). Wraps the
+    /// argv path's [`RejectionReason`] rather than mirroring its variants so the
+    /// reason-code strings have exactly one definition —
+    /// `opened_url_reason_code` delegates to `rejection_reason_code`, and a
+    /// third copy of `"unsupported-extension"` / `"not-a-file"` is precisely the
+    /// drift #1344 was.
+    ///
+    /// `RejectionReason::SuspiciousColon` is unreachable through this variant:
+    /// the NTFS alternate-data-stream scan is `#[cfg(target_os = "windows")]`
+    /// and lives in `extract_file_arg` (it runs on the pre-validation joined
+    /// path), while Opened events are macOS-only.
+    PathRejected(RejectionReason),
 }
 
 impl std::fmt::Display for OpenedUrlRejection {
@@ -434,6 +518,12 @@ impl std::fmt::Display for OpenedUrlRejection {
             OpenedUrlRejection::ConversionFailed => {
                 write!(f, "failed to convert URL to file path")
             }
+            // Delegate so the log line keeps the resolved path + detail the
+            // inner reason carries. Wire payloads stay path-free because they go
+            // through `opened_url_reason_code`, never through `Display`.
+            OpenedUrlRejection::PathRejected(reason) => {
+                write!(f, "rejected path from Opened event: {reason}")
+            }
         }
     }
 }
@@ -441,13 +531,18 @@ impl std::fmt::Display for OpenedUrlRejection {
 /// Map an [`OpenedUrlRejection`] to a stable, path-free reason code for the
 /// WebView toast bus. Mirrors `rejection_reason_code` for the argv path; both
 /// codes are handled by the `startup-file-rejected` listener in `App.svelte`.
-/// macOS-only (the only caller is the macOS-gated `handle_opened_urls`).
-#[cfg(target_os = "macos")]
+///
+/// Unconditionally compiled (its only production caller is the macOS-gated
+/// `handle_opened_urls`, hence the `dead_code` allowance off macOS) so the
+/// code-stability test can run on every CI leg.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 fn opened_url_reason_code(reason: &OpenedUrlRejection) -> &'static str {
     match reason {
         OpenedUrlRejection::NonFileScheme => "non-file-url",
         OpenedUrlRejection::NonEmptyHost => "suspicious-path",
         OpenedUrlRejection::ConversionFailed => "not-a-file",
+        // Pure delegation — no new code strings on this surface.
+        OpenedUrlRejection::PathRejected(reason) => rejection_reason_code(reason),
     }
 }
 
@@ -459,11 +554,15 @@ fn opened_url_reason_code(reason: &OpenedUrlRejection) -> &'static str {
 /// - Reject any non-empty host (`NonEmptyHost`). `file://host/share/...`
 ///   SMB-style URLs would surprise the user; require an empty/missing host.
 /// - Convert via `Url::to_file_path()`; a failure is `ConversionFailed`.
+/// - Validate the resulting path with the shared [`validate_open_candidate`]
+///   (extension + regular file); a failure is `PathRejected(..)`. This step was
+///   APPENDED, not interleaved — the first three gates are unchanged.
 ///
-/// Pure and unconditionally compiled so it can be unit-tested cross-platform
+/// Unconditionally compiled and free of Tauri / Apple-Event plumbing (it reads
+/// only the filesystem), so it can be unit-tested cross-platform with tempfiles
 /// (the macOS Apple-Event delivery plumbing in `handle_opened_urls` is not
 /// unit-testable from Windows). Its only production caller is the macOS-gated
-/// `handle_opened_urls`. See issue #630, sub-task #3.
+/// `handle_opened_urls`. See issues #630 (sub-task #3) and #1344.
 #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 pub(crate) fn classify_opened_url(url: &Url) -> Result<PathBuf, OpenedUrlRejection> {
     if url.scheme() != "file" {
@@ -472,7 +571,60 @@ pub(crate) fn classify_opened_url(url: &Url) -> Result<PathBuf, OpenedUrlRejecti
     if url.host_str().map(|h| !h.is_empty()).unwrap_or(false) {
         return Err(OpenedUrlRejection::NonEmptyHost);
     }
-    url.to_file_path().map_err(|_| OpenedUrlRejection::ConversionFailed)
+    let path =
+        url.to_file_path().map_err(|_| OpenedUrlRejection::ConversionFailed)?;
+    validate_open_candidate(path).map_err(OpenedUrlRejection::PathRejected)
+}
+
+/// The path-shaped half of open-candidate validation: the extension must be in
+/// [`SUPPORTED_FILE_ASSOC_EXTS`] (case-insensitive) and the path must be a
+/// regular file. Shared by the argv path (`extract_file_arg`, used by Windows /
+/// Linux cold start and the `single-instance` warm-start callback) and the macOS
+/// `RunEvent::Opened` path (`classify_opened_url`).
+///
+/// One definition so the two OS entry points cannot drift again: before #1344
+/// these two checks existed only inline inside `extract_file_arg`, so a macOS
+/// Finder double-click of a `.pdf` or a deleted path sailed through to
+/// `/api/open` and was refused server-side with nothing but a `log::warn!`.
+///
+/// Takes and returns the `PathBuf` by value so neither caller has to clone it.
+///
+/// `RejectionReason::SuspiciousColon` is deliberately NOT produced here: the
+/// NTFS alternate-data-stream scan is `#[cfg(target_os = "windows")]`, operates
+/// on the pre-validation joined path, and stays in `extract_file_arg` ahead of
+/// this call — while Opened events are macOS-only.
+///
+/// Note that `SUPPORTED_FILE_ASSOC_EXTS` is deliberately NARROWER than the
+/// server's `SUPPORTED_EXTENSIONS` (it omits `htm`), per
+/// `tests/build/file-association-alignment.test.ts`, which records that
+/// direction as a legitimate product choice. Consequence of sharing this
+/// validator: a `.htm` file sent via the macOS Dock / "Open With" is now refused
+/// by the shell even though the server would accept it — the same file dropped
+/// on the window still opens, because `useTauriFileDrop.svelte.ts` validates
+/// against the wider list. Widening the OS-registered set is a separate
+/// decision.
+fn validate_open_candidate(
+    absolute: std::path::PathBuf,
+) -> Result<std::path::PathBuf, RejectionReason> {
+    let ext = absolute
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !SUPPORTED_FILE_ASSOC_EXTS.contains(&ext.as_str()) {
+        return Err(RejectionReason::UnsupportedExtension { ext, path: absolute });
+    }
+
+    // is_file() follows symlinks intentionally — the final read goes through
+    // server-side openFileByPath which is the authority for path validation
+    // (extension, size, UNC rejection, etc.). Resolving symlinks here would
+    // duplicate that check without adding defense in depth, since a symlink
+    // pointing at a disallowed target would be rejected on the server hop.
+    if !absolute.is_file() {
+        return Err(RejectionReason::NotAFile { path: absolute });
+    }
+
+    Ok(absolute)
 }
 
 /// Extract a file path to open from a process's command-line args.
@@ -488,8 +640,10 @@ pub(crate) fn classify_opened_url(url: &Url) -> Result<PathBuf, OpenedUrlRejecti
 ///   (defends against NTFS alternate-data-stream paths like
 ///   `file.md:Zone.Identifier`).
 /// - Resolve relative to `cwd`.
-/// - Verify the extension is in `SUPPORTED_FILE_ASSOC_EXTS` (case-insensitive).
-/// - Verify the path exists as a regular file.
+/// - Hand the resolved absolute path to the shared `validate_open_candidate`,
+///   which verifies the extension is in `SUPPORTED_FILE_ASSOC_EXTS`
+///   (case-insensitive) and that the path exists as a regular file. The macOS
+///   `RunEvent::Opened` path runs the same helper (#1344).
 ///
 /// Returns:
 /// - `Ok(Some(path))` — a validated, openable file path.
@@ -541,25 +695,7 @@ pub fn extract_file_arg(
         }
     }
 
-    let ext = absolute
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    if !SUPPORTED_FILE_ASSOC_EXTS.contains(&ext.as_str()) {
-        return Err(RejectionReason::UnsupportedExtension { ext, path: absolute });
-    }
-
-    // is_file() follows symlinks intentionally — the final read goes through
-    // server-side openFileByPath which is the authority for path validation
-    // (extension, size, UNC rejection, etc.). Resolving symlinks here would
-    // duplicate that check without adding defense in depth, since a symlink
-    // pointing at a disallowed target would be rejected on the server hop.
-    if !absolute.is_file() {
-        return Err(RejectionReason::NotAFile { path: absolute });
-    }
-
-    Ok(Some(absolute))
+    validate_open_candidate(absolute).map(Some)
 }
 
 /// POST `{ filePath }` to the sidecar's `/api/open` endpoint with the auth
@@ -702,13 +838,19 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
             Ok(path) => path,
             Err(reason) => {
                 log::warn!("Ignoring URL from Opened event ({reason}): {url}");
-                // The app is already running here (Apple Event arrives post-
-                // launch), so the WebView listener exists — emit the rejection
-                // event directly rather than buffering. Path-free reason code,
-                // matching the cold-start contract. See #630.
-                if let Err(e) =
-                    app.emit(EVENT_STARTUP_FILE_REJECTED, opened_url_reason_code(&reason))
-                {
+                // This single `RunEvent::Opened` arm serves BOTH cold and warm
+                // start. Warm start: the app is running, the WebView listener
+                // exists, and the live emit is what surfaces the toast. Cold
+                // start: the Apple Event arrives 100–300 ms after launch, before
+                // App.svelte's deferred dynamic import has wired the listener,
+                // so the emit would drop on exactly the failure mode it exists
+                // to surface — hence the buffer, gated on whether the WebView
+                // has polled. Both surfaces fire in the narrow overlap; the
+                // toast carries `dedupKey: "startup-file-rejected"`, so the
+                // worst case is one toast with a count badge. See #630, #1344.
+                let code = opened_url_reason_code(&reason);
+                record_opened_url_rejection(code);
+                if let Err(e) = app.emit(EVENT_STARTUP_FILE_REJECTED, code) {
                     log::warn!("Failed to emit {EVENT_STARTUP_FILE_REJECTED}: {e}");
                 }
                 continue;
@@ -5451,23 +5593,29 @@ mod classify_opened_url_tests {
     use super::*;
 
     /// An empty-host, absolute-path `file://` URL converts to a filesystem
-    /// path. `Url::to_file_path()` is platform-specific: Windows requires a
-    /// drive letter (`/C:/x` -> `C:\x`), Unix takes the POSIX path as-is
-    /// (`/tmp/x`). We cfg-gate the literal and assert on the file name (which
-    /// is stable across both) rather than the full path string.
+    /// path — and, since #1344, that is no longer sufficient. The converted
+    /// path still has to clear the shared `validate_open_candidate` checks, and
+    /// `x` carries no extension at all, so it rejects. `Url::to_file_path()` is
+    /// platform-specific (Windows requires a drive letter, `/C:/x` -> `C:\x`;
+    /// Unix takes the POSIX path as-is), so we cfg-gate the literal and match
+    /// on the variant rather than the resolved path.
     #[test]
-    fn empty_host_absolute_path_is_ok() {
+    fn empty_host_absolute_path_is_still_validated() {
         #[cfg(target_os = "windows")]
         let literal = "file:///C:/x";
         #[cfg(not(target_os = "windows"))]
         let literal = "file:///tmp/x";
 
         let url = Url::parse(literal).expect("valid file URL");
-        let path = classify_opened_url(&url).expect("should classify Ok");
-        assert_eq!(
-            path.file_name().and_then(|n| n.to_str()),
-            Some("x"),
-            "path should end in the requested file name"
+        let result = classify_opened_url(&url);
+        assert!(
+            matches!(
+                &result,
+                Err(OpenedUrlRejection::PathRejected(
+                    RejectionReason::UnsupportedExtension { ext, .. }
+                )) if ext.is_empty()
+            ),
+            "URL conversion succeeding is no longer sufficient (#1344); got {result:?}"
         );
     }
 
@@ -5493,8 +5641,12 @@ mod classify_opened_url_tests {
     ///
     /// The downstream outcome is platform-specific: on Windows the bare
     /// `/x` path has no drive letter so conversion fails (`ConversionFailed`);
-    /// on Unix `/x` is a valid absolute path so it classifies `Ok`. We assert
-    /// the actual behavior on each platform so a future reader sees the gap.
+    /// on Unix `/x` converts fine and is then caught by the shared path
+    /// validator, which #1344 appended. Note what that means: the host gate
+    /// still never fires, so the #630 gap is untouched — but the path validator
+    /// closes the hole in practice on both platforms, since a `localhost`-host
+    /// URL that survived normalization would still have to name a real,
+    /// supported file to be opened.
     #[test]
     fn localhost_host_normalizes_away_and_falls_through() {
         let url = Url::parse("file://localhost/x").expect("valid file URL");
@@ -5513,9 +5665,14 @@ mod classify_opened_url_tests {
         );
         #[cfg(not(target_os = "windows"))]
         assert_eq!(
-            result.as_ref().map(|p| p.file_name().and_then(|n| n.to_str())),
-            Ok(Some("x")),
-            "on Unix /x is a valid absolute path, so it classifies Ok"
+            result,
+            Err(OpenedUrlRejection::PathRejected(
+                RejectionReason::UnsupportedExtension {
+                    ext: String::new(),
+                    path: PathBuf::from("/x"),
+                }
+            )),
+            "on Unix /x converts fine, then fails the shared path validator"
         );
     }
 
@@ -5537,7 +5694,9 @@ mod classify_opened_url_tests {
     /// reachable once those gates pass:
     ///   - Windows rejects the driveless path `/foo` (needs a drive letter or
     ///     UNC root) -> `Err(ConversionFailed)`.
-    ///   - Unix accepts `/foo` as an absolute path -> `Ok("/foo")`.
+    ///   - Unix accepts `/foo` as an absolute path, which then reaches the
+    ///     shared path validator and fails it (no extension) ->
+    ///     `Err(PathRejected(UnsupportedExtension))`.
     /// CI runs both arms (ubuntu + windows), so each is exercised.
     #[test]
     fn empty_host_file_url_classification_is_platform_dependent() {
@@ -5555,8 +5714,136 @@ mod classify_opened_url_tests {
         #[cfg(not(windows))]
         assert_eq!(
             got,
-            Ok(PathBuf::from("/foo")),
-            "Unix accepts /foo as an absolute path"
+            Err(OpenedUrlRejection::PathRejected(
+                RejectionReason::UnsupportedExtension {
+                    ext: String::new(),
+                    path: PathBuf::from("/foo"),
+                }
+            )),
+            "Unix accepts /foo as an absolute path, then the path validator rejects it"
+        );
+    }
+
+    /// The cross-platform positive control (#1344). Table-driven over
+    /// `SUPPORTED_FILE_ASSOC_EXTS` ITSELF rather than a hardcoded copy, so a
+    /// future added extension is covered automatically.
+    #[test]
+    fn every_supported_extension_is_accepted_from_an_opened_url() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        for ext in SUPPORTED_FILE_ASSOC_EXTS {
+            let path = dir.path().join(format!("doc.{ext}"));
+            std::fs::write(&path, b"x").expect("write fixture");
+            let url = Url::from_file_path(&path).expect("absolute path -> file URL");
+            assert_eq!(
+                classify_opened_url(&url),
+                Ok(path.clone()),
+                ".{ext} must classify Ok from an Opened event"
+            );
+        }
+    }
+
+    /// The four realistic negative shapes, each asserting the exact wrapped
+    /// `RejectionReason` so the delegating reason-code map cannot drift.
+    #[test]
+    fn opened_url_path_rejections_are_table_driven() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+
+        // (1) Exists, but the extension is not OS-registered.
+        let exe = dir.path().join("secret.exe");
+        std::fs::write(&exe, b"x").expect("write fixture");
+        // (2) Exists, but has no extension at all.
+        let bare = dir.path().join("README");
+        std::fs::write(&bare, b"x").expect("write fixture");
+        // (3) Supported extension, but nothing is there — the stale-alias case.
+        let missing = dir.path().join("missing.md");
+        // (4) A DIRECTORY whose name ends in `.md`. This is the case that
+        //     proves the check is `is_file()` and not `exists()`, and it is the
+        //     realistic Finder "Open With" shape.
+        let subdir = dir.path().join("subdir.md");
+        std::fs::create_dir(&subdir).expect("mkdir fixture");
+
+        let cases: Vec<(PathBuf, RejectionReason)> = vec![
+            (
+                exe.clone(),
+                RejectionReason::UnsupportedExtension {
+                    ext: "exe".to_string(),
+                    path: exe,
+                },
+            ),
+            (
+                bare.clone(),
+                RejectionReason::UnsupportedExtension {
+                    ext: String::new(),
+                    path: bare,
+                },
+            ),
+            (missing.clone(), RejectionReason::NotAFile { path: missing }),
+            (subdir.clone(), RejectionReason::NotAFile { path: subdir }),
+        ];
+
+        for (path, expected) in cases {
+            let url = Url::from_file_path(&path).expect("absolute path -> file URL");
+            assert_eq!(
+                classify_opened_url(&url),
+                Err(OpenedUrlRejection::PathRejected(expected)),
+                "unexpected classification for {}",
+                path.display()
+            );
+        }
+    }
+
+    /// The shared helper lowercases before matching, and that reaches the
+    /// Opened path too — a Finder double-click of `DOC.MD` must open.
+    #[test]
+    fn opened_url_extension_check_is_case_insensitive() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("DOC.MD");
+        std::fs::write(&path, b"x").expect("write fixture");
+        let url = Url::from_file_path(&path).expect("absolute path -> file URL");
+        assert_eq!(
+            classify_opened_url(&url),
+            Ok(path),
+            "the extension match must be case-insensitive on the Opened path"
+        );
+    }
+
+    /// #1344 APPENDED the path check as step 4; it did not interleave it. A
+    /// supported-looking extension must not smuggle a URL past the scheme or
+    /// host gates.
+    #[test]
+    fn check_order_is_scheme_then_host_then_conversion_then_path() {
+        let https = Url::parse("https://example.com/a.md").expect("valid https URL");
+        assert_eq!(
+            classify_opened_url(&https),
+            Err(OpenedUrlRejection::NonFileScheme),
+            "a .md extension must not get an https URL past the scheme gate"
+        );
+
+        let smb = Url::parse("file://smb-host/share/a.md").expect("valid file URL");
+        assert_eq!(
+            classify_opened_url(&smb),
+            Err(OpenedUrlRejection::NonEmptyHost),
+            "a .md extension must not get a hosted URL past the host gate"
+        );
+    }
+
+    /// Ordering within the shared helper: extension before `is_file()`, matching
+    /// the argv path's documented ordering (see
+    /// `tests/file_association.rs::no_extension_returns_unsupported_extension_with_empty_ext`).
+    #[test]
+    fn unsupported_extension_wins_over_missing_file() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let ghost = dir.path().join("ghost.exe");
+        let url = Url::from_file_path(&ghost).expect("absolute path -> file URL");
+        assert_eq!(
+            classify_opened_url(&url),
+            Err(OpenedUrlRejection::PathRejected(
+                RejectionReason::UnsupportedExtension {
+                    ext: "exe".to_string(),
+                    path: ghost,
+                }
+            )),
+            "a nonexistent unsupported file reports the extension, not NotAFile"
         );
     }
 }
@@ -5671,7 +5958,8 @@ mod startup_rejection_tests {
         clear_startup_rejection();
     }
 
-    #[cfg(target_os = "macos")]
+    /// Un-gated since #1344 (`opened_url_reason_code` is now unconditionally
+    /// compiled), so this contract runs on ubuntu, windows AND macOS.
     #[test]
     fn opened_url_reason_codes_are_path_free_and_stable() {
         assert_eq!(
@@ -5686,6 +5974,98 @@ mod startup_rejection_tests {
             opened_url_reason_code(&OpenedUrlRejection::ConversionFailed),
             "not-a-file"
         );
+
+        // The delegating arm reuses the argv path's codes rather than minting
+        // new ones — App.svelte's `messageForCode` already handles both.
+        let unsupported = opened_url_reason_code(&OpenedUrlRejection::PathRejected(
+            RejectionReason::UnsupportedExtension {
+                ext: "exe".into(),
+                path: PathBuf::from("/secret/place/file.exe"),
+            },
+        ));
+        assert_eq!(unsupported, "unsupported-extension");
+        let not_a_file = opened_url_reason_code(&OpenedUrlRejection::PathRejected(
+            RejectionReason::NotAFile {
+                path: PathBuf::from("/Users/victim/Secret Plans.md"),
+            },
+        ));
+        assert_eq!(not_a_file, "not-a-file");
+
+        // Mirrors `reason_code_never_leaks_the_path`: delegating must never
+        // start putting a path on the wire.
+        for code in [unsupported, not_a_file] {
+            assert!(
+                !code.contains('/') && !code.contains("Secret"),
+                "delegated reason code must not embed the rejected path"
+            );
+        }
+    }
+
+    /// The cross-platform proof of the cold-start delivery fix (#1344).
+    /// `handle_opened_urls` is macOS-gated and untestable from here, so the
+    /// buffer-vs-emit decision lives in `record_opened_url_rejection`, which is
+    /// not.
+    #[test]
+    fn opened_url_rejection_buffers_before_the_webview_has_polled() {
+        let _g = REJECTION_LOCK.lock().unwrap();
+        clear_startup_rejection();
+        REJECTION_POLLED.store(false, Ordering::Release);
+
+        let code = opened_url_reason_code(&OpenedUrlRejection::PathRejected(
+            RejectionReason::UnsupportedExtension {
+                ext: "pdf".into(),
+                path: PathBuf::from("/x/paper.pdf"),
+            },
+        ));
+        assert!(
+            record_opened_url_rejection(code),
+            "a rejection arriving before the mount poll must buffer"
+        );
+        assert_eq!(
+            get_startup_rejection(),
+            Some("unsupported-extension".to_string()),
+            "the mount poll must find the cold-start Opened rejection"
+        );
+
+        REJECTION_POLLED.store(false, Ordering::Release);
+    }
+
+    /// The no-residue property: a warm-start rejection must not leave a code in
+    /// the buffer that a later WebView re-mount would replay as a phantom toast.
+    #[test]
+    fn opened_url_rejection_does_not_buffer_after_the_webview_polled() {
+        let _g = REJECTION_LOCK.lock().unwrap();
+        clear_startup_rejection();
+        REJECTION_POLLED.store(true, Ordering::Release);
+
+        assert!(
+            !record_opened_url_rejection("not-a-file"),
+            "once the WebView has polled, the live emit is the delivery surface"
+        );
+        assert_eq!(
+            get_startup_rejection(),
+            None,
+            "a warm-start rejection must leave no residue in the buffer"
+        );
+
+        REJECTION_POLLED.store(false, Ordering::Release);
+    }
+
+    /// Pins the one-line contract change in the Tauri command that all of the
+    /// above hangs off.
+    #[test]
+    fn polling_marks_the_webview_ready() {
+        let _g = REJECTION_LOCK.lock().unwrap();
+        clear_startup_rejection();
+        REJECTION_POLLED.store(false, Ordering::Release);
+
+        assert_eq!(get_startup_rejection(), None, "nothing buffered");
+        assert!(
+            REJECTION_POLLED.load(Ordering::Acquire),
+            "polling is what tells Rust the startup-file-rejected listener exists"
+        );
+
+        REJECTION_POLLED.store(false, Ordering::Release);
     }
 }
 

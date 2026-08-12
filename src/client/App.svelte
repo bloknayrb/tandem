@@ -395,10 +395,18 @@ if (isTauriRuntime()) {
 // Surface OS file-association open failures (Tauri-only) as a warning toast.
 // The Rust side classifies the rejected double-clicked file and signals a
 // STABLE, PATH-FREE reason code via two surfaces, both handled here (see #630):
-//  - cold-start: buffered in a OnceLock-style slot (the App listener doesn't
-//    exist yet at classification time) — polled once via `get_startup_rejection`
-//    on mount. The buffer is TAKEN, so a WebView reload won't replay it.
-//  - warm-start / macOS Apple-Event: emitted live as `startup-file-rejected`.
+//  - before this listener exists: buffered Rust-side in a OnceLock-style slot.
+//    That covers argv cold start AND a macOS Apple-Event rejection landing
+//    before the poll below — the Opened event arrives 100–300 ms after a cold
+//    launch, ahead of these deferred dynamic imports. Polled once via
+//    `get_startup_rejection` on mount; the buffer is TAKEN, so a WebView
+//    reload won't replay it.
+//  - once this listener exists: emitted live as `startup-file-rejected` — warm
+//    start, plus every macOS Apple-Event rejection after the poll. Rust keys
+//    the choice on whether `get_startup_rejection` has been called yet, which
+//    is its only signal that this listener is wired (#1344).
+// A same-tick double delivery is harmless: `dedupKey: "startup-file-rejected"`
+// collapses it into one toast with a count badge.
 // The user double-clicked a file and silently landed on welcome.md; this is the
 // feedback. The message is composed here from the code so no path reaches the
 // DOM (mirrors the sidecar-restart-failed contract).
