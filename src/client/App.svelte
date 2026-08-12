@@ -2892,6 +2892,7 @@ const shouldShowModelPicker = $derived(
 {#snippet resizeHandle(side: "left" | "right", onmousedown: (e: MouseEvent) => void, testId?: string, widthPx?: number)}
   <div
     data-testid={testId ?? `${side}-panel-resize-handle`}
+    class="rail-resize-handle"
     role="slider"
     aria-orientation="horizontal"
     aria-label={side === "left" ? "Resize left panel" : "Resize right panel"}
@@ -2921,13 +2922,6 @@ const shouldShowModelPicker = $derived(
     }}
     onkeyup={() => {
       // Width is already persisted inside handleResizeStep on each keyboard step.
-    }}
-    style="width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; transition: background 0.15s; position: relative; z-index: var(--tandem-z-base);"
-    onmouseenter={(e) => {
-      (e.currentTarget as HTMLDivElement).style.background = "var(--tandem-border-strong)";
-    }}
-    onmouseleave={(e) => {
-      (e.currentTarget as HTMLDivElement).style.background = "transparent";
     }}
   ></div>
 {/snippet}
@@ -3264,6 +3258,25 @@ const shouldShowModelPicker = $derived(
     flex-shrink: 0;
   }
 
+  /* #1396: the editor row's vertical clearance, declared ONCE for the rail
+     shell AND for the drag strip that sits beside it. Both are flex items of
+     the same `align-items: stretch` row, and under `stretch` an item's margins
+     inset its stretched cross size — so while only the shell carried these two
+     margins, the 4px strip stretched the FULL row height and its hover tint
+     painted 52px above and 52-68px below the rail it resizes.
+
+     One rule, two consumers, deliberately: the bottom inset is
+     density-dependent (`--tandem-status-clearance-total` rides
+     `--tandem-space-5`, so 52/60/68px across compact/cozy/spacious), so a
+     hardcoded copy on the strip would desync at two densities out of three,
+     and any second declaration desyncs the moment either token moves. A third
+     consumer may join this selector list; it must never get its own copy.
+     Pinned by tests/design-system-impl/rail-clearance-contract.test.ts. */
+  .rail-shell,
+  .rail-resize-handle {
+    margin-top: var(--tandem-rail-top-clearance, 0);
+    margin-bottom: var(--tandem-status-clearance-total, 60px);
+  }
   /* Always-mounted dual-layer rail. The shell owns width + chrome (bg, inner
      radius, side shadow) + the hover-grow; its two children (`.rail-full` via
      the data-testid divs in markup, and `.rail-peek` via PeekStrip) are
@@ -3271,13 +3284,11 @@ const shouldShowModelPicker = $derived(
      is set inline (`width: <dragWidth>px`); the collapsed width + hover-grow
      live here so the CSS `:hover` rule can win (an inline width would not be
      overridable). overflow:hidden clips the 28px peek button to a 14px sliver
-     at rest. */
+     at rest. Its vertical extent comes from the shared rule above, not here. */
   .rail-shell {
     position: relative;
     flex-shrink: 0;
     overflow: hidden;
-    margin-top: var(--tandem-rail-top-clearance, 0);
-    margin-bottom: var(--tandem-status-clearance-total, 60px);
     background: var(--tandem-surface-muted);
     /* #798: ease the open/close width + the side shadow. The collapse-side
        display:none of `.rail-full` is deferred by the `.animating` flag (JS)
@@ -3286,17 +3297,55 @@ const shouldShowModelPicker = $derived(
       width 360ms cubic-bezier(0.22, 1, 0.36, 1),
       box-shadow 280ms cubic-bezier(0.22, 1, 0.36, 1);
   }
+  /* The drag strip between a rail and the editor. Everything here used to be an
+     inline `style` attribute plus two inline JS handlers for the hover tint;
+     both moved into the stylesheet for #1396, because the clearance the strip
+     was missing has to come from the shared rule above and a clearance copied
+     into a string literal is precisely the desync that rule exists to prevent.
+     So: vertical extent from the shared rule, horizontal box + chrome here.
+
+     Declared BEFORE the reduce-motion blocks on purpose — the media-query rule
+     below beats this one by source order alone (see its comment), so moving
+     this rule after it would silently unguard the colour crossfade.
+
+     `:focus-visible` also paints a background because this element and
+     `.rail-shell-right` are both z-index 1 with the rail LATER in DOM, so the
+     outward half of a 2px outline on the right-hand strip can be over-painted;
+     the accent fill is unconditionally visible and unconditionally distinct
+     from the border-strong hover tint on a 4px transparent strip. */
+  .rail-resize-handle {
+    position: relative;
+    z-index: var(--tandem-z-base);
+    flex-shrink: 0;
+    width: 4px;
+    background: transparent;
+    cursor: col-resize;
+    transition: background 0.15s;
+  }
+  .rail-resize-handle:hover {
+    background: var(--tandem-border-strong);
+  }
+  .rail-resize-handle:focus-visible {
+    background: var(--tandem-accent);
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
   /* Reduce motion: snap (the JS path likewise skips the `animating` flag so
      `.rail-full` drops to display:none synchronously). The :global body class
      mirrors the OS query but also honours the in-app reduceMotion setting; the
      media-query rule wins by SOURCE ORDER (equal specificity to the base), the
-     body-class rule by added specificity — both override the base transition. */
+     body-class rule by added specificity — both override the base transition.
+     The drag strip's colour crossfade is guarded here too (#1396): it shipped
+     unguarded only because an inline style was structurally unreachable by
+     these rules, not because it was meant to ignore the setting. */
   @media (prefers-reduced-motion: reduce) {
-    .rail-shell {
+    .rail-shell,
+    .rail-resize-handle {
       transition: none;
     }
   }
-  :global(body.tandem-reduce-motion) .rail-shell {
+  :global(body.tandem-reduce-motion) .rail-shell,
+  :global(body.tandem-reduce-motion) .rail-resize-handle {
     transition: none;
   }
   /* z-index lifts the pinned rail above the editor column. Both rails are
