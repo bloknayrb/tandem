@@ -20,10 +20,18 @@
  * sees Tandem open with the wrong document and no error, and only stderr says
  * why. Nothing else in the tree compares these lists, so drift ships.
  *
- * Direction matters: registered-but-unsupported is the bug. The reverse
- * (`.htm` is server-supported but deliberately not OS-registered, since
- * `.html` alone is the association) is a legitimate product choice and is NOT
- * asserted here.
+ * Direction matters between (1) and the others: registered-but-unsupported is
+ * the bug, and `tauri.conf.json` is deliberately narrower than both — `.html`
+ * alone is the association, `.htm` is not registered. That asymmetry is a
+ * product choice and stays unasserted.
+ *
+ * Between (2) and (3) the relation is EQUALITY, not subset (#1344). A narrower
+ * Rust list reads as harmless defense-in-depth and is not: `SUPPORTED_FILE_ASSOC_EXTS`
+ * stopped being an argv-only filter once the macOS Apple Event was routed
+ * through it, and "Open With" / a Dock-icon drop deliver any file regardless of
+ * what the OS registered. `.htm` was omitted on argv-only reasoning and
+ * silently became a refusal of a file the server accepts. Subset would have
+ * passed; equality is what catches it.
  */
 
 import { readFileSync } from "node:fs";
@@ -64,8 +72,13 @@ describe("OS file associations align with the server's accepted extensions", () 
     expect(rejected).toEqual([]);
   });
 
-  it("the Rust argv filter never admits an extension the server will reject", () => {
-    const overpermissive = rustAssocExts().filter((ext) => !SUPPORTED_EXTENSIONS.has(`.${ext}`));
-    expect(overpermissive).toEqual([]);
+  it("the Rust shell filter accepts exactly what the server accepts", () => {
+    // Equality, both directions. Over-permissive would let a doomed HTTP
+    // request through (harmless, the server refuses it). UNDER-permissive is
+    // the #1344 bug: the shell refuses a file the app can actually open, and
+    // the user just lands on welcome.md.
+    const rust = rustAssocExts().slice().sort();
+    const server = [...SUPPORTED_EXTENSIONS].map((e) => e.replace(/^\./, "")).sort();
+    expect(rust).toEqual(server);
   });
 });

@@ -393,23 +393,24 @@ if (isTauriRuntime()) {
 }
 
 // Surface OS file-association open failures (Tauri-only) as a warning toast.
-// The Rust side classifies the rejected double-clicked file and signals a
-// STABLE, PATH-FREE reason code via two surfaces, both handled here (see #630):
-//  - before this listener exists: buffered Rust-side in a OnceLock-style slot.
-//    That covers argv cold start AND a macOS Apple-Event rejection landing
-//    before the poll below — the Opened event arrives 100–300 ms after a cold
-//    launch, ahead of these deferred dynamic imports. Polled once via
-//    `get_startup_rejection` on mount; the buffer is TAKEN, so a WebView
-//    reload won't replay it.
-//  - once this listener exists: emitted live as `startup-file-rejected` — warm
-//    start, plus every macOS Apple-Event rejection after the poll. Rust keys
-//    the choice on whether `get_startup_rejection` has been called yet, which
-//    is its only signal that this listener is wired (#1344).
-// A same-tick double delivery is harmless: `dedupKey: "startup-file-rejected"`
-// collapses it into one toast with a count badge.
 // The user double-clicked a file and silently landed on welcome.md; this is the
-// feedback. The message is composed here from the code so no path reaches the
-// DOM (mirrors the sidecar-restart-failed contract).
+// feedback. Rust classifies the rejection and buffers a STABLE, PATH-FREE
+// reason code; the message is composed here from that code, so no path reaches
+// the DOM (mirrors the sidecar-restart-failed contract). See #630.
+//
+// ONE delivery surface: `get_startup_rejection`, which TAKES. Both paths below
+// call it — the mount poll (covers a rejection that happened before this code
+// ran: argv cold start, and the macOS Apple Event, which lands 100–300 ms into
+// a cold launch, ahead of these deferred dynamic imports) and the
+// `startup-file-rejected` listener, which is a payload-free NUDGE meaning
+// "something is buffered, don't wait for the next mount".
+//
+// The two are deliberately NOT ordered against each other. They race, and
+// take-once settles it: whichever gets there first toasts, the other gets null.
+// Do not "fix" this by having Rust choose a surface based on whether the poll
+// has happened — #1344 did, and it was wrong, because these are two independent
+// promise chains and the shorter poll chain routinely wins, so the listener
+// could still be unwired when Rust concluded it was ready.
 if (isTauriRuntime()) {
   const messageForCode = (code: string): string => {
     switch (code) {
@@ -436,16 +437,28 @@ if (isTauriRuntime()) {
     });
   };
 
+  // Take whatever Rust has buffered and toast it. Safe to call from either
+  // path and safe to call twice: the command TAKES, so the loser of the race
+  // gets `null` and does nothing.
+  const drainStartupRejection = (): void => {
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<string | null>("get_startup_rejection"))
+      .then((code) => {
+        if (code) pushStartupRejection(code);
+      })
+      .catch((err) => {
+        console.warn("[App] Failed to drain buffered startup rejection:", err);
+      });
+  };
+
   let unlistenRejected: (() => void) | null = null;
   let rejectedCancelled = false;
 
-  // Live (warm-start / macOS Apple-Event) rejections arrive as events.
+  // Nudge path: a rejection landed while this WebView was already up. The event
+  // carries no payload by design — reading a code off it would be a second
+  // delivery surface, and the two would disagree the moment one of them raced.
   import("@tauri-apps/api/event")
-    .then(({ listen }) =>
-      listen<string>("startup-file-rejected", (event) => {
-        pushStartupRejection(typeof event.payload === "string" ? event.payload : "");
-      }),
-    )
+    .then(({ listen }) => listen("startup-file-rejected", () => drainStartupRejection()))
     .then((un) => {
       if (rejectedCancelled) un();
       else unlistenRejected = un;
@@ -454,17 +467,9 @@ if (isTauriRuntime()) {
       console.warn("[App] Failed to wire startup-file-rejected listener:", err);
     });
 
-  // Cold-start rejection was buffered before this listener existed — drain it
-  // once. `get_startup_rejection` TAKES the value, so this is idempotent across
-  // re-mounts.
-  import("@tauri-apps/api/core")
-    .then(({ invoke }) => invoke<string | null>("get_startup_rejection"))
-    .then((code) => {
-      if (code) pushStartupRejection(code);
-    })
-    .catch((err) => {
-      console.warn("[App] Failed to poll buffered startup rejection:", err);
-    });
+  // Mount path: covers a rejection buffered before this code ran, and is the
+  // whole reason a dropped nudge is not a lost toast.
+  drainStartupRejection();
 
   onDestroy(() => {
     rejectedCancelled = true;

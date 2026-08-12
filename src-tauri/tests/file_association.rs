@@ -172,7 +172,10 @@ fn key_equals_value_flag_is_skipped_not_parsed() {
 fn each_supported_extension_is_accepted() {
     let dir = TempDir::new().unwrap();
     let cwd = std::env::current_dir().unwrap();
-    for ext in ["md", "markdown", "txt", "html", "docx"] {
+    // Iterate the constant, never a copy of it: a sixth extension added to
+    // `SUPPORTED_FILE_ASSOC_EXTS` must be exercised here automatically, or it
+    // ships unexercised on the argv path (which is how `.htm` drifted).
+    for ext in app_lib::SUPPORTED_FILE_ASSOC_EXTS {
         let p = touch(&dir, &format!("doc.{ext}"));
         let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
         assert_eq!(
