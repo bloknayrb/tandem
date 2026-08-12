@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-08-11
+
+This release is about your AI noticing that you said something.
+
+Tandem has always been able to tell your AI that you commented on a paragraph or sent a chat message, but for sessions you started yourself, something had to be listening first — and nothing arranged that for you. A session you opened by typing `claude` would sit there while your comments piled up unread. Now it sets that up itself, on its own, the first time it touches Tandem, and Tandem says how at the moment the connection opens rather than hoping the subject comes up later. Measured across ten isolated sessions, the number that arranged it went from three in six to six in six.
+
+The rest is a smaller thing that will save you a round trip: bug reports now arrive with the details we would otherwise have to ask you for, and the Report a bug link fills them in.
+
 ### Changed
 
 - **Hand-started Claude Code sessions now try to watch Tandem automatically on first use.** After the first successful read-only `tandem_status`, the bundled skill makes one persistent built-in Monitor attempt using the server-reported wake address; asking Claude to watch is now recovery rather than setup. Existing setup-managed skill copies refresh before Tandem reports ready, including when the launcher is disabled or deferred. A missing standalone skill does not install during generic startup, so plugin-only users do not silently acquire a second integration route. Plugin-only sessions receive the updated instructions when Claude Code refreshes its plugin cache, on a timeline Tandem does not control. If a plugin-backed session starts both its packaged monitor and the built-in watch automatically, wakes remain payload-free and inbox reads de-duplicate; `TaskStop` stops the built-in watch when doubled wakes make the overlap visible.
