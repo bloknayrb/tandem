@@ -6,57 +6,44 @@ import { describe, expect, it } from "vitest";
  * Guards ADR-012's refuted stateless-transport claim (#1332, evidence #1253).
  *
  * ADR-012 asserted, as fact, that the SDK "crashes in stateless mode after the
- * first `server.connect()`". The #1253 probe refuted both the mechanism and the
- * severity, measured against `@modelcontextprotocol/sdk` **1.30.0**:
+ * first `server.connect()`". The #1253 probe refuted it. The mechanism is
+ * recorded once, in `docs/spikes/stateless-transport-probe.md` — this file
+ * deliberately does not restate it, because four copies of one explanation is
+ * the drift this change exists to correct.
  *
- *   - There is no crash. `StreamableHTTPServerTransport.handleRequest` carries a
- *     deliberate guard that throws `Stateless transport cannot be reused across
- *     requests` once a transport built without a `sessionIdGenerator` has
- *     handled one request (`_hasHandledRequest`), so the boundary is the SECOND
- *     REQUEST on a given transport, not the handshake.
- *   - `server.connect()` is not involved. `Protocol.connect()` does throw when a
- *     server already holds a transport, but that is a DIFFERENT and still-true
- *     guard — the one ADR-045 Decision 2 and `transport-registry.ts` rest on.
- *     Conflating the two is the specific mistake this test exists to catch,
- *     because it has already been made once during triage.
- *   - Under the Node wrapper the throw reaches the client as a bare 500 with an
- *     empty body, which is the plausible origin of the 2024 "crash" reading.
+ * The one distinction the matcher below depends on: "cannot be **re**used" is
+ * the SDK's own TRUE rule, and `Protocol.connect()` throwing on an
+ * already-connected server is a DIFFERENT and still-true guard — the one
+ * ADR-045 and `transport-registry.ts` rest on. Conflating the two is the
+ * specific mistake this test exists to catch, because it was already made once
+ * during triage.
  *
- * Full evidence: `docs/spikes/stateless-transport-probe.md`.
- *
- * WHY A TEST. The claim had propagated: `docs/decisions.md`:53 quoted it as
- * "untested", :54 asserted it, and ADR-045's amendment (~:995) quotes it again.
- * That is the same "authoritative-sounding prose that is now false, restated
- * across files" class `tests/docs/loopback-gate-claims.test.ts` was built for,
- * and the same remedy: pin the correction so a later "harmonization" pass
+ * WHY A TEST. The claim had propagated across files as authoritative-sounding
+ * prose — the same class `tests/docs/loopback-gate-claims.test.ts` was built
+ * for, and the same remedy: pin the correction so a later "harmonization" pass
  * cannot quietly restore the false version.
  *
- * WHY THREE LIMBS. The claim propagated in three different wordings, so a
- * matcher pinned to any one of them leaves the others free to re-assert it.
- * `docs/lessons-learned.md` lesson 15 carried the second and third ("still
- * doesn't work — each transport needs `sessionIdGenerator`") and is corrected
- * in this same change; the limbs and the prose fix have to land together, since
- * either one alone is red. Note the third limb must not fire on "cannot be
- * REused", which is the SDK's own TRUE rule.
+ * WHY THREE LIMBS. It propagated in three wordings, so a matcher pinned to one
+ * leaves the others free to re-assert it. `docs/lessons-learned.md` lesson 15
+ * carried the second and third and is corrected in this same change.
  *
- * `docs/decisions.md`'s ADR-045 amendment passes on its own merits, not by
- * exemption: it names #1253 and says the claim "has never been re-tested".
+ * WHY SENTENCES, NOT LINES. A markdown paragraph here is a single line —
+ * `docs/decisions.md`:53 is 1893 characters. A line-scoped exemption therefore
+ * exempts the whole paragraph, so appending "stateless mode crashes on Windows"
+ * to a corrected passage passed green. Measured, not theorised: that mutation
+ * was run against the line-scoped version and the suite stayed 2/2. The guard
+ * covered everything EXCEPT the three passages the claim actually lives in,
+ * which are exactly the ones a future edit would touch. Scoring each sentence
+ * separately is what makes the exemption mean "this claim is marked" rather
+ * than "something in this paragraph is marked".
  */
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 
-/**
- * Budget for the corpus walk, matching the sibling guard's rationale: this walk
- * reads ~1500 `.ts` files synchronously, and under the full suite vitest is
- * already saturating the disk. A timing verdict wearing the costume of a
- * documentation failure is the most expensive kind of false alarm.
- */
-const CORPUS_TIMEOUT_MS = 90_000;
-
-/** Recursive `.md` listing, repo-relative and forward-slashed. */
-function markdownUnder(dir: string): string[] {
+/** Recursive listing under `dir`, repo-relative and forward-slashed. */
+function filesUnder(dir: string, ext: string): string[] {
   return readdirSync(join(REPO_ROOT, dir), { recursive: true, encoding: "utf-8" })
-    .filter((p) => p.endsWith(".md"))
+    .filter((p) => p.endsWith(ext))
     .map((p) => `${dir}/${p.replace(/\\/g, "/")}`);
 }
 
@@ -73,43 +60,56 @@ function markdownUnder(dir: string): string[] {
  * given day; they were accurate when written, and rewriting them is the
  * opposite of what a triage record is for. Same honest carve-out
  * `tests/docs/tool-count-drift.test.ts` makes for `docs/decisions.md`.
+ *
+ * `tests/docs/` is out wholesale rather than just this file by name. Every
+ * guard in that directory quotes the phrases it hunts, so a future guard
+ * quoting THIS one's phrasings would fail here — pointing at a file its author
+ * never touched.
  */
 function scannedFiles(): string[] {
-  const docs = ["CLAUDE.md", "AGENTS.md", ...markdownUnder("docs")];
-  const code = ["src", "tests"].flatMap((dir) =>
-    readdirSync(join(REPO_ROOT, dir), { recursive: true, encoding: "utf-8" })
-      .filter((p) => p.endsWith(".ts"))
-      .map((p) => `${dir}/${p.replace(/\\/g, "/")}`),
-  );
-  return [...docs, ...code].filter(
-    (p) =>
-      !p.startsWith("docs/triage/") &&
-      // This file quotes the wording it is hunting for.
-      !p.endsWith("stateless-transport-claims.test.ts"),
-  );
+  return [
+    "CLAUDE.md",
+    "AGENTS.md",
+    ...filesUnder("docs", ".md"),
+    ...["src", "tests"].flatMap((dir) => filesUnder(dir, ".ts")),
+  ].filter((p) => !p.startsWith("docs/triage/") && !p.startsWith("tests/docs/"));
 }
 
-/** Read every scanned file once, memoized at module scope. */
-let cachedCorpus: Array<{ rel: string; lines: string[] }> | null = null;
+/**
+ * Only files that mention the topic at all can carry the claim. Of ~1050 files
+ * in the corpus, 8 contain `stateless`; reading the rest into line arrays
+ * retains ~28 MB to examine two dozen lines. `assertsStatelessCrash` already
+ * early-returns on the same predicate, so this changes cost, not verdicts.
+ */
 function corpus(): Array<{ rel: string; lines: string[] }> {
-  if (!cachedCorpus) {
-    cachedCorpus = scannedFiles().map((rel) => ({
-      rel,
-      lines: readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n"),
-    }));
-  }
-  return cachedCorpus;
+  return scannedFiles().flatMap((rel) => {
+    const text = readFileSync(join(REPO_ROOT, rel), "utf-8");
+    return TOPIC.test(text) ? [{ rel, lines: text.split("\n") }] : [];
+  });
 }
 
-/** The refuted assertion, in each of the three phrasings it has taken. */
-function assertsStatelessCrash(line: string): boolean {
-  if (!/stateless/i.test(line)) return false;
-  if (/crash(es|ed|ing)?\b/i.test(line)) return true;
-  if (/does ?n.t work|is unusable|cannot be used|never works?\b/i.test(line)) return true;
-  // "cannot be REused" is the SDK's own TRUE rule — never let it match here.
-  return (
-    /\b(needs|requires)\b/i.test(line) && /sessionIdGenerator/.test(line) && !/re-?us/i.test(line)
-  );
+const TOPIC = /stateless/i;
+
+/** The SDK's own TRUE rule. It must never be read as the refuted claim. */
+const SDK_REUSE_RULE = /re-?us/i;
+
+/** The refuted assertion, in each of the wordings it has taken. */
+const BROKEN_PHRASING =
+  /crash(es|ed|ing)?\b|does ?n.t work|is unusable|cannot be used|never works?\b/i;
+
+function assertsStatelessCrash(text: string): boolean {
+  if (!TOPIC.test(text) || SDK_REUSE_RULE.test(text)) return false;
+  if (BROKEN_PHRASING.test(text)) return true;
+  return /\b(needs|requires)\b/i.test(text) && /sessionIdGenerator/.test(text);
+}
+
+/**
+ * Sentence-sized units within one markdown line. Boundaries are sentence-final
+ * punctuation, spaced em-dashes, and semicolons — the three the corrected
+ * passages actually use to separate a struck claim from its correction.
+ */
+function sentences(line: string): string[] {
+  return line.split(/(?<=[.!?])\s+|\s+—\s+|;\s+/);
 }
 
 /**
@@ -121,35 +121,37 @@ function assertsStatelessCrash(line: string): boolean {
  * the SDK crashes in stateless mode (#1253)" would sail through on it, which is
  * precisely the re-assertion this guard exists to stop.
  */
-function isMarkedAsOverturned(line: string): boolean {
-  return /~~/.test(line) || (/#1253|#1332/.test(line) && /refuted|never|untested/i.test(line));
+function isMarkedAsOverturned(text: string): boolean {
+  return /~~/.test(text) || (/#1253|#1332/.test(text) && /refuted|never|untested/i.test(text));
 }
 
 describe("stateless-transport documentation claims (#1332 / #1253)", () => {
-  it(
-    "nothing asserts that stateless mode crashes without marking it as overturned",
-    () => {
-      const offenders: string[] = [];
+  it("nothing asserts that stateless mode crashes without marking it as overturned", () => {
+    const offenders: string[] = [];
 
-      for (const { rel, lines } of corpus()) {
-        lines.forEach((line, i) => {
-          if (assertsStatelessCrash(line) && !isMarkedAsOverturned(line)) {
+    for (const { rel, lines } of corpus()) {
+      lines.forEach((line, i) => {
+        for (const unit of sentences(line)) {
+          if (assertsStatelessCrash(unit) && !isMarkedAsOverturned(unit)) {
             offenders.push(`${rel}:${i + 1}`);
+            return;
           }
-        });
-      }
+        }
+      });
+    }
 
-      expect(offenders).toEqual([]);
-    },
-    CORPUS_TIMEOUT_MS,
-  );
+    expect(offenders).toEqual([]);
+  });
 
   it("the corrected ADR-012 passage and its evidence file are both present", () => {
     // Non-vacuity control. The guard above can only pass honestly if the
     // corrected text is what is actually in the tree; without this, deleting
     // ADR-012's whole rationale would also make it green.
+    //
+    // The mechanism strings are asserted against the SPIKE, which is their
+    // single source. Asserting them against `decisions.md` would have made the
+    // prose duplication load-bearing — pinning the copies in place.
     const decisions = readFileSync(join(REPO_ROOT, "docs", "decisions.md"), "utf-8");
-    expect(decisions).toContain("Stateless transport cannot be reused across requests");
     expect(decisions).toContain("spikes/stateless-transport-probe.md");
 
     const spike = readFileSync(
@@ -157,6 +159,7 @@ describe("stateless-transport documentation claims (#1332 / #1253)", () => {
       "utf-8",
     );
     // The distinction that makes the correction correct rather than merely different.
+    expect(spike).toContain("Stateless transport cannot be reused across requests");
     expect(spike).toContain("_hasHandledRequest");
     expect(spike).toContain("Protocol.connect()");
   });
