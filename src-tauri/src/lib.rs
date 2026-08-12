@@ -132,6 +132,7 @@ const SIDECAR_UNLOCK_DEADLINE_SECS: u64 = 15;
 /// timeout elsewhere — it only bounds a best-effort diagnostic on the
 /// terminal failure dialog, so a wedged lookup fails toward "less detail",
 /// never toward blocking the dialog itself.
+#[cfg(target_os = "windows")]
 const PORT_HOLDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESTARTS: u32 = 3;
 /// The two TCP ports the sidecar binds. Used by the port-holder diagnostic on
@@ -1281,14 +1282,23 @@ pub fn run() {
                 // and orphaning a child. That is the exact failure the gate was
                 // added for; only this call site was outside it.
                 // CAS rather than a bare store, and release only what we took:
-                // a blind store would clear a gate held by someone else.
-                let gate_held = RESTART_IN_PROGRESS
+                // a blind store would clear a gate held by someone else. And if
+                // the gate is already held — some other path won the race before
+                // we got here — we must NOT run start_sidecar anyway: doing so
+                // is the exact concurrent-spawn failure this gate exists to
+                // prevent, just from the other direction. Skip, like
+                // `restart_sidecar` itself does on a gate miss.
+                if RESTART_IN_PROGRESS
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok();
-                let start_result = start_sidecar(&handle, &client, cold_start_file.as_deref()).await;
-                if gate_held {
-                    RESTART_IN_PROGRESS.store(false, Ordering::Release);
+                    .is_err()
+                {
+                    log::warn!(
+                        "initial start_sidecar found RESTART_IN_PROGRESS already held — skipping to avoid a concurrent spawn"
+                    );
+                    return;
                 }
+                let start_result = start_sidecar(&handle, &client, cold_start_file.as_deref()).await;
+                RESTART_IN_PROGRESS.store(false, Ordering::Release);
 
                 if let Err(e) = start_result {
                     log::error!("Sidecar failed: {e}");
@@ -1723,31 +1733,6 @@ async fn port_holder_for_dialog() -> Option<PortHolder> {
     }
 }
 
-/// The terminal "your server didn't start" dialog, with a one-shot retry.
-///
-/// This is the dialog a user hits after a Windows auto-update when the old
-/// sidecar's port hasn't released yet. Two things it does that the previous
-/// version did not:
-///
-/// 1. **Names the holder.** `holder` comes from `describe_port_holder`, so the
-///    message says "Port 3479 appears to be held by node.exe (PID 12345)"
-///    instead of asking the user to run `netstat` themselves.
-/// 2. **Offers a retry** (`allow_retry`), which re-runs `start_sidecar` — whose
-///    freshly spawned sidecar calls `freePort()` on both ports as its first act.
-///    The kill therefore stays in `src/server/platform.ts`, its single owner; a
-///    second `taskkill` implementation here would duplicate that logic AND add a
-///    PID-reuse race whose bad outcome is killing the wrong process.
-///
-/// `allow_retry: false` on the second showing — an unbounded retry loop at ~2
-/// minutes a cycle is worse than an honest dead end, and the dead end names the
-/// real remaining exit (Settings → Network → Restart server).
-///
-/// Non-blocking `.show(cb)` deliberately: `blocking_show()` from inside a
-/// `tauri::async_runtime::spawn` task parks this task's worker (see
-/// `show_update_available_dialog`'s doc comment), and the callback form is what
-/// lets the retry spawn async work. Note the callback's `bool` is `true` only
-/// for the first (OK) label — Esc and the title-bar X both arrive as `false`,
-/// i.e. as Close.
 /// Parent a dialog builder to the main window if it exists, else warn and
 /// leave it parentless. Shared by every `show_*_dialog` function below —
 /// `fn_name` names the caller in the log line so a parentless dialog is
@@ -1766,6 +1751,35 @@ fn attach_main_window_or_warn<R: tauri::Runtime>(
     }
 }
 
+/// The terminal "your server didn't start" dialog, with a one-shot retry.
+///
+/// This is the dialog a user hits after a Windows auto-update when the old
+/// sidecar's port hasn't released yet. Two things it does that the previous
+/// version did not:
+///
+/// 1. **Names the holder.** `holder` comes from `describe_port_holder`, so the
+///    message says "Port 3479 appears to be held by node.exe (PID 12345)"
+///    instead of asking the user to run `netstat` themselves.
+/// 2. **Offers a retry** (`allow_retry`), which re-runs `start_sidecar` — whose
+///    freshly spawned sidecar calls `freePort()` on both ports as its first act.
+///    The kill therefore stays in `src/server/platform.ts`, its single owner; a
+///    second `taskkill` implementation here would duplicate that logic AND add a
+///    PID-reuse race whose bad outcome is killing the wrong process. Note this
+///    dialog only appears after `start_sidecar` already ran that same
+///    `freePort()` up to MAX_RESTARTS+1 times without success — the retry's
+///    real new leverage is elapsed time, not a fresh kill mechanism, so the
+///    message text says "try to end", not "will end".
+///
+/// `allow_retry: false` on the second showing — an unbounded retry loop at ~2
+/// minutes a cycle is worse than an honest dead end, and the dead end names the
+/// real remaining exit (Settings → Network → Restart server).
+///
+/// Non-blocking `.show(cb)` deliberately: `blocking_show()` from inside a
+/// `tauri::async_runtime::spawn` task parks this task's worker (see
+/// `show_update_available_dialog`'s doc comment), and the callback form is what
+/// lets the retry spawn async work. Note the callback's `bool` is `true` only
+/// for the first (OK) label — Esc and the title-bar X both arrive as `false`,
+/// i.e. as Close.
 fn show_server_error_dialog(
     app: &tauri::AppHandle,
     error: &str,
@@ -1784,15 +1798,21 @@ fn show_server_error_dialog(
     }
     if allow_retry {
         // Say what the retry will actually DO. When we have identified a live
-        // process, retrying terminates it — "free the port" does not read as
-        // "end node.exe, discarding its unsaved state" to a non-technical user,
-        // and the likeliest collision in this codebase's own workflow is a dev
-        // server the user cares about. When the port is merely in TIME_WAIT
-        // there is nothing to kill and the retry works only because time
-        // passed; promising to "free the port" there would be a lie.
+        // process, retrying attempts to terminate it — "free the port" does
+        // not read as "end node.exe, discarding its unsaved state" to a
+        // non-technical user, and the likeliest collision in this codebase's
+        // own workflow is a dev server the user cares about. "Attempts" rather
+        // than a flat promise: by the time this dialog shows, `start_sidecar`
+        // has already run `freePort()` against this same holder up to
+        // MAX_RESTARTS+1 times without success, so a holder that survived all
+        // of those (elevated/protected, or something that respawns) may well
+        // survive one more — don't claim certainty the mechanism hasn't earned.
+        // When the port is merely in TIME_WAIT there is nothing to kill and
+        // the retry works only because time passed; promising to "free the
+        // port" there would be a lie.
         match holder.as_ref().and_then(|h| h.killable_process.as_deref()) {
             Some(proc) => message.push_str(&format!(
-                "\n\nRetry Server Start will end {proc} and start Tandem's server again. \
+                "\n\nRetry Server Start will try to end {proc} and start Tandem's server again. \
                  This can take up to two minutes."
             )),
             None => message.push_str(

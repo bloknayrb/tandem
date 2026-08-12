@@ -2,7 +2,6 @@ import { execFileSync, execSync } from "child_process";
 import envPaths from "env-paths";
 import net from "net";
 import path from "path";
-import { systemBin } from "./integrations/acl-win.js";
 
 /**
  * Resolve the Tandem app-data root directory. `TANDEM_APP_DATA_DIR` overrides
@@ -12,6 +11,18 @@ export function resolveAppDataDir(): string {
   const envOverride = process.env.TANDEM_APP_DATA_DIR;
   if (envOverride && envOverride.length > 0) return envOverride;
   return envPaths("tandem", { suffix: "" }).data;
+}
+
+/**
+ * Resolve a Windows system binary by absolute path under `%SystemRoot%`.
+ * Bypasses `PATH` so a git-bash / MSYS / Cygwin shadow (e.g. their own
+ * `whoami` that doesn't understand Windows flags) can't intercept us.
+ * Lives here rather than in a feature module (e.g. `integrations/acl-win.ts`,
+ * a former home) because this file is a leaf utility imported broadly across
+ * `src/server` — a feature module importing a leaf is fine, the reverse isn't.
+ */
+export function systemBin(name: string): string {
+  return path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", name);
 }
 
 const APP_DATA_DIR = resolveAppDataDir();

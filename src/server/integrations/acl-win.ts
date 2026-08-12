@@ -39,8 +39,8 @@
  */
 
 import { execFile } from "node:child_process";
-import { join } from "node:path";
 import { promisify } from "node:util";
+import { systemBin } from "../platform.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -48,16 +48,6 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
   }
-}
-
-/**
- * Resolve a Windows system binary by absolute path under `%SystemRoot%`.
- * Bypasses `PATH` so a git-bash / MSYS / Cygwin shadow (e.g. their own
- * `whoami` that doesn't understand Windows flags) can't intercept us.
- * `icacls` and `whoami` both live in `System32`.
- */
-export function systemBin(name: string): string {
-  return join(process.env.SystemRoot ?? "C:\\Windows", "System32", name);
 }
 
 /**

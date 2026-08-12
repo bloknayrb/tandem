@@ -108,6 +108,17 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
       expect(parseNetstatListeningPids(out, 3479)).toEqual([]);
     });
 
+    it("does not treat a TIME_WAIT row as a listener (headline case: killed sidecar's lingering connection)", () => {
+      // Mirrors `finds_a_lingering_connection_when_there_is_no_listener` in
+      // src-tauri/src/lib.rs — same row, same claim: the old sidecar is gone
+      // (no LISTENING row) but its connections sit in TIME_WAIT with owner PID
+      // 0, and freePortWindows must not try to taskkill PID 0. The Rust and TS
+      // parsers must agree here or the dialog names one thing and the kill
+      // targets another.
+      const out = "  TCP    127.0.0.1:3479         127.0.0.1:52000        TIME_WAIT       0\n";
+      expect(parseNetstatListeningPids(out, 3479)).toEqual([]);
+    });
+
     it("ignores listeners on interfaces that don't contend with a loopback bind", () => {
       // A WSL/Hyper-V/Docker adapter listening on its own address does not
       // prevent Tandem binding 127.0.0.1 — killing it would be pure collateral.
