@@ -7,8 +7,9 @@ disable-model-invocation: true
 # Cut a Tandem Release
 
 Codifies the release sequence used from v0.14.3 onward, and refined by every cut
-through v0.20.1 — including the global-install upgrade step, the two changelog
-gaps, and the duplicate-draft race described below. The version
+through v0.22.0 — including the global-install upgrade step, the two changelog
+gaps, the rebuild-before-retest step, and the duplicate-draft race described
+below. The version
 bump has **SIX surfaces**, none of which bump automatically. Surfaces 1–4 are
 CI-guarded by `tests/plugin/plugin-version-pin.test.ts` (any divergence from
 `package.json` fails CI); surfaces 5–6 are **not guarded** — this skill is what
@@ -115,7 +116,18 @@ prevents them drifting.
      directions — "bundled but we never call it" belongs in the entry, or the
      note implies an exposure that did not exist.
 
-3. Verify the full test suite is green — `plugin-version-pin.test.ts` proves
+3. **Rebuild before you retest.** `APP_VERSION` is a build-time tsup define, so
+   `dist/` still carries the OUTGOING version until `npm run build` runs, and
+   `tests/build/version-baked.test.ts` fails asserting the new string against a
+   stale bundle. It reads as a real regression and is not one. This has now
+   fired at three cuts (v0.19.0→v0.20.0, and again at v0.22.0 despite being
+   recorded in project memory both times), which is why it is a step here rather
+   than a note someone is expected to remember:
+   ```bash
+   npm run build
+   ```
+
+4. Verify the full test suite is green — `plugin-version-pin.test.ts` proves
    surfaces 1–4 agree (it also checks `plugin.json`'s pinned npx specs);
    `tests/plugin-manifest.test.ts` additionally fails if `package.json` and
    `plugin.json` diverge — treat either failure as "you bumped some, not all":
@@ -128,10 +140,10 @@ prevents them drifting.
    terminal. `--run` makes that unconditional; `ci.yml` and `.husky/pre-push`
    both pass it.
 
-4. Ship the bump through the normal flow: branch → PR → CI green → merge →
+5. Ship the bump through the normal flow: branch → PR → CI green → merge →
    verify master CI green on the **merge commit**.
 
-5. Tag the release on the master tip and push the tag:
+6. Tag the release on the master tip and push the tag:
    ```bash
    git tag -a v<version> -m "Tandem v<version>" && git push origin v<version>
    ```
@@ -145,7 +157,7 @@ prevents them drifting.
    tag alone does NOT publish to npm. (`HUSKY=0` on the tag push is fine — the
    commit is already CI-green.)
 
-5b. Populate the GitHub release body from the `## [<version>]` changelog
+6b. Populate the GitHub release body from the `## [<version>]` changelog
    section — `tauri-action` writes only "See the assets to download and install
    Tandem." Extract the section between its heading and the previous version's
    and pass it via `gh release edit v<version> --notes-file <file>`. Do this
@@ -153,7 +165,7 @@ prevents them drifting.
    full notes; v0.17.0 and v0.19.0 shipped with the boilerplate), so it needs
    to be a step rather than a habit.
 
-6. Wait for every matrix build, `release-check`, AND `verify-release-manifest`
+7. Wait for every matrix build, `release-check`, AND `verify-release-manifest`
    to go green, then publish the draft:
    ```bash
    gh release edit v<version> --draft=false --latest
@@ -185,7 +197,7 @@ prevents them drifting.
    developer.apple.com / App Store Connect — re-run the failed jobs after he
    signs.
 
-6b. Upgrade the local global install: `npm install -g tandem-editor@<version>`.
+7b. Upgrade the local global install: `npm install -g tandem-editor@<version>`.
    This is a smoke-checklist §4 step, but it is also a *correctness* step for
    the plugin path and easy to skip because nothing fails loudly without it. A
    stale global `tandem-editor` shadows `npx -y tandem-editor@<pin>`, so the
@@ -195,7 +207,7 @@ prevents them drifting.
    `tandem doctor` also asserts it (`Global tandem-editor@<v> matches this
    build`).
 
-7. Walk `docs/release-smoke-checklist.md`: CI signal first (matrix + macOS
+8. Walk `docs/release-smoke-checklist.md`: CI signal first (matrix + macOS
    launch smoke — **not** `tauri-webdriver.yml`, whose tag trigger was removed
    on 2026-08-08 per #1197, so a release tag no longer produces a run to check;
    review scheduled 2026-11-01 in #1345), then real installers on real
@@ -204,7 +216,7 @@ prevents them drifting.
    doctor`. Record the outcome (platforms covered, anything skipped) on the
    release PR or tracking issue — an unstated skip reads as "verified".
 
-8. Update project memory: the CLAUDE.md **Status** section (what shipped in
+9. Update project memory: the CLAUDE.md **Status** section (what shipped in
    this version) and the project memory SHIPPED entry (per the archive
    rotation discipline).
 

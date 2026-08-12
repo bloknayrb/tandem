@@ -201,9 +201,11 @@ Mechanism, ops, and failure modes: [docs/licensing-explained.md](docs/licensing-
 
 ## Status
 
-**Shipped: v0.21.0** (2026-08-10). Release history is [CHANGELOG.md](CHANGELOG.md); remaining v1.0 work is [docs/roadmap.md](docs/roadmap.md#active--toward-v10). Do not re-narrate either here.
+**Shipped: v0.22.0** (2026-08-12). Release history is [CHANGELOG.md](CHANGELOG.md); remaining v1.0 work is [docs/roadmap.md](docs/roadmap.md#active--toward-v10). Do not re-narrate either here.
 
 Core is complete — 29 active MCP tools, multi-doc tabs, CRDT-anchored annotations, chat, four push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor stdin), `.md`/`.docx`/`.txt`/`.html`, npm global install, Tauri desktop app.
+
+**First-use arming is now measured, not argued.** v0.22.0 shipped the skill description rewrite (#1391/#1392), the populated MCP `instructions` string (#1397), and the acceptance harness that grades them (#1393). Ten bounded authenticated sessions took natural first-use arming from **3 of 6 to 6 of 6**, both shapes PASS. Two things that live measurement settled and source review had not: the plugin arm reports its skill as `tandem:tandem`, so an exact-match dispatch check scores every plugin session a false decline; and a typed `/tandem` emits **no** `PreToolUse Skill` event at all, so the control arm is invisible without `UserPromptExpansion`. The harness suite is **not run by CI** — `npm test` is vitest and the pre-push hook is biome + vitest + `cargo test`, so `npm run test:acceptance-harness` is the only thing that runs it (#1399, which also carries why wiring it needs a tag-bearing checkout).
 
 **Two systems are merged but runtime-inert. Both must stay that way until their flag flips:**
 
