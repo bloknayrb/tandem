@@ -16,14 +16,23 @@ declare global {
  * the reading is authoritative, because Rust reads `window.theme()` AFTER
  * applying/releasing the override. That is the mechanism that lets a
  * transition back to `"system"` resolve correctly in the SAME round trip
- * instead of waiting on the 3s poll below (see `setNativeTheme`).
+ * instead of waiting on the poll below (see `setNativeTheme`).
  *
- * Expressed as a discriminated union rather than a flat struct so that
- * contract is enforced by the compiler instead of by this comment:
+ * Expressed as a discriminated union rather than a flat struct, because
  * `{ overrideActive: true, osTheme: "dark" }` is exactly the pair that would
- * write an echo of our own force into `tauriTheme.current`, and it must not
- * type-check. Serde cannot express this from the Rust side's flat struct, but
- * TypeScript is the consumer and is free to be stricter than the producer.
+ * write an echo of our own force into `tauriTheme.current`. Serde cannot
+ * express that from the Rust side's flat struct, but TypeScript is the
+ * consumer and is free to be stricter than the producer.
+ *
+ * Be clear about what this does NOT do. The type reaches values only through
+ * `invoke<NativeThemeOutcome>(...)`, an unchecked assertion, so the compiler
+ * polices no producer and validates no payload -- the forbidden pair can
+ * arrive over the wire and type-check fine. What actually enforces the
+ * contract is the `!outcome.overrideActive` guard in `setNativeTheme`'s
+ * `.then`, at runtime, where the violation could originate; the union's job is
+ * to make that guard the obvious shape and to type `recordResolution`'s
+ * parameter. Field-name fidelity against Rust's serde attributes is pinned
+ * separately, by `tests/docs/native-theme-claims.test.ts`.
  */
 type NativeThemeOutcome =
   | { overrideActive: true; osTheme: null }
@@ -44,10 +53,13 @@ let _initialized = false;
 // The push pipeline's own state lives in exactly TWO records below:
 // `lastPush` (what we ASSERTED to the native layer) and `lastResolved` (what
 // the native layer actually DID). They are split by LIFECYCLE, not by field
-// list — a rejection voids the whole of `lastPush` in one expression and must
-// never name `lastResolved`. A NEW pipeline fact belongs as a field on one of
-// them rather than as another module `let` — a field is cleared with its
-// record, so `_resetForTests` cannot fall out of sync with it.
+// list — a rejection voids the whole of `lastPush` in one expression, and it
+// may never write a RESOLUTION into `lastResolved`. (Once the retry ladder is
+// exhausted it does drop `lastResolved` to `null` — "we no longer know" is not
+// a resolution, and the `.catch` argues why that beats suppressing forever.)
+// A NEW pipeline fact belongs as a field on one of them rather than as another
+// module `let` — a field is cleared with its record, so `_resetForTests`
+// cannot fall out of sync with it.
 //
 // REQUIRED: both are plain module `let`s and must NEVER become `$state`.
 // `setNativeTheme` both reads `lastPush?.pref` and writes `lastPush = {…}`
@@ -55,8 +67,14 @@ let _initialized = false;
 // (useTheme.svelte.ts). A rune would (a) subscribe that effect to the push
 // pipeline, re-running `applyTheme` on every settle — precisely the
 // accidental subscription the notes in `createTheme` exist to avoid — and
-// (b) place a `$state` write inside an active reaction, which throws
-// `state_unsafe_mutation` in production as well as in dev. The sibling
+// (b) make that effect self-invalidating, since it both reads `lastPush?.pref`
+// and writes `lastPush` in one body: an unbounded re-run surfacing as
+// `effect_update_depth_exceeded`. Note it would NOT be `state_unsafe_mutation`
+// — that fires only when the active reaction matches `DERIVED | BLOCK_EFFECT |
+// ASYNC | EAGER_EFFECT`, and a plain `$effect` is `EFFECT | USER_EFFECT`,
+// which matches none of them (verified against the installed runtime; this
+// comment previously named the wrong error). Reason (a) carries the
+// conclusion on its own. The sibling
 // `useTauriFileDrop.svelte.ts` states that it "mirrors `useTauriTheme.svelte.ts`
 // in shape" and DOES declare a module-scope `$state`; do not mirror that back
 // here. `tauriTheme.current` is the only reactive value in this module.
@@ -66,18 +84,22 @@ let _initialized = false;
 // of each site doing its own `import("@tauri-apps/api/core")`.
 let invokePromise: Promise<InvokeFn> | null = null;
 
-// The 3s poll interval handle, held here (not just closed over inside
+// The poll interval handle, held here (not just closed over inside
 // `initTauriTheme`) so `_resetForTests()` can clear it.
 let pollIntervalHandle: ReturnType<typeof setInterval> | null = null;
 
 // Monotonic ticket dispenser, bumped on every `setNativeTheme` call. A push
 // compares its own ticket against THIS counter, never against `lastPush`, and
-// no `seq` field lives on that record for two reasons. First, the `.catch`
-// sets `lastPush = null` BEFORE the seq compare, so a record-based compare
-// would read `undefined` and the retry would never fire for an unsuperseded
-// push — the one case retries exist for. Second, this counter is also the
-// staleness stamp that async read-backs (onThemeChanged, the poll) capture at
-// issue time, when `lastPush` may be null; see `acceptReadback` below.
+// no `seq` field lives on that record. The durable reason: this counter is
+// ALSO the staleness stamp that async read-backs (onThemeChanged, the poll)
+// capture at issue time, when `lastPush` may be null — a record-based stamp
+// would have nothing to read there. See `acceptReadback` below.
+//
+// A second reason holds as the `.catch` is currently ordered — `lastPush =
+// null` precedes the seq compare, so a record-based compare would read
+// `undefined` and the retry would never fire for an unsuperseded push, the one
+// case retries exist for. True, but defeated by moving two adjacent
+// statements; don't mistake it for the structural argument.
 let pushSeq = 0;
 
 // What we ASSERTED to the native layer: the preference last sent to
@@ -92,52 +114,75 @@ let pushSeq = 0;
 // still in flight short-circuits instead of duplicating it.
 //
 // On rejection it is cleared to `null` — NOT restored to its previous value.
-// Restoring the previous value is a *guess* that the failed push never
-// landed, and the guess inverts in the case that actually happens: a
-// `recv_timeout` in Rust's `apply_app_mode` abandons the wait but does not
-// cancel the queued closure, so the mode can apply a moment later. The latch
-// would then claim the old preference while the OS holds the new one, and
-// re-picking the old one would be deduped away forever. `null` means "no
-// claim", which is the only honest state after a failure and guarantees the
-// next push proceeds whatever its value.
+// Restoring the previous value is a *guess* that the failed push never landed,
+// and a rejection is exactly the state in which we cannot know. Rust names one
+// concrete way the guess inverts: `apply_app_mode`'s `recv_timeout` abandons
+// the wait without cancelling the queued closure, so the mode can apply a
+// moment later (Windows-only, and today unreachable because the closure runs
+// inline — but the Rust side bounds the receive anyway, on the grounds that
+// the inlining is a Tauri implementation detail). The latch would then claim
+// the old preference while the OS holds the new one, and re-picking the old
+// one would be deduped away forever. `null` means "no claim", which is the
+// only honest state after a failure and guarantees the next push proceeds
+// whatever its value.
 //
 // This is the ONLY dedupe input, and `lastResolved` deliberately carries no
 // `pref` field to become a second one. Deduping against the last CONFIRMED
 // preference would let a re-pick of it short-circuit past the `cancelRetry()`
 // in `setNativeTheme`, leaving an armed retry of a *rejected* push free to
-// land later and release an override while the app renders an explicit theme
-// — the `recv_timeout` hazard described just above. A rejection means "no
-// claim", full stop.
+// land later and release an override while the app renders an explicit theme.
+// A rejection means "no claim", full stop.
 let lastPush: { pref: ThemePreference; inFlight: boolean; issuedAt: number } | null = null;
 
 // What the native layer actually DID: the last RESOLVED outcome's
-// `overrideActive`. Assigned at exactly ONE site — the non-superseded `.then`
-// in `setNativeTheme` — and the failure path never names this variable,
-// because a rejected push leaves the native override state UNKNOWN and that
-// is precisely what the client cannot guess. Gates read-backs (see
-// `acceptReadback`) so an OS notification arriving while an explicit override
-// is forced (macOS only — Windows always resolves `false`) isn't mistaken for
-// a real user-driven OS change.
+// `overrideActive`. The push pipeline writes it through exactly ONE function,
+// `recordResolution` below (plus the initializer and `_resetForTests`), and
+// the failure path never records a resolution — a rejected push leaves the
+// native override state UNKNOWN, and that is precisely what the client cannot
+// guess. Gates read-backs (see `acceptReadback`) so an OS notification
+// arriving while an explicit override is forced (macOS only — Windows always
+// resolves `false`) isn't mistaken for a real user-driven OS change.
 //
-// It is a record rather than the bare boolean it replaced, and every read is
-// truthiness, so the wrapper carries no data the boolean did not. What it
-// carries is LEGIBILITY: #1362 was caused by the failure path writing
-// `overrideActive = false`, which reads as innocuous cleanup. The equivalent
-// write here is `lastResolved = { overrideActive: false }`, which reads as
-// inventing a resolution that never happened. The compiler still permits it —
-// this raises the bar, it does not close the hole (see the header).
+// A record rather than the bare boolean it replaced, because the boolean could
+// not distinguish "never resolved" from "resolved to `false`" — it initialized
+// to the same value it would eventually settle to. `null` is that third state,
+// and it is exactly the state #1362 fabricated a false claim about. Every read
+// is truthiness today, so the distinction is representable rather than
+// consumed; that is deliberate, and it is why a new pipeline fact belongs here
+// as a field rather than as another module `let`.
 let lastResolved: { overrideActive: boolean } | null = null;
 
-// Bounded retry for a rejected push. Without this, a failed *release* would
-// leave `lastResolved.overrideActive` true, which suppresses both the 3s poll
-// and every `onThemeChanged` — so `tauriTheme.current` would stop moving and
-// the app's own `data-theme` would stop following the OS for the rest of the
-// session. Capped and cancelled on supersession so a persistently failing
-// invoke cannot hot-loop.
+/**
+ * The only writer of `lastResolved` in the push pipeline. Taking a whole
+ * `NativeThemeOutcome` is the point, not ceremony: the failure path has no
+ * outcome in hand, so recording one from there means visibly fabricating an
+ * IPC payload rather than assigning a bare `false` — which is what #1362 did.
+ * This raises the bar; it does not close the hole.
+ */
+function recordResolution(outcome: NativeThemeOutcome): void {
+  lastResolved = { overrideActive: outcome.overrideActive };
+}
+
+// Bounded retry for a rejected push. Without it, a failed *release* would leave
+// `lastResolved.overrideActive` true, which suppresses both the poll and every
+// `onThemeChanged` — so `tauriTheme.current` would stop moving and the app's
+// own `data-theme` would stop following the OS. The ladder is capped so a
+// persistently failing invoke cannot hot-loop; PAST the cap the `.catch` drops
+// `lastResolved` to `null`, because once we have stopped trying, "unknown" has
+// to degrade to "stop suppressing" rather than to "suppress forever".
+//
+// `retryAttempts` belongs to ONE user intent, not to the session. It is reset
+// by `cancelRetry` when a new intent supersedes an armed ladder, and again at
+// exhaustion. Without those resets a user toggling themes against a failing
+// invoke burns the whole budget in three picks, and every later failure gets
+// zero retries — silently.
 const MAX_PUSH_RETRIES = 3;
 const RETRY_BASE_MS = 500;
 let retryHandle: ReturnType<typeof setTimeout> | null = null;
 let retryAttempts = 0;
+
+/** How often the focused window re-reads the OS theme as a fallback. */
+const POLL_INTERVAL_MS = 3000;
 
 // Ceiling on how long an UNSETTLED push may suppress OS read-backs (see
 // `acceptReadback`). The bound is not optional: a hung `invoke` never
@@ -147,28 +192,36 @@ let retryAttempts = 0;
 // therefore freeze `tauriTheme.current` for the whole session — exactly the
 // failure the retry ladder exists to prevent, reintroduced by the guard.
 //
-// 3000 ms is justified from two independent directions: Rust's own wait in
-// `apply_app_mode` is `rx.recv_timeout(Duration::from_secs(2))`, so a healthy
-// push settles well inside it; and it matches `POLL_INTERVAL_MS`, so a hung
-// push costs at most one poll tick before degrading to the pre-#1369
-// behaviour. Deliberately NOT defined as `= POLL_INTERVAL_MS`: the Rust
-// timeout is the primary justification and must keep holding if the poll is
-// ever retuned. If you change the poll, re-check this comment rather than
-// assuming the equality is load-bearing.
-const PUSH_SETTLE_CEILING_MS = 3000;
+// ONE poll tick is the whole justification, which is why this is defined as
+// `POLL_INTERVAL_MS` rather than repeating its number: a hung push costs at
+// most one missed re-read, and the next poll re-establishes the OS reading.
+//
+// An earlier revision cited Rust's `recv_timeout(Duration::from_secs(2))` in
+// `apply_app_mode` as the PRIMARY justification. Do not reinstate that: it is
+// wrong twice over. `apply_app_mode` is `#[cfg(target_os = "windows")]`, and
+// macOS — which routes to `SetWindowTheme` — is the only platform where
+// `overrideActive` is ever true, i.e. the only platform this gate exists for.
+const PUSH_SETTLE_CEILING_MS = POLL_INTERVAL_MS;
 
-/** How often the focused window re-reads the OS theme as a fallback. */
-const POLL_INTERVAL_MS = 3000;
-
-/** Cancels a scheduled push retry, if any. Idempotent. */
+/**
+ * Cancels a scheduled push retry, if any, and resets the ladder. Idempotent.
+ *
+ * The `retryAttempts` reset MUST stay inside the guard. The retry timer clears
+ * `retryHandle` BEFORE re-entering `setNativeTheme`, so a call on the retry
+ * path sees `null` here and keeps its budget — which is what bounds the
+ * ladder. Hoisting the reset out of the guard would make every rung refill its
+ * own budget: an unbounded 500 ms hot loop, the exact thing `MAX_PUSH_RETRIES`
+ * exists to prevent.
+ */
 function cancelRetry(): void {
   if (retryHandle !== null) {
     clearTimeout(retryHandle);
     retryHandle = null;
+    retryAttempts = 0;
   }
 }
 
-/** Stops the 3s poll if it is running. Idempotent. */
+/** Stops the poll if it is running. Idempotent. */
 function stopPoll(): void {
   if (pollIntervalHandle !== null) {
     clearInterval(pollIntervalHandle);
@@ -223,7 +276,7 @@ function getInvoke(): Promise<InvokeFn> {
  *
  * Called from three sources: the initial `get_app_theme` fetch in
  * `initTauriTheme`; `acceptReadback` below (the gated path for
- * `onThemeChanged` events and the 3s poll); and `setNativeTheme`'s own
+ * `onThemeChanged` events and the poll); and `setNativeTheme`'s own
  * resolved outcome, when `osTheme` is non-null -- the release round trip,
  * which is authoritative and bypasses the read-back gate entirely (Rust
  * only sets `osTheme` once the override state settles).
@@ -235,7 +288,7 @@ function setTauriTheme(next: "light" | "dark"): void {
 
 /**
  * Gate for ASYNCHRONOUS OS read-backs only -- `onThemeChanged` events and
- * the 3s poll. NOT used for `setNativeTheme`'s own resolved outcome, which
+ * the poll. NOT used for `setNativeTheme`'s own resolved outcome, which
  * carries its own authoritative `osTheme` on release and writes through
  * unconditionally (see `setNativeTheme`).
  *
@@ -254,6 +307,11 @@ function setTauriTheme(next: "light" | "dark"): void {
  *    `setNativeTheme` -- which reopens the gate while a newer push is still
  *    unsettled. That residue is the same benign class the gate reduces.
  *
+ *    Platform note, the mirror of gate 3's: on Windows there is no echo to
+ *    suppress at all (see the platform contract in `setNativeTheme`), so this
+ *    gate can only ever discard a GENUINE read-back there. It is kept for
+ *    uniformity because the cost is bounded at one poll tick.
+ *
  * 2. STALENESS. `seqAtIssue` must be the value of `pushSeq` captured when the
  *    read-back was ISSUED (the poll's `invoke` call, or the moment an OS event
  *    was received) -- not when it resolves. A read-back that started before
@@ -270,7 +328,7 @@ function setTauriTheme(next: "light" | "dark"): void {
  *    like the `false` this used to initialize to.
  */
 function acceptReadback(seqAtIssue: number, next: "light" | "dark"): void {
-  if (lastPush?.inFlight && Date.now() - lastPush.issuedAt < PUSH_SETTLE_CEILING_MS) return;
+  if (lastPush?.inFlight && performance.now() - lastPush.issuedAt < PUSH_SETTLE_CEILING_MS) return;
   if (seqAtIssue !== pushSeq) return; // issued before the latest push -- stale
   if (lastResolved?.overrideActive) return; // echo of our own force (macOS only)
   setTauriTheme(next);
@@ -285,8 +343,10 @@ function acceptReadback(seqAtIssue: number, next: "light" | "dark"): void {
  * `AppsUseLightTheme` registry value before consulting uxtheme, so our app
  * mode cannot echo into it); on macOS it forces `NSApp.appearance` app-wide
  * and `overrideActive` is `true` while an explicit theme is set; on Linux
- * the Rust side resolves to a no-op action (#1363) -- the client pushes
- * identically on every platform. Called
+ * the Rust side resolves to a no-op *action* (#1363), though the round trip
+ * is not itself a no-op -- the outcome still carries an `osTheme`, currently
+ * a hardcoded `Light` (see `native_theme_outcome` in `lib.rs`). The client
+ * pushes identically on every platform. Called
  * on every `settings.theme` change: an explicit preference forces that
  * theme, and `"system"` clears the override so native surfaces resume
  * following the OS -- the raw, UNRESOLVED `ThemePreference` is sent
@@ -297,20 +357,19 @@ function acceptReadback(seqAtIssue: number, next: "light" | "dark"): void {
  * `$effect`, which also reruns on `lightVariant` churn) doesn't re-push an
  * unchanged preference. It is set OPTIMISTICALLY, before the `invoke`
  * settles, and the whole record is cleared to `null` on rejection -- see its
- * declaration for why `null` rather than the previous value. `lastResolved`
- * is deliberately NOT touched on rejection: a failed push means the native
- * override state is UNKNOWN, and leaving read-backs suppressed is
- * stale-but-recoverable, where admitting an echo of a force we may not have
- * released is corrupt and self-reinforcing via the poll.
+ * declaration for why `null` rather than the previous value. `lastResolved` is
+ * NOT touched while retries remain: a failed push means the native override
+ * state is UNKNOWN, and leaving read-backs suppressed is stale-but-recoverable
+ * where admitting an echo of a force we may not have released is corrupt and
+ * self-reinforcing via the poll. Once the ladder is exhausted that trade
+ * inverts and it drops to `null`; the `.catch` says why.
  *
  * Note the latch does not prevent duplicate *concurrent* pushes: a stale
  * rejection can clear it while a newer push is still in flight. That is
- * harmless -- the native operation is idempotent. Since #1369 that same clear
- * also reopens `acceptReadback`'s in-flight gate, so a stale rejection can
- * admit an OS read-back while a newer push is still unsettled; that residue
- * is the same benign class the gate narrows rather than closes, and the
- * unconditional clear is required (a superseded rejection must still
- * invalidate the latch).
+ * harmless -- the native operation is idempotent -- and the unconditional
+ * clear is required, since a superseded rejection must still invalidate the
+ * latch. It also reopens `acceptReadback`'s in-flight gate early; that residue
+ * is the same benign class the gate narrows rather than closes.
  *
  * Note also that a push which NEVER settles holds the dedupe claim
  * indefinitely: `PUSH_SETTLE_CEILING_MS` bounds only the read-back gate, not
@@ -333,7 +392,14 @@ export function setNativeTheme(pref: ThemePreference): void {
   cancelRetry();
   if (pref === lastPush?.pref) return;
   const seq = ++pushSeq;
-  lastPush = { pref, inFlight: true, issuedAt: Date.now() };
+  // `performance.now()`, not `Date.now()`: `issuedAt` is only ever used to
+  // measure an elapsed duration against `PUSH_SETTLE_CEILING_MS`, and the wall
+  // clock is not monotonic. An NTP correction or a VM resume that steps the
+  // clock backwards while a push is hung makes that difference negative —
+  // which is `< PUSH_SETTLE_CEILING_MS` — pinning the read-back gate shut for
+  // as long as the offset persists. That is precisely the frozen-theme failure
+  // the ceiling exists to guarantee against.
+  lastPush = { pref, inFlight: true, issuedAt: performance.now() };
   getInvoke()
     .then((invoke) => invoke<NativeThemeOutcome>("set_native_theme", { theme: pref }))
     .then((outcome) => {
@@ -346,31 +412,69 @@ export function setNativeTheme(pref: ThemePreference): void {
       // invariant with a single writer per direction. That is what makes the
       // `.catch` below readable as the whole failure story.
       if (lastPush) lastPush.inFlight = false;
-      lastResolved = { overrideActive: outcome.overrideActive };
+      recordResolution(outcome);
       retryAttempts = 0;
       // Authoritative: Rust reads the theme AFTER applying/releasing the
       // override, so on release this is already correct as part of THIS
-      // round trip -- no need to wait on the 3s poll (acceptReadback above).
-      if (outcome.osTheme) setTauriTheme(outcome.osTheme);
+      // round trip -- no need to wait on a poll tick (acceptReadback above).
+      //
+      // The `!overrideActive` half enforces `NativeThemeOutcome`'s union at
+      // RUNTIME, which is the only place it can be violated: the type is
+      // applied via an unchecked `invoke<...>` assertion, and Rust's own
+      // struct is flat, so a future edit to `native_theme_outcome`'s match
+      // could send the forbidden pair with no error on either side. Writing an
+      // `osTheme` read while our force is applied is the #992/#1362 echo bug.
+      if (!outcome.overrideActive && outcome.osTheme) setTauriTheme(outcome.osTheme);
     })
     .catch((e) => {
       // Clear the latch unconditionally, superseded or not: a rejected push
       // may have left the latch describing a preference the native layer
-      // never received, and `null` guarantees the next call re-pushes. This
-      // one expression is the whole of the PIPELINE state change on failure:
-      // it drops the dedupe claim and `inFlight` together, and `lastResolved`
-      // is deliberately never named here. (The retry bookkeeping below is
-      // scheduling, not pipeline state.)
+      // never received, and `null` guarantees the next call re-pushes. One
+      // expression drops the dedupe claim and `inFlight` together.
       lastPush = null;
-      if (seq === pushSeq && retryAttempts < MAX_PUSH_RETRIES) {
+
+      // A superseded rejection stops here. The newer push owns the outcome,
+      // including whatever `lastResolved` should end up saying.
+      if (seq !== pushSeq) {
+        console.warn(`[useTauriTheme] set_native_theme("${pref}") failed (superseded):`, e);
+        return;
+      }
+
+      if (retryAttempts < MAX_PUSH_RETRIES) {
         const delay = RETRY_BASE_MS * 2 ** retryAttempts;
         retryAttempts++;
         retryHandle = setTimeout(() => {
           retryHandle = null;
           setNativeTheme(pref);
         }, delay);
+        console.warn(
+          `[useTauriTheme] set_native_theme("${pref}") failed (retry ${retryAttempts}/${MAX_PUSH_RETRIES}):`,
+          e,
+        );
+        return;
       }
-      console.warn(`[useTauriTheme] set_native_theme("${pref}") failed:`, e);
+
+      // Ladder exhausted. Suppressing read-backs was the right trade while a
+      // retry was pending — a TRANSIENT unknown resolves in seconds. It
+      // inverts once we have stopped trying, and the end states are not
+      // symmetric. Keeping `lastResolved.overrideActive` true pins BOTH the
+      // poll and every `onThemeChanged` shut with nothing left to reopen them,
+      // so the app renders a theme matching neither the OS nor the native
+      // surfaces, for the rest of the session, with no self-correction path.
+      // Dropping to `null` may instead let a still-forced appearance be read
+      // back — wrong against the user's pick, but consistent with the native
+      // menus, and it self-corrects the moment any later push succeeds.
+      //
+      // Note `null`, never `{ overrideActive: false }`: the failure path is
+      // still not permitted to invent a resolution. "We no longer know" is a
+      // state this type has, which is the whole reason it is nullable.
+      lastResolved = null;
+      // Give the next intent a fresh ladder; see `retryAttempts`.
+      retryAttempts = 0;
+      console.warn(
+        `[useTauriTheme] set_native_theme("${pref}") gave up after ${MAX_PUSH_RETRIES} retries; OS theme read-backs re-enabled:`,
+        e,
+      );
     });
 }
 
@@ -399,9 +503,13 @@ export function initTauriTheme(): void {
           // `systemTheme` fall through to the honest Rust-provided seed.
           //
           // For the same reason this is deliberately NOT gated on
-          // `lastPush.inFlight` either: that first push is unsettled at
-          // exactly this moment by construction, so an in-flight gate here
-          // would discard the boot reading every single time.
+          // `lastPush.inFlight` either: that first push is normally still
+          // unsettled at this moment, so an in-flight gate here would discard
+          // the boot reading in the common case, with no offsetting benefit --
+          // gate 3 already covers the real (macOS echo) hazard. Pinned by the
+          // "seeds the boot theme even though the first push is still
+          // unsettled" test; without it this reads as a preference rather
+          // than a rule, and adding the gate passed the whole suite.
           if (lastResolved?.overrideActive) return;
           setTauriTheme(theme === "dark" ? "dark" : "light");
         })
@@ -432,7 +540,7 @@ export function initTauriTheme(): void {
       console.warn("[useTauriTheme] Tauri window API import failed:", e);
     });
 
-  // 3-second polling fallback while focused -- onThemeChanged reliability
+  // Polling fallback while focused (POLL_INTERVAL_MS) -- onThemeChanged reliability
   // on Windows app-mode-only flips is undocumented and unverified. Skipped
   // entirely while an override is forced: the round trip would just be
   // discarded by acceptReadback's `lastResolved.overrideActive` check, so

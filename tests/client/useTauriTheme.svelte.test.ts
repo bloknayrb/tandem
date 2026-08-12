@@ -43,8 +43,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 /**
- * Filters `invoke.mock.calls` down to a single command name. A stray 3s
- * poll tick landing mid-test must not flake a `toHaveBeenCalledTimes`
+ * Mirrors the SUT's `MAX_PUSH_RETRIES`, which is not exported. The ladder is
+ * 500 + 1000 + 2000 ms, so advancing 4000 ms clears all three rungs.
+ */
+const MAX_PUSH_RETRIES = 3;
+
+/**
+ * Filters `invoke.mock.calls` down to a single command name. A stray poll
+ * tick landing mid-test must not flake a `toHaveBeenCalledTimes`
  * assertion -- prefer this everywhere over a raw call count.
  */
 function callsFor(invoke: { mock: { calls: unknown[][] } }, cmd: string): unknown[][] {
@@ -355,8 +361,11 @@ describe("setNativeTheme (#992)", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(callsFor(invoke, "set_native_theme")).toHaveLength(3);
 
-      // Past every rung of the retry ladder: nothing more may be issued.
-      await vi.advanceTimersByTimeAsync(2000);
+      // Past every rung of the ladder (500 + 1000 + 2000 = 3500 ms, so 4000
+      // clears it with room): nothing more may be issued. Only the single
+      // armed 500 ms rung is actually pending here — the point is that
+      // disarming it left nothing behind at any later delay either.
+      await vi.advanceTimersByTimeAsync(4000);
       expect(callsFor(invoke, "set_native_theme")).toHaveLength(3);
     } finally {
       vi.useRealTimers();
@@ -525,7 +534,8 @@ describe("setNativeTheme (#992)", () => {
     // `invoke` resolving BOTH of the pre-existing gates pass: the read-back's
     // stamp equals `pushSeq` (it is taken at delivery) and no resolved
     // outcome has reported `overrideActive` yet. Without the in-flight gate
-    // this event is ACCEPTED, i.e. this test is red at HEAD by construction.
+    // this event is ACCEPTED, i.e. this test is red on master by
+    // construction (it was written against the pre-#1369 shape).
     const { setNativeTheme, initTauriTheme } = await import(
       "../../src/client/hooks/useTauriTheme.svelte.js"
     );
@@ -597,17 +607,145 @@ describe("setNativeTheme (#992)", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(systemTheme()).toBe("light"); // gate shut
 
-      // vitest's fake timers fake `Date` too (default `toFake`), and this
-      // repo sets no `fakeTimers` config — so `Date.now()` advances here.
-      await vi.advanceTimersByTimeAsync(3001);
+      // vitest's fake timers fake `performance` and `Date` (default `toFake`
+      // is every timer sinon knows, minus nextTick/queueMicrotask), and this
+      // repo sets no `fakeTimers` config — so `performance.now()`, which is
+      // what `issuedAt` is measured on, advances here. Measured, not assumed.
+      //
+      // Pin the bound from BOTH sides. Without the lower assertion the value
+      // is bracketed only to "somewhere in (a few ms, 3001]" — a mutant
+      // dropping the ceiling to 500 ms survives, which would silently reopen
+      // the echo window for every healthy push slower than half a second.
+      await vi.advanceTimersByTimeAsync(2999);
+      themeChangedCapture.current?.({ payload: "dark" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(systemTheme()).toBe("light"); // still inside the ceiling
 
+      await vi.advanceTimersByTimeAsync(2);
       themeChangedCapture.current?.({ payload: "dark" });
       await vi.advanceTimersByTimeAsync(0);
       expect(systemTheme()).toBe("dark"); // gate expired — degraded to pre-#1369
+    } finally {
+      // Stops the poll interval while fake timers are still installed;
+      // afterEach would otherwise run it against real ones. In the `finally`
+      // so an assertion failure above cannot leak the interval.
+      (await import("../../src/client/hooks/useTauriTheme.svelte.js"))._resetForTests();
+      vi.useRealTimers();
+    }
+  });
 
-      // Stops the 3s interval while fake timers are still installed; afterEach
-      // would otherwise run it against real ones.
+  it("seeds the boot theme even though the first push is still unsettled", async () => {
+    // The boot `get_app_theme` fetch is deliberately NOT gated on
+    // `lastPush.inFlight`, and that decision had no test: adding the gate
+    // passed the entire suite. It is not self-limiting either — the poll that
+    // would correct it is skipped while the window is unfocused, so a
+    // backgrounded launch holds the wrong theme indefinitely, and
+    // `window.__TANDEM_INITIAL_THEME__` carries it into the pre-mount seed.
+    const { setNativeTheme, initTauriTheme } = await import(
+      "../../src/client/hooks/useTauriTheme.svelte.js"
+    );
+    vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+    vi.stubGlobal("document", { hasFocus: () => false });
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "get_app_theme" ? Promise.resolve("dark") : new Promise(() => {}),
+    );
+
+    initTauriTheme();
+    setNativeTheme("dark"); // same tick as createTheme's effect; never settles
+    await flushAsync();
+
+    // "dark", not "light": a vacuous version of this test would assert
+    // "light", which is also what `systemTheme()` returns when
+    // `tauriTheme.current` is still null.
+    expect(systemTheme()).toBe("dark");
+  });
+
+  it("re-enables OS read-backs once the retry ladder is exhausted", async () => {
+    // The failure the ladder exists to prevent, reached THROUGH the ladder.
+    // A failed release leaves `lastResolved.overrideActive` true, which pins
+    // both the poll and every `onThemeChanged` shut. While a retry is pending
+    // that is the right trade — a transient unknown resolves in seconds. Past
+    // the cap there is nothing left to reopen the gate, so holding it shut
+    // renders a theme matching neither the OS nor the native surfaces for the
+    // rest of the session. "We stopped trying" has to degrade to "stop
+    // suppressing".
+    vi.useFakeTimers();
+    try {
+      const { setNativeTheme, initTauriTheme, _resetForTests } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+      vi.stubGlobal("document", { hasFocus: () => false });
+
+      invoke.mockImplementation((cmd: string) =>
+        cmd === "get_app_theme"
+          ? Promise.resolve("light")
+          : Promise.resolve({ overrideActive: true, osTheme: null }),
+      );
+      initTauriTheme();
+      await vi.advanceTimersByTimeAsync(0);
+      setNativeTheme("dark"); // succeeds — the override is now live
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Gate shut: an OS event while the override is forced is an echo.
+      themeChangedCapture.current?.({ payload: "dark" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(systemTheme()).toBe("light");
+
+      // Now fail the release on every attempt, ladder included.
+      invoke.mockImplementation((cmd: string) =>
+        cmd === "get_app_theme"
+          ? Promise.resolve("light")
+          : Promise.reject(new Error("release failed")),
+      );
+      setNativeTheme("system");
+      await vi.advanceTimersByTimeAsync(4000); // 500 + 1000 + 2000, plus slack
+
+      // Four attempts and no more: the ladder is spent, not looping.
+      expect(callsFor(invoke, "set_native_theme")).toHaveLength(1 + 1 + MAX_PUSH_RETRIES);
+
+      // The gate must now be OPEN. Before this fix `lastResolved` stayed
+      // `{ overrideActive: true }` forever and this read-back was discarded.
+      themeChangedCapture.current?.({ payload: "dark" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(systemTheme()).toBe("dark");
+
       _resetForTests();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives each new user intent a fresh retry budget", async () => {
+    // `retryAttempts` is module-scope, so without a reset the budget belongs
+    // to the SESSION rather than to one intent: a user toggling themes
+    // against a failing invoke burns all three rungs in three picks, and
+    // every later failure then retries zero times, silently. The reset lives
+    // inside `cancelRetry`'s `if (retryHandle !== null)` guard — the retry
+    // timer nulls the handle before re-entering, so the ladder's own rungs do
+    // NOT refill their budget. Both halves are asserted here, because moving
+    // that reset out of the guard turns the ladder into a 500 ms hot loop.
+    vi.useFakeTimers();
+    try {
+      const { setNativeTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+      invoke.mockImplementation(() => Promise.reject(new Error("nope")));
+
+      // Three distinct intents, each superseding the previous one's armed
+      // retry before it can fire.
+      setNativeTheme("dark");
+      await vi.advanceTimersByTimeAsync(0);
+      setNativeTheme("light");
+      await vi.advanceTimersByTimeAsync(0);
+      setNativeTheme("warm");
+      await vi.advanceTimersByTimeAsync(0);
+      const afterThreeIntents = callsFor(invoke, "set_native_theme").length;
+      expect(afterThreeIntents).toBe(3); // no rung has fired yet
+
+      // The third intent must still own a FULL ladder, not a spent one.
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(callsFor(invoke, "set_native_theme")).toHaveLength(
+        afterThreeIntents + MAX_PUSH_RETRIES,
+      );
     } finally {
       vi.useRealTimers();
     }
