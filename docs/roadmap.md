@@ -350,7 +350,7 @@ Production WebView uses `tauri://localhost` origin. Server CORS and DNS-rebindin
 
 ### Step 3: Sidecar lifecycle hardening — DONE
 
-Health polling (200ms interval, 15s timeout), exponential backoff restart (up to 3 attempts), early-exit if sidecar dies before healthy, error dialog on exhausted retries. `kill_sidecar()` on `RunEvent::Exit` prevents orphan processes.
+Health polling (200ms interval, 30s timeout), exponential backoff restart (up to 3 attempts), early-exit if sidecar dies before healthy, error dialog on exhausted retries — the dialog names the port holder and offers a one-shot retry on Windows. `kill_sidecar()` on `RunEvent::Exit` prevents orphan processes.
 
 ### Step 4: MCP auto-setup — SUPERSEDED (removed in #477 PR 3c-ii-c)
 

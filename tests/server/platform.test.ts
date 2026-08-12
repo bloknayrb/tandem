@@ -1,9 +1,10 @@
 import net from "net";
 import path from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   freePort,
   parseLsofPids,
+  parseNetstatListeningPids,
   parseSsPid,
   resolveAppDataDir,
   SESSION_DIR,
@@ -72,6 +73,80 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
     });
   });
 
+  // These pin the process-selection half of freePort() on Windows. The old
+  // implementation piped netstat through `findstr ":${port}.*LISTENING"` — a
+  // regex matched anywhere in the line — and then took the last whitespace
+  // token of the whole blob, so it could kill a process that merely had a
+  // similar-looking port. Since the Tauri shell now NAMES the holder in its
+  // error dialog while this function KILLS it, the two must select the same row.
+  describe("parseNetstatListeningPids", () => {
+    // Verbatim `netstat -ano` shape captured on Windows 11.
+    const NETSTAT = [
+      "",
+      "Active Connections",
+      "",
+      "  Proto  Local Address          Foreign Address        State           PID",
+      "  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1520",
+      "  TCP    127.0.0.1:3479         0.0.0.0:0              LISTENING       12345",
+      "  TCP    [::]:445               [::]:0                 LISTENING       4",
+      "",
+    ].join("\n");
+
+    it("finds the PID listening on the requested port", () => {
+      expect(parseNetstatListeningPids(NETSTAT, 3479)).toEqual([12345]);
+    });
+
+    it("does not match a longer port sharing the prefix", () => {
+      // The regression the old findstr regex had: ":3479.*LISTENING" matched
+      // this row, so freePort killed an unrelated service.
+      const out = "  TCP    127.0.0.1:34790        0.0.0.0:0              LISTENING       999\n";
+      expect(parseNetstatListeningPids(out, 3479)).toEqual([]);
+    });
+
+    it("ignores connected rows on the same port", () => {
+      const out = "  TCP    127.0.0.1:3479         127.0.0.1:5500         ESTABLISHED     42\n";
+      expect(parseNetstatListeningPids(out, 3479)).toEqual([]);
+    });
+
+    it("ignores listeners on interfaces that don't contend with a loopback bind", () => {
+      // A WSL/Hyper-V/Docker adapter listening on its own address does not
+      // prevent Tandem binding 127.0.0.1 — killing it would be pure collateral.
+      const out = "  TCP    172.28.16.1:3479       0.0.0.0:0              LISTENING       777\n";
+      expect(parseNetstatListeningPids(out, 3479)).toEqual([]);
+    });
+
+    it("returns every distinct holder, not just the last row", () => {
+      // The old `.at(-1)` over the whole blob returned one PID — and not
+      // necessarily one from a matching row.
+      const out = [
+        "  TCP    127.0.0.1:3479         0.0.0.0:0              LISTENING       111",
+        "  TCP    [::]:3479              [::]:0                 LISTENING       222",
+        "  TCP    [::]:445               [::]:0                 LISTENING       4",
+      ].join("\n");
+      expect(parseNetstatListeningPids(out, 3479)).toEqual([111, 222]);
+    });
+
+    it("treats a wildcard foreign port as listening (localized Windows)", () => {
+      // netstat localizes the State column, so "LISTENING" is absent on a
+      // non-English host. A foreign address of *:0 is the structural signature.
+      const out = "  TCP    127.0.0.1:3479         0.0.0.0:0              ABIERTO         31\n";
+      expect(parseNetstatListeningPids(out, 3479)).toEqual([31]);
+    });
+
+    it("returns nothing for empty, header-only, or garbage output", () => {
+      expect(parseNetstatListeningPids("", 3479)).toEqual([]);
+      expect(parseNetstatListeningPids("no table here", 3479)).toEqual([]);
+      expect(
+        parseNetstatListeningPids("  Proto  Local Address  Foreign Address  State  PID", 3479),
+      ).toEqual([]);
+    });
+
+    it("rejects a non-numeric PID column", () => {
+      const out = "  TCP    127.0.0.1:3479         0.0.0.0:0              LISTENING       n/a\n";
+      expect(parseNetstatListeningPids(out, 3479)).toEqual([]);
+    });
+  });
+
   describe("waitForPort", () => {
     let holdServer: net.Server | null = null;
 
@@ -117,6 +192,36 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
       const elapsed = Date.now() - start;
       expect(elapsed).toBeGreaterThanOrEqual(200);
       expect(elapsed).toBeLessThan(3000);
+    });
+
+    // Pins the DEFAULT timeout (no explicit argument). Uses fake timers so the
+    // 15s ceiling costs no wall clock. The default is coupled to HEALTH_TIMEOUT
+    // in src-tauri/src/lib.rs — the Tauri shell times this wait from outside the
+    // process, so lowering one without the other resurrects the post-update
+    // "Server failed to start after 3 restart attempts" failure.
+    it("defaults to a 15s ceiling", async () => {
+      holdServer = net.createServer();
+      await new Promise<void>((resolve) => holdServer!.listen(0, "127.0.0.1", resolve));
+      const port = (holdServer.address() as net.AddressInfo).port;
+
+      vi.useFakeTimers();
+      try {
+        let settled: "pending" | "rejected" = "pending";
+        const pending = waitForPort(port).catch((err: Error) => {
+          settled = "rejected";
+          return err;
+        });
+
+        await vi.advanceTimersByTimeAsync(14_900);
+        expect(settled).toBe("pending");
+
+        await vi.advanceTimersByTimeAsync(400);
+        const err = await pending;
+        expect(settled).toBe("rejected");
+        expect((err as Error).message).toBe(`Port ${port} still not available after 15000ms`);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("throws when port stays occupied past timeout", async () => {

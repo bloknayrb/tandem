@@ -56,7 +56,7 @@ function throwIfAborted(signal?: AbortSignal): void {
  * `whoami` that doesn't understand Windows flags) can't intercept us.
  * `icacls` and `whoami` both live in `System32`.
  */
-function systemBin(name: string): string {
+export function systemBin(name: string): string {
   return join(process.env.SystemRoot ?? "C:\\Windows", "System32", name);
 }
 
