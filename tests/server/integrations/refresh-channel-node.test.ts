@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  refreshAllChannelNodeBinaries,
-  refreshChannelNodeBinary,
+  refreshAllMcpEntryBinaries,
+  refreshMcpEntryBinary,
 } from "../../../src/server/integrations/apply.js";
 
 /**
@@ -20,7 +20,7 @@ import {
  * The non-clobber guarantees matter as much as the repair: this file is
  * `~/.claude.json`, which holds other vendors' entries and bearer tokens.
  */
-describe("refreshChannelNodeBinary", () => {
+describe("refreshMcpEntryBinary", () => {
   let dir: string;
   let configPath: string;
 
@@ -48,13 +48,13 @@ describe("refreshChannelNodeBinary", () => {
         "tandem-channel": { command: "/gone/v20/bin/node", args: ["/x/channel.js"] },
       },
     });
-    return refreshChannelNodeBinary(configPath, {
+    return refreshMcpEntryBinary(configPath, {
       probe: () => false,
       resolveBinary: () => GOOD,
       // Explicit and non-existent so this case does not depend on whether
       // `dist/channel/index.js` happens to be built in the checkout: with no
       // replacement script available, `args` must be left exactly as found.
-      channelScript: join(dir, "no-such-channel.js"),
+      script: join(dir, "no-such-channel.js"),
     }).then((result) => {
       expect(result).toEqual({
         status: "rewritten",
@@ -70,7 +70,7 @@ describe("refreshChannelNodeBinary", () => {
 
   it("leaves a path that still exists alone", async () => {
     write({ mcpServers: { "tandem-channel": { command: GOOD } } });
-    const result = await refreshChannelNodeBinary(configPath, {
+    const result = await refreshMcpEntryBinary(configPath, {
       probe: () => true,
       resolveBinary: () => "/somewhere/else/node",
     });
@@ -82,7 +82,7 @@ describe("refreshChannelNodeBinary", () => {
     // Bare `node` is the deliberate fallback when no absolute path could be
     // produced. Promoting it here would undo that decision behind the user.
     write({ mcpServers: { "tandem-channel": { command: "node" } } });
-    const result = await refreshChannelNodeBinary(configPath, {
+    const result = await refreshMcpEntryBinary(configPath, {
       probe: () => false,
       resolveBinary: () => GOOD,
     });
@@ -91,7 +91,7 @@ describe("refreshChannelNodeBinary", () => {
   });
 
   it("does not create a config that is not there", async () => {
-    const result = await refreshChannelNodeBinary(configPath, { probe: () => false });
+    const result = await refreshMcpEntryBinary(configPath, { probe: () => false });
     expect(result).toEqual({ status: "missing" });
     expect(existsSync(configPath)).toBe(false);
   });
@@ -101,7 +101,7 @@ describe("refreshChannelNodeBinary", () => {
     // bearer tokens — the reason must stay a fixed string.
     const original = '{ "mcpServers": { "tandem-channel": { "command": "/gone/node" } ';
     writeFileSync(configPath, original);
-    const result = await refreshChannelNodeBinary(configPath, { probe: () => false });
+    const result = await refreshMcpEntryBinary(configPath, { probe: () => false });
     expect(result).toEqual({ status: "skipped", reason: "malformed-json" });
     expect(readFileSync(configPath, "utf-8")).toBe(original);
   });
@@ -114,7 +114,7 @@ describe("refreshChannelNodeBinary", () => {
       },
       someOtherVendorKey: { nested: true },
     });
-    const result = await refreshChannelNodeBinary(configPath, {
+    const result = await refreshMcpEntryBinary(configPath, {
       probe: () => false,
       resolveBinary: () => GOOD,
     });
@@ -129,7 +129,7 @@ describe("refreshChannelNodeBinary", () => {
 
   it("no-ops when there is no channel entry at all", async () => {
     write({ mcpServers: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } } });
-    const result = await refreshChannelNodeBinary(configPath, { probe: () => false });
+    const result = await refreshMcpEntryBinary(configPath, { probe: () => false });
     expect(result).toEqual({ status: "no-op" });
   });
 
@@ -139,7 +139,7 @@ describe("refreshChannelNodeBinary", () => {
     // polarity here is the opposite of `detect-claude-cli`'s `isFile`, where
     // "could not tell" safely collapses to `false`.
     write({ mcpServers: { "tandem-channel": { command: "/unreadable/bin/node" } } });
-    const result = await refreshChannelNodeBinary(configPath, {
+    const result = await refreshMcpEntryBinary(configPath, {
       probe: () => null,
       resolveBinary: () => GOOD,
     });
@@ -151,7 +151,7 @@ describe("refreshChannelNodeBinary", () => {
     // `existsSync` would say true here; a directory is definitively not a
     // runnable binary, so this must repair.
     write({ mcpServers: { "tandem-channel": { command: "/some/dir" } } });
-    const result = await refreshChannelNodeBinary(configPath, {
+    const result = await refreshMcpEntryBinary(configPath, {
       probe: () => false,
       resolveBinary: () => GOOD,
     });
@@ -164,7 +164,7 @@ describe("refreshChannelNodeBinary", () => {
     // names are exempt from the staleness check. Leaving the dead path visible
     // is strictly better.
     write({ mcpServers: { "tandem-channel": { command: "/gone/node" } } });
-    const result = await refreshChannelNodeBinary(configPath, {
+    const result = await refreshMcpEntryBinary(configPath, {
       probe: () => false,
       resolveBinary: () => "node",
     });
@@ -183,10 +183,10 @@ describe("refreshChannelNodeBinary", () => {
         "tandem-channel": { command: "/gone/node", args: ["/gone/dist/channel/index.js"] },
       },
     });
-    const result = await refreshChannelNodeBinary(configPath, {
+    const result = await refreshMcpEntryBinary(configPath, {
       probe: () => false,
       resolveBinary: () => GOOD,
-      channelScript: configPath, // any path that exists
+      script: configPath, // any path that exists
     });
     expect(result).toEqual({
       status: "rewritten",
@@ -211,10 +211,10 @@ describe("refreshChannelNodeBinary", () => {
         "tandem-channel": { command: GOOD, args: ["/gone/dist/channel/index.js"] },
       },
     });
-    const result = await refreshChannelNodeBinary(configPath, {
+    const result = await refreshMcpEntryBinary(configPath, {
       probe: (p) => p !== "/gone/dist/channel/index.js",
       resolveBinary: () => GOOD,
-      channelScript: configPath,
+      script: configPath,
     });
     // `from`/`to` are null: nothing about the BINARY changed, and reporting the
     // unchanged command as a rewrite would misname what was repaired.
@@ -234,11 +234,11 @@ describe("refreshChannelNodeBinary", () => {
         "tandem-channel": { command: "/gone/node", args: ["/live/dist/channel/index.js"] },
       },
     });
-    const result = await refreshChannelNodeBinary(configPath, {
+    const result = await refreshMcpEntryBinary(configPath, {
       // Binary gone, script present.
       probe: (p) => (p === "/gone/node" ? false : true),
       resolveBinary: () => GOOD,
-      channelScript: configPath,
+      script: configPath,
     });
     expect(result).toMatchObject({ status: "rewritten", scriptRefreshed: false });
     expect(read().mcpServers["tandem-channel"].args).toEqual(["/live/dist/channel/index.js"]);
@@ -246,7 +246,7 @@ describe("refreshChannelNodeBinary", () => {
 
   it("no-ops rather than rewriting to the same value", async () => {
     write({ mcpServers: { "tandem-channel": { command: GOOD } } });
-    const result = await refreshChannelNodeBinary(configPath, {
+    const result = await refreshMcpEntryBinary(configPath, {
       probe: () => false,
       resolveBinary: () => GOOD,
     });
@@ -262,7 +262,7 @@ describe("refreshChannelNodeBinary", () => {
  * A best-effort config repair must never be able to do that, so "never
  * rejects" is a behavioural requirement, not a style preference.
  */
-describe("refreshAllChannelNodeBinaries", () => {
+describe("refreshAllMcpEntryBinaries", () => {
   let home: string;
   let errSpy: ReturnType<typeof vi.spyOn>;
   const stderr = () => errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
@@ -286,7 +286,7 @@ describe("refreshAllChannelNodeBinaries", () => {
     // that just found out.
     writeFileSync(join(home, ".claude.json"), "{ not json");
 
-    await expect(refreshAllChannelNodeBinaries({ homeOverride: home })).resolves.toBeUndefined();
+    await expect(refreshAllMcpEntryBinaries({ homeOverride: home })).resolves.toBeUndefined();
 
     const out = stderr();
     expect(out).toContain("malformed-json");
@@ -294,7 +294,7 @@ describe("refreshAllChannelNodeBinaries", () => {
   });
 
   it("resolves when there is no config at all", async () => {
-    await expect(refreshAllChannelNodeBinaries({ homeOverride: home })).resolves.toBeUndefined();
+    await expect(refreshAllMcpEntryBinaries({ homeOverride: home })).resolves.toBeUndefined();
     expect(stderr()).not.toContain("malformed-json");
   });
 
@@ -307,12 +307,14 @@ describe("refreshAllChannelNodeBinaries", () => {
       }),
     );
 
-    await refreshAllChannelNodeBinaries({ homeOverride: home });
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
 
     const after = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(after.mcpServers["tandem-channel"].command).toBe(process.execPath);
     const out = stderr();
-    expect(out).toContain("Repaired stale channel entry");
+    // The sweep now visits both refreshable keys, so the message names which
+    // one it repaired rather than saying "channel" unconditionally.
+    expect(out).toContain("Repaired stale tandem-channel entry");
     expect(out).toContain("Claude Code");
   });
 
@@ -322,8 +324,160 @@ describe("refreshAllChannelNodeBinaries", () => {
       JSON.stringify({ mcpServers: { "tandem-channel": { command: process.execPath } } }),
     );
 
-    await refreshAllChannelNodeBinaries({ homeOverride: home });
+    await refreshAllMcpEntryBinaries({ homeOverride: home });
 
     expect(stderr()).not.toContain("Repaired");
+  });
+});
+
+/**
+ * The `tandem` key joined the sweep when its stdio entry started carrying an
+ * absolute Node path, and it is far less forgiving than `tandem-channel`.
+ *
+ * `tandem-channel` has only ever been written by Tandem, so any stale absolute
+ * path in it is ours to repair. `tandem` is shared ground: the same key holds
+ * HTTP entries for Claude Code, npx fallbacks, legacy sidecar invocations from
+ * older Tauri builds, and hand-edits — and the legacy shape is
+ * ARITY-IDENTICAL to the one we emit. Every test below pins a shape the sweep
+ * must refuse to touch; each one is a config-clobbering bug if it regresses.
+ */
+describe("refreshMcpEntryBinary — the `tandem` key", () => {
+  let dir: string;
+  let configPath: string;
+
+  const BRIDGE_TAIL = join("dist", "stdio-bridge", "index.js");
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "tandem-entry-refresh-"));
+    configPath = join(dir, ".claude.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const write = (tandem: unknown): void => {
+    writeFileSync(configPath, JSON.stringify({ mcpServers: { tandem } }, null, 2));
+  };
+  const read = (): Record<string, unknown> =>
+    JSON.parse(readFileSync(configPath, "utf-8")).mcpServers.tandem;
+
+  it("repairs a stale Node path when the entry is ours", async () => {
+    const bridge = join(dir, "live", BRIDGE_TAIL);
+    mkdirSync(join(bridge, ".."), { recursive: true });
+    writeFileSync(bridge, "// stub\n");
+    write({ command: join(dir, "gone", "node"), args: [bridge], env: {} });
+
+    const result = await refreshMcpEntryBinary(configPath, {
+      entryKey: "tandem",
+      script: bridge,
+    });
+
+    expect(result.status).toBe("rewritten");
+    expect(read().command).toBe(process.execPath);
+    // The subcommand-free single arg survives: two args would leave
+    // `validateTandemEntry`'s Node branch and read back as `invalid-args`.
+    expect(read().args).toEqual([bridge]);
+  });
+
+  it("leaves an HTTP entry alone (Claude Code has no command to repair)", async () => {
+    const entry = { type: "http", url: "http://127.0.0.1:3479/mcp" };
+    write(entry);
+
+    const result = await refreshMcpEntryBinary(configPath, { entryKey: "tandem" });
+
+    expect(result.status).toBe("no-op");
+    expect(read()).toEqual(entry);
+  });
+
+  it("leaves a deliberate bare-npx fallback alone", async () => {
+    // Rewriting this would undo a choice `buildStdioTandemEntry` made on
+    // purpose on a host where no absolute pair could be built.
+    const entry = { command: "npx", args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"], env: {} };
+    write(entry);
+
+    const result = await refreshMcpEntryBinary(configPath, { entryKey: "tandem" });
+
+    expect(result.status).toBe("no-op");
+    expect(read()).toEqual(entry);
+  });
+
+  it("leaves an absolute-npx fallback alone rather than substituting the bridge", async () => {
+    // An absolute npx IS probed (it is a real path), but its command is not
+    // Node-shaped and its args are the npx tuple — swapping in a Node binary
+    // would leave `<node> -y tandem-editor@x mcp-stdio`, which spawns nothing.
+    const entry = {
+      command: join(dir, "gone", "npx"),
+      args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"],
+      env: {},
+    };
+    write(entry);
+
+    const result = await refreshMcpEntryBinary(configPath, { entryKey: "tandem" });
+
+    expect(result.status).toBe("no-op");
+    expect(read()).toEqual(entry);
+  });
+
+  it("leaves a legacy 1-arg sidecar entry alone even though its path is gone", async () => {
+    // Arity-identical to ours, so only the script identity separates them. This
+    // is the case that made the ownership gate necessary.
+    const entry = { command: join(dir, "gone", "node"), args: [join(dir, "gone", "server.js")] };
+    write(entry);
+
+    const result = await refreshMcpEntryBinary(configPath, { entryKey: "tandem" });
+
+    expect(result.status).toBe("no-op");
+    expect(read()).toEqual(entry);
+  });
+
+  it("leaves a hand-edited entry alone", async () => {
+    const entry = {
+      command: join(dir, "gone", "node"),
+      args: [join(dir, "my-own", "bridge.js")],
+      env: { TANDEM_URL: "http://127.0.0.1:3479" },
+    };
+    write(entry);
+
+    const result = await refreshMcpEntryBinary(configPath, { entryKey: "tandem" });
+
+    expect(result.status).toBe("no-op");
+    expect(read()).toEqual(entry);
+  });
+
+  it("refuses to repair into a bare name, leaving the dead path visible", async () => {
+    const bridge = join(dir, "live", BRIDGE_TAIL);
+    mkdirSync(join(bridge, ".."), { recursive: true });
+    writeFileSync(bridge, "// stub\n");
+    const dead = join(dir, "gone", "node");
+    write({ command: dead, args: [bridge] });
+
+    const result = await refreshMcpEntryBinary(configPath, {
+      entryKey: "tandem",
+      script: bridge,
+      resolveBinary: () => "node", // BARE_NODE
+    });
+
+    // `isRecordedPathGone` exempts bare names, so writing one here would make
+    // every later diagnostic go quiet about an entry that is still broken.
+    expect(result).toEqual({ status: "skipped", reason: "no-valid-replacement" });
+    expect(read().command).toBe(dead);
+  });
+
+  it("refreshes a moved bridge path while the Node binary stays put", async () => {
+    const oldBridge = join(dir, "old-install", BRIDGE_TAIL);
+    const newBridge = join(dir, "new-install", BRIDGE_TAIL);
+    mkdirSync(join(newBridge, ".."), { recursive: true });
+    writeFileSync(newBridge, "// stub\n");
+    write({ command: process.execPath, args: [oldBridge] });
+
+    const result = await refreshMcpEntryBinary(configPath, {
+      entryKey: "tandem",
+      script: newBridge,
+    });
+
+    expect(result.status).toBe("rewritten");
+    expect(read().args).toEqual([newBridge]);
+    expect(read().command).toBe(process.execPath);
   });
 });

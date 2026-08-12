@@ -36,7 +36,7 @@
  * The trade is a resolution failure for a staleness failure — a recorded
  * absolute path can outlive the binary (a deleted nvm version, a Tauri update,
  * macOS App Translocation, an AppImage remount). Write-time validation cannot
- * see that; `refreshChannelNodeBinary` in `./apply.ts` is the boot-time
+ * see that; `refreshMcpEntryBinary` in `./apply.ts` is the boot-time
  * counterpart that can, gated by `isRecordedPathGone` below.
  */
 import { statSync } from "node:fs";
@@ -70,7 +70,7 @@ export function resolveNodeBinary(candidate: string = process.execPath): string 
   // Memoized for the DEFAULT candidate only. `process.execPath` cannot change
   // mid-process (this module already relies on that), while the callers loop:
   // `buildMcpEntries` resolves once per entry, and `writeTargets` /
-  // `applyConfigWithToken` / `refreshAllChannelNodeBinaries` each loop over
+  // `applyConfigWithToken` / `refreshAllMcpEntryBinaries` each loop over
   // every detected target. Without this, a host whose execPath fails
   // validation — a Debian `nodejs` basename, a home directory containing `..` —
   // prints `fallBackToBareNode`'s four-line warning once per target per

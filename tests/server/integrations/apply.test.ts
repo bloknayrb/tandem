@@ -9,6 +9,7 @@ import {
   MSIX_PACKAGE_PATTERN,
   PathRejectedError,
   resolveChannelDist,
+  resolveStdioBridgeDist,
 } from "../../../src/server/integrations/apply.js";
 
 const POSIX_ONLY = process.platform !== "win32";
@@ -50,6 +51,64 @@ describe("resolveChannelDist — TANDEM_CHANNEL_DIST precedence (#477 PR 3c-ii-c
   it("ignores an empty-string env var (empty string is falsy — falls back to derivation)", () => {
     const resolved = resolveChannelDist({ TANDEM_CHANNEL_DIST: "" }, () => true);
     expect(resolved.replace(/\\/g, "/")).toMatch(/dist\/channel\/index\.js$/);
+  });
+});
+
+describe("resolveStdioBridgeDist — TANDEM_STDIO_BRIDGE_DIST precedence", () => {
+  // Same contract as resolveChannelDist: the Tauri bundle injects the path
+  // because the package-root derivation resolves outside the resource dir.
+  it("prefers an injected env path when it points at an existing file", () => {
+    const injected = "/app/Resources/dist/stdio-bridge/index.js";
+    expect(resolveStdioBridgeDist({ TANDEM_STDIO_BRIDGE_DIST: injected }, () => true)).toBe(
+      injected,
+    );
+  });
+
+  it("falls back to the package-root derivation when env is unset", () => {
+    const resolved = resolveStdioBridgeDist({}, () => true);
+    expect(resolved.replace(/\\/g, "/")).toMatch(/dist\/stdio-bridge\/index\.js$/);
+  });
+
+  it("ignores a bogus env path that does not exist, and says so", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const resolved = resolveStdioBridgeDist(
+        { TANDEM_STDIO_BRIDGE_DIST: "/nope/bridge.js" },
+        () => false,
+      );
+      expect(resolved).not.toBe("/nope/bridge.js");
+      const logged = errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+      expect(logged).toContain("/nope/bridge.js");
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("refuses a macOS App Translocation path even though the file is right there", () => {
+    // A quarantined .app runs from a randomized read-only mount that is GONE on
+    // the next launch. Recording it would write an entry that works exactly
+    // once — worse than the npx fallback, because a dead absolute path cannot
+    // recover on its own and the user has no tools at all in the meantime.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const translocated =
+        "/private/var/folders/ab/xyz/d/AppTranslocation/1234-5678/d/Tandem.app/Contents/Resources/dist/stdio-bridge/index.js";
+      const resolved = resolveStdioBridgeDist(
+        { TANDEM_STDIO_BRIDGE_DIST: translocated },
+        () => true, // the file genuinely exists right now — that is the trap
+      );
+      expect(resolved).not.toBe(translocated);
+      expect(errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n")).toMatch(
+        /AppTranslocation/,
+      );
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("ignores an empty-string env var", () => {
+    const resolved = resolveStdioBridgeDist({ TANDEM_STDIO_BRIDGE_DIST: "" }, () => true);
+    expect(resolved.replace(/\\/g, "/")).toMatch(/dist\/stdio-bridge\/index\.js$/);
   });
 });
 

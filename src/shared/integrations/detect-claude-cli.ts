@@ -1,8 +1,8 @@
-import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, extname, join } from "node:path";
 
 import type { ClaudeCliPresence } from "./contract.js";
+import { binNamesFor, isFile, isOnPath } from "./path-lookup.js";
 
 /**
  * Pure-built-ins probe for the `claude` CLI binary, extracted to a shared leaf
@@ -18,56 +18,6 @@ export interface DetectClaudeCliOptions {
   pathOverride?: string;
   /** Override `process.platform` — tests exercise the win32 `.exe` branch. */
   platformOverride?: NodeJS.Platform;
-}
-
-/**
- * Does this path name a FILE?
- *
- * Not `existsSync`, which is also true for a directory — and one of the names
- * probed below is the extensionless `claude`, so a PATH entry holding an
- * ordinary `claude/` folder (a source checkout on a `PATH`-listed parent, say)
- * would otherwise read as an installed CLI. `statSync` follows symlinks, so a
- * link to a real binary still counts; `throwIfNoEntry: false` keeps a dangling
- * one from throwing.
- *
- * Total by construction — it answers `false` rather than throwing when it
- * cannot tell. `throwIfNoEntry: false` suppresses only the "no entry" case;
- * `EACCES` on a locked-down directory, `ELOOP` on a symlink cycle, and a
- * disconnected network share named in `PATH` (routine on Windows) all still
- * throw. Both callers walk every `PATH` entry, so one unreadable directory
- * anywhere on it would otherwise abort the whole walk — and these run inside
- * `tandem doctor`, a LAN-reachable status route, and the launcher's crash
- * handler, where an exception is respectively a crashed CLI, a 500, and a
- * dead server process. "I could not read it" is not evidence of an install,
- * so `false` is the honest answer as well as the safe one.
- */
-function isFile(path: string): boolean {
-  try {
-    return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Every filename `claude` can be installed under, in the order a shell would
- * find them.
- *
- * On Windows the native installer drops `claude.exe`, while
- * `npm i -g @anthropic-ai/claude-code` writes cmd-shim wrappers (`claude.cmd` /
- * `claude.ps1`) plus a bare `claude` bash shim. Probing `claude.exe` alone
- * reported a perfectly usable npm-global install as NOT_INSTALLED — the exact
- * false "not installed" warning this check exists to avoid — so we check every
- * candidate. POSIX only ever has the bare `claude`.
- *
- * `stem` is `"claude"` for the detector; {@link isBareNameLaunchable} passes the
- * `TANDEM_CLAUDE_CMD` override's basename, since that is the name the launcher
- * will actually search PATH for.
- */
-function binNamesFor(platform: NodeJS.Platform, stem = "claude"): string[] {
-  return platform === "win32"
-    ? [`${stem}.exe`, `${stem}.cmd`, `${stem}.bat`, `${stem}.ps1`, stem]
-    : [stem];
 }
 
 /**
@@ -94,17 +44,16 @@ export function detectClaudeCli(opts: DetectClaudeCliOptions = {}): ClaudeCliPre
   const platform = opts.platformOverride ?? process.platform;
   const home = opts.homeOverride ?? homedir();
 
-  const binNames = binNamesFor(platform);
-  const foundIn = (dir: string): boolean => binNames.some((name) => isFile(join(dir, name)));
-
-  // `delimiter` is platform-specific (`;` on win32, `:` elsewhere). When a
-  // platformOverride disagrees with the host, the override is for test
-  // ergonomics only — real callers never pass it, so host `delimiter` is fine.
-  const pathVar = opts.pathOverride ?? process.env.PATH ?? "";
-  for (const dir of pathVar.split(delimiter)) {
-    if (dir.length === 0) continue;
-    if (foundIn(dir)) return "INSTALLED_ON_PATH";
+  // First-hit over PATH is exactly `isOnPath`'s semantics, so this half shares
+  // it. The OTHER walk in this file (`isBareNameLaunchable`) does not and keeps
+  // its own loop — it must see the whole PATH to distinguish "a shim, and no
+  // `.exe` anywhere" from "a shim ahead of a real `.exe`".
+  if (isOnPath("claude", { pathOverride: opts.pathOverride, platformOverride: platform })) {
+    return "INSTALLED_ON_PATH";
   }
+
+  const foundIn = (dir: string): boolean =>
+    binNamesFor(platform, "claude").some((name) => isFile(join(dir, name)));
 
   // Native install location — same `~/.local/bin` on every platform per the
   // official installer's documented uninstall paths (Windows included).

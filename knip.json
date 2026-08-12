@@ -5,6 +5,7 @@
     "src/cli/index.ts",
     "src/channel/index.ts",
     "src/monitor/index.ts",
+    "src/stdio-bridge/index.ts",
     "src/client/main.ts",
     "scripts/*.{ts,mjs,js}",
     "tests/**/*.{test,spec}.ts",

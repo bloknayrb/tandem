@@ -59,6 +59,7 @@
     "resources": {
       "../dist/server/": "dist/server/",
       "../dist/channel/": "dist/channel/",
+      "../dist/stdio-bridge/": "dist/stdio-bridge/",
       "../dist/client/": "dist/client/",
       "../sample/": "sample/",
       "../skills/": "skills/",

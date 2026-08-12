@@ -14,6 +14,7 @@ import { runSetup } from "../../src/cli/setup.js";
 // These helpers moved to src/server/integrations/apply.ts in #477 PR 3c-ii-a;
 // the back-compat re-export from src/cli/setup.ts was dropped in PR 3c-ii-c.
 import {
+  _resetStdioFallbackWarningForTests,
   applyConfig,
   applyConfigWithToken,
   applyOpsForCli,
@@ -103,22 +104,101 @@ describe("buildMcpEntries", () => {
     expect(entries["tandem-channel"]?.env?.TANDEM_URL).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}`);
   });
 
-  it("generates stdio entry for claude-desktop targets", () => {
-    const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
-      targetKind: "claude-desktop",
+  // The `tandem` stdio entry is an absolute pair when one can be built and the
+  // historical npx tuple when it cannot — see `buildStdioTandemEntry`. The
+  // fallback IS the bug: a bare command word is resolved through the MCP
+  // client's PATH at spawn time, and a GUI-launched client's PATH routinely
+  // holds no Node at all.
+  describe("claude-desktop stdio entry: absolute pair, else npx", () => {
+    const NPX_ARGS = ["-y", `tandem-editor@${resolveCliVersion()}`, "mcp-stdio"];
+
+    beforeEach(() => {
+      // The "one cause deserves one warning" memo is module-scoped, so a prior
+      // test's fallback would silence the next one's assertion.
+      _resetStdioFallbackWarningForTests();
     });
-    expect(entries.tandem.command).toBe("npx");
-    // The npx spec is pinned to this build's version so `npm exec` bypasses any
-    // stale global tandem-editor. resolveCliVersion() is the same source the
-    // code uses, so this assertion tracks releases without rotting.
-    expect(entries.tandem.args).toEqual([
-      "-y",
-      `tandem-editor@${resolveCliVersion()}`,
-      "mcp-stdio",
-    ]);
-    expect(entries.tandem.env?.TANDEM_URL).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}`);
-    expect(entries.tandem.type).toBeUndefined();
-    expect(entries.tandem.url).toBeUndefined();
+
+    it("tier 1: absolute Node + absolute bridge when both resolve", () => {
+      const bridge = join(tmpdir(), `tandem-bridge-${process.pid}.js`);
+      writeFileSync(bridge, "// stub\n");
+      try {
+        const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
+          targetKind: "claude-desktop",
+          stdioBridgePath: bridge,
+        });
+        // No PATH lookup is needed to spawn either half of this.
+        expect(entries.tandem.command).toBe(process.execPath);
+        // Exactly ONE arg. Two would leave `validateTandemEntry`'s Node branch
+        // and be reported `invalid-args`, which the wizard turns into
+        // `apply: "skip"` — Tandem refusing to write its own correct entry.
+        expect(entries.tandem.args).toEqual([bridge]);
+        expect(entries.tandem.env?.TANDEM_URL).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}`);
+        expect(entries.tandem.type).toBeUndefined();
+        expect(entries.tandem.url).toBeUndefined();
+      } finally {
+        rmSync(bridge, { force: true });
+      }
+    });
+
+    it("falls back to the BARE pinned npx tuple when the bridge is missing", () => {
+      const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
+        targetKind: "claude-desktop",
+        stdioBridgePath: join(tmpdir(), "definitely-not-here-stdio-bridge.js"),
+      });
+      // The npx spec stays pinned to this build's version so `npm exec` bypasses
+      // any stale global tandem-editor. `resolveCliVersion()` is the same source
+      // the code uses, so this tracks releases without rotting.
+      expect(entries.tandem.args).toEqual(NPX_ARGS);
+      // BARE, on every host — even one with npx sitting on this process's PATH.
+      // Embedding the absolute npx looks like a free improvement and is not:
+      // `npx` is a `#!/usr/bin/env node` script, so an absolute path still
+      // resolves `node` through the CLIENT's PATH and fails exactly where the
+      // bare name does. This assertion is what keeps it from coming back.
+      expect(entries.tandem.command).toBe("npx");
+      expect(entries.tandem.env?.TANDEM_URL).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}`);
+    });
+
+    it("never emits a bare `node` when no absolute Node can be resolved", () => {
+      const bridge = join(tmpdir(), `tandem-bridge-bare-${process.pid}.js`);
+      writeFileSync(bridge, "// stub\n");
+      try {
+        const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
+          targetKind: "claude-desktop",
+          stdioBridgePath: bridge,
+          nodeBinary: "node", // i.e. BARE_NODE — what resolveNodeBinary returns on a
+          // Debian-lineage `nodejs` basename, a `..` in HOME, or a UNC path.
+        });
+        // A bare `node` has exactly the PATH problem this whole change fixes,
+        // and unlike `npx` it is not even the shape clients have tolerated.
+        expect(entries.tandem.command).not.toBe("node");
+        expect(entries.tandem.args).toEqual(NPX_ARGS);
+      } finally {
+        rmSync(bridge, { force: true });
+      }
+    });
+
+    it("warns once per cause, not once per target", () => {
+      const errors: string[] = [];
+      const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+        errors.push(a.join(" "));
+      });
+      try {
+        const missing = join(tmpdir(), "definitely-not-here-stdio-bridge.js");
+        for (let i = 0; i < 3; i++) {
+          buildMcpEntries("/abs/path/to/dist/channel/index.js", {
+            targetKind: "claude-desktop",
+            stdioBridgePath: missing,
+          });
+        }
+        // `writeTargets` / `applyConfigWithToken` loop over every detected
+        // target, so a per-call warning prints the same paragraph three times
+        // for one cause.
+        const warnings = errors.filter((e) => e.includes("Failed to spawn process"));
+        expect(warnings).toHaveLength(1);
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 
   it("includes token in stdio entry env for claude-desktop targets", () => {
@@ -251,6 +331,55 @@ describe("applyConfig", () => {
       url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`,
     });
     expect(written.mcpServers["tandem-channel"]).toBeUndefined();
+  });
+
+  // The migration every existing Claude Desktop user goes through exactly once.
+  it("rewrites a legacy bare-npx desktop entry, backs it up once, then is idempotent", async () => {
+    const configPath = join(tmpDir, "claude_desktop_config.json");
+    const bridge = join(tmpDir, "dist", "stdio-bridge", "index.js");
+    mkdirSync(dirname(bridge), { recursive: true });
+    writeFileSync(bridge, "// stub\n");
+    // What every pre-fix install has on disk.
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          tandem: {
+            command: "npx",
+            args: ["-y", "tandem-editor@0.20.0", "mcp-stdio"],
+            env: { TANDEM_URL: `http://127.0.0.1:${DEFAULT_MCP_PORT}` },
+          },
+        },
+      }),
+    );
+
+    const backups: string[] = [];
+    const build = () =>
+      buildMcpEntries("/fake/channel/index.js", {
+        targetKind: "claude-desktop",
+        stdioBridgePath: bridge,
+      });
+    const ops = () => ({
+      ...applyOpsForCli(build(), { withChannelShim: false }),
+      onBackup: (p: string) => backups.push(p),
+    });
+
+    await applyConfig(configPath, ops());
+
+    const after = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(after.mcpServers.tandem.command).toBe(process.execPath);
+    expect(after.mcpServers.tandem.args).toEqual([bridge]);
+    // The user's old entry is recoverable — this is a rewrite of something they
+    // may have hand-edited.
+    expect(backups).toHaveLength(1);
+
+    // Second apply from the SAME binary must be a byte-level no-op. Without
+    // this, every run would churn the file and burn a backup slot (MAX_BACKUPS
+    // is 3), eventually evicting the one copy of their original config.
+    const before = readFileSync(configPath, "utf-8");
+    await applyConfig(configPath, ops());
+    expect(readFileSync(configPath, "utf-8")).toBe(before);
+    expect(backups).toHaveLength(1);
   });
 
   it("creates parent directory if it does not exist", async () => {

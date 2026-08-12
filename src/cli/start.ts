@@ -28,7 +28,13 @@ export function runStart(): void {
       "works but isn't the recommended experience (https://github.com/bloknayrb/tandem/issues/477).",
   );
 
-  const proc = spawn("node", [SERVER_DIST], {
+  // `process.execPath`, not a bare `"node"`. The bare name is resolved through
+  // PATH at spawn time, and this process is already running Node — so the
+  // interpreter we want is one we can name outright, with no lookup that could
+  // miss (or, worse, find a different Node than the one running this CLI). Same
+  // reasoning as `integrations/node-binary.ts`, which fixed the equivalent bug
+  // in generated MCP entries.
+  const proc = spawn(process.execPath, [SERVER_DIST], {
     stdio: "inherit",
     env: process.env,
   });

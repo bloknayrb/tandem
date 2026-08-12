@@ -45,7 +45,12 @@ import { fileURLToPath } from "node:url";
 
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
+import {
+  claudeCodeConfigPath,
+  claudeDesktopConfigPath,
+} from "../../shared/integrations/client-config-paths.js";
 import { targetPushSupport } from "../../shared/integrations/contract.js";
+import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
 import type { SkillRefreshError } from "../../shared/launcher/contract.js";
 import { resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
@@ -88,25 +93,85 @@ const PACKAGE_ROOT = (() => {
  * Exported (with `exists` injectable) so the env-precedence can be unit-tested
  * without re-importing the module to re-run the const initializer.
  */
+function resolveBundledDist(
+  envVar: "TANDEM_CHANNEL_DIST" | "TANDEM_STDIO_BRIDGE_DIST",
+  relPath: string,
+  consequence: string,
+  env: NodeJS.ProcessEnv,
+  exists: (p: string) => boolean,
+): string {
+  const bundled = resolve(PACKAGE_ROOT, relPath);
+  const injected = env[envVar];
+  if (injected) {
+    // macOS App Translocation: a quarantined `.app` on first launch runs from
+    // `/private/var/folders/…/AppTranslocation/<uuid>/d/Tandem.app/…`, a
+    // randomized read-only mount that is GONE on the next launch. Recording a
+    // path from there produces config that works exactly once, and unlike an
+    // absent path there is no later probe that can tell it was doomed. Refuse
+    // it for BOTH bundles: translocation moves the whole `.app`, so the channel
+    // shim has the identical problem — the only asymmetry is severity, which
+    // belongs to the callers, not here.
+    //
+    // Matched on the path segment, not a prefix: the mount is under
+    // `/private/var/folders/…` on some releases and `/var/folders/…` on others,
+    // and only the literal directory name is stable. Separator-agnostic so a
+    // Windows-shaped fixture read on Linux in CI cannot accidentally match.
+    if (/[/\\]AppTranslocation[/\\]/.test(injected)) {
+      console.error(
+        `[Tandem] ${envVar} is under macOS App Translocation ("${injected}") — ` +
+          `that path disappears on the next launch, so it will not be recorded. ` +
+          `${consequence} Move Tandem.app to /Applications and reopen it.`,
+      );
+      return bundled;
+    }
+    if (exists(injected)) return injected;
+    // Set-but-missing: a broken desktop injection would otherwise degrade with
+    // no trace. Behaviour is unchanged (we still fall back); this only leaves a
+    // diagnostic breadcrumb on stderr (Critical Rule #3-safe).
+    console.error(
+      `[Tandem] ${envVar} set to "${injected}" but no file there — ` +
+        `falling back to bundled path. ${consequence}`,
+    );
+  }
+  return bundled;
+}
+
 export function resolveChannelDist(
   env: NodeJS.ProcessEnv = process.env,
   exists: (p: string) => boolean = existsSync,
 ): string {
-  const injected = env.TANDEM_CHANNEL_DIST;
-  if (injected) {
-    if (exists(injected)) return injected;
-    // Set-but-missing: a broken desktop injection would otherwise degrade push
-    // → polling with no trace. Behavior is unchanged (we still fall back); this
-    // only leaves a diagnostic breadcrumb on stderr (Critical Rule #3-safe).
-    console.error(
-      `[Tandem] TANDEM_CHANNEL_DIST set to "${injected}" but no file there — ` +
-        "falling back to bundled path; real-time push may be unavailable.",
-    );
-  }
-  return resolve(PACKAGE_ROOT, "dist/channel/index.js");
+  return resolveBundledDist(
+    "TANDEM_CHANNEL_DIST",
+    "dist/channel/index.js",
+    "Real-time push may be unavailable.",
+    env,
+    exists,
+  );
 }
 
 const CHANNEL_DIST = resolveChannelDist();
+
+/**
+ * Resolve the bundled stdio-bridge entry embedded in the generated `tandem`
+ * stdio entry (Claude Desktop and friends).
+ *
+ * Same contract as {@link resolveChannelDist}; see `src/stdio-bridge/index.ts`
+ * for why this is a separate bundle from `dist/cli`.
+ */
+export function resolveStdioBridgeDist(
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (p: string) => boolean = existsSync,
+): string {
+  return resolveBundledDist(
+    "TANDEM_STDIO_BRIDGE_DIST",
+    "dist/stdio-bridge/index.js",
+    "The MCP entry will have to use npx, which the client must resolve on PATH.",
+    env,
+    exists,
+  );
+}
+
+const STDIO_BRIDGE_DIST = resolveStdioBridgeDist();
 
 const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
 
@@ -237,10 +302,102 @@ export interface BuildMcpEntriesOptions {
    *  When omitted (first-run before token provisioned), headers/env are omitted
    *  and backward compatibility is preserved. */
   token?: string;
+  /** Override the stdio-bridge script the `tandem` stdio entry points at.
+   *  Omit in production: the default is `STDIO_BRIDGE_DIST`. Test seam only,
+   *  mirroring `nodeBinary` — pass a path that does not exist to exercise the
+   *  npx fallback tiers. */
+  stdioBridgePath?: string;
   /** Target kind controls entry shape. Claude Code uses HTTP (direct);
-   *  Claude Desktop uses stdio (npx bridge) because Cowork sessions can
-   *  only surface stdio MCP servers. */
+   *  Claude Desktop uses stdio because Cowork sessions can only surface stdio
+   *  MCP servers. See {@link buildStdioTandemEntry} for which of the three
+   *  stdio shapes it gets. */
   targetKind?: TargetKind;
+}
+
+/**
+ * Has the "could not embed an absolute command" warning already been printed?
+ *
+ * Module-scoped on purpose. `buildMcpEntries` runs once per detected target,
+ * and `writeTargets` / `applyConfigWithToken` each loop over every target — so
+ * a per-call warning prints the same four lines two or three times for one
+ * cause. `resolveNodeBinary`'s own memo documents the same rule: one cause
+ * deserves one warning.
+ */
+let warnedStdioFallback = false;
+
+/** Test seam: let a suite assert the warning fires again for a fresh cause. */
+export function _resetStdioFallbackWarningForTests(): void {
+  warnedStdioFallback = false;
+}
+
+function warnStdioFallback(detail: string): void {
+  if (warnedStdioFallback) return;
+  warnedStdioFallback = true;
+  console.error(
+    `[Tandem] ${detail} The 'tandem' MCP entry will use the bare command "npx", ` +
+      "which the MCP client must resolve on its own PATH at spawn time. A " +
+      "GUI-launched client does not inherit a login shell's PATH — on macOS it " +
+      "gets roughly /usr/bin:/bin:/usr/sbin:/sbin, which contains no Node. If " +
+      'the client reports "Failed to spawn process: No such file or directory", ' +
+      "this is why. Run 'tandem doctor' for the full check.",
+  );
+}
+
+/**
+ * The `tandem` entry for a stdio target: an absolute pair when we can build
+ * one, the historical `npx` tuple when we cannot.
+ *
+ * **Absolute Node + absolute bridge** needs nothing on the user's PATH, no npm
+ * registry round-trip and no `node_modules` — and in the desktop app the Node
+ * is our bundled sidecar, so it works on a machine with no Node installed at
+ * all. That last property is the whole point: a bare command word is resolved
+ * through the MCP client's PATH at spawn time, and a GUI-launched client's PATH
+ * routinely has no Node in it.
+ *
+ * **There is deliberately no middle tier that embeds an absolute `npx`.** It
+ * looks like it should help and does not: on POSIX `npx` is a symlink to
+ * `npm/bin/npx-cli.js`, whose shebang is `#!/usr/bin/env node`. Naming it by
+ * absolute path still performs a PATH lookup for `node` *in the client's
+ * environment* — measured directly:
+ *
+ *     $ env -i PATH=/usr/bin:/bin /opt/node22/bin/npx --version
+ *     /usr/bin/env: 'node': No such file or directory
+ *
+ * So on the exact machine this change exists for, an absolute `npx` fails the
+ * same way the bare one does. Its only band would be "npx off the client's PATH
+ * but node on it", and in the `BARE_NODE` case that band is empty — that is a
+ * validator rejection (a Debian-lineage `nodejs` basename), not a PATH miss, so
+ * node is on PATH and the bare tuple already worked.
+ *
+ * Never emit `{command: "node"}`: a bare `node` has exactly the PATH problem
+ * being fixed here and, unlike `npx`, is not even a shape clients have been
+ * tolerating. Never emit an absolute path to a file that is not there: that
+ * fails at every spawn, where `npx` at least might work.
+ */
+function buildStdioTandemEntry(
+  env: Record<string, string>,
+  opts: BuildMcpEntriesOptions,
+): McpEntry {
+  const nodeBinary = opts.nodeBinary ?? resolveNodeBinary();
+  const bridge = opts.stdioBridgePath ?? STDIO_BRIDGE_DIST;
+  if (nodeBinary !== BARE_NODE && existsSync(bridge)) {
+    // ONE arg, not `[bridge, "mcp-stdio"]`. It mirrors the `tandem-channel`
+    // shape and so lands in `validateTandemEntry`'s existing Node-shaped
+    // branch, which needs no loosening — and the wizard re-reads its own
+    // freshly written entry through that validator, where an `invalid-args`
+    // verdict becomes `apply: "skip"`. It is also only *safe* because the
+    // bridge bundle has no subcommand dispatch: the same 1-arg shape aimed at
+    // `dist/cli/index.js` would fall through to `runStart()` and spawn a whole
+    // Tandem server onto the MCP wire.
+    return { command: nodeBinary, args: [bridge], env };
+  }
+
+  warnStdioFallback(
+    nodeBinary === BARE_NODE
+      ? "Could not resolve an absolute Node binary for the 'tandem' MCP entry."
+      : `The bundled stdio bridge is missing (looked at "${bridge}").`,
+  );
+  return { command: "npx", args: ["-y", `tandem-editor@${CLI_VERSION}`, "mcp-stdio"], env };
 }
 
 export function buildMcpEntries(
@@ -255,11 +412,10 @@ export function buildMcpEntries(
     if (opts.token) {
       env.TANDEM_AUTH_TOKEN = opts.token;
     }
-    tandemEntry = {
-      command: "npx",
-      args: ["-y", `tandem-editor@${CLI_VERSION}`, "mcp-stdio"],
-      env,
-    };
+    // Resolution stays INSIDE this branch. Hoisting it above the `if` would
+    // start emitting a `command` for Claude Code too, breaking the direct-HTTP
+    // path — which has no subprocess at all (ADR-045).
+    tandemEntry = buildStdioTandemEntry(env, opts);
   } else {
     tandemEntry = { type: "http", url: `${MCP_URL}/mcp` };
     if (opts.token) {
@@ -398,7 +554,7 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   // MCP servers are configured in ~/.claude.json under the "mcpServers" key.
   // Detect if the file exists OR if ~/.claude directory exists (Claude Code is installed).
   // With --force, always include regardless.
-  const claudeCodeConfig = join(home, ".claude.json");
+  const claudeCodeConfig = claudeCodeConfigPath({ homeOverride: opts.homeOverride });
   const claudeCodeDir = join(home, ".claude");
   if (opts.force || existsSync(claudeCodeConfig) || existsSync(claudeCodeDir)) {
     targets.push({ label: "Claude Code", configPath: claudeCodeConfig, kind: "claude-code" });
@@ -407,35 +563,16 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   // Claude Desktop — platform-specific.
   // Only detect if the config file already exists (user has launched Desktop at least once).
   // With --force, always include.
-  let desktopConfig: string | null = null;
-  if (process.platform === "win32") {
-    // `homeOverride` WINS over %APPDATA%, and this is a containment boundary,
-    // not a preference. %APPDATA% is set on every real Windows box, so reading
-    // it first made the override partial: a caller that redirected `home` to a
-    // temp dir still got the real `…\AppData\Roaming\Claude\` path back for
-    // this target. A test doing exactly that wrote its fixture token into the
-    // developer's live Claude Desktop config on 2026-08-09. `assertPathSafe`
-    // does not catch it either — that guard validates against the process's
-    // real `homedir()`, which the real APPDATA path is happily inside.
-    const appdata =
-      opts.appDataOverride ??
-      (opts.homeOverride
-        ? join(opts.homeOverride, "AppData", "Roaming")
-        : (process.env.APPDATA ?? join(home, "AppData", "Roaming")));
-    desktopConfig = join(appdata, "Claude", "claude_desktop_config.json");
-  } else if (process.platform === "darwin") {
-    desktopConfig = join(
-      home,
-      "Library",
-      "Application Support",
-      "Claude",
-      "claude_desktop_config.json",
-    );
-  } else {
-    desktopConfig = join(home, ".config", "claude", "claude_desktop_config.json");
-  }
+  // The platform switch (including the `homeOverride`-beats-%APPDATA%
+  // containment rule) lives in the shared leaf so `tandem doctor` inspects the
+  // exact file this writes. Do not reinline it — a second copy is how the
+  // diagnosis drifts from the write target.
+  const desktopConfig: string = claudeDesktopConfigPath({
+    homeOverride: opts.homeOverride,
+    appDataOverride: opts.appDataOverride,
+  });
 
-  if (desktopConfig && (opts.force || existsSync(desktopConfig))) {
+  if (opts.force || existsSync(desktopConfig)) {
     targets.push({ label: "Claude Desktop", configPath: desktopConfig, kind: "claude-desktop" });
   }
 
@@ -863,7 +1000,7 @@ export type ConfigReadResult =
  * Extracted because this preamble had been hand-copied and had already begun to
  * diverge; a hardening change applied to one copy and not the other fails
  * silently on someone's `~/.claude.json`. Two callers use it today
- * (`removeConfigEntries`, `refreshChannelNodeBinary`); `applyConfig` keeps its
+ * (`removeConfigEntries`, `refreshMcpEntryBinary`); `applyConfig` keeps its
  * own variant deliberately because it CREATES the file, and
  * `existing-config.ts` has a third, looser read this did not absorb. Async I/O so callers on the startup
  * path do not block the event loop on a multi-megabyte config.
@@ -945,49 +1082,172 @@ export type RefreshNodeBinaryResult =
   | ConfigReadRefusal
   | { status: "no-op" }
   /** The recorded binary is gone and we have no better value to put there —
-   *  see the `BARE_NODE` refusal in `refreshChannelNodeBinary`. */
+   *  see the `BARE_NODE` refusal in `refreshMcpEntryBinary`. */
   | { status: "skipped"; reason: "no-valid-replacement" }
   /** `from`/`to` are null when only the SCRIPT path needed repair — the two are
    *  checked independently, so either can move without the other. */
   | { status: "rewritten"; from: string | null; to: string | null; scriptRefreshed: boolean };
 
 /**
- * Repair a `tandem-channel` entry whose recorded Node path has gone stale.
+ * Which entry key a refresh pass is operating on. Both carry an absolute Node
+ * path plus an absolute script, and both can go stale the same ways.
+ */
+export type RefreshableEntryKey = "tandem" | "tandem-channel";
+
+/**
+ * Is this recorded `args[0]` one of OUR script paths, and therefore ours to
+ * repair?
  *
- * Writing an absolute Node path (see `node-binary.ts`) fixes a shim that could
- * not be resolved — but it trades that for a path that can later stop existing:
- * a deleted nvm/fnm version, a Tauri update that relocates the sidecar, macOS
- * App Translocation, an AppImage's per-run mount. Write-time validation cannot
- * see any of those; only a check at start can. Without this, the absolute-path
- * change would swap one silent failure for a worse one, since a dead absolute
- * path can never recover while a bare name might still resolve.
+ * Only consulted for the `tandem` key, and it is the difference between a
+ * repair and a clobber. `validateTandemEntry` accepts a Node-shaped command
+ * with a single `.js` arg, which covers the bundled stdio bridge — but ALSO a
+ * legacy sidecar invocation written by an older Tauri build, and any absolute
+ * `.js` a user hand-pointed the entry at. Those are arity-identical to the
+ * shape we emit, so "has a string command and a stale `args[0]`" is not enough
+ * to justify overwriting: it would silently redirect a working hand-edited
+ * entry at Tandem's bridge the moment the user's own script moved.
+ *
+ * Matching on the trailing path segments rather than equality with
+ * `STDIO_BRIDGE_DIST` is the point — the recorded path we are being asked
+ * about is, by construction, a *different* location from the current one (an
+ * old install prefix, a pre-update `.app`). Separator-agnostic because a
+ * Windows-shaped config is read on Linux in CI.
+ *
+ * `tandem-channel` needs no equivalent: nothing but Tandem has ever written
+ * that key, so its pre-existing "any stale absolute `args[0]`" rule stays.
+ */
+function isOwnStdioBridgeScript(recorded: string): boolean {
+  return /[/\\]dist[/\\]stdio-bridge[/\\]index\.js$/.test(recorded);
+}
+
+/** What a refreshable key needs to know about itself. */
+interface RefreshDescriptor {
+  /** The script this key's entry should point at. A thunk, not a value: both
+   *  bundles are module-level consts, and taking them eagerly here would freeze
+   *  the table before the test seams can vary them. */
+  script: () => string;
+  /** Did Tandem write this entry, i.e. is it ours to rewrite? */
+  isOurs: (command: string, args: unknown) => boolean;
+}
+
+/**
+ * The two refreshable keys and everything that differs between them.
+ *
+ * A table rather than `if (entryKey === "tandem")` branches, because the pairing
+ * of key→script is the one genuinely dangerous mistake available in this file:
+ * pointing the `tandem` entry at `CHANNEL_DIST` would spawn the channel shim in
+ * the bridge's place — a process starts, no tools appear, and every health check
+ * reads green. Expressed as a table, that mispairing is unrepresentable in
+ * production code instead of being warned about in a comment.
+ *
+ * It also forces the ownership question to be *answered* for each key rather
+ * than inherited from whichever default a `??` happened to fall through to —
+ * and a third key (`dist/monitor`, say) cannot be added without answering both
+ * columns.
+ */
+const REFRESHABLE: Record<RefreshableEntryKey, RefreshDescriptor> = {
+  tandem: {
+    script: () => STDIO_BRIDGE_DIST,
+    isOurs: (command, args) =>
+      isValidNodeBinary(command) &&
+      Array.isArray(args) &&
+      typeof args[0] === "string" &&
+      isOwnStdioBridgeScript(args[0]),
+  },
+  "tandem-channel": {
+    // Tandem is the sole writer of this key, so any stale absolute path in it is
+    // ours — the pre-existing rule, now stated rather than assumed.
+    script: () => CHANNEL_DIST,
+    isOurs: () => true,
+  },
+};
+
+/** Entry keys the boot sweep repairs, in the order it visits them. */
+const REFRESHABLE_ENTRY_KEYS = Object.keys(REFRESHABLE) as RefreshableEntryKey[];
+
+/**
+ * Repair a `tandem` or `tandem-channel` entry whose recorded Node path has gone
+ * stale.
+ *
+ * Writing an absolute Node path (see `node-binary.ts`) fixes a command that
+ * could not be resolved — but it trades that for a path that can later stop
+ * existing: a deleted nvm/fnm version, a Tauri update that relocates the
+ * sidecar, macOS App Translocation, an AppImage's per-run mount, an
+ * `npm uninstall -g`. Write-time validation cannot see any of those; only a
+ * check at start can. Without this, the absolute-path change would swap one
+ * silent failure for a worse one, since a dead absolute path can never recover
+ * while a bare name might still resolve.
+ *
+ * Three shapes are deliberately left alone, and each would be a regression to
+ * touch:
+ *   - **HTTP entries** (Claude Code's `tandem`) have no `command` → `no-op`.
+ *   - **A deliberate bare-`npx` fallback.** `"npx"` and `"-y"` are bare names,
+ *     so `isRecordedPathGone` reports `false` for both the command and the
+ *     script half. Rewriting one would undo a fallback that was chosen on
+ *     purpose. An *absolute* npx is a different case — it is probed, and if it
+ *     is gone the entry is left visibly dead rather than silently downgraded.
+ *   - **A `tandem` entry that is not ours** — see {@link isOwnStdioBridgeScript}.
  *
  * Read-side rules (never create, never replace malformed JSON, no parse detail
  * in a log) are `readConfigForMutation`'s; this function owns only the decision
  * and the write. `deps` is a test seam; production wants the defaults.
  */
-export async function refreshChannelNodeBinary(
+export async function refreshMcpEntryBinary(
   configPath: string,
-  deps: {
-    probe?: (p: string) => boolean | null;
-    resolveBinary?: () => string;
-    /** Absolute path to the channel bundle. Defaults to `CHANNEL_DIST`. */
-    channelScript?: string;
-  } = {},
+  deps: RefreshDeps = {},
 ): Promise<RefreshNodeBinaryResult> {
-  const resolveBinary = deps.resolveBinary ?? resolveNodeBinary;
-  const channelScript = deps.channelScript ?? CHANNEL_DIST;
-
   const opened = await readConfigForMutation(configPath);
   if (opened.status !== "ok") return opened;
 
-  const entry = opened.servers["tandem-channel"];
-  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-    return { status: "no-op" };
-  }
+  const { changed, result } = repairEntryInPlace(opened.servers, deps);
+  if (changed) await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", configPath);
+  return result;
+}
+
+interface RefreshDeps {
+  probe?: (p: string) => boolean | null;
+  resolveBinary?: () => string;
+  /** Which entry to repair. Defaults to `tandem-channel` so the pre-existing
+   *  call shape (and its suite) is unchanged. */
+  entryKey?: RefreshableEntryKey;
+  /** Override the script the entry should point at. Test seam only — production
+   *  takes it from {@link REFRESHABLE}, where the key→script pairing cannot be
+   *  got wrong. */
+  script?: string;
+}
+
+/**
+ * Decide and apply one key's repair, mutating `servers` in place.
+ *
+ * Split out of the read/write wrapper so the boot sweep can repair every key
+ * against a SINGLE parse of the file and commit them with a single write. Doing
+ * it per key meant two reads (and up to two writes) of the same `~/.claude.json`
+ * per config — a file that is routinely multi-megabyte because it stores
+ * per-project history, on a path that is awaited during startup.
+ */
+function repairEntryInPlace(
+  servers: Record<string, unknown>,
+  deps: RefreshDeps,
+): { changed: boolean; result: RefreshNodeBinaryResult } {
+  const noOp = { changed: false, result: { status: "no-op" } as const };
+
+  const resolveBinary = deps.resolveBinary ?? resolveNodeBinary;
+  const entryKey = deps.entryKey ?? "tandem-channel";
+  const descriptor = REFRESHABLE[entryKey];
+  const script = deps.script ?? descriptor.script();
+
+  const entry = servers[entryKey];
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return noOp;
   const record = entry as Record<string, unknown>;
   const command = record.command;
-  if (typeof command !== "string") return { status: "no-op" };
+  if (typeof command !== "string") return noOp;
+
+  // Ownership gate. The `tandem` key is shared ground: it also holds legacy
+  // sidecar invocations from older Tauri builds, npx fallbacks, and whatever a
+  // user hand-edited — and the legacy shape is arity-identical to ours. Leaving
+  // anything else exactly as found is the whole point for a hand-edit, and for
+  // an npx fallback is what keeps a deliberate choice from being undone.
+  if (!descriptor.isOurs(command, record.args)) return noOp;
 
   // The script path is checked INDEPENDENTLY of the binary, and first.
   //
@@ -1004,9 +1264,9 @@ export async function refreshChannelNodeBinary(
   // case was never the problem.)
   let scriptRefreshed = false;
   const args = record.args;
-  if (Array.isArray(args) && typeof args[0] === "string" && args[0] !== channelScript) {
-    if (isRecordedPathGone(args[0], deps.probe) && existsSync(channelScript)) {
-      args[0] = channelScript;
+  if (Array.isArray(args) && typeof args[0] === "string" && args[0] !== script) {
+    if (isRecordedPathGone(args[0], deps.probe) && existsSync(script)) {
+      args[0] = script;
       scriptRefreshed = true;
     }
   }
@@ -1026,31 +1286,35 @@ export async function refreshChannelNodeBinary(
 
   if (commandRewrite === null && !scriptRefreshed) {
     return noValidReplacement
-      ? { status: "skipped", reason: "no-valid-replacement" }
-      : { status: "no-op" };
+      ? { changed: false, result: { status: "skipped", reason: "no-valid-replacement" } }
+      : noOp;
   }
 
   if (commandRewrite !== null) record.command = commandRewrite.to;
-  await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", configPath);
   return {
-    status: "rewritten",
-    from: commandRewrite?.from ?? null,
-    to: commandRewrite?.to ?? null,
-    scriptRefreshed,
+    changed: true,
+    result: {
+      status: "rewritten",
+      from: commandRewrite?.from ?? null,
+      to: commandRewrite?.to ?? null,
+      scriptRefreshed,
+    },
   };
 }
 
 /**
- * Boot-time sweep over every detected client config.
+ * Boot-time sweep over every detected client config, for every entry key that
+ * can carry an absolute path.
  *
- * Deliberately NOT filtered to `claude-code` targets. `shouldRegisterChannelShim`
- * only ever writes a shim for Claude Code, so filtering would be correct today —
- * but it would be a second, independently-maintained copy of that rule, and the
- * function is already total: a config with no `tandem-channel` key, or one whose
- * command is the Desktop branch's bare `npx`, both fall out as `no-op`. Leaving
- * it unfiltered also repairs an entry left behind by an older Tandem.
+ * Deliberately NOT filtered to a target kind. `shouldRegisterChannelShim` only
+ * ever writes a shim for Claude Code and the stdio `tandem` entry only goes to
+ * Claude Desktop, so filtering would be correct today — but it would be a
+ * second, independently-maintained copy of those rules, and the function is
+ * already total: a missing key, an HTTP entry, a bare-`npx` fallback and a
+ * `tandem` entry Tandem did not write all fall out as `no-op`. Leaving it
+ * unfiltered also repairs an entry left behind by an older Tandem.
  */
-export async function refreshAllChannelNodeBinaries(
+export async function refreshAllMcpEntryBinaries(
   opts: { homeOverride?: string } = {},
 ): Promise<void> {
   // Yield before any filesystem work. `void` alone would NOT defer this:
@@ -1075,28 +1339,53 @@ export async function refreshAllChannelNodeBinaries(
 
   for (const target of targets) {
     try {
-      const result = await refreshChannelNodeBinary(target.configPath);
-      if (result.status === "rewritten") {
-        // Name what actually moved. The binary and the script are repaired
-        // independently, so `from`/`to` are null on a script-only fix — logging
-        // them unconditionally would print "null → null" for a real repair.
-        const what =
-          result.from === null
-            ? "channel script path refreshed"
-            : `${result.from} → ${result.to}` +
-              (result.scriptRefreshed ? ", channel script path also refreshed" : "");
-        console.error(`[Tandem] Repaired stale channel entry in ${target.label} (${what}).`);
-      } else if (result.status === "skipped") {
-        // Every refusal was previously silent. `malformed-json` in particular
-        // deserves to be loud: `~/.claude.json` is the whole MCP registry, so
-        // if it does not parse then EVERY server the user has is broken — and
-        // Tandem is the only process that just found out. The reasons are
-        // fixed enum strings precisely so they are safe to log (parse-error
-        // text would embed a source snippet from a file holding bearer tokens).
-        console.error(
-          `[Tandem] Left the channel entry in ${target.label} untouched (${result.reason}). ` +
-            "Run 'tandem doctor' for the push-path check.",
-        );
+      // ONE read and at most ONE write per config, however many keys we repair.
+      // `~/.claude.json` is routinely multi-megabyte (it stores per-project
+      // history) and this is awaited on the startup path ahead of the launcher
+      // spawn, so a read per key would put the whole file through `stat` +
+      // `readFile` + `JSON.parse` twice to answer a question that is `no-op` for
+      // one of the keys in almost every real config.
+      const opened = await readConfigForMutation(target.configPath);
+      if (opened.status !== "ok") {
+        if (opened.status === "skipped") {
+          // Every refusal was previously silent. `malformed-json` in particular
+          // deserves to be loud: `~/.claude.json` is the whole MCP registry, so
+          // if it does not parse then EVERY server the user has is broken — and
+          // Tandem is the only process that just found out. The reasons are
+          // fixed enum strings precisely so they are safe to log (parse-error
+          // text would embed a source snippet from a file holding bearer tokens).
+          console.error(
+            `[Tandem] Left ${target.label} untouched (${opened.reason}). ` +
+              "Run 'tandem doctor' for the full check.",
+          );
+        }
+        continue;
+      }
+
+      let dirty = false;
+      for (const entryKey of REFRESHABLE_ENTRY_KEYS) {
+        const { changed, result } = repairEntryInPlace(opened.servers, { entryKey });
+        dirty ||= changed;
+        if (result.status === "rewritten") {
+          // Name what actually moved. The binary and the script are repaired
+          // independently, so `from`/`to` are null on a script-only fix —
+          // logging them unconditionally would print "null → null" for a real
+          // repair.
+          const what =
+            result.from === null
+              ? "script path refreshed"
+              : `${result.from} → ${result.to}` +
+                (result.scriptRefreshed ? ", script path also refreshed" : "");
+          console.error(`[Tandem] Repaired stale ${entryKey} entry in ${target.label} (${what}).`);
+        } else if (result.status === "skipped") {
+          console.error(
+            `[Tandem] Left the ${entryKey} entry in ${target.label} untouched (${result.reason}). ` +
+              "Run 'tandem doctor' for the full check.",
+          );
+        }
+      }
+      if (dirty) {
+        await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", target.configPath);
       }
     } catch (err) {
       // Include the target — a Windows box can have Claude Code plus several
@@ -1104,7 +1393,7 @@ export async function refreshAllChannelNodeBinaries(
       // failed. This is also where `assertPathSafe`'s rejection lands, i.e.
       // "someone symlinked this config", which is worth naming.
       console.error(
-        `[Tandem] Channel entry refresh failed for ${target.label} (${target.configPath}, non-fatal): ${err instanceof Error ? err.message : err}`,
+        `[Tandem] MCP entry refresh failed for ${target.label} (${target.configPath}, non-fatal): ${err instanceof Error ? err.message : err}`,
       );
     }
   }
@@ -1426,7 +1715,7 @@ export async function resolveChannelShimIntent(
  *
  * **When `withChannelShim` is ABSENT, the existing REGISTRATION is preserved.**
  * The entry BODY is still re-derived from `resolveNodeBinary()` and
- * `CHANNEL_DIST` — this heals a stale Node path the way `refreshChannelNodeBinary`
+ * `CHANNEL_DIST` — this heals a stale Node path the way `refreshMcpEntryBinary`
  * does, and a hand-customised `command`/`args` will be overwritten. What is
  * preserved is whether the entry exists at all. These are different questions and conflating them is a
  * data-loss bug. `shouldRegisterChannelShim` answers "what should a fresh
