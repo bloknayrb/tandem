@@ -1791,7 +1791,7 @@ fn show_server_error_dialog(
 
     let mut message = format!("Tandem's server failed to start.\n\nError: {error}\n\n");
     match &holder {
-        Some(h) => message.push_str(&h.message),
+        Some(h) => message.push_str(&h.message()),
         None => message.push_str(&format!(
             "Ports {WS_PORT} and {MCP_PORT} must be free for Tandem's server to start."
         )),
@@ -1810,7 +1810,7 @@ fn show_server_error_dialog(
         // When the port is merely in TIME_WAIT there is nothing to kill and
         // the retry works only because time passed; promising to "free the
         // port" there would be a lie.
-        match holder.as_ref().and_then(|h| h.killable_process.as_deref()) {
+        match holder.as_ref().and_then(|h| h.killable_process()) {
             Some(proc) => message.push_str(&format!(
                 "\n\nRetry Server Start will try to end {proc} and start Tandem's server again. \
                  This can take up to two minutes."
@@ -2843,17 +2843,60 @@ fn run_system32_tool(exe: &str, args: &[&str]) -> Option<String> {
 }
 
 /// What is holding one of the sidecar's ports, and whether the retry can do
-/// anything about it.
+/// anything about it. An enum rather than a `{ message, killable_process }`
+/// struct deliberately: those two fields were only ever kept in sync by both
+/// return sites of `describe_port_holder` being written carefully by hand —
+/// nothing stopped a future construction site from naming a process in
+/// `message` while leaving `killable_process` `None`, which is exactly the
+/// kind of contradictory-dialog bug this type exists to prevent. With the
+/// population as the only source of truth, `message()` and
+/// `killable_process()` below derive both user-facing strings from the same
+/// value, so that drift is unrepresentable rather than merely avoided.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub(crate) struct PortHolder {
+pub(crate) enum PortHolder {
+    /// A live process we can name and that a retry would terminate.
+    Listener { port: u16, pid: u32, name: Option<String> },
+    /// Windows TIME_WAIT: the old sidecar is gone, so there is no owning
+    /// process, but the OS hasn't released the port yet. Nothing to kill;
+    /// the retry works only because time passed.
+    Lingering { port: u16 },
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+impl PortHolder {
     /// User-facing sentence, already hedged. Never logged or emitted — it goes
     /// straight into the native dialog.
-    pub message: String,
-    /// A live process we can name and that a retry would terminate. None for
-    /// the TIME_WAIT case, where there is no process to kill and the retry
-    /// succeeds only because time passed.
-    pub killable_process: Option<String>,
+    fn message(&self) -> String {
+        match self {
+            PortHolder::Listener { port, pid, name } => {
+                format!("Port {port} appears to be held by {}.", describe_process(*pid, name.as_deref()))
+            }
+            PortHolder::Lingering { port } => format!(
+                "Port {port} is still tied up by a connection from a previous run \
+                 (Windows releases these after a short delay). No other program is using it."
+            ),
+        }
+    }
+
+    /// A description of the process a retry would terminate, or `None` for
+    /// the `Lingering` case where there is nothing to kill.
+    fn killable_process(&self) -> Option<String> {
+        match self {
+            PortHolder::Listener { pid, name, .. } => Some(describe_process(*pid, name.as_deref())),
+            PortHolder::Lingering { .. } => None,
+        }
+    }
+}
+
+/// Shared by `PortHolder::message` and `PortHolder::killable_process` so the
+/// two can't describe the same process differently.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn describe_process(pid: u32, name: Option<&str>) -> String {
+    match name {
+        Some(n) => format!("{n} (PID {pid})"),
+        None => format!("PID {pid}"),
+    }
 }
 
 /// Describe what is holding one of `ports`.
@@ -2885,13 +2928,7 @@ fn describe_port_holder(ports: &[u16]) -> Option<PortHolder> {
     let Some(first) = parse_netstat_listening_pid(&netstat, ports) else {
         // No listener — check for the TIME_WAIT population before giving up.
         let port = parse_netstat_lingering_port(&netstat, ports)?;
-        return Some(PortHolder {
-            message: format!(
-                "Port {port} is still tied up by a connection from a previous run \
-                 (Windows releases these after a short delay). No other program is using it."
-            ),
-            killable_process: None,
-        });
+        return Some(PortHolder::Lingering { port });
     };
     let (port, pid) = first;
 
@@ -2909,14 +2946,7 @@ fn describe_port_holder(ports: &[u16]) -> Option<PortHolder> {
         return None;
     }
 
-    let described = match &name {
-        Some(n) => format!("{n} (PID {pid})"),
-        None => format!("PID {pid}"),
-    };
-    Some(PortHolder {
-        message: format!("Port {port} appears to be held by {described}."),
-        killable_process: Some(described),
-    })
+    Some(PortHolder::Listener { port, pid, name })
 }
 
 /// Non-Windows: no diagnostic. The failures this serves are Windows-specific
@@ -5311,7 +5341,7 @@ Active Connections
         let port = listener.local_addr().expect("local_addr").port();
 
         let holder = describe_port_holder(&[port]).expect("a held port must be described");
-        let described = holder.message;
+        let described = holder.message();
 
         assert!(
             described.contains(&format!("Port {port}")),
@@ -5328,10 +5358,14 @@ Active Connections
             described.to_ascii_lowercase().contains(".exe"),
             "should resolve the image name via tasklist, not fall back to PID-only: {described}"
         );
-        // A live listener is killable, so the dialog is allowed to promise the
-        // retry will end it. The TIME_WAIT branch must NOT set this.
+        // A live listener is killable, so the dialog is allowed to say the
+        // retry will try to end it. The TIME_WAIT branch must report None here.
         assert!(
-            holder.killable_process.is_some(),
+            matches!(holder, PortHolder::Listener { .. }),
+            "a live listener must be reported as the Listener variant"
+        );
+        assert!(
+            holder.killable_process().is_some(),
             "a live listener must be reported as killable"
         );
     }
