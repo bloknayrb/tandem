@@ -241,6 +241,57 @@ describe("bundled CSS: the #1302 formatting-bar declarations survive minificatio
   });
 });
 
+describe("bundled CSS: the #1383/#1384 mode-toggle declarations survive minification", () => {
+  // ModeToggle.svelte's thumb no longer computes its own box; it is PLACED into
+  // the track's first grid column (`grid-area: 1 / 1 / 2 / 2` + `inset: 0`) so
+  // that it cannot drift from the segment it selects. Those declarations live in
+  // a component <style> block, so they really do ship through lightningcss —
+  // and CI's Playwright run drives `npm run dev`, which never minifies, so no
+  // E2E gate can see this axis. That blind spot is exactly the one that shipped
+  // #1189 inert for six weeks.
+  //
+  // All four cases were measured green before the change shipped; they are
+  // here so the pipeline question stays visibly answered rather than unasked.
+
+  it("keeps grid-area as the four-line form", () => {
+    // The load-bearing one. For an ABSOLUTELY-POSITIONED grid child an `auto`
+    // end line resolves to the container's padding edge, not `span 1`, so a
+    // minifier that collapsed `1/1/2/2` to `1/1` would silently stretch the
+    // thumb across the whole track — a visual bug with no failing test
+    // anywhere else.
+    const out = minify(".probe{grid-area:1 / 1 / 2 / 2}");
+    expect(out).toContain("grid-area:1/1/2/2");
+  });
+
+  it("keeps inset: 0 as a placement-neutral shorthand", () => {
+    // Exploding `inset` into a reordered top/right/bottom/left set would be
+    // legal but would put four declarations back where the point of the fix
+    // was to have none.
+    const out = minify(".probe{position:absolute;grid-area:1 / 1 / 2 / 2;inset:0}");
+    expect(out).toMatch(/inset:\s*0|top:\s*0/);
+    expect(out).toContain("grid-area:1/1/2/2");
+  });
+
+  it("does not rewrite repeat(2, 1fr) into a minmax(0, …) form", () => {
+    // Bare `1fr` is `minmax(auto, 1fr)`, and the `auto` minimum is what keeps a
+    // column from being squeezed under its label — the actual root cause of
+    // #1383/#1384. A rewrite to a 0 minimum would reopen both, so this pins the
+    // toolchain half of the rule that `mode-toggle-thumb-contract.test.ts` pins
+    // in source.
+    const out = minify(".probe{display:inline-grid;grid-template-columns:repeat(2, 1fr)}");
+    expect(out).not.toContain("minmax(0");
+    expect(out).toMatch(/repeat\(2,\s*1fr\)|1fr 1fr/);
+  });
+
+  it("preserves the thumb's one-column slide", () => {
+    // lightningcss rewrites `translateX(100%)` to the equivalent
+    // `translate(100%)`. That is semantically identical, so match either —
+    // what must not happen is the percentage being resolved or dropped.
+    const out = minify(".probe{transform:translateX(100%)}");
+    expect(out).toMatch(/translate(?:X)?\(100%\)/);
+  });
+});
+
 /** Every `.svelte` `<style>` / `.css` file whose CSS the build routes through lightningcss. */
 function bundledCssFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
