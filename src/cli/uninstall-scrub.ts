@@ -364,8 +364,8 @@ const SKILL_DIR_ALLOWLIST = [/^SKILL\.md$/, /^\.tandem-setup-[0-9a-f-]+\.tmp$/];
  * orphaned `atomicWrite` temps from a crashed install). Anything else means
  * the user put files there; leave the whole dir intact. A dangling skill is
  * harmless to Claude Code but keeps advertising tandem_* tools that no
- * longer exist; if the install survives and runs again, `refreshSkillIfStale`
- * recreates it.
+ * longer exist. A later user-approved `tandem setup` recreates it; generic
+ * server startup deliberately does not cross that install boundary.
  *
  * `homeOverride` is for tests only.
  */

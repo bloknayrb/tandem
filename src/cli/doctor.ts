@@ -1524,16 +1524,21 @@ export function evaluatePushPath(push: unknown): EvalOutcome | null {
         "to install and no flag (the bundled skill tells it how; `tandem_status` reports " +
         "the address). That one needs a Monitor tool, which not every Claude Code has — it " +
         "is enabled per account rather than per version, so upgrading will not add it, and " +
-        "on Windows it also needs Git Bash. If Claude says it has none, go straight to the " +
-        "channel shim below: the plugin monitor needs the same tool and will not help. " +
-        "Otherwise install the Tandem plugin, which registers a monitor " +
+        "on Windows it also needs Git Bash. If Claude says it has none, the channel shim " +
+        "below is the option that always avoids Monitor. The plugin monitor shares that " +
+        "per-account feature gate, so it will not help if the gate is off; however, the " +
+        "plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, " +
+        "so it can help when Git Bash is the missing precondition. You can install the " +
+        "Tandem plugin, which registers a monitor " +
         "needing no flag (`claude plugin list` to check) — start `claude` from a terminal " +
         "if you do, since the monitor inherits that shell's PATH and cannot find Node " +
         "without it — or register the channel shim with " +
         "`tandem setup --apply --with-channel-shim` and start Claude Code with " +
-        "`--dangerously-load-development-channels server:tandem-channel`. Use ONE of the " +
-        "three, not several — each delivers independently, so running two means every " +
-        "event arrives twice.",
+        "`--dangerously-load-development-channels server:tandem-channel`. Choose one setup " +
+        "route where possible. When the plugin and built-in Monitor are both available, " +
+        "invoking Tandem's skill can start both automatically; doubled wakes carry no " +
+        "content and the inbox de-duplicates, but they can waste a turn. Ask Claude to stop " +
+        "its built-in watch with `TaskStop` if that happens.",
       data,
     };
   }
@@ -1548,7 +1553,8 @@ export function evaluatePushPath(push: unknown): EvalOutcome | null {
       status: "pass",
       message:
         `${subscribers} push consumer(s) attached; no events delivered yet this run ` +
-        "(expected if you haven't edited, or if you're in Solo mode)",
+        "(expected if you haven't edited, or if you're in Solo mode; this is a " +
+        "process-global count, NOT that this Claude session is covered)",
       data,
     };
   }
@@ -1559,7 +1565,8 @@ export function evaluatePushPath(push: unknown): EvalOutcome | null {
     message:
       `${subscribers} push consumer(s) attached; ${eventCount} event(s) delivered this run, ` +
       `most recently ${agoS === null ? "?" : `${agoS}s`} ago ` +
-      "(confirms events reach a consumer, NOT that Claude sees them)",
+      "(confirms events reach a process-global consumer, NOT that this Claude session is " +
+      "covered or saw them)",
     data,
   };
 }

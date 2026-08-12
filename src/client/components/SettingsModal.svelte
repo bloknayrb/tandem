@@ -83,9 +83,10 @@ export interface SettingsTab {
 
 <script lang="ts">
 import { onMount, untrack } from "svelte";
-import { BYO_MODELS_ENABLED, TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
+import { BYO_MODELS_ENABLED } from "../../shared/constants";
 import { scrollFade } from "../actions/scrollFade.svelte";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
+import { createBugReportUrl } from "../hooks/useBugReportUrl.svelte";
 import { focusablesWithin, trapTab } from "../utils/focus-trap";
 import { activationKeydown } from "../utils/keyboard-activate";
 import { openServerPath } from "../utils/server-paths";
@@ -240,6 +241,10 @@ let {
 let modalEl: HTMLDivElement | undefined = $state();
 let hamburgerEl: HTMLButtonElement | undefined = $state();
 const appInfo = createAppInfo(() => open);
+// Primed from the Report-a-bug link's hover/focus, not from `open` — see the
+// hook's docstring for why the modal opening is the wrong trigger. The getter
+// is for teardown, which the hook owns.
+const bugReport = createBugReportUrl(() => open);
 let changelogLoading = $state(false);
 let changelogError = $state<string | null>(null);
 let replayLoading = $state(false);
@@ -709,8 +714,16 @@ async function handleReplayTutorial(): Promise<void> {
             </div>
           {/if}
         {/if}
+        <!-- Stays an <a>: the href is upgraded in place once diagnostics land,
+             so the click never awaits a fetch (which would lose user activation
+             and get popup-blocked in the browser build). Hover/focus start the
+             prefetch; if it hasn't landed, this is still the plain issue URL. -->
         <a
-          href={TANDEM_ISSUES_NEW_URL}
+          href={bugReport.url}
+          onpointerenter={bugReport.primeOnDwell}
+          onpointerleave={bugReport.cancelDwell}
+          onfocus={bugReport.primeOnDwell}
+          onblur={bugReport.cancelDwell}
           target="_blank"
           rel="noreferrer"
           data-testid="settings-modal-report-bug-link"

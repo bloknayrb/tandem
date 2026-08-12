@@ -310,7 +310,7 @@ describe("resolveRouteCwd — homeOverride seam (cross-platform determinism, #80
   /** Treat a tmpdir as "$HOME" so the home-confinement check is exercised
    * deterministically on every platform — no dependency on whether the
    * process's real $HOME happens to encompass `os.tmpdir()` (Windows CI
-   * sometimes does, POSIX never does). Mirrors the `refreshSkillIfStale`
+   * sometimes does, POSIX never does). Mirrors the `refreshExistingSkillIfStale`
    * homeOverride pattern in `src/server/integrations/apply.ts`. */
   let fakeHome: string;
   let outside: string;

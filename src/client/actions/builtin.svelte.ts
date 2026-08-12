@@ -708,6 +708,16 @@ async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
     return false;
   }
   const status = result.value;
+  // Side-channel: surface bundled-skill refresh failures before branching on
+  // launcher availability. Refresh now runs for launcher-disabled and deferred
+  // boots too, so those are precisely the states where a warning can coexist
+  // with `available: false`.
+  if ("skillRefresh" in status && status.skillRefresh) {
+    d.notify(
+      "warning",
+      `Bundled skill refresh failed: ${status.skillRefresh.message}. Run \`tandem setup\` to retry.`,
+    );
+  }
   if (!status.available) {
     // #1236: "not active in this Tandem build" is a lie in the deferred case —
     // the launcher is present and about to start, it just hasn't seen a human
@@ -719,15 +729,6 @@ async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
     }
     d.notify("warning", "Claude launcher not active in this Tandem build.");
     return false;
-  }
-  // Side-channel: surface bundled-skill refresh failures to the user. The
-  // server only includes `skillRefresh` on loopback, and the field is
-  // optional on the discriminated-union so absence is the success case.
-  if ("skillRefresh" in status && status.skillRefresh) {
-    d.notify(
-      "warning",
-      `Bundled skill refresh failed: ${status.skillRefresh.message}. Run \`tandem setup\` to retry.`,
-    );
   }
   return true;
 }

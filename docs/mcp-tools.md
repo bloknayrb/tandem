@@ -953,9 +953,17 @@ Read-only, takes **no parameters**, and is **not** license-gated — diagnostics
   "platform": "win32",
   "arch": "x64",
   "nodeVersion": "v22.0.0",
-  "tauriSidecar": true
+  "tauriSidecar": true,
+  "osRelease": "10.0.26100",
+  "osVersion": "Windows 11 Pro",
+  "cpuModel": "AMD Ryzen 7 5800X 8-Core Processor",
+  "cpuCount": 16,
+  "totalMemoryMb": 32768,
+  "freeMemoryMb": 6247
 }
 ```
+
+Everything from `osRelease` down is **optional and best-effort** (`collectHostInfo()` in `src/server/mcp/host-info.ts`): `os.cpus()` returns `[]` on some cgroup-restricted hosts and `os.version()` can throw, so any of these keys may be absent. They are deliberately non-identifying — no hostname, username, home path, network interfaces, locale or timezone — because this payload is what "Copy Diagnostics" puts on the clipboard and what the Report-a-bug link prefills into a public issue.
 
 **Notes:**
 - The two dev-repo-only checks (`node-modules`, `mcp-json`) are filtered out and `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop / npm-global install. (`tandem doctor` on the CLI keeps them; there the cwd is meaningful.)
@@ -1021,7 +1029,7 @@ Returns app metadata for the client's About panel and version indicator. All fie
 
 Runs the embedded `tandem doctor` collector and returns the report plus environment metadata. Backs the client's **Settings → About → Copy Diagnostics** button.
 
-**Loopback-only, unconditionally** — non-loopback callers get `403` regardless of auth, because the report embeds absolute paths (which include the username) and PIDs. It never contains token material or document content. The two dev-repo-only checks (`node-modules`, `mcp-json`) are filtered out of the report with `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop/npm-global install. Concurrent requests share one in-flight collector run (single-flight).
+**Loopback-only, unconditionally** — non-loopback callers get `403` regardless of auth, because the report embeds absolute paths and PIDs. It never contains token material or document content. Home-directory paths are `~`-redacted before they reach the wire (`redactHomePaths`), since this payload also prefills the Report-a-bug issue body; that narrows what leaks into a public issue but does not change the loopback posture. The two dev-repo-only checks (`node-modules`, `mcp-json`) are filtered out of the report with `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop/npm-global install. Concurrent requests share one in-flight collector run (single-flight).
 
 **Response (200):**
 ```json
@@ -1032,9 +1040,17 @@ Runs the embedded `tandem doctor` collector and returns the report plus environm
   "platform": "win32",
   "arch": "x64",
   "nodeVersion": "v22.0.0",
-  "tauriSidecar": true
+  "tauriSidecar": true,
+  "osRelease": "10.0.26100",
+  "osVersion": "Windows 11 Pro",
+  "cpuModel": "AMD Ryzen 7 5800X 8-Core Processor",
+  "cpuCount": 16,
+  "totalMemoryMb": 32768,
+  "freeMemoryMb": 6247
 }
 ```
+
+The `osRelease`/`osVersion`/`cpu*`/`*MemoryMb` fields are optional and best-effort — see the `tandem_diagnostics` section above for why, and for what is deliberately excluded.
 
 **Errors:** `403 FORBIDDEN` (non-loopback caller, or disallowed Host header), `500 diagnostics failed` (collector crash — detail goes to the server log, never the wire)
 

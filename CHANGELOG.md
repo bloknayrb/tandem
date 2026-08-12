@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Hand-started Claude Code sessions now try to watch Tandem automatically on first use.** After the first successful read-only `tandem_status`, the bundled skill makes one persistent built-in Monitor attempt using the server-reported wake address; asking Claude to watch is now recovery rather than setup. Existing setup-managed skill copies refresh before Tandem reports ready, including when the launcher is disabled or deferred. A missing standalone skill does not install during generic startup, so plugin-only users do not silently acquire a second integration route. Plugin-only sessions receive the updated instructions when Claude Code refreshes its plugin cache, on a timeline Tandem does not control. If a plugin-backed session starts both its packaged monitor and the built-in watch automatically, wakes remain payload-free and inbox reads de-duplicate; `TaskStop` stops the built-in watch when doubled wakes make the overlap visible.
+
 ## [0.21.0] - 2026-08-10
 
 Most of this release is Tandem telling you the truth about itself.

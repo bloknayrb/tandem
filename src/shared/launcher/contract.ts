@@ -22,7 +22,12 @@
 export type LauncherStatus =
   /** `reason` is loopback-only — see the note on `LauncherUnavailableReason`.
    * Non-loopback callers get the bare `{ available: false }`. */
-  | { available: false; reason?: LauncherUnavailableReason }
+  | {
+      available: false;
+      reason?: LauncherUnavailableReason;
+      /** Loopback-only. Present when the pre-readiness skill refresh failed. */
+      skillRefresh?: SkillRefreshError;
+    }
   | {
       available: true;
       running: false;
@@ -110,7 +115,7 @@ export type LauncherErrorCode =
  * has no other signal that the skill is stale, so `/status` surfaces this
  * for the palette/settings UI to convert into a notification. */
 export interface SkillRefreshError {
-  code: "write-failed" | "read-failed";
+  code: "write-failed" | "read-failed" | "path-rejected" | "timed-out";
   message: string;
 }
 
