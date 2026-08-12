@@ -24,57 +24,16 @@ import { SelectionDecorationExtension } from "./extensions/selection-decoration"
 import { SlashCommandExtension } from "./slash-menu";
 import { applyLink, getInitialLinkHref } from "./toolbar/handlers";
 import LinkEditor from "./toolbar/LinkEditor.svelte";
+// resolveRelativeLink + INTERNAL_LINK_EXTS hoisted to ./utils/relative-link.ts:
+// module-private here, it had zero test coverage, and its fail-closed traversal
+// guards are exactly the kind of thing that has to be tested.
+import { resolveRelativeLink } from "./utils/relative-link";
 import { isSafeExternalHref } from "./utils/url-safety";
 import "./editor.css";
-
-import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
-
-/** File extensions that open as new Tandem tabs when clicked as relative links. .docx excluded — not navigable as a link target. */
-const INTERNAL_LINK_EXTS = new Set([...SUPPORTED_EXTENSIONS].filter((e) => e !== ".docx"));
 
 // SAFE_EXTERNAL_PREFIXES + isSafeExternalHref hoisted to ./utils/url-safety.ts
 // so the click-time anchor intercept and the paste-time link sanitizer share
 // one allowlist (any drift would silently widen the XSS trust surface).
-
-/**
- * Resolve a relative href against an absolute file path.
- * Works on both POSIX and Windows paths by detecting the separator.
- * Returns null if the resolved path's extension is not in INTERNAL_LINK_EXTS.
- */
-function resolveRelativeLink(href: string, currentFilePath: string): string | null {
-  // Detect Windows vs POSIX
-  const sep = currentFilePath.includes("\\") ? "\\" : "/";
-
-  // Strip hash fragment for resolution; we don't support in-page anchors cross-file
-  const hashIdx = href.indexOf("#");
-  const hrefPath = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
-  if (!hrefPath) return null; // pure fragment (#section) — not a file link
-
-  // Check extension
-  const extMatch = hrefPath.match(/\.[^./\\]+$/);
-  const ext = extMatch ? extMatch[0].toLowerCase() : "";
-  if (!INTERNAL_LINK_EXTS.has(ext)) return null;
-
-  // Get directory of current file (convert forward slashes in href to platform sep)
-  const dirParts = currentFilePath.split(sep);
-  dirParts.pop(); // remove filename
-
-  // Normalize the href to use the platform separator
-  const hrefNormalized = hrefPath.replace(/\//g, sep);
-  const hrefParts = hrefNormalized.split(sep);
-
-  // Merge directory + relative parts, resolving . and ..
-  const resultParts = [...dirParts];
-  for (const part of hrefParts) {
-    if (part === "..") {
-      if (resultParts.length > 0) resultParts.pop();
-    } else if (part !== ".") {
-      resultParts.push(part);
-    }
-  }
-
-  return resultParts.join(sep);
-}
 
 interface Props {
   ydoc: Y.Doc;
@@ -321,6 +280,10 @@ async function openHref(href: string) {
   }
 
   // Treat anything else with a recognised file extension as a relative path.
+  // `resolveRelativeLink` is fail-closed: a non-navigable extension, a pure
+  // fragment, or a traversal escaping the current file's root all return null,
+  // and a null routes to this no-op — the correct UX for a link that points
+  // outside the document tree.
   if (currentFilePath) {
     const resolvedPath = resolveRelativeLink(href, currentFilePath);
     if (resolvedPath) {

@@ -40,9 +40,23 @@ export function isSafeExternalHref(href: string): boolean {
  * True when `trimmed` has a URI scheme prefix — a `:` appearing before any of
  * `/`, `#`, or `?` (a colon appearing only after one of those, e.g. inside a
  * filename or query string, is path-like, not a scheme). Shared detection
- * mechanic for `sanitizeHrefForPaste` and `sanitizeImageSrcForPaste`; each
- * keeps its own separate allowlist policy, so a change here can only ever
- * affect what counts as "has a scheme", never which schemes are safe.
+ * mechanic for `sanitizeHrefForPaste`, `sanitizeImageSrcForPaste` and
+ * {@link isSchemelessPathHref}.
+ *
+ * The first two pair this helper with their own separate allowlist
+ * (`SAFE_EXTERNAL_PREFIXES` / `SAFE_IMAGE_PREFIXES`), so for THEM a change here
+ * can only ever affect what counts as "has a scheme", never which schemes are
+ * safe. That warranty does NOT extend to the third consumer:
+ * {@link isSchemelessPathHref} is `!hasSchemePrefix(...)` and nothing else,
+ * with no allowlist of its own, so a change here now also moves the
+ * RENDER-TIME boundary — which hrefs the editor will emit as an `href`
+ * attribute at all.
+ *
+ * Consequence: separator-set changes belong in the CALLER, never here. Adding
+ * `\` to the separator list below to make backslash forms path-like would
+ * silently move `sanitizeHrefForPaste` and `sanitizeImageSrcForPaste` too —
+ * exactly the drift this file's header warns about. {@link isSchemelessPathHref}
+ * handles backslash itself, by rejecting it outright.
  */
 function hasSchemePrefix(trimmed: string): boolean {
   const firstColon = trimmed.indexOf(":");
@@ -50,6 +64,62 @@ function hasSchemePrefix(trimmed: string): boolean {
   const seps = ["/", "#", "?"].map((ch) => trimmed.indexOf(ch)).filter((idx) => idx !== -1);
   const firstPathSep = seps.length ? Math.min(...seps) : Number.POSITIVE_INFINITY;
   return firstPathSep >= firstColon;
+}
+
+/**
+ * Characters that make an href unsafe to reason about as a plain string.
+ *
+ * The leading run mirrors DOMPurify's URL-whitespace set, copied verbatim from
+ * `@tiptap/extension-link/dist/index.js:7` — that module strips these before
+ * matching its scheme regex, and browsers strip a subset of them before
+ * parsing. The trailing `\\` is ours: a backslash is not whitespace, but
+ * browsers map it to `/` inside a URL, so it reinterprets structure just as
+ * badly.
+ */
+const URL_HOSTILE_CHARS = /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000\\]/;
+
+/**
+ * True when `raw` is a scheme-less path reference — something the editor may
+ * safely emit as an `href` attribute even though it names no protocol.
+ *
+ * This answers the RENDER-TIME question ("may this href be emitted at all"),
+ * which is a different question from {@link isSafeExternalHref}'s ("may we
+ * hand this to `window.open`") and from {@link sanitizeHrefForPaste}'s ("may
+ * this survive a markdown paste"). It exists so `@tiptap/extension-link`'s
+ * default URL guard can be WIDENED rather than replaced — see the
+ * `isAllowedUri` union in `editor-extensions.ts` (#1377).
+ *
+ * **Fail-closed by design.** Any character a browser strips or reinterprets is
+ * a rejection, never a normalization. That asymmetry IS the safety argument:
+ * rejecting can only ever return `false`, so this predicate can never widen the
+ * union past Tiptap's `defaultValidate`, whereas a normalizer would have to be
+ * *provably identical* to the browser's own stripping to be safe. Worked
+ * counterexamples, all measured:
+ *   - `java<TAB>script:alert(1)` — browsers strip TAB, so this IS `javascript:`.
+ *   - `/\evil.com/x.md` and `\\evil.com\share\x.md` — `new URL(…)` resolves both
+ *     to `http://evil.com/…`, i.e. CROSS-HOST despite looking path-like.
+ *   - `<NUL>//evil.com` — resolves to `http://evil.com/`, and JS `trim()` does
+ *     NOT strip U+0000. That is precisely why there is no `trim()` here.
+ *
+ * **The `//` exclusion is separate and non-obvious.** `hasSchemePrefix("//x")`
+ * is false (no colon before the first `/`), so protocol-relative hrefs would
+ * otherwise be misclassified as paths — they are EXTERNAL navigations.
+ *
+ * **Why this is safe as an allowlist widener:** with hostile characters already
+ * rejected, a `/`, `#` or `?` before the first `:` means WHATWG scheme parsing
+ * (`ALPHA *(ALPHA / DIGIT / "+" / "-" / ".") ":"`) cannot succeed, so the href
+ * is relative *as far as the URL parser is concerned*. That is NOT the same as
+ * "safe for Tandem's own consumer": clicking such a link runs
+ * `resolveRelativeLink` (`./relative-link.ts`), which is a segment walk rather
+ * than a URL parser. The traversal question is answered there, not here.
+ */
+export function isSchemelessPathHref(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  // Fail closed: no trimming, no normalizing — see the doc comment above.
+  if (URL_HOSTILE_CHARS.test(raw)) return false;
+  // Protocol-relative is an EXTERNAL navigation, not a path.
+  if (raw.startsWith("//")) return false;
+  return !hasSchemePrefix(raw);
 }
 
 /**

@@ -372,6 +372,21 @@ describe("mdastToYDoc — inline marks", () => {
     expect(delta[0].attributes?.link).toEqual({ href: "https://example.com", title: "Example" });
   });
 
+  it("link with a bare nested relative href round-trips verbatim (#1377)", () => {
+    // Closes the issue's explicit open question. The client-side blanking is
+    // RENDER-only: neither mdastToYDoc nor yDocToMdast reads rendered DOM, so
+    // the on-disk href was never at risk.
+    doc = new Y.Doc();
+    loadMarkdown(doc, "[spec](docs/spec.md)\n");
+
+    const paragraph = getFragment(doc).get(0) as Y.XmlElement;
+    const delta = (paragraph.get(0) as Y.XmlText).toDelta();
+    expect(delta[0].insert).toBe("spec");
+    expect(delta[0].attributes?.link).toEqual({ href: "docs/spec.md" });
+
+    expect(saveMarkdown(doc)).toContain("[spec](docs/spec.md)");
+  });
+
   it("overlapping marks: bold-italic", () => {
     const xmlText = loadParagraphWithInline([
       {

@@ -1,7 +1,8 @@
+import fsSync from "fs";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addDoc,
   getOpenDocs,
@@ -367,5 +368,34 @@ describe("handleOpen — readOnly propagation", () => {
     const data = (capturedBody as { data: { readOnly: boolean; alreadyOpen: boolean } }).data;
     expect(data.alreadyOpen).toBe(true);
     expect(data.readOnly).toBe(true);
+  });
+});
+
+describe("openFileByPath — UNC paths are rejected BEFORE canonicalization", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["\\\\evil.com\\share\\x.md", "a bare UNC path"],
+    // The extended-UNC bypass the previous inline two-prefix check did not
+    // cover — `path.resolve` does not normalise `\\?\UNC\…` back to `\\…`.
+    ["\\\\?\\UNC\\evil.com\\share\\x.md", "an extended-UNC path"],
+  ])("rejects %s (%s) without calling realpathSync", async (badPath) => {
+    const spy = vi.spyOn(fsSync, "realpathSync");
+
+    try {
+      await openFileByPath(badPath);
+      expect.unreachable("should have thrown");
+    } catch (err: unknown) {
+      expect((err as NodeJS.ErrnoException).code).toBe("INVALID_PATH");
+    }
+
+    // THE POINT OF THIS TEST. `realpathSync` on a UNC path opens the SMB
+    // connection — and leaks the NTLM hash — so a result-only assertion would
+    // still pass with the check back in its old position after
+    // canonicalization. The pre-check is cross-platform (no `win32` gate,
+    // matching windows-path-safety.ts's own header), so this runs on Linux CI.
+    expect(spy).not.toHaveBeenCalled();
   });
 });

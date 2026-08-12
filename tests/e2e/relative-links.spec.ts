@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import fs from "fs";
 import path from "path";
 import {
   cleanupAllOpenDocuments,
@@ -51,6 +52,60 @@ test("clicking a relative .md link opens the target file as a new tab", async ({
   await expect(sourceTabName).toBeVisible();
 });
 
+test("clicking a bare nested relative .md link opens the target as a new tab (#1377)", async ({
+  page,
+}) => {
+  // Only the SOURCE is a fixture; the nested target is written inline so
+  // `createFixtureDir` (38 call sites across 35 specs) stays untouched.
+  const nestedDir = createFixtureDir("link-source-nested.md");
+  try {
+    fs.mkdirSync(path.join(nestedDir, "subdir"), { recursive: true });
+    // DISTINCT content, not a copy of link-target.md: identical fixture content
+    // across tests is what triggers the rename-recovery envelope collision that
+    // `cleanupFixtureDir`'s own comment warns about.
+    fs.writeFileSync(
+      path.join(nestedDir, "subdir", "link-target.md"),
+      "# Nested Link Target\n\nReached through a bare nested relative link.\n",
+    );
+    // NOTE: `cleanupFixtureDir`'s envelope sweep is NON-recursive, so it would
+    // not clean an envelope for `subdir/link-target.md`. Harmless here because
+    // this test creates no annotations — anyone adding an annotation-creating
+    // nested test must fix the sweep first.
+
+    await mcp.callTool("tandem_open", {
+      filePath: path.join(nestedDir, "link-source-nested.md"),
+    });
+
+    await page.goto("/");
+    const editor = page.locator(".tandem-editor");
+    await expect(editor).toBeVisible({ timeout: 10_000 });
+    await expect(editor).toContainText("Nested Link Source");
+
+    const link = editor.locator("a", { hasText: "Open the nested target" });
+    await expect(link).toBeVisible({ timeout: 5_000 });
+
+    // The regression assertions: both were empty/absent before #1377 — the
+    // base guard blanked the href, and the blanked href also suppressed the
+    // #996 tooltip.
+    await expect(link).toHaveAttribute("href", "subdir/link-target.md");
+    await expect(link).toHaveAttribute("title", "subdir/link-target.md");
+
+    await link.click();
+
+    const targetTabName = page.locator("[data-testid^='tab-name-']", {
+      hasText: "link-target.md",
+    });
+    await expect(targetTabName).toBeVisible({ timeout: 10_000 });
+
+    const sourceTabName = page.locator("[data-testid^='tab-name-']", {
+      hasText: "link-source-nested.md",
+    });
+    await expect(sourceTabName).toBeVisible();
+  } finally {
+    cleanupFixtureDir(nestedDir);
+  }
+});
+
 test("an editor link shows a pointer cursor and a title tooltip with its destination (#996)", async ({
   page,
 }) => {
@@ -77,8 +132,12 @@ test("a disallowed-scheme link renders inert — no live href, no title (#996 se
 }) => {
   // mdast→Y.Doc stores link URLs verbatim (no scheme check), so a .md authored
   // with a javascript: href reaches the editor. The renderHTML override must
-  // delegate to the base extension's isAllowedUri guard (which blanks the href)
-  // and must NOT mirror the disallowed scheme into a title tooltip.
+  // delegate to the base extension's blanking branch, which runs against the
+  // CONFIGURED `isAllowedUri` (`ctx.defaultValidate(url) ||
+  // isSchemelessPathHref(url)`, #1377). A `javascript:` href satisfies neither
+  // half: the scheme fails `defaultValidate`, and its colon precedes any `/`,
+  // `#` or `?`, so `hasSchemePrefix` sees a scheme. The override must also NOT
+  // mirror the disallowed scheme into a title tooltip.
   const xssDir = createFixtureDir("link-xss.md");
   try {
     await mcp.callTool("tandem_open", { filePath: path.join(xssDir, "link-xss.md") });

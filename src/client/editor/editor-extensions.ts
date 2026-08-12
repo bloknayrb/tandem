@@ -1,7 +1,7 @@
 import { type AnyExtension, mergeAttributes } from "@tiptap/core";
 import Highlight from "@tiptap/extension-highlight";
 import Image from "@tiptap/extension-image";
-import Link from "@tiptap/extension-link";
+import Link, { isAllowedUri as tiptapDefaultIsAllowedUri } from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import Subscript from "@tiptap/extension-subscript";
 import Superscript from "@tiptap/extension-superscript";
@@ -15,19 +15,24 @@ import { FootnoteRefMark } from "./extensions/footnote-ref";
 import { ListItemCheckbox } from "./extensions/list-item-checkbox";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { RawMarkdownMark } from "./extensions/raw-markdown";
-import { isSafeExternalHref } from "./utils/url-safety";
+import { isSafeExternalHref, isSchemelessPathHref } from "./utils/url-safety";
 
 // Link mark that surfaces the destination URL on hover via a native `title`
 // tooltip (issue #996). The base `@tiptap/extension-link` renderHTML emits the
 // `href` (plus our configured rel/target) but no title, so links give no hover
 // affordance for where they point. We delegate to the base renderHTML via
-// `this.parent()` — which keeps its `isAllowedUri` security branch (blanking
-// `javascript:`/`data:`/etc. hrefs to "") — and then post-process: mirror the
+// `this.parent()` — which keeps its href-blanking security branch, emitting
+// `href: ""` for any URI its guard refuses — and then post-process: mirror the
 // href into `title` only when the BASE output's href survived (non-empty) and no
 // explicit title already exists (e.g. a .docx-imported title attr wins). Reading
 // the base output rather than the raw HTMLAttributes means a disallowed scheme is
 // never given a title and never resurrected. Pointer-cursor styling lives in
 // editor.css (`.tandem-editor a[href]`).
+//
+// Two halves, deliberately separate: the BLANKING lives here in the base
+// renderHTML, but WHICH hrefs get blanked is decided by the `isAllowedUri`
+// option configured at the `.configure({…})` site below — not by the vendored
+// default. Read that comment before reasoning about what reaches `attrs.href`.
 //
 // It also strips the configured `target="_blank"` from non-external hrefs — see
 // the comment at that branch for why the attribute is a double-open on internal
@@ -113,6 +118,66 @@ export function buildSchemaExtensions(): AnyExtension[] {
     LinkWithHoverTitle.configure({
       openOnClick: false,
       HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
+      // #1377: `[spec](docs/spec.md)` — the relative-link form most repos use —
+      // rendered with `href=""` and no hover tooltip. The vendored default
+      // guard blocks `/^[a-zA-Z][a-zA-Z0-9+.-]*[:\/]/`.
+      //
+      // DERIVATION WARNING, because re-deriving it wrong flips the answer: the
+      // vendored pattern is assembled inside a TEMPLATE LITERAL
+      // (`dist/index.js:211-213`), so `\-` collapses to a bare `-` before
+      // `new RegExp` ever sees it and the final class is `[^a-z+.-:]`, in which
+      // `.-:` IS a range (U+002E–U+003A) swallowing `.`, `/`, the digits and
+      // `:`. Written literally with an escaped hyphen it would be a plain set,
+      // and `docs/spec.md` would be ALLOWED — the opposite of production.
+      //
+      // Fix: a strictly-additive union. `ctx.defaultValidate` runs FIRST so
+      // Tiptap's DOMPurify-derived scheme allowlist stays the authority on
+      // schemes, and our predicate can only ever ADD.
+      //
+      // Newly allowed, as a PROPERTY rather than a list (a list was measurably
+      // wrong): every href that contains no URL-hostile character and no
+      // backslash, does not begin `//`, and has either no colon or a `/`, `#`
+      // or `?` before its first colon — that `defaultValidate` rejects.
+      // Illustrations only: `docs/spec.md`, `java/script:alert(1)`,
+      // `example.com/path`. `javascript:`/`data:`/`vbscript:`/`file:`/`blob:`/
+      // `filesystem:` and their whitespace-obfuscated variants stay blocked by
+      // BOTH halves (the default strips whitespace and sees the scheme; our
+      // predicate fails closed on the hostile character).
+      //
+      // NOT claimed: that a newly-allowed href "can only be a relative URL".
+      // That is true of `new URL()` and false of Tandem's actual consumer —
+      // `utils/relative-link.ts` is a segment walk, and it is where the
+      // traversal question is answered.
+      //
+      // This option governs SIX surfaces in `dist/index.js`: parseHTML getAttrs
+      // (:290), renderHTML (:304), setLink (:322), toggleLink (:333), the
+      // linkify markPasteRule (:361) and the autolink validator (:395).
+      // setLink/toggleLink are the Link-editor + context-menu surface, where a
+      // bare nested path silently no-opped before this change. The markPasteRule
+      // reads `isAllowedUri` directly and CANNOT be narrowed by option — pasting
+      // the plain text `example.com/path` now linkifies; accepted deliberately,
+      // since bare `example.com` already linkifies today. Autolink is pinned
+      // below.
+      isAllowedUri: (url, ctx) => ctx.defaultValidate(url) || isSchemelessPathHref(url),
+      // Autolink is held at EXACTLY today's behaviour, and only this option can
+      // do it: the autolink plugin filters on `link.value` — the RAW TYPED TEXT
+      // (`dist/index.js:106`), not the resolved href. Measured with the real
+      // linkifyjs, `find("example.com/path")` yields
+      // `{value: "example.com/path", href: "http://example.com/path"}` while
+      // `defaultValidate("example.com/path")` is false, so widening
+      // `isAllowedUri` alone would make typing `example.com/path ` auto-create a
+      // link — writing markdown link syntax into the user's file on a keystroke,
+      // entirely outside #1377. `shouldAutoLink` is applied AFTER `validate`
+      // (:107), so restoring the vendored default here pins the gate exactly.
+      // What is NOT new: typing `docs/spec.md ` already autolinks `spec.md`
+      // today (linkify tokenizes to the last dotted run); this changes nothing
+      // there.
+      //
+      // The `[]` is the `protocols` argument, and it is correct only because we
+      // never configure `protocols`. If a custom protocol is ever added above,
+      // it must be threaded through here too or autolink will silently ignore
+      // it — an option literal cannot reach `this.options`.
+      shouldAutoLink: (url) => !!tiptapDefaultIsAllowedUri(url, []),
     }),
     // Block-level image node (issue #153). Renders `![alt](url)` markdown
     // (round-tripped through mdast-ydoc) and embedded .docx images (mammoth
