@@ -532,10 +532,7 @@ describe("setNativeTheme (#992)", () => {
     vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
     // hasFocus false so no poll tick can confound the assertions below.
     vi.stubGlobal("document", { hasFocus: () => false });
-    invoke.mockImplementation((cmd: string) => {
-      if (cmd === "get_app_theme") return Promise.resolve("light");
-      return Promise.resolve({ overrideActive: false, osTheme: null });
-    });
+    // invoke default comes from beforeEach; the two commands in play behave identically.
 
     initTauriTheme();
     await flushAsync();
@@ -581,13 +578,9 @@ describe("setNativeTheme (#992)", () => {
       const { setNativeTheme, initTauriTheme, _resetForTests } = await import(
         "../../src/client/hooks/useTauriTheme.svelte.js"
       );
-      _resetForTests();
       vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
       vi.stubGlobal("document", { hasFocus: () => false });
-      invoke.mockImplementation((cmd: string) => {
-        if (cmd === "get_app_theme") return Promise.resolve("light");
-        return Promise.resolve({ overrideActive: false, osTheme: null });
-      });
+      // invoke default comes from beforeEach; the two commands in play behave identically.
 
       initTauriTheme();
       await vi.advanceTimersByTimeAsync(0);
@@ -612,10 +605,11 @@ describe("setNativeTheme (#992)", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(systemTheme()).toBe("dark"); // gate expired — degraded to pre-#1369
 
+      // Stops the 3s interval while fake timers are still installed; afterEach
+      // would otherwise run it against real ones.
       _resetForTests();
     } finally {
       vi.useRealTimers();
-      isTauri.mockReturnValue(false);
     }
   });
 });

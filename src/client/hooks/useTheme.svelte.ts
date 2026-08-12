@@ -133,14 +133,14 @@ export function applyTheme(
  * to a native theme and `"system"` to "no override") and applies the
  * resolved theme to the DOM (`applyTheme`). One effect rather than two, so
  * correctness does not depend on Svelte flushing siblings in declaration
- * order. This is safe because `setNativeTheme` dedupes internally on
- * `lastPush.pref` (useTauriTheme.svelte.ts), so a `lightVariant`-only rerun
- * calls it with the same `pref` and no-ops.
+ * order. This is safe because `setNativeTheme` dedupes internally on the
+ * preference it last pushed (useTauriTheme.svelte.ts), so a
+ * `lightVariant`-only rerun calls it with the same `pref` and no-ops.
  *
  * That dedupe is also the LOOP BREAKER: a release round trip writes
  * `osTheme` back through `tauriTheme.current`, which re-runs this effect. It
  * terminates only because the second `setNativeTheme` call short-circuits.
- * Do not "simplify" the `lastPush` latch away.
+ * Do not "simplify" the latch away.
  *
  * Accepts getters for `pref` and `lightVariant` so callers with `$state`
  * values propagate reactively. `lightVariant` (#993) controls which

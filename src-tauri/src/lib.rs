@@ -3340,7 +3340,7 @@ fn set_native_theme(
     // Fail closed AND fail loud. The action above has already released any
     // prior force, so the accessibility scheme wins — but the push did not
     // achieve the requested theme, and resolving it as success would let the
-    // client latch `lastPush.pref` on a preference the OS does not have,
+    // client latch its dedupe on a preference the OS does not have,
     // deduping every later attempt to re-apply it. That is #992 itself,
     // silently restored, so report the uncertainty instead.
     if high_contrast == HighContrast::Unknown {

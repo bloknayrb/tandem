@@ -46,8 +46,8 @@ let _initialized = false;
 // the native layer actually DID). They are split by LIFECYCLE, not by field
 // list — a rejection voids the whole of `lastPush` in one expression and must
 // never name `lastResolved`. A NEW pipeline fact belongs as a field on one of
-// them rather than as another module `let`; `issuedAt` below is the worked
-// example, and it needed no `_resetForTests` line.
+// them rather than as another module `let` — a field is cleared with its
+// record, so `_resetForTests` cannot fall out of sync with it.
 //
 // REQUIRED: both are plain module `let`s and must NEVER become `$state`.
 // `setNativeTheme` both reads `lastPush?.pref` and writes `lastPush = {…}`
@@ -71,12 +71,13 @@ let invokePromise: Promise<InvokeFn> | null = null;
 let pollIntervalHandle: ReturnType<typeof setInterval> | null = null;
 
 // Monotonic ticket dispenser, bumped on every `setNativeTheme` call. A push
-// compares its own ticket against THIS counter, never against `lastPush` —
-// which is why no `seq` field lives on that record: comparing against the
-// record instead of the dispenser flips the retry decision when two pushes
-// are in flight and the older one rejects. Doubles as the staleness stamp
-// async read-backs (onThemeChanged, the poll) capture at issue time — see
-// `acceptReadback` below.
+// compares its own ticket against THIS counter, never against `lastPush`, and
+// no `seq` field lives on that record for two reasons. First, the `.catch`
+// sets `lastPush = null` BEFORE the seq compare, so a record-based compare
+// would read `undefined` and the retry would never fire for an unsuperseded
+// push — the one case retries exist for. Second, this counter is also the
+// staleness stamp that async read-backs (onThemeChanged, the poll) capture at
+// issue time, when `lastPush` may be null; see `acceptReadback` below.
 let pushSeq = 0;
 
 // What we ASSERTED to the native layer: the preference last sent to
@@ -117,6 +118,14 @@ let lastPush: { pref: ThemePreference; inFlight: boolean; issuedAt: number } | n
 // `acceptReadback`) so an OS notification arriving while an explicit override
 // is forced (macOS only — Windows always resolves `false`) isn't mistaken for
 // a real user-driven OS change.
+//
+// It is a record rather than the bare boolean it replaced, and every read is
+// truthiness, so the wrapper carries no data the boolean did not. What it
+// carries is LEGIBILITY: #1362 was caused by the failure path writing
+// `overrideActive = false`, which reads as innocuous cleanup. The equivalent
+// write here is `lastResolved = { overrideActive: false }`, which reads as
+// inventing a resolution that never happened. The compiler still permits it —
+// this raises the bar, it does not close the hole (see the header).
 let lastResolved: { overrideActive: boolean } | null = null;
 
 // Bounded retry for a rejected push. Without this, a failed *release* would
@@ -140,10 +149,16 @@ let retryAttempts = 0;
 //
 // 3000 ms is justified from two independent directions: Rust's own wait in
 // `apply_app_mode` is `rx.recv_timeout(Duration::from_secs(2))`, so a healthy
-// push settles well inside it; and it equals the 3s poll period below, so a
-// hung push costs at most one poll tick before degrading to the pre-#1369
-// behaviour.
+// push settles well inside it; and it matches `POLL_INTERVAL_MS`, so a hung
+// push costs at most one poll tick before degrading to the pre-#1369
+// behaviour. Deliberately NOT defined as `= POLL_INTERVAL_MS`: the Rust
+// timeout is the primary justification and must keep holding if the poll is
+// ever retuned. If you change the poll, re-check this comment rather than
+// assuming the equality is load-bearing.
 const PUSH_SETTLE_CEILING_MS = 3000;
+
+/** How often the focused window re-reads the OS theme as a fallback. */
+const POLL_INTERVAL_MS = 3000;
 
 /** Cancels a scheduled push retry, if any. Idempotent. */
 function cancelRetry(): void {
@@ -255,7 +270,6 @@ function setTauriTheme(next: "light" | "dark"): void {
  *    like the `false` this used to initialize to.
  */
 function acceptReadback(seqAtIssue: number, next: "light" | "dark"): void {
-  // Bounded, not unconditional -- see PUSH_SETTLE_CEILING_MS.
   if (lastPush?.inFlight && Date.now() - lastPush.issuedAt < PUSH_SETTLE_CEILING_MS) return;
   if (seqAtIssue !== pushSeq) return; // issued before the latest push -- stale
   if (lastResolved?.overrideActive) return; // echo of our own force (macOS only)
@@ -305,18 +319,32 @@ function acceptReadback(seqAtIssue: number, next: "light" | "dark"): void {
  * must not be misread as a general reset.
  */
 export function setNativeTheme(pref: ThemePreference): void {
-  if (!isTauriRuntime() || pref === lastPush?.pref) return;
+  if (!isTauriRuntime()) return;
+  // Cancel BEFORE the dedupe check, not after. A new intent supersedes a
+  // pending retry whether or not it needs an `invoke`. Today this is a
+  // provable no-op in the deduped case, because an armed retry implies
+  // `lastPush === null` (retries are armed only in the `.catch`, which nulls
+  // it, and only when `seq === pushSeq`) — so a deduped call cannot have one
+  // pending. That invariant is exactly what #1369 proposed to break by
+  // widening the dedupe input to a last-RESOLVED preference: the re-picked
+  // pref would short-circuit past this line and leave a rejected push's retry
+  // armed to release the override under an explicit theme. Hoisting it costs
+  // nothing and makes the ordering safe independently of that reasoning.
+  cancelRetry();
+  if (pref === lastPush?.pref) return;
   const seq = ++pushSeq;
-  cancelRetry(); // a newer push supersedes any pending retry
   lastPush = { pref, inFlight: true, issuedAt: Date.now() };
   getInvoke()
     .then((invoke) => invoke<NativeThemeOutcome>("set_native_theme", { theme: pref }))
     .then((outcome) => {
       if (seq !== pushSeq) return; // superseded by a later push -- discard
-      // MUTATE, never reassign. `lastPush = { pref, inFlight: false, … }` here
-      // would resurrect a dedupe claim that a concurrent stale rejection
-      // deliberately voided, silently deduping away the next same-pref push.
-      // The `if` guard IS that case -- not defensive noise.
+      // MUTATE, never reassign, and the `if` guard is not defensive noise: it
+      // is the case where a concurrent stale rejection voided the claim. The
+      // reassigning form would not be *wrong* here -- this push is current
+      // (`seq === pushSeq`) and it succeeded -- but mutating keeps "a
+      // rejection voids the claim, and nothing undoes that" a ONE-WAY
+      // invariant with a single writer per direction. That is what makes the
+      // `.catch` below readable as the whole failure story.
       if (lastPush) lastPush.inFlight = false;
       lastResolved = { overrideActive: outcome.overrideActive };
       retryAttempts = 0;
@@ -450,7 +478,7 @@ export function initTauriTheme(): void {
           pollErrorLogged = true;
         }
       });
-  }, 3000);
+  }, POLL_INTERVAL_MS);
 
   // Clean up the polling interval. pagehide is more reliable than unload in
   // Chromium-based environments (including Tauri's WebView2).
