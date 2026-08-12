@@ -295,7 +295,7 @@ describe("setNativeTheme (#992)", () => {
     await flushAsync();
     expect(callsFor(invoke, "set_native_theme")).toHaveLength(1);
 
-    // Committing lastPushedPref before the await, with no clear on failure,
+    // Committing lastPush before the await, with no clear on failure,
     // meant this second call — the SAME pref, retried after a failure — was
     // silently deduped away forever. It must go through again.
     setNativeTheme("dark");
@@ -328,6 +328,39 @@ describe("setNativeTheme (#992)", () => {
     setNativeTheme("dark");
     await flushAsync();
     expect(callsFor(invoke, "set_native_theme").length).toBeGreaterThan(before);
+  });
+
+  it("re-issues the last CONFIRMED preference after a failed push in between", async () => {
+    // Regression guard for the dedupe INPUT (#1369). The obvious restructure
+    // is to dedupe against "the last preference we know about" — i.e. to fall
+    // back to the last RESOLVED outcome when nothing is in flight. Trace why
+    // that is wrong: dark resolves, system rejects and arms the 500 ms retry,
+    // then the user re-picks dark. A `lastResolved`-aware dedupe
+    // short-circuits that third call, so `cancelRetry()` never runs, and the
+    // armed "system" retry lands afterwards — releasing the native override
+    // while the app renders dark. A rejection means "no claim", full stop:
+    // only what we ASSERTED (and have not had rejected) may dedupe.
+    vi.useFakeTimers();
+    try {
+      const { setNativeTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+
+      setNativeTheme("dark"); // resolves — this is the last CONFIRMED pref
+      await vi.advanceTimersByTimeAsync(0);
+
+      invoke.mockImplementationOnce(() => Promise.reject(new Error("release failed")));
+      setNativeTheme("system"); // rejects — arms a 500 ms retry of "system"
+      await vi.advanceTimersByTimeAsync(0);
+
+      setNativeTheme("dark"); // must go through, and must disarm that retry
+      await vi.advanceTimersByTimeAsync(0);
+      expect(callsFor(invoke, "set_native_theme")).toHaveLength(3);
+
+      // Past every rung of the retry ladder: nothing more may be issued.
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(callsFor(invoke, "set_native_theme")).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not touch overrideActive on a rejected push", async () => {
@@ -478,6 +511,106 @@ describe("setNativeTheme (#992)", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(systemTheme()).toBe("light"); // stale poll discarded, not "dark"
+
+      _resetForTests();
+    } finally {
+      vi.useRealTimers();
+      isTauri.mockReturnValue(false);
+    }
+  });
+
+  it("an OS read-back arriving while a push is unsettled is discarded, and honoured once it settles", async () => {
+    // #1369 item C. `lastResolved` describes the last push to have RESOLVED,
+    // so in the window between an override's appearance flipping and its
+    // `invoke` resolving BOTH of the pre-existing gates pass: the read-back's
+    // stamp equals `pushSeq` (it is taken at delivery) and no resolved
+    // outcome has reported `overrideActive` yet. Without the in-flight gate
+    // this event is ACCEPTED, i.e. this test is red at HEAD by construction.
+    const { setNativeTheme, initTauriTheme } = await import(
+      "../../src/client/hooks/useTauriTheme.svelte.js"
+    );
+    vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+    // hasFocus false so no poll tick can confound the assertions below.
+    vi.stubGlobal("document", { hasFocus: () => false });
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_app_theme") return Promise.resolve("light");
+      return Promise.resolve({ overrideActive: false, osTheme: null });
+    });
+
+    initTauriTheme();
+    await flushAsync();
+    expect(themeChangedCapture.current).not.toBeNull();
+    expect(systemTheme()).toBe("light");
+
+    // Hold the push with a CAPTURED resolver, branched on the command so the
+    // `Once` implementation cannot be consumed by a stray `get_app_theme`.
+    let resolveHeld!: (v: unknown) => void;
+    invoke.mockImplementationOnce((cmd: string) =>
+      cmd === "set_native_theme"
+        ? new Promise((r) => {
+            resolveHeld = r;
+          })
+        : Promise.resolve("light"),
+    );
+    setNativeTheme("dark");
+    await flushAsync();
+
+    themeChangedCapture.current?.({ payload: "dark" });
+    await flushAsync();
+    expect(systemTheme()).toBe("light"); // discarded — the push has not settled
+
+    resolveHeld({ overrideActive: false, osTheme: null });
+    await flushAsync();
+
+    // A window, not a lockout: once the push settles the same event lands.
+    themeChangedCapture.current?.({ payload: "dark" });
+    await flushAsync();
+    expect(systemTheme()).toBe("dark");
+  });
+
+  it("the in-flight read-back gate expires, so a push that never settles cannot freeze the theme", async () => {
+    // Pins the BOUND, not the gate. Resolving a held push only proves the
+    // gate opens on a SETTLED push; a promise that neither resolves nor
+    // rejects reaches neither the `.then` nor the `.catch`, and the retry
+    // ladder fires on rejection only — so an unbounded `if (inFlight) return`
+    // would freeze `tauriTheme.current` for the rest of the session. Without
+    // this test, `issuedAt` and PUSH_SETTLE_CEILING_MS read as unused
+    // ceremony and get simplified away.
+    vi.useFakeTimers();
+    try {
+      const { setNativeTheme, initTauriTheme, _resetForTests } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      _resetForTests();
+      vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+      vi.stubGlobal("document", { hasFocus: () => false });
+      invoke.mockImplementation((cmd: string) => {
+        if (cmd === "get_app_theme") return Promise.resolve("light");
+        return Promise.resolve({ overrideActive: false, osTheme: null });
+      });
+
+      initTauriTheme();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(themeChangedCapture.current).not.toBeNull();
+      expect(systemTheme()).toBe("light");
+
+      invoke.mockImplementationOnce((cmd: string) =>
+        cmd === "set_native_theme" ? new Promise(() => {}) : Promise.resolve("light"),
+      );
+      setNativeTheme("dark");
+      await vi.advanceTimersByTimeAsync(0);
+
+      themeChangedCapture.current?.({ payload: "dark" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(systemTheme()).toBe("light"); // gate shut
+
+      // vitest's fake timers fake `Date` too (default `toFake`), and this
+      // repo sets no `fakeTimers` config — so `Date.now()` advances here.
+      await vi.advanceTimersByTimeAsync(3001);
+
+      themeChangedCapture.current?.({ payload: "dark" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(systemTheme()).toBe("dark"); // gate expired — degraded to pre-#1369
 
       _resetForTests();
     } finally {
