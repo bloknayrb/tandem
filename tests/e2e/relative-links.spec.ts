@@ -159,3 +159,53 @@ test("a disallowed-scheme link renders inert — no live href, no title (#996 se
     cleanupFixtureDir(xssDir);
   }
 });
+
+test("a link that renders live but cannot be opened SAYS so (#1377 render/click gap)", async ({
+  page,
+}) => {
+  // #1377 widened the RENDER boundary without widening the click boundary, so
+  // an href can be live — pointer cursor, tooltip naming a destination — and
+  // still be refused on click. Before this test the refusal was a
+  // `console.warn`, which is not a channel in the primary distribution: the
+  // Tauri release build ships no `devtools` feature, and `diagnostics.ts` has
+  // no console ring buffer, so it reached neither the user nor a bug report.
+  //
+  // `report.docx` is the shape that will actually bite: .docx is first-class
+  // in drag-drop, the file dialog and `tandem_open`, but excluded from
+  // INTERNAL_LINK_EXTS (see #1421).
+  const dir = createFixtureDir("link-unopenable.md");
+  try {
+    await mcp.callTool("tandem_open", { filePath: path.join(dir, "link-unopenable.md") });
+
+    await page.goto("/");
+    const editor = page.locator(".tandem-editor");
+    await expect(editor).toBeVisible({ timeout: 10_000 });
+    await expect(editor).toContainText("Unopenable Link");
+
+    // Precondition: the link really did render live. If this ever fails the
+    // test is passing vacuously — there would be no gap left to report.
+    const link = editor.locator("a", { hasText: "the quarterly report" });
+    await expect(link).toBeVisible({ timeout: 5_000 });
+    await expect(link).toHaveAttribute("href", "report.docx");
+    await expect(link).toHaveAttribute("title", "report.docx");
+
+    await link.click();
+
+    // The refusal reaches the activity tray, which persists to localStorage and
+    // therefore survives into a bug report — unlike a console warn.
+    const pill = page.getByTestId("activity-pill");
+    await expect(pill).toBeVisible({ timeout: 10_000 });
+    await pill.click();
+
+    const tray = page.getByTestId("activity-tray");
+    await expect(tray).toBeVisible({ timeout: 5_000 });
+    await expect(tray).toContainText("report.docx");
+
+    // And it did NOT open a tab.
+    await expect(
+      page.locator("[data-testid^='tab-name-']", { hasText: "report.docx" }),
+    ).toHaveCount(0);
+  } finally {
+    cleanupFixtureDir(dir);
+  }
+});
