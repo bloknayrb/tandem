@@ -134,6 +134,24 @@ This describes the paid model arriving at v1.0; during the public beta Tandem is
 - **Enforcement is server-side, not client-trust.** When the gate is active and a trial has expired with no license, the local server marks Hocuspocus document-room connections read-only AND gates Claude's mutation tools / mutating `/api` routes — both re-checked per request. The escape hatch is preserved: you can always open, read, and **export** your local files (and chat keeps working). The trial clock is deliberately **soft** (a local timestamp, no anti-rollback); the signed license is the only hard gate.
 - **Updates authenticate entitlement without telemetry.** The licensed updater sends an opaque license id (a UUID, not the buyer's key or email) to a small license-checked endpoint that serves new builds only while the update window is current. Unknown ids and expired windows get a **byte-identical no-update** response (no existence oracle). The endpoint logs `{ result, reason, timestamp }` — a coarse enum describing *the service's* state (`unknown-id`, `expired`, `upstream`, …), **never the license id**, so no per-customer update history exists. That reason field is the only way the operator can tell a broken issuance pipeline from a healthy one, because a license with no entitlement is served the same no-update response as having nothing to install — and the app reports it to you as "You're up to date". Note that the endpoint runs on Cloudflare, whose platform-level request logging is outside Tandem's control; "no telemetry" is a statement about what Tandem records, not about what a CDN sees. An expired-window license still *runs* offline; it simply stops receiving new builds.
 
+## Open findings
+
+**This section is the tracked home for open security findings (#1308).** A new one belongs here as well as in the tracker — the issue label is not a complete index, and neither is [#1199](https://github.com/bloknayrb/tandem/issues/1199), which is a fresh re-audit at the RC tag and does not enumerate open findings.
+
+It lives here rather than in `CLAUDE.md` deliberately. `CLAUDE.md` is auto-loaded into every session, including sessions that read messages from people outside the project; a working exploit brief should not be ambient context in those. Anyone who needs the detail is one link away, and the issues themselves are public.
+
+Open as of v0.22.1:
+
+- **[#1417](https://github.com/bloknayrb/tandem/issues/1417) — a filesystem call runs before the guard that would reject the path**, in three places, plus four weaker hand-rolled copies of the UNC predicate. The reachable one is `src/cli/uninstall-scrub.ts:179`: a junction under `%LOCALAPPDATA%` pointing at a UNC share leaks on `tandem uninstall` — same uid, no crafted document and no click. That is an **easier trigger than #1407**, the one v0.22.1 actually fixed, so do not read that fix as closing the class.
+- **[#1420](https://github.com/bloknayrb/tandem/issues/1420) — two link-handling escapes.** Middle-click never reaches the link intercept (`Editor.svelte` registers `onclick` and no `onauxclick`), and `/\evil.com/x.md` renders live because the guard is `defaultValidate(url) || isSchemelessPathHref(url)` and the first operand short-circuits the second away. Pasted image sources have no downstream gate at all, so they resolve cross-host on render with no click.
+
+Still open from the v0.21.0 security gate, whose RC re-run failed on 2026-08-05 with two HIGH:
+
+- **#1292 — the last HIGH.** Its code fix shipped in v0.21.0, but it gates on the BYO-models flag flip rather than on the release, so the v0.21.0 changelog entry does not close it. Verify the issue state, not the changelog.
+- **#1295.** Three of its six LOW findings shipped in v0.21.0 (the scratchpad gate, the restore documentId binding, the reply cap); the other three did not. A batch issue closes when the batch does, so its open state does not tell you which half remains — read the issue.
+
+Closed from that same gate: #1291 (CORS opaque-origin grant), #1293 (inverted loopback gate), and #1294.
+
 ## Reporting security issues
 
 Email security reports to the address in [package.json](../package.json)'s `bugs.email` field, or open a private security advisory at <https://github.com/bloknayrb/tandem/security/advisories/new>. Please don't file public issues for vulnerabilities.
