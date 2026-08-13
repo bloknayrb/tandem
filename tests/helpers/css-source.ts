@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import postcss from "postcss";
 
 /**
  * Source-level CSS extraction shared by the `tests/design-system-impl/` suites.
@@ -7,19 +9,52 @@ import { readFileSync } from "node:fs";
  * hand-write a vendor prefix, which declare a token — so they read the source
  * rather than a rendered page. Two files had rolled their own byte-identical
  * copies of the first two helpers below, and the rule splitter was triplicated.
+ * One copy is a bug to fix; N copies is a bug plus N-1 silent false negatives.
  *
- * These are regexes, not a parser, and that is the reason to have exactly one of
- * each: Svelte's `<style>` syntax can grow (a `lang=` attribute, `module`,
- * nesting), and when it does, a stale copy does not fail loudly — it extracts an
- * empty string, finds zero offenders and reports **green**. That failure mode is
- * documented in-repo: css-pipeline-contract.test.ts records a scan whose first
- * prototype returned 0 pairs while 12 existed and looked passing. One copy is a
- * bug to fix; N copies is a bug plus N-1 silent false negatives.
+ * **Rule extraction is a real parse (postcss), not a brace regex**, and the
+ * reason is that the regex form failed silently in the one direction that
+ * matters. A brace splitter cannot represent CSS nesting: a nested rule's
+ * PARENT does not match as a whole either, so the parent's declarations are
+ * swallowed and the parent vanishes from the list. Measured:
+ *
+ *     ".thumb{span{color:red}width:50%}"  ->  [["span", "color:red"]]
+ *
+ * `.thumb`'s banned `width: 50%` is simply gone, and every negative scan built
+ * on the splitter reports green. Svelte 5 accepts nesting and lightningcss
+ * compiles it, so this is one tidy-up away rather than hypothetical. A guard
+ * was tried first and is why the parse is here: keying on `&`/`;` appearing in
+ * a captured selector catches `&`-nesting and misses the bare-selector form
+ * above entirely, which is a tell rather than a detector.
+ *
+ * postcss specifically, over lightningcss (also a dependency): it is LOSSLESS.
+ * `handWrittenPairs` and the `-webkit-line-clamp` gate ask "is this prefix
+ * hand-written in the source?", which a normalizing parser cannot answer
+ * because it has already rewritten the answer. postcss round-trips authored
+ * text, so `d.prop` is what the developer typed. It also leaves `:global(...)`
+ * alone as opaque selector text, and parses Svelte's `:global { … }` block form
+ * rather than rejecting it.
  *
  * Deliberately NOT migrated: `styleBlock` in activity-message-wrapping.test.ts.
  * It is a different primitive — singular, non-global, no comment stripping —
  * that asserts a block's presence rather than scanning its contents.
  */
+
+/**
+ * Every file whose CSS Vite routes through lightningcss. Deliberately excludes
+ * `index.html`: its inline `<style>` is emitted verbatim, so it is NOT a bundled
+ * source and the collapse cannot reach it. The two obey different rules.
+ *
+ * `withFileTypes` rather than a `statSync` per entry — measured 1.8ms against
+ * 13.2ms over this corpus, and there are four call sites.
+ */
+export function bundledCssFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) bundledCssFiles(full, out);
+    else if (full.endsWith(".svelte") || full.endsWith(".css")) out.push(full);
+  }
+  return out;
+}
 
 /** Strip CSS block comments so commented-out prose can't satisfy or trip a grep. */
 export function stripCssComments(css: string): string {
@@ -42,57 +77,48 @@ export function styleBlocks(file: string): string {
   );
 }
 
-/**
- * Flat `[selectorList, declarationBlock]` pairs.
- *
- * Because a body may not contain braces, an at-rule wrapper never matches as a
- * whole — the scan steps past it and matches the rules *inside*, so a
- * declaration hidden in `@media` is still found rather than skipped.
- *
- * That same property makes CSS nesting unrepresentable, and unrepresentable in
- * the one direction that fails green: a nested rule's parent does not match as a
- * whole either, so the parent's own declarations are swallowed into the child's
- * captured *selector* and the parent vanishes from the list. A negative scan
- * ("no rule declares a width") then finds nothing and passes while the banned
- * declaration ships. Svelte 5 accepts nesting and lightningcss compiles it, so
- * this is one refactor away, not hypothetical — hence the guard rather than a
- * comment. `&` cannot appear in a flat selector and `;` cannot appear in any
- * selector this repo writes, so both are nesting tells.
- */
-export function cssRules(css: string): Array<[string, string]> {
-  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(
-    (m) => [m[1], m[2]] as [string, string],
-  );
-  for (const [selector] of rules) {
-    if (selector.includes("&") || selector.includes(";")) {
-      throw new Error(
-        `css-source: CSS nesting detected near ${JSON.stringify(selector.trim().slice(0, 60))}. ` +
-          `The flat splitter drops the parent rule's declarations, so every scan built on it ` +
-          `would pass while missing them. Upgrade this helper to a real parser before nesting here.`,
-      );
-    }
-  }
-  return rules;
-}
-
 /** One authored rule: its selector list already split, and its declaration body. */
 export type CssRule = { selectors: string[]; body: string };
 
 /**
- * `cssRules` with the selector list split on `,`, which is what "does this rule
- * apply to `.foo`?" actually needs.
+ * Every style rule in `css`, at any nesting depth and inside any at-rule.
  *
- * Comparing the unsplit list instead is the trap this exists to close: it works
- * until someone groups the selector, and then `.thumb, .x { … }` stops matching
- * `.thumb` and the scan reports the rule *missing* rather than reporting the
- * declaration it was hired to check. Two suites had independently rolled this,
- * and a third arrived comparing the unsplit form — three answers to one question.
+ * `selectors` comes from postcss, which splits a grouped selector list the way
+ * CSS does rather than the way `String.split(",")` does — so `:is(.a, .b)`
+ * stays one selector instead of becoming two nonsense ones. Comparing the
+ * UNSPLIT list is the older trap this closes: `.thumb, .x { … }` stops matching
+ * `.thumb`, and the scan reports the rule *missing* rather than reporting the
+ * declaration it was hired to check.
+ *
+ * `body` is re-serialized from the declaration nodes as `prop: value` pairs, so
+ * it holds exactly what was authored (postcss does not normalize) minus
+ * comments and whitespace noise. Scans regex it, and every one of them anchors
+ * on `(?:^|[;\s])`, which the `; ` join satisfies.
+ *
+ * Nested children are returned as their OWN rules, carrying their authored
+ * relative selector (`&:hover`, or a bare `span`). No scan in the repo needs
+ * them resolved against the parent, and resolving would mean re-implementing
+ * the nesting cascade; what matters is that the parent keeps its declarations,
+ * which is precisely what the brace splitter got wrong.
  */
 export function cssRulesBySelector(css: string): CssRule[] {
-  return cssRules(css).map(([selectorList, body]) => ({
-    selectors: selectorList.split(",").map((s) => s.trim()),
-    body,
-  }));
+  const out: CssRule[] = [];
+  postcss.parse(css).walkRules((rule) => {
+    const body = rule.nodes
+      .filter((node) => node.type === "decl")
+      .map((decl) => `${decl.prop}: ${decl.value}${decl.important ? " !important" : ""}`)
+      .join("; ");
+    out.push({ selectors: rule.selectors.map((s) => s.trim()), body });
+  });
+  return out;
+}
+
+/**
+ * `cssRulesBySelector` as flat `[selectorList, declarationBlock]` pairs, for
+ * callers that only scan bodies and never ask which selector they belong to.
+ */
+export function cssRules(css: string): Array<[string, string]> {
+  return cssRulesBySelector(css).map((rule) => [rule.selectors.join(", "), rule.body]);
 }
 
 /**
@@ -107,20 +133,24 @@ export function cssRulesBySelector(css: string): CssRule[] {
  * rule at a time — is what leaves synthetic-probe tests standing in for real
  * ones.
  *
- * Both failure modes below throw, because the alternative is worse than a crash.
- * A `:global()` this cannot rewrite is left verbatim and merely warns, but one
- * it rewrites *wrongly* is silent: `:global(.a, .b) .thumb` flattens to
- * `.a, .b .thumb`, which splits into two selectors that mean something else
- * entirely, and a gate asking "does a rule for `.thumb` exist?" gets a confident
- * "no". Distributing the list correctly (`.a .thumb, .b .thumb`) is the real
- * fix; nothing in the repo needs it yet, and a throw is honest until something
- * does.
+ * Throws rather than mis-rewrites, because flattening a selector LIST in place
+ * is silent and wrong: `:global(.a, .b) .thumb` becomes `.a, .b .thumb`, two
+ * selectors meaning something else entirely, and a gate asking "does a rule for
+ * `.thumb` exist?" gets a confident "no". Distributing it (`.a .thumb, .b
+ * .thumb`) is the real fix; nothing needs it yet, and a throw is honest until
+ * something does.
+ *
+ * Only a TOP-LEVEL comma is a list. A comma nested inside a functional
+ * pseudo-class — `:global(:is(.a, .b))`, `:global(.x:not(.a, .b))` — is one
+ * selector and flattens safely, so throwing on it would be a false positive
+ * that reds three test files. `App.svelte` already carries
+ * `:global(body:not(…))`, one added class away from that shape.
  *
  * Known limitation, deliberately not handled: Svelte's `:global { … }` *block*
- * form (live in ToastContainer, ChatPanel, StatusBar). `cssRules` steps past the
- * wrapper and emits the inner rules as though they were scoped, so no
- * declaration is lost and every current gate is unaffected — but a future gate
- * asking "is this rule global?" would get a wrong answer with no signal.
+ * form (live in ToastContainer, ChatPanel, StatusBar). postcss parses it as an
+ * ordinary rule with children, so no declaration is lost and every current gate
+ * is unaffected — but a gate asking "is this rule global?" would get a wrong
+ * answer with no signal.
  */
 export function neutralizeSvelteGlobal(css: string): string {
   const TOKEN = ":global(";
@@ -131,16 +161,18 @@ export function neutralizeSvelteGlobal(css: string): string {
     if (start === -1) return out + css.slice(cursor);
     out += css.slice(cursor, start);
     let depth = 1;
+    let topLevelComma = false;
     let i = start + TOKEN.length;
     for (; i < css.length && depth > 0; i++) {
       if (css[i] === "(") depth++;
       else if (css[i] === ")") depth--;
+      else if (css[i] === "," && depth === 1) topLevelComma = true;
     }
     if (depth !== 0) {
       throw new Error(`css-source: unbalanced \`:global(\` starting at index ${start}.`);
     }
     const inner = css.slice(start + TOKEN.length, i - 1);
-    if (inner.includes(",")) {
+    if (topLevelComma) {
       throw new Error(
         `css-source: \`:global(${inner})\` holds a selector list. Flattening it in place ` +
           `changes what it matches; distribute the list across the descendant part instead.`,

@@ -44,12 +44,6 @@ async function boot(page: Page) {
   // when the face does. Every assertion below uses an absolute px tolerance and
   // `expect.poll` re-evaluates, so a pre-swap sample and a post-swap sample
   // would be describing two different layouts.
-  //
-  // (The figures that used to sit here were the PRE-FIX widths, left behind
-  // when the fix changed them, and the same file described the same track three
-  // times with one of the three 17px out. Deleted rather than re-measured: the
-  // point is that the swap moves them, which nothing here can assert and no
-  // number makes truer.)
   await page.evaluate(() => document.fonts.ready);
 }
 
@@ -234,10 +228,12 @@ async function paddingFloor(page: Page): Promise<number> {
     };
     return sides(track) + buttons.reduce((sum, b) => sum + sides(b), 0);
   });
-  // A zeroed or absurd floor would make both assertions below meaningless
-  // rather than failing: capping at 0 collapses everything flush.
+  // A zeroed floor would make both assertions below meaningless rather than
+  // failing: capping at ~0 collapses everything flush. An over-large one needs
+  // no guard — it produces no effective cap, `dR` stays 0, and the boundary
+  // test's own "too small" assertion fails with a better diagnosis than a
+  // transcribed ceiling could give.
   expect(floor, "derived padding floor is implausible — did the query desync?").toBeGreaterThan(20);
-  expect(floor).toBeLessThan(300);
   return floor;
 }
 
@@ -308,14 +304,18 @@ test("the pill's guarantee ends at the padding floor, not below it", async ({ pa
   // at all — remove `inset: 0` and the thumb renders 0x0 for a dR near -55,
   // which would read as this test passing. One pixel off the floor splits across
   // two columns, so the intended desync is half a pixel and nothing else is.
-  expect(
-    below.dR,
-    `one pixel below the floor the pill should be exactly half a pixel narrower than its ` +
-      `button (got ${below.dR.toFixed(2)}). Too small: the floor moved, and since it is now ` +
-      `derived that means the box model changed, not the padding. Too large: the thumb is ` +
-      `mis-sized for a reason that has nothing to do with the floor.`,
-  ).toBeLessThan(-0.25);
-  expect(below.dR).toBeGreaterThan(-1);
+  //
+  // The upper bound is -0.25 rather than -0.5 only to leave rounding room; the
+  // lower is -0.75, which keeps the band narrower than the half-pixel claim is
+  // wide. A wider band would let a sub-pixel error in the derivation satisfy
+  // both this and `expectThumbFlush`'s |d| < 0.5 at the same time.
+  const why =
+    `one pixel below the floor the pill should be about half a pixel narrower than its ` +
+    `button (got ${below.dR.toFixed(2)}). Too small: the floor moved, and since it is now ` +
+    `derived that means the box model changed, not the padding. Too large: the thumb is ` +
+    `mis-sized for a reason that has nothing to do with the floor.`;
+  expect(below.dR, why).toBeLessThan(-0.25);
+  expect(below.dR, why).toBeGreaterThan(-0.75);
 });
 
 test("the widened toggle still fits a narrow viewport", async ({ page }) => {

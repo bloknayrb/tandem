@@ -9,22 +9,15 @@ import { cssRulesBySelector, styleBlocks } from "../helpers/css-source";
  * ModeToggle.svelte; this file pins the shape of that fix rather than
  * re-explaining it. What a failure means is in each message below.
  *
- * **These are all NEGATIVE scans, and that is deliberate.** The positive
- * literals this file used to assert — `inline-grid`, `minmax(0,`,
- * `grid-area: 1/1/2/2`, `inset: 0`, `position: relative` — moved to
- * css-pipeline-contract.test.ts, which reads the same source and then runs it
- * through the real minifier, so it adds minifier drift to what those caught.
- * Mutation-tested both ways, with one measured exception in the other
- * direction: rewriting `inset: 0` to the four longhands failed the old source
- * regex, and passes the new gate because the minifier collapses it back. That
- * is a false red removed rather than coverage lost — the two spellings are the
- * same box — but "everything the old gates caught" would be the wrong claim,
- * and it is the sort of claim that stops anyone from checking.
- *
- * What survives is what a positive scan cannot express: that something is
- * ABSENT. No percentage geometry, no width rule, no gutter — each of them a
- * property that admits infinitely many spellings, which is exactly the shape a
- * `toContain` cannot pin.
+ * **Mostly NEGATIVE scans, and that is deliberate.** The positive literals this
+ * file used to assert — `inline-grid`, `minmax(0,`, `grid-area: 1/1/2/2`,
+ * `inset: 0`, `position: relative` — moved to css-pipeline-contract.test.ts,
+ * which reads the same source and then runs it through the real minifier. What
+ * stayed is what a positive scan cannot express: that something is ABSENT. No
+ * percentage geometry, no width rule, no gutter — each a property admitting
+ * infinitely many spellings, which is exactly the shape a `toContain` cannot
+ * pin. (The translate check at the end is positive, and belongs here because it
+ * guards the extraction as much as the declaration; see its comment.)
  *
  * One of them is a genuine invariant, and by SPEC FIAT rather than by geometry:
  * derived-spec.md §3.9 bans percentage-derived thumb sizing outright because it
@@ -52,6 +45,11 @@ function ruleWithSelector(selector: string): string {
     0,
   );
   return found.map((r) => r.body).join("\n");
+}
+
+/** The same existence assertion, for a scan that needs the proof but not the body. */
+function assertRuleExists(selector: string): void {
+  ruleWithSelector(selector);
 }
 
 describe("ModeToggle: the mechanisms that must stay absent", () => {
@@ -85,9 +83,11 @@ describe("ModeToggle: the mechanisms that must stay absent", () => {
     // same elements and fails `startsWith`, so the filter yields zero rules and
     // `offenders` is `[]` by construction. Mutation-proved: that rename carrying
     // `min-width: 60px`, the exact bug this gate exists to catch, passed the
-    // whole suite. (Folding a child rule into the base one via CSS nesting would
-    // also empty the scan; `cssRules` throws on that, so it is guarded upstream.)
-    ruleWithSelector(".mode-toggle button");
+    // whole suite.
+    //
+    // `ruleWithSelector` is called for its assertion, not its value. Named so a
+    // "remove the unused expression" cleanup cannot quietly reopen the hole.
+    assertRuleExists(".mode-toggle button");
 
     const offenders = RULES.filter((r) =>
       r.selectors.some((s) => s.startsWith(".mode-toggle button")),
@@ -100,30 +100,27 @@ describe("ModeToggle: the mechanisms that must stay absent", () => {
   });
 
   it("carries no percentage-derived sizing on the thumb", () => {
-    // The property list tracks the ban, not the current implementation:
-    // `inset` because the fix itself now uses it, `margin` because
-    // `margin-left: 50%` is percentage positioning the spec forbids and an
-    // earlier list let through.
+    // A ban on VALUES, not an enumeration of properties, because §3.9 states it
+    // that way — "no percentage or `calc` sizing or positioning on the thumb" —
+    // and because every enumeration of this has been short. The last one listed
+    // ten properties and still let `transform: translateX(50%)` through, which
+    // is percentage positioning AND half of the literal #1383/#1384 mechanism
+    // (`width: calc(50% - 2px)` plus a translate). `padding` and the individual
+    // `translate` property were missing too.
     //
-    // The `(?:min-|max-)?` prefix and the logical sizes are load-bearing, not
-    // completeness theatre. `[a-z-]*` only extends a property to the RIGHT
-    // (`margin` → `margin-left`), while the `(?:^|[;\s])` anchor requires the
-    // character before the match to be a separator — so `min-width` cannot match
-    // via `width`, whose preceding character is `-`. Mutation-proved: before the
-    // prefix was added, `max-width: 50%` on the thumb passed all 73 tests. The
-    // sibling scan above already spelled `(?:min-|max-)?width`, so this was one
-    // scan of two carrying knowledge the file already had.
-    const offenders = [
-      ...ruleWithSelector(".thumb").matchAll(
-        /(?:^|[;\s])((?:min-|max-)?(?:width|height|block-size|inline-size)|inset|margin|left|right|top|bottom)[a-z-]*\s*:[^;]*(%|calc\()/g,
-      ),
-    ].map((m) => m[0].trim());
+    // This costs nothing to hold: the shipped `.thumb` rule declares position,
+    // grid-area, inset, background, border-radius, box-shadow, pointer-events,
+    // z-index and transition, and the reduced-motion override declares
+    // `transition: none` — not one `%` or `calc(` between them. The legal
+    // `translateX(100%)` lives in `.thumb.tandem`, a different rule that
+    // exact-selector matching never hands to this scan, and which the test
+    // below pins positively.
     expect(
-      offenders,
+      ruleWithSelector(".thumb"),
       "#1383/#1384 were caused by sizing the thumb as a fraction of the track " +
         "(`width: calc(50% - 2px)`), which assumed equal halves the layout never produced. " +
         "The grid area supplies the box; see derived-spec.md §3.9.",
-    ).toEqual([]);
+    ).not.toMatch(/%|calc\(/);
   });
 
   it("still slides exactly one column on a mode flip", () => {

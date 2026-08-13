@@ -1,9 +1,9 @@
-import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { transform } from "lightningcss";
 import { resolveConfig } from "vite";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  bundledCssFiles,
   cssRules,
   cssRulesBySelector,
   neutralizeSvelteGlobal,
@@ -54,14 +54,8 @@ const FORMATTING_BAR = join(CLIENT_ROOT, "shell", "FormattingBar.svelte");
  * rest of Svelte's CSS dialect would still need a real parser.
  */
 function authoredRule(file: string, selector: string, mustDeclare?: RegExp): string {
-  // Stripped of `g`/`y` deliberately: `test()` on a sticky or global regex
-  // advances `lastIndex`, so reusing one inside a `.filter` would skip every
-  // other candidate and the count below would be wrong in a way that reads like
-  // a missing rule. No caller passes one today; this makes it impossible to.
-  const declares =
-    mustDeclare && new RegExp(mustDeclare.source, mustDeclare.flags.replace(/[gy]/g, ""));
   const matches = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(file))).filter(
-    (r) => r.selectors.includes(selector) && (!declares || declares.test(r.body)),
+    (r) => r.selectors.includes(selector) && (!mustDeclare || mustDeclare.test(r.body)),
   );
   expect(
     matches.length,
@@ -172,56 +166,6 @@ function minify(css: string): string {
 
 const declares = (css: string, prop: string) => new RegExp(`[;{]\\s*${prop}\\s*:`).test(css);
 
-describe("the shared CSS extractor can still read what this repo authors", () => {
-  // Every gate in this file and in mode-toggle-thumb-contract.test.ts is built on
-  // `tests/helpers/css-source.ts`, which is regexes rather than a parser. Its own
-  // docstring names the hazard — Svelte's CSS dialect can grow, and a splitter
-  // that cannot represent the new form does not fail, it returns fewer rules and
-  // reports green. Two live instances were found by review rather than by any
-  // test: CSS nesting silently drops the parent rule's declarations, and a
-  // `:global()` holding parentheses is left unrewritten.
-  //
-  // Both now throw, which is only useful if something runs them over the real
-  // corpus. That is this: the assertion is not about any one rule, it is that the
-  // extractor still understands the whole surface the other gates trust it on. It
-  // fails the day someone adopts a form the helpers cannot represent, which is
-  // the day those gates would otherwise start passing vacuously.
-  const files = bundledCssFiles(CLIENT_ROOT);
-
-  it("enumerates a plausible corpus", () => {
-    // Guards the sweep below from passing on an empty list.
-    expect(files.length).toBeGreaterThan(50);
-  });
-
-  it("extracts every bundled file without losing structure", () => {
-    const broken: string[] = [];
-    for (const file of files) {
-      const where = relative(ROOT, file).replace(/\\/g, "/");
-      let rules: ReturnType<typeof cssRulesBySelector>;
-      try {
-        rules = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(file)));
-      } catch (err) {
-        broken.push(`${where}: ${(err as Error).message}`);
-        continue;
-      }
-      for (const rule of rules) {
-        // A brace or an empty string in a selector means the splitter lost its
-        // place; a brace in a body means a nested block was swallowed whole.
-        if (rule.selectors.some((s) => s === "" || s.includes("{"))) {
-          broken.push(`${where}: unparseable selector ${JSON.stringify(rule.selectors)}`);
-        }
-        if (rule.body.includes("}")) {
-          broken.push(`${where}: rule body contains a closing brace`);
-        }
-        if (rule.selectors.some((s) => s.includes(":global("))) {
-          broken.push(`${where}: unrewritten :global( in ${JSON.stringify(rule.selectors)}`);
-        }
-      }
-    }
-    expect(broken).toEqual([]);
-  });
-});
-
 describe("the Vite CSS target our authoring rule depends on", () => {
   it("reads Tandem's real Vite config", () => {
     // Guards the beforeAll assertion above from being silently skipped.
@@ -316,32 +260,26 @@ describe("bundled CSS: the #1302 formatting-bar declarations survive minificatio
     // popup — and no E2E test would catch it, because Playwright drives
     // `npm run dev`, which never minifies.
     //
-    // The real selector AND the real body, not a `.w:has(...){z-index:9}` probe:
-    // this gate was synthetic until #1428, so deleting the rule from
-    // FormattingBar left it green. That is the same defect the line-clamp gate
-    // below records and the mode-toggle block above now avoids — three
-    // instances of one class.
-    //
-    // #1428 fixed only half of it, which is why this reads the way it does.
-    // Scraping the selector but hand-writing the declaration still asserts
-    // nothing about what ships, and taking `wrap[0]` off an at-least-one guard
-    // reintroduced the original hole from the other side: with a second
-    // `:has([aria-expanded])` rule present, deleting THIS one still passed.
-    // Identify the rule by the property that makes it the z-lift, and require
-    // exactly one.
-    const lifts = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(FORMATTING_BAR))).flatMap(
-      (rule) =>
-        rule.selectors
-          .filter((s) => s.includes(":has(") && s.includes("aria-expanded"))
-          .map((selector) => ({ selector, body: rule.body })),
+    // The real rule, both halves, not a `.w:has(...){z-index:9}` probe. Two
+    // mutations, both of which passed a previous spelling of this gate:
+    // deleting the rule outright (it was fully synthetic), and deleting it
+    // while any other `:has([aria-expanded])` rule remained (the selector was
+    // scraped, but taken as `wrap[0]` off an at-least-one guard). Identifying
+    // it by the property that makes it the z-lift, and requiring exactly one,
+    // closes both.
+    const isLift = (s: string) => s.includes(":has(") && s.includes("aria-expanded");
+    const lifts = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(FORMATTING_BAR))).filter(
+      (rule) => rule.selectors.some(isLift),
     );
     expect(
-      lifts.map((l) => l.selector),
+      lifts.map((r) => r.selectors.join(", ")),
       "expected exactly one `:has([aria-expanded])` rule in FormattingBar.svelte — " +
         "the #1302 z-lift was removed, renamed, or joined by a lookalike",
     ).toHaveLength(1);
 
-    const out = minify(`${lifts[0].selector}{${lifts[0].body}}`);
+    // Grouped as authored: counting RULES rather than selectors means a legal
+    // `.a:has(…), .b:has(…)` grouping is one rule, not a false red.
+    const out = minify(`${lifts[0].selectors.join(", ")}{${lifts[0].body}}`);
     expect(out).toContain(":has(");
     expect(out).toContain("aria-expanded");
     // The lift itself, not just its selector: a surviving `:has()` that no
@@ -433,16 +371,6 @@ describe("bundled CSS: the #1383/#1384 mode-toggle declarations survive minifica
     expect(out).toContain("gap:0");
   });
 });
-
-/** Every `.svelte` `<style>` / `.css` file whose CSS the build routes through lightningcss. */
-function bundledCssFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) bundledCssFiles(full, out);
-    else if (full.endsWith(".svelte") || full.endsWith(".css")) out.push(full);
-  }
-  return out;
-}
 
 /**
  * Every rule body in bundled CSS that hand-writes both `-webkit-X` and `X`.
