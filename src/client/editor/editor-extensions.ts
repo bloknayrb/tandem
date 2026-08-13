@@ -1,7 +1,7 @@
 import { type AnyExtension, mergeAttributes } from "@tiptap/core";
 import Highlight from "@tiptap/extension-highlight";
 import Image from "@tiptap/extension-image";
-import Link from "@tiptap/extension-link";
+import Link, { isAllowedUri as tiptapDefaultIsAllowedUri } from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import Subscript from "@tiptap/extension-subscript";
 import Superscript from "@tiptap/extension-superscript";
@@ -15,19 +15,24 @@ import { FootnoteRefMark } from "./extensions/footnote-ref";
 import { ListItemCheckbox } from "./extensions/list-item-checkbox";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { RawMarkdownMark } from "./extensions/raw-markdown";
-import { isSafeExternalHref } from "./utils/url-safety";
+import { isSafeExternalHref, isSchemelessPathHref } from "./utils/url-safety";
 
 // Link mark that surfaces the destination URL on hover via a native `title`
 // tooltip (issue #996). The base `@tiptap/extension-link` renderHTML emits the
 // `href` (plus our configured rel/target) but no title, so links give no hover
 // affordance for where they point. We delegate to the base renderHTML via
-// `this.parent()` — which keeps its `isAllowedUri` security branch (blanking
-// `javascript:`/`data:`/etc. hrefs to "") — and then post-process: mirror the
+// `this.parent()` — which keeps its href-blanking security branch, emitting
+// `href: ""` for any URI its guard refuses — and then post-process: mirror the
 // href into `title` only when the BASE output's href survived (non-empty) and no
 // explicit title already exists (e.g. a .docx-imported title attr wins). Reading
 // the base output rather than the raw HTMLAttributes means a disallowed scheme is
 // never given a title and never resurrected. Pointer-cursor styling lives in
 // editor.css (`.tandem-editor a[href]`).
+//
+// Two halves, deliberately separate: the BLANKING lives here in the base
+// renderHTML, but WHICH hrefs get blanked is decided by the `isAllowedUri`
+// option configured at the `.configure({…})` site below — not by the vendored
+// default. Read that comment before reasoning about what reaches `attrs.href`.
 //
 // It also strips the configured `target="_blank"` from non-external hrefs — see
 // the comment at that branch for why the attribute is a double-open on internal
@@ -113,6 +118,50 @@ export function buildSchemaExtensions(): AnyExtension[] {
     LinkWithHoverTitle.configure({
       openOnClick: false,
       HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
+      // #1377: `[spec](docs/spec.md)` — the relative-link form most repos use —
+      // rendered with `href=""` and no hover tooltip, because Tiptap's default
+      // guard rejects it. (Don't re-derive that guard's regex by reading it:
+      // it is assembled in a template literal, so the escape you see is not the
+      // one `new RegExp` gets, and the naive reading flips the answer. The
+      // behaviour is pinned executably in `tests/client/link-target-internal.test.ts`.)
+      //
+      // The fix is a union, and it is strictly additive because `||` can only
+      // ever widen — not because of which operand runs first. Tiptap's
+      // DOMPurify-derived scheme allowlist therefore stays the authority on
+      // schemes and our predicate only ADDs: hrefs with no URL-hostile
+      // character, no backslash, no leading `//`, and either no colon or a
+      // `/`/`#`/`?` before the first one. `javascript:` and friends stay blocked
+      // by both halves.
+      //
+      // NOT claimed: that a newly-allowed href "can only be a relative URL".
+      // That is true of `new URL()` and false of Tandem's actual consumer —
+      // `utils/relative-link.ts` is a segment walk, and it is where the
+      // traversal question is answered.
+      //
+      // Widening reaches every surface that reads this option, including the
+      // linkify markPasteRule, which cannot be narrowed separately: pasting the
+      // plain text `example.com/path` now linkifies. Accepted deliberately —
+      // bare `example.com` already did.
+      isAllowedUri: (url, ctx) => ctx.defaultValidate(url) || isSchemelessPathHref(url),
+      // Autolink is the one surface held at EXACTLY today's behaviour, and only
+      // this option can do it: the autolink plugin filters on the RAW TYPED
+      // TEXT, not the resolved href, so widening `isAllowedUri` alone would make
+      // typing `example.com/path ` auto-create a link — writing markdown link
+      // syntax into the user's file on a keystroke, entirely outside #1377.
+      //
+      // Substituting the vendored default URI GUARD here pins that gate. Note
+      // it is not the vendored `shouldAutoLink` default (that one is
+      // `url => !!url`): autolink's effective gate is `validate && shouldAutoLink`,
+      // so widened-validate AND default-guard re-composes to exactly the
+      // default. The `!!` is required, not decorative — `isAllowedUri` returns
+      // `RegExpMatchArray | null`, and this option is typed boolean.
+      //
+      // The `[]` is the `protocols` argument, and it is correct only because we
+      // never configure `protocols` (asserted in the test file). If a custom
+      // protocol is ever added above, it must be threaded through here too or
+      // autolink will silently ignore it — an option literal cannot reach
+      // `this.options`.
+      shouldAutoLink: (url) => !!tiptapDefaultIsAllowedUri(url, []),
     }),
     // Block-level image node (issue #153). Renders `![alt](url)` markdown
     // (round-tripped through mdast-ydoc) and embedded .docx images (mammoth

@@ -42,7 +42,7 @@
 import { statSync } from "node:fs";
 import { posix as posixPath, resolve, win32 as win32Path } from "node:path";
 import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
-import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 
 /** The pre-existing behaviour, and the fallback whenever an absolute path
  *  cannot be produced or would not validate. Never emit something the

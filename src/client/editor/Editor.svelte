@@ -6,6 +6,7 @@ import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import Typography from "@tiptap/extension-typography";
 import { untrack } from "svelte";
 import * as Y from "yjs";
+import type { TandemNotification } from "../../shared/types.js";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { openServerPath } from "../utils/server-paths";
@@ -24,57 +25,20 @@ import { SelectionDecorationExtension } from "./extensions/selection-decoration"
 import { SlashCommandExtension } from "./slash-menu";
 import { applyLink, getInitialLinkHref } from "./toolbar/handlers";
 import LinkEditor from "./toolbar/LinkEditor.svelte";
+// resolveRelativeLink + INTERNAL_LINK_EXTS hoisted to ./utils/relative-link.ts:
+// module-private here, it had zero test coverage, and its fail-closed traversal
+// guards are exactly the kind of thing that has to be tested.
+import {
+  LINKABLE_EXTS_LABEL,
+  resolveRelativeLink,
+  SECURITY_REJECT_REASONS,
+} from "./utils/relative-link";
 import { isSafeExternalHref } from "./utils/url-safety";
 import "./editor.css";
-
-import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
-
-/** File extensions that open as new Tandem tabs when clicked as relative links. .docx excluded — not navigable as a link target. */
-const INTERNAL_LINK_EXTS = new Set([...SUPPORTED_EXTENSIONS].filter((e) => e !== ".docx"));
 
 // SAFE_EXTERNAL_PREFIXES + isSafeExternalHref hoisted to ./utils/url-safety.ts
 // so the click-time anchor intercept and the paste-time link sanitizer share
 // one allowlist (any drift would silently widen the XSS trust surface).
-
-/**
- * Resolve a relative href against an absolute file path.
- * Works on both POSIX and Windows paths by detecting the separator.
- * Returns null if the resolved path's extension is not in INTERNAL_LINK_EXTS.
- */
-function resolveRelativeLink(href: string, currentFilePath: string): string | null {
-  // Detect Windows vs POSIX
-  const sep = currentFilePath.includes("\\") ? "\\" : "/";
-
-  // Strip hash fragment for resolution; we don't support in-page anchors cross-file
-  const hashIdx = href.indexOf("#");
-  const hrefPath = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
-  if (!hrefPath) return null; // pure fragment (#section) — not a file link
-
-  // Check extension
-  const extMatch = hrefPath.match(/\.[^./\\]+$/);
-  const ext = extMatch ? extMatch[0].toLowerCase() : "";
-  if (!INTERNAL_LINK_EXTS.has(ext)) return null;
-
-  // Get directory of current file (convert forward slashes in href to platform sep)
-  const dirParts = currentFilePath.split(sep);
-  dirParts.pop(); // remove filename
-
-  // Normalize the href to use the platform separator
-  const hrefNormalized = hrefPath.replace(/\//g, sep);
-  const hrefParts = hrefNormalized.split(sep);
-
-  // Merge directory + relative parts, resolving . and ..
-  const resultParts = [...dirParts];
-  for (const part of hrefParts) {
-    if (part === "..") {
-      if (resultParts.length > 0) resultParts.pop();
-    } else if (part !== ".") {
-      resultParts.push(part);
-    }
-  }
-
-  return resultParts.join(sep);
-}
 
 interface Props {
   ydoc: Y.Doc;
@@ -93,6 +57,13 @@ interface Props {
   /** Intent-only callbacks used by the desktop native editor menu. */
   onFocusChat?: () => void;
   onComposeAnnotation?: (kind: "comment" | "note") => void;
+  /**
+   * Surface a link-open failure to the user. Threaded as a prop rather than
+   * calling `createNotifications()` here: that factory is NOT a singleton (it
+   * opens a fresh `EventSource` per call), so a second instantiation would
+   * duplicate the SSE subscription and the tray.
+   */
+  onNotify?: (n: TandemNotification) => void;
 }
 
 const {
@@ -108,6 +79,7 @@ const {
   onSlashCommandMenuChange,
   onFocusChat,
   onComposeAnnotation,
+  onNotify,
 }: Props = $props();
 
 let editor = $state<TiptapEditor | null>(null);
@@ -307,6 +279,18 @@ $effect(() => {
   }
 });
 
+function notifyLinkProblem(message: string, severity: "warning" | "error", dedupKey: string): void {
+  onNotify?.({
+    id: `link-problem-${Date.now()}`,
+    type: "general-error",
+    severity,
+    message,
+    dedupKey,
+    timestamp: Date.now(),
+    errorCode: "LINK_NOT_OPENABLE",
+  });
+}
+
 // Open a link href the same way for both the click intercept and the context
 // menu's "Open Link" item (issue #923): safe external schemes go to the system
 // browser, relative paths open as Tandem tabs, unrecognised schemes are
@@ -321,14 +305,49 @@ async function openHref(href: string) {
   }
 
   // Treat anything else with a recognised file extension as a relative path.
-  if (currentFilePath) {
-    const resolvedPath = resolveRelativeLink(href, currentFilePath);
-    if (resolvedPath) {
-      const result = await openServerPath(resolvedPath);
-      if (!result.ok) {
-        console.warn(`[tandem] Could not open linked file "${resolvedPath}": ${result.error}`);
-      }
-    }
+  //
+  // #1377 widened the RENDER boundary without widening this one, so an href can
+  // now be clickable — pointer cursor, hover tooltip naming a destination — and
+  // still be refused here. Every refusal therefore has to SAY so. A
+  // `console.warn` alone is not a channel in the primary distribution: the
+  // Tauri release build ships no `devtools` feature, so there is no inspector
+  // the user can open, and `utils/diagnostics.ts` has no console ring buffer,
+  // so it never reaches a bug report either.
+  if (!currentFilePath) {
+    notifyLinkProblem(
+      `Can't follow "${href}" — save this document to disk first so relative links have somewhere to resolve against.`,
+      "warning",
+      `link-no-file:${href}`,
+    );
+    return;
+  }
+
+  const resolved = resolveRelativeLink(href, currentFilePath);
+  if (!resolved.ok) {
+    // A blocked traversal and a mistyped extension are not the same event. The
+    // first is something a hostile or model-authored document put in front of
+    // the user — MCP tools write markdown into these files — and it needs a
+    // durable record, not a line in a console nobody can open.
+    const hostile = SECURITY_REJECT_REASONS.has(resolved.reason);
+    notifyLinkProblem(
+      hostile
+        ? `Blocked a link pointing outside this document's folder: "${href}"`
+        : `Can't open "${href}" — Tandem follows links to ${LINKABLE_EXTS_LABEL} files relative to this document.`,
+      hostile ? "error" : "warning",
+      `link-rejected:${resolved.reason}:${href}`,
+    );
+    console.warn(`[tandem] Link refused (${resolved.reason}): "${href}"`);
+    return;
+  }
+
+  const result = await openServerPath(resolved.path);
+  if (!result.ok) {
+    notifyLinkProblem(
+      `Couldn't open "${resolved.path}": ${result.error}`,
+      "error",
+      `link-open-failed:${resolved.path}`,
+    );
+    console.warn(`[tandem] Could not open linked file "${resolved.path}": ${result.error}`);
   }
 }
 

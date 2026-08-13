@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rejectUnsafeWindowsPrefix } from "../../src/server/file-io/windows-path-safety.js";
+import { rejectUnsafeWindowsPrefix } from "../../src/shared/windows-path-safety.js";
 
 describe("rejectUnsafeWindowsPrefix", () => {
   // Bare UNC.

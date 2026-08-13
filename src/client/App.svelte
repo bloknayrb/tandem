@@ -3048,6 +3048,7 @@ const shouldShowModelPicker = $derived(
         onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
         onFocusChat={focusChat}
         onComposeAnnotation={requestAnnotationComposer}
+        onNotify={(n) => notifications.push(n)}
       />
     {/snippet}
     <!-- One snippet, two call sites: left wires `marginNotes`, right wires

@@ -18,6 +18,7 @@ import {
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import type { ExternalConflictState, FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { closeStore, createStore } from "../annotations/store.js";
 import {
@@ -45,7 +46,6 @@ import {
 } from "../file-io/docx-verify.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
-import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { recordSelfWrite, suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";

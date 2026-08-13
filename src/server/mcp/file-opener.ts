@@ -24,6 +24,7 @@ import { withFileSync, withInternal, withReload } from "../../shared/origins.js"
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation, ExternalConflictState, FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { recoverRenamedEnvelope } from "../annotations/rename-recovery.js";
@@ -658,13 +659,34 @@ export async function restoreDocumentFromBackup(
 
 // --- Extracted helpers for openFileByPath ---
 
+/** Throw INVALID_PATH if `p` carries a UNC / extended-length / device prefix. */
+function assertSafePathPrefix(p: string): void {
+  const reason = rejectUnsafeWindowsPrefix(p);
+  if (reason) throw Object.assign(new Error(reason), { code: "INVALID_PATH" });
+}
+
 /**
  * Resolve a raw file path to its canonical form, validate it (UNC check,
  * extension check, size limit), derive format / readOnly / doc ID.
  * stat is used only for the size check and is not returned.
  */
 async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
+  // ORDER IS THE POINT. `realpathSync` on `\\evil.com\share\x.md` OPENS the SMB
+  // connection — and leaks the NTLM hash — before any post-canonicalization
+  // check could reject it, so the UNC gate has to run first, on the raw input
+  // and on `path.resolve`'s output.
+  //
+  // These pre-checks are deliberately NOT gated on `process.platform ===
+  // "win32"`, matching `windows-path-safety.ts`'s own header and the four
+  // existing ungated call sites (convert.ts, document-service.ts,
+  // rename-recovery.ts, node-binary.ts): the path string can reach code that
+  // runs on Windows via shared state. The helper also covers `\\?\UNC\…`, which
+  // the previous inline two-prefix check did not.
+  assertSafePathPrefix(filePath);
+
   let resolved = path.resolve(filePath);
+  assertSafePathPrefix(resolved);
+
   try {
     resolved = fsSync.realpathSync(resolved);
   } catch (err: unknown) {
@@ -677,11 +699,9 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
     resolved = path.resolve(filePath);
   }
 
-  if (process.platform === "win32" && (resolved.startsWith("\\\\") || resolved.startsWith("//"))) {
-    throw Object.assign(new Error("UNC paths are not supported for security reasons."), {
-      code: "INVALID_PATH",
-    });
-  }
+  // Defense-in-depth, kept deliberately: a Windows junction can canonicalize to
+  // a UNC target that neither pre-check could see.
+  assertSafePathPrefix(resolved);
 
   const ext = path.extname(resolved).toLowerCase();
   if (!SUPPORTED_EXTENSIONS.has(ext)) {

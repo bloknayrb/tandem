@@ -15,21 +15,7 @@
  */
 
 import { crossBasename } from "../cross-basename.js";
-
-/**
- * Reject UNC paths (both backslash and forward-slash variants) to prevent NTLM
- * hash leaks.
- *
- * Deliberately private, and deliberately weaker than
- * `server/file-io/windows-path-safety.ts#rejectUnsafeWindowsPrefix` — which
- * also covers the `\\?\` and `\\.\` device-namespace forms and is what server
- * callers should use. This copy exists only because this module is in
- * `src/shared/` and must not import from `src/server/`; it is the last line of
- * a basename allowlist, not the security boundary.
- */
-function hasUncPrefix(p: string): boolean {
-  return p.startsWith("\\\\") || p.startsWith("//");
-}
+import { rejectUnsafeWindowsPrefix } from "../windows-path-safety.js";
 
 /** `node-sidecar-<triple>` is the desktop app's bundled Node — accepted so the
  *  Tauri build can point the channel shim at its own runtime. */
@@ -39,6 +25,9 @@ const VALID_NODE_BASENAME_RE = /^node(-sidecar(-[a-z0-9_-]+)?)?(\.exe)?$/;
 export function isValidNodeBinary(nodeBinary: string): boolean {
   if (!nodeBinary) return false;
   if (nodeBinary.includes("..")) return false;
-  if (hasUncPrefix(nodeBinary)) return false;
+  // UNC and device-namespace prefixes leak NTLM hashes on Windows. This is the
+  // last line of a basename allowlist, not the security boundary — but it is
+  // the same rule every other caller uses, so it stays the same code.
+  if (rejectUnsafeWindowsPrefix(nodeBinary) !== null) return false;
   return VALID_NODE_BASENAME_RE.test(crossBasename(nodeBinary));
 }

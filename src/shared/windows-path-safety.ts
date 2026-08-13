@@ -5,6 +5,29 @@
  * crafted path to a Linux/macOS server (the path string still reaches code
  * that may eventually run on Windows via shared state).
  *
+ * **This is the canonical copy of this rule**, and it lives in `src/shared/`
+ * rather than with the server's file IO because client, CLI and server all need
+ * it while `src/client/` must not import from `src/server/`.
+ *
+ * **What this function is worth is one definition and a specific message — NOT
+ * a wider verdict.** Every prefix in the first branch also starts with `\\` or
+ * `//`, so as a boolean this is equivalent to a bare
+ * `startsWith("\\\\") || startsWith("//")` on every input. A test that asserts
+ * only "rejected" therefore does not pin the extended-length branch; assert on
+ * the message. Four hand-rolled copies survive, and their gaps differ — do not
+ * assume they are all "the weak one":
+ *
+ *  - `server/file-io/docx-export.ts` and its spike twin — bare `\\` only, so
+ *    they genuinely miss the forward-slash forms.
+ *  - `server/launcher/supervisor.ts` — names `\\?\` and `\\.\` explicitly; its
+ *    gap is `//`, which `path.isAbsolute` accepts on Windows.
+ *  - `cli/win-path-guard.ts` — handles both flavours of extended UNC and is
+ *    deliberately LOOSER on `\\?\C:\…`, which it allows on purpose before
+ *    applying realpath'd containment. It is not a defect; do not "fix" it.
+ *
+ * See #1417, which also covers the ordering defect where a filesystem call runs
+ * *before* the check — a class this string test cannot detect.
+ *
  * Rejected forms (all case-insensitive):
  *  - `\\?\…`        — Windows extended-length prefix. `\\?\UNC\server\share`
  *                     is a documented bypass of plain `\\` UNC rejection

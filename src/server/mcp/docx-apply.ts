@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import fs from "fs/promises";
 import path from "path";
 import { z } from "zod";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { listDocBackups } from "../file-io/doc-backup.js";
 import {
   type AcceptedSuggestion,
@@ -53,15 +54,19 @@ export async function applyChangesCore(
   const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
   const resolvedBackupPath = backupPath !== undefined ? path.resolve(backupPath) : undefined;
 
-  // Reject UNC backup paths (Windows NTLM hash leak)
-  if (
-    resolvedBackupPath !== undefined &&
-    process.platform === "win32" &&
-    (resolvedBackupPath.startsWith("\\\\") || resolvedBackupPath.startsWith("//"))
-  ) {
-    throw Object.assign(new Error("UNC paths are not supported for security reasons."), {
-      code: "INVALID_PATH",
-    });
+  // Reject UNC / device-namespace backup paths (Windows NTLM hash leak).
+  //
+  // RAW **and** resolved, in that order — checking only the resolved form makes
+  // this inert on POSIX, which is the exact platform an ungated check exists to
+  // cover. `path.resolve` is platform-dependent where this guard is not: on
+  // POSIX it treats `\\server\share\x.docx` as a RELATIVE name and prepends
+  // cwd, and it collapses `//evil/share` to `/evil/share` — either way the
+  // prefix the check looks for is gone before the check runs. Same idiom and
+  // same reason as `integrations/node-binary.ts` and `mcp/file-opener.ts`.
+  if (backupPath !== undefined) {
+    const unsafe =
+      rejectUnsafeWindowsPrefix(backupPath) ?? rejectUnsafeWindowsPrefix(path.resolve(backupPath));
+    if (unsafe) throw Object.assign(new Error(unsafe), { code: "INVALID_PATH" });
   }
 
   // 1. Resolve document
