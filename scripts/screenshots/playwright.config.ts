@@ -1,5 +1,25 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
 import baseConfig from "../../playwright.config";
+
+/**
+ * Repo root, for `webServer.cwd` below.
+ *
+ * Playwright resolves `webServer.cwd` relative to the CONFIG FILE's directory,
+ * not the repo root. The root config's commands (`npm run dev`, `node
+ * scripts/e2e-server.mjs`) are written for a config that sits at the root, so
+ * spreading them into this config -- which lives two levels down -- made Node
+ * look for `scripts/screenshots/scripts/e2e-server.mjs` and die with
+ * MODULE_NOT_FOUND before a single frame was captured.
+ *
+ * That failure is why this pipeline had never actually run: its output on disk
+ * (`09-settings-popover.png`) is a name no step here writes, and the images
+ * that were fresh came from the other, now-deleted script. Reading two
+ * pipelines tells you which is better designed; only running one tells you
+ * which works.
+ */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /**
  * Isolated Playwright config for deterministic screenshot capture — the ONLY
@@ -41,4 +61,11 @@ export default defineConfig({
     // Individual tests widen further via `page.setViewportSize`.
     viewport: { width: 1440, height: 900 },
   },
+  // Re-root every inherited webServer command. See REPO_ROOT above.
+  webServer: (Array.isArray(baseConfig.webServer)
+    ? baseConfig.webServer
+    : baseConfig.webServer
+      ? [baseConfig.webServer]
+      : []
+  ).map((server) => ({ ...server, cwd: REPO_ROOT })),
 });

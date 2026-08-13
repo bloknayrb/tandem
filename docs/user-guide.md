@@ -28,11 +28,15 @@ A "You're ready!" card follows the three steps. The tutorial dismisses after tha
 
 **Tip:** Start the Tandem server before Claude Code. Having the AI connected before the tutorial means you'll see real responses when you ask a question in step 2.
 
+![The three-step tutorial card, anchored at the bottom-left of the editor](screenshots/08-onboarding-tutorial.png)
+
 **On first run:** the integration wizard walks you through connecting Claude Code, in both the desktop app and the browser — there's no need to run `tandem setup` from a terminal. In the desktop app the server is already running; with the npm install, start it with `tandem` first. You can reopen the wizard any time from **Settings → AI Assistant**, or (desktop app only) the tray's "Setup AI Assistant" item.
+
+![The integration wizard listing each Claude client it found, with the settings file it will write to](screenshots/13-setup-wizard.png)
 
 ## The Editor
 
-![Toolbar with annotation buttons, document tabs, and side panel header](screenshots/04-toolbar-actions.png)
+![Five documents open in tabs, the formatting toolbar, and a selected sentence with the popup offering highlight colours and an Annotate button](screenshots/04-toolbar-actions.png)
 
 ### Document Area
 
@@ -84,6 +88,8 @@ The editor replaces the usual scrollbar with a slim pill in the right gutter. It
 ### Outline Panel (left)
 
 The left panel is the document outline: every heading in the active document, click to jump. A thin strip of tick marks beside it previews the document's shape even while the panel is collapsed. Toggle it with `Alt+Shift+Left`.
+
+![The outline rail listing every heading in the open document, with a search box above it](screenshots/12-outline-rail.png)
 
 ### Side Panel (right)
 
@@ -162,6 +168,10 @@ Press `Ctrl+S` to save the active document to disk. Your AI can also save via `t
 
 Annotations are how feedback — yours and your AI's — shows up in the document. There are three types, each with distinct visual styling:
 
+![Comment cards in the right margin, each anchored beside the underlined passage it refers to](screenshots/11-margin-annotations.png)
+
+The shot above shows the optional **margin view** (Settings → AI Assistant), where cards sit beside the text they reference rather than in the side panel.
+
 ### Highlight
 
 Colored background on the annotated text. User-only — the AI never creates highlights. Choose from 4 colors (yellow, green, blue, pink) via the selection popup's swatches. Use highlights to mark notable passages — green for good, yellow for problems, pink for style/tone.
@@ -220,6 +230,8 @@ Either way, click a card to expand it while it's selected, or click its chevron 
 
 ### Solo / Tandem Mode
 
+![The Solo / Tandem toggle, with Tandem selected](screenshots/10-solo-tandem-toggle.png)
+
 The title bar includes a **Solo / Tandem** toggle (`Ctrl+Shift+M`). It holds work back in *both* directions — the AI's annotations are held from you, and your own comments are held from the AI.
 
 - **Tandem** (default) — the AI's annotations appear immediately as they arrive, and the comments and replies you write are visible to it.
@@ -268,6 +280,8 @@ An unread badge appears on the Chat tab when a reply arrives while you're viewin
 ## Settings
 
 Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
+
+![The settings modal open on the AI Assistant tab](screenshots/09-settings-modal.png)
 
 | Tab | What's in it |
 |-----|--------------|

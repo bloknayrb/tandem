@@ -134,6 +134,12 @@ See [docs/workflows.md](docs/workflows.md) for examples of how this looks in dai
 
 *Several documents open in tabs, with the formatting toolbar above the text. Highlight a passage and the AI sees the selection as you make it. The Solo / Tandem toggle on the right decides whether you are working alongside the AI or on your own — see [Privacy and trust](#privacy-and-trust) for what Solo holds back.*
 
+<p align="center">
+  <img src="docs/screenshots/11-margin-annotations.png" alt="Comment cards laid out down the right margin, each one level with the underlined sentence it refers to" width="800">
+</p>
+
+*The optional margin view. Instead of stacking in a side panel, each card sits level with the passage it is about — so you can see what is being discussed without clicking anything.*
+
 </details>
 
 ## Privacy and trust

@@ -39,7 +39,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
-import { DEFAULT_MCP_PORT } from "../../src/shared/constants";
+import { DEFAULT_MCP_PORT, TUTORIAL_ANNOTATION_PREFIX } from "../../src/shared/constants";
 import {
   cleanupAllOpenDocuments,
   McpTestClient,
@@ -63,6 +63,23 @@ const welcomePath = path.join(repoRoot, "sample", "welcome.md");
  * alongside the table if full-mode geometry ever changes.
  */
 const MARGIN_FULL_COLUMN_PX = 240;
+
+/**
+ * The four ids `injectTutorialAnnotations` seeds into `sample/welcome.md`
+ * (`src/server/mcp/tutorial-annotations.ts`), listed rather than imported: that
+ * module pulls in `yjs` and the whole server position stack, which is a lot of
+ * graph to drag into a Playwright transform for four string literals.
+ *
+ * They must be listed, not discovered. `tandem_getAnnotations` cannot see
+ * `tutorial-note-1` — ADR-027 filters notes out of every Claude-facing read —
+ * so a list-then-remove sweep leaves the note behind, which is exactly how a
+ * private "Notes are personal…" card ended up in the first run's side-panel
+ * shot. Injection is idempotent per id, so removing them is stable across the
+ * re-open every test performs.
+ */
+const TUTORIAL_ANNOTATION_IDS = ["highlight-1", "comment-1", "suggest-1", "note-1"].map(
+  (suffix) => `${TUTORIAL_ANNOTATION_PREFIX}${suffix}`,
+);
 
 // Skip the entire file unless explicitly requested.
 test.skip(!process.env.SCREENSHOTS, "manual screenshot capture — run with SCREENSHOTS=1 to enable");
@@ -100,28 +117,62 @@ test.afterEach(async () => {
 // ── MCP seeding helpers ──────────────────────────────────────────────────────
 
 /**
- * Open `sample/welcome.md` and dismiss the tutorial annotations it injects.
+ * Remove one annotation. `NOT_FOUND` is tolerated and nothing else is.
  *
- * `openFileByPath` seeds `tutorial-*` annotations idempotently whenever the
- * sample doc is opened (see CLAUDE.md). They are instructional, not
- * representative, and they crowd the side panel out of every shot — so they are
- * dismissed rather than captured.
+ * This is the one place a missing annotation is not a defect: the tutorial ids
+ * are removed unconditionally without first checking whether injection actually
+ * placed them (it skips a definition whose target prose has moved), and the
+ * carry-over sweep races nothing. Any OTHER failure — a gated tool, a closed
+ * document — means the slate is not clean and the next shot would photograph
+ * the residue, so it throws.
+ */
+async function removeAnnotation(documentId: string, id: string): Promise<void> {
+  // The parameter is `id`, not `annotationId` (src/server/mcp/annotations.ts).
+  // Every step in this file routes through this helper's caller, so the wrong
+  // name failed all twelve at once — which is how we learned this pipeline had
+  // never actually run.
+  const res = (await mcp.callTool("tandem_removeAnnotation", { id, documentId })) as Envelope;
+  if (res.error && res.code !== "NOT_FOUND") {
+    throw new Error(
+      `tandem_removeAnnotation(${id}) failed: ${res.code ?? ""} ${res.message ?? ""}`,
+    );
+  }
+}
+
+/**
+ * Open `sample/welcome.md` on a GUARANTEED-EMPTY annotation slate.
+ *
+ * Two distinct piles have to go, and the first run of this pipeline shipped
+ * both into the images:
+ *
+ * 1. **The tutorial set.** `openFileByPath` seeds `tutorial-*` annotations
+ *    idempotently whenever the sample doc is opened (CLAUDE.md). They are
+ *    instructional rather than representative. This used to *dismiss* them,
+ *    which is not the same as removing them: a dismissed annotation still
+ *    renders, as a card under the panel's "3 resolved" disclosure, and the
+ *    private note was never touched at all because ADR-027 hides notes from
+ *    `tandem_getAnnotations`. Slot 01 asserted 4 cards and found 8.
+ * 2. **The previous test's seed.** Annotations are DURABLE — keyed by file
+ *    path in the annotation store, not by the document being open — so
+ *    `cleanupAllOpenDocuments` does not clear them and every re-open restores
+ *    them. Each test added four more on top: slot 03 ran third and photographed
+ *    three identical copies of every card, thirteen pending in total.
+ *
+ * Removal is what fixes both, and it is durable in the right direction: the
+ * Y.Map delete records a tombstone, so a removed annotation does not come back
+ * on the next open.
  */
 async function openWelcome(): Promise<string> {
   const res = (await mcp.callTool("tandem_open", { filePath: welcomePath })) as Envelope;
   const documentId = res.data?.documentId as string | undefined;
   if (!documentId) throw new Error(`tandem_open returned no documentId: ${JSON.stringify(res)}`);
 
+  for (const id of TUTORIAL_ANNOTATION_IDS) await removeAnnotation(documentId, id);
+
   const anns = (await mcp.callTool("tandem_getAnnotations", { documentId })) as Envelope;
-  const list = (anns.data?.annotations ?? []) as Array<{ id?: string; status?: string }>;
+  const list = (anns.data?.annotations ?? []) as Array<{ id?: string }>;
   for (const ann of list) {
-    if (ann.status === "pending" && ann.id?.startsWith("tutorial-")) {
-      await mcp.callTool("tandem_resolveAnnotation", {
-        annotationId: ann.id,
-        action: "dismiss",
-        documentId,
-      });
-    }
+    if (ann.id) await removeAnnotation(documentId, ann.id);
   }
   return documentId;
 }
@@ -214,6 +265,82 @@ async function openWithAnnotations(): Promise<string> {
   return documentId;
 }
 
+/**
+ * Seed slot 11 with four anchors that all sit in the FIRST SCREENFUL.
+ *
+ * The margin view places each bubble at its anchor's y, so a seed set is only
+ * usable there if the anchors share a screen. `openWithAnnotations`' set does
+ * not: measured at 1600x1000 its bubbles land at document y 469, 1269, 2011 and
+ * 2110, so three of the four are below the fold and slot 11's first capture was
+ * a near-empty margin holding one lone card — assertions all green, because
+ * "the first bubble is visible" is true when the other three are off-screen.
+ * That set is right for slot 03, which is a shot of a LIST and shows every card
+ * regardless of where it is anchored.
+ *
+ * The last two anchors are deliberately ~65px apart, closer than a card is
+ * tall. The resulting collision push is what makes a leader line legible: an
+ * uncrowded bubble sits level with its anchor, so its bezier is a 24px
+ * near-horizontal hairline, while a displaced one draws the visible diagonal
+ * the slot's caption promises.
+ */
+async function openWithMarginAnnotations(): Promise<string> {
+  const documentId = await openWelcome();
+  const text = await documentText(documentId);
+
+  const pasteText = "no copy-paste needed";
+  await annotate({
+    ...findRange(text, pasteText),
+    text: "This is the sentence that lands the whole pitch.",
+    textSnapshot: pasteText,
+  });
+
+  const openerText = "Both you and your AI can see and edit this document at the same time";
+  await annotate({
+    ...findRange(text, openerText),
+    text: "Great opening line — sets collaborative expectations immediately.",
+    textSnapshot: openerText,
+  });
+
+  const marksText = "your color-coded marks (yellow, green, blue, pink)";
+  await annotate({
+    ...findRange(text, marksText),
+    text: "Worth naming which colour carries which meaning.",
+    textSnapshot: marksText,
+  });
+
+  const notesText = "private thoughts kept to yourself";
+  await annotate({
+    ...findRange(text, notesText),
+    text: "Say plainly that notes never reach the model.",
+    textSnapshot: notesText,
+  });
+
+  return documentId;
+}
+
+/**
+ * Mark the first-run tutorial complete before any page script runs.
+ *
+ * The tutorial card is `position: fixed` bottom-left and covers three lines of
+ * the document. That is correct product behaviour and slot 08 exists to
+ * photograph it — but in the full-viewport document shots it sits on top of the
+ * prose those shots are of, so the README hero shipped its first capture with
+ * the "Notes / Comments / Suggestions" bullets hidden behind it.
+ *
+ * `addInitScript` rather than a post-load `evaluate`: `useTutorial` reads
+ * localStorage once at construction, so a write after navigation is too late —
+ * the same ordering fact slot 08 relies on in the opposite direction.
+ */
+async function suppressTutorialCard(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem("tandem:tutorialCompleted", "true");
+    } catch {
+      // Storage-disabled contexts throw on access; the card is cosmetic here.
+    }
+  });
+}
+
 /** Write three extra documents to the temp dir and open them, for the tab bar. */
 async function openExtraDocuments(): Promise<string[]> {
   const files = [
@@ -262,6 +389,45 @@ async function dismissReadOnlyBanner(page: Page): Promise<void> {
     await dismiss.click();
     await page.waitForTimeout(300);
   }
+}
+
+/**
+ * Replace this machine's account name with `you` everywhere it is rendered.
+ *
+ * The wizard prints the real resolved config path for every client it finds --
+ * the home-directory Claude Code settings file and three more, each carrying the
+ * account name as a path segment. These images ship in a public repo, so the
+ * capture must not depend on whoever runs it remembering to look. A note asking
+ * for a human privacy check is not a control: it passes by default, and it
+ * passes silently on the one run where nobody reads it.
+ *
+ * Redaction, not fabrication. The path shape, the drive, and every directory
+ * that is actually part of the product's behaviour survive verbatim -- only the
+ * account segment changes, and it changes to a placeholder that reads as one.
+ * The screenshot still shows exactly which file Tandem is about to edit.
+ *
+ * Keyed off `os.homedir()` rather than a hardcoded name so this works on any
+ * capture machine. No-ops when the basename is already generic, and refuses to
+ * touch anything shorter than three characters -- a two-letter account name
+ * appears as a substring of ordinary words and would corrupt the surrounding
+ * copy. Slot 13's assertion then fails rather than shipping the shot, which is
+ * the correct outcome: an unredactable name is a reason to stop, not to
+ * publish.
+ */
+async function redactAccountName(page: Page): Promise<void> {
+  const account = path.basename(os.homedir());
+  if (!account || account.length < 3 || account.toLowerCase() === "you") return;
+  await page.evaluate((name) => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const hits: Text[] = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      if (node.nodeValue?.includes(name)) hits.push(node);
+    }
+    for (const node of hits) {
+      node.nodeValue = (node.nodeValue ?? "").split(name).join("you");
+    }
+  }, account);
 }
 
 /** Load the app, wait for the editor + first annotation card, settle animations. */
@@ -313,6 +479,9 @@ test("01-editor-overview", async ({ page }) => {
   // tab bar all read at README's 820px display width.
   await page.setViewportSize({ width: 1600, height: 1000 });
   await openWithAnnotations();
+  // The hero is a shot of the document; the tutorial card covers three lines of
+  // it. Slot 08 is where that card gets photographed.
+  await suppressTutorialCard(page);
   await gotoAnnotatedEditor(page);
 
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(4, {
@@ -386,9 +555,47 @@ test("03-side-panel", async ({ page }) => {
   await expect(list).toBeVisible({ timeout: 10_000 });
   // The suggestion card is the reason this shot exists — README's alt text
   // promises the strikethrough/green replacement diff and Accept/Reject.
-  await expect(list).toContainText("In early 2025, the project set three ambitious goals", {
-    timeout: 10_000,
-  });
+  //
+  // Asserted against the diff's STRUCTURE, not against the proposed sentence as
+  // a contiguous string. `SuggestionCard` renders `diffWords(textSnapshot,
+  // suggestedText)`, so the two versions are interleaved word by word — the DOM
+  // reads "The projectIn launchedearly in2025, earlythe 2025project withset
+  // three coreambitious goals", and a `toContainText` on the whole proposed
+  // sentence could never pass while a `textSnapshot` is present. (It would pass
+  // against the no-snapshot fallback branch further down that component, which
+  // is presumably where the string came from.) These four checks are what the
+  // README slot actually promises, and they are strictly harder to satisfy.
+  // Scrolled fully into frame first. An element screenshot captures the list's
+  // box, not its scroll extent, so a card sitting past the fold is photographed
+  // sliced in half — the first passing run caught the suggestion card at its
+  // header, with the diff the slot exists for cut off two pixels below.
+  const suggestionCard = list
+    .locator("[data-testid^='annotation-card-']")
+    .filter({ has: page.locator("[data-testid^='suggestion-diff-']") })
+    .first();
+  await expect(suggestionCard).toBeVisible({ timeout: 10_000 });
+  await suggestionCard.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(400);
+
+  const diff = suggestionCard.locator("[data-testid^='suggestion-diff-']");
+  await expect(diff).toBeVisible({ timeout: 10_000 });
+  // Red strikethrough on the removed words, green on the proposed ones. Both
+  // are inline styles on the diff's own spans, hence the attribute match.
+  await expect(diff.locator("span[style*='line-through']").first()).toBeVisible();
+  await expect(diff.locator("span[style*='success-fg-strong']").first()).toBeVisible();
+  // The proposed wording landed rather than only the deletion rendering.
+  await expect(diff).toContainText("ambitious");
+  await expect(suggestionCard.locator("[data-testid^='accept-btn-']")).toBeVisible();
+  await expect(suggestionCard.locator("[data-testid^='dismiss-btn-']")).toBeVisible();
+
+  // Whole card inside the captured box, top and bottom. This is the assertion
+  // the cropped first run lacked: every check above passed against a card whose
+  // Accept/Reject row was below the frame.
+  const listBox = await list.boundingBox();
+  const cardBox = await suggestionCard.boundingBox();
+  if (!listBox || !cardBox) throw new Error("annotation list or suggestion card has no box");
+  expect(cardBox.y).toBeGreaterThanOrEqual(listBox.y - 1);
+  expect(cardBox.y + cardBox.height).toBeLessThanOrEqual(listBox.y + listBox.height + 1);
 
   await list.screenshot({ path: path.join(screenshotsDir, "03-side-panel.png") });
 });
@@ -407,21 +614,40 @@ test("04-toolbar-actions", async ({ page }) => {
   });
   if (!roRes.ok())
     throw new Error(`read-only open failed: ${roRes.status()} ${await roRes.text()}`);
-  await mcp.callTool("tandem_appendContent", {
-    documentId: budgetId,
-    content: "\n## Outlook\n\nQ4 forecast pending finance review.\n",
-  });
   await mcp.callTool("tandem_switchDocument", { documentId: welcomeId });
 
   await page.goto("/");
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
   await dismissReadOnlyBanner(page);
+
+  // The dirtying edit lands AFTER the page is up and the tab has armed, and
+  // that ordering is the whole trick. `dirty` is not server state: TabItem
+  // inlines `useTabDirty`, which observes its own Y.Doc fragment and arms on a
+  // 500ms timer that RESETS `dirty = false` when it fires — deliberately, so
+  // the initial Hocuspocus sync isn't mistaken for a user edit. Appending
+  // before `page.goto` therefore put the change inside that initial sync, and
+  // the tab loaded permanently clean over a document that had never been
+  // written to disk. Waiting past the arm window and then editing is the only
+  // way a browser observes the transition at all.
+  await page.waitForTimeout(900);
+  await mcp.callTool("tandem_appendContent", {
+    documentId: budgetId,
+    content: "\n## Outlook\n\nQ4 forecast pending finance review.\n",
+  });
+
   await selectFirstParagraph(page);
 
   // Everything the two captions promise, asserted rather than hoped for.
   await expect(page.locator("[data-testid^='tab-']")).not.toHaveCount(0);
   await expect(page.locator(".tab-ro-badge").first()).toBeVisible({ timeout: 10_000 });
-  await expect(page.locator("[data-testid^='unsaved-indicator-']").first()).toBeVisible({
+  // The DIRTY tab's dot, addressed by document id. `unsaved-indicator-*` is a
+  // fixed-width slot TabItem renders on every tab so the dot/check/empty states
+  // can't shift the strip — on a clean tab it is an empty span with no box, so
+  // `.first()` resolved the (clean, active) welcome tab and waited ten seconds
+  // for something that is hidden by design. `budgetId` is the one we dirtied
+  // with `tandem_appendContent`, and `.dot` is the ● itself rather than the
+  // slot holding it.
+  await expect(page.locator(`[data-testid='unsaved-indicator-${budgetId}'] .dot`)).toBeVisible({
     timeout: 10_000,
   });
   await expect(page.getByTestId("mode-toggle")).toBeVisible();
@@ -596,7 +822,9 @@ test("11-margin-annotations", async ({ page }) => {
   // silently steps down to `narrow` (no action row) or `stub` (a pip), and the
   // shot degrades into something that does not show what the caption claims.
   await page.setViewportSize({ width: 1600, height: 1000 });
-  await openWithAnnotations();
+  // Slot 11's own above-the-fold seed — see `openWithMarginAnnotations`.
+  await openWithMarginAnnotations();
+  await suppressTutorialCard(page);
   await page.goto("/");
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
   await dismissReadOnlyBanner(page);
@@ -611,17 +839,41 @@ test("11-margin-annotations", async ({ page }) => {
   await expect(marginToggle).toBeChecked();
   await page.keyboard.press("Escape");
 
+  // `margin-column-right` is asserted ATTACHED, never visible. Every bubble it
+  // holds is `position: absolute`, so the column contributes no height of its
+  // own and Playwright reports it `hidden` in every state including a perfectly
+  // rendered full-width margin — the first run burned ten seconds proving that
+  // against a column the locator had already resolved thirteen times. The
+  // bubbles are the visible surface, and they are what the shot is of.
   const column = page.locator("[data-testid='margin-column-right']");
-  await expect(column).toBeVisible({ timeout: 10_000 });
-  await expect(page.locator("[data-testid^='margin-bubble-']").first()).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect(column).toBeAttached({ timeout: 10_000 });
+  const bubble = page.locator("[data-testid^='margin-bubble-']").first();
+  await expect(bubble).toBeVisible({ timeout: 10_000 });
   await expect(page.locator("[data-testid='margin-anchor-dot']").first()).toBeVisible();
   // `full` is 240px; `narrow` is 160 and `stub` is 28. This is the assertion
   // that stops a degraded ladder state shipping as a full-margin screenshot.
-  const columnBox = await column.boundingBox();
-  if (!columnBox) throw new Error("margin-column-right has no bounding box");
-  expect(columnBox.width).toBeGreaterThanOrEqual(MARGIN_FULL_COLUMN_PX);
+  // Measured on the bubble, which is `width: 100%` of the column — same number,
+  // from an element that actually has a box.
+  const bubbleBox = await bubble.boundingBox();
+  if (!bubbleBox) throw new Error("margin bubble has no bounding box");
+  expect(bubbleBox.width).toBeGreaterThanOrEqual(MARGIN_FULL_COLUMN_PX);
+
+  // The margin must actually LOOK like a margin. Bubbles are placed at their
+  // anchor's y down the whole scroll height, so "a bubble exists and is
+  // visible" is satisfied by a frame containing exactly one card and three
+  // off-screen ones — which is the picture the first passing run produced.
+  // Count the ones inside the captured viewport instead.
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("No viewport");
+  const inFrame = await page.locator("[data-testid^='margin-bubble-']").evaluateAll(
+    (els, h) =>
+      els.filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.top >= 0 && r.bottom <= h && r.height > 0;
+      }).length,
+    viewport.height,
+  );
+  expect(inFrame).toBeGreaterThanOrEqual(3);
   await page.waitForTimeout(500);
 
   await page.screenshot({
@@ -632,6 +884,13 @@ test("11-margin-annotations", async ({ page }) => {
 
 test("12-outline-rail", async ({ page }) => {
   await openWelcome();
+  // Before `goto`: this installs an init script, so it has no effect on a page
+  // that has already navigated. The tutorial card is anchored bottom-left and
+  // overlaps the outline rail, which is the one element this shot exists to
+  // show. It survived the first capture because every assertion below still
+  // passed with a card clipped across the lower third of the frame -- passing
+  // is not the same as depicting the subject.
+  await suppressTutorialCard(page);
   await page.goto("/");
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
   await dismissReadOnlyBanner(page);
@@ -644,6 +903,9 @@ test("12-outline-rail", async ({ page }) => {
   // welcome.md carries six headings across two levels; a flat document would
   // produce a technically-correct screenshot of an empty tree.
   await expect(page.locator("[data-testid^='outline-heading-']")).not.toHaveCount(0);
+  // Pin the suppression, or a future change to the completion key silently
+  // restores the overlap and nothing here notices.
+  await expect(page.getByTestId("tutorial-dismiss-btn")).toHaveCount(0);
   await page.waitForTimeout(400);
 
   await rail.screenshot({ path: path.join(screenshotsDir, "12-outline-rail.png") });
@@ -656,9 +918,11 @@ test("13-setup-wizard", async ({ page }) => {
   // first-run wizard would look like an unexplained timeout. The manual reopen
   // entry point is deterministic and leaves first-run state alone.
   //
-  // PRIVACY: this shot can render host and path detail
-  // (`integration-wizard-reachability-*`). It needs a human check before it is
-  // committed even though the capture is automated — see docs/screenshots/README.md.
+  // PRIVACY: this shot renders the real resolved config path for every client
+  // found on the capture machine, account name included. `redactAccountName`
+  // below handles it by construction and the assertion after it proves the
+  // redaction landed — do not downgrade either into a note asking a human to
+  // check, which is what this step used to rely on.
   await openWelcome();
   await page.goto("/");
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
@@ -673,6 +937,15 @@ test("13-setup-wizard", async ({ page }) => {
     timeout: 10_000,
   });
   await page.waitForTimeout(400);
+
+  await redactAccountName(page);
+  // Prove the redaction reached the DOM rather than trusting that it ran. The
+  // wizard is the one surface that prints a resolved path, so an empty match
+  // here would mean the paths moved out of text nodes -- a real finding, not a
+  // reason to ship the shot anyway.
+  const account = path.basename(os.homedir());
+  await expect(wizard).not.toContainText(account, { timeout: 5_000 });
+  await expect(page.locator(".itc-path").first()).toContainText("you");
 
   await page.screenshot({
     path: path.join(screenshotsDir, "13-setup-wizard.png"),
