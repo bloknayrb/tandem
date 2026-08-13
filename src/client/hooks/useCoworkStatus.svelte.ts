@@ -12,7 +12,19 @@ export interface CoworkStatusState {
   readonly status: CoworkStatus | null;
   readonly loading: boolean;
   readonly error: string | null;
-  refetch: () => Promise<void>;
+  /**
+   * Re-read the OS status. Resolves `true` only when a fresh status was
+   * actually stored.
+   *
+   * The boolean matters because this swallows its own failure into `error`
+   * rather than rejecting — so a caller that only `await`s it cannot tell a
+   * refreshed `status` from a stale one, and `error` is not a usable substitute
+   * (a caller would have to compare it before and after). Anything that reads
+   * `status` to decide what to PAINT after a write must gate on this, or it
+   * will paint the pre-write value as though it were the outcome.
+   * `useFirstRunNeeded`'s `refetch` returns a boolean for the same reason.
+   */
+  refetch: () => Promise<boolean>;
 }
 
 /**
@@ -43,20 +55,23 @@ export function createCoworkStatus(getActive: () => boolean): CoworkStatusState 
     }
   });
 
-  const refetch = async (): Promise<void> => {
+  const refetch = async (): Promise<boolean> => {
     if (tauriMissing) {
       if (mounted) loading = false;
-      return;
+      return false;
     }
     const invoke = invokeRef;
-    if (!invoke) return;
+    if (!invoke) return false;
     try {
       const next = await coworkGetStatus(invoke);
-      if (!mounted) return;
+      // An unmounted component stored nothing, so this is `false` for the same
+      // reason a throw is: `status` does not reflect the read.
+      if (!mounted) return false;
       status = next;
       error = null;
+      return true;
     } catch (err) {
-      if (!mounted) return;
+      if (!mounted) return false;
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === TAURI_NOT_AVAILABLE) {
         tauriMissing = true;
@@ -65,9 +80,10 @@ export function createCoworkStatus(getActive: () => boolean): CoworkStatusState 
           intervalId = null;
         }
         loading = false;
-        return;
+        return false;
       }
       error = msg;
+      return false;
     } finally {
       if (mounted) loading = false;
     }

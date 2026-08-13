@@ -168,11 +168,17 @@ const PLUGIN_INSTALL_TEXT = CLAUDE_PLUGIN_INSTALL_COMMANDS.join("\n");
  * MUST be `""` whenever the push-routes block is about to (re)mount — a live
  * region created already holding its text is announced by nothing, which is
  * #1376's defect reintroduced inside the fix for it. Unlike `coworkProbe`,
- * there is no single choke point to hang that on: this block's mount condition
- * is compound and partly `$derived` (`step === "done"` AND `view === "main"`
- * AND `channelRegistered !== null && whatsNext !== "stdio-only"`, where
- * `whatsNext` follows a live reachability poll). So the reset is explicit at
- * each transition, and `copyToken` is what makes that safe.
+ * there is no single choke point to hang that on, so the reset is explicit at
+ * each transition that can remount the block — `openCoworkView` and
+ * `retryDetection` — and `copyToken` is what makes that safe.
+ *
+ * `close()` deliberately does not reset, and that is the one leg of this
+ * invariant the component does not own: it holds only because `App.svelte`
+ * renders the modal under `{#if shouldShowWizard}`, so closing DESTROYS this
+ * state rather than hiding it. The component is otherwise written for a
+ * persistent `open` prop, and under that shape a close/reopen would remount the
+ * block still holding "Copied". If the parent ever stops unmounting, this needs
+ * a third reset site.
  */
 let pluginCopyResult = $state("");
 
@@ -189,9 +195,11 @@ let copyToken = 0;
 async function copyPluginCommands(): Promise<void> {
   const mine = ++copyToken;
   let result: string;
-  // `writeText` FIRST, with no await before it. Some engines gate the
-  // clipboard on transient user activation, which an awaited microtask can
-  // outlive — so the clear-and-flush below happens after the write, not before.
+  // `writeText` FIRST, with no await before it. WebKit invalidates the
+  // user-gesture token across an `await`, so a clipboard write placed after one
+  // can be rejected for want of transient activation — hence the clear-and-flush
+  // below happens after the write, not before. (Not testable here: happy-dom
+  // models no activation state, so this is pinned by the comment, deliberately.)
   try {
     await navigator.clipboard.writeText(PLUGIN_INSTALL_TEXT);
     result = "Copied";
@@ -204,9 +212,11 @@ async function copyPluginCommands(): Promise<void> {
     console.warn("[wizard] clipboard write failed:", err);
     result = "Couldn't copy — select the commands above";
   }
-  // Early out so a superseded copy does not blank a region it no longer owns.
-  // The guard AFTER the flush is the load-bearing one — it is what stops the
-  // stale "Copied" from landing — and the tests pin the pair.
+  // THIS is the load-bearing guard: `writeText` spans real tasks, so a user can
+  // click the Cowork row while it is pending, and without this the superseded
+  // continuation both blanks a region it no longer owns and lands a stale
+  // "Copied" in it. Pinned by "drops a copy result that lands after the user has
+  // left for the sub-view".
   if (mine !== copyToken) return;
   // Clear and flush before the outcome: a second click with the SAME outcome
   // would otherwise re-assign an identical string, mutate no text node, and
@@ -214,6 +224,12 @@ async function copyPluginCommands(): Promise<void> {
   // for and hears silence.
   pluginCopyResult = "";
   await tick();
+  // Defensive, and unreachable today: every `copyToken` mutator is an `onclick`,
+  // a click is a task, and the gap above is a microtask — so nothing can
+  // supersede across it. Kept because it costs one line and Svelte's async mode
+  // would make `tick()` span a task, at which point it becomes the load-bearing
+  // one. Deliberately NOT tested: reaching it needs a synthetic click dispatched
+  // inside a microtask flush, which pins an interleaving no user can produce.
   if (mine !== copyToken) return;
   pluginCopyResult = result;
 }
@@ -349,8 +365,9 @@ function close(): void {
 function retryDetection(): void {
   wizard.reset();
   secretInputs = {};
-  // Same reason as `openCoworkView` — `wizard.reset()` re-renders through the
-  // detecting state, so the block remounts.
+  // Same reason as `openCoworkView`: `wizard.reset()` sets `step = "connect"`,
+  // and the push-routes block gates on `step === "done"` — so leaving "done" is
+  // what unmounts it, not the `detecting` flag `reset()` also clears.
   copyToken++;
   pluginCopyResult = "";
   void wizard.begin();
@@ -616,13 +633,9 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
     newer: on anything older the install succeeds and the monitor simply never runs, with nothing
     to tell you so.
   </p>
-  <!-- #1390: shown rather than run. Not because Tandem *cannot* — `apply.ts`
-       already writes `~/.claude.json` and the skill, and `cowork_installer.rs`
-       already writes a plugin registry — but because the personal-Claude-Code
-       registry schema is reverse-engineered rather than supported, and enabling
-       a plugin installs hooks that run in the user's own sessions. See
-       `CLAUDE_PLUGIN_INSTALL_COMMANDS`. Before this they were printed by
-       `tandem setup` alone, which a desktop-app user never runs. -->
+  <!-- #1390: shown rather than run — see `CLAUDE_PLUGIN_INSTALL_COMMANDS` for
+       why. Before this they were printed by `tandem setup` alone, which a
+       desktop-app user never runs. -->
   <div class="iw-plugin-install" data-testid="integration-wizard-plugin">
     <pre class="iw-plugin-commands" data-testid="integration-wizard-plugin-commands">{PLUGIN_INSTALL_TEXT}</pre>
     <button
@@ -1088,12 +1101,9 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                     The channel shim is registered here, and it is the one route that needs
                     neither of those. Registration alone does not switch it on, though: start the
                     session with
-                    <!-- One source line on purpose: `.iw-code-inline` sets no
-                         `white-space`, so a wrap here collapses to a space
-                         INSIDE the chip and the command can break mid-flag
-                         where a user will copy a fragment of it. -->
-                    <!-- prettier-ignore -->
-                    <code class="iw-code-inline">claude --dangerously-load-development-channels server:tandem-channel</code>.
+                    <code class="iw-code-inline"
+                      >claude --dangerously-load-development-channels server:tandem-channel</code
+                    >.
                   </p>
                 {:else}
                   <p>

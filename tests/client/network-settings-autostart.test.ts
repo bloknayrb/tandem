@@ -15,28 +15,33 @@
  * This is the same defect measured on Cowork's two toggles (#1375); the third
  * instance lived here and was found by reviewing that fix. See
  * `src/client/utils/checkbox-sync.ts`.
+ *
+ * The status lives in a `$state` cell rather than a module `let` — the first
+ * version of this file used a `let` and it made a test pass that could not
+ * fail. See `../helpers/autostart-status-cell.svelte`.
  */
 
-import { render, waitFor } from "@testing-library/svelte";
+import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
-import type { AutostartStatus } from "../../src/client/tauri/autostart-invoke";
+import { autostartStatusCell } from "../helpers/autostart-status-cell.svelte";
 
-/** What the OS reports. Mutated per-test; the mocked hook reads it live. */
-let osStatus: AutostartStatus = { enabled: false, trayAvailable: true, error: null };
 let toggleError: string | null = null;
 
-const toggle = vi.fn(async (_next: boolean) => {
-  // The shape that matters: a write the OS refused or virtualized away leaves
-  // `status` untouched. `next` is deliberately ignored.
-});
+/**
+ * The OS write. Default: it fails to commit — the write is refused or
+ * virtualized away, so `status` is left exactly as it was. That is the shape
+ * `resyncCheckbox` exists for, and making it the default keeps each test's
+ * setup to the ONE thing it varies.
+ */
+const toggle = vi.fn(async (_next: boolean) => {});
 
 vi.mock("../../src/client/hooks/useAutostart.svelte.js", () => ({
   createAutostart: () => ({
     get status() {
-      return osStatus;
+      return autostartStatusCell.value;
     },
     get error() {
       return toggleError;
@@ -78,17 +83,44 @@ function mount() {
   return { container, box };
 }
 
+/** Move the box the way a user does: mutate `.checked`, then fire `change`. */
 async function clickToggle(box: HTMLInputElement, checked: boolean): Promise<void> {
   box.checked = checked;
   box.dispatchEvent(new Event("change", { bubbles: true }));
   await tick();
 }
 
+// FILE scope. `autostartStatusCell` is module state, and without an explicit
+// `cleanup()` Testing Library's auto-cleanup never registers here (it hooks
+// `afterEach` only under `globals: true`, which this project does not set), so
+// mounts would otherwise accumulate across the file.
+beforeEach(() => {
+  autostartStatusCell.reset();
+  toggleError = null;
+  toggle.mockReset();
+  toggle.mockImplementation(async () => {});
+});
+
+afterEach(() => {
+  cleanup();
+});
+
 describe("NetworkSettings — start-at-login toggle", () => {
-  beforeEach(() => {
-    osStatus = { enabled: false, trayAvailable: true, error: null };
-    toggleError = null;
-    toggle.mockClear();
+  it("follows the OS when the status changes with no click at all", async () => {
+    // The binding must be live. Every other test here reads `box.checked` after
+    // a click, and a click sets `.checked` by itself — so if the mocked status
+    // were inert (a plain module `let`, which is what this file used to do)
+    // those assertions would pass with the production resync deleted. This is
+    // the one test that can only pass if Svelte's own write is running, and it
+    // is the reason the others mean anything. The real hook does exactly this
+    // on a Settings reopen.
+    const { box } = mount();
+    await tick();
+    expect(box.checked).toBe(false);
+
+    autostartStatusCell.patch({ enabled: true });
+
+    await waitFor(() => expect(box.checked).toBe(true), { interval: 5 });
   });
 
   it("puts the box back when the OS did not take the write", async () => {
@@ -99,29 +131,17 @@ describe("NetworkSettings — start-at-login toggle", () => {
     await clickToggle(box, true);
 
     expect(toggle).toHaveBeenCalledWith(true);
-    // `osStatus.enabled` never moved, so the expression re-computes to `false`
-    // — the value Svelte last wrote — and the DOM write is skipped. Without an
+    // `enabled` never moved, so the expression re-computes to `false` — the
+    // value Svelte last wrote — and the DOM write is skipped. Without an
     // explicit resync the box stays checked over a login item that does not
     // exist.
     await waitFor(() => expect(box.checked).toBe(false), { interval: 5 });
   });
 
-  it("leaves the box on when the OS confirms the write", async () => {
-    const { box } = mount();
-    await tick();
-
-    toggle.mockImplementationOnce(async () => {
-      osStatus = { ...osStatus, enabled: true };
-    });
-    await clickToggle(box, true);
-
-    await waitFor(() => expect(box.checked).toBe(true), { interval: 5 });
-  });
-
   it("puts the box back when un-checking fails too", async () => {
     // The disable half, which on Cowork was the one that produced an
     // unrecoverable control.
-    osStatus = { enabled: true, trayAvailable: true, error: null };
+    autostartStatusCell.patch({ enabled: true });
     const { box } = mount();
     await tick();
     expect(box.checked).toBe(true);
@@ -130,5 +150,38 @@ describe("NetworkSettings — start-at-login toggle", () => {
 
     expect(toggle).toHaveBeenCalledWith(false);
     await waitFor(() => expect(box.checked).toBe(true), { interval: 5 });
+  });
+
+  it("leaves the box on when the OS confirms the write", async () => {
+    const { box } = mount();
+    await tick();
+
+    // Deferred rather than resolving inline: with a mock that settles in the
+    // same microtask, dropping the `await` in `toggleAutostart` still passes.
+    // The gap is what makes the resync's ORDERING observable.
+    let release!: () => void;
+    const committed = new Promise<void>((r) => {
+      release = r;
+    });
+    toggle.mockImplementationOnce(async () => {
+      await committed;
+      autostartStatusCell.patch({ enabled: true });
+    });
+
+    await clickToggle(box, true);
+    // Ordering, not timing: while the write is still in flight the resync must
+    // not have run. Drop the `await` in `toggleAutostart` and it runs here
+    // instead, reading the PRE-write status and snapping the box back to
+    // `false` under the user before the commit lands. The deferred promise is
+    // what makes that deterministic rather than a race.
+    expect(box.checked).toBe(true);
+
+    release();
+
+    await waitFor(() => expect(box.checked).toBe(true), { interval: 5 });
+    // And it stays on: the resync must not read the pre-write status and undo
+    // a commit that succeeded.
+    await tick();
+    expect(box.checked).toBe(true);
   });
 });

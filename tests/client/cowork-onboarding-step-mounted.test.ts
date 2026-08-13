@@ -15,9 +15,9 @@
  * this file gives the other surface the same guard.
  */
 
-import { render, waitFor } from "@testing-library/svelte";
+import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { COWORK_PREFLIGHT_CHECKING } from "../../src/client/cowork/cowork-helpers";
 import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
 import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
@@ -85,6 +85,12 @@ beforeEach(() => {
   fakeInvoke.mockClear();
   preflightSubnet.mockClear();
   preflightSubnet.mockResolvedValue({ status: "unknown" });
+});
+
+afterEach(() => {
+  // Explicit: without `globals: true` Testing Library never registers its own
+  // `afterEach`, so mounts would otherwise accumulate across this file.
+  cleanup();
 });
 
 describe("CoworkOnboardingStep — confirm wiring (#1375)", () => {

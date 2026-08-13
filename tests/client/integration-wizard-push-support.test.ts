@@ -416,6 +416,7 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
         }),
       },
     });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { container } = mountPushMode(false);
     await tick();
 
@@ -425,6 +426,11 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     expect(q(container, "integration-wizard-plugin-commands")?.textContent ?? "").toContain(
       CLAUDE_PLUGIN_INSTALL_COMMANDS[0],
     );
+    // The user-facing string is the same for every clipboard failure, so the log
+    // is the only thing that separates a denied permission from a missing API
+    // from a CSP rejection. Without this the catch could stop logging and
+    // nothing would notice.
+    expect(warn).toHaveBeenCalledWith("[wizard] clipboard write failed:", expect.any(Error));
   });
 
   it("does not carry a copy status back from the Cowork sub-view", async () => {
@@ -481,6 +487,36 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     await tick();
 
     (q(container, "integration-wizard-cowork-back") as HTMLButtonElement).click();
+    await waitFor(() => {
+      expect(q(container, "integration-wizard-plugin-copy-status")).toBeTruthy();
+    });
+    expect(q(container, "integration-wizard-plugin-copy-status")?.textContent?.trim()).toBe("");
+  });
+
+  it("does not carry a copy status through a retry either", async () => {
+    // `retryDetection` resets the status for the same reason `openCoworkView`
+    // does — `wizard.reset()` takes `step` out of "done", which is what the
+    // push-routes block gates on, so the block unmounts and would remount
+    // holding "Copied". Its comment claimed parity with `openCoworkView`; the
+    // tests did not, and deleting both lines here left the suite green.
+    vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn(async () => {}) } });
+    wizardStub.channelRegistered = false;
+    // One error alongside the applied target, so the done step offers "Try
+    // again" while the push-routes block is still on screen.
+    const { container } = mountDone(
+      [pickedCode(), pickedDesktop()],
+      [applied("claude-code-1"), { id: "claude-desktop-1", status: "error", error: "nope" }],
+    );
+    await tick();
+
+    await clickCopy(container, /Copied/);
+
+    (q(container, "integration-wizard-done-retry") as HTMLButtonElement).click();
+    await tick();
+
+    // Back to "done" the way the wizard gets there, and the region must be
+    // empty rather than remounting with its old text.
+    wizardStub.step = "done";
     await waitFor(() => {
       expect(q(container, "integration-wizard-plugin-copy-status")).toBeTruthy();
     });

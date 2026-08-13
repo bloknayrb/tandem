@@ -17,17 +17,18 @@
  * an `$effect` and a real invoke — an unmocked mount hits the network.
  */
 
-import { render, waitFor } from "@testing-library/svelte";
+import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { COWORK_PREFLIGHT_CHECKING } from "../../src/client/cowork/cowork-helpers";
 import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
-import { coworkStatusCell } from "../helpers/cowork-fixtures.svelte";
+import { coworkErrorCell, coworkStatusCell } from "../helpers/cowork-fixtures.svelte";
 
 const toggleIntegration = vi.fn(async () => ({ ok: true as const }));
 const fakeInvoke = vi.fn();
 
 const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unknown" }));
+const setLanIpOverride = vi.fn(async () => {});
 
 // Spread `importOriginal` rather than re-declaring the module: `cowork-invoke`
 // exports nine symbols and each suite's mock used to name a different subset,
@@ -38,19 +39,50 @@ vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
   loadInvoke: vi.fn(async () => fakeInvoke),
   coworkToggleIntegration: (...args: unknown[]) => toggleIntegration(...args),
   coworkPreflightSubnet: () => preflightSubnet(),
+  coworkSetLanIpOverride: (...args: unknown[]) => setLanIpOverride(...args),
 }));
 
-// A REACTIVE status cell, not a frozen literal: `enabled` is what the surface
-// renders, and a status the component cannot observe changing makes the
-// post-enable checkbox untestable. See the helper for why a plain `let` is
-// worse than useless here.
-const refetch = vi.fn(async () => {});
+/**
+ * The re-read that follows every write.
+ *
+ * Resolves `true` — "a fresh status was stored". The real `refetch` reports its
+ * failure that way rather than throwing, and the handlers gate their resync on
+ * it, so a mock resolving `undefined` would silently send every test in this
+ * file down the read-back-failed branch and skip the very resync they exist to
+ * pin. It would still be green, which is why it is worth saying out loud.
+ *
+ * It mutates `coworkStatusCell` — a REACTIVE cell, not a frozen literal —
+ * because `enabled` is what the surface renders, and a status the component
+ * cannot observe changing makes the post-write checkbox untestable. See the
+ * helper for why a plain `let` is worse than useless here.
+ */
+const refetch = vi.fn(async () => true);
 
 /** What the Rust side does on success: the toggle commits, the refetch reports it. */
 function enableSucceeds(): void {
   refetch.mockImplementation(async () => {
     coworkStatusCell.patch({ enabled: true });
+    return true;
   });
+}
+
+/** The disable mirror of `enableSucceeds`. */
+function disableSucceeds(): void {
+  refetch.mockImplementation(async () => {
+    coworkStatusCell.patch({ enabled: false });
+    return true;
+  });
+}
+
+/**
+ * The write commits, but the read-back after it does not land.
+ *
+ * `refetch` swallows that into `coworkState.error` and resolves `false` rather
+ * than throwing, so `status` keeps its PRE-write value while every other signal
+ * says the operation succeeded.
+ */
+function readBackFails(): void {
+  refetch.mockImplementation(async () => false);
 }
 
 vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
@@ -59,7 +91,9 @@ vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
       return coworkStatusCell.value;
     },
     loading: false,
-    error: null,
+    get error() {
+      return coworkErrorCell.value;
+    },
     refetch,
   }),
 }));
@@ -109,13 +143,20 @@ beforeEach(() => {
   toggleIntegration.mockClear();
   toggleIntegration.mockImplementation(async () => ({ ok: true as const }));
   fakeInvoke.mockClear();
+  coworkErrorCell.reset();
   refetch.mockReset();
-  refetch.mockImplementation(async () => {});
+  refetch.mockImplementation(async () => true);
+  setLanIpOverride.mockClear();
+  setLanIpOverride.mockImplementation(async () => {});
   preflightSubnet.mockClear();
   preflightSubnet.mockResolvedValue({ status: "unknown" });
 });
 
 afterEach(() => {
+  // Explicit: without `globals: true` Testing Library never registers its own
+  // `afterEach`, so mounts would accumulate across this file — the other half
+  // of the isolation argument the file-scoped `beforeEach` above makes.
+  cleanup();
   vi.unstubAllGlobals();
 });
 
@@ -197,6 +238,110 @@ describe("CoworkSettings — enable confirm wiring (#1375)", () => {
     expect(q(container, "cowork-settings")?.textContent).toContain("Integration enabled: yes");
     expect(q(container, "cowork-enable-confirm")).toBeNull();
     expect(toggleIntegration).toHaveBeenCalledWith(fakeInvoke, false);
+  });
+
+  it("a disable that succeeds leaves the box off", async () => {
+    // The mirror of the test above, and the one that makes the resync's ARGUMENT
+    // matter rather than just its presence: with only the failure path covered,
+    // `enabled` never moves, so `resyncCheckbox(box, true)` as a hard-coded
+    // constant is indistinguishable from reading the model — and a constant
+    // `true` would leave the box checked over an integration that just turned
+    // off, which is precisely the defect `checkbox-sync.ts` exists to fix.
+    coworkStatusCell.patch({ enabled: true });
+    disableSucceeds();
+    const { container, checkbox } = mount();
+    await tick();
+    expect(checkbox.checked).toBe(true);
+
+    await setChecked(checkbox, false);
+
+    // Wait on the MODEL's readout, not the box: `resyncCheckbox` writes
+    // `checked` imperatively before Svelte's flush, so gating on the box alone
+    // would let this proceed while the surface still said "yes".
+    await waitFor(
+      () =>
+        expect(q(container, "cowork-settings")?.textContent).toContain("Integration enabled: no"),
+      { interval: 5 },
+    );
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it("a disable whose read-back fails leaves the box off and says why", async () => {
+    // The write landed; only the re-read did not. `status` therefore still says
+    // `enabled: true`, and resyncing from it would visibly RE-CHECK the box over
+    // an integration that is now off — the resync making the UI more wrong than
+    // no resync at all. So the resync is gated on the read-back, and the failure
+    // gets a banner instead of the silence it used to get.
+    coworkStatusCell.patch({ enabled: true });
+    readBackFails();
+    const { checkbox } = mount();
+    await tick();
+    expect(checkbox.checked).toBe(true);
+
+    await setChecked(checkbox, false);
+    // `disabled={busy}` is the handler's own end-marker, and waiting on it is
+    // what makes this test non-vacuous: waiting on `toggleIntegration` instead
+    // resolves while `refetch` and the resync are still pending, so the
+    // assertion below would read the user's click position and pass no matter
+    // what the handler went on to do. Both edges, so a missed flush cannot make
+    // the second wait return immediately.
+    await waitFor(() => expect(checkbox.disabled).toBe(true), { interval: 5 });
+    await waitFor(() => expect(checkbox.disabled).toBe(false), { interval: 5 });
+
+    expect(toggleIntegration).toHaveBeenCalledWith(fakeInvoke, false);
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it("surfaces a re-read failure that happens after the first load", async () => {
+    // The banner used to be gated on `!coworkState.status`, which is false for
+    // every failure a user of the toggle can cause — the toggle only exists once
+    // a status has loaded. So the one error state reachable from this surface
+    // was the one the banner could not show.
+    coworkStatusCell.patch({ enabled: true });
+    refetch.mockImplementation(async () => {
+      coworkErrorCell.set("bridge unavailable");
+      return false;
+    });
+    const { container, checkbox } = mount();
+    await tick();
+
+    await setChecked(checkbox, false);
+
+    const banner = await waitFor(
+      () => {
+        const el = q(container, "cowork-settings-error");
+        expect(el).toBeTruthy();
+        return el as HTMLElement;
+      },
+      { interval: 5 },
+    );
+    expect(banner.textContent).toContain("bridge unavailable");
+    // Phrased for a refresh, not a cold load — the status on screen is real,
+    // just stale.
+    expect(banner.textContent).toContain("refresh");
+  });
+
+  it("the LAN-IP override row resyncs its own box", async () => {
+    // This row is behind `{#if s.lanIpFallback !== null}` and every fixture
+    // leaves that null, so `handleToggleLanIp` had never executed under a mount
+    // at all — deleting its resync left the whole suite green. It carries the
+    // same hazard as the Enable toggle with none of the cover: no confirm
+    // banner, no "enabled: yes/no" line, so the box IS the readout.
+    coworkStatusCell.patch({ lanIpFallback: "192.168.1.100", useLanIpOverride: false });
+    const { container } = mount();
+    await tick();
+
+    const lanBox = q(container, "cowork-lan-ip-override-checkbox") as HTMLInputElement;
+    expect(lanBox).toBeTruthy();
+    expect(lanBox.checked).toBe(false);
+
+    // The write fails, so `useLanIpOverride` stays false and the expression
+    // re-computes to the value Svelte last wrote — the skipped-write trap.
+    setLanIpOverride.mockRejectedValueOnce(new Error("bridge gone"));
+    lanBox.checked = true;
+    lanBox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await waitFor(() => expect(lanBox.checked).toBe(false), { interval: 5 });
   });
 
   it("checking an already-enabled box re-asserts it instead of offering Enable", async () => {

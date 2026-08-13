@@ -35,3 +35,26 @@ export const coworkStatusCell = {
     current = coworkStatusFixture();
   },
 };
+
+/**
+ * `createCoworkStatus`'s `error`, and reactive for the same reason as the
+ * status above.
+ *
+ * `refetch` sets this instead of throwing, so the surface's error banner is the
+ * only thing that can report a failed re-read. A frozen `let` here makes that
+ * banner untestable in the direction that matters — it can never appear, so a
+ * test asserting it does will fail against correct code.
+ */
+let currentError = $state<string | null>(null);
+
+export const coworkErrorCell = {
+  get value(): string | null {
+    return currentError;
+  },
+  set(next: string | null): void {
+    currentError = next;
+  },
+  reset(): void {
+    currentError = null;
+  },
+};

@@ -7,14 +7,19 @@ import type { CoworkStatus } from "../../src/client/types";
  * suite needs it and they had each written their own nine-field literal.
  *
  * Deliberately a plain `.ts`, split from the reactive cell in
- * `cowork-fixtures.svelte.ts`. `vitest.config.ts` gives the svelte plugin to
- * the `client` project only, so a `.svelte.ts` import from anywhere else in
- * `tests/` fails with `rune_outside_svelte` — in a test that never touches
- * reactivity. Every consumer today is in `tests/client/` and would be fine
- * either way; this is cheap insurance for the first contract or server test
- * that wants a `CoworkStatus`, not a constraint anything currently hits. The
- * alternative — giving the `node` project the svelte plugin — changes the
- * transform pipeline for every server and CLI test to buy the same thing.
+ * `cowork-fixtures.svelte.ts`. Measured, not assumed: importing a `.svelte.ts`
+ * from a `tests/` file outside `tests/client/` fails with `ReferenceError:
+ * $state is not defined` — in a test that never touches reactivity. Note
+ * `vitest.config.ts` DOES declare the svelte plugin at the root as well as on
+ * the `client` project; the root declaration simply does not reach the `node`
+ * project's transform, which is why the split is about where a file lives
+ * rather than about the config growing a plugin.
+ *
+ * Every consumer today is in `tests/client/` and would be fine either way; this
+ * is cheap insurance for the first contract or server test that wants a
+ * `CoworkStatus`, not a constraint anything currently hits. The alternative —
+ * giving the `node` project the svelte plugin — changes the transform pipeline
+ * for every server and CLI test to buy the same thing.
  *
  * Import it from HERE, not through the `.svelte.ts`. One symbol, one path.
  *

@@ -30,13 +30,22 @@ const autostartDisabled = $derived(autostartBlocked || autostart.loading);
 
 /**
  * `resyncCheckbox` because `checked={autostartStatus.enabled}` cannot repair
- * itself — see that helper for the mechanism. Two paths leave `enabled`
- * unchanged here and both are routine rather than exceptional: `toggle()`'s
- * `catch` sets `error` without touching `status`, and a `readback-mismatch`
- * (the OS virtualized the write away) reports the value it already had. Either
- * way the expression re-computes to what Svelte last wrote, the DOM write is
- * skipped, and the box sits where the USER put it over a setting that never
- * moved — with only an error line below to contradict it.
+ * itself — see that helper for the mechanism.
+ *
+ * Unconditional, and NOT keyed on an error code, because several paths leave
+ * `enabled` unchanged and they do not share a signal: `toggle()`'s `catch` sets
+ * `error` without touching `status`; a `readback-mismatch` (the OS virtualized
+ * the write away) reports the value it already had; and a failed
+ * `manager.enable()`/`disable()` still reads back and returns the old value
+ * with an `io-error`/`plugin-error` code *without* rejecting, so the `catch`
+ * never sees it (`src-tauri/src/autostart.rs`, the write-error branch). In
+ * every one of them the expression re-computes to what Svelte last wrote, the
+ * DOM write is skipped, and the box sits where the USER put it over a setting
+ * that never moved — with only an error line below to contradict it.
+ *
+ * Unlike the Cowork toggles, this needs no read-back gate: the status it
+ * resyncs from is the one THIS call returned, not a separately-fetched value
+ * whose fetch can fail unobserved.
  */
 async function toggleAutostart(box: HTMLInputElement): Promise<void> {
   await autostart.toggle(box.checked);
