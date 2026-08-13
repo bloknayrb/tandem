@@ -74,27 +74,47 @@ async function setChecked(box: HTMLInputElement, checked: boolean): Promise<void
   await tick();
 }
 
+/**
+ * Wait for the Nth probe to have been issued.
+ *
+ * `run()` defers `probing` one flush (#1376 rule 1 — the region has to reach
+ * the a11y tree before its first line), so the probe is never in flight by the
+ * end of the tick that opened the confirm. Counted ticks would encode that
+ * offset as a constant; this stays true if the chain gains or loses a hop.
+ */
+async function probeCount(n: number): Promise<void> {
+  await waitFor(() => {
+    expect(preflightSubnet).toHaveBeenCalledTimes(n);
+  });
+}
+
 function mount() {
   const { container } = render(CoworkSettings);
   const checkbox = q(container, "cowork-toggle-checkbox") as HTMLInputElement;
   return { container, checkbox };
 }
 
+// FILE scope, not per-describe: `coworkStatusCell` is module state and
+// `enableSucceeds()` installs a `refetch` that mutates it to `enabled: true`.
+// Scoped to one describe, a sibling describe inherits whatever the previous
+// one left — isolation by test ordering, which the next added test silently
+// breaks.
+beforeEach(() => {
+  coworkStatusCell.reset();
+  toggleIntegration.mockClear();
+  toggleIntegration.mockImplementation(async () => ({ ok: true as const }));
+  fakeInvoke.mockClear();
+  refetch.mockReset();
+  refetch.mockImplementation(async () => {});
+  preflightSubnet.mockClear();
+  preflightSubnet.mockResolvedValue({ status: "unknown" });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("CoworkSettings — enable confirm wiring (#1375)", () => {
-  beforeEach(() => {
-    coworkStatusCell.reset();
-    toggleIntegration.mockClear();
-    fakeInvoke.mockClear();
-    refetch.mockReset();
-    refetch.mockImplementation(async () => {});
-    preflightSubnet.mockClear();
-    preflightSubnet.mockResolvedValue({ status: "unknown" });
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it("renders the toggle without enabling or probing anything", async () => {
     const { container, checkbox } = mount();
     await tick();
@@ -114,7 +134,7 @@ describe("CoworkSettings — enable confirm wiring (#1375)", () => {
     await setChecked(checkbox, true);
 
     expect(q(container, "cowork-enable-confirm")).toBeTruthy();
-    expect(preflightSubnet).toHaveBeenCalledTimes(1);
+    await probeCount(1);
     expect(toggleIntegration).not.toHaveBeenCalled();
   });
 
@@ -131,17 +151,96 @@ describe("CoworkSettings — enable confirm wiring (#1375)", () => {
     expect(q(container, "cowork-enable-confirm")).toBeNull();
   });
 
-  it("re-checking after a cancel starts a second probe", async () => {
-    // The raced path #1375 singles out: two overlapping probes on the surface
-    // where a user can toggle faster than PowerShell answers. `reset()` bumps
-    // the ticket, so only the newest may write — which is invisible unless a
-    // test actually issues the second one.
-    const { checkbox } = mount();
+  it("the Cancel button un-checks the box, not just the banner", async () => {
+    // The `|| confirming === "enable"` half of the `checked=` expression, which
+    // was previously pinned by nothing: dropping it (or the whole attribute)
+    // left every test here green, because `setChecked` writes `box.checked` by
+    // hand and the suite never observed Svelte writing it. Driving Cancel from
+    // the BUTTON is what makes the DOM write observable — Svelte skips the
+    // write whenever the expression re-computes to its cached value, so with
+    // `checked={s.enabled}` alone the box stays visually checked over a
+    // disabled integration until the next status refetch.
+    const { container, checkbox } = mount();
     await setChecked(checkbox, true);
+    expect(q(container, "cowork-enable-confirm")).toBeTruthy();
+
+    (q(container, "cowork-enable-cancel-btn") as HTMLButtonElement).click();
+    await tick();
+
+    expect(checkbox.checked).toBe(false);
+    expect(toggleIntegration).not.toHaveBeenCalled();
+  });
+
+  it("a failed disable puts the box back, so the retry is reachable", async () => {
+    // Measured trap this closes: `checked=` is one-way and Svelte caches the
+    // last value it wrote, so a disable that throws left the box unchecked over
+    // `enabled: true` with the line beneath it reading "yes" — and the next
+    // click, seeing an unchecked box, opened the ENABLE confirm. There was no
+    // gesture that reached `handleToggleOff` again short of a remount.
+    coworkStatusCell.patch({ enabled: true });
+    toggleIntegration.mockRejectedValueOnce(new Error("UAC declined"));
+    const { container, checkbox } = mount();
+    await tick();
+    expect(checkbox.checked).toBe(true);
+
     await setChecked(checkbox, false);
+    await waitFor(() => {
+      expect(checkbox.checked).toBe(true);
+    });
+
+    // Still on, still says so, and no confirm was opened by the failure.
+    expect(q(container, "cowork-settings")?.textContent).toContain("Integration enabled: yes");
+    expect(q(container, "cowork-enable-confirm")).toBeNull();
+    expect(toggleIntegration).toHaveBeenCalledWith(fakeInvoke, false);
+  });
+
+  it("checking an already-enabled box re-asserts it instead of offering Enable", async () => {
+    // The other exit from that desync. Clicking a box whose model is already
+    // `true` must not open a confirm whose Enable button fires a UAC prompt and
+    // a firewall write for the state the user is in.
+    coworkStatusCell.patch({ enabled: true });
+    const { container, checkbox } = mount();
+    await tick();
+
     await setChecked(checkbox, true);
 
-    expect(preflightSubnet).toHaveBeenCalledTimes(2);
+    expect(checkbox.checked).toBe(true);
+    expect(q(container, "cowork-enable-confirm")).toBeNull();
+    expect(preflightSubnet).not.toHaveBeenCalled();
+    expect(toggleIntegration).not.toHaveBeenCalled();
+  });
+
+  it("re-checking after a cancel starts a second probe", async () => {
+    // The raced path #1375 singles out: two OVERLAPPING probes on the surface
+    // where a user can toggle faster than PowerShell answers. `reset()` bumps
+    // the ticket, so only the newest may write.
+    //
+    // The first probe must never settle, or this degenerates into two
+    // sequential probes and exercises no supersession at all — the default mock
+    // resolves immediately, so probe 1 would already be done before probe 2
+    // started.
+    let releaseFirst: ((v: SubnetPreflight) => void) | undefined;
+    preflightSubnet.mockImplementationOnce(
+      () =>
+        new Promise<SubnetPreflight>((resolve) => {
+          releaseFirst = resolve;
+        }),
+    );
+    const { container, checkbox } = mount();
+    await setChecked(checkbox, true);
+    await probeCount(1);
+
+    await setChecked(checkbox, false);
+    await setChecked(checkbox, true);
+    await probeCount(2);
+
+    // Probe 1 lands late, after its ticket was superseded twice. Its result
+    // must not paint: the user is looking at the second probe's surface.
+    releaseFirst?.({ status: "blocked", hint: "stale adapter" });
+    await waitFor(() => {
+      expect(q(container, "cowork-enable-confirm")).toBeTruthy();
+    });
+    expect(q(container, "cowork-preflight-blocked")).toBeNull();
     expect(toggleIntegration).not.toHaveBeenCalled();
   });
 
@@ -178,32 +277,30 @@ describe("CoworkSettings — enable confirm wiring (#1375)", () => {
     preflightSubnet.mockResolvedValue({ status: "blocked", hint: "no adapter" });
     const { container, checkbox } = mount();
     await setChecked(checkbox, true);
-    await tick();
-
-    expect(q(container, "cowork-preflight-blocked")?.textContent).toContain("no adapter");
+    await waitFor(() => {
+      expect(q(container, "cowork-preflight-blocked")?.textContent ?? "").toContain("no adapter");
+    });
 
     (q(container, "cowork-enable-cancel-btn") as HTMLButtonElement).click();
     await tick();
 
     preflightSubnet.mockImplementationOnce(() => new Promise(() => {}));
     await setChecked(checkbox, true);
+    await probeCount(2);
 
     expect(q(container, "cowork-enable-confirm")).toBeTruthy();
     expect(q(container, "cowork-preflight-blocked")).toBeNull();
-    expect(preflightSubnet).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("CoworkSettings — pre-flight live region (#1376)", () => {
-  beforeEach(() => {
-    preflightSubnet.mockClear();
-    preflightSubnet.mockResolvedValue({ status: "unknown" });
-    toggleIntegration.mockClear();
-  });
-
   it("mounts the region empty, before the text that has to be announced", async () => {
     // The whole of #1376: a live region inserted together with its content is
-    // generally not announced. Region first and empty, content second.
+    // generally not announced. Region first and EMPTY, content second — and
+    // the emptiness is the half that was asserted by nothing. The in-flight
+    // line is the first text to arrive, so a `probing` that flips in the tick
+    // that mounts the region puts this right back; `run()` defers it one flush
+    // for exactly this reason.
     preflightSubnet.mockImplementationOnce(() => new Promise(() => {}));
     const { container, checkbox } = mount();
     await setChecked(checkbox, true);
@@ -211,40 +308,53 @@ describe("CoworkSettings — pre-flight live region (#1376)", () => {
     const region = q(container, "cowork-preflight-live");
     expect(region).toBeTruthy();
     expect(region?.getAttribute("role")).toBe("status");
+    expect(region?.textContent?.trim()).toBe("");
     expect(q(container, "cowork-preflight-blocked")).toBeNull();
+
+    // …and the same node then fills, rather than being replaced by one that
+    // arrives already populated.
+    await waitFor(() => {
+      expect(region?.textContent ?? "").toMatch(/Checking/);
+    });
+    expect(q(container, "cowork-preflight-live")).toBe(region);
   });
 
   it("keeps the same region node across probing → blocked", async () => {
     preflightSubnet.mockResolvedValue({ status: "blocked", hint: "no adapter" });
     const { container, checkbox } = mount();
     await setChecked(checkbox, true);
+    // Captured BEFORE the hint arrives — that is what makes the identity
+    // assertion real. A wrapper living inside `{#if blocked}` gives `before ===
+    // null` here and fails, which is the shape #1376 is about.
     const before = q(container, "cowork-preflight-live");
-    await tick();
-    await tick();
+    expect(before).toBeTruthy();
 
-    const after = q(container, "cowork-preflight-live");
-    expect(after).toBe(before);
-    expect(after?.textContent).toContain("no adapter");
+    await waitFor(() => {
+      expect(q(container, "cowork-preflight-live")?.textContent ?? "").toContain("no adapter");
+    });
+    expect(q(container, "cowork-preflight-live")).toBe(before);
   });
 
   it("announces the re-probe without dropping the hint it is re-checking", async () => {
     // `run()` deliberately keeps the previous result, so a retry has `probing`
     // and `blocked` set at once. Appending rather than swapping is what lets
-    // the region change (so it is announced) while `-blocked` stays mounted for
-    // the three suites that read it mid-probe.
+    // the region change (so it is announced) while `-blocked` stays mounted —
+    // swapping to `{:else if}` would unmount the hint the retry is re-checking,
+    // under a pointer that is on the retry button.
     preflightSubnet.mockResolvedValue({ status: "blocked", hint: "no adapter" });
     const { container, checkbox } = mount();
     await setChecked(checkbox, true);
-    await tick();
-    await tick();
+    await waitFor(() => {
+      expect(q(container, "cowork-preflight-retry-btn")).toBeTruthy();
+    });
 
     preflightSubnet.mockImplementationOnce(() => new Promise(() => {}));
     (q(container, "cowork-preflight-retry-btn") as HTMLButtonElement).click();
-    await tick();
-    await tick();
+    await probeCount(2);
 
-    const region = q(container, "cowork-preflight-live");
-    expect(region?.textContent).toContain("no adapter");
-    expect(region?.textContent).toMatch(/Checking/);
+    await waitFor(() => {
+      expect(q(container, "cowork-preflight-live")?.textContent ?? "").toMatch(/Checking/);
+    });
+    expect(q(container, "cowork-preflight-live")?.textContent ?? "").toContain("no adapter");
   });
 });

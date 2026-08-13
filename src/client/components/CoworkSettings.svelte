@@ -112,11 +112,30 @@ async function handleToggleOn(): Promise<void> {
   }, "Failed to enable Cowork");
 }
 
-async function handleToggleOff(): Promise<void> {
+/**
+ * Re-assert a one-way `checked=` checkbox against the model.
+ *
+ * Svelte caches the last value it wrote and skips the DOM write when the
+ * expression re-computes to that same value — but the user's click has already
+ * moved the DOM without telling it. So every transition that leaves the
+ * expression unchanged desyncs the control from its own label, and nothing
+ * re-runs to heal it. Measured before this existed: decline the UAC prompt on
+ * disable and the toggle reads off, the line directly under it reads
+ * "Integration enabled: yes", and clicking the toggle again opens the ENABLE
+ * confirm — `handleToggleOff` is unreachable until the component remounts.
+ */
+function resyncCheckbox(box: HTMLInputElement, modelValue: boolean): void {
+  box.checked = modelValue;
+}
+
+async function handleToggleOff(box: HTMLInputElement): Promise<void> {
   await withInvoke(async (invoke) => {
     await coworkToggleIntegration(invoke, false);
     await refetch();
   }, "Failed to disable Cowork");
+  // Unconditional, not just on the failure path: a disable whose refetch does
+  // not reflect the write leaves the same desync with no toast at all.
+  resyncCheckbox(box, coworkState.status?.enabled ?? false);
 }
 
 function handleRescan(): void {
@@ -128,11 +147,15 @@ function handleRescan(): void {
   });
 }
 
-async function handleToggleLanIp(enabled: boolean): Promise<void> {
+async function handleToggleLanIp(enabled: boolean, box: HTMLInputElement): Promise<void> {
   await withInvoke(async (invoke) => {
     await coworkSetLanIpOverride(invoke, enabled);
     await refetch();
   }, "Failed to update LAN-IP override");
+  // Same hazard as the Enable toggle, without a confirm banner to mask it:
+  // `checked={s.useLanIpOverride}` cannot re-run when the write fails, so the
+  // box would sit where the user put it over a setting that never moved.
+  resyncCheckbox(box, coworkState.status?.useLanIpOverride ?? false);
 }
 
 function workspaceRowStyle(ws: WorkspaceStatus): string {
@@ -180,7 +203,9 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
     >
       <!-- `|| confirming` so Cancel un-checks the box again: `s.enabled` never
            changed on the way in, so binding to it alone left a checked box
-           sitting over a disabled integration until the next status refetch. -->
+           sitting over a disabled integration until the next status refetch.
+           That covers the enable half; `resyncCheckbox` covers the disable
+           half, which this expression cannot reach. -->
       <input
         class="cs-accent-cbx"
         data-testid="cowork-toggle-checkbox"
@@ -188,14 +213,26 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
         checked={s.enabled || confirming === "enable"}
         disabled={busy}
         onchange={(e) => {
-          if ((e.target as HTMLInputElement).checked) openEnableConfirm();
+          const box = e.currentTarget as HTMLInputElement;
+          if (box.checked) {
+            // Already on: there is no enable to confirm. Snap the box back
+            // rather than offering a UAC prompt and a firewall write for the
+            // state the user is already in. This is the only way out of a
+            // desync left by a disable that failed.
+            if (s.enabled) resyncCheckbox(box, true);
+            else openEnableConfirm();
+            return;
+          }
           // Unchecking while the confirm is open is a cancel, not a disable.
           // It used to fall through to `handleToggleOff`, which fired a real
           // `coworkToggleIntegration(invoke, false)` for a state transition
           // that had never happened — and left the confirm open behind it,
           // Enable button and all.
-          else if (confirming === "enable") closeEnableConfirm();
-          else void handleToggleOff();
+          if (confirming === "enable") closeEnableConfirm();
+          // …but cancelling is ALL it does unless the integration is genuinely
+          // on, which is reachable: the 30s status poll can report an enable
+          // that happened on another surface while this confirm sat open.
+          if (s.enabled) void handleToggleOff(box);
         }}
       />
       <span>Enable Cowork integration</span>
@@ -317,7 +354,10 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
             type="checkbox"
             checked={s.useLanIpOverride}
             disabled={busy}
-            onchange={(e) => void handleToggleLanIp((e.target as HTMLInputElement).checked)}
+            onchange={(e) => {
+              const box = e.currentTarget as HTMLInputElement;
+              void handleToggleLanIp(box.checked, box);
+            }}
           />
           <span>Use LAN IP instead of host.docker.internal</span>
         </label>

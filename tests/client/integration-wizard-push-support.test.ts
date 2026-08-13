@@ -19,12 +19,13 @@
  * is the render, and a real probe would fetch `/health`.
  */
 
-import { cleanup, render } from "@testing-library/svelte";
+import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../../src/shared/constants.js";
 import type { ApplyItemResult } from "../../src/shared/integrations/contract.js";
+import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
 // Mutable stubs the mocked hooks return; each test sets them BEFORE render.
 const wizardStub: {
@@ -87,13 +88,33 @@ vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
   }),
 }));
 
+// Mutable, defaulting to `null` (no Cowork row) so the push-mode assertions
+// below see the layout they were written against. One test flips it to reach
+// the Cowork sub-view, which is the only way to unmount and remount the
+// push-routes block.
+const coworkStub: { status: unknown } = { status: null };
+
 vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
   createCoworkStatus: () => ({
-    status: null,
+    get status() {
+      return coworkStub.status;
+    },
     loading: false,
     error: null,
     refetch: vi.fn(async () => {}),
   }),
+}));
+
+vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
+  return { ...actual, isTauriRuntime: () => coworkStub.status !== null };
+});
+
+vi.mock("../../src/client/cowork/cowork-invoke", () => ({
+  TAURI_NOT_AVAILABLE: "Tauri runtime not available",
+  loadInvoke: vi.fn(async () => vi.fn()),
+  coworkToggleIntegration: vi.fn(async () => ({ ok: true })),
+  coworkPreflightSubnet: vi.fn(async () => ({ status: "unknown" })),
 }));
 
 import IntegrationWizardModal from "../../src/client/components/IntegrationWizardModal.svelte";
@@ -217,9 +238,10 @@ describe("IntegrationWizardModal — per-target push support (#1299)", () => {
  *
  * #1390: the two plugin install commands existed only as `tandem setup` console
  * output, which a desktop-app user never sees — and the desktop app is the
- * primary distribution channel. Tandem cannot run them either way (registering
- * a marketplace is Claude Code's own trust boundary), so showing them IS the
- * fix, and showing them in both branches is the part that keeps regressing.
+ * primary distribution channel. Tandem shows them rather than running them (the
+ * reason is on `CLAUDE_PLUGIN_INSTALL_COMMANDS`), so putting them where a
+ * desktop user can see them IS the fix — and reaching both branches is the part
+ * that keeps regressing.
  */
 describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
   afterEach(() => {
@@ -227,7 +249,14 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     wizardStub.picked = [];
     wizardStub.applyResults = [];
     wizardStub.channelRegistered = null;
+    coworkStub.status = null;
     vi.clearAllMocks();
+    // Here rather than at the end of each clipboard test: `navigator` is a
+    // global and the stub replaces it wholesale (no `userAgent`, no
+    // `platform`). Unstubbing in the test body means one real assertion failure
+    // leaves every later test in the worker running against the stripped
+    // object, turning a single red into a cascade.
+    vi.unstubAllGlobals();
   });
 
   function mountPushMode(channelRegistered: boolean) {
@@ -257,12 +286,26 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
       expect(q(container, "integration-wizard-plugin-copy")).toBeTruthy();
     });
 
+    it(`labels the branch it rendered when the ${branch}`, async () => {
+      // `data-push-mode` had no reader at all after #1389 renamed its values
+      // from push/polling to shim/no-shim — dead metadata with a silently
+      // changed contract. Asserted rather than deleted: it is the only handle
+      // on WHICH arm rendered, and both arms now share one visual treatment.
+      const { container } = mountPushMode(registered);
+      await tick();
+      expect(q(container, "integration-wizard-push-mode")?.getAttribute("data-push-mode")).toBe(
+        registered ? "shim" : "no-shim",
+      );
+    });
+
     it(`names the plugin's version floor when the ${branch}`, async () => {
       // `docs/cli.md` records the failure mode this prevents: below 2.1.212 the
       // install succeeds and the monitor never runs, with nothing to say so. A
       // wizard that recommends the plugin without the floor sends a desktop
-      // user to a silent no-op — and neither doc-contract test covers this
-      // file's prose, so the assertion has to live here.
+      // user to a silent no-op. `tests/docs/monitor-arming-claims.test.ts` does
+      // read this file (it is in that suite's CARRIERS), but only to ban
+      // unconditional-arming phrasings — nothing there asserts the floor is
+      // PRESENT, so that assertion has to live here.
       const { container } = mountPushMode(registered);
       await tick();
       expect(q(container, "integration-wizard-push-mode")?.textContent ?? "").toContain("2.1.212");
@@ -287,7 +330,14 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     // named the flag alone, which is a command that silently does nothing.
     const { container } = mountPushMode(true);
     await tick();
-    const text = q(container, "integration-wizard-push-mode")?.textContent ?? "";
+    // Whitespace-normalised: the command lives in an inline `<code>` whose
+    // source line-breaks would land in `textContent` verbatim. Without this the
+    // test goes red on a re-wrap that changes no behaviour, and the natural
+    // "fix" for that is to delete the assertion.
+    const text = (q(container, "integration-wizard-push-mode")?.textContent ?? "").replace(
+      /\s+/g,
+      " ",
+    );
     expect(text).toContain("--dangerously-load-development-channels server:tandem-channel");
   });
 
@@ -301,17 +351,26 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     expect(text).toMatch(/neither gate|no Monitor tool/i);
   });
 
+  /** Click Copy and wait for the live region to settle on `expected`. */
+  async function clickCopy(container: HTMLElement, expected: RegExp): Promise<void> {
+    (q(container, "integration-wizard-plugin-copy") as HTMLButtonElement).click();
+    // `waitFor`, not a tick count: the handler clears the status, awaits a
+    // flush, then awaits `writeText` — a hand-counted number of hops is a
+    // constant nobody can re-derive when the chain changes.
+    await waitFor(() => {
+      expect(q(container, "integration-wizard-plugin-copy-status")?.textContent ?? "").toMatch(
+        expected,
+      );
+    });
+  }
+
   it("copies both commands as one pasteable block", async () => {
     const writeText = vi.fn(async () => {});
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     const { container } = mountPushMode(false);
     await tick();
 
-    (q(container, "integration-wizard-plugin-copy") as HTMLButtonElement).click();
-    // Two ticks: the label is written after an awaited `writeText`, so it lands
-    // a microtask after the click's own flush.
-    await tick();
-    await tick();
+    await clickCopy(container, /Copied/);
 
     expect(writeText).toHaveBeenCalledWith(CLAUDE_PLUGIN_INSTALL_COMMANDS.join("\n"));
     // The outcome is announced from a live region beside the button, not from
@@ -320,7 +379,29 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     const status = q(container, "integration-wizard-plugin-copy-status");
     expect(status?.getAttribute("role")).toBe("status");
     expect(status?.textContent?.trim()).toBe("Copied");
-    vi.unstubAllGlobals();
+  });
+
+  it("empties the status between copies, so a repeat click is announced too", async () => {
+    // A live region that does not CHANGE announces nothing. Re-assigning the
+    // same string mutates no text node, so without the clear the second click
+    // is silent — indistinguishable from an unwired button for exactly the
+    // user this region exists for.
+    vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn(async () => {}) } });
+    const { container } = mountPushMode(false);
+    await tick();
+
+    await clickCopy(container, /Copied/);
+
+    const status = q(container, "integration-wizard-plugin-copy-status") as HTMLElement;
+    (q(container, "integration-wizard-plugin-copy") as HTMLButtonElement).click();
+    // Same node throughout — the region must never be replaced, only refilled.
+    await waitFor(() => {
+      expect(status.textContent?.trim()).toBe("");
+    });
+    await waitFor(() => {
+      expect(status.textContent?.trim()).toBe("Copied");
+    });
+    expect(q(container, "integration-wizard-plugin-copy-status")).toBe(status);
   });
 
   it("says so on the button when the clipboard refuses", async () => {
@@ -336,17 +417,45 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     const { container } = mountPushMode(false);
     await tick();
 
-    (q(container, "integration-wizard-plugin-copy") as HTMLButtonElement).click();
-    await tick();
-    await tick();
+    await clickCopy(container, /Couldn't copy/i);
 
-    expect(q(container, "integration-wizard-plugin-copy-status")?.textContent ?? "").toMatch(
-      /Couldn't copy/i,
-    );
     // The commands stay on screen to be selected by hand.
     expect(q(container, "integration-wizard-plugin-commands")?.textContent ?? "").toContain(
       CLAUDE_PLUGIN_INSTALL_COMMANDS[0],
     );
-    vi.unstubAllGlobals();
+  });
+
+  it("does not carry a copy status back from the Cowork sub-view", async () => {
+    // The push-routes block unmounts with the main view. A surviving status
+    // remounts CREATED WITH its content, which is a live region announced by
+    // nothing — #1376's defect, reintroduced inside the fix for it.
+    coworkStub.status = coworkStatusFixture();
+    vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn(async () => {}) } });
+    const { container } = mountPushMode(false);
+    await tick();
+
+    await clickCopy(container, /Copied/);
+
+    (q(container, "integration-wizard-cowork-setup") as HTMLButtonElement).click();
+    await tick();
+    expect(q(container, "integration-wizard-plugin-copy-status")).toBeNull();
+
+    (q(container, "integration-wizard-cowork-back") as HTMLButtonElement).click();
+    await waitFor(() => {
+      expect(q(container, "integration-wizard-plugin-copy-status")).toBeTruthy();
+    });
+    expect(q(container, "integration-wizard-plugin-copy-status")?.textContent?.trim()).toBe("");
+  });
+
+  it("survives a WebView with no clipboard API at all", async () => {
+    // Not the same path as a rejecting `writeText`: this throws a TypeError on
+    // the property access itself. The `try` covers it only because the access
+    // is inside the block — moving it out to a `const` above would reintroduce
+    // an unhandled rejection with the same visible symptom.
+    vi.stubGlobal("navigator", {});
+    const { container } = mountPushMode(false);
+    await tick();
+
+    await clickCopy(container, /Couldn't copy/i);
   });
 });

@@ -25,7 +25,7 @@
  * --tandem-z-above-titlebar, r-5 + shadow-3) and a Tab focus trap re-queried
  * per keypress (the Advanced <details> changes the focusable set while open).
  */
-import { untrack } from "svelte";
+import { tick, untrack } from "svelte";
 import {
   BYO_MODELS_ENABLED,
   CLAUDE_PLUGIN_INSTALL_COMMANDS,
@@ -164,13 +164,23 @@ const PLUGIN_INSTALL_TEXT = CLAUDE_PLUGIN_INSTALL_COMMANDS.join("\n");
 let pluginCopyResult = $state("");
 
 async function copyPluginCommands(): Promise<void> {
+  // Clear and flush before writing the outcome. A second click with the same
+  // outcome would otherwise re-assign an identical string: Svelte skips the
+  // text update, the region's contents never change, and a live region that
+  // does not change announces nothing. The user clicks the retry the failure
+  // message asks for and hears silence.
+  pluginCopyResult = "";
+  await tick();
   try {
     await navigator.clipboard.writeText(PLUGIN_INSTALL_TEXT);
     pluginCopyResult = "Copied";
-  } catch {
-    // No rethrow and no console noise: the message says everything actionable,
-    // and the commands stay on screen to be selected by hand. The WebView
-    // denies clipboard access in more situations than it grants it.
+  } catch (err) {
+    // Not rethrown: the message says everything actionable and the commands
+    // stay on screen to be selected by hand. Logged anyway — a denied
+    // permission, a WebView with no `navigator.clipboard`, and a security
+    // policy rejection are three different bugs with three different fixes,
+    // and after this catch nobody can tell which one a user hit.
+    console.warn("[wizard] clipboard write failed:", err);
     pluginCopyResult = "Couldn't copy — select the commands above";
   }
 }
@@ -212,6 +222,12 @@ $effect(() => {
 function openCoworkView(): void {
   coworkError = null;
   coworkBusy = false;
+  // The push-routes block unmounts with the main view, so a surviving result
+  // would remount CREATED WITH its content on the way back — a live region
+  // that is never announced, which is the defect #1376 exists to fix,
+  // reintroduced inside the fix. `leaveCoworkView` documents the same
+  // discipline for `coworkProbe`.
+  pluginCopyResult = "";
   view = "cowork";
   void coworkProbe.run();
 }
@@ -302,6 +318,9 @@ function close(): void {
 function retryDetection(): void {
   wizard.reset();
   secretInputs = {};
+  // Same reason as `openCoworkView`: `wizard.reset()` re-renders through the
+  // detecting state, so the status must not survive into the remount.
+  pluginCopyResult = "";
   void wizard.begin();
   void cliStatus.refetch();
   // The Cowork poller only refreshes every 30s — "Check again" must reflect a
@@ -703,12 +722,24 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                  surfaces, this wrapper's parent (`.iw-step`) is a flex column
                  with a `gap`, and a gap applies between items regardless of
                  their size — so an always-mounted empty wrapper would sit there
-                 as a permanent `--tandem-space-4` of dead air. `:empty` and
-                 `display: none` are both wrong here: Svelte leaves comment
-                 anchors inside an `{#if}` so the wrapper is never `:empty`, and
-                 `display: none` takes a live region back OUT of the
-                 accessibility tree, restoring the exact bug at the exact
-                 moment content arrives. -->
+                 as a permanent `--tandem-space-4` of dead air.
+
+                 `:empty` and `display: none` are both wrong here. `:empty`
+                 because the two `{#if}` blocks compile to two `<!>` anchors on
+                 separate source lines, and the WHITESPACE between them is a
+                 text node — `:empty` ignores comments but not that, so the
+                 wrapper never matches. (Joining the source lines would fix the
+                 selector and is not worth the fragility.) `display: none`
+                 because it takes a live region back OUT of the accessibility
+                 tree, restoring the exact bug at the exact moment content
+                 arrives.
+
+                 `display: contents` has its own history of dropping elements
+                 from the a11y tree; Chromium has exposed them since 89 and
+                 this sub-view is WebView2-only (gated on `isTauriRuntime()`
+                 and an `osSupported` Cowork status), so the WebKit path never
+                 renders it. Re-check before reusing this on a surface macOS
+                 can reach. -->
             <div
               class="iw-preflight-live"
               role="status"
@@ -1025,9 +1056,12 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                     The channel shim is registered here, and it is the one route that needs
                     neither of those. Registration alone does not switch it on, though: start the
                     session with
-                    <code class="iw-code-inline">
-                      claude --dangerously-load-development-channels server:tandem-channel
-                    </code>.
+                    <!-- One source line on purpose: `.iw-code-inline` sets no
+                         `white-space`, so a wrap here collapses to a space
+                         INSIDE the chip and the command can break mid-flag
+                         where a user will copy a fragment of it. -->
+                    <!-- prettier-ignore -->
+                    <code class="iw-code-inline">claude --dangerously-load-development-channels server:tandem-channel</code>.
                   </p>
                 {:else}
                   <p>
@@ -1728,19 +1762,16 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
     margin-top: 1px;
   }
 
-  /* Push-vs-polling readout (WS-B). A config-truth line, not a live claim:
-     "configured" (success-tinted) vs "polling" (neutral/muted). */
+  /* Push-routes readout. ONE treatment for both arms since #1389: the old
+     green/grey split tinted "configured" vs "polling", which read as
+     configured-vs-degraded, and the unregistered arm is neither — it now leads
+     with two push routes that need no shim at all. */
   .iw-push-mode {
     margin-top: var(--tandem-space-2);
     padding: var(--tandem-space-2) var(--tandem-space-3);
     border-radius: var(--tandem-r-3);
     font-size: var(--tandem-text-xs);
     line-height: 1.5;
-  }
-  /* One treatment for both arms since #1389. The green/grey split read as
-     "configured" vs "degraded", and the unregistered arm is neither — it now
-     leads with two push routes that need no shim at all. */
-  .iw-push-mode {
     background: var(--tandem-surface-muted);
     color: var(--tandem-fg-muted);
   }

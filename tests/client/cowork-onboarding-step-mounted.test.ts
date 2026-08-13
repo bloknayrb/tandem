@@ -18,6 +18,7 @@
 import { render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { COWORK_PREFLIGHT_CHECKING } from "../../src/client/cowork/cowork-helpers";
 import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
 import { coworkStatusFixture } from "../helpers/cowork-fixtures.svelte";
 
@@ -57,14 +58,30 @@ async function openConfirm(container: HTMLElement): Promise<void> {
   await tick();
 }
 
-describe("CoworkOnboardingStep — confirm wiring (#1375)", () => {
-  beforeEach(() => {
-    toggleIntegration.mockClear();
-    fakeInvoke.mockClear();
-    preflightSubnet.mockClear();
-    preflightSubnet.mockResolvedValue({ status: "unknown" });
+/**
+ * Wait for the Nth probe to have been issued.
+ *
+ * `run()` defers `probing` one flush (#1376 rule 1 — the region must reach the
+ * a11y tree before its first line), so the probe is not in flight by the end of
+ * the tick that opened the confirm.
+ */
+async function probeCount(n: number): Promise<void> {
+  await waitFor(() => {
+    expect(preflightSubnet).toHaveBeenCalledTimes(n);
   });
+}
 
+// File scope so both describes get it — a per-describe reset is isolation by
+// test ordering, which the next added test silently breaks.
+beforeEach(() => {
+  toggleIntegration.mockClear();
+  toggleIntegration.mockImplementation(async () => ({ ok: true as const }));
+  fakeInvoke.mockClear();
+  preflightSubnet.mockClear();
+  preflightSubnet.mockResolvedValue({ status: "unknown" });
+});
+
+describe("CoworkOnboardingStep — confirm wiring (#1375)", () => {
   it("does not probe on mount — the step renders for everyone who will Skip", async () => {
     const { container } = mount();
     await tick();
@@ -89,7 +106,7 @@ describe("CoworkOnboardingStep — confirm wiring (#1375)", () => {
     await openConfirm(container);
 
     expect(q(container, "cowork-onboarding-confirm")).toBeTruthy();
-    expect(preflightSubnet).toHaveBeenCalledTimes(1);
+    await probeCount(1);
     expect(toggleIntegration).not.toHaveBeenCalled();
   });
 
@@ -106,6 +123,41 @@ describe("CoworkOnboardingStep — confirm wiring (#1375)", () => {
 
     expect(toggleIntegration).toHaveBeenCalledTimes(1);
     expect(toggleIntegration).toHaveBeenCalledWith(fakeInvoke, true);
+    // The success path must close the confirm too — deleting `closeConfirm()`
+    // and leaving `onAdvance()` used to pass every test in this file. The step
+    // can be returned to, so a confirm left open comes back with it.
+    expect(q(container, "cowork-onboarding-confirm")).toBeNull();
+  });
+
+  it("a successful enable supersedes the probe still in flight", async () => {
+    // The success path's own `reset()`. It cannot be proved the way Cancel's is
+    // — a blocked hint REPLACES the confirm's Enable button with a retry, so
+    // there is no state where a hint is on screen and Enable is clickable.
+    // What is reachable is the race: enable while the probe is still running,
+    // then let it answer `blocked` afterwards. Without `reset()`'s ticket bump
+    // that late result paints a firewall hint over a step the user has left.
+    let release: ((v: SubnetPreflight) => void) | undefined;
+    preflightSubnet.mockImplementationOnce(
+      () =>
+        new Promise<SubnetPreflight>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { container, onAdvance } = mount();
+    await openConfirm(container);
+    await probeCount(1);
+
+    (q(container, "cowork-onboarding-enable-confirm-btn") as HTMLButtonElement).click();
+    await waitFor(() => {
+      expect(onAdvance).toHaveBeenCalledTimes(1);
+    });
+
+    release?.({ status: "blocked", hint: "no adapter" });
+    await tick();
+    await tick();
+
+    expect(q(container, "cowork-onboarding-preflight-blocked")).toBeNull();
+    expect(q(container, "cowork-onboarding-confirm")).toBeNull();
   });
 
   it("Cancel clears the blocked hint, so a re-open does not paint a stale one", async () => {
@@ -115,11 +167,11 @@ describe("CoworkOnboardingStep — confirm wiring (#1375)", () => {
     preflightSubnet.mockResolvedValue({ status: "blocked", hint: "no adapter" });
     const { container } = mount();
     await openConfirm(container);
-    await tick();
-
-    expect(q(container, "cowork-onboarding-preflight-blocked")?.textContent).toContain(
-      "no adapter",
-    );
+    await waitFor(() => {
+      expect(q(container, "cowork-onboarding-preflight-blocked")?.textContent ?? "").toContain(
+        "no adapter",
+      );
+    });
 
     (q(container, "cowork-onboarding-enable-cancel-btn") as HTMLButtonElement).click();
     await tick();
@@ -127,10 +179,10 @@ describe("CoworkOnboardingStep — confirm wiring (#1375)", () => {
 
     preflightSubnet.mockImplementationOnce(() => new Promise(() => {}));
     await openConfirm(container);
+    await probeCount(2);
 
     expect(q(container, "cowork-onboarding-confirm")).toBeTruthy();
     expect(q(container, "cowork-onboarding-preflight-blocked")).toBeNull();
-    expect(preflightSubnet).toHaveBeenCalledTimes(2);
   });
 
   it("a failed enable keeps the confirm open and says why", async () => {
@@ -152,12 +204,6 @@ describe("CoworkOnboardingStep — confirm wiring (#1375)", () => {
 });
 
 describe("CoworkOnboardingStep — pre-flight live region (#1376)", () => {
-  beforeEach(() => {
-    preflightSubnet.mockClear();
-    preflightSubnet.mockResolvedValue({ status: "unknown" });
-    toggleIntegration.mockClear();
-  });
-
   it("mounts the region empty, before the text that has to be announced", async () => {
     preflightSubnet.mockImplementationOnce(() => new Promise(() => {}));
     const { container } = mount();
@@ -166,7 +212,26 @@ describe("CoworkOnboardingStep — pre-flight live region (#1376)", () => {
     const region = q(container, "cowork-onboarding-preflight-live");
     expect(region).toBeTruthy();
     expect(region?.getAttribute("role")).toBe("status");
+    // Empty is the half that matters and the half nothing asserted: the
+    // in-flight line is the FIRST text to arrive here, so a region that mounts
+    // already holding it is announced by nothing.
+    expect(region?.textContent?.trim()).toBe("");
     expect(q(container, "cowork-onboarding-preflight-blocked")).toBeNull();
+  });
+
+  it("announces the in-flight line into the region it already mounted", async () => {
+    // The `{#if probe.probing}` child on this surface was covered by nothing —
+    // deleting it outright left the file green. It is also the one line that
+    // proves the region fills rather than being replaced.
+    preflightSubnet.mockImplementationOnce(() => new Promise(() => {}));
+    const { container } = mount();
+    await openConfirm(container);
+    const region = q(container, "cowork-onboarding-preflight-live");
+
+    await waitFor(() => {
+      expect(region?.textContent ?? "").toContain(COWORK_PREFLIGHT_CHECKING);
+    });
+    expect(q(container, "cowork-onboarding-preflight-live")).toBe(region);
   });
 
   it("keeps the same region node across probing → blocked", async () => {
@@ -174,11 +239,38 @@ describe("CoworkOnboardingStep — pre-flight live region (#1376)", () => {
     const { container } = mount();
     await openConfirm(container);
     const before = q(container, "cowork-onboarding-preflight-live");
-    await tick();
-    await tick();
+    expect(before).toBeTruthy();
 
-    const after = q(container, "cowork-onboarding-preflight-live");
-    expect(after).toBe(before);
-    expect(after?.textContent).toContain("no adapter");
+    await waitFor(() => {
+      expect(q(container, "cowork-onboarding-preflight-live")?.textContent ?? "").toContain(
+        "no adapter",
+      );
+    });
+    expect(q(container, "cowork-onboarding-preflight-live")).toBe(before);
+  });
+
+  it("keeps the hint mounted while re-checking it", async () => {
+    // Additive, not `{:else if}` — pinned on Settings but not here, so swapping
+    // this surface's second `{#if}` was a silent change. The hint the retry is
+    // re-checking must not vanish under the pointer that clicked retry.
+    preflightSubnet.mockResolvedValue({ status: "blocked", hint: "no adapter" });
+    const { container } = mount();
+    await openConfirm(container);
+    await waitFor(() => {
+      expect(q(container, "cowork-onboarding-preflight-retry-btn")).toBeTruthy();
+    });
+
+    preflightSubnet.mockImplementationOnce(() => new Promise(() => {}));
+    (q(container, "cowork-onboarding-preflight-retry-btn") as HTMLButtonElement).click();
+    await probeCount(2);
+
+    await waitFor(() => {
+      expect(q(container, "cowork-onboarding-preflight-live")?.textContent ?? "").toContain(
+        COWORK_PREFLIGHT_CHECKING,
+      );
+    });
+    expect(q(container, "cowork-onboarding-preflight-live")?.textContent ?? "").toContain(
+      "no adapter",
+    );
   });
 });

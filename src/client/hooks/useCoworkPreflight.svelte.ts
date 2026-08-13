@@ -1,3 +1,4 @@
+import { tick } from "svelte";
 import {
   coworkPreflightSubnet,
   loadInvoke,
@@ -43,11 +44,20 @@ export interface SubnetPreflightState {
  *     its text is commonly not read out at all. That is the whole defect: a
  *     user asked Tandem to check the network, detection failed, and the
  *     sentence saying why was silent.
+ *
+ *     Mounting the region early is only half of it, and the missing half is
+ *     easy to reintroduce: the in-flight line is the FIRST text to arrive, so
+ *     if `probing` flips in the same tick that mounts the region, the region
+ *     is once again inserted with content and rule 1 buys nothing. `run()`
+ *     therefore defers it one flush. Every caller is free to keep flipping its
+ *     mount condition and calling `run()` together; the hook absorbs it.
  *  2. The blocked hint and the in-flight line are ADDITIVE, not an
  *     `{#if}/{:else if}`. `run()` deliberately keeps the previous result (see
  *     the comment on `run` below), so a retry has `probing` and `blocked` set
- *     at once — and swapping would unmount the `-blocked` testid that three
- *     suites read mid-probe.
+ *     at once — and swapping would unmount the `-blocked` testid that
+ *     `cowork-settings-mounted.test.ts` reads mid-probe. It is also the right
+ *     a11y shape: `role="status"` implies `aria-atomic="false"`, so only the
+ *     added subtree is announced and the retry does not re-read the hint.
  */
 export function createSubnetPreflight(): SubnetPreflightState {
   let preflight = $state<SubnetPreflight | null>(null);
@@ -73,6 +83,22 @@ export function createSubnetPreflight(): SubnetPreflightState {
     //
     // The cost is that every path which closes a surface MUST call `reset()`,
     // or a stale hint paints on reopen. All three do; the tests pin it.
+
+    // Rule 1 above is why `probing` is set a flush late rather than here.
+    // All three callers flip their mount condition (`confirming`, `view`) and
+    // call `run()` in the same tick, so setting it synchronously would insert
+    // the region and its first line in ONE mutation — the pattern that is not
+    // announced. Waiting one flush lets the region reach the accessibility
+    // tree empty, so "Checking…" arrives as a change to a region already in
+    // it. The ticket is taken above, synchronously, so a `reset()` landing
+    // inside this gap still wins.
+    await tick();
+    // Consequence worth knowing: a probe superseded during this gap never
+    // issues at all, so two `run()`s in one tick cost ONE PowerShell
+    // round-trip. That is the desirable reading of a double-clicked retry
+    // button, and `cowork-preflight-hook.test.ts` pins both halves — this one,
+    // and that a probe superseded AFTER issuing still cannot write.
+    if (mine !== token) return;
     probing = true;
     try {
       const invoke = await loadInvoke();

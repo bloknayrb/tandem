@@ -10,6 +10,7 @@
  * that project only, so a `.svelte.ts` import from anywhere else is never
  * compiled and fails with `$state is not defined`.
  */
+import { tick } from "svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const preflightSubnet = vi.fn();
@@ -38,16 +39,28 @@ const BLOCKED = { status: "blocked", hint: "stale hint" } as const;
 
 /**
  * Drain enough microtasks for every in-flight `run()` to get past its
- * `await loadInvoke()` and actually attach to its probe promise.
+ * `await tick()` and its `await loadInvoke()`, and actually attach to its probe
+ * promise.
  *
  * Without this the tests below are vacuous: resolving a deferred before its
  * `await` is attached makes the continuations queue in ATTACH order rather than
  * RESOLVE order, so the newest probe wins by accident and the assertions pass
  * with the staleness guard deleted. Verified by mutation — that is exactly how
  * the first draft of this file behaved.
+ *
+ * The leading `tick()` is #1376's deferral: `run()` no longer sets `probing`
+ * synchronously, because the live region has to reach the accessibility tree
+ * before the in-flight line lands in it.
  */
 async function settleAttachments(): Promise<void> {
+  await tick();
   for (let i = 0; i < 4; i++) await Promise.resolve();
+}
+
+/** `run()` has issued its probe and flipped `probing` — one flush after the call. */
+async function probeStarted(): Promise<void> {
+  await tick();
+  await Promise.resolve();
 }
 
 describe("createSubnetPreflight", () => {
@@ -62,6 +75,11 @@ describe("createSubnetPreflight", () => {
 
     const probe = createSubnetPreflight();
     const a = probe.run();
+    // `a` must reach its probe before `b` starts. Since #1376 `run()` waits a
+    // flush before doing anything, so two `run()`s in one tick leave the first
+    // superseded BEFORE it issues — it returns without calling the bridge at
+    // all, and this test would then be pinning the wrong thing entirely.
+    await probeStarted();
     const b = probe.run();
     await settleAttachments();
 
@@ -70,6 +88,23 @@ describe("createSubnetPreflight", () => {
     first.resolve(BLOCKED);
     await Promise.all([a, b]);
 
+    expect(preflightSubnet).toHaveBeenCalledTimes(2);
+    expect(probe.preflight).toEqual(OK);
+    expect(probe.probing).toBe(false);
+  });
+
+  it("never issues a probe that was superseded before it started", async () => {
+    // The other half of the same deferral: two `run()`s in one tick cost ONE
+    // PowerShell round-trip, not two. A user double-clicking the retry button
+    // is the common case.
+    preflightSubnet.mockResolvedValue(OK);
+
+    const probe = createSubnetPreflight();
+    const a = probe.run();
+    const b = probe.run();
+    await Promise.all([a, b]);
+
+    expect(preflightSubnet).toHaveBeenCalledTimes(1);
     expect(probe.preflight).toEqual(OK);
     expect(probe.probing).toBe(false);
   });
@@ -81,6 +116,7 @@ describe("createSubnetPreflight", () => {
 
     const probe = createSubnetPreflight();
     const a = probe.run();
+    await probeStarted(); // both must genuinely issue — see the test above
     const b = probe.run();
     await settleAttachments();
 
@@ -100,6 +136,7 @@ describe("createSubnetPreflight", () => {
 
     const probe = createSubnetPreflight();
     const run = probe.run();
+    await probeStarted();
     expect(probe.probing).toBe(true);
 
     probe.reset();
@@ -128,6 +165,10 @@ describe("createSubnetPreflight", () => {
     // button on `blocked`, so clearing it here unmounts the button the user is
     // clicking and mounts Enable in its place.
     const retry = probe.run();
+    // `preflight` must survive the gap BEFORE `probing` flips too — that gap is
+    // new, and it is exactly when the user's pointer is on the retry button.
+    expect(probe.preflight).toEqual(BLOCKED);
+    await probeStarted();
     expect(probe.probing).toBe(true);
     expect(probe.preflight).toEqual(BLOCKED);
 

@@ -18,12 +18,16 @@ export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
 /**
  * The two commands that install Tandem's Claude Code plugin, in order.
  *
- * Tandem cannot run these for the user from any surface: registering a
- * marketplace is Claude Code's own trust boundary, so showing the commands is
- * the whole of what either surface can do. That made them easy to leave in only
- * one place — `tandem setup` printed them and the desktop wizard did not, so on
- * the primary distribution channel a whole push route was undiscoverable
- * (#1390). Shared so the CLI and the wizard cannot say different things.
+ * Tandem shows these rather than running them, and that is a choice rather
+ * than a limitation — `POST /api/integrations/install-claude-code` already
+ * shells out to install the Claude CLI itself, so the capability plainly
+ * exists. Registering a marketplace adds a trusted source to the user's own
+ * Claude Code; that consent should be typed by the user, in the user's shell.
+ *
+ * Being display-only is what made them easy to leave in exactly one place:
+ * `tandem setup` printed them and the desktop wizard did not, so on the primary
+ * distribution channel a whole push route was undiscoverable (#1390). Shared so
+ * the CLI and the wizard cannot say different things.
  *
  * The identities here are the manifest's: plugin `tandem` from marketplace
  * `tandem-editor`, sourced from `bloknayrb/tandem`. `tests/plugin-manifest.test.ts`

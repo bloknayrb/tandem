@@ -262,8 +262,9 @@ shipped and were removed:
   (the reason is on `CLAUDE_PLUGIN_INSTALL_COMMANDS`), so `-commands` holds the
   text and `-copy` is the only affordance. `-copy-status` is the button's
   outcome, in its own live region rather than in the button label — a changed
-  accessible name on an unfocused button announces nothing. Shown in BOTH
-  channel-registered branches.
+  accessible name on an unfocused button announces nothing. Rendered once from
+  a snippet ABOVE the registered/unregistered split rather than twice inside it
+  — both branches carry it because neither one can omit it.
 
 ### Cowork modals & settings
 - `cowork-onboarding-{step,confirm,error,enable-btn,enable-confirm-btn,enable-cancel-btn,skip-btn,learn-more-btn,learn-more-link}`

@@ -70,12 +70,13 @@ describe("published Claude Code plugin manifest", () => {
   });
 
   it("the shared install commands spell the identities the manifests declare", () => {
-    // #1390: `tandem setup` and the desktop wizard both print these, and Tandem
-    // cannot run either one for the user — registering a marketplace is Claude
-    // Code's own trust boundary. A wrong slug is therefore a dead end the user
-    // has to debug, not an error Tandem can catch at runtime. Derived from the
-    // manifests rather than transcribed, so renaming the plugin fails here
-    // instead of shipping two surfaces that confidently say the old name.
+    // #1390: `tandem setup` and the desktop wizard both print these for the
+    // user to run (see `CLAUDE_PLUGIN_INSTALL_COMMANDS` for why Tandem shows
+    // them rather than running them). Nothing executes them here, so a wrong
+    // slug is a dead end the user has to debug rather than an error Tandem can
+    // catch at runtime. Derived from the manifests rather than transcribed, so
+    // renaming the plugin fails here instead of shipping two surfaces that
+    // confidently say the old name.
     const plugins = marketplace.plugins as Array<{ name: string; source?: { repo?: string } }>;
     const repo = plugins.find((p) => p.name === plugin.name)?.source?.repo;
     expect(CLAUDE_PLUGIN_INSTALL_COMMANDS).toEqual([
