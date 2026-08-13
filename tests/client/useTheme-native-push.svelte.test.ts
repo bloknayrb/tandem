@@ -13,7 +13,7 @@
  * discovery. Harness shape copied from
  * `tests/client/useAutostart.svelte.test.ts`.
  *
- * `tests/client/useTauriTheme.test.ts` covers `setNativeTheme` /
+ * `tests/client/useTauriTheme.svelte.test.ts` covers `setNativeTheme` /
  * `acceptReadback`'s own logic (dedupe, latch clearing, supersession,
  * read-back gating) directly, but never touches the DOM. This file covers the
  * two things only an end-to-end reactive run can show:
@@ -55,7 +55,7 @@ import { _resetForTests, tauriTheme } from "../../src/client/hooks/useTauriTheme
 import { createTheme } from "../../src/client/hooks/useTheme.svelte.js";
 
 /** Filters `invoke.mock.calls` to a single command — mirrors
- * useTauriTheme.test.ts so a stray poll tick can't flake a count. */
+ * useTauriTheme.svelte.test.ts so a stray poll tick can't flake a count. */
 function callsFor(invoke: { mock: { calls: unknown[][] } }, cmd: string): unknown[][] {
   return invoke.mock.calls.filter(([c]) => c === cmd);
 }
@@ -148,7 +148,7 @@ describe("createTheme effect wiring (#992)", () => {
   it("an OS theme flip re-resolves a 'system' pref onto the DOM", async () => {
     // The chain nothing used to cover: `useTheme.test.ts` calls `applyTheme`
     // directly and seeds via `__TANDEM_INITIAL_THEME__`, and
-    // `useTauriTheme.test.ts` never touches the DOM. Without this, the only
+    // `useTauriTheme.svelte.test.ts` never touches the DOM. Without this, the only
     // thing standing behind the effect's subscription to `tauriTheme.current`
     // was a comment -- and that comment was wrong about where the
     // subscription came from.

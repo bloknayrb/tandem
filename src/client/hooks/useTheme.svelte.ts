@@ -133,9 +133,9 @@ export function applyTheme(
  * to a native theme and `"system"` to "no override") and applies the
  * resolved theme to the DOM (`applyTheme`). One effect rather than two, so
  * correctness does not depend on Svelte flushing siblings in declaration
- * order. This is safe because `setNativeTheme` dedupes internally on
- * `lastPushedPref` (useTauriTheme.svelte.ts), so a `lightVariant`-only rerun
- * calls it with the same `pref` and no-ops.
+ * order. This is safe because `setNativeTheme` dedupes internally on the
+ * preference it last pushed (useTauriTheme.svelte.ts), so a
+ * `lightVariant`-only rerun calls it with the same `pref` and no-ops.
  *
  * That dedupe is also the LOOP BREAKER: a release round trip writes
  * `osTheme` back through `tauriTheme.current`, which re-runs this effect. It
@@ -174,11 +174,21 @@ export function createTheme(
 
     // Do NOT "fix" staleness by writing `setTauriTheme(...)` (or
     // `tauriTheme.current = ...`) synchronously from inside this effect
-    // body. Effect bodies run inside an active Svelte reaction, and a
-    // synchronous `$state` write from within one throws
-    // `state_unsafe_mutation` -- in production too, not just dev (see
-    // CLAUDE.md). All native read-backs are written through the async
-    // `acceptReadback` gate in useTauriTheme.svelte.ts instead.
+    // body. Under `pref === "system"` this effect READS that same `$state`
+    // (via `applyTheme` -> `resolveTheme` -> `systemTheme`), so writing it
+    // here self-invalidates the effect and re-runs it, which writes again:
+    // an unbounded loop that surfaces as `effect_update_depth_exceeded`.
+    //
+    // It is specifically NOT `state_unsafe_mutation`. That error fires only
+    // when the active reaction matches `DERIVED | BLOCK_EFFECT | ASYNC |
+    // EAGER_EFFECT` (see CLAUDE.md); a plain `$effect` is `EFFECT |
+    // USER_EFFECT`, which matches none of them, and `$effect.pre` is
+    // `RENDER_EFFECT | USER_EFFECT`, which also does not. Verified against
+    // the installed runtime, because this comment previously claimed the
+    // wrong error and sent a reader looking for a throw that cannot happen.
+    //
+    // All native read-backs are written through the async `acceptReadback`
+    // gate in useTauriTheme.svelte.ts instead.
 
     return applyTheme(pref, lightVariant);
   });
