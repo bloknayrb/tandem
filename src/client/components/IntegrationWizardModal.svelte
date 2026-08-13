@@ -161,19 +161,40 @@ const coworkProbe = createSubnetPreflight();
 // nobody is focused on is announced by nothing, which is the same mistake
 // #1376 exists to fix.
 const PLUGIN_INSTALL_TEXT = CLAUDE_PLUGIN_INSTALL_COMMANDS.join("\n");
+
+/**
+ * Outcome of the Copy button, announced from its own live region.
+ *
+ * MUST be `""` whenever the push-routes block is about to (re)mount — a live
+ * region created already holding its text is announced by nothing, which is
+ * #1376's defect reintroduced inside the fix for it. Unlike `coworkProbe`,
+ * there is no single choke point to hang that on: this block's mount condition
+ * is compound and partly `$derived` (`step === "done"` AND `view === "main"`
+ * AND `channelRegistered !== null && whatsNext !== "stdio-only"`, where
+ * `whatsNext` follows a live reachability poll). So the reset is explicit at
+ * each transition, and `copyToken` is what makes that safe.
+ */
 let pluginCopyResult = $state("");
 
+/**
+ * Monotonic ticket, same device as `createSubnetPreflight`'s. The clear is
+ * synchronous and the write is two awaits later, so without it a clear cannot
+ * dominate an in-flight copy: click Copy, click the Cowork row before the
+ * clipboard settles, and the continuation writes "Copied" into an unmounted
+ * region that then remounts holding it — the exact thing the clear exists to
+ * prevent, caused by the clear's own async gap.
+ */
+let copyToken = 0;
+
 async function copyPluginCommands(): Promise<void> {
-  // Clear and flush before writing the outcome. A second click with the same
-  // outcome would otherwise re-assign an identical string: Svelte skips the
-  // text update, the region's contents never change, and a live region that
-  // does not change announces nothing. The user clicks the retry the failure
-  // message asks for and hears silence.
-  pluginCopyResult = "";
-  await tick();
+  const mine = ++copyToken;
+  let result: string;
+  // `writeText` FIRST, with no await before it. Some engines gate the
+  // clipboard on transient user activation, which an awaited microtask can
+  // outlive — so the clear-and-flush below happens after the write, not before.
   try {
     await navigator.clipboard.writeText(PLUGIN_INSTALL_TEXT);
-    pluginCopyResult = "Copied";
+    result = "Copied";
   } catch (err) {
     // Not rethrown: the message says everything actionable and the commands
     // stay on screen to be selected by hand. Logged anyway — a denied
@@ -181,8 +202,20 @@ async function copyPluginCommands(): Promise<void> {
     // policy rejection are three different bugs with three different fixes,
     // and after this catch nobody can tell which one a user hit.
     console.warn("[wizard] clipboard write failed:", err);
-    pluginCopyResult = "Couldn't copy — select the commands above";
+    result = "Couldn't copy — select the commands above";
   }
+  // Early out so a superseded copy does not blank a region it no longer owns.
+  // The guard AFTER the flush is the load-bearing one — it is what stops the
+  // stale "Copied" from landing — and the tests pin the pair.
+  if (mine !== copyToken) return;
+  // Clear and flush before the outcome: a second click with the SAME outcome
+  // would otherwise re-assign an identical string, mutate no text node, and
+  // announce nothing — so the user clicks the retry the failure message asks
+  // for and hears silence.
+  pluginCopyResult = "";
+  await tick();
+  if (mine !== copyToken) return;
+  pluginCopyResult = result;
 }
 
 let dialogEl: HTMLElement | null = $state(null);
@@ -222,11 +255,9 @@ $effect(() => {
 function openCoworkView(): void {
   coworkError = null;
   coworkBusy = false;
-  // The push-routes block unmounts with the main view, so a surviving result
-  // would remount CREATED WITH its content on the way back — a live region
-  // that is never announced, which is the defect #1376 exists to fix,
-  // reintroduced inside the fix. `leaveCoworkView` documents the same
-  // discipline for `coworkProbe`.
+  // Remount incoming — see the declaration. Bumping the token is what stops an
+  // in-flight copy from writing its result after this clear.
+  copyToken++;
   pluginCopyResult = "";
   view = "cowork";
   void coworkProbe.run();
@@ -318,8 +349,9 @@ function close(): void {
 function retryDetection(): void {
   wizard.reset();
   secretInputs = {};
-  // Same reason as `openCoworkView`: `wizard.reset()` re-renders through the
-  // detecting state, so the status must not survive into the remount.
+  // Same reason as `openCoworkView` — `wizard.reset()` re-renders through the
+  // detecting state, so the block remounts.
+  copyToken++;
   pluginCopyResult = "";
   void wizard.begin();
   void cliStatus.refetch();

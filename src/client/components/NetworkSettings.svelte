@@ -3,6 +3,7 @@ import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { createAppInfo } from "../hooks/useAppInfo.svelte.js";
 import { createAutostart } from "../hooks/useAutostart.svelte.js";
 import type { SidecarRetryStrategy } from "../hooks/useTandemSettings.svelte.js";
+import { resyncCheckbox } from "../utils/checkbox-sync.js";
 import { disabledControlStyle } from "../utils/colors.js";
 import CollapsibleSection from "./CollapsibleSection.svelte";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
@@ -26,6 +27,21 @@ const autostart = createAutostart(() => open && isTauri);
 const autostartStatus = $derived(autostart.status);
 const autostartBlocked = $derived(autostartStatus !== null && !autostartStatus.trayAvailable);
 const autostartDisabled = $derived(autostartBlocked || autostart.loading);
+
+/**
+ * `resyncCheckbox` because `checked={autostartStatus.enabled}` cannot repair
+ * itself — see that helper for the mechanism. Two paths leave `enabled`
+ * unchanged here and both are routine rather than exceptional: `toggle()`'s
+ * `catch` sets `error` without touching `status`, and a `readback-mismatch`
+ * (the OS virtualized the write away) reports the value it already had. Either
+ * way the expression re-computes to what Svelte last wrote, the DOM write is
+ * skipped, and the box sits where the USER put it over a setting that never
+ * moved — with only an error line below to contradict it.
+ */
+async function toggleAutostart(box: HTMLInputElement): Promise<void> {
+  await autostart.toggle(box.checked);
+  resyncCheckbox(box, autostart.status?.enabled ?? false);
+}
 
 let restartError = $state<string | null>(null);
 let restarting = $state(false);
@@ -143,7 +159,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
         data-testid="network-autostart-toggle"
         checked={autostartStatus.enabled}
         disabled={autostartDisabled}
-        onchange={(e) => void autostart.toggle(e.currentTarget.checked)}
+        onchange={(e) => void toggleAutostart(e.currentTarget)}
         style="accent-color: var(--tandem-accent); margin-top: 2px; flex-shrink: 0; {disabledControlStyle(
           autostartDisabled,
         )}"

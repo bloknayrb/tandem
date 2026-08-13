@@ -20,6 +20,7 @@
 import { render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { COWORK_PREFLIGHT_CHECKING } from "../../src/client/cowork/cowork-helpers";
 import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
 import { coworkStatusCell } from "../helpers/cowork-fixtures.svelte";
 
@@ -28,13 +29,15 @@ const fakeInvoke = vi.fn();
 
 const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unknown" }));
 
-vi.mock("../../src/client/cowork/cowork-invoke", () => ({
-  TAURI_NOT_AVAILABLE: "Tauri runtime not available",
+// Spread `importOriginal` rather than re-declaring the module: `cowork-invoke`
+// exports nine symbols and each suite's mock used to name a different subset,
+// so a component reaching for an un-named one failed as `undefined is not a
+// function` — a component-shaped error, discovered one file at a time.
+vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => fakeInvoke),
   coworkToggleIntegration: (...args: unknown[]) => toggleIntegration(...args),
   coworkPreflightSubnet: () => preflightSubnet(),
-  coworkRescan: vi.fn(async () => {}),
-  coworkSetLanIpOverride: vi.fn(async () => {}),
 }));
 
 // A REACTIVE status cell, not a frozen literal: `enabled` is what the surface
@@ -83,9 +86,11 @@ async function setChecked(box: HTMLInputElement, checked: boolean): Promise<void
  * offset as a constant; this stays true if the chain gains or loses a hop.
  */
 async function probeCount(n: number): Promise<void> {
-  await waitFor(() => {
-    expect(preflightSubnet).toHaveBeenCalledTimes(n);
-  });
+  // `interval: 5` because the predicate is a mock call count: it emits no DOM
+  // mutation, so `waitFor`'s MutationObserver can never wake it and it falls
+  // through to the poll timer. At the 50ms default that is one full interval
+  // per call, measured at ~479ms across these suites.
+  await waitFor(() => expect(preflightSubnet).toHaveBeenCalledTimes(n), { interval: 5 });
 }
 
 function mount() {
@@ -184,9 +189,9 @@ describe("CoworkSettings — enable confirm wiring (#1375)", () => {
     expect(checkbox.checked).toBe(true);
 
     await setChecked(checkbox, false);
-    await waitFor(() => {
-      expect(checkbox.checked).toBe(true);
-    });
+    // `interval: 5`: a `checked` property assignment emits no mutation record,
+    // so the observer never fires and this polls to the full default otherwise.
+    await waitFor(() => expect(checkbox.checked).toBe(true), { interval: 5 });
 
     // Still on, still says so, and no confirm was opened by the failure.
     expect(q(container, "cowork-settings")?.textContent).toContain("Integration enabled: yes");
@@ -314,7 +319,7 @@ describe("CoworkSettings — pre-flight live region (#1376)", () => {
     // …and the same node then fills, rather than being replaced by one that
     // arrives already populated.
     await waitFor(() => {
-      expect(region?.textContent ?? "").toMatch(/Checking/);
+      expect(region?.textContent ?? "").toContain(COWORK_PREFLIGHT_CHECKING);
     });
     expect(q(container, "cowork-preflight-live")).toBe(region);
   });
@@ -353,7 +358,9 @@ describe("CoworkSettings — pre-flight live region (#1376)", () => {
     await probeCount(2);
 
     await waitFor(() => {
-      expect(q(container, "cowork-preflight-live")?.textContent ?? "").toMatch(/Checking/);
+      expect(q(container, "cowork-preflight-live")?.textContent ?? "").toContain(
+        COWORK_PREFLIGHT_CHECKING,
+      );
     });
     expect(q(container, "cowork-preflight-live")?.textContent ?? "").toContain("no adapter");
   });

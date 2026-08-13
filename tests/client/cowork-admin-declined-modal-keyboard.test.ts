@@ -21,24 +21,18 @@ import { cleanup, render, screen } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import CoworkAdminDeclinedModal from "../../src/client/components/CoworkAdminDeclinedModal.svelte";
 import { _resetAdminDismissForTests } from "../../src/client/cowork/coworkAdminDismiss.svelte";
+import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
 // uacDeclined status so the modal renders. Everything else in the component
 // (cowork-invoke, dismiss module) stays real — no button is ever clicked, so
 // loadInvoke's Tauri-unavailable rejection is never hit.
 vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
   createCoworkStatus: () => ({
-    status: {
-      osSupported: true,
-      coworkDetected: true,
+    status: coworkStatusFixture({
       enabled: true,
-      vethernetCidr: "172.30.16.0/28",
-      lanIpFallback: null,
-      useLanIpOverride: false,
-      workspaces: [],
       uacDeclined: true,
       uacDeclinedAt: "2026-07-14T00:00:00Z",
-      workspacesLastScannedAt: null,
-    },
+    }),
     loading: false,
     error: null,
     refetch: vi.fn(async () => {}),

@@ -6,7 +6,7 @@
  * the entire suite still passed. The mechanism the hook's longest comment
  * defends was pinned by nothing.
  *
- * Must live in `tests/client/`: `vite.config.ts` registers the svelte plugin on
+ * Must live in `tests/client/`: `vitest.config.ts` registers the svelte plugin on
  * that project only, so a `.svelte.ts` import from anywhere else is never
  * compiled and fails with `$state is not defined`.
  */
@@ -38,8 +38,20 @@ const OK = { status: "ok", cidr: "172.20.0.0/20" } as const;
 const BLOCKED = { status: "blocked", hint: "stale hint" } as const;
 
 /**
+ * `run()` has issued its probe and flipped `probing`.
+ *
+ * The leading `tick()` is #1376's deferral: `run()` no longer sets `probing`
+ * synchronously, because the live region has to reach the accessibility tree
+ * before the in-flight line lands in it.
+ */
+async function probeStarted(): Promise<void> {
+  await tick();
+  await Promise.resolve();
+}
+
+/**
  * Drain enough microtasks for every in-flight `run()` to get past its
- * `await tick()` and its `await loadInvoke()`, and actually attach to its probe
+ * `await tick()` and its `await loadInvoke()` and actually ATTACH to its probe
  * promise.
  *
  * Without this the tests below are vacuous: resolving a deferred before its
@@ -47,20 +59,14 @@ const BLOCKED = { status: "blocked", hint: "stale hint" } as const;
  * RESOLVE order, so the newest probe wins by accident and the assertions pass
  * with the staleness guard deleted. Verified by mutation — that is exactly how
  * the first draft of this file behaved.
- *
- * The leading `tick()` is #1376's deferral: `run()` no longer sets `probing`
- * synchronously, because the live region has to reach the accessibility tree
- * before the in-flight line lands in it.
  */
 async function settleAttachments(): Promise<void> {
-  await tick();
-  for (let i = 0; i < 4; i++) await Promise.resolve();
-}
-
-/** `run()` has issued its probe and flipped `probing` — one flush after the call. */
-async function probeStarted(): Promise<void> {
-  await tick();
-  await Promise.resolve();
+  await probeStarted();
+  // Over-drained deliberately. The deferreds are unresolved here, so extra
+  // drains cost nothing — while too FEW fails toward GREEN, which is the mode
+  // described above. Composed from `probeStarted` so the deferral is encoded
+  // once rather than in two helpers that must agree.
+  for (let i = 0; i < 12; i++) await Promise.resolve();
 }
 
 describe("createSubnetPreflight", () => {

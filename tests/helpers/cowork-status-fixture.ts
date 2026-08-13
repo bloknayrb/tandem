@@ -7,11 +7,16 @@ import type { CoworkStatus } from "../../src/client/types";
  * suite needs it and they had each written their own nine-field literal.
  *
  * Deliberately a plain `.ts`, split from the reactive cell in
- * `cowork-fixtures.svelte.ts`: `vitest.config.ts` gives the svelte plugin to
- * the `client` project only, so anything under `tests/` outside `tests/client/`
- * that imported a `.svelte.ts` would fail at import with `rune_outside_svelte`
- * — in a test that never touches reactivity. This factory is the half a
- * contract or server test would plausibly want.
+ * `cowork-fixtures.svelte.ts`. `vitest.config.ts` gives the svelte plugin to
+ * the `client` project only, so a `.svelte.ts` import from anywhere else in
+ * `tests/` fails with `rune_outside_svelte` — in a test that never touches
+ * reactivity. Every consumer today is in `tests/client/` and would be fine
+ * either way; this is cheap insurance for the first contract or server test
+ * that wants a `CoworkStatus`, not a constraint anything currently hits. The
+ * alternative — giving the `node` project the svelte plugin — changes the
+ * transform pipeline for every server and CLI test to buy the same thing.
+ *
+ * Import it from HERE, not through the `.svelte.ts`. One symbol, one path.
  *
  * The optional fields are set rather than omitted. Omitting them sends every
  * mounted suite down the `undefined` branch of `undetectedDetail` /

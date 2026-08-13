@@ -110,8 +110,10 @@ vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
   return { ...actual, isTauriRuntime: () => coworkStub.status !== null };
 });
 
-vi.mock("../../src/client/cowork/cowork-invoke", () => ({
-  TAURI_NOT_AVAILABLE: "Tauri runtime not available",
+// Spread, not re-declare — see `cowork-settings-mounted.test.ts` for the
+// subset-drift this avoids.
+vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => vi.fn()),
   coworkToggleIntegration: vi.fn(async () => ({ ok: true })),
   coworkPreflightSubnet: vi.fn(async () => ({ status: "unknown" })),
@@ -439,6 +441,44 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     (q(container, "integration-wizard-cowork-setup") as HTMLButtonElement).click();
     await tick();
     expect(q(container, "integration-wizard-plugin-copy-status")).toBeNull();
+
+    (q(container, "integration-wizard-cowork-back") as HTMLButtonElement).click();
+    await waitFor(() => {
+      expect(q(container, "integration-wizard-plugin-copy-status")).toBeTruthy();
+    });
+    expect(q(container, "integration-wizard-plugin-copy-status")?.textContent?.trim()).toBe("");
+  });
+
+  it("drops a copy result that lands after the user has left for the sub-view", async () => {
+    // The clear is synchronous and the write is two awaits later, so a clear
+    // alone cannot dominate an in-flight copy. Click Copy, click the Cowork row
+    // before the clipboard settles, and without the token the continuation
+    // writes "Copied" into an unmounted region — which then remounts holding
+    // it, which is the very thing the clear exists to prevent.
+    coworkStub.status = coworkStatusFixture();
+    let release: (() => void) | undefined;
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        writeText: vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              release = resolve;
+            }),
+        ),
+      },
+    });
+    const { container } = mountPushMode(false);
+    await tick();
+
+    (q(container, "integration-wizard-plugin-copy") as HTMLButtonElement).click();
+    await tick();
+    (q(container, "integration-wizard-cowork-setup") as HTMLButtonElement).click();
+    await tick();
+
+    // The clipboard answers only now, with the block unmounted.
+    release?.();
+    await tick();
+    await tick();
 
     (q(container, "integration-wizard-cowork-back") as HTMLButtonElement).click();
     await waitFor(() => {

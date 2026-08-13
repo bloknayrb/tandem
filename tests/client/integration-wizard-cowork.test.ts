@@ -25,7 +25,9 @@
 import { render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { COWORK_PREFLIGHT_CHECKING } from "../../src/client/cowork/cowork-helpers";
 import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
+import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
 const toggleIntegration = vi.fn(async () => ({ ok: true as const }));
 const fakeInvoke = vi.fn();
@@ -44,28 +46,26 @@ vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
 // so the copy would not even fail to compile.
 const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unknown" }));
 
-vi.mock("../../src/client/cowork/cowork-invoke", () => ({
-  TAURI_NOT_AVAILABLE: "Tauri runtime not available",
+// Spread `importOriginal` rather than re-declaring the module: `cowork-invoke`
+// exports nine symbols and each suite's mock used to name a different subset,
+// so a component reaching for an un-named one failed as `undefined is not a
+// function` — a component-shaped error, discovered one file at a time.
+vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => fakeInvoke),
   coworkToggleIntegration: (...args: unknown[]) => toggleIntegration(...args),
   coworkPreflightSubnet: () => preflightSubnet(),
 }));
 
 // A "normal" (Windows + detected) status with Cowork OFF, so the "Set up"
-// button renders and enable is a meaningful action.
+// button renders and enable is a meaningful action. The shared fixture, not a
+// literal: its sibling `integration-wizard-push-support.test.ts` mounts the
+// SAME component through the SAME mock, and a hand-written literal here omits
+// the optional fields the sidecar always sends — so the two suites would render
+// different `undetectedDetail` arms for reasons neither file states.
 vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
   createCoworkStatus: () => ({
-    status: {
-      osSupported: true,
-      coworkDetected: true,
-      enabled: false,
-      vethernetCidr: "172.30.16.0/28",
-      lanIpFallback: null,
-      useLanIpOverride: false,
-      workspaces: [],
-      uacDeclined: false,
-      uacDeclinedAt: null,
-    },
+    status: coworkStatusFixture(),
     loading: false,
     error: null,
     refetch: vi.fn(async () => {}),
@@ -192,11 +192,14 @@ describe("integration wizard — Cowork sub-view gating", () => {
     // defers `probing` one flush so the live region reaches the accessibility
     // tree empty first (#1376), which puts the call an unknowable number of
     // hops from the click.
-    await waitFor(() => {
-      expect(preflightSubnet).toHaveBeenCalled();
-    });
+    // `interval: 5` — a mock call count wakes no MutationObserver.
+    await waitFor(() => expect(preflightSubnet).toHaveBeenCalled(), { interval: 5 });
+    // Two flushes to let an ALREADY-RESOLVED mock's continuations run. Not a
+    // chain length — the `waitFor` above owns that — so this stays correct if
+    // `run()` gains a hop. A caller waiting on a specific settled state should
+    // still use its own `waitFor`; the ones below do.
     await tick();
-    await tick(); // let the pre-flight promise settle
+    await tick();
   }
 
   it("pre-flights subnet detection when entering the sub-view", async () => {
@@ -224,8 +227,11 @@ describe("integration wizard — Cowork sub-view gating", () => {
     await tick();
     await openCoworkSubView(container);
 
-    const banner = q(container, "integration-wizard-cowork-preflight-blocked");
-    expect(banner?.textContent).toContain("didn't find a Hyper-V virtual network adapter");
+    await waitFor(() => {
+      expect(
+        q(container, "integration-wizard-cowork-preflight-blocked")?.textContent ?? "",
+      ).toContain("didn't find a Hyper-V virtual network adapter");
+    });
     expect(q(container, "integration-wizard-cowork-preflight-retry-btn")).toBeTruthy();
     // The whole point: no button offering an action we've watched fail.
     expect(q(container, "cowork-enable-confirm-btn")).toBeNull();
@@ -284,9 +290,7 @@ describe("integration wizard — Cowork sub-view gating", () => {
     });
     const retryBtn = q(container, "integration-wizard-cowork-preflight-retry-btn");
     (retryBtn as HTMLButtonElement).click();
-    await waitFor(() => {
-      expect(preflightSubnet).toHaveBeenCalledTimes(2);
-    });
+    await waitFor(() => expect(preflightSubnet).toHaveBeenCalledTimes(2), { interval: 5 });
     await tick();
 
     const stillThere = q(container, "integration-wizard-cowork-preflight-retry-btn");
@@ -325,7 +329,7 @@ describe("integration wizard — Cowork sub-view gating", () => {
     expect(q(container, "integration-wizard-cowork-preflight-blocked")).toBeNull();
 
     await waitFor(() => {
-      expect(region?.textContent ?? "").toMatch(/Checking/);
+      expect(region?.textContent ?? "").toContain(COWORK_PREFLIGHT_CHECKING);
     });
     expect(q(container, "integration-wizard-cowork-preflight-live")).toBe(region);
   });

@@ -1,10 +1,9 @@
 import type { CoworkStatus } from "../../src/client/types";
 import { coworkStatusFixture } from "./cowork-status-fixture";
 
-// Re-exported so a client suite needs one import, not two. The factory itself
-// lives in a plain `.ts` — see that file for why a `.svelte.ts` cannot be
-// imported from the `node` vitest project.
-export { coworkStatusFixture };
+// Deliberately NOT re-exported: `coworkStatusFixture` has one home, and a
+// second door here would defeat the split that put it in a plain `.ts`. Import
+// it from `./cowork-status-fixture` directly.
 
 /**
  * A reactive stand-in for `createCoworkStatus`'s `status`.

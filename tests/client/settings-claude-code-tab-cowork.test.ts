@@ -18,7 +18,7 @@
 import { render, waitFor } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
-import { coworkStatusFixture } from "../helpers/cowork-fixtures.svelte";
+import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
 let tauri = true;
 
@@ -38,13 +38,12 @@ vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
   }),
 }));
 
-vi.mock("../../src/client/cowork/cowork-invoke", () => ({
-  TAURI_NOT_AVAILABLE: "Tauri runtime not available",
+// Spread, not re-declare — see `cowork-settings-mounted.test.ts`.
+vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => vi.fn()),
   coworkToggleIntegration: vi.fn(async () => ({ ok: true })),
   coworkPreflightSubnet: vi.fn(async () => ({ status: "unknown" })),
-  coworkRescan: vi.fn(async () => {}),
-  coworkSetLanIpOverride: vi.fn(async () => {}),
 }));
 
 import SettingsClaudeCodeTab from "../../src/client/components/settings-tabs/SettingsClaudeCodeTab.svelte";

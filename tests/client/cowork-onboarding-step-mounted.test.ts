@@ -20,15 +20,19 @@ import { tick } from "svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { COWORK_PREFLIGHT_CHECKING } from "../../src/client/cowork/cowork-helpers";
 import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
-import { coworkStatusFixture } from "../helpers/cowork-fixtures.svelte";
+import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
 const toggleIntegration = vi.fn(async () => ({ ok: true as const }));
 const fakeInvoke = vi.fn();
 
 const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unknown" }));
 
-vi.mock("../../src/client/cowork/cowork-invoke", () => ({
-  TAURI_NOT_AVAILABLE: "Tauri runtime not available",
+// Spread `importOriginal` rather than re-declaring the module: `cowork-invoke`
+// exports nine symbols and each suite's mock used to name a different subset,
+// so a component reaching for an un-named one failed as `undefined is not a
+// function` — a component-shaped error, discovered one file at a time.
+vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => fakeInvoke),
   coworkToggleIntegration: (...args: unknown[]) => toggleIntegration(...args),
   coworkPreflightSubnet: () => preflightSubnet(),
@@ -66,9 +70,11 @@ async function openConfirm(container: HTMLElement): Promise<void> {
  * the tick that opened the confirm.
  */
 async function probeCount(n: number): Promise<void> {
-  await waitFor(() => {
-    expect(preflightSubnet).toHaveBeenCalledTimes(n);
-  });
+  // `interval: 5` because the predicate is a mock call count: it emits no DOM
+  // mutation, so `waitFor`'s MutationObserver can never wake it and it falls
+  // through to the poll timer. At the 50ms default that is one full interval
+  // per call, measured at ~479ms across these suites.
+  await waitFor(() => expect(preflightSubnet).toHaveBeenCalledTimes(n), { interval: 5 });
 }
 
 // File scope so both describes get it — a per-describe reset is isolation by
