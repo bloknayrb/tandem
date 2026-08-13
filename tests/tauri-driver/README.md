@@ -133,3 +133,35 @@ xvfb-run npm test
 - `specs/prevent-default.e2e.ts` — the reload-interception assertions.
 - `package.json` / `tsconfig.json` — standalone toolchain (kept out of the root
   install so the WebdriverIO dependency tree is opt-in).
+
+## Dependency advisories
+
+**`serialize-javascript` is pinned via `overrides`, and that is not tidiness.**
+It arrives at `@wdio/mocha-framework` → `mocha` → `serialize-javascript`, and
+**every** published `mocha` (through 11.8.0) declares `^6.0.2` — which cannot
+reach the 7.0.5 that patches GHSA-5c6j-r48x-rmvq (RCE) and GHSA-qj8w-gfj5-8c6v
+(CPU-exhaustion DoS). Only the unreleased `mocha@12` RC widens it to `^7`, and
+`@wdio/mocha-framework` pins `mocha@^10.3.0` regardless. So there is no version
+bump that fixes this and `npm audit fix` is a no-op; the `overrides` entry is the
+only route short of `--force`, which downgrades the harness to
+`@wdio/mocha-framework@7`. v7 is API-compatible with mocha's single call site
+(`BufferedWorkerPool.serializeOptions`, `{unsafe, ignoreFunction}`) and drops the
+`randombytes` dependency. Remove the override once `@wdio/mocha-framework` ships
+a `mocha` that carries `serialize-javascript@^7`.
+
+**`extract-zip` is knowingly accepted, not overlooked.** GHSA-jmr9-qjv8-65gv
+(symlink path traversal on extract) has **no patched release** — 2.0.1 is the
+last publish, from 2020. It enters at `@wdio/cli` → `@wdio/utils` →
+`@puppeteer/browsers@2` → `extract-zip`, and is used only by
+`@puppeteer/browsers`' `unpackArchive`, i.e. unpacking a browser/driver archive
+that WebdriverIO downloaded itself. **This harness never takes that path**: it
+sets `host`/`port` to the `tauri-driver` proxy on 127.0.0.1:4444, so
+`@wdio/utils`' `startWebDriver` short-circuits on `definesRemoteDriver()`
+("Connecting to existing driver at …") and never imports the `./node.js` module
+where `@puppeteer/browsers` lives. Nothing here extracts an archive at all,
+attacker-influenced or otherwise, and `tests/` is excluded from the published
+npm package. `@puppeteer/browsers@3` did drop `extract-zip` (native
+`unzip`/`tar.exe`/PowerShell plus an optional `yauzl` path), but `@wdio/utils`
+still pins `^2.2.0`, and forcing the major across it would be an unverifiable
+override on a code path this harness provably never runs. Revisit alongside
+#1345 — if that review retires this workflow, the dependency leaves with it.
