@@ -750,4 +750,44 @@ describe("setNativeTheme (#992)", () => {
       vi.useRealTimers();
     }
   });
+
+  it("gives a fresh budget to an intent that supersedes an IN-FLIGHT retry", async () => {
+    // The gap the `retryHandle !== null` guard alone does not cover. The retry
+    // timer nulls `retryHandle` BEFORE re-pushing, so between the timer firing
+    // and that push settling there is an armed ladder with no handle to find.
+    // A new user intent landing in that window used to inherit the spent
+    // counter and retry fewer times than the intent before it — silently, and
+    // not reproducibly, since it depends on where the pick lands relative to
+    // the 500 ms rung. `viaRetry` on `lastPush` is what closes it.
+    vi.useFakeTimers();
+    try {
+      const { setNativeTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+
+      // A hung invoke: the retry push neither resolves nor rejects, so it is
+      // still in flight — `retryHandle` is null and the ladder is half spent.
+      let hang = false;
+      invoke.mockImplementation(() =>
+        hang ? new Promise(() => {}) : Promise.reject(new Error("nope")),
+      );
+
+      setNativeTheme("dark");
+      await vi.advanceTimersByTimeAsync(0);
+      hang = true;
+      await vi.advanceTimersByTimeAsync(500); // rung 1 fires and hangs
+      const beforeNewIntent = callsFor(invoke, "set_native_theme").length;
+
+      // A new user pick supersedes the in-flight retry.
+      hang = false;
+      setNativeTheme("light");
+      await vi.advanceTimersByTimeAsync(0);
+
+      // It must own a FULL ladder. With the budget leaked it gets two rungs.
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(callsFor(invoke, "set_native_theme")).toHaveLength(
+        beforeNewIntent + 1 + MAX_PUSH_RETRIES,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

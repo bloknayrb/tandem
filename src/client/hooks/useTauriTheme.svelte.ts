@@ -132,7 +132,12 @@ let pushSeq = 0;
 // in `setNativeTheme`, leaving an armed retry of a *rejected* push free to
 // land later and release an override while the app renders an explicit theme.
 // A rejection means "no claim", full stop.
-let lastPush: { pref: ThemePreference; inFlight: boolean; issuedAt: number } | null = null;
+let lastPush: {
+  pref: ThemePreference;
+  inFlight: boolean;
+  issuedAt: number;
+  viaRetry: boolean;
+} | null = null;
 
 // What the native layer actually DID: the last RESOLVED outcome's
 // `overrideActive`. The push pipeline writes it through exactly ONE function,
@@ -218,7 +223,19 @@ function cancelRetry(): void {
     clearTimeout(retryHandle);
     retryHandle = null;
     retryAttempts = 0;
+    return;
   }
+  // A retry whose timer has already FIRED is not covered by the branch above:
+  // the timer nulls `retryHandle` before re-pushing, so between that and the
+  // `invoke` settling there is an armed ladder with no handle to find. A new
+  // user intent arriving in that window is still a new intent and must get a
+  // full budget — otherwise it silently inherits a partly-spent counter and
+  // retries fewer times than the next one, with no way to tell from the logs.
+  //
+  // `viaRetry` is what distinguishes it from the retry's OWN re-entry, which
+  // must keep its budget (that call sees `lastPush === null`, because the
+  // `.catch` cleared it before arming the timer).
+  if (lastPush?.viaRetry) retryAttempts = 0;
 }
 
 /** Stops the poll if it is running. Idempotent. */
@@ -378,6 +395,17 @@ function acceptReadback(seqAtIssue: number, next: "light" | "dark"): void {
  * must not be misread as a general reset.
  */
 export function setNativeTheme(pref: ThemePreference): void {
+  pushNativeTheme(pref, false);
+}
+
+/**
+ * The push itself. `viaRetry` exists so `cancelRetry` can tell a retry's own
+ * re-entry (keeps its budget) from a new user intent superseding an in-flight
+ * retry (gets a fresh one). It is deliberately NOT a parameter on the exported
+ * `setNativeTheme`: no caller outside this module can meaningfully supply it,
+ * and an optional boolean on the public surface would invite one to try.
+ */
+function pushNativeTheme(pref: ThemePreference, viaRetry: boolean): void {
   if (!isTauriRuntime()) return;
   // Cancel BEFORE the dedupe check, not after. A new intent supersedes a
   // pending retry whether or not it needs an `invoke`. Today this is a
@@ -399,7 +427,7 @@ export function setNativeTheme(pref: ThemePreference): void {
   // which is `< PUSH_SETTLE_CEILING_MS` — pinning the read-back gate shut for
   // as long as the offset persists. That is precisely the frozen-theme failure
   // the ceiling exists to guarantee against.
-  lastPush = { pref, inFlight: true, issuedAt: performance.now() };
+  lastPush = { pref, inFlight: true, issuedAt: performance.now(), viaRetry };
   getInvoke()
     .then((invoke) => invoke<NativeThemeOutcome>("set_native_theme", { theme: pref }))
     .then((outcome) => {
@@ -445,7 +473,7 @@ export function setNativeTheme(pref: ThemePreference): void {
         retryAttempts++;
         retryHandle = setTimeout(() => {
           retryHandle = null;
-          setNativeTheme(pref);
+          pushNativeTheme(pref, true);
         }, delay);
         console.warn(
           `[useTauriTheme] set_native_theme("${pref}") failed (retry ${retryAttempts}/${MAX_PUSH_RETRIES}):`,
