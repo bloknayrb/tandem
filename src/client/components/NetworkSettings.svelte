@@ -97,7 +97,13 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
         {restarting ? "Restarting…" : "Restart sidecar"}
       </button>
     {:else}
-      <span data-allow-context-menu style="font-size: 10px; color: var(--tandem-fg-subtle);">Run <code>tandem stop &amp;&amp; tandem start</code> to restart</span>
+      <!--
+        There is no `tandem stop` subcommand -- `src/cli/index.ts` dispatches only
+        `start` (or a bare `tandem`). This copy told users to run one for months;
+        it fails with an unknown-command error at exactly the moment someone is
+        trying to recover a stuck server. Stop the process the way it was started.
+      -->
+      <span data-allow-context-menu style="font-size: 10px; color: var(--tandem-fg-subtle);">Press <code>Ctrl+C</code> in the terminal running Tandem, then run <code>tandem</code> again</span>
     {/if}
   </div>
   {#if restartError}

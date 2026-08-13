@@ -6,7 +6,7 @@ Tandem lets you work on documents with an AI — by default Claude, but any MCP-
 
 > Follow the tutorial in the bottom-left corner to learn the basics. You can dismiss it at any time. For a full walkthrough of all features, see the [User Guide](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md) (opens in your browser).
 
-Open Claude Code from any directory — your Tandem tools are already configured. Both you and your AI can see and edit this document at the same time. Your AI's cursor appears as a soft blue highlight on the paragraph being read, and a typing indicator shows when it's writing.
+Once Claude is connected (Settings → AI Assistant), open Claude Code from any directory — your Tandem tools are configured for you. Both you and your AI can see and edit this document at the same time. Your AI's cursor appears as a soft blue highlight on the paragraph being read, and a typing indicator shows when it's writing.
 
 ## Annotations
 
@@ -29,8 +29,8 @@ You choose how closely your AI participates:
 
 ## Try These
 
-1. **Respond to a suggestion** — Look at the highlighted text in this document. Open the side panel to accept or dismiss annotations, or press Ctrl+Shift+R for Review Mode.
-2. **Ask a question** — Select some text and press Ctrl+Shift+A, or type in the Chat panel.
+1. **Respond to a suggestion** — Look at the highlighted text in this document. Open the side panel to accept or dismiss annotations, or use Ctrl+Enter to accept and Ctrl+Shift+Enter to dismiss; Alt+] and Alt+[ step between them.
+2. **Ask a question** — Select some text and use the popup's Annotate composer (or press Ctrl+Alt+M), or type in the Chat panel.
 3. **Make an edit** — Click anywhere in the document and start typing. You can simplify sentences, fix typos, or add new content.
 
 ## Get Around Faster

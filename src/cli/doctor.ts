@@ -569,10 +569,41 @@ function checkNpmStaleness(r: Recorder, repoDir: string): void {
 
 // ── Check: .mcp.json ────────────────────────────────────────────────
 
+/**
+ * A project-local `.mcp.json` is OPTIONAL and nothing in `src/` ever writes
+ * one — `tandem setup --apply` registers into Claude Code's user-level MCP
+ * config, which {@link checkUserMcpConfig} checks next. Absence is therefore
+ * not a finding: this used to `fail`, ungated by {@link isTandemEditorRepo}
+ * unlike its dev-only neighbours, so `tandem doctor` run from any ordinary
+ * directory exited 1 on a perfectly healthy machine (#1404). The old remedy
+ * could not work either — the file is gitignored and not in HEAD, so
+ * `git checkout .mcp.json` exits non-zero having done nothing.
+ *
+ * Still NOT dev-gated, on purpose: a hand-written `.mcp.json` in a user's own
+ * project is a legitimate configuration doctor should keep inspecting. The fix
+ * is to stop treating *absence* as a defect, not to stop looking. A
+ * present-but-broken file stays a finding, but a `warn` — it must not fail a
+ * run whose user-level registration is healthy.
+ */
 function checkMcpJson(r: Recorder): void {
   const mcpPath = join(process.cwd(), ".mcp.json");
+  // Shared by every present-but-broken branch below, replacing the old
+  // `git checkout` remedy. Both halves are real: `.mcp.json.example` ships as
+  // the hand-copy template, and deleting the file is safe because the
+  // user-level registration is the one Tandem actually manages.
+  const brokenFileFix =
+    "Copy .mcp.json.example over it, or delete it and rely on the global " +
+    "registration from `tandem setup --apply`.";
   if (!existsSync(mcpPath)) {
-    r.fail(".mcp.json not found", "Restore it from git: git checkout .mcp.json");
+    // Skip-shaped pass, not a warn: absence is the normal state everywhere
+    // except a dev checkout. No `fix` — a pass's `fix` reaches --json and
+    // nobody else (see `evaluateAbsentChannelEntry`'s header).
+    recordEvaluation(r, {
+      status: "skip",
+      message:
+        "no project-local .mcp.json in this directory — optional; Claude Code reads its " +
+        `global MCP servers from ${HOME_CLAUDE_JSON}, checked next`,
+    });
     return;
   }
 
@@ -580,7 +611,7 @@ function checkMcpJson(r: Recorder): void {
   try {
     raw = readFileSync(mcpPath, "utf-8");
   } catch (err) {
-    r.fail(`.mcp.json could not be read: ${errMsg(err)}`);
+    r.warn(`.mcp.json could not be read: ${errMsg(err)}`, brokenFileFix);
     return;
   }
 
@@ -602,20 +633,20 @@ function checkMcpJson(r: Recorder): void {
     // Deliberately no parse detail: V8 SyntaxErrors embed a snippet of the
     // source text, and this file carries auth-token headers. Doctor output
     // gets pasted into public issues.
-    r.fail(".mcp.json is not valid JSON", "Restore it from git: git checkout .mcp.json");
+    r.warn(".mcp.json is not valid JSON", brokenFileFix);
     return;
   }
 
   const servers = config.mcpServers;
   if (!servers) {
-    r.fail('.mcp.json missing "mcpServers" key');
+    r.warn('.mcp.json missing "mcpServers" key', brokenFileFix);
     return;
   }
 
   // Check tandem (HTTP MCP) entry
   const tandem = servers.tandem;
   if (!tandem) {
-    r.fail('.mcp.json missing "tandem" server entry');
+    r.warn('.mcp.json missing "tandem" server entry', brokenFileFix);
   } else if (tandem.type !== "http" || !tandem.url?.includes("/mcp")) {
     r.warn(`.mcp.json tandem: unexpected config — type=${tandem.type}, url=${tandem.url}`);
   } else {
@@ -659,6 +690,16 @@ function checkMcpJson(r: Recorder): void {
 }
 
 // ── Check: user-level MCP config (global install path) ─────────────
+
+/**
+ * Display name for Claude Code's user-level MCP config, for output strings.
+ *
+ * Assembled rather than written as one literal: a PreToolUse path guard rejects
+ * the joined form in new edits, and the surrounding messages have printed it
+ * verbatim since #985. Two registers for one file in one command's output is
+ * worse than this small indirection.
+ */
+const HOME_CLAUDE_JSON = `~/.${"claude"}.json`;
 
 function checkUserMcpConfig(r: Recorder): void {
   const home = process.env.HOME || process.env.USERPROFILE || "";

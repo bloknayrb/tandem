@@ -14,6 +14,7 @@ Tandem is a TypeScript/Vite document editor with a Node server, CLI, monitor, an
 - `npm run test:e2e`: runs Playwright end-to-end tests.
 - `npm run lint` / `npm run format`: run ESLint and Biome formatting.
 - `npm run dev:tauri` / `npm run build:tauri`: run or package the Tauri desktop app.
+- Git hooks: `pre-commit` runs lint-staged (ESLint + Biome + a semantic-token scan); `pre-push` runs `biome check src/ tests/`, the **full** Vitest suite, and `cargo test`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the one-time setup `cargo test` needs — a fresh clone cannot push without it.
 
 ## Invariants That Fail Silently
 
@@ -24,6 +25,10 @@ These are not style preferences. Violating one produces code that type-checks, p
 - **stdout is reserved** for the MCP wire in stdio mode. `console.log/warn/info` are redirected to stderr; a dependency that writes to stdout corrupts the protocol.
 - **Three coordinate systems** — flat text offsets, ProseMirror positions, and Yjs RelativePositions — are not interchangeable. Use `validateRange()` / `anchoredRange()` rather than raw offsets.
 - **`tandem_getTextContent` uses `extractText()`, never `extractMarkdown()`**; the latter shifts offsets out of the annotation coordinate system.
+- **`tandem_edit` refuses ranges that overlap heading markup.** A range covering a `## ` prefix returns `INVALID_RANGE`; target the text content, not the marker.
+- **`data-testid` values are a contract, not labels.** E2E selectors are kebab-case and may be added but never removed or renamed. The set is snapshotted out of `src/client/` by `tests/design-system-impl/testid-coverage.test.ts`; renaming one without regenerating that snapshot fails CI. The human-readable list in [docs/design-system-impl/testid-manifest.md](docs/design-system-impl/testid-manifest.md) is a convenience copy that no test reads.
+- **CORS denies by absence, never by `null`.** Emit `Access-Control-Allow-Origin` only for an allowlisted origin. `null` looks like a refusal but is a *grant* — it is the origin serialization of opaque contexts, so a sandboxed iframe on any page matches it (#1291). See [docs/security.md](docs/security.md).
+- **A new mutating MCP tool or `/api` route must join the license-gated set in both halves.** An MCP write bypasses the Hocuspocus read-only surface, so gating a route while leaving its MCP twin ungated is a hole. Only the MCP half is CI-enforced (`tests/server/license-gate-coverage.test.ts`); the `/api` half is review-only against the enumeration in [`CLAUDE.md` → Licensing gate](CLAUDE.md). Note the gate is applied two ways — a `licenseGateMiddleware` mount *and* direct in-handler `licenseGate()` calls — so grepping the middleware name alone under-reports it.
 
 ## Coding Style & Naming Conventions
 

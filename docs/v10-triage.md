@@ -1,6 +1,13 @@
 # v1.0 Triage — Mark each row
 
-For each row, replace the empty `Bryan` cell with one of: **Core** (must ship for v1.0), **Defer** (v1.1+), **Cut** (drop entirely), or **TBD**. To accept the recommendation in the `Rec` column, just type "ditto" or copy the rec value.
+> **Status: COMPLETE — historical record, 2026-05-14 triage marks, closed 2026-05-15.**
+> Every row below is marked; the wave list it fed is locked in
+> [roadmap.md](roadmap.md#active--toward-v10), which is the live document. Preserved
+> verbatim because the *marks themselves* (and Bryan's phrasing in them) are the
+> decision record — later amendments are recorded in roadmap.md and in
+> [decisions.md](decisions.md), never by editing a row here.
+
+Each row's `Bryan` cell carries one of **Core** (must ship for v1.0), **Defer** (v1.1+), **Cut** (drop entirely), or **TBD**, against my recommendation in the `Rec` column.
 
 Full plan context lives in a maintainer-local planning doc. Once this triage is locked, the wave list in §4 of that plan becomes concrete.
 
@@ -14,6 +21,11 @@ Full plan context lives in a maintainer-local planning doc. Once this triage is 
 | ---- | ---------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------- | ----- |
 | #477 | Local LLM integration (PR-4 quartet #642–#645 + PRs 1/3/5) | LARGE                                                            | CRITICAL — PR-4 rewrites `.claude.json` on every user's machine | TBD — if Core, requires ≥2-week feature-flag soak        | Core  |
 | #576 | .docx write-back (docx-npm body export)                    | MEDIUM (10–13d body export; comment round-trip = separate spike) | HIGH                                                            | TBD — if Core, body export only (defer comments to v1.1) | Core  |
+
+> *Naming note, added 2026-08-13:* #477's "Local LLM integration" label predates the split.
+> #477 delivered the sidecar launcher + integration-setup wizard + auto-config removal
+> (all v0.13.0/v0.14.0). Running a **local model** is #1123 / [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11),
+> merged dark behind `BYO_MODELS_ENABLED`.
 
 ## 1B. Polish / UX from open issues
 
@@ -149,13 +161,10 @@ These block specific implementation work. Each unlocks a downstream wave.
 
 ---
 
-## After you've marked everything
+## Closure (all done, 2026-05-15)
 
-When done:
-
-- This file gets folded back into the maintainer-local planning doc
-- Wave list in §4 of the plan locks
-- I verify §1H "likely shipped" items against current code (Wave 0 task #1)
-- Apple Developer cert procurement starts (Wave 0 calendar gate)
-- I park or close `spike/477-sidecar-launcher` based on the #477 row decision
-- I replace `docs/roadmap.md` v0.12.0+ sections with the new wave structure
+- Folded back into the maintainer-local planning doc; the §4 wave list locked.
+- §1H "likely shipped" items verified against code (Wave 0 task #1 — zero gaps found).
+- Apple Developer cert procurement started (Wave 0 calendar gate; #428 closed in v0.14.0).
+- `spike/477-sidecar-launcher` resolved per the #477 row (Core).
+- `docs/roadmap.md` v0.12.0+ sections replaced with the wave structure.

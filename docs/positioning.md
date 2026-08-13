@@ -1,8 +1,8 @@
 # Tandem — Positioning & Market Context
 
-_Last updated: 2026-05-26_
+_Last updated: 2026-08-13 (reconciled against v0.22.1)_
 
-> **Audience & monetization direction ([ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license)):** Tandem targets **individuals** working on their own documents — not institutions. The moat is the **same-canvas / no-copy-paste** review experience backed by **persistent, queryable annotations + the .docx review-record loop**. Monetization is **free during public beta → a one-time paid license at v1.0** (offline signed-license activation; beta users grandfathered). This document is being reframed to that direction; institutional roles below survive only as example *contexts*, not as the target buyer.
+> **Audience & monetization direction ([ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license)):** Tandem targets **individuals** working on their own documents — not institutions. The moat is the **same-canvas / no-copy-paste** review experience backed by **persistent, queryable annotations + the .docx review-record loop**. Monetization is **free during public beta → a one-time paid license at v1.0** (offline signed-license activation; beta users grandfathered). That reframe is complete: the institutional roles below survive only as example *contexts* for the work, never as the target buyer.
 
 ## What Tandem Is
 
@@ -20,10 +20,10 @@ Most AI document tools are either writing assistants (generate content for you) 
 
 ### The annotation model
 
-Tandem's core differentiator is that AI suggestions are **first-class data objects**, not ephemeral UI. Each annotation (highlight, comment — including suggestions and questions — and flag) is:
+Tandem's core differentiator is that AI suggestions are **first-class data objects**, not ephemeral UI. Each annotation (highlight, comment — including replacement suggestions — or note) is:
 
 - **Addressable** — stored in a Y.Map with a unique ID
-- **Typed** — highlight, comment, or flag, with comments supporting replacement suggestions and directed questions as variants
+- **Typed** — highlight, comment, or note; comments carry an optional replacement suggestion. Notes are user-private and are never surfaced to the AI (ADR-027).
 - **Attributable** — author field tracks who created it (Claude or user)
 - **Resolvable** — user accepts or dismisses each one individually
 - **Queryable** — user can ask Claude about specific annotations via "Ask Claude"
@@ -44,7 +44,7 @@ This maps directly to how a huge amount of real document work actually happens: 
 
 ## The Market
 
-Tandem is for **individuals** who write and review prose-heavy documents and want to do that work alongside an AI — not for institutions buying seats. The near-term reachable audience is who already runs an MCP-capable LLM **or a local model** (the 2026-06-11 [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11) decision brings Ollama/LM Studio into v1.0 via Tandem's own loop — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §1 note); we grow that audience by lowering setup friction, not by adding a hosted backend.
+Tandem is for **individuals** who write and review prose-heavy documents and want to do that work alongside an AI — not for institutions buying seats. The near-term reachable audience is who already runs an MCP-capable LLM **or a local model** (the 2026-06-11 [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11) decision brings Ollama/LM Studio into v1.0 via Tandem's own loop — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §1 note); we grow that audience by lowering setup friction, not by adding a hosted backend. Today that local half is committed, not shipped: the loop is merged dark (`BYO_MODELS_ENABLED = false`) and turns on at v1.0.
 
 ### Who this is
 
@@ -84,7 +84,7 @@ Near-zero outside legal contracts and e-discovery. The Gartner 2024 Hype Cycle p
 
 **Resolved at the architectural level by [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) (2026-05-17).** Tandem's integration contract is MCP, not Claude Code specifically. Claude remains the default integration because that's the deepest-supported path (channel push, cowork, plugin monitor, auto-launcher), but the architecture is no longer Claude-locked.
 
-The remaining distribution-friction risk is **downstream**, and was resolved in two same-day amendments (2026-06-11, canonical record in [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11)): **local models (Ollama / LM Studio) ship in v1.0** (#1123 — a tool-use loop driving OpenAI-compatible local endpoints; gated on the M0 capability spike), while cloud BYO keys (OpenAI/Gemini API) arrive in v1.1. v1.0's reachable audience is therefore Claude users **plus anyone who can run a local model** — the zero-subscription stack (free local LLM + one-time license) that ADR-040 §2 leans on. The license applies identically with local models (no free tier implied). The desktop app's integration setup wizard (#477 PR 3, shipped) keeps the install path tractable for non-developers.
+The remaining distribution-friction risk is **downstream**, and was resolved in two same-day amendments (2026-06-11, canonical record in [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11)): **local models (Ollama / LM Studio) ship in v1.0** (#1123 — a tool-use loop driving OpenAI-compatible local endpoints; the M0 capability spike closed 2026-06-17 with a GO as an **opt-in, experimental** tier, ≥14B recommended. The whole loop is merged today but **runtime-inert** behind `BYO_MODELS_ENABLED = false`, so no local-model surface is visible in a shipped build), while cloud BYO keys (OpenAI/Gemini API) arrive in v1.1. v1.0's reachable audience is therefore Claude users **plus anyone who can run a local model** — the zero-subscription stack (free local LLM + one-time license) that ADR-040 §2 leans on. The license applies identically with local models (no free tier implied). The desktop app's integration setup wizard (#477 PR 3, shipped) keeps the install path tractable for non-developers.
 
 ### Platform risk (medium)
 
@@ -99,7 +99,7 @@ Tandem's architecture bets on MCP becoming a standard interface for AI tool use.
 
 ### Revenue model (decided — ADR-040)
 
-The revenue question is now settled in [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license). Tandem is **free during the public beta** and moves to a **one-time paid license at v1.0**, activated by an **offline Ed25519-signed license file** — no hosted offering, no subscription, no support-contract dependency, consistent with the local-first promise. A Merchant of Record (Polar.sh or Paddle) handles checkout and global tax; auto-updates within the license's renewal window are served by a small license-checked endpoint. Existing beta users are grandfathered with a free license; new users pay. Pricing is set low (~$29–79) so paying beats building from source. Revenue is expected to be modest, and that is an accepted risk (full commitment, no kill-criterion) — see ADR-040 §3 and the licensing-change prerequisite in §5.
+The revenue question is now settled in [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license). Tandem is **free during the public beta** and moves to a **one-time paid license at v1.0**, activated by an **offline Ed25519-signed license file** — no hosted offering, no subscription, no support-contract dependency, consistent with the local-first promise. Polar, as Merchant of Record, handles checkout and global tax (narrowed from "Polar or Paddle" on 2026-07-03, #1176 — the issuance Worker verifies Polar's webhook signature scheme specifically); auto-updates within the license's renewal window are served by a small license-checked endpoint. Existing beta users are grandfathered with a free license; new users pay. Pricing is set low (~$29–79) so paying beats building from source. Revenue is expected to be modest, and that is an accepted risk (full commitment, no kill-criterion) — see ADR-040 §3 and the licensing-change prerequisite in §5.
 
 ## Positioning Summary
 

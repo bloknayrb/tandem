@@ -1,10 +1,12 @@
 # Tandem licence terms — working draft
 
+_Drafted 2026-08-06 · reviewed 2026-08-13 · no item below has been to counsel._
+
 > **Status: DRAFT. Not legal advice, and not yet published.** This file exists
-> because nothing did: there is currently no EULA, terms of sale, refund policy,
-> or privacy notice anywhere in the repository, the README, or the product. The
-> only artifact doing that job today is nine lines of email body in the issuance
-> Worker.
+> because nothing did: there is still no EULA, terms of sale, refund policy, or
+> privacy notice anywhere in the repository or the product. The README states the
+> shape of the v1.0 gate but no terms; the only artifact doing the terms job today
+> is nine lines of email body in the issuance Worker.
 >
 > Everything below is a statement of *what the software actually does*, written
 > so that a lawyer can turn it into terms without having to reverse-engineer the
@@ -30,6 +32,10 @@ Stated as the code behaves, not as marketing:
 | **Transfer** | Undefined today. ⚖️ See §6. |
 | **Organisational use** | **Not available.** See §2. |
 
+Nothing above is live yet: the gate ships **dark** — `LICENSE_GATE_ENABLED` is a
+`const false` in `tsup.config.ts`, so today's builds neither trial nor gate. One
+const flips at v1.0, and these terms must exist before it does.
+
 ## 2. Organisational use is currently unsellable — checkout copy must say so ⚖️
 
 The BUSL Additional Use Grant covers personal use and individual self-hosting,
@@ -47,8 +53,7 @@ wire an SKU→type map at that milestone."* (`isLedgerRecord` also rejects
 write such a record in the first place.)
 
 So the buyer would receive a licence whose own metadata contradicts what they
-paid for. Until an SKU→type map exists, checkout copy must **exclude
-organisational use explicitly**.
+paid for.
 
 Until a commercial SKU exists, checkout copy must **exclude organisational use
 explicitly**. Selling to a company something the software's own licence doesn't

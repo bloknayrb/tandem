@@ -33,14 +33,14 @@ tandem setup --apply    # write config non-interactively
 
 ### `tandem doctor`
 
-Diagnoses setup issues: Node version, `.mcp.json` / `~/.claude.json` registration, ports, `/health`, the SSE event stream, and annotation-store health. Exits `1` when any check fails. `--json` emits a single machine-readable report on stdout instead of the human-readable list.
+Diagnoses setup issues: Node version and toolchain, MCP registration in `.mcp.json` / `~/.claude.json` / the Claude Desktop config, the Claude CLI and the Tandem plugin, a stale global install, ports, `/health`, the SSE event stream, and annotation-store health. Exits `1` when any check fails. `--json` emits a single machine-readable report on stdout instead of the human-readable list.
 
 ```bash
 tandem doctor
 tandem doctor --json
 ```
 
-The desktop app's **Settings → About → Copy Diagnostics** button runs the same checks (minus the five source-checkout-only items). See [troubleshooting.md → Sharing diagnostics](troubleshooting.md#sharing-diagnostics).
+The desktop app's **Settings → About → Copy Diagnostics** button runs the same checks, minus the five source-checkout-only items (`node-modules`, `dev-repo`, `npm-staleness`, `mcp-json`, `orphaned-vite`) -- they read `process.cwd()`, which is arbitrary for a desktop or npm-global install. See [troubleshooting.md → Sharing diagnostics](troubleshooting.md#sharing-diagnostics).
 
 ### `tandem --uninstall-scrub`
 
@@ -72,6 +72,8 @@ tandem mcp-stdio
 
 Not intended for direct user invocation — the plugin manifest wires it up. Reads `TANDEM_URL` to find the local server.
 
+Since v0.22.1 the generated `tandem` MCP entry prefers the bundled `dist/stdio-bridge/index.js` with an absolute Node path (`src/server/integrations/apply.ts`), because a bare `npx` resolves against the PATH a GUI-launched client inherits, which on macOS often contains no Node. `tandem mcp-stdio` remains the runtime behind both that path and the `npx` fallback.
+
 ### `tandem channel`
 
 Runs the Tandem channel shim as a stdio MCP server. Subscribes to `/api/events` on Tandem's behalf and re-emits the events as MCP notifications. Activated by Claude Code's `--dangerously-load-development-channels server:tandem-channel` flag.
@@ -84,9 +86,11 @@ Not intended for direct user invocation — the `tandem-channel` MCP entry (writ
 
 ### `tandem monitor`
 
-Runs the Tandem plugin monitor: subscribes to `/api/events` and writes a payload-free wake line to stdout for Claude Code to surface as a notification (the event's type only — the details come from `tandem_checkInbox`). This is the flagless alternative to the channel shim — it needs no `--dangerously-load-development-channels` — under three conditions.
+Runs the Tandem plugin monitor: subscribes to `/api/events` and writes a payload-free wake line to stdout for Claude Code to surface as a notification (the event's type only — the details come from `tandem_checkInbox`). This is the flagless alternative to the channel shim — it needs no `--dangerously-load-development-channels` — under four conditions.
 
 It **starts on first use of the Tandem skill**, not at session start: the manifest arms it with `on-skill-invoke`, so a session that never mentions Tandem never spawns it (#1354). It requires **Claude Code 2.1.212 or newer** (on older versions the plugin installs fine and the monitor simply never runs, with nothing to say so). And it must be able to resolve Node from the PATH Claude Code itself was started with: monitors are spawned through a non-login shell, so a GUI-launched Claude Code often cannot run it and reports `exit 127`. Start `claude` from a terminal.
+
+The fourth condition is the one nobody can act on: the plugin monitor sits behind the same `tengu_amber_sentinel` remote feature gate as Claude Code's own `Monitor` tool, and that flag **defaults to false**. Both read the identical flag — see [ADR-049](decisions.md) and its 2026-08-09 amendment, plus [docs/spikes/plugin-monitor-tty-activation.md](spikes/plugin-monitor-tty-activation.md). It is not observable from Tandem's source and no `tandem doctor` check can assert it, which is why the plugin monitor cannot cover for a Claude Code that offers no `Monitor` tool. The channel shim is the fallback that can.
 
 Neither this nor the channel shim is involved in a session Tandem auto-launches; those are woken over the supervisor's stdin ([ADR-047](decisions.md#adr-047-claude-code-push-transport-activation)).
 
@@ -160,8 +164,9 @@ These commands are available when running Tandem from a source checkout (`git cl
 
 | Script | What it runs |
 |---|---|
-| `npm run build` | Production build: typecheck, Vite client build, font-asset check, tsup server/channel/CLI bundle. |
-| `npm run build:server` | tsup only — bundles server, channel, CLI to `dist/`. |
+| `npm run build` | Production build: typecheck, Vite client build, font-asset check, then tsup's five bundles — `dist/server`, `dist/cli`, `dist/channel`, `dist/monitor`, `dist/stdio-bridge`. |
+| `npm run build:server` | tsup only — bundles server, CLI, channel shim, monitor and the stdio bridge into `dist/`. A missing `dist/stdio-bridge/` is not a build error: the generated `tandem` MCP entry silently falls back to bare `npx` behind a `log::warn!`. |
+| `npm run build:reaper` | Builds the `tandem-reaper` sidecar. Both declared `externalBin`s must exist or `cargo tauri dev/build` fails its existence check. |
 | `npm run build:tauri` | Tauri production build — produces installers. |
 | `npm run check:fonts` | Validates that all referenced font assets are present. |
 
@@ -172,13 +177,17 @@ These commands are available when running Tandem from a source checkout (`git cl
 | `npm test` | Vitest unit tests. |
 | `npm run test:e2e` | Playwright E2E tests (auto-starts servers via `webServer` config). |
 | `npm run test:e2e:ui` | Playwright UI mode for interactive E2E debugging. |
+| `npm run test:tauri-driver` | WebDriver-based Tauri shell tests. |
+| `npm run test:acceptance-harness` | First-use arming acceptance harness (#1393). **Not run by `npm test` or the pre-push hook** — this is its only runner. |
 | `npm run capture:screenshots` | Re-captures README screenshots via Playwright. |
+| `npm run capture:design-baselines` | Re-captures the design-system baseline screenshots. |
 
 ### Diagnostics and linting
 
 | Script | What it runs |
 |---|---|
 | `npm run doctor` | End-to-end setup check (Node version, MCP config, server health, ports). |
+| `npm run perf:gate` | Performance gate. |
 | `npm run typecheck` | TypeScript + svelte-check across server and client. |
 | `npm run lint` | ESLint across the repo. |
 | `npm run format` | Biome auto-format. |

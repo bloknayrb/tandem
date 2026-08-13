@@ -12,7 +12,7 @@ Tandem lets you work on documents with an AI without the constant copy-paste. Yo
 
 Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and an **MCP client** (Claude Code by default) where the AI connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
 
-Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/releases/latest) (macOS, Linux, Windows) or as an [npm package](https://www.npmjs.com/package/tandem-editor) (`npm install -g tandem-editor`). The desktop app manages the server automatically; the npm install requires starting it from the terminal. Once running, the editor experience is identical either way.
+Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/releases/latest) (macOS, Linux, Windows) or as an [npm package](https://www.npmjs.com/package/tandem-editor) (`npm install -g tandem-editor`), which opens the same editor in your browser. The desktop app manages the server automatically; the npm install requires starting it from the terminal. Editing, annotations, chat and the integration wizard work the same in both. The desktop app adds what only a native shell can do: a system tray, native right-click menus and file dialogs, start-at-login, Cowork, in-app log access, and automatic updates. Instructions below that apply to only one of the two say so.
 
 ## First Launch
 
@@ -21,14 +21,14 @@ On first run, Tandem opens `sample/welcome.md` automatically. Four tutorial anno
 A floating tutorial card appears at the bottom-left of the editor with three steps:
 
 1. **Review an annotation** — Accept or dismiss one of the tutorial annotations from the side panel, or turn on the margin view to see them beside the text.
-2. **Ask Claude a question** — Select text, click Annotate, and send your question to your AI assistant. Or type in the Chat panel.
-3. **Try editing** — Click in the document and type something.
+2. **Ask a question** — Select text, click Annotate, and send your question to your AI assistant. Or type in the Chat panel.
+3. **Make an edit** — Click in the document and type something.
 
-The tutorial dismisses after all three steps and won't appear again (progress is saved to localStorage).
+A "You're ready!" card follows the three steps. The tutorial dismisses after that and won't appear again (progress is saved to localStorage).
 
-**Tip:** Start the Tandem server first, then open Claude Code with the channel flag. Having Claude connected before the tutorial means you'll see real responses when you ask a question in step 2.
+**Tip:** Start the Tandem server before Claude Code. Having the AI connected before the tutorial means you'll see real responses when you ask a question in step 2.
 
-**Desktop app users:** The server starts automatically when you open Tandem. On first run, the integration wizard walks you through connecting Claude Code — no need to run `tandem setup` from a terminal.
+**On first run:** the integration wizard walks you through connecting Claude Code, in both the desktop app and the browser — there's no need to run `tandem setup` from a terminal. In the desktop app the server is already running; with the npm install, start it with `tandem` first. You can reopen the wizard any time from **Settings → AI Assistant**, or (desktop app only) the tray's "Setup AI Assistant" item.
 
 ## The Editor
 
@@ -36,14 +36,14 @@ The tutorial dismisses after all three steps and won't appear again (progress is
 
 ### Document Area
 
-The main editing area is a rich text editor powered by Tiptap. You can type, select, format, and edit just like any document editor. When Claude is connected, its focus paragraph gets a subtle blue highlight so you can see where Claude is reading.
+The main editing area is a rich text editor powered by Tiptap. You can type, select, format, and edit just like any document editor. When your AI is connected, its focus paragraph gets a subtle blue highlight so you can see where it is reading.
 
 ### Tab Bar
 
-Open documents appear as tabs along the top. Each tab shows the file name and a format indicator: **M** for Markdown, **W** for Word (.docx), **T** for plain text.
+Open documents appear as tabs along the top. Each tab shows the file name, a dot while there are unsaved changes, and an **RO** badge when the document is read-only.
 
 - Drag tabs to reorder them, or use `Alt+Left` / `Alt+Right`
-- A dot appears on the tab title when a document has unsaved changes
+- Double-click a tab title (or press `F2`) to rename the file inline
 - Click the **+** button at the end of the tab bar to open a new file
 
 ### Formatting Toolbar
@@ -56,32 +56,60 @@ When text is selected, a floating popup appears with two parts:
 
 - **Highlight swatches** — One-click highlighting in 4 colors (yellow, green, blue, pink), plus a "no highlight" swatch that clears an existing highlight.
 - **Annotate** — Opens a small composer anchored to the selection. Type your text, then choose the audience:
-  - **Note to self** (`Alt+Enter`) — A private note. Never sent to the AI.
-  - **Send to Claude** (`Ctrl+Enter`) — An outbound comment. Claude sees the selected passage and your text, and can respond with annotations, chat messages, or both.
+  - **Note to self** (`Alt+Enter`) — A private note. Never sent to the AI. `Alt+Enter` always files a note, whichever button is primary.
+  - **Send to your AI** (`Ctrl+Enter`) — An outbound comment. The AI sees the selected passage and your text, and can respond with annotations, chat messages, or both. The button is labelled with your configured assistant's name. `Ctrl+Enter` sends the *primary* action, which is the outbound comment by default.
 
 The popup also includes a toggle to show or hide the formatting bar.
 
-### Side Panel
+### Slash Menu
 
-The right panel toggles between two views:
+Type `/` at the start of a line (or after a space) to open a block-insert menu: Heading 1/2/3, Bullet list, Numbered list, Task list, Quote, Code block, Horizontal rule, and a 3×3 Table with a header row. Keep typing to filter — each command also has a short alias (`h1`, `ul`, `ol`, `todo`, `q`, `code`, `hr`, `3x3`).
+
+Use `↑` / `↓` to move, `Enter` to insert, `Esc` to close. The `/` and whatever you typed after it are removed when the command runs. The menu only opens on text you actually type, so clicking after an existing `/` won't summon it, and it stays out of the way while the find bar, command palette, or an annotation popup is open.
+
+### Right-Click Menus
+
+**Desktop app only** — these are real OS menus. The browser build shows its browser's own menu in the document and nothing in the app chrome.
+
+- **In the document:** Undo/Redo, Cut/Copy/Paste, **Paste as Raw Text** (`Ctrl+Shift+V`), and Select All. Right-clicking a link gives Open / Copy / Edit / Remove Link; right-clicking inside a table gives row and column submenus plus Merge Cells, Split Cell, and Delete Table. With text selected, three more items appear: **Ask AI about selection…**, **Comment to AI…**, and **Private Note…**. (On macOS, plain text keeps the native menu so Look Up and Services still work.)
+- **On a tab:** Close, Close Tabs to the Left / Others / to the Right, Rename, Save or Save As…, View Markdown Source, Copy File Name, Copy Path, and Reveal in Finder / Show in File Explorer.
+- **On an annotation card** (side panel or margin): Accept, Dismiss, Reply…, Edit…, Send to your AI, Copy text, and Remove (or Archive, for notes).
+
+Right-clicking empty app chrome — rails, panel padding, the status bar — deliberately does nothing.
+
+### Scroll Pill
+
+The editor replaces the usual scrollbar with a slim pill in the right gutter. It fades in as your pointer approaches and flashes briefly whenever you scroll, so it stays out of the way while reading. Drag it to scrub through the document; it isn't a click-to-jump target, and it hides entirely when the document fits on screen. Turn it off in **Settings → Appearance → Scroll pill** to get the system scrollbar back.
+
+### Outline Panel (left)
+
+The left panel is the document outline: every heading in the active document, click to jump. A thin strip of tick marks beside it previews the document's shape even while the panel is collapsed. Toggle it with `Alt+Shift+Left`.
+
+### Side Panel (right)
+
+The right panel toggles between two views. Toggle the panel itself with `Alt+Shift+Right`.
+
+Either rail can be resized by dragging the thin strip between it and the document. The strip is also keyboard-operable: tab to it and use the arrow keys.
 
 **Annotations** — Lists all annotations with filtering by type, author, and status. Each card shows a preview of the annotated text, the annotation content, author badge, and timestamp. Bulk **Accept All** / **Dismiss All** buttons appear when multiple annotations are pending. When filters are active, bulk actions only affect the filtered subset.
 
-**Chat** — Freeform messaging with Claude. See the [Chat](#chat) section for details.
+**Chat** — Freeform messaging with your AI. See the [Chat](#chat) section for details.
 
 ### Status Bar
 
-![Status bar showing connection state, document count, and Claude's activity](screenshots/06-claude-presence.png)
+![Status bar showing connection state, word count, and the AI's activity](screenshots/06-claude-presence.png)
 
-The bottom bar shows:
+The floating pill at the bottom-left shows the following — it stays faint until you hover or focus it:
 
 - **Connection state** — Green when connected, with reconnect attempt count and elapsed time during disconnects. A prominent banner appears after 30 seconds of continuous disconnect.
-- **Document count** — How many documents are currently open.
-- **Display name** — Your name as it appears to Claude. Click to change it (stored in localStorage).
-- **Review Only badge** — Appears when the active document is read-only (e.g. an uploaded file, or the changelog opened via View Changelog).
-- **Claude's activity** — What Claude is doing ("Working on Cost Summary...", idle, etc.).
+- **Word count** — Click to cycle through words, characters, sentences, and paragraphs.
+- **Save state** — "Saving…" while a write is in flight, then "Saved HH:MM".
+- **Review Only badge** — Appears when the active document is read-only (an uploaded file, or the changelog opened via View Changelog).
+- **Held count** — In Solo mode, how many of your comments and replies are being withheld.
+- **AI connection** — Whether your AI is reachable, and what it is doing ("Working on Cost Summary…", idle, and so on).
+- **Working-folder pill** — Appears when the AI's working directory has drifted from the document you have open.
 
-Claude collaboration mode (**Solo** / **Tandem**) lives in the title bar at the top of the window, not the status bar. See [Solo / Tandem Mode](#solo--tandem-mode).
+Your display name is set in **Settings → Collaboration**. The Solo / Tandem toggle (`Ctrl+Shift+M`) lives in the title bar at the top of the window, not the status bar. See [Solo / Tandem Mode](#solo--tandem-mode).
 
 ### Toast Notifications
 
@@ -108,9 +136,19 @@ There are three ways to open a file:
 ### Supported Formats
 
 - **Markdown** (`.md`) — Full read-write support with lossless round-trip formatting.
-- **Word** (`.docx`) — Read-write. Saving writes your edits back to the `.docx` body, and pending comments are written back as real Word comments. Existing Word comments (`<w:comment>` elements) are imported as annotations with author "import". External edits (e.g. from Word) are detected: a clean document reloads in place, while a document with unsaved edits shows a keep-vs-reload banner instead of losing anything. A **Convert to Markdown** option is also available if you prefer working in Markdown.
+- **Word** (`.docx`) — Read-write. Saving writes your edits back to the `.docx` body, and pending comments are written back as real Word comments. Existing Word comments (`<w:comment>` elements) are imported as annotations with author "import". External edits (e.g. from Word) are detected: a clean document reloads in place, while a document with unsaved edits shows a keep-vs-reload banner instead of losing anything. A **Convert to Markdown** option is also available if you prefer working in Markdown. See [Word fidelity](#word-fidelity) below.
 - **Plain text** (`.txt`) — Full read-write support.
 - **HTML** (`.html`, `.htm`) — Read support.
+
+### Word Fidelity
+
+Tandem does not model every Word feature, and it tells you which ones rather than letting you find out after a save.
+
+When you open a `.docx` that uses something Tandem can't carry, a notice appears above the document: *"Some Word features in this file aren't fully supported… the items below won't survive a save back to .docx."* Expand **Details** for the list — it names the feature and a count (for example, "3 tracked deletions were applied automatically"), never the content itself. The notice is server-authoritative and stays until the losses are gone; you can collapse it, but not dismiss it.
+
+Saving raises a toast summarising what was simplified on export, and what the backed-up original still has that the saved file doesn't. It repeats on every save on purpose: the comparison is against a copy you can still recover.
+
+**Your original is always backed up first.** Before Tandem's first write to a `.docx` in a session it copies the file's bytes verbatim, so nothing here is one-way. If a save looks wrong, run **"Restore a backup of this document…"** from the command palette (`Ctrl+Shift+P`) — see [troubleshooting → Recovering a previous version](troubleshooting.md#recovering-a-previous-version-of-a-document). `.docx` files are also never auto-saved; only an explicit save overwrites them.
 
 ### Multi-Document Tabs
 
@@ -118,29 +156,29 @@ Each open file gets its own tab and its own collaboration room. Tabs scroll hori
 
 ### Saving
 
-Press `Ctrl+S` to save the active document to disk. Claude can also save via `tandem_save`. A dot on the tab title indicates unsaved changes. Saves are atomic (write to temp file, then rename) to prevent partial writes.
+Press `Ctrl+S` to save the active document to disk. Your AI can also save via `tandem_save`. A dot on the tab title indicates unsaved changes. Saves are atomic (write to temp file, then rename) to prevent partial writes.
 
 ## Annotations
 
-Annotations are how feedback — yours and Claude's — shows up in the document. There are three types, each with distinct visual styling:
+Annotations are how feedback — yours and your AI's — shows up in the document. There are three types, each with distinct visual styling:
 
 ### Highlight
 
-Colored background on the annotated text. User-only — Claude never creates highlights. Choose from 4 colors (yellow, green, blue, pink) via the selection popup's swatches. Use highlights to mark notable passages — green for good, yellow for problems, pink for style/tone.
+Colored background on the annotated text. User-only — the AI never creates highlights. Choose from 4 colors (yellow, green, blue, pink) via the selection popup's swatches. Use highlights to mark notable passages — green for good, yellow for problems, pink for style/tone.
 
 ### Comment
 
-Dashed underline on the annotated text. Comments are the shared channel: you create them to send observations or questions to Claude, and Claude creates them to give feedback on your text. The comment text appears in the side panel card.
+Dashed underline on the annotated text. Comments are the shared channel: you create them to send observations or questions to your AI, and it creates them to give feedback on your text. The comment text appears in the side panel card.
 
-Claude's comments may carry a **replacement suggestion** (`suggestedText`) — a proposed text change. The side panel card shows a diff view: the original text in red with strikethrough, an arrow, and the replacement text in green. When a reason is provided, it appears below the diff. Accepting the comment applies the text change automatically. Suggestions are Claude-only — your own comments are plain text; if you want a rewrite, ask for one in the comment and Claude responds with a suggestion you can accept.
+The AI's comments may carry a **replacement suggestion** (`suggestedText`) — a proposed text change. The side panel card shows a diff view: the original text in red with strikethrough, an arrow, and the replacement text in green. When a reason is provided, it appears below the diff. Accepting the comment applies the text change automatically. Suggestions are AI-only — your own comments are plain text; if you want a rewrite, ask for one in the comment and the AI responds with a suggestion you can accept.
 
 ### Note
 
-A private note to yourself. Notes are never sent to Claude — it cannot read them through any MCP tool or event ([ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model)). Use them for personal reminders while you work. A note can later be **promoted** to a comment if you decide Claude should see it (imported Word comments arrive as notes too, and can be batch-promoted).
+A private note to yourself. Notes are never sent to the AI — it cannot read them through any MCP tool or event ([ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model)). Use them for personal reminders while you work. A note can later be **promoted** to a comment if you decide the AI should see it (imported Word comments arrive as notes too, and can be batch-promoted).
 
 ### Creating Annotations
 
-Select text in the editor to reveal the selection popup. Click a highlight swatch for a highlight, or click **Annotate**, type your text, and choose **Note to self** (private) or **Send to Claude** (comment).
+Select text in the editor to reveal the selection popup. Click a highlight swatch for a highlight, or click **Annotate**, type your text, and choose **Note to self** (private) or the send button (an outbound comment — it carries your assistant's name).
 
 ### Editing Annotations
 
@@ -172,7 +210,9 @@ Annotations can be reviewed without leaving the keyboard:
 
 You can also enable the **margin view** (Settings → AI Assistant → "Margin annotation view") to see annotation cards beside the text they reference, in addition to the side panel list.
 
-In margin view, cards that would be pushed away from their anchor text by their neighbours automatically shrink to a one-line summary — the Accept/Reject buttons stay available, so a shrunken card is still actionable. Click a card to expand it while it's selected, or click its chevron to keep it expanded even after you select something else. Cards also widen to use empty margin space when you collapse or narrow a side rail.
+The margin adapts on two independent axes, and it helps to know which one you are seeing. **When the window is narrow**, the whole margin steps down — from full-width cards, to a narrow track showing a one-line teaser without the action row, to a bare tick mark, to nothing at all. **When cards are crowded** — too many anchored too close together — individual cards shrink to a one-line summary but **keep** their Accept/Reject buttons, so a shrunken card in a full-width margin is still actionable.
+
+Either way, click a card to expand it while it's selected, or click its chevron to keep it expanded even after you select something else. Cards also widen to use empty margin space when you collapse or narrow a side rail.
 
 ### Bulk Actions
 
@@ -180,12 +220,14 @@ In margin view, cards that would be pushed away from their anchor text by their 
 
 ### Solo / Tandem Mode
 
-The title bar includes a **Solo / Tandem** toggle (`Ctrl+Shift+M`). It holds work back in *both* directions — Claude's annotations are held from you, and your own comments are held from Claude.
+The title bar includes a **Solo / Tandem** toggle (`Ctrl+Shift+M`). It holds work back in *both* directions — the AI's annotations are held from you, and your own comments are held from the AI.
 
-- **Tandem** (default) — Claude's annotations appear immediately as they arrive, and the comments and replies you write are visible to Claude.
-- **Solo** — Claude's pending annotations are held back from the document. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
+- **Tandem** (default) — the AI's annotations appear immediately as they arrive, and the comments and replies you write are visible to it.
+- **Solo** — the AI's pending annotations are held back from the document. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
 
-Since v0.19.0 the server, not the client, enforces the other direction: while you are in Solo, the comments and replies **you** author are withheld from Claude. Each held item shows an amber **Held** pill, and the status bar shows a running count of what is being withheld. Switching back to Tandem releases the whole set at once — Claude picks them up on its next check, and a one-time nudge wakes a push-connected session to look.
+Since v0.19.0 the server, not the client, enforces the other direction: while you are in Solo, the comments and replies **you** author are withheld from the AI. Each held item shows an amber **Held** pill, and the status bar shows a running count of what is being withheld. Switching back to Tandem releases the whole set at once — the AI picks them up on its next check, and a one-time nudge wakes a push-connected session to look.
+
+Solo also hides the right rail, so the annotation list is out of sight while you write.
 
 **Exactly what the Solo hold covers.** Held comments and replies are withheld from every surface that sends them to the AI:
 
@@ -197,9 +239,9 @@ Since v0.19.0 the server, not the client, enforces the other direction: while yo
 | `tandem_exportAnnotations` (generating a review report) | Yes — the export reports how many items it withheld, so the report never reads as complete when it isn't. (This was previously exempt, on the reasoning that an export is an explicit "give everything" action. It isn't: only the AI can invoke this tool, so the "explicit action" was always the AI's, not yours.) |
 | `tandem_getTextContent`, `tandem_getContext`, `tandem_search` | Not applicable — these return document text only, never annotation records |
 
-Personal **notes** are private in both modes and are never surfaced to Claude through any tool ([ADR-027](decisions.md)).
+Personal **notes** are private in both modes and are never surfaced to the AI through any tool ([ADR-027](decisions.md)).
 
-Use **Solo** during focused writing to avoid interruption, or when you want to mark up a draft without Claude reacting to each comment. Switch to **Tandem** when you're ready — all held annotations appear at once, in both directions.
+Use **Solo** during focused writing to avoid interruption, or when you want to mark up a draft without the AI reacting to each comment. Switch to **Tandem** when you're ready — all held annotations appear at once, in both directions.
 
 ## Chat
 
@@ -209,19 +251,19 @@ Toggle between the **Annotations** and **Chat** views using the tabs at the top 
 
 ### Sending Messages
 
-Type in the input box and press `Enter` to send. Messages go to Claude via the server.
+Type in the input box and press `Enter` to send. Messages go to your AI via the server.
 
 ### Text Anchors
 
 If you have text selected in the editor when you send a message, the selection is attached as a clickable anchor. The anchor quote shows a preview that expands on hover to reveal the full text. Clicking the anchor scrolls the editor back to that passage.
 
-### Claude's Responses
+### Responses
 
-Claude's replies are rendered as Markdown in the chat panel. Claude can respond to chat messages with text, annotations on the document, or both.
+Replies are rendered as Markdown in the chat panel. Your AI can respond to chat messages with text, annotations on the document, or both.
 
 ### Unread Badge
 
-An unread badge appears on the Chat tab when Claude replies while you're viewing the Annotations panel. Switch to Chat to clear it.
+An unread badge appears on the Chat tab when a reply arrives while you're viewing the Annotations panel. Switch to Chat to clear it.
 
 ## Settings
 
@@ -229,15 +271,27 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 
 | Tab | What's in it |
 |-----|--------------|
-| **Appearance** | Theme (light / dark / warm / system), which decorations are shown (authorship, comments, highlights, notes), raw-markdown view, uniform tab width, the optional formatting bar |
-| **Editor** | Smart typography (curly quotes, em dashes) and the spellcheck toggle — both opt-in |
-| **Network** | Connection details, start-at-login, Cowork enablement, and the advanced retry/delay controls |
+| **Appearance** | Theme (light / warm / dark / system), which panel opens by default, text size, accent hue, spacing density, which decorations are shown (authorship, comments, highlights, notes), reduce motion, the optional formatting bar, reveal-rails-on-hover, uniform tab width, and the scroll pill |
+| **Editor** | Reading measure, editor font, default font by file type, default save folder, smart typography, spellcheck, and raw-markdown view — see [Editor settings](#editor-settings) below |
+| **Network** | Connection details, start-at-login (desktop app only), and the advanced retry/delay controls |
 | **Accessibility** | Motion-reduction and related display preferences |
-| **Collaboration** | Solo/Tandem behavior and presence options |
-| **AI Assistant** | Working directory, the margin annotation view, the integration wizard, and Replay tutorial |
+| **Collaboration** | Your display name, Solo/Tandem behavior, and presence options |
+| **AI Assistant** | Working directory, the margin annotation view, the integration wizard, Replay tutorial, and Cowork enablement (desktop app only) |
 | **Shortcuts** | Click-to-record remapping for every app-level shortcut, with per-row reset and a reset-all |
 | **License** | Activation and current license or trial status |
-| **About** | Version, Copy Diagnostics, and Open log folder |
+| **About** | Version, Copy Diagnostics, and Open log folder (desktop app only) |
+
+### Editor settings
+
+Most of what shapes the reading surface lives here.
+
+- **Reading measure** — The line length of the text: Narrow (58 characters), Comfortable (68), Wide (82), or Full (fills the editor). A fixed measure keeps lines readable no matter which panels are open.
+- **Editor font** — Sans-serif, Serif, or Monospace for the document text.
+- **Default font by file type** — Overrides the editor font per format (`.md`, `.docx`, `.html`, `.txt`). Anything you don't set falls back to the editor font; **Reset to defaults** clears every override at once.
+- **Default save folder** — Where **Save As** puts new files. Leave it empty to fall back to your AI's working directory, then your home folder. In the desktop app a **Choose…** button opens a native folder picker; in the browser you type the path, and browser Save As is a download that ignores this setting.
+- **Smart typography** — Converts straight quotes, dashes, and `...` to typographic characters as you type. Opt-in.
+- **Spellcheck** — Shows the browser's spelling underlines. Opt-in.
+- **Show raw markdown** — Reveals footnotes, reference-style links, and inline HTML that Tandem keeps as raw source. When hidden they stay in the file and always save; only the on-screen markers are hidden. (This control used to sit under Appearance.)
 
 ## Keyboard Shortcuts
 
@@ -284,7 +338,7 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Ctrl+Alt+T` | Reopen closed tab |
 | `Ctrl+1`–`Ctrl+9` | Jump to tab 1–9 |
 | `Alt+Left` / `Alt+Right` | Reorder the focused tab |
-| `Alt+Shift+Left` / `Alt+Shift+Right` | Toggle left / right panel |
+| `Alt+Shift+Left` / `Alt+Shift+Right` | Toggle the outline panel / the Annotations + Chat panel |
 | `Ctrl+Shift+M` | Toggle Solo / Tandem mode |
 | `Ctrl+Shift+J` | Focus chat |
 | `Ctrl+,` | Settings |
@@ -378,7 +432,7 @@ The message appears after 3 seconds of failed connection. If the server was rest
 
 Check the connection indicator in the status bar. If it shows "Reconnecting...", the WebSocket connection dropped — it will auto-reconnect.
 
-If connected but annotations still aren't showing, check your **mode** in the toolbar. **Solo** mode holds Claude's pending annotations. Switch to **Tandem** to see everything.
+If connected but annotations still aren't showing, check your **mode** in the title bar. **Solo** mode holds Claude's pending annotations, and also hides the right rail. Switch to **Tandem** to see everything.
 
 Check the developer console for CRDT fallback warnings (`buildDecorations()` warnings indicate annotations falling back from CRDT-anchored to flat offsets).
 
