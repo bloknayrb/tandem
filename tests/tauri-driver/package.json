@@ -16,5 +16,8 @@
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "webdriverio": "^9.4.0"
+  },
+  "overrides": {
+    "serialize-javascript": "^7.0.5"
   }
 }
