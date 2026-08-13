@@ -42,18 +42,39 @@ const { tandemMode, onModeChange }: Props = $props();
 <style>
   .mode-toggle {
     display: inline-grid;
-    /* `minmax(0, 1fr)`, not a bare `1fr`. Both measure IDENTICALLY today — the
-       track is shrink-to-fit, so it sizes to max-content and the `auto`
-       minimum never binds. They diverge only under compression, and there the
-       0 minimum is the one that holds this component's whole invariant:
-       measured at a 120px cap, `1fr` gives 52 / 70.97px columns while
-       `minmax(0, 1fr)` gives 60 / 60px. Unequal columns put the thumb (which
-       IS column 1) on a segment of a different width — #1384, reopened. The
-       trade is that a squeezed label can outgrow its column; a visibly
-       overflowing label beats a silently misplaced pill. */
+    /* `minmax(0, 1fr)`, not a bare `1fr` — a GUARD, not the fix, and the
+       distinction is the honest one. Both forms measure identically in the
+       shipped layout (67.83 / 67.83): the track is shrink-to-fit, so it sizes
+       to max-content and the `auto` minimum never binds. Nor can it, today —
+       `.title-bar-mode` is `flex: 0 0 auto` (TitleBar.svelte) and
+       `.title-bar-center` carries `min-width: 0`, so the center strip absorbs
+       every pixel of shrink and this track measures the same at every viewport
+       width; past that the row overflows rather than compressing.
+
+       The forms diverge only once something DOES compress the track, and there
+       the 0 minimum is the one that holds the invariant: measured in-app at a
+       border-box 120px cap, `1fr` gives 51.08 / 67.83 (overflowing the cap)
+       while `minmax(0, 1fr)` gives 57 / 57 — which checks out against the box,
+       57 + 57 + 4px padding + 2px border = 120 exactly. Unequal columns put
+       the thumb (which IS column 1) on a
+       segment of a different width — #1384, reopened. Since no viewport can
+       reach that, the compression case is forced with an injected `max-width`
+       in tests/e2e/mode-toggle-geometry.spec.ts rather than left unpinned.
+
+       Two limits, stated rather than hidden. A squeezed label can outgrow its
+       column — a visibly overflowing label beats a silently misplaced pill.
+       And below ~60px even this form fails: the buttons cannot shrink past
+       their own 28px horizontal padding, so they overflow equal columns and
+       the thumb desyncs again (measured dR = -6.00 at a 50px cap). This widens
+       the range over which the pill tracks its segment; it does not make it
+       unconditional. */
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    /* The thumb's containing block. Measured: remove it and the thumb sizes
-       itself against the viewport. Fails silently. */
+    /* The thumb's containing block. Measured: remove it and the containing
+       block falls through to `.title-bar-mode` (TitleBar.svelte), which is
+       itself `position: relative` — the grid placement stops applying and the
+       thumb covers the whole track with a 3px overhang. Fails silently, and
+       note what that means: this rule's correctness depends on an ancestor
+       rule in another file. */
     position: relative;
     /* Bundle's `.a8 .seg` recipe: 2px track padding + a 1px border so the
        segmented control reads as a chip rather than a recessed plate. The
@@ -78,14 +99,20 @@ const { tandemMode, onModeChange }: Props = $props();
 
        - ALL FOUR grid lines must be written out. On an absolutely-positioned
          grid child an `auto` end line resolves to the container's PADDING
-         EDGE, not to `span 1`, so a two-line `grid-area: 1 / 1` stretches the
-         thumb across the entire track. Measured; nothing warns.
+         EDGE, not to `span 1`. Measured, a two-line `grid-area: 1 / 1` breaks
+         BOTH axes: width 136.78 vs 67.39 and height 23 vs 21, the second being
+         the track's 2px of vertical padding. The row half is the non-obvious
+         one — there is no `grid-template-rows`, so row line 2 lives in the
+         IMPLICIT grid and reads as decorative. It is what holds the bottom
+         edge flush. Nothing warns about either.
        - `inset: 0` is required. Without it the abspos box shrink-to-fits and
          renders 0x0.
 
-     Flushness is measured, not asserted here — tests/e2e/mode-toggle-geometry
-     .spec.ts. Minifier survival is pinned in css-pipeline-contract.test.ts,
-     because CI's Playwright run drives `npm run dev`, which never minifies. */
+     Flushness is measured, not asserted here — see
+     tests/e2e/mode-toggle-geometry.spec.ts (kept on one line: a rename sweep
+     greps for the whole filename). Minifier survival is pinned in
+     css-pipeline-contract.test.ts, because CI's Playwright run drives
+     `npm run dev`, which never minifies. */
   .thumb {
     position: absolute;
     grid-area: 1 / 1 / 2 / 2;
@@ -150,6 +177,11 @@ const { tandemMode, onModeChange }: Props = $props();
   :global(body.tandem-reduce-motion) .thumb {
     transition: none;
   }
+  /* Not cosmetic — this is the ONLY selection indicator in forced-colors mode.
+     Measured there: the thumb's background is forced to the same white as the
+     track and its box-shadow to `none`, so the pill is invisible and the
+     outline is all that distinguishes the active segment. Pinned by
+     tests/e2e/forced-colors.spec.ts. */
   @media (forced-colors: active) {
     .mode-toggle button[aria-pressed="true"] {
       outline: 2px solid ButtonText;

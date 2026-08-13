@@ -38,6 +38,7 @@ import { cssRules, styleBlocks } from "../helpers/css-source";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const CLIENT_ROOT = join(ROOT, "src", "client");
+const MODE_TOGGLE = join(CLIENT_ROOT, "editor", "toolbar", "ModeToggle.svelte");
 
 /**
  * Vite's own esbuild-name -> lightningcss-key table, transcribed from
@@ -250,20 +251,75 @@ describe("bundled CSS: the #1383/#1384 mode-toggle declarations survive minifica
   // E2E gate can see this axis. That blind spot is exactly the one that shipped
   // #1189 inert for six weeks.
   //
-  // One case, not four. Three siblings were dropped in review for being
-  // unfalsifiable: lightningcss COLLAPSES longhands into `inset: 0` rather than
-  // exploding it, `minmax(auto, 1fr)` → `minmax(0, 1fr)` is a semantic change
-  // no minifier performs, and a percentage in `translateX` cannot be resolved
-  // without a box. A test that can only pass is not a gate.
+  // One case, not four. Three siblings were dropped in review, and since this
+  // comment is now the only record of why those gates do not exist, the reasons
+  // are the measured ones rather than the plausible ones:
+  //
+  //  - `inset`: at today's targets lightningcss COLLAPSES the four longhands
+  //    into `inset: 0` rather than exploding it. That direction is target
+  //    conditional — at `{safari:13}` / `{chrome:80}` / `{ie:11}` it expands
+  //    instead — so the non-rotting reason is the stronger one: both forms are
+  //    geometrically identical at every target, so no assertion over the choice
+  //    can express a bug.
+  //  - `minmax(auto, 1fr)` → `minmax(0, 1fr)` is a semantic change, and no
+  //    minifier performs one.
+  //  - `translateX(100%)`: lightningcss DOES rewrite this — to `translate(100%)`
+  //    — so contrary to the first draft of this comment that axis was
+  //    falsifiable, and a naive `toContain("translateX")` gate would have failed
+  //    rather than passed. It is dropped because the rewrite is semantically
+  //    identical, not because nothing happens to it.
+  //
+  // A test that can only pass is not a gate; neither is one that reds on a
+  // rename the browser cannot tell apart.
 
   it("keeps grid-area as the four-line form", () => {
     // The load-bearing one. For an ABSOLUTELY-POSITIONED grid child an `auto`
     // end line resolves to the container's padding edge, not `span 1`, so a
     // minifier that collapsed `1/1/2/2` to `1/1` would silently stretch the
     // thumb across the whole track — a visual bug with no failing test
-    // anywhere else.
+    // anywhere else. Verified against the real minifier: it DOES collapse
+    // `1/1/auto/auto` and `grid-row:1;grid-column:1` to `1/1`, so the
+    // optimization this guards is one it already performs elsewhere.
     const out = minify(".probe{grid-area:1 / 1 / 2 / 2}");
     expect(out).toContain("grid-area:1/1/2/2");
+  });
+
+  it("keeps the real .thumb placement intact, not just a synthetic probe", () => {
+    // The synthetic fixture above does not guard our source — delete `.thumb`
+    // from ModeToggle.svelte entirely and it still passes. This is the same
+    // lesson the line-clamp gate one describe block up already records; the
+    // first draft of this block did not follow its own neighbour.
+    //
+    // Only the base `.thumb` rule is fed to the minifier, not the whole <style>
+    // block: that block contains `:global(...)`, which is Svelte syntax and not
+    // CSS lightningcss can parse.
+    const thumbRule = cssRules(styleBlocks(MODE_TOGGLE)).find(
+      ([selector, body]) => selector.trim() === ".thumb" && /background\s*:/.test(body),
+    );
+    expect(
+      thumbRule,
+      "no painting `.thumb` rule in ModeToggle.svelte — renamed or removed?",
+    ).toBeDefined();
+
+    const out = minify(`.thumb{${thumbRule?.[1]}}`);
+    for (const decl of ["grid-area:1/1/2/2", "inset:0", "position:absolute"]) {
+      expect(out, `#1384: \`${decl}\` did not survive minification of the real rule`).toContain(
+        decl,
+      );
+    }
+  });
+
+  it("keeps the real track's equal-column sizing intact", () => {
+    const track = cssRules(styleBlocks(MODE_TOGGLE)).find(
+      ([selector]) => selector.trim() === ".mode-toggle",
+    );
+    expect(track, "no `.mode-toggle` rule in ModeToggle.svelte").toBeDefined();
+
+    const out = minify(`.mode-toggle{${track?.[1]}}`);
+    expect(out, "#1384: the grid track no longer minifies to equal columns").toMatch(
+      /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
+    );
+    expect(out).toContain("inline-grid");
   });
 });
 
