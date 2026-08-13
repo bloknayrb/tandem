@@ -190,8 +190,24 @@ describe("the premise of #1377 (Tiptap's default guard)", () => {
     "https://example.com",
     "//example.com/x",
     "#frag",
+    // Load-bearing, and asserted only in a comment until now: this is the
+    // traversal `relative-link.ts` calls a PRE-EXISTING hole. It differs from
+    // the `a/…` variant only in its leading segment, and that is exactly why it
+    // survives — a leading `.` hits the guard's `[^a-z]` alternative, while a
+    // leading letter dies in `[a-z0-9+.-]+` on the following `/`. If this row
+    // ever flips, the "pre-existing" framing is wrong and the claim must move.
+    "../../../../..///evil.com/share/x.md",
   ])("already accepted %j before #1377", (href) => {
     expect(tiptapDefaultIsAllowedUri(href, [])).toBeTruthy();
+  });
+
+  it("returns a match array, not a boolean — which is why `!!` is load-bearing", () => {
+    // `shouldAutoLink` is typed boolean, so `editor-extensions.ts` coerces.
+    // A reader who assumes this returns a boolean will "simplify" the `!!`
+    // away; this makes that a red test rather than a silent type lie. It is
+    // also why the rows above use toBeFalsy/toBeTruthy — `toBe(false)` fails.
+    expect(tiptapDefaultIsAllowedUri("notes.md", [])).toBeInstanceOf(Array);
+    expect(tiptapDefaultIsAllowedUri("docs/spec.md", [])).toBeNull();
   });
 });
 

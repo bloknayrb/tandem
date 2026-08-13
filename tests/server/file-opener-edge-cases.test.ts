@@ -377,18 +377,28 @@ describe("openFileByPath — UNC paths are rejected BEFORE canonicalization", ()
   });
 
   it.each([
-    ["\\\\evil.com\\share\\x.md", "a bare UNC path"],
-    // The extended-UNC bypass the previous inline two-prefix check did not
-    // cover — `path.resolve` does not normalise `\\?\UNC\…` back to `\\…`.
-    ["\\\\?\\UNC\\evil.com\\share\\x.md", "an extended-UNC path"],
-  ])("rejects %s (%s) without calling realpathSync", async (badPath) => {
-    const spy = vi.spyOn(fsSync, "realpathSync");
+    ["\\\\evil.com\\share\\x.md", "a bare UNC path", /UNC paths/],
+    // Extended UNC. The MESSAGE is the assertion that matters: as a verdict
+    // this is indistinguishable from the bare case (every device-namespace
+    // prefix also starts with `\\`), so asserting only INVALID_PATH would pin
+    // nothing about the extended-length branch.
+    ["\\\\?\\UNC\\evil.com\\share\\x.md", "an extended-UNC path", /Extended-length/],
+  ])("rejects %s (%s) without calling realpathSync", async (badPath, _label, expectedMessage) => {
+    // NOT a pass-through spy. Under a regression the real `realpathSync` runs
+    // against `\\evil.com\share\x.md` — i.e. the test performs the very NTLM
+    // leak it exists to prevent, from the developer's machine, and blocks for
+    // an SMB timeout (measured: 21s) before failing. Throwing turns that into
+    // an instant, local failure.
+    const spy = vi.spyOn(fsSync, "realpathSync").mockImplementation(() => {
+      throw new Error("realpathSync must not be called on an unvalidated path");
+    });
 
     try {
       await openFileByPath(badPath);
       expect.unreachable("should have thrown");
     } catch (err: unknown) {
       expect((err as NodeJS.ErrnoException).code).toBe("INVALID_PATH");
+      expect((err as Error).message).toMatch(expectedMessage);
     }
 
     // THE POINT OF THIS TEST. `realpathSync` on a UNC path opens the SMB

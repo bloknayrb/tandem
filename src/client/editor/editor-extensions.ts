@@ -148,7 +148,13 @@ export function buildSchemaExtensions(): AnyExtension[] {
       // TEXT, not the resolved href, so widening `isAllowedUri` alone would make
       // typing `example.com/path ` auto-create a link — writing markdown link
       // syntax into the user's file on a keystroke, entirely outside #1377.
-      // Restoring the vendored default here pins that gate.
+      //
+      // Substituting the vendored default URI GUARD here pins that gate. Note
+      // it is not the vendored `shouldAutoLink` default (that one is
+      // `url => !!url`): autolink's effective gate is `validate && shouldAutoLink`,
+      // so widened-validate AND default-guard re-composes to exactly the
+      // default. The `!!` is required, not decorative — `isAllowedUri` returns
+      // `RegExpMatchArray | null`, and this option is typed boolean.
       //
       // The `[]` is the `protocols` argument, and it is correct only because we
       // never configure `protocols` (asserted in the test file). If a custom

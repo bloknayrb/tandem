@@ -54,11 +54,18 @@ export async function applyChangesCore(
   const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
   const resolvedBackupPath = backupPath !== undefined ? path.resolve(backupPath) : undefined;
 
-  // Reject UNC / device-namespace backup paths (Windows NTLM hash leak). Not
-  // gated on `process.platform`: the check is a pure string test, and a path
-  // arriving at a Linux/macOS server can still reach a Windows client.
-  if (resolvedBackupPath !== undefined) {
-    const unsafe = rejectUnsafeWindowsPrefix(resolvedBackupPath);
+  // Reject UNC / device-namespace backup paths (Windows NTLM hash leak).
+  //
+  // RAW **and** resolved, in that order — checking only the resolved form makes
+  // this inert on POSIX, which is the exact platform an ungated check exists to
+  // cover. `path.resolve` is platform-dependent where this guard is not: on
+  // POSIX it treats `\\server\share\x.docx` as a RELATIVE name and prepends
+  // cwd, and it collapses `//evil/share` to `/evil/share` — either way the
+  // prefix the check looks for is gone before the check runs. Same idiom and
+  // same reason as `integrations/node-binary.ts` and `mcp/file-opener.ts`.
+  if (backupPath !== undefined) {
+    const unsafe =
+      rejectUnsafeWindowsPrefix(backupPath) ?? rejectUnsafeWindowsPrefix(path.resolve(backupPath));
     if (unsafe) throw Object.assign(new Error(unsafe), { code: "INVALID_PATH" });
   }
 

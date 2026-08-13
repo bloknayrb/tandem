@@ -78,10 +78,18 @@ function hasSchemePrefix(trimmed: string): boolean {
  * badly.
  *
  * Deliberately NOT applied to {@link sanitizeHrefForPaste} or
- * {@link sanitizeImageSrcForPaste}. Those answer "may this survive a markdown
- * paste" and already have an allowlist standing between a hostile string and a
- * navigation; this set exists for the render-time question, which has no
- * allowlist of its own and so must fail closed.
+ * {@link sanitizeImageSrcForPaste}, and NOT because those are already covered.
+ * Both end in a bare `if (!hasSchemePrefix(trimmed)) return trimmed` — their
+ * allowlists gate only SCHEME-BEARING strings, so for exactly the class this
+ * set exists to catch they are pass-throughs. Measured: both return
+ * `<NUL>//evil.com/x.png` unchanged.
+ *
+ * For links that is covered downstream — `openHref` re-gates every href through
+ * `isSafeExternalHref` or `resolveRelativeLink`'s fail-closed walk. For IMAGES
+ * there is no equivalent gate: a pasted `src` reaches the DOM as written and
+ * the browser resolves it cross-host. That gap is pre-existing and tracked
+ * separately; it is not something this set's absence here creates, but it is
+ * also not something an allowlist prevents.
  */
 const URL_HOSTILE_CHARS = /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000\\]/;
 
@@ -103,10 +111,17 @@ const URL_HOSTILE_CHARS = /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u
  * *provably identical* to the browser's own stripping to be safe. Worked
  * counterexamples, all measured:
  *   - `java<TAB>script:alert(1)` — browsers strip TAB, so this IS `javascript:`.
- *   - `/\evil.com/x.md` and `\\evil.com\share\x.md` — `new URL(…)` resolves both
- *     to `http://evil.com/…`, i.e. CROSS-HOST despite looking path-like.
  *   - `<NUL>//evil.com` — resolves to `http://evil.com/`, and JS `trim()` does
  *     NOT strip U+0000. That is precisely why there is no `trim()` here.
+ *
+ * **A caution about reading those rows as protections.** The consumer is
+ * `defaultValidate(url) || isSchemelessPathHref(url)`, so a rejection here only
+ * matters when `defaultValidate` also rejects. It does not for `/\evil.com/x.md`
+ * (leading `/` hits its `[^a-z]` alternative), so that href renders regardless
+ * of what this predicate says — the rejection is real but INERT at the union.
+ * `\\evil.com\share\x.md` is the same story. Both resolve cross-host under
+ * `new URL()`; neither is newly reachable because of this file, and neither is
+ * closed by it.
  *
  * **The `//` exclusion is separate and non-obvious.** `hasSchemePrefix("//x")`
  * is false (no colon before the first `/`), so protocol-relative hrefs would

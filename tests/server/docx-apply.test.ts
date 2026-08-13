@@ -785,21 +785,23 @@ describe("applyChangesCore — UNC backupPath rejection", () => {
     setActiveDocId(DOC_ID);
   });
 
-  it("rejects a UNC backupPath starting with \\\\", async () => {
-    // Only meaningful on win32; on other platforms path.resolve won't produce
-    // a UNC path, so the check is a no-op — skip on non-Windows.
-    if (process.platform !== "win32") return;
-
-    await expect(
-      applyChangesCore(DOC_ID, "Test Author", "\\\\attacker.com\\share\\backup.docx"),
-    ).rejects.toMatchObject({ code: "INVALID_PATH", message: /UNC paths are not supported/ });
-  });
-
-  it("rejects a UNC backupPath starting with //", async () => {
-    if (process.platform !== "win32") return;
-
-    await expect(
-      applyChangesCore(DOC_ID, "Test Author", "//attacker.com/share/backup.docx"),
-    ).rejects.toMatchObject({ code: "INVALID_PATH", message: /UNC paths are not supported/ });
+  // These used to early-return on non-Windows, which made them assertion-free
+  // no-ops on Ubuntu CI — the only place they actually run. They pass now
+  // because the guard checks the RAW `backupPath` before `path.resolve`;
+  // checking only the resolved form is inert on POSIX, where `path.resolve`
+  // destroys every prefix the check looks for (`//evil/share` → `/evil/share`,
+  // and `\\evil\share` → `<cwd>/\\evil\share`).
+  it.each([
+    ["\\\\attacker.com\\share\\backup.docx", "backslash UNC", /UNC paths are not supported/],
+    ["//attacker.com/share/backup.docx", "forward-slash UNC", /UNC paths are not supported/],
+    // Message, not just verdict: as a boolean this is indistinguishable from
+    // the bare-UNC rows above.
+    ["\\\\?\\UNC\\attacker.com\\share\\b.docx", "extended UNC", /Extended-length/],
+    ["\\\\.\\pipe\\backup.docx", "device namespace", /Extended-length/],
+  ])("rejects a %s backupPath (%s) on every platform", async (badPath, _label, message) => {
+    await expect(applyChangesCore(DOC_ID, "Test Author", badPath)).rejects.toMatchObject({
+      code: "INVALID_PATH",
+      message,
+    });
   });
 });
