@@ -58,12 +58,13 @@ export function isSafeExternalHref(href: string): boolean {
  * exactly the drift this file's header warns about. {@link isSchemelessPathHref}
  * handles backslash itself, by rejecting it outright.
  */
+const SCHEME_STOP_CHARS = /[/#?]/;
+
 function hasSchemePrefix(trimmed: string): boolean {
   const firstColon = trimmed.indexOf(":");
   if (firstColon === -1) return false;
-  const seps = ["/", "#", "?"].map((ch) => trimmed.indexOf(ch)).filter((idx) => idx !== -1);
-  const firstPathSep = seps.length ? Math.min(...seps) : Number.POSITIVE_INFINITY;
-  return firstPathSep >= firstColon;
+  const firstPathSep = trimmed.search(SCHEME_STOP_CHARS);
+  return firstPathSep === -1 || firstPathSep > firstColon;
 }
 
 /**
@@ -75,6 +76,12 @@ function hasSchemePrefix(trimmed: string): boolean {
  * parsing. The trailing `\\` is ours: a backslash is not whitespace, but
  * browsers map it to `/` inside a URL, so it reinterprets structure just as
  * badly.
+ *
+ * Deliberately NOT applied to {@link sanitizeHrefForPaste} or
+ * {@link sanitizeImageSrcForPaste}. Those answer "may this survive a markdown
+ * paste" and already have an allowlist standing between a hostile string and a
+ * navigation; this set exists for the render-time question, which has no
+ * allowlist of its own and so must fail closed.
  */
 const URL_HOSTILE_CHARS = /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000\\]/;
 

@@ -282,15 +282,19 @@ async function openHref(href: string) {
   // Treat anything else with a recognised file extension as a relative path.
   // `resolveRelativeLink` is fail-closed: a non-navigable extension, a pure
   // fragment, or a traversal escaping the current file's root all return null,
-  // and a null routes to this no-op — the correct UX for a link that points
-  // outside the document tree.
+  // and a null means we do not navigate — the correct UX for a link that points
+  // outside the document tree. #1377 widened the RENDER boundary without
+  // widening this one, so an href can now be clickable and still land here; the
+  // warn is what makes that gap visible instead of a dead click.
   if (currentFilePath) {
     const resolvedPath = resolveRelativeLink(href, currentFilePath);
-    if (resolvedPath) {
-      const result = await openServerPath(resolvedPath);
-      if (!result.ok) {
-        console.warn(`[tandem] Could not open linked file "${resolvedPath}": ${result.error}`);
-      }
+    if (!resolvedPath) {
+      console.warn(`[tandem] Link target is not an openable relative path: "${href}"`);
+      return;
+    }
+    const result = await openServerPath(resolvedPath);
+    if (!result.ok) {
+      console.warn(`[tandem] Could not open linked file "${resolvedPath}": ${result.error}`);
     }
   }
 }

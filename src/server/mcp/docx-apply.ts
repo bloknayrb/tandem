@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import fs from "fs/promises";
 import path from "path";
 import { z } from "zod";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { listDocBackups } from "../file-io/doc-backup.js";
 import {
   type AcceptedSuggestion,
@@ -53,15 +54,12 @@ export async function applyChangesCore(
   const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
   const resolvedBackupPath = backupPath !== undefined ? path.resolve(backupPath) : undefined;
 
-  // Reject UNC backup paths (Windows NTLM hash leak)
-  if (
-    resolvedBackupPath !== undefined &&
-    process.platform === "win32" &&
-    (resolvedBackupPath.startsWith("\\\\") || resolvedBackupPath.startsWith("//"))
-  ) {
-    throw Object.assign(new Error("UNC paths are not supported for security reasons."), {
-      code: "INVALID_PATH",
-    });
+  // Reject UNC / device-namespace backup paths (Windows NTLM hash leak). Not
+  // gated on `process.platform`: the check is a pure string test, and a path
+  // arriving at a Linux/macOS server can still reach a Windows client.
+  if (resolvedBackupPath !== undefined) {
+    const unsafe = rejectUnsafeWindowsPrefix(resolvedBackupPath);
+    if (unsafe) throw Object.assign(new Error(unsafe), { code: "INVALID_PATH" });
   }
 
   // 1. Resolve document

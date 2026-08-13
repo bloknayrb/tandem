@@ -119,64 +119,42 @@ export function buildSchemaExtensions(): AnyExtension[] {
       openOnClick: false,
       HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
       // #1377: `[spec](docs/spec.md)` — the relative-link form most repos use —
-      // rendered with `href=""` and no hover tooltip. The vendored default
-      // guard blocks `/^[a-zA-Z][a-zA-Z0-9+.-]*[:\/]/`.
+      // rendered with `href=""` and no hover tooltip, because Tiptap's default
+      // guard rejects it. (Don't re-derive that guard's regex by reading it:
+      // it is assembled in a template literal, so the escape you see is not the
+      // one `new RegExp` gets, and the naive reading flips the answer. The
+      // behaviour is pinned executably in `tests/client/link-target-internal.test.ts`.)
       //
-      // DERIVATION WARNING, because re-deriving it wrong flips the answer: the
-      // vendored pattern is assembled inside a TEMPLATE LITERAL
-      // (`dist/index.js:211-213`), so `\-` collapses to a bare `-` before
-      // `new RegExp` ever sees it and the final class is `[^a-z+.-:]`, in which
-      // `.-:` IS a range (U+002E–U+003A) swallowing `.`, `/`, the digits and
-      // `:`. Written literally with an escaped hyphen it would be a plain set,
-      // and `docs/spec.md` would be ALLOWED — the opposite of production.
-      //
-      // Fix: a strictly-additive union. `ctx.defaultValidate` runs FIRST so
-      // Tiptap's DOMPurify-derived scheme allowlist stays the authority on
-      // schemes, and our predicate can only ever ADD.
-      //
-      // Newly allowed, as a PROPERTY rather than a list (a list was measurably
-      // wrong): every href that contains no URL-hostile character and no
-      // backslash, does not begin `//`, and has either no colon or a `/`, `#`
-      // or `?` before its first colon — that `defaultValidate` rejects.
-      // Illustrations only: `docs/spec.md`, `java/script:alert(1)`,
-      // `example.com/path`. `javascript:`/`data:`/`vbscript:`/`file:`/`blob:`/
-      // `filesystem:` and their whitespace-obfuscated variants stay blocked by
-      // BOTH halves (the default strips whitespace and sees the scheme; our
-      // predicate fails closed on the hostile character).
+      // The fix is a union, and it is strictly additive because `||` can only
+      // ever widen — not because of which operand runs first. Tiptap's
+      // DOMPurify-derived scheme allowlist therefore stays the authority on
+      // schemes and our predicate only ADDs: hrefs with no URL-hostile
+      // character, no backslash, no leading `//`, and either no colon or a
+      // `/`/`#`/`?` before the first one. `javascript:` and friends stay blocked
+      // by both halves.
       //
       // NOT claimed: that a newly-allowed href "can only be a relative URL".
       // That is true of `new URL()` and false of Tandem's actual consumer —
       // `utils/relative-link.ts` is a segment walk, and it is where the
       // traversal question is answered.
       //
-      // This option governs SIX surfaces in `dist/index.js`: parseHTML getAttrs
-      // (:290), renderHTML (:304), setLink (:322), toggleLink (:333), the
-      // linkify markPasteRule (:361) and the autolink validator (:395).
-      // setLink/toggleLink are the Link-editor + context-menu surface, where a
-      // bare nested path silently no-opped before this change. The markPasteRule
-      // reads `isAllowedUri` directly and CANNOT be narrowed by option — pasting
-      // the plain text `example.com/path` now linkifies; accepted deliberately,
-      // since bare `example.com` already linkifies today. Autolink is pinned
-      // below.
+      // Widening reaches every surface that reads this option, including the
+      // linkify markPasteRule, which cannot be narrowed separately: pasting the
+      // plain text `example.com/path` now linkifies. Accepted deliberately —
+      // bare `example.com` already did.
       isAllowedUri: (url, ctx) => ctx.defaultValidate(url) || isSchemelessPathHref(url),
-      // Autolink is held at EXACTLY today's behaviour, and only this option can
-      // do it: the autolink plugin filters on `link.value` — the RAW TYPED TEXT
-      // (`dist/index.js:106`), not the resolved href. Measured with the real
-      // linkifyjs, `find("example.com/path")` yields
-      // `{value: "example.com/path", href: "http://example.com/path"}` while
-      // `defaultValidate("example.com/path")` is false, so widening
-      // `isAllowedUri` alone would make typing `example.com/path ` auto-create a
-      // link — writing markdown link syntax into the user's file on a keystroke,
-      // entirely outside #1377. `shouldAutoLink` is applied AFTER `validate`
-      // (:107), so restoring the vendored default here pins the gate exactly.
-      // What is NOT new: typing `docs/spec.md ` already autolinks `spec.md`
-      // today (linkify tokenizes to the last dotted run); this changes nothing
-      // there.
+      // Autolink is the one surface held at EXACTLY today's behaviour, and only
+      // this option can do it: the autolink plugin filters on the RAW TYPED
+      // TEXT, not the resolved href, so widening `isAllowedUri` alone would make
+      // typing `example.com/path ` auto-create a link — writing markdown link
+      // syntax into the user's file on a keystroke, entirely outside #1377.
+      // Restoring the vendored default here pins that gate.
       //
       // The `[]` is the `protocols` argument, and it is correct only because we
-      // never configure `protocols`. If a custom protocol is ever added above,
-      // it must be threaded through here too or autolink will silently ignore
-      // it — an option literal cannot reach `this.options`.
+      // never configure `protocols` (asserted in the test file). If a custom
+      // protocol is ever added above, it must be threaded through here too or
+      // autolink will silently ignore it — an option literal cannot reach
+      // `this.options`.
       shouldAutoLink: (url) => !!tiptapDefaultIsAllowedUri(url, []),
     }),
     // Block-level image node (issue #153). Renders `![alt](url)` markdown

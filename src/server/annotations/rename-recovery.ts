@@ -40,7 +40,7 @@ import type * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
-import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { extractText } from "../mcp/document-model.js";
 import { contentHash, ENVELOPE_FILENAME_RE } from "./doc-hash.js";
 import { type AnnotationDocV1, parseAnnotationDoc, SCHEMA_VERSION } from "./schema.js";

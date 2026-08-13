@@ -1,8 +1,8 @@
 import fs from "fs/promises";
 import path from "path";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { atomicWrite } from "../file-io/index.js";
-import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { resolveAppDataDir } from "../platform.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { extractMarkdown } from "./document-model.js";

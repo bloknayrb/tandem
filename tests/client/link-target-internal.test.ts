@@ -24,6 +24,7 @@
  */
 
 import { Editor } from "@tiptap/core";
+import { isAllowedUri as tiptapDefaultIsAllowedUri } from "@tiptap/extension-link";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 
@@ -112,10 +113,11 @@ describe("link target attribute", () => {
     ["../docs/spec.md", "a parent-relative markdown file"],
     ["./subdir/file.txt", "an explicitly-relative nested path"],
     ["/abs/path.md", "a root-relative path"],
-    // #1377: bare paths whose first separator is `/`. Tiptap's default guard
-    // blanked all of these to `href=""` before our renderHTML post-processing
-    // ran, so they rendered as dead links.
     ["notes.md", "a bare sibling file"],
+    // #1377: bare paths carrying a `/`. Tiptap's default guard blanked these to
+    // `href=""` before our renderHTML post-processing ran, so they rendered as
+    // dead links. (`notes.md` above is NOT one of them — it has no separator,
+    // `defaultValidate` always accepted it, and it is here as a control.)
     ["docs/spec.md", "a bare relative path with a subdirectory"],
     ["a/b.md", "a bare two-segment path"],
     ["subdir/file.md#frag", "a bare nested path with a fragment"],
@@ -163,6 +165,33 @@ describe("link target attribute", () => {
     const anchor = renderLink(href);
     expect(anchor?.getAttribute("rel")).toBe("noopener noreferrer");
     expect(anchor?.getAttribute("title")).toBe(href);
+  });
+});
+
+describe("the premise of #1377 (Tiptap's default guard)", () => {
+  // The whole fix rests on `defaultValidate("docs/spec.md")` being FALSE. That
+  // is genuinely surprising, and reading the vendored regex to confirm it gives
+  // the WRONG answer — the pattern is assembled in a template literal, so the
+  // hyphen escape you see is gone before `new RegExp` runs and `.-:` becomes a
+  // range. So assert it against the real dependency instead of re-deriving it:
+  // if a `@tiptap/extension-link` upgrade widens the default, this row flips
+  // and the union above becomes dead weight worth deleting.
+  it.each([
+    "docs/spec.md",
+    "a/b.md",
+    "Docs/spec.md",
+    "example.com/path",
+  ])("rejects %j, which is why the union exists", (href) => {
+    expect(tiptapDefaultIsAllowedUri(href, [])).toBeFalsy();
+  });
+
+  it.each([
+    "notes.md",
+    "https://example.com",
+    "//example.com/x",
+    "#frag",
+  ])("already accepted %j before #1377", (href) => {
+    expect(tiptapDefaultIsAllowedUri(href, [])).toBeTruthy();
   });
 });
 
@@ -224,5 +253,14 @@ describe("autolink pin (shouldAutoLink)", () => {
     const fn = shouldAutoLink as (url: string) => boolean;
     expect(fn("example.com/path")).toBe(false);
     expect(fn("notes.md")).toBe(true);
+  });
+
+  it("leaves `protocols` unconfigured, which is what makes the pin's `[]` correct", () => {
+    // `shouldAutoLink` passes a literal `[]` for the `protocols` argument
+    // because an option literal cannot reach `this.options`. That is only
+    // faithful while no custom protocol is configured — this converts the
+    // comment saying so into a detector.
+    const editor = mountEditor("<p>x</p>");
+    expect(linkOptions(editor).protocols).toEqual([]);
   });
 });

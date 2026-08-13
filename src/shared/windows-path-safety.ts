@@ -5,6 +5,15 @@
  * crafted path to a Linux/macOS server (the path string still reaches code
  * that may eventually run on Windows via shared state).
  *
+ * **This is the canonical copy of this rule**, and it lives in `src/shared/`
+ * rather than with the server's file IO because client, CLI and server all need
+ * it while `src/client/` must not import from `src/server/`. A hand-rolled
+ * `startsWith("\\\\")` elsewhere is a weaker duplicate: it misses the
+ * device-namespace forms below. Four such copies survive at the time of writing
+ * (`cli/win-path-guard.ts`, `server/file-io/docx-export.ts`, its spike twin, and
+ * `server/launcher/supervisor.ts`) — see #1417, which also covers the ordering
+ * defect where a filesystem call runs *before* the check.
+ *
  * Rejected forms (all case-insensitive):
  *  - `\\?\…`        — Windows extended-length prefix. `\\?\UNC\server\share`
  *                     is a documented bypass of plain `\\` UNC rejection

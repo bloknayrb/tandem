@@ -28,11 +28,11 @@ import {
   generateNotificationId,
   generateReplyId,
 } from "../../shared/utils.js";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev, REPLY_TEXT_MAX } from "../annotations/schema.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { atomicWrite } from "../file-io/index.js";
-import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
 import { anchoredRange } from "../positions.js";

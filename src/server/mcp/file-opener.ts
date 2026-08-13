@@ -24,6 +24,7 @@ import { withFileSync, withInternal, withReload } from "../../shared/origins.js"
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation, ExternalConflictState, FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { recoverRenamedEnvelope } from "../annotations/rename-recovery.js";
@@ -40,7 +41,6 @@ import {
   type LoadIssue,
   type Prepared,
 } from "../file-io/index.js";
-import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { recordSelfWrite, suppressNextChange, watchFile } from "../file-watcher.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
