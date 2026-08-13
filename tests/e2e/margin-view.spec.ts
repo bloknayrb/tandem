@@ -10,6 +10,7 @@ import {
   nextFrames,
   openAnnotatePopup,
   openSettingsViaBrandMenu,
+  setRailVisible,
 } from "./helpers";
 
 /**
@@ -67,18 +68,8 @@ async function openSettingsAndGotoCowork(page: import("@playwright/test").Page):
  * removed the titlebar panel-toggle buttons; keyboard shortcuts drive it.
  */
 async function closeBothRails(page: import("@playwright/test").Page): Promise<void> {
-  if ((await page.locator("[data-testid='left-panel-resize-handle']").count()) > 0) {
-    await page.keyboard.press("Alt+Shift+ArrowLeft");
-    await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(0, {
-      timeout: 3_000,
-    });
-  }
-  if ((await page.locator("[data-testid='panel-resize-handle']").count()) > 0) {
-    await page.keyboard.press("Alt+Shift+ArrowRight");
-    await expect(page.locator("[data-testid='panel-resize-handle']")).toHaveCount(0, {
-      timeout: 3_000,
-    });
-  }
+  await setRailVisible(page, "left", false);
+  await setRailVisible(page, "right", false);
 }
 
 async function setMarginView(

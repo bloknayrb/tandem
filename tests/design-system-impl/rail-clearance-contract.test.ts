@@ -1,123 +1,74 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { styleBlocks } from "../helpers/css-source";
 
 /**
  * Regression guard for #1396 — the rail drag strip overhung the visible rail.
  *
- * The strip (`{#snippet resizeHandle}` in App.svelte) is a flex SIBLING of
- * `.rail-shell` inside the editor row, which has no `align-items` and therefore
- * stretches every child. Under `stretch`, an item's margins inset its stretched
- * cross size — so while only the shell carried `--tandem-rail-top-clearance` /
- * `--tandem-status-clearance-total`, the strip stretched the full row height and
- * its hover tint painted 52px above and 52-68px below the rail it resizes.
+ * The mechanic (flex `stretch` + margins) is documented on the shared
+ * `.rail-shell, .rail-resize-handle` rule in App.svelte; this file pins the
+ * shape of that fix rather than re-explaining it.
  *
- * The fix is a SHARED declaration, not a copied one, and that is what this file
- * pins. The bottom inset rides `--tandem-space-5`, so it computes to 52/60/68px
- * across compact/cozy/spacious — a second declaration (even a correct-looking
- * one) desyncs the two siblings the moment either token moves. Hence:
+ * What it pins, and why each half matters:
  *
- *  - exactly ONE declaration site per token (not one *mention*: counting token
- *    names would forbid the explanatory comments this fix is required to carry,
- *    and index.html:280 shows in-repo how naturally a comment names a token);
- *  - and each declaration's rule must list BOTH classes, so "shared" is proven
- *    rather than asserted. Counting declarations rather than selectors also
- *    leaves room for a legitimate third consumer joining the same rule.
+ *  - The clearance is declared ONCE per token, in a rule listing BOTH classes,
+ *    so "shared" is proven rather than asserted. Counting *declarations* rather
+ *    than token mentions leaves the explanatory comments alone and leaves room
+ *    for a legitimate third consumer joining the same rule.
+ *  - The strip carries no inline geometry. This is the more valuable half: an
+ *    inline `style` attribute is structurally unreachable by any stylesheet
+ *    rule, which is why the strip could not be covered by its neighbour's
+ *    clearance policy and why its colour crossfade sat unguarded by both
+ *    reduce-motion rules. One cause, two bugs.
  *
- * Comment spans are stripped BEFORE any analysis. Without that, the selector
- * walk-back would sweep up the comment block sitting between `.banner-stack`'s
- * closing brace and the rule under test — so prose could satisfy the check while
- * the bug was reintroduced. `maskComments` in scripts/check-semantic-tokens.ts
- * does the same job but is not exported; widening that script's public API for
- * one test is not worth it, and inside a `<style>` block `/* … *\/` is the only
- * comment form, so the local four-line strip is sufficient.
- *
- * The rendered geometry (computed margins + box edges matching the shell's) is
- * covered by tests/e2e/rail-resize-handle.spec.ts. This file is the source-level
- * half: it fails in `npm test`, with no browser, if the shape that caused #1396
- * — geometry inlined onto the element — comes back.
+ * The rendered geometry lives in tests/e2e/rail-resize-handle.spec.ts, and that
+ * spec states the actual invariant ("the strip's edges coincide with its
+ * rail's") in a structure-independent way. This file is the fast source-level
+ * half: it fails in `npm test`, with no browser.
  */
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const APP_SVELTE = join(ROOT, "src", "client", "App.svelte");
 
-const SHARED_SELECTORS = [".rail-shell", ".rail-resize-handle"] as const;
-
-const src = readFileSync(APP_SVELTE, "utf-8");
-
-/** Strip CSS block comments so commented-out prose can't satisfy or trip a grep. */
-function stripCssComments(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, "");
-}
-
-/** The component's `<style>` blocks, comments removed. */
-function styleBlock(): string {
-  const blocks = [...src.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]);
-  if (blocks.length === 0) throw new Error("App.svelte has no <style> block");
-  return stripCssComments(blocks.join("\n"));
-}
-
-/**
- * The selector list of the rule containing `index`, as trimmed entries.
- *
- * Brace scanner, not a CSS parser: the opening brace of the enclosing rule is
- * the last `{` before the declaration, and the selector runs back to whichever
- * comes later — the previous rule's `}` or an enclosing at-rule's `{`.
- */
-function enclosingSelectors(css: string, index: number): string[] {
-  const open = css.lastIndexOf("{", index);
-  expect(open, "declaration should sit inside a rule").toBeGreaterThan(-1);
-  const start = Math.max(css.lastIndexOf("}", open), css.lastIndexOf("{", open - 1)) + 1;
-  return css
-    .slice(start, open)
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function matchIndices(css: string, re: RegExp): number[] {
-  return [...css.matchAll(re)].map((m) => m.index as number);
-}
+const SHARED_SELECTORS = [".rail-shell", ".rail-resize-handle"];
 
 describe("#1396 rail clearance is declared once and shared", () => {
-  const css = styleBlock();
+  // Flat rule scan. `[^{}]*` bodies naturally skip an at-rule wrapper and match
+  // the inner rule, so a declaration moved inside `@media` is still found.
+  const rules = [...styleBlocks(APP_SVELTE).matchAll(/([^{}]+)\{([^{}]*)\}/g)];
 
-  const cases: Array<{ token: string; re: RegExp }> = [
-    { token: "--tandem-rail-top-clearance", re: /margin-top:\s*var\(--tandem-rail-top-clearance/g },
+  const cases = [
+    { token: "--tandem-rail-top-clearance", re: /margin-top:\s*var\(--tandem-rail-top-clearance/ },
     {
       token: "--tandem-status-clearance-total",
-      re: /margin-bottom:\s*var\(--tandem-status-clearance-total/g,
+      re: /margin-bottom:\s*var\(--tandem-status-clearance-total/,
     },
   ];
 
   for (const { token, re } of cases) {
-    it(`declares ${token} exactly once in App.svelte's stylesheet`, () => {
-      expect(matchIndices(css, re)).toHaveLength(1);
-    });
+    // If a structural fix ever moves this clearance onto a wrapper element,
+    // this assertion is SUPERSEDED, not violated — delete the block rather than
+    // re-satisfying it. The geometry invariant lives in the E2E spec.
+    it(`declares ${token} once in App.svelte, shared by the shell and the strip`, () => {
+      const declaring = rules.filter((r) => re.test(r[2]));
+      expect(declaring).toHaveLength(1);
 
-    it(`shares the ${token} declaration between the rail shell and the drag strip`, () => {
-      const [index] = matchIndices(css, re);
-      expect(index, `no declaration of ${token} found`).toBeDefined();
-      const selectors = enclosingSelectors(css, index);
-      for (const selector of SHARED_SELECTORS) {
-        // Exact entry, not `includes`: a partial or prose match must not pass.
-        expect(selectors).toContain(selector);
-      }
+      const selectors = declaring[0][1].split(",").map((s) => s.trim());
+      // Exact entries, not `includes`: a partial or prose match must not pass.
+      expect(selectors).toEqual(expect.arrayContaining(SHARED_SELECTORS));
     });
   }
 });
 
 describe("#1396 the drag strip carries no inline geometry", () => {
+  const src = readFileSync(APP_SVELTE, "utf-8");
   const start = src.indexOf("{#snippet resizeHandle");
   const end = src.indexOf("{/snippet}", start);
   const snippet = src.slice(start, end);
 
-  it("locates the resizeHandle snippet", () => {
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-  });
-
   it("styles the handle through a class, not an inline style attribute", () => {
+    expect(start).toBeGreaterThan(-1);
     expect(snippet).toContain('class="rail-resize-handle"');
     // An inline `style` is exactly where the missing margins would end up as a
     // second, silently desyncing copy of the clearance policy.

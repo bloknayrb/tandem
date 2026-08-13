@@ -261,10 +261,7 @@
            deliberately tucked under it — which is why any offset expressed as
            "52px + something" is wrong for clearing in-flow chrome below the
            titlebar. Rails use rail-top-clearance as margin-top inside the
-           editor row, so they track the editor content automatically — and so
-           does the rail drag strip (`.rail-resize-handle` in App.svelte), which
-           shares that margin with `.rail-shell` from a single rule so the two
-           flex siblings start on the same line (#1396). */
+           editor row, so they track the editor content automatically. */
         /* Bottom edge of the in-flow top-of-shell banner stack (server-restart
            strip, updater, connection, license) in viewport coordinates,
            measured at runtime by the `bannerStackHeight` action in App.svelte
@@ -304,14 +301,8 @@
         /* Bottom inset that any "hugs-content" rail (outline) reserves
            below itself so the floating status pill (W5) renders into
            clear space. Sum of pill chrome (status-clearance) + a comfy
-           24px margin.
-
-           Two consumers, both in App.svelte's orbit: PanelSlot's outline
-           `padding-bottom` (PanelSlot.svelte), and the shared
-           `.rail-shell, .rail-resize-handle` margin-bottom rule in App.svelte
-           that keeps a rail and its drag strip ending on the same line (#1396).
-           Note the value rides --tandem-space-5, so it computes to 52/60/68px
-           across compact/cozy/spacious — never hardcode it at a call site. */
+           24px margin. The value rides --tandem-space-5, so it is
+           density-dependent — never hardcode it at a call site. */
         --tandem-status-clearance-total: calc(var(--tandem-status-clearance) + var(--tandem-space-5, 24px));
         /* Light-mode floating-pill stack (matches v7 calm-v7.css). Warm/dark
            override --c7-pill-shadow inside their own theme blocks. */

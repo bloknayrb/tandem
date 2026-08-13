@@ -49,7 +49,7 @@ let { kind, visible, ...rest }: Props = $props();
 const wrapStyle = $derived(
   visible !== undefined
     ? `display: ${visible ? "flex" : "none"}; flex-direction: column; flex: 1; min-height: 0;${
-        kind === "outline" ? " padding-bottom: var(--tandem-status-clearance-total, 88px);" : ""
+        kind === "outline" ? " padding-bottom: var(--tandem-status-clearance-total, 60px);" : ""
       }`
     : undefined,
 );

@@ -2916,12 +2916,10 @@ const shouldShowModelPicker = $derived(
       if (delta !== null) {
         e.preventDefault();
         e.stopPropagation();
+        // No keyup counterpart: handleResizeStep persists the width on each step.
         if (side === "left") dragResizeLeft.handleResizeStep(delta);
         else dragResizeRight.handleResizeStep(delta);
       }
-    }}
-    onkeyup={() => {
-      // Width is already persisted inside handleResizeStep on each keyboard step.
     }}
   ></div>
 {/snippet}
@@ -3266,11 +3264,10 @@ const shouldShowModelPicker = $derived(
      painted 52px above and 52-68px below the rail it resizes.
 
      One rule, two consumers, deliberately: the bottom inset is
-     density-dependent (`--tandem-status-clearance-total` rides
-     `--tandem-space-5`, so 52/60/68px across compact/cozy/spacious), so a
-     hardcoded copy on the strip would desync at two densities out of three,
-     and any second declaration desyncs the moment either token moves. A third
-     consumer may join this selector list; it must never get its own copy.
+     density-dependent, so a hardcoded copy on the strip would desync at two
+     densities out of three, and any second declaration desyncs the moment
+     either token moves. A third consumer may join this selector list; it must
+     never get its own copy.
      Pinned by tests/design-system-impl/rail-clearance-contract.test.ts. */
   .rail-shell,
   .rail-resize-handle {
@@ -3303,16 +3300,15 @@ const shouldShowModelPicker = $derived(
      was missing has to come from the shared rule above and a clearance copied
      into a string literal is precisely the desync that rule exists to prevent.
      So: vertical extent from the shared rule, horizontal box + chrome here.
+     Declared BEFORE the reduce-motion blocks on purpose (see their comment).
 
-     Declared BEFORE the reduce-motion blocks on purpose — the media-query rule
-     below beats this one by source order alone (see its comment), so moving
-     this rule after it would silently unguard the colour crossfade.
-
-     `:focus-visible` also paints a background because this element and
-     `.rail-shell-right` are both z-index 1 with the rail LATER in DOM, so the
-     outward half of a 2px outline on the right-hand strip can be over-painted;
-     the accent fill is unconditionally visible and unconditionally distinct
-     from the border-strong hover tint on a 4px transparent strip. */
+     On a 4px strip the `:focus-visible` FILL is the focus indicator and the
+     outline is the redundant half, not the other way round: a 2px inset outline
+     on a 4px element degenerates to a fill anyway, and the outward half of an
+     outset one can be over-painted on the right — that strip precedes
+     `.rail-shell-right` in DOM at the same z-index, so the rail's opaque
+     background and side shadow win. The accent fill is unconditionally visible
+     and distinct from the border-strong hover tint. */
   .rail-resize-handle {
     position: relative;
     z-index: var(--tandem-z-base);
