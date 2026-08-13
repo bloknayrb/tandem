@@ -102,13 +102,23 @@ function handleSkip(): void {
         can connect back — admin is required once. To check it worked afterward, ask Claude in a
         Cowork session to open or list your documents.
       </div>
-      {#if probe.preflight?.status === "blocked"}
-        <!-- Say what stopped us and offer a retry, rather than an Enable button
-             whose failure we have already observed. -->
-        <div class="cos-preflight" data-testid="cowork-onboarding-preflight-blocked" role="status">
-          {probe.preflight.hint}
-        </div>
-      {/if}
+      <!-- #1376: mounted with the confirm, contents swap inside it. A live
+           region created together with its text is generally not announced, so
+           `role="status"` on the banner itself did nothing for the one user it
+           was written for. Both children can show at once — see CoworkSettings
+           for why a retry has `probing` and `blocked` set together. -->
+      <div role="status" data-testid="cowork-onboarding-preflight-live">
+        {#if probe.preflight?.status === "blocked"}
+          <!-- Say what stopped us and offer a retry, rather than an Enable button
+               whose failure we have already observed. -->
+          <div class="cos-preflight" data-testid="cowork-onboarding-preflight-blocked">
+            {probe.preflight.hint}
+          </div>
+        {/if}
+        {#if probe.probing}
+          <div class="cos-preflight cos-preflight-checking">Checking your network…</div>
+        {/if}
+      </div>
       <div class="cos-actions">
         {#if probe.preflight?.status === "blocked"}
           <button
@@ -228,6 +238,11 @@ function handleSkip(): void {
     border-radius: var(--tandem-r-2);
     padding: 6px 8px;
     margin-bottom: 8px;
+  }
+  .cos-preflight-checking {
+    color: var(--tandem-fg-muted);
+    background: var(--tandem-surface-sunk);
+    border-color: var(--tandem-border);
   }
   .cos-confirm-heading {
     font-weight: 600;

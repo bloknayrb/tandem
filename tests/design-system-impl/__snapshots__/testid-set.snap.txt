@@ -81,10 +81,12 @@ cowork-onboarding-error
 cowork-onboarding-learn-more-btn
 cowork-onboarding-learn-more-link
 cowork-onboarding-preflight-blocked
+cowork-onboarding-preflight-live
 cowork-onboarding-preflight-retry-btn
 cowork-onboarding-skip-btn
 cowork-onboarding-step
 cowork-preflight-blocked
+cowork-preflight-live
 cowork-preflight-retry-btn
 cowork-reachability
 cowork-rescan-btn
@@ -208,6 +210,7 @@ integration-wizard-cowork-back
 integration-wizard-cowork-error
 integration-wizard-cowork-explainer
 integration-wizard-cowork-preflight-blocked
+integration-wizard-cowork-preflight-live
 integration-wizard-cowork-preflight-retry-btn
 integration-wizard-cowork-setup
 integration-wizard-cowork-step
@@ -222,6 +225,9 @@ integration-wizard-keychain-fallback
 integration-wizard-models-setup
 integration-wizard-more
 integration-wizard-pick-{*}
+integration-wizard-plugin
+integration-wizard-plugin-commands
+integration-wizard-plugin-copy
 integration-wizard-push-mode
 integration-wizard-push-support-{*}
 integration-wizard-reachability-{*}

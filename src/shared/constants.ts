@@ -15,6 +15,25 @@ export const TRIAL_DAYS = 14;
 export const TANDEM_REPO_URL = "https://github.com/bloknayrb/tandem";
 export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
 
+/**
+ * The two commands that install Tandem's Claude Code plugin, in order.
+ *
+ * Tandem cannot run these for the user from any surface: registering a
+ * marketplace is Claude Code's own trust boundary, so showing the commands is
+ * the whole of what either surface can do. That made them easy to leave in only
+ * one place — `tandem setup` printed them and the desktop wizard did not, so on
+ * the primary distribution channel a whole push route was undiscoverable
+ * (#1390). Shared so the CLI and the wizard cannot say different things.
+ *
+ * The identities here are the manifest's: plugin `tandem` from marketplace
+ * `tandem-editor`, sourced from `bloknayrb/tandem`. `tests/plugin-manifest.test.ts`
+ * pins this array against `.claude-plugin/*.json` rather than trusting the match.
+ */
+export const CLAUDE_PLUGIN_INSTALL_COMMANDS = [
+  "claude plugin marketplace add bloknayrb/tandem",
+  "claude plugin install tandem@tandem-editor",
+] as const;
+
 /** Tandem's website. The public face — distinct from the source repo. */
 export const TANDEM_SITE_URL = "https://tandem.ink";
 

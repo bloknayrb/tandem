@@ -26,7 +26,11 @@
  * per keypress (the Advanced <details> changes the focusable set while open).
  */
 import { untrack } from "svelte";
-import { BYO_MODELS_ENABLED, DEFAULT_MCP_PORT } from "../../shared/constants.js";
+import {
+  BYO_MODELS_ENABLED,
+  CLAUDE_PLUGIN_INSTALL_COMMANDS,
+  DEFAULT_MCP_PORT,
+} from "../../shared/constants.js";
 import type { ApplyItemResult, ExistingMcpInstall } from "../../shared/integrations/contract.js";
 import {
   coworkSettingsVariant,
@@ -149,6 +153,30 @@ let view = $state<"main" | "cowork">("main");
 let coworkBusy = $state(false);
 let coworkError = $state<string | null>(null);
 const coworkProbe = createSubnetPreflight();
+
+// #1390: the plugin install commands, and the state of the button that copies
+// them. The label is the only feedback — deliberately, because the alternative
+// is a transient banner in a modal that already stacks four of them, and a
+// label change on a persistent node is the shape screen readers announce.
+const PLUGIN_INSTALL_TEXT = CLAUDE_PLUGIN_INSTALL_COMMANDS.join("\n");
+let pluginCopyState = $state<"idle" | "copied" | "failed">("idle");
+const pluginCopyLabel = $derived(
+  { idle: "Copy", copied: "Copied", failed: "Copy failed — select the text above" }[
+    pluginCopyState
+  ],
+);
+
+async function copyPluginCommands(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(PLUGIN_INSTALL_TEXT);
+    pluginCopyState = "copied";
+  } catch {
+    // No rethrow and no console noise: the failure is fully described by the
+    // label, and the commands stay on screen to be selected by hand. The
+    // WebView denies clipboard access in more situations than it grants it.
+    pluginCopyState = "failed";
+  }
+}
 
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
@@ -511,6 +539,48 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
   {/if}
 {/snippet}
 
+<!-- The two push routes that need no flag, in the order `doctor.ts` and
+     `README.md` recommend them. Shared by both halves of the push-mode block
+     because they are true either way: registering the channel shim does not
+     take the built-in watch away, and #1389 was the copy that implied it did.
+
+     Deliberately avoids "every session" in any form. The plugin genuinely does
+     apply to every session once installed, but it arms on skill dispatch rather
+     than at session start, and `tests/docs/monitor-arming-claims.test.ts` scores
+     that claim per LINE — a sentence that reads honestly here is one wrap away
+     from an unqualified promise. Saying when it starts and leaving the scope
+     implied is both shorter and not the thing that keeps breaking. -->
+{#snippet pushRoutes()}
+  <p>
+    <strong>The built-in Monitor watch</strong> installs nothing and needs no flag: on first
+    Tandem use, Tandem's bundled skill reads the wake address from Claude's first
+    <code class="iw-code-inline">tandem_status</code> and starts it for that session. It needs a
+    Claude Code that offers a built-in Monitor tool — that is granted per account rather than per
+    version, so upgrading will not add it, and on Windows it also needs Git Bash.
+  </p>
+  <p>
+    <strong>The Tandem plugin</strong> needs no flag either. It starts watching the first time
+    Claude uses Tandem's skill, so ask for Tandem by name rather than expecting it to be listening
+    beforehand, and launch <code class="iw-code-inline">claude</code> from a terminal so it can
+    find Node. It reads the same per-account gate as the built-in Monitor, so it cannot cover for
+    that gate being off — but it does not need Git Bash.
+  </p>
+  <!-- #1390: registering a marketplace is Claude Code's own trust boundary, so
+       these can only be shown, never run for the user. Before this they were
+       printed by `tandem setup` alone, which a desktop-app user never runs. -->
+  <div class="iw-plugin-install" data-testid="integration-wizard-plugin">
+    <pre class="iw-plugin-commands" data-testid="integration-wizard-plugin-commands">{PLUGIN_INSTALL_TEXT}</pre>
+    <button
+      type="button"
+      class="iw-btn iw-btn-secondary iw-plugin-copy-btn"
+      data-testid="integration-wizard-plugin-copy"
+      onclick={() => void copyPluginCommands()}
+    >
+      {pluginCopyLabel}
+    </button>
+  </div>
+{/snippet}
+
 {#if open}
   <div
     role="presentation"
@@ -618,18 +688,39 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 </div>
               </details>
             {/if}
-            {#if coworkProbe.preflight?.status === "blocked"}
-              <!-- #1298: detection already failed once here; say why rather
-                   than leaving an Enable button that repeats it. -->
-              <div
-                class="iw-banner-warning"
-                role="status"
-                data-testid="integration-wizard-cowork-preflight-blocked"
-              >
-                {@render warningIcon()}
-                <span>{coworkProbe.preflight.hint}</span>
-              </div>
-            {/if}
+            <!-- #1376: `role="status"` used to sit on the banner itself, which
+                 is created together with its text — a live region generally has
+                 to be in the accessibility tree BEFORE its contents change for
+                 the change to be announced, so the sentence explaining a failed
+                 detection was silent for the users who most needed it. The
+                 region is now mounted for the life of the sub-view and only its
+                 contents swap.
+
+                 Not styled `:empty { display: none }` as #1376 sketched: Svelte
+                 leaves comment anchors inside an `{#if}`, so the wrapper is
+                 never `:empty`. It carries no box of its own instead, which
+                 costs nothing when both children are absent. -->
+            <div role="status" data-testid="integration-wizard-cowork-preflight-live">
+              {#if coworkProbe.preflight?.status === "blocked"}
+                <!-- #1298: detection already failed once here; say why rather
+                     than leaving an Enable button that repeats it. -->
+                <div
+                  class="iw-banner-warning"
+                  data-testid="integration-wizard-cowork-preflight-blocked"
+                >
+                  {@render warningIcon()}
+                  <span>{coworkProbe.preflight.hint}</span>
+                </div>
+              {/if}
+              <!-- Additive rather than an `{:else if}` on `probing`: `run()`
+                   deliberately keeps the previous result, so a retry has both
+                   flags set at once, and swapping the hint out would remove the
+                   testid three tests assert on mid-probe. Appending changes the
+                   region's contents either way, which is what gets announced. -->
+              {#if coworkProbe.probing}
+                <p class="iw-hint-text">Checking your network…</p>
+              {/if}
+            </div>
             {#if coworkError}
               <div
                 class="iw-banner-warning"
@@ -915,34 +1006,28 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 data-testid="integration-wizard-push-mode"
                 data-push-mode={wizard.channelRegistered ? "push" : "polling"}
               >
-                {#if wizard.channelRegistered}
-                  The channel shim is registered. Sessions Tandem starts for you are woken directly
-                  and need nothing further. For a session you start yourself, the simplest route is
-                  still to ask Claude to arm a watch on Tandem's wake stream — nothing to install,
-                  no flag — where Claude Code offers a Monitor tool. If Claude says it has none,
-                  that is what the shim is for: start it with the
-                  <code class="iw-code-inline">--dangerously-load-development-channels</code> flag,
-                  since registration alone does not switch the channel on. Either way, Claude also
-                  sees your comments and messages when it next checks its inbox. Use one, not both.
-                {:else}
+                <p>
                   Sessions Tandem starts for you are woken directly and need nothing further. A
-                  session you start yourself will see your comments and messages when it next
-                  checks its inbox — to have it react as they happen, the simplest route is to ask
-                  Claude to arm a watch on Tandem's wake stream, which needs nothing installed.
-                  That one depends on Claude Code offering a Monitor tool, which not every one
-                  does; if Claude says it has none, come back here and register the channel shim,
-                  which does not need it. Installing the Tandem plugin covers any session where you
-                  ask for Tandem by name — it starts watching the first time Claude uses the Tandem
-                  skill, not the moment the session opens — as long as you launch
-                  <code class="iw-code-inline">claude</code> from a terminal so it can find Node.
-                  Use one, not both.
-                {/if}
-                <p class="iw-hint-text">
-                  To install the plugin, run these in a terminal:
-                  <code class="iw-code-inline">claude plugin marketplace add bloknayrb/tandem</code>
-                  then
-                  <code class="iw-code-inline">claude plugin install tandem@tandem-editor</code>.
+                  session you start yourself sees your comments and messages when it next checks
+                  its inbox; to have it react as they happen, use one of these — not several.
                 </p>
+                {@render pushRoutes()}
+                {#if wizard.channelRegistered}
+                  <p>
+                    The channel shim is registered here, and it is the one route that needs
+                    neither of those. Registration alone does not switch it on, though: start the
+                    session with
+                    <code class="iw-code-inline">
+                      claude --dangerously-load-development-channels server:tandem-channel
+                    </code>.
+                  </p>
+                {:else}
+                  <p>
+                    If Claude reports no Monitor tool at all, come back here and register the
+                    channel shim — it is the one route that depends on neither gate, at the cost
+                    of a flag on every session you start.
+                  </p>
+                {/if}
               </div>
             {/if}
           </section>
@@ -1651,6 +1736,38 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
   .iw-push-mode-polling {
     background: var(--tandem-surface-muted);
     color: var(--tandem-fg-muted);
+  }
+  /* The block is now several paragraphs rather than one sentence; scoped so it
+     cannot reach the `<p>`s in the Cowork sub-view. */
+  .iw-push-mode p {
+    margin: 0 0 var(--tandem-space-2);
+  }
+  .iw-push-mode p:last-child {
+    margin-bottom: 0;
+  }
+  .iw-plugin-install {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--tandem-space-2);
+    margin-bottom: var(--tandem-space-2);
+  }
+  .iw-plugin-commands {
+    /* `min-width: 0` because a flex item's automatic minimum size is
+       min-content, and these are two unbreakable command lines — without it the
+       <pre> refuses to shrink and pushes the button out of the dialog. */
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    padding: var(--tandem-space-2);
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-xs);
+    line-height: 1.6;
+    background: var(--tandem-surface-sunk);
+    border-radius: var(--tandem-r-2);
+    overflow-x: auto;
+  }
+  .iw-plugin-copy-btn {
+    flex: 0 0 auto;
   }
 
   /* --- More integrations --- */

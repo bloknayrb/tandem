@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../src/shared/constants.js";
 
 // Guards against the published Claude Code plugin manifest drifting out of
 // sync with the npm package — historically `plugin.json` was left at 0.8.0
@@ -66,6 +67,21 @@ describe("published Claude Code plugin manifest", () => {
     const tandem = plugins.find((p) => p.name === "tandem");
     expect(tandem).toBeDefined();
     expect(tandem?.source).toEqual({ source: "github", repo: "bloknayrb/tandem" });
+  });
+
+  it("the shared install commands spell the identities the manifests declare", () => {
+    // #1390: `tandem setup` and the desktop wizard both print these, and Tandem
+    // cannot run either one for the user — registering a marketplace is Claude
+    // Code's own trust boundary. A wrong slug is therefore a dead end the user
+    // has to debug, not an error Tandem can catch at runtime. Derived from the
+    // manifests rather than transcribed, so renaming the plugin fails here
+    // instead of shipping two surfaces that confidently say the old name.
+    const plugins = marketplace.plugins as Array<{ name: string; source?: { repo?: string } }>;
+    const repo = plugins.find((p) => p.name === plugin.name)?.source?.repo;
+    expect(CLAUDE_PLUGIN_INSTALL_COMMANDS).toEqual([
+      `claude plugin marketplace add ${repo}`,
+      `claude plugin install ${plugin.name}@${marketplace.name}`,
+    ]);
   });
 
   it("the experimental monitor runs via the pinned npx subcommand", () => {

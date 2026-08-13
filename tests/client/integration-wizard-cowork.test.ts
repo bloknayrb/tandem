@@ -286,6 +286,48 @@ describe("integration wizard — Cowork sub-view gating", () => {
     ).toBeNull();
   });
 
+  // -------------------------------------------------------------------------
+  // #1376 — the live region. `role="status"` sat on the blocked banner, which
+  // is created together with its text; a region inserted with its content is
+  // generally not announced, so the sentence explaining a failed detection was
+  // silent for exactly the users #1298 wrote it for.
+  // -------------------------------------------------------------------------
+
+  it("mounts the pre-flight region empty on entry, before any hint exists", async () => {
+    preflightSubnet.mockImplementationOnce(() => new Promise(() => {}));
+    const { container } = render(IntegrationWizardModal, {
+      props: { open: true, onClose: vi.fn() },
+    });
+    await tick();
+    (q(container, "integration-wizard-cowork-setup") as HTMLButtonElement).click();
+    await tick();
+
+    const region = q(container, "integration-wizard-cowork-preflight-live");
+    expect(region).toBeTruthy();
+    expect(region?.getAttribute("role")).toBe("status");
+    expect(q(container, "integration-wizard-cowork-preflight-blocked")).toBeNull();
+  });
+
+  it("keeps the same region node when the hint arrives", async () => {
+    // Same NODE, not merely a region present in both states: a wrapper that
+    // unmounts and remounts with its content is the original bug wearing a
+    // testid.
+    preflightSubnet.mockResolvedValue({ status: "blocked", hint: "no adapter" });
+    const { container } = render(IntegrationWizardModal, {
+      props: { open: true, onClose: vi.fn() },
+    });
+    await tick();
+    (q(container, "integration-wizard-cowork-setup") as HTMLButtonElement).click();
+    await tick();
+    const before = q(container, "integration-wizard-cowork-preflight-live");
+    await tick();
+    await tick();
+
+    const after = q(container, "integration-wizard-cowork-preflight-live");
+    expect(after).toBe(before);
+    expect(after?.textContent).toContain("no adapter");
+  });
+
   it("leaves Enable available when the probe itself cannot run", async () => {
     // A broken probe says nothing about whether enabling would work. Blocking
     // here would strand a user whose enable would have succeeded — a worse

@@ -257,6 +257,10 @@ shipped and were removed:
   This sub-view has no confirm step — its footer button fires the real enable —
   so the probe runs on entry to the view, and the retry button *replaces*
   `cowork-enable-confirm-btn` while blocked rather than sitting beside it.
+- Plugin install (#1390): `integration-wizard-plugin{,-commands,-copy}` in the
+  push-mode block. Tandem cannot run these commands — registering a marketplace
+  is Claude Code's own trust boundary — so `-commands` holds the text and
+  `-copy` is the only affordance. Shown in BOTH channel-registered branches.
 
 ### Cowork modals & settings
 - `cowork-onboarding-{step,confirm,error,enable-btn,enable-confirm-btn,enable-cancel-btn,skip-btn,learn-more-btn,learn-more-link}`
@@ -265,6 +269,12 @@ shipped and were removed:
   `cowork-preflight-{blocked,retry-btn}`. The retry button **replaces** the
   enable-confirm button while detection is known-failing, so a spec asserting
   `*-enable-confirm-btn` visible must first establish the probe did not block.
+- Pre-flight live regions (#1376): `cowork-preflight-live`,
+  `cowork-onboarding-preflight-live` and `integration-wizard-cowork-preflight-live`.
+  The `role="status"` wrapper, mounted for the life of the confirm (the wizard's
+  for the life of the sub-view) so a hint arriving later is announced rather than
+  inserted silently with its region. The `-blocked` testids sit INSIDE it, which
+  is why they still come and go; the wrapper never does.
 - `cowork-admin-declined-{backdrop,modal,confirm-disable,error,status-error,disable-btn,disable-confirm-btn,disable-cancel-btn,retry-btn,learn-more-link}`
 - `cowork-settings{,-loading,-unsupported,-undetected,-error}`,
   `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`, `cowork-explainer`,

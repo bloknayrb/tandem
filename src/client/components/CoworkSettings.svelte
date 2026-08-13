@@ -177,14 +177,23 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
       class:is-busy={busy}
       data-testid="cowork-toggle"
     >
+      <!-- `|| confirming` so Cancel un-checks the box again: `s.enabled` never
+           changed on the way in, so binding to it alone left a checked box
+           sitting over a disabled integration until the next status refetch. -->
       <input
         class="cs-accent-cbx"
         data-testid="cowork-toggle-checkbox"
         type="checkbox"
-        checked={s.enabled}
+        checked={s.enabled || confirming === "enable"}
         disabled={busy}
         onchange={(e) => {
           if ((e.target as HTMLInputElement).checked) openEnableConfirm();
+          // Unchecking while the confirm is open is a cancel, not a disable.
+          // It used to fall through to `handleToggleOff`, which fired a real
+          // `coworkToggleIntegration(invoke, false)` for a state transition
+          // that had never happened — and left the confirm open behind it,
+          // Enable button and all.
+          else if (confirming === "enable") closeEnableConfirm();
           else void handleToggleOff();
         }}
       />
@@ -238,13 +247,28 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
           Cowork can reach your open documents. This adds a Windows firewall rule so the Cowork VM
           can connect back — admin is required once.
         </div>
-        {#if probe.preflight?.status === "blocked"}
-          <!-- #1298: we already watched detection fail, so offer a retry rather
-               than an Enable button whose outcome we know. -->
-          <div class="cs-preflight" data-testid="cowork-preflight-blocked" role="status">
-            {probe.preflight.hint}
-          </div>
-        {/if}
+        <!-- #1376: the live region is mounted for the life of the confirm and
+             only its contents swap. Carried on the banner itself, `role=status`
+             announced nothing — a region inserted with its text already present
+             is generally not read out, so a screen-reader user asked Tandem to
+             check the network, watched it fail, and heard no reason.
+
+             Both children are shown rather than one `{#if}/{:else if}`: `run()`
+             keeps the previous result on purpose, so a retry has `probing` and
+             `blocked` set together, and swapping would unmount a testid the
+             wizard/settings suites read mid-probe. -->
+        <div role="status" data-testid="cowork-preflight-live">
+          {#if probe.preflight?.status === "blocked"}
+            <!-- #1298: we already watched detection fail, so offer a retry rather
+                 than an Enable button whose outcome we know. -->
+            <div class="cs-preflight" data-testid="cowork-preflight-blocked">
+              {probe.preflight.hint}
+            </div>
+          {/if}
+          {#if probe.probing}
+            <div class="cs-preflight-checking">Checking your network…</div>
+          {/if}
+        </div>
         <div class="cs-actions">
           {#if probe.preflight?.status === "blocked"}
             <button
@@ -421,13 +445,18 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
      paragraph of the confirm blurb. It already inherits the warning tokens from
      `.cs-warning-banner`, so a border is what separates it — matching
      `.cos-preflight` in CoworkOnboardingStep, which renders the same hint. */
-  .cs-preflight {
+  .cs-preflight,
+  .cs-preflight-checking {
     font-size: 12px;
     line-height: 1.5;
     border: 1px solid var(--tandem-warning-border);
     border-radius: var(--tandem-r-2);
     padding: 6px 8px;
     margin-bottom: 8px;
+  }
+  .cs-preflight-checking {
+    border-color: var(--tandem-border);
+    color: var(--tandem-fg-muted);
   }
   .cs-link {
     color: var(--tandem-accent);

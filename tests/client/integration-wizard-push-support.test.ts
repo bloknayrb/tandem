@@ -23,6 +23,7 @@ import { cleanup, render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../../src/shared/constants.js";
 import type { ApplyItemResult } from "../../src/shared/integrations/contract.js";
 
 // Mutable stubs the mocked hooks return; each test sets them BEFORE render.
@@ -181,6 +182,17 @@ describe("IntegrationWizardModal — per-target push support (#1299)", () => {
     expect(q(container, "integration-wizard-push-support-claude-code-1")).toBeNull();
   });
 
+  it("keeps the push-mode block off a stdio-only selection entirely", async () => {
+    // Guards the `whatsNext !== "stdio-only"` half of the gate: with only
+    // Claude Desktop picked, the per-row line is the whole story and a block of
+    // Claude Code push routes would be advice the user cannot act on.
+    wizardStub.channelRegistered = false;
+    const { container } = mountDone([pickedDesktop()], [applied("claude-desktop-1")]);
+    await tick();
+    expect(q(container, "integration-wizard-push-mode")).toBeNull();
+    expect(q(container, "integration-wizard-plugin")).toBeNull();
+  });
+
   it("says nothing on a row that did not apply", async () => {
     // An error row is about the write failing; leading with a delivery caveat
     // would bury the actionable problem under one the user cannot act on yet.
@@ -190,5 +202,135 @@ describe("IntegrationWizardModal — per-target push support (#1299)", () => {
     );
     await tick();
     expect(q(container, "integration-wizard-push-support-claude-desktop-1")).toBeNull();
+  });
+});
+
+/**
+ * The push-mode block's copy (#1389, #1390).
+ *
+ * #1389: the block has two branches keyed on whether the channel shim is
+ * registered, and the registered one used to drop the built-in Monitor watch
+ * entirely — reading as if the `--dangerously-load-development-channels` flag
+ * were the only route a hand-started session had. Registering the shim does not
+ * take the watch away, so the user who followed the wizard's own advice was the
+ * one who lost the free option.
+ *
+ * #1390: the two plugin install commands existed only as `tandem setup` console
+ * output, which a desktop-app user never sees — and the desktop app is the
+ * primary distribution channel. Tandem cannot run them either way (registering
+ * a marketplace is Claude Code's own trust boundary), so showing them IS the
+ * fix, and showing them in both branches is the part that keeps regressing.
+ */
+describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
+  afterEach(() => {
+    cleanup();
+    wizardStub.picked = [];
+    wizardStub.applyResults = [];
+    wizardStub.channelRegistered = null;
+    vi.clearAllMocks();
+  });
+
+  function mountPushMode(channelRegistered: boolean) {
+    wizardStub.channelRegistered = channelRegistered;
+    return mountDone([pickedCode()], [applied("claude-code-1")]);
+  }
+
+  for (const registered of [true, false]) {
+    const branch = registered ? "channel registered" : "channel not registered";
+
+    it(`names the built-in Monitor watch when the ${branch}`, async () => {
+      const { container } = mountPushMode(registered);
+      await tick();
+      const text = q(container, "integration-wizard-push-mode")?.textContent ?? "";
+      expect(text).toMatch(/built-in Monitor/i);
+      // The precondition, not just the option: it is granted per account, so a
+      // user told to use it without being told it may not be there reads a
+      // missing tool as Tandem being broken.
+      expect(text).toMatch(/per account/i);
+    });
+
+    it(`offers the plugin install commands when the ${branch}`, async () => {
+      const { container } = mountPushMode(registered);
+      await tick();
+      const commands = q(container, "integration-wizard-plugin-commands")?.textContent ?? "";
+      for (const cmd of CLAUDE_PLUGIN_INSTALL_COMMANDS) expect(commands).toContain(cmd);
+      expect(q(container, "integration-wizard-plugin-copy")).toBeTruthy();
+    });
+
+    it(`does not tell the user to ask Claude to watch when the ${branch}`, async () => {
+      // The watch is automatic on first Tandem use as of the ADR-049 amendment;
+      // asking is a recovery step. `tests/docs/wake-availability-claims.test.ts`
+      // bans this wording on README and the user guide — this wizard carries the
+      // same claim and was written before the correction.
+      const { container } = mountPushMode(registered);
+      await tick();
+      expect(q(container, "integration-wizard-push-mode")?.textContent ?? "").not.toMatch(
+        /ask Claude to watch/i,
+      );
+    });
+  }
+
+  it("keeps the flag as the registered branch's own instruction, with its argument", async () => {
+    // A bare `--dangerously-load-development-channels` does not enable the
+    // Tandem channel; it needs `server:tandem-channel` after it. The old copy
+    // named the flag alone, which is a command that silently does nothing.
+    const { container } = mountPushMode(true);
+    await tick();
+    const text = q(container, "integration-wizard-push-mode")?.textContent ?? "";
+    expect(text).toContain("--dangerously-load-development-channels server:tandem-channel");
+  });
+
+  it("points an unregistered user back here for the gate-independent route", async () => {
+    const { container } = mountPushMode(false);
+    await tick();
+    const text = q(container, "integration-wizard-push-mode")?.textContent ?? "";
+    expect(text).toMatch(/channel shim/i);
+    // Not merely mentioned — offered as the answer to both Monitor gates being
+    // shut, which is the only thing that makes it worth a flag on every session.
+    expect(text).toMatch(/neither gate|no Monitor tool/i);
+  });
+
+  it("copies both commands as one pasteable block", async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const { container } = mountPushMode(false);
+    await tick();
+
+    (q(container, "integration-wizard-plugin-copy") as HTMLButtonElement).click();
+    // Two ticks: the label is written after an awaited `writeText`, so it lands
+    // a microtask after the click's own flush.
+    await tick();
+    await tick();
+
+    expect(writeText).toHaveBeenCalledWith(CLAUDE_PLUGIN_INSTALL_COMMANDS.join("\n"));
+    expect(q(container, "integration-wizard-plugin-copy")?.textContent?.trim()).toBe("Copied");
+    vi.unstubAllGlobals();
+  });
+
+  it("says so on the button when the clipboard refuses", async () => {
+    // The WebView denies clipboard access in more situations than it grants it,
+    // and a silent no-op button is indistinguishable from a copy that worked.
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        writeText: vi.fn(async () => {
+          throw new Error("denied");
+        }),
+      },
+    });
+    const { container } = mountPushMode(false);
+    await tick();
+
+    (q(container, "integration-wizard-plugin-copy") as HTMLButtonElement).click();
+    await tick();
+    await tick();
+
+    expect(q(container, "integration-wizard-plugin-copy")?.textContent ?? "").toMatch(
+      /Copy failed/i,
+    );
+    // The commands stay on screen to be selected by hand.
+    expect(q(container, "integration-wizard-plugin-commands")?.textContent ?? "").toContain(
+      CLAUDE_PLUGIN_INSTALL_COMMANDS[0],
+    );
+    vi.unstubAllGlobals();
   });
 });
