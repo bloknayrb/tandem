@@ -244,15 +244,12 @@ Each row:
   from the track: the pill must be positioned by whatever mechanism
   sizes the segments, so the two cannot desync (#1383/#1384, one desync
   seen from two sides). Concretely, no percentage or `calc` **sizing or
-  positioning** on the thumb, and no measured JS. That ban is
-  deliberately stricter than the invariant above — a percentage thumb
-  over an equalized track can be made correct — because it is the
-  mechanism the two issues arrived through; `translateX(100%)` for the
-  slide itself is not sizing and is fine. The current implementation
-  uses an `inline-grid` track and a placed thumb, but the requirement is
-  the invariant, not that mechanism. Note the invariant holds over a
-  RANGE, not unconditionally: below ~60px the buttons cannot shrink past
-  their own padding and overflow equal columns regardless.
+  positioning** on the thumb, and no measured JS; `translateX(100%)` for
+  the slide itself is not sizing and is fine. That ban is deliberately
+  stricter than the requirement — a percentage thumb over an equalized
+  track can be made correct — because it is the mechanism the two issues
+  arrived through. The requirement is the invariant, not any particular
+  mechanism.
 
 ### 3.10 Annotation decorations — B2 (inline marks)
 

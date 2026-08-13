@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { nextFrames } from "./helpers";
 
 /**
  * ModeToggle sliding-thumb geometry (#1383, #1384).
@@ -96,9 +97,20 @@ function measure(page: Page): Promise<Geometry> {
 
 /**
  * Polls, so the 220ms slide settles without a bare sleep. Asserted as a single
- * object so a failure reports all four edges at once — a thumb that is off on
- * `left` and `right` by the same amount is a translate bug, while one off on
- * `right` alone is a sizing bug, and that distinction is the whole diagnosis.
+ * object so a failure reports all four edges at once — a thumb off on `left` and
+ * `right` by the same amount is a translate bug, one off on `right` alone is a
+ * sizing bug, and that distinction is the whole diagnosis.
+ *
+ * `inkDelta` rides along for #1383. The label is always centred in its BUTTON,
+ * so under symmetric padding it equals -(dL+dR)/2 and cannot fail while the
+ * edges hold — except when `justify-content: center` is removed, which the edge
+ * deltas cannot see.
+ *
+ * That sensitivity is ONE-SIDED, and it decides which call site matters. The
+ * column width is the TANDEM button's max-content, so "Tandem"'s ink already
+ * fills its content box and its `inkDelta` stays ~0 however the label is
+ * justified. Only "Solo" has slack. Drop the solo call and #1383 coverage goes
+ * with it.
  */
 async function expectThumbFlush(page: Page, label: string) {
   await expect
@@ -108,30 +120,15 @@ async function expectThumbFlush(page: Page, label: string) {
         const off = (["dL", "dR", "dT", "dB"] as const)
           .filter((k) => Math.abs(g[k]) >= 0.5)
           .map((k) => `${k}=${g[k].toFixed(2)}`);
-        // #1383 rides along: the label is always centred in its BUTTON, so with
-        // symmetric padding the ink delta is -(dL+dR)/2 and cannot fail while
-        // the edges hold — EXCEPT if `justify-content: center` is removed, which
-        // is a real #1383-shaped regression the edge deltas would not see.
-        //
-        // That sensitivity is ONE-SIDED, and it decides which call site matters.
-        // The column width equals the TANDEM button's max-content, so "Tandem"'s
-        // ink already fills its content box and its inkDelta stays ~0 however the
-        // label is justified. Only "Solo" has slack — (67.83 - 28 - 22.5)/2 ≈
-        // 8.6px of it. So the whole `justify-content` regression is caught by the
-        // solo assertion alone; drop that one call and #1383 coverage goes with
-        // it.
         if (Math.abs(g.inkDelta) >= 0.75) off.push(`inkDelta=${g.inkDelta.toFixed(2)}`);
         return off;
       },
       {
         timeout: 5_000,
         message:
-          `${label}: the sliding pill does not cover the selected segment (#1384). ` +
-          `The thumb is placed into grid area 1/1/2/2 of the track, so any non-zero edge ` +
-          `delta means the segments are no longer equal columns or the placement was lost. ` +
-          `An \`inkDelta\` entry with all four edges flush is the other defect (#1383): the ` +
-          `pill is correct and the LABEL is off-centre inside it — check \`justify-content\` ` +
-          `on \`.mode-toggle button\`.`,
+          `${label}: the pill does not cover the selected segment (#1384). An \`inkDelta\` ` +
+          `entry with all four edges flush is the other defect instead (#1383) — the pill is ` +
+          `right and the LABEL is off-centre in it; check \`justify-content\`.`,
       },
     )
     .toEqual([]);
@@ -159,17 +156,15 @@ test("the segments are equal and the pill covers the selected one (tandem defaul
 
   // The only assertion in this file that reads an ABSOLUTE height. Everything
   // else is a thumb-vs-button delta, so the pill and the button could grow
-  // together and every delta would stay 0.00. ModeToggle.svelte trims the
-  // button padding 5px -> 3px precisely to offset `line-height: normal`, and
-  // that arithmetic is otherwise unpinned: reverting the trim while keeping
-  // `normal` measures 24px.
+  // together and every delta would stay 0.00. ModeToggle.svelte trims the button
+  // padding 5px -> 3px precisely to offset `line-height: normal`; reverting the
+  // trim while keeping `normal` measures 24px, and nothing else would notice.
   expect(
-    g.thumbH,
-    `the pill is ${g.thumbH.toFixed(2)}px tall. It should hold ~20px under the shipped SN Pro ` +
-      `face (21px pre-swap). 24px means the button's 3px vertical padding was reverted to 5px ` +
+    Math.abs(g.thumbH - 20),
+    `the pill is ${g.thumbH.toFixed(2)}px tall; it should hold ~20px under the shipped SN Pro ` +
+      `face (21px pre-swap). 24px means the button's vertical padding was reverted to 5px ` +
       `without also reverting \`line-height: normal\` — see ModeToggle.svelte.`,
-  ).toBeLessThan(22);
-  expect(g.thumbH).toBeGreaterThan(18);
+  ).toBeLessThan(2);
 
   await expect(page.locator("[data-testid='mode-tandem-btn']")).toHaveAttribute(
     "aria-pressed",
@@ -202,34 +197,74 @@ test("the pill covers the selected segment after switching to solo, and back", a
   await expectThumbFlush(page, "tandem (after a slide)");
 });
 
+/** Force a track width the real layout cannot produce. Repeatable within a page. */
+async function setTrackCap(page: Page, px: number) {
+  await page.evaluate((cap) => {
+    let tag = document.getElementById("e2e-track-cap") as HTMLStyleElement | null;
+    if (!tag) {
+      tag = document.createElement("style");
+      tag.id = "e2e-track-cap";
+      document.head.appendChild(tag);
+    }
+    tag.textContent = `.mode-toggle { max-width: ${cap}px }`;
+  }, px);
+}
+
 test("the columns stay equal when the track is forced to compress", async ({ page }) => {
-  // `minmax(0, 1fr)` versus a bare `1fr` is the most-argued decision in this
-  // fix, and NOTHING in the shipped layout can exercise it: `.title-bar-mode` is
+  // `minmax(0, 1fr)` versus a bare `1fr` is the most-argued decision in this fix,
+  // and NOTHING in the shipped layout exercises it: `.title-bar-mode` is
   // `flex: 0 0 auto` and `.title-bar-center` carries `min-width: 0`, so the
-  // center strip absorbs every pixel of shrink and this track measures the same
-  // at every viewport width. Swept 1200 -> 200px, it never moved.
+  // center strip absorbs every pixel of shrink. Swept 1200 -> 200px, this track
+  // never moved. The regime is therefore injected rather than reached.
   //
-  // So the regime is injected rather than reached. Without this test the guard's
-  // only gate is a source literal in mode-toggle-thumb-contract.test.ts, which
-  // pins the spelling and can never see the effect — and a `min-width` on the
-  // button, which restores exactly the min-content floor `minmax(0, 1fr)` exists
-  // to defeat, is invisible at every other assertion in this file.
+  // That is not a hypothetical: it is a unit test of a CSS mechanism, run here
+  // because Playwright is the only layout engine in the repo. The source scan in
+  // mode-toggle-thumb-contract.test.ts pins the spelling of the guard; nothing
+  // but this can observe that it works.
   await boot(page);
-  await page.addStyleTag({ content: ".mode-toggle { max-width: 120px }" });
 
-  const g = await measure(page);
+  // 120px is mid-range; 62px is the boundary measured below. A bare `1fr`
+  // floors each column at min-content and fails both.
+  for (const cap of [120, 62]) {
+    await setTrackCap(page, cap);
+    const g = await measure(page);
+    expect(
+      Math.abs(g.soloW - g.tandemW),
+      `capped at ${cap}px: solo=${g.soloW.toFixed(2)} tandem=${g.tandemW.toFixed(2)}. Unequal ` +
+        `columns put the thumb — which IS column 1 — on a segment of a different width (#1384). ` +
+        `A bare \`1fr\` reopens exactly this.`,
+    ).toBeLessThan(0.5);
+    // Equal columns are necessary but not sufficient: a `min-width` on the
+    // button keeps the COLUMNS equal while the button outgrows the column the
+    // thumb is placed into, so only the flush check sees that one.
+    await expectThumbFlush(page, `capped at ${cap}px`);
+  }
+});
+
+test("the pill's guarantee ends at the padding floor, not below it", async ({ page }) => {
+  // The guarantee holds over a RANGE, and this asserts where the range ends so
+  // that no comment has to narrate it. Both `ModeToggle.svelte` and
+  // derived-spec.md previously carried a "~60px" figure; it was derivable and
+  // not derived, and it was wrong.
+  //
+  // The floor is the button's own horizontal padding (2 x 14px) plus the track's
+  // padding and border: 28 + 4 + 2 = 62px. Below that the buttons stop shrinking
+  // while the columns keep going, so the thumb — which tracks the COLUMN —
+  // becomes narrower than the button it is supposed to cover. Measured: at 62px
+  // dR = 0.00, at 61px dR = -0.50.
+  await boot(page);
+
+  await setTrackCap(page, 62);
+  await expectThumbFlush(page, "at the 62px floor");
+
+  await setTrackCap(page, 61);
+  const below = await measure(page);
   expect(
-    Math.abs(g.soloW - g.tandemW),
-    `compressed to 120px: solo=${g.soloW.toFixed(2)} tandem=${g.tandemW.toFixed(2)}. ` +
-      `A bare \`1fr\` measures 51.08/67.83 here because its \`auto\` minimum floors each ` +
-      `column at min-content; \`minmax(0, 1fr)\` measures 57/57. Unequal columns put the ` +
-      `thumb on a segment of a different width — #1384, reopened.`,
-  ).toBeLessThan(0.5);
-
-  // Equal columns are necessary but not sufficient: a `min-width` on the button
-  // keeps the COLUMNS equal while the button outgrows the column the thumb is
-  // placed in, so only the flush check sees it.
-  await expectThumbFlush(page, "compressed to 120px");
+    below.dR,
+    `one pixel below the floor the pill should already be narrower than its button. If this ` +
+      `passes, the floor moved — re-derive it from the button padding and the track chrome, ` +
+      `and update the test above rather than adding a comment.`,
+  ).toBeLessThan(-0.25);
 });
 
 test("the widened toggle still fits a narrow viewport", async ({ page }) => {
@@ -250,6 +285,10 @@ test("the widened toggle still fits a narrow viewport", async ({ page }) => {
   // step, not by this assertion. Do not read this as pinning the desktop case.
   await boot(page);
   await page.setViewportSize({ width: 360, height: 800 });
+  // Without this the sample can predate the resize, and since the assertion is
+  // `right <= innerWidth`, a stale WIDE-viewport reading passes vacuously — the
+  // test would go green having never measured the 360px layout.
+  await nextFrames(page);
 
   const fits = await page.evaluate(() => {
     const el = document.querySelector(".mode-toggle");

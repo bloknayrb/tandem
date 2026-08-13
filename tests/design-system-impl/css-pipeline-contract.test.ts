@@ -3,7 +3,12 @@ import { join, relative } from "node:path";
 import { transform } from "lightningcss";
 import { resolveConfig } from "vite";
 import { beforeAll, describe, expect, it } from "vitest";
-import { cssRules, styleBlocks } from "../helpers/css-source";
+import {
+  cssRules,
+  cssRulesBySelector,
+  neutralizeSvelteGlobal,
+  styleBlocks,
+} from "../helpers/css-source";
 
 /**
  * CSS pipeline contract.
@@ -39,6 +44,36 @@ import { cssRules, styleBlocks } from "../helpers/css-source";
 const ROOT = join(import.meta.dirname, "..", "..");
 const CLIENT_ROOT = join(ROOT, "src", "client");
 const MODE_TOGGLE = join(CLIENT_ROOT, "editor", "toolbar", "ModeToggle.svelte");
+const FORMATTING_BAR = join(CLIENT_ROOT, "shell", "FormattingBar.svelte");
+
+/**
+ * A single authored rule, ready to hand to the minifier.
+ *
+ * Rules are extracted one at a time rather than minifying a whole `<style>`
+ * block, because `neutralizeSvelteGlobal` only rewrites `:global(...)` — the
+ * rest of Svelte's CSS dialect would still need a real parser.
+ */
+function authoredRule(file: string, selector: string, mustDeclare?: RegExp): string {
+  const matches = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(file))).filter(
+    (r) => r.selectors.includes(selector) && (!mustDeclare || mustDeclare.test(r.body)),
+  );
+  expect(
+    matches.length,
+    `expected exactly one \`${selector}\` rule in ${relative(ROOT, file).replace(/\\/g, "/")}` +
+      (mustDeclare ? ` declaring ${mustDeclare}` : "") +
+      " — renamed, removed, or the scanner desynced",
+  ).toBe(1);
+  return matches[0].body;
+}
+
+/**
+ * `.thumb` appears three times in ModeToggle.svelte (base, the reduced-motion
+ * media override, and the in-app `body.tandem-reduce-motion` override), and the
+ * two overrides declare only `transition: none`. `background` picks the one that
+ * paints, independent of every placement property under test.
+ */
+const paintingRule = (selector: string) => authoredRule(MODE_TOGGLE, selector, /background\s*:/);
+const trackRule = () => authoredRule(MODE_TOGGLE, ".mode-toggle");
 
 /**
  * Vite's own esbuild-name -> lightningcss-key table, transcribed from
@@ -218,7 +253,20 @@ describe("bundled CSS: the #1302 formatting-bar declarations survive minificatio
     // or drops it re-buries every formatting-bar popover behind the selection
     // popup — and no E2E test would catch it, because Playwright drives
     // `npm run dev`, which never minifies.
-    const out = minify('.w:has([aria-expanded="true"]){z-index:9}');
+    //
+    // The real selector, not a `.w:has(...)` probe: this gate was synthetic
+    // until #1428, so deleting the rule from FormattingBar left it green. That
+    // is the same defect the line-clamp gate below records and the mode-toggle
+    // block above now avoids — three instances of one class.
+    const wrap = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(FORMATTING_BAR)))
+      .flatMap((r) => r.selectors)
+      .filter((s) => s.includes(":has("));
+    expect(
+      wrap,
+      "no `:has()` rule left in FormattingBar.svelte — the #1302 z-lift was removed or renamed",
+    ).not.toEqual([]);
+
+    const out = minify(`${wrap[0]}{z-index:9}`);
     expect(out).toContain(":has(");
     expect(out).toContain("aria-expanded");
   });
@@ -251,57 +299,35 @@ describe("bundled CSS: the #1383/#1384 mode-toggle declarations survive minifica
   // E2E gate can see this axis. That blind spot is exactly the one that shipped
   // #1189 inert for six weeks.
   //
-  // One case, not four. Three siblings were dropped in review, and since this
-  // comment is now the only record of why those gates do not exist, the reasons
-  // are the measured ones rather than the plausible ones:
+  // These gates read the REAL rules and minify those, so they also stand in for
+  // the source-shape gates that used to live in mode-toggle-thumb-contract.test
+  // .ts — they fail on everything those did, plus minifier drift.
   //
-  //  - `inset`: at today's targets lightningcss COLLAPSES the four longhands
-  //    into `inset: 0` rather than exploding it. That direction is target
-  //    conditional — at `{safari:13}` / `{chrome:80}` / `{ie:11}` it expands
-  //    instead — so the non-rotting reason is the stronger one: both forms are
-  //    geometrically identical at every target, so no assertion over the choice
-  //    can express a bug.
-  //  - `minmax(auto, 1fr)` → `minmax(0, 1fr)` is a semantic change, and no
-  //    minifier performs one.
-  //  - `translateX(100%)`: lightningcss DOES rewrite this — to `translate(100%)`
-  //    — so contrary to the first draft of this comment that axis was
-  //    falsifiable, and a naive `toContain("translateX")` gate would have failed
-  //    rather than passed. It is dropped because the rewrite is semantically
-  //    identical, not because nothing happens to it.
+  // Two rewrites were investigated and deliberately have no gate, because a test
+  // that can only pass is not one — and neither is one that reds on a rename the
+  // browser cannot tell apart:
   //
-  // A test that can only pass is not a gate; neither is one that reds on a
-  // rename the browser cannot tell apart.
+  //  - `top/right/bottom/left: 0` vs `inset: 0`: lightningcss collapses toward
+  //    the shorthand at today's targets and expands away from it at older ones
+  //    ({safari:13}, {chrome:80}, {ie:11}). Either direction is fine — the two
+  //    forms are geometrically identical at every target, so no assertion over
+  //    the choice can express a bug.
+  //  - `translateX(100%)` → `translate(100%)`: lightningcss DOES rewrite this,
+  //    so the axis is falsifiable and a `toContain("translateX")` gate would red.
+  //    It has no gate because the rewrite is semantically identical, not because
+  //    nothing happens to it.
 
-  it("keeps grid-area as the four-line form", () => {
-    // The load-bearing one. For an ABSOLUTELY-POSITIONED grid child an `auto`
-    // end line resolves to the container's padding edge, not `span 1`, so a
-    // minifier that collapsed `1/1/2/2` to `1/1` would silently stretch the
-    // thumb across the whole track — a visual bug with no failing test
-    // anywhere else. Verified against the real minifier: it DOES collapse
+  it("keeps the real .thumb placement intact", () => {
+    // A synthetic `.probe{grid-area:1 / 1 / 2 / 2}` fixture would pass with
+    // `.thumb` deleted from the component entirely. Same lesson as the
+    // line-clamp gate above: minify what actually ships.
+    //
+    // The load-bearing assertion is `grid-area`. For an absolutely-positioned
+    // grid child an `auto` end line resolves to the container's padding edge,
+    // not `span 1` — and lightningcss is measured to collapse both
     // `1/1/auto/auto` and `grid-row:1;grid-column:1` to `1/1`, so the
     // optimization this guards is one it already performs elsewhere.
-    const out = minify(".probe{grid-area:1 / 1 / 2 / 2}");
-    expect(out).toContain("grid-area:1/1/2/2");
-  });
-
-  it("keeps the real .thumb placement intact, not just a synthetic probe", () => {
-    // The synthetic fixture above does not guard our source — delete `.thumb`
-    // from ModeToggle.svelte entirely and it still passes. This is the same
-    // lesson the line-clamp gate one describe block up already records; the
-    // first draft of this block did not follow its own neighbour.
-    //
-    // Only the base `.thumb` rule is fed to the minifier, not the whole <style>
-    // block: that block contains `:global(...)`, which is Svelte syntax and not
-    // CSS lightningcss can parse.
-    const thumbRule = cssRules(styleBlocks(MODE_TOGGLE)).find(
-      ([selector, body]) => selector.trim() === ".thumb" && /background\s*:/.test(body),
-    );
-    expect(
-      thumbRule,
-      "no painting `.thumb` rule in ModeToggle.svelte — renamed or removed?",
-    ).toBeDefined();
-
-    const out = minify(`.thumb{${thumbRule?.[1]}}`);
+    const out = minify(`.thumb{${paintingRule(".thumb")}}`);
     for (const decl of ["grid-area:1/1/2/2", "inset:0", "position:absolute"]) {
       expect(out, `#1384: \`${decl}\` did not survive minification of the real rule`).toContain(
         decl,
@@ -310,16 +336,18 @@ describe("bundled CSS: the #1383/#1384 mode-toggle declarations survive minifica
   });
 
   it("keeps the real track's equal-column sizing intact", () => {
-    const track = cssRules(styleBlocks(MODE_TOGGLE)).find(
-      ([selector]) => selector.trim() === ".mode-toggle",
-    );
-    expect(track, "no `.mode-toggle` rule in ModeToggle.svelte").toBeDefined();
-
-    const out = minify(`.mode-toggle{${track?.[1]}}`);
-    expect(out, "#1384: the grid track no longer minifies to equal columns").toMatch(
-      /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
-    );
+    const out = minify(`.mode-toggle{${trackRule()}}`);
+    expect(
+      out,
+      "#1384: the thumb IS column 1, so the columns must stay equal at every track width. " +
+        "A bare `1fr` floors each column at min-content and they diverge under compression; " +
+        "the E2E spec measures that with an injected max-width.",
+    ).toMatch(/grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
     expect(out).toContain("inline-grid");
+    // Without `position: relative` the containing block falls through to the
+    // next positioned ancestor and the grid placement stops applying entirely.
+    expect(out).toContain("position:relative");
+    expect(out).toContain("gap:0");
   });
 });
 

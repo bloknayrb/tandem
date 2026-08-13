@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { cssRules, styleBlocks } from "../helpers/css-source";
+import { cssRulesBySelector, styleBlocks } from "../helpers/css-source";
 
 /**
  * Regression guard for #1396 — the rail drag strip overhung the visible rail.
@@ -39,10 +39,7 @@ const SHELL = ".rail-shell";
 const STRIP = ".rail-resize-handle";
 
 const css = styleBlocks(APP_SVELTE);
-const rules = cssRules(css).map(([selectorList, body]) => ({
-  selectors: selectorList.split(",").map((s) => s.trim()),
-  body,
-}));
+const rules = cssRulesBySelector(css);
 
 describe("#1396 rail clearance is declared once and shared", () => {
   const cases = [
