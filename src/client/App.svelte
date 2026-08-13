@@ -140,6 +140,7 @@ import { resolveDefaultModelChip } from "./utils/model-chip";
 import { resolveModelFirstRunNeeded } from "./utils/model-first-run";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
+import { wireStartupRejection } from "./utils/startup-rejection";
 
 // `getRetryStrategy` is read lazily inside yjsSync (only after bootstrap), so it
 // safely closes over `settingsState`, which is initialized further down.
@@ -393,88 +394,25 @@ if (isTauriRuntime()) {
 }
 
 // Surface OS file-association open failures (Tauri-only) as a warning toast.
-// The user double-clicked a file and silently landed on welcome.md; this is the
-// feedback. Rust classifies the rejection and buffers a STABLE, PATH-FREE
-// reason code; the message is composed here from that code, so no path reaches
-// the DOM (mirrors the sidecar-restart-failed contract). See #630.
-//
-// ONE delivery surface: `get_startup_rejection`, which TAKES. Both paths below
-// call it — the mount poll (covers a rejection that happened before this code
-// ran: argv cold start, and the macOS Apple Event, which lands 100–300 ms into
-// a cold launch, ahead of these deferred dynamic imports) and the
-// `startup-file-rejected` listener, which is a payload-free NUDGE meaning
-// "something is buffered, don't wait for the next mount".
-//
-// The two are deliberately NOT ordered against each other. They race, and
-// take-once settles it: whichever gets there first toasts, the other gets null.
-// Do not "fix" this by having Rust choose a surface based on whether the poll
-// has happened — #1344 did, and it was wrong, because these are two independent
-// promise chains and the shorter poll chain routinely wins, so the listener
-// could still be unwired when Rust concluded it was ready.
+// Mechanism, the ordering constraint, and the reason the event carries no
+// payload all live in `utils/startup-rejection.ts` — this site only supplies the
+// Tauri module loaders and decides what a toast looks like.
 if (isTauriRuntime()) {
-  const messageForCode = (code: string): string => {
-    switch (code) {
-      case "unsupported-extension":
-        return "That file type can't be opened in Tandem.";
-      case "not-a-file":
-      case "non-file-url":
-        return "That file couldn't be opened — it may have moved or been deleted.";
-      case "suspicious-path":
-        return "That file path was rejected for safety reasons.";
-      default:
-        return "That file couldn't be opened in Tandem.";
-    }
-  };
-  const pushStartupRejection = (code: string): void => {
-    notifications.push({
-      id: `startup-file-rejected-${Date.now()}`,
-      type: "general-error",
-      severity: "warning",
-      message: messageForCode(code),
-      dedupKey: "startup-file-rejected",
-      timestamp: Date.now(),
-      errorCode: "STARTUP_FILE_REJECTED",
-    });
-  };
-
-  // Take whatever Rust has buffered and toast it. Safe to call from either
-  // path and safe to call twice: the command TAKES, so the loser of the race
-  // gets `null` and does nothing.
-  const drainStartupRejection = (): void => {
-    import("@tauri-apps/api/core")
-      .then(({ invoke }) => invoke<string | null>("get_startup_rejection"))
-      .then((code) => {
-        if (code) pushStartupRejection(code);
-      })
-      .catch((err) => {
-        console.warn("[App] Failed to drain buffered startup rejection:", err);
-      });
-  };
-
-  let unlistenRejected: (() => void) | null = null;
-  let rejectedCancelled = false;
-
-  // Nudge path: a rejection landed while this WebView was already up. The event
-  // carries no payload by design — reading a code off it would be a second
-  // delivery surface, and the two would disagree the moment one of them raced.
-  import("@tauri-apps/api/event")
-    .then(({ listen }) => listen("startup-file-rejected", () => drainStartupRejection()))
-    .then((un) => {
-      if (rejectedCancelled) un();
-      else unlistenRejected = un;
-    })
-    .catch((err) => {
-      console.warn("[App] Failed to wire startup-file-rejected listener:", err);
-    });
-
-  // Mount path: covers a rejection buffered before this code ran, and is the
-  // whole reason a dropped nudge is not a lost toast.
-  drainStartupRejection();
-
-  onDestroy(() => {
-    rejectedCancelled = true;
-    unlistenRejected?.();
+  const cleanupStartupRejection = wireStartupRejection({
+    loadCore: () => import("@tauri-apps/api/core"),
+    loadEvent: () => import("@tauri-apps/api/event"),
+    push: (message) =>
+      notifications.push({
+        id: `startup-file-rejected-${Date.now()}`,
+        type: "general-error",
+        severity: "warning",
+        message,
+        dedupKey: "startup-file-rejected",
+        timestamp: Date.now(),
+        errorCode: "STARTUP_FILE_REJECTED",
+      }),
   });
+  onDestroy(cleanupStartupRejection);
 }
 
 let settingsModalOpen = $state(false);

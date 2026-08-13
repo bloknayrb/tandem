@@ -103,8 +103,9 @@ const COWORK_HEAL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// File extensions Tandem can open via OS file association. Keep aligned with
 /// `SUPPORTED_EXTENSIONS` in `src/shared/constants.ts` (re-exported through
 /// `src/server/mcp/file-opener.ts`) — server-side is the authority; this list is
-/// defense-in-depth to reject obviously-wrong argv before issuing an HTTP
-/// request.
+/// defense-in-depth, rejecting an obviously-wrong open candidate before an HTTP
+/// request is issued. Since #1344 that means BOTH surfaces: argv on
+/// Windows/Linux, and macOS `RunEvent::Opened` URLs.
 ///
 /// "Keep aligned" was the whole instruction and it still drifted (#1306):
 /// `markdown` sat in this list and in `tauri.conf.json` while the server
@@ -150,32 +151,41 @@ static SIDECAR_HEALTHY: AtomicBool = AtomicBool::new(false);
 /// the rest of the session.
 static LAUNCHER_DEFERRED: AtomicBool = AtomicBool::new(false);
 
-/// Buffered cold-start file-open rejection reason CODE (stable, path-free), for
-/// the WebView to surface as a toast once it has mounted. See issue #630.
+/// Buffered file-open rejection reason CODE (stable, path-free) — the single
+/// delivery surface for EVERY entry point, cold start and warm start alike.
+/// See issues #630 and #1344.
 ///
 /// ## Why buffer instead of just emitting an event
 ///
 /// A cold-start "Open With" rejection (`extract_file_arg` returns `Err`) is
-/// classified in `setup()` — which runs BEFORE the Svelte `App.svelte`
-/// `onMount` listener exists. Emitting a Tauri event there drops silently on
-/// the exact failure mode it's meant to surface. So the reason is buffered
-/// here and polled via `get_startup_rejection()` on mount.
+/// classified in `setup()` — which runs before `App.svelte` exists at all, let
+/// alone its listener. Emitting a Tauri event there drops silently on the exact
+/// failure mode it is meant to surface. So the reason is buffered here and
+/// drained via `get_startup_rejection()` when the client comes up.
 ///
-/// This buffer is the ONLY delivery surface, on EVERY path — warm start
-/// included. `startup-file-rejected` is a payload-free NUDGE, answered by
-/// calling `get_startup_rejection()`, the same take-once accessor the mount
-/// poll uses. So Rust never has to know whether the listener is wired yet,
-/// which it cannot know: an earlier revision of #1344 inferred readiness from
-/// "has the poll happened", and that inference is false — `App.svelte` wires
-/// the listener and polls in two INDEPENDENT promise chains, and the poll chain
-/// is the shorter, so it routinely wins. A rejection landing in that gap took
-/// the emit-only path and was dropped, which is the exact failure mode this
-/// buffer exists to fix.
+/// ## Why the buffer is unconditional, and not gated on WebView readiness
 ///
-/// Unconditional buffering also means a nudge with no listener (WebView reload,
-/// the dynamic-import gap) costs one dropped event rather than the toast. Same
-/// queue-then-drain shape as `PendingOpens`, the other place in this file where
-/// a producer must not care whether the consumer is ready.
+/// `startup-file-rejected` is a payload-free NUDGE, answered by calling
+/// `get_startup_rejection()` — the same take-once accessor the init-time drain
+/// uses. So Rust never has to know whether the listener is wired, which it
+/// cannot know.
+///
+/// An earlier revision of this work (see PR #1414's history; the design does not
+/// appear in issue #1344 itself) inferred readiness from a `REJECTION_POLLED`
+/// latch — "the WebView has polled, so its listener must be wired" — and skipped
+/// the buffer once set. The inference does not hold, for a reason that needs no
+/// race to demonstrate: the latch is process-global and the listener is not. **A
+/// WebView reload leaves the latch set and the listener gone**, so every
+/// rejection after the first reload took the emit-only path and was dropped
+/// permanently. (`App.svelte` also wires the listener and drains in two
+/// independent promise chains whose completion order is not guaranteed, so a
+/// completed drain never proved a wired listener either — but that one is a
+/// sub-millisecond window and is not the argument this rests on.)
+///
+/// Unconditional buffering also means a nudge with no listener costs one dropped
+/// event rather than the toast. Same queue-then-drain shape as `PendingOpens`,
+/// the other place in this file where a producer must not care whether the
+/// consumer is ready.
 ///
 /// ## Why a `Mutex<Option<_>>` and not a `OnceLock`
 ///
@@ -188,8 +198,24 @@ static LAUNCHER_DEFERRED: AtomicBool = AtomicBool::new(false);
 /// The buffer holds a stable reason CODE only (e.g. `"unsupported-extension"`),
 /// never the rejected path — the resolved path is already logged at `warn` for
 /// diagnostics, and the human-readable toast message is composed client-side
-/// (mirrors the path-free `sidecar-restart-failed` toast contract).
+/// (mirrors the path-free `sidecar-restart-failed` toast contract). The writers
+/// take `&'static str` precisely so this cannot be relaxed by accident; see
+/// [`buffer_startup_rejection_code`].
 static STARTUP_REJECTION: Mutex<Option<String>> = Mutex::new(None);
+
+/// Run `f` against the rejection buffer, recovering from (and reporting) a
+/// poisoned mutex. One helper rather than three hand-rolled `match` arms: the
+/// take path used to be the only one that recovered *silently*, and it is the
+/// one whose recovery destroys state, so the divergence was exactly backwards.
+fn with_rejection<R>(what: &str, f: impl FnOnce(&mut Option<String>) -> R) -> R {
+    match STARTUP_REJECTION.lock() {
+        Ok(mut guard) => f(&mut guard),
+        Err(poisoned) => {
+            log::error!("STARTUP_REJECTION mutex poisoned during {what} — recovering");
+            f(&mut poisoned.into_inner())
+        }
+    }
+}
 
 /// Tauri event name for a startup-file rejection surfaced to the WebView.
 /// Deliberately payload-FREE: it is a nudge to call `get_startup_rejection`,
@@ -199,8 +225,9 @@ static STARTUP_REJECTION: Mutex<Option<String>> = Mutex::new(None);
 const EVENT_STARTUP_FILE_REJECTED: &str = "startup-file-rejected";
 
 /// Map a typed [`RejectionReason`] to a stable, path-free reason code for the
-/// WebView toast bus. Kept in sync with the `startup-file-rejected` handler in
-/// `App.svelte`, which composes the user-facing message from this code.
+/// WebView toast bus. The code travels to the client through
+/// `get_startup_rejection`, never through the event payload; `App.svelte`'s
+/// reason-code→message map turns it into user-facing text.
 fn rejection_reason_code(reason: &RejectionReason) -> &'static str {
     match reason {
         RejectionReason::SuspiciousColon { .. } => "suspicious-path",
@@ -209,17 +236,25 @@ fn rejection_reason_code(reason: &RejectionReason) -> &'static str {
     }
 }
 
-/// Record an already-mapped, path-free reason CODE in the buffer. Last-write-
-/// wins. The single writer — every entry point funnels through
-/// [`surface_startup_rejection`], which funnels through here.
-fn buffer_startup_rejection_code(code: &str) {
-    match STARTUP_REJECTION.lock() {
-        Ok(mut guard) => *guard = Some(code.to_string()),
-        Err(poisoned) => {
-            log::error!("STARTUP_REJECTION mutex poisoned — recovering");
-            *poisoned.into_inner() = Some(code.to_string());
-        }
-    }
+/// Record an already-mapped, path-free reason CODE in the buffer. The single
+/// writer — every entry point funnels through [`surface_startup_rejection`],
+/// which funnels through here.
+///
+/// `&'static str`, not `&str`, and that is a safety property rather than a
+/// style choice. `Display for OpenedUrlRejection` deliberately EMBEDS the
+/// resolved path (it is the log format), so a sink taking `&str` would accept
+/// `&format!("{reason}")` and put a filesystem path on the wire to the DOM.
+/// A formatted string is not `'static`, so that mistake is now a compile error
+/// rather than a thing tests have to notice. Both producers
+/// ([`rejection_reason_code`], [`opened_url_reason_code`]) already return
+/// `&'static str` from a closed set of literals.
+///
+/// Last-write-wins. A multi-file Opened batch rejects at most once through
+/// [`surface_startup_rejection`] — the batch collapses to a single code before
+/// it reaches here — so the surviving value is one deliberate summary, not an
+/// arbitrary survivor of N racing writes.
+fn buffer_startup_rejection_code(code: &'static str) {
+    with_rejection("buffer", |slot| *slot = Some(code.to_string()));
 }
 
 /// Deliver a startup-file rejection to the WebView. THE delivery path — every
@@ -228,44 +263,106 @@ fn buffer_startup_rejection_code(code: &str) {
 /// alone serves cold and warm start through one arm.
 ///
 /// Buffer first, then nudge, unconditionally. Do not re-add a "has the WebView
-/// polled yet" discriminator to skip the buffer on warm start — #1344 tried it,
-/// and [`STARTUP_REJECTION`] records why the readiness inference is false (it
-/// also raced, being read outside the buffer's mutex).
-fn surface_startup_rejection(app: &tauri::AppHandle, code: &str) {
-    buffer_startup_rejection_code(code);
-    if let Err(e) = app.emit(EVENT_STARTUP_FILE_REJECTED, ()) {
-        // Non-fatal by construction: the code is already buffered, so the only
-        // cost is that the toast waits for the next mount poll.
-        log::warn!("Failed to emit {EVENT_STARTUP_FILE_REJECTED}: {e}");
-    }
+/// polled yet" discriminator to skip the buffer on warm start — [`STARTUP_REJECTION`]
+/// records why the readiness inference is false (it also raced, being read
+/// outside the buffer's mutex).
+fn surface_startup_rejection(app: &tauri::AppHandle, code: &'static str) {
+    surface_startup_rejection_with(code, || {
+        if let Err(e) = app.emit(EVENT_STARTUP_FILE_REJECTED, ()) {
+            // Non-fatal by construction: the code is already buffered, so the
+            // worst case is that the toast waits for the next client init.
+            log::warn!("Failed to emit {EVENT_STARTUP_FILE_REJECTED}: {e}");
+        }
+    });
 }
 
-/// Clear any buffered cold-start rejection. Called from `restart_sidecar` so a
-/// stale rejection from the previous launch can't be replayed on the next mount
-/// poll. See the `STARTUP_REJECTION` doc comment.
-fn clear_startup_rejection() {
-    match STARTUP_REJECTION.lock() {
-        Ok(mut guard) => *guard = None,
-        Err(poisoned) => {
-            log::error!("STARTUP_REJECTION mutex poisoned during clear — recovering");
-            *poisoned.into_inner() = None;
+/// The testable half of [`surface_startup_rejection`], split out because
+/// `tauri::AppHandle` cannot be constructed in a unit test (no `tauri` `test`
+/// feature is in dev-dependencies) — and without this seam the ordering below
+/// was pinned by nothing at all: deleting the buffer call reverted the whole
+/// fix, and swapping the two lines re-opened the drop, both with a green suite.
+///
+/// The order is the contract. Buffer BEFORE nudging, or a live listener drains
+/// an empty slot and the toast is lost — the nudge is deliberately payload-free,
+/// so it carries nothing the client could fall back on.
+fn surface_startup_rejection_with(code: &'static str, nudge: impl FnOnce()) {
+    buffer_startup_rejection_code(code);
+    nudge();
+}
+
+/// Wire code for "more than one file in this batch was refused". Distinct from
+/// the per-reason codes because a mixed batch has no single true reason, and
+/// picking one of them would state something false rather than something vague.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+const CODE_MULTIPLE_REJECTED: &str = "multiple-rejected";
+
+/// Collapses one OS batch — a Finder multi-select "Open With", a multi-file Dock
+/// drop — into the single code the user should see.
+///
+/// This exists because the buffer is one slot and the batch is N rejections. The
+/// obvious shape (call [`surface_startup_rejection`] per rejected URL) is what
+/// the first version did, and it is nondeterministic in a way that shows: the
+/// loop is synchronous while the client's drain is an async IPC round-trip, so
+/// whether the user got one toast or two-with-a-count-badge, and which reason it
+/// named, depended on where the drain happened to land. Same user action, two
+/// different outcomes.
+///
+/// Accumulating first and surfacing once removes the race rather than narrowing
+/// it. Deliberately ungated and free of Tauri types so it is unit-testable on
+/// every platform — its only caller, `handle_opened_urls`, is macOS-only and
+/// cannot be tested from Windows or Linux CI, which is precisely why the logic
+/// must not live inside it.
+#[derive(Default)]
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+struct RejectionBatch {
+    first: Option<&'static str>,
+    count: usize,
+}
+
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+impl RejectionBatch {
+    fn record(&mut self, code: &'static str) {
+        self.count += 1;
+        if self.first.is_none() {
+            self.first = Some(code);
+        }
+    }
+
+    /// The one code to surface, or `None` when nothing was rejected. A single
+    /// rejection keeps its specific reason; two or more report multiplicity,
+    /// because "that file type can't be opened" is actively misleading when the
+    /// user just dropped five files and four of them opened.
+    fn resolve(&self) -> Option<&'static str> {
+        match self.count {
+            0 => None,
+            1 => self.first,
+            _ => Some(CODE_MULTIPLE_REJECTED),
         }
     }
 }
 
-/// WebView-polled accessor for the buffered cold-start rejection code. Returns
-/// `Some(code)` exactly once per buffered rejection: the value is TAKEN, so a
-/// re-mount (e.g. an in-WebView reload) doesn't replay a toast the user already
-/// saw. Called from BOTH `App.svelte` sites — the `onMount` poll and the
+/// Clear any buffered rejection. Called from `restart_sidecar` so a stale
+/// rejection from the previous launch can't be replayed against the new sidecar.
+///
+/// Note the scope is wider than that rationale: since every entry point buffers,
+/// this also discards a LIVE rejection caught in the window between
+/// [`surface_startup_rejection`] and the client's drain. That needs the user to
+/// hit Relaunch in the same breath as a rejected open, and the alternative
+/// (replaying it against the new sidecar) is worse.
+fn clear_startup_rejection() {
+    with_rejection("clear", |slot| *slot = None);
+}
+
+/// Client-drained accessor for the buffered rejection code. Returns `Some(code)`
+/// exactly once per buffered rejection: the value is TAKEN, so a re-init (e.g.
+/// an in-WebView reload) doesn't replay a toast the user already saw. Called
+/// from BOTH `App.svelte` sites — the init-time drain and the
 /// `startup-file-rejected` listener — because the event is a payload-free nudge
 /// and this is the only way to read what it is about. Take-once is what makes
 /// that safe: whichever arrives first wins, the other gets `None`.
 #[tauri::command]
 fn get_startup_rejection() -> Option<String> {
-    match STARTUP_REJECTION.lock() {
-        Ok(mut guard) => guard.take(),
-        Err(poisoned) => poisoned.into_inner().take(),
-    }
+    with_rejection("take", |slot| slot.take())
 }
 
 /// Strip the Windows extended-length path prefix (`\\?\`) that Tauri's
@@ -475,8 +572,13 @@ pub(crate) enum OpenedUrlRejection {
     /// third copy of `"unsupported-extension"` / `"not-a-file"` is precisely the
     /// drift #1344 was.
     ///
-    /// `RejectionReason::SuspiciousColon` is unreachable through this variant —
-    /// see [`validate_open_candidate`] for why.
+    /// Every `RejectionReason` variant is reachable through here on the platform
+    /// that produces it — `SuspiciousColon` only where the ADS scan compiles
+    /// (Windows), which is why the wrapping is exact rather than aspirational.
+    /// Its production caller is macOS-only today, so that arm is currently
+    /// unreached; it is deliberately not *unreachable*, because a future
+    /// Windows Opened / deep-link handler must inherit the scan rather than
+    /// silently skip it. See [`validate_open_candidate`].
     PathRejected(RejectionReason),
 }
 
@@ -550,23 +652,34 @@ pub(crate) fn classify_opened_url(url: &Url) -> Result<PathBuf, OpenedUrlRejecti
     validate_open_candidate(path).map_err(OpenedUrlRejection::PathRejected)
 }
 
-/// The path-shaped half of open-candidate validation: the extension must be in
-/// [`SUPPORTED_FILE_ASSOC_EXTS`] (case-insensitive) and the path must be a
-/// regular file. Shared by the argv path (`extract_file_arg`, used by Windows /
-/// Linux cold start and the `single-instance` warm-start callback) and the macOS
-/// `RunEvent::Opened` path (`classify_opened_url`).
+/// ALL of the path-shaped open-candidate validation the desktop shell performs,
+/// in one place: the NTFS alternate-data-stream scan (Windows), UNC rejection,
+/// the extension allowlist, and the regular-file check. Shared by the argv path
+/// (`extract_file_arg`, used by Windows / Linux cold start and the
+/// `single-instance` warm-start callback) and the macOS `RunEvent::Opened` path
+/// (`classify_opened_url`).
 ///
-/// One definition so the two OS entry points cannot drift again: before #1344
-/// these two checks existed only inline inside `extract_file_arg`, so a macOS
-/// Finder double-click of a `.pdf` or a deleted path sailed through to
-/// `/api/open` and was refused server-side with nothing but a `log::warn!`.
+/// One definition so the OS entry points cannot drift again: before #1344 these
+/// checks existed only inline inside `extract_file_arg`, so a macOS Finder
+/// double-click of a `.pdf` or a deleted path sailed through to `/api/open` and
+/// was refused server-side with nothing but a `log::warn!`.
+///
+/// The ADS scan lives HERE rather than in `extract_file_arg`, and that placement
+/// is the point. Guarding it with a `#[cfg]` on the *caller* was the same shape
+/// of bug as #1344 itself: this function is unconditionally compiled and
+/// `classify_opened_url` is too, so a future Windows or Linux Opened / deep-link
+/// handler would have inherited the extension and `is_file()` checks with no ADS
+/// scan — and `C:\x\notes:stream.md` has `extension() == "md"` and reports
+/// `is_file() == true` (Windows returns the base file's attributes for a stream
+/// path). A check whose safety depends on who happens to call it is not a check.
+///
+/// ORDER IS LOAD-BEARING. The ADS and UNC scans run before `is_file()`, because
+/// `is_file()` on a UNC path performs the SMB handshake — leaking an NTLM hash
+/// from the shell process on a path Tandem was never going to open (the server's
+/// `resolveAndValidatePath` refuses `\\` and `//` prefixes). A gate that runs
+/// after the syscall it is protecting against is decoration.
 ///
 /// Takes and returns the `PathBuf` by value so neither caller has to clone it.
-///
-/// `RejectionReason::SuspiciousColon` is deliberately NOT produced here: the
-/// NTFS alternate-data-stream scan is `#[cfg(target_os = "windows")]`, operates
-/// on the pre-validation joined path, and stays in `extract_file_arg` ahead of
-/// this call — while Opened events are macOS-only.
 ///
 /// `SUPPORTED_FILE_ASSOC_EXTS` must MATCH the server's `SUPPORTED_EXTENSIONS`
 /// exactly — asserted as set equality by
@@ -580,6 +693,35 @@ pub(crate) fn classify_opened_url(url: &Url) -> Result<PathBuf, OpenedUrlRejecti
 fn validate_open_candidate(
     absolute: std::path::PathBuf,
 ) -> Result<std::path::PathBuf, RejectionReason> {
+    #[cfg(target_os = "windows")]
+    {
+        // Reject any colon outside the drive-letter position (index 1) on the
+        // resolved absolute path. Catches NTFS Alternate Data Stream syntax
+        // (`file.md:Zone.Identifier`) both when the colon lands at an absolute
+        // index >1 (e.g. `C:\tmp\file.md:ADS`) and when a relative candidate
+        // joined against `cwd` produces an absolute path with the suspicious
+        // colon. An earlier version scanned the un-joined candidate string,
+        // which let a relative `f:ADS.md` through (colon at index 1 of the
+        // *candidate*). Scanning the resolved absolute closes that gap, which
+        // is also why this must run on the already-joined path.
+        let absolute_str = absolute.to_string_lossy();
+        for (i, b) in absolute_str.as_bytes().iter().enumerate() {
+            if *b == b':' && i != 1 {
+                let index = i;
+                return Err(RejectionReason::SuspiciousColon { path: absolute, index });
+            }
+        }
+    }
+
+    // UNC / network paths, refused before any filesystem call touches them.
+    // Matches the server's `resolveAndValidatePath`, which rejects both
+    // prefixes — but the server refusing it is one HTTP hop too late to stop
+    // `is_file()` from having already performed the SMB handshake here.
+    let as_str = absolute.to_string_lossy();
+    if as_str.starts_with(r"\\") || as_str.starts_with("//") {
+        return Err(RejectionReason::NotAFile { path: absolute });
+    }
+
     let ext = absolute
         .extension()
         .and_then(|e| e.to_str())
@@ -610,14 +752,15 @@ fn validate_open_candidate(
 ///   part of the flag.
 /// - Skip a literal `--` separator.
 /// - Take the FIRST remaining arg.
-/// - On Windows, reject paths containing a `:` outside the drive-letter slot
-///   (defends against NTFS alternate-data-stream paths like
-///   `file.md:Zone.Identifier`).
 /// - Resolve relative to `cwd`.
-/// - Hand the resolved absolute path to the shared `validate_open_candidate`,
-///   which verifies the extension is in `SUPPORTED_FILE_ASSOC_EXTS`
-///   (case-insensitive) and that the path exists as a regular file. The macOS
-///   `RunEvent::Opened` path runs the same helper (#1344).
+/// - Hand the resolved absolute path to the shared [`validate_open_candidate`],
+///   which owns EVERY path-shaped check: the Windows NTFS alternate-data-stream
+///   colon scan, UNC rejection, the `SUPPORTED_FILE_ASSOC_EXTS` allowlist
+///   (case-insensitive), and the regular-file check. The macOS
+///   `RunEvent::Opened` path runs the same helper (#1344). This function's own
+///   job is argv shape only — it deliberately performs no path validation of
+///   its own, because a check that lives at one entry point is a check the
+///   other entry point does not have.
 ///
 /// Returns:
 /// - `Ok(Some(path))` — a validated, openable file path.
@@ -645,29 +788,6 @@ pub fn extract_file_arg(
     let p = std::path::Path::new(candidate);
     let absolute: std::path::PathBuf =
         if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
-
-    #[cfg(target_os = "windows")]
-    {
-        // Reject any colon outside the drive-letter position (index 1) on the
-        // resolved absolute path. Catches NTFS Alternate Data Stream syntax
-        // (`file.md:Zone.Identifier`) both when the colon lands at an absolute
-        // index >1 (e.g. `C:\tmp\file.md:ADS`) and when a relative candidate
-        // joined against `cwd` produces an absolute path with the suspicious
-        // colon. The previous version scanned the un-joined candidate string,
-        // which let relative paths like `foo:ADS.md` slip through (colon at
-        // index 3 in the candidate -> rejected; but if it were at index 1 of
-        // the candidate, e.g. `f:ADS.md`, it would have passed). Scanning the
-        // resolved absolute closes that gap.
-        let absolute_str = absolute.to_string_lossy();
-        for (i, b) in absolute_str.as_bytes().iter().enumerate() {
-            if *b == b':' && i != 1 {
-                return Err(RejectionReason::SuspiciousColon {
-                    path: absolute.clone(),
-                    index: i,
-                });
-            }
-        }
-    }
 
     validate_open_candidate(absolute).map(Some)
 }
@@ -801,26 +921,31 @@ async fn post_drained_paths(
 /// queues when it is not.
 #[cfg(target_os = "macos")]
 fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
+    // Deliberately BEFORE validation: a fully-rejected batch still needs a
+    // visible window, because the thing it produces is a toast.
     show_main_window_for_user(app);
     // Fetched at most once per batch, and LAZILY — a keyring read is an XPC
     // round-trip to `securityd` (and can *write* on first run), on the main
     // event-loop thread. Hoisting it out of the loop stops an N-file "Open
-    // With" paying it N times; deferring it to the first accepted URL stops a
-    // fully-rejected batch paying it at all. Since #1344 that is the shape of
-    // the realistic user error (a double-clicked .pdf, a stale alias), so it is
-    // the common case, not a corner. Falls back to anonymous on retrieval
-    // failure; loopback bypasses Bearer enforcement so this is non-fatal.
+    // With" paying it N times; deferring it to the first URL that actually
+    // needs a direct POST (accepted, and the sidecar already healthy) stops a
+    // fully-rejected — or fully-queued — batch paying it at all. Since #1344 a
+    // fully-rejected batch is the shape of the realistic user error (a
+    // double-clicked .pdf, a stale alias), so it is the common case, not a
+    // corner. Falls back to anonymous on retrieval failure; loopback bypasses
+    // Bearer enforcement so this is non-fatal, and the failure is memoized so a
+    // locked keychain is not re-hit per URL.
     let mut batch_token: Option<Option<String>> = None;
+    // Accumulate, then surface once after the loop. See `RejectionBatch` — one
+    // arm here serves BOTH cold and warm start and cannot tell them apart, so
+    // per-URL surfacing raced the client's drain nondeterministically.
+    let mut rejected = RejectionBatch::default();
     for url in urls {
         let path = match classify_opened_url(&url) {
             Ok(path) => path,
             Err(reason) => {
                 log::warn!("Ignoring URL from Opened event ({reason}): {url}");
-                // This one arm serves BOTH cold and warm start, and cannot tell
-                // them apart — a cold-start Apple Event lands 100–300 ms in,
-                // well before App.svelte wires its listener. Buffer-then-nudge
-                // is what makes that indistinguishability harmless.
-                surface_startup_rejection(app, opened_url_reason_code(&reason));
+                rejected.record(opened_url_reason_code(&reason));
                 continue;
             }
         };
@@ -846,6 +971,9 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
                 }
             });
         }
+    }
+    if let Some(code) = rejected.resolve() {
+        surface_startup_rejection(app, code);
     }
 }
 
@@ -908,7 +1036,7 @@ async fn request_launcher_start(
 /// natively-hidden Tauri window is unverified, and it would silently do nothing
 /// if the WebView failed to mount. Rust knows exactly when the window is shown.
 /// A Tauri *event* would not work — events aren't buffered, and the listener may
-/// not exist yet (see `buffer_startup_rejection`) — but a direct loopback POST
+/// not exist yet (see [`STARTUP_REJECTION`]) — but a direct loopback POST
 /// has no such constraint.
 ///
 /// Known, accepted consequence: the tray's "Setup AI Assistant" item also
@@ -1699,7 +1827,7 @@ fn restart_sidecar(app: tauri::AppHandle) {
     clear_healthy_under_lock(&pending);
     // Drop any buffered cold-start rejection so a stale reason from the previous
     // launch can't be replayed against the freshly restarted sidecar on the next
-    // mount poll. See the STARTUP_REJECTION doc comment (#630 risk note).
+    // init-time drain. See the STARTUP_REJECTION doc comment (#630 risk note).
     clear_startup_rejection();
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
@@ -2487,6 +2615,26 @@ async fn start_sidecar(
                 }
             }
         }
+    }
+
+    // The queue is never going to drain, so say so at a level that survives
+    // release builds. `LevelFilter::Warn` is the release floor, and the queue
+    // push logs at `info` — so without this line a file the user double-clicked
+    // is dropped leaving no evidence anywhere: no tab, no toast, and nothing in
+    // `tandem.log`, the one artifact a bug report can attach.
+    let abandoned = {
+        let pending = handle.state::<PendingOpens>();
+        let mut guard = match pending.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        std::mem::take(&mut *guard)
+    };
+    if !abandoned.is_empty() {
+        log::warn!(
+            "Abandoning {} queued file open(s) — sidecar never became healthy",
+            abandoned.len()
+        );
     }
 
     Err(format!(
@@ -5549,7 +5697,8 @@ mod annotation_context_menu_tests {
 }
 
 /// Cross-platform unit tests for `classify_opened_url` (#630 sub-task #3). The
-/// helper is pure and unconditionally compiled, so these run on every platform
+/// helper is unconditionally compiled and free of Tauri runtime handles — its
+/// only I/O is a filesystem stat — so these run on every platform
 /// even though its only production caller (`handle_opened_urls`) is macOS-gated.
 /// CI runs `cargo test` on both ubuntu-latest and windows-latest, so every
 /// assertion below must hold on both.
@@ -5695,7 +5844,9 @@ mod classify_opened_url_tests {
     fn opened_url_path_rejections_are_table_driven() {
         let dir = tempfile::TempDir::new().expect("tempdir");
 
-        // (1) Exists, but the extension is not OS-registered.
+        // (1) Exists, but the extension is not in SUPPORTED_FILE_ASSOC_EXTS.
+        //     (Not the same thing as OS-registered: `.htm` is accepted here and
+        //     deliberately registered nowhere.)
         let exe = dir.path().join("secret.exe");
         std::fs::write(&exe, b"x").expect("write fixture");
         // (2) Exists, but has no extension at all.
@@ -5743,6 +5894,48 @@ mod classify_opened_url_tests {
     /// Finder double-click of `DOC.MD` must open, which can only happen if this
     /// path reaches the shared helper's lowercasing match.
     ///
+    /// UNC / network paths are refused by the shared validator itself, so the
+    /// refusal covers BOTH OS entry points and — critically — lands before
+    /// `is_file()`. `is_file()` on `\\host\share\...` performs the SMB
+    /// handshake, leaking an NTLM hash from the shell process on a path the
+    /// server was always going to reject (`resolveAndValidatePath` refuses both
+    /// prefixes). A gate placed after the syscall it guards is decoration.
+    ///
+    /// Unconditionally compiled, like the check: `\\` is the Windows-exploitable
+    /// form, but a Linux/macOS Opened handler must not start accepting `//`
+    /// either just because it is locally harmless there.
+    #[test]
+    fn unc_paths_are_refused_before_any_filesystem_call() {
+        for candidate in [r"\\attacker\share\notes.md", "//attacker/share/notes.md"] {
+            let path = PathBuf::from(candidate);
+            assert_eq!(
+                validate_open_candidate(path.clone()),
+                Err(RejectionReason::NotAFile { path }),
+                "{candidate} must be refused by the shared validator"
+            );
+        }
+    }
+
+    /// `is_file()` follows symlinks deliberately (the server re-resolves and is
+    /// the authority). That is a documented choice with a plausible-looking
+    /// "safer" mutation — `symlink_metadata()` — which would silently refuse
+    /// every symlinked document on both surfaces.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_a_supported_file_is_accepted() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let target = dir.path().join("real.md");
+        std::fs::write(&target, b"x").expect("write fixture");
+        let link = dir.path().join("link.md");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+        assert_eq!(
+            validate_open_candidate(link.clone()),
+            Ok(link),
+            "a symlink to a supported regular file must be accepted, not resolved away"
+        );
+    }
+
     /// Deliberately NOT a table over `SUPPORTED_FILE_ASSOC_EXTS` — that table
     /// lives once, on the argv surface
     /// (`tests/file_association.rs::each_supported_extension_is_accepted`).
@@ -5766,8 +5959,12 @@ mod classify_opened_url_tests {
     /// #1344 APPENDED the path check as step 4; it did not interleave it. A
     /// supported-looking extension must not smuggle a URL past the scheme or
     /// host gates.
+    ///
+    /// Named for what it actually pins. Distinguishing conversion-before-path
+    /// would need a platform-specific driveless fixture; that case is covered
+    /// separately by `empty_host_file_url_classification_is_platform_dependent`.
     #[test]
-    fn check_order_is_scheme_then_host_then_conversion_then_path() {
+    fn check_order_is_scheme_then_host_before_path() {
         let https = Url::parse("https://example.com/a.md").expect("valid https URL");
         assert_eq!(
             classify_opened_url(&https),
@@ -5866,7 +6063,7 @@ mod startup_rejection_tests {
             path: PathBuf::from("/x/missing.md"),
         }));
         // restart_sidecar calls clear_startup_rejection — a stale rejection from
-        // the previous launch must not survive into the next mount poll.
+        // the previous launch must not survive into the next init-time drain.
         clear_startup_rejection();
         assert_eq!(
             get_startup_rejection(),
@@ -5913,7 +6110,7 @@ mod startup_rejection_tests {
         );
 
         // The delegating arm reuses the argv path's codes rather than minting
-        // new ones — App.svelte's `messageForCode` already handles both.
+        // new ones — App.svelte's reason-code→message map already handles both.
         let unsupported = opened_url_reason_code(&OpenedUrlRejection::PathRejected(
             RejectionReason::UnsupportedExtension {
                 ext: "exe".into(),
@@ -5938,34 +6135,84 @@ mod startup_rejection_tests {
         }
     }
 
-    /// The cross-platform proof of the delivery fix (#1344). `handle_opened_urls`
-    /// and `surface_startup_rejection` both need an `AppHandle`, so the piece
-    /// that is testable from here is the invariant they rest on: the buffer
-    /// always receives the code, and the WebView can always take it — with no
-    /// readiness flag in between, because the earlier flag-based version of this
-    /// dropped rejections whenever the poll chain beat the listen chain.
+    /// THE delivery-ordering contract, and the reason `surface_startup_rejection`
+    /// was split around a closure.
+    ///
+    /// Without this, two one-line mutations reverted the #1344 fix with a fully
+    /// green suite: deleting the buffer write made every path emit-only again
+    /// (the original cold-start drop), and swapping buffer/nudge let a live
+    /// listener drain an empty slot (the nudge is payload-free, so there is
+    /// nothing to fall back on). Both are killed here by asserting from INSIDE
+    /// the nudge that the code is already readable.
     #[test]
-    fn an_opened_url_rejection_is_always_retrievable_from_the_buffer() {
+    fn the_code_is_buffered_before_the_nudge_fires() {
         let _g = REJECTION_LOCK.lock().unwrap();
         clear_startup_rejection();
 
-        let code = opened_url_reason_code(&OpenedUrlRejection::PathRejected(
-            RejectionReason::UnsupportedExtension {
-                ext: "pdf".into(),
-                path: PathBuf::from("/x/paper.pdf"),
-            },
-        ));
-        buffer_startup_rejection_code(code);
+        let mut nudged = false;
+        surface_startup_rejection_with("unsupported-extension", || {
+            nudged = true;
+            // A real listener answers the nudge by calling get_startup_rejection.
+            // Doing that here is the whole point: it must already be there.
+            assert_eq!(
+                get_startup_rejection(),
+                Some("unsupported-extension".to_string()),
+                "the buffer must be populated BEFORE the nudge is emitted, or a \
+                 listener that answers immediately drains nothing"
+            );
+        });
+        assert!(nudged, "the nudge must actually be invoked");
+        clear_startup_rejection();
+    }
+
+    /// A failed emit must not cost the toast — the code stays queued for the
+    /// client's next init-time drain. This is the justification printed in
+    /// `surface_startup_rejection`'s `log::warn!`, now enforced.
+    #[test]
+    fn a_failed_nudge_leaves_the_code_buffered() {
+        let _g = REJECTION_LOCK.lock().unwrap();
+        clear_startup_rejection();
+
+        surface_startup_rejection_with("not-a-file", || { /* emit failed; do nothing */ });
 
         assert_eq!(
             get_startup_rejection(),
-            Some("unsupported-extension".to_string()),
-            "the code must be retrievable regardless of whether a poll happened first"
+            Some("not-a-file".to_string()),
+            "a dropped nudge costs one event, not the toast"
         );
+        clear_startup_rejection();
+    }
+
+    /// One OS batch yields exactly one buffered code, so the toast the user gets
+    /// does not depend on where the client's async drain happened to land.
+    #[test]
+    fn a_batch_collapses_to_one_deterministic_code() {
+        let mut empty = RejectionBatch::default();
+        assert_eq!(empty.resolve(), None, "nothing rejected, nothing to surface");
+        empty.record("unsupported-extension");
         assert_eq!(
-            get_startup_rejection(),
-            None,
-            "take-once: whichever of the poll or the nudge-driven read arrives              second must get None, so one rejection is one toast"
+            empty.resolve(),
+            Some("unsupported-extension"),
+            "a lone rejection keeps its specific reason"
+        );
+
+        let mut mixed = RejectionBatch::default();
+        mixed.record("unsupported-extension");
+        mixed.record("not-a-file");
+        assert_eq!(
+            mixed.resolve(),
+            Some("multiple-rejected"),
+            "a mixed batch has no single true reason, so it must not claim one"
+        );
+
+        let mut same = RejectionBatch::default();
+        same.record("not-a-file");
+        same.record("not-a-file");
+        assert_eq!(
+            same.resolve(),
+            Some("multiple-rejected"),
+            "multiplicity is reported even when the reason agrees — four of five \
+             files opening is the case a singular message misdescribes"
         );
     }
 }

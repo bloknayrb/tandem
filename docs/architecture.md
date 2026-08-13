@@ -262,10 +262,11 @@ Cold start, macOS:
   OS double-click  ──▶  Tandem.app launched  ──▶  setup() spawns sidecar
                                               ──▶  Apple Event kAEOpenDocuments
                                                     fires as RunEvent::Opened
-                                              ──▶  lib.rs:classify_opened_url
-                                                    (scheme/host/ext/is_file)
-                                              ──▶  handle_opened_urls() queues
-                                                    path in PendingOpens
+                                              ──▶  lib.rs:handle_opened_urls
+                                                    → classify_opened_url
+                                                    (scheme/host/convert/
+                                                     ADS/UNC/ext/is_file)
+                                              ──▶  queues path in PendingOpens
                                               ──▶  wait_for_health() returns Ok
                                               ──▶  drain_pending_opens()
                                                     POSTs /api/open
@@ -282,8 +283,10 @@ Warm start, Windows / Linux:
 Warm start, macOS:
   OS double-click  ──▶  LaunchServices reactivates app
                                               ──▶  RunEvent::Opened
-                                              ──▶  lib.rs:classify_opened_url
-                                                    (scheme/host/ext/is_file)
+                                              ──▶  lib.rs:handle_opened_urls
+                                                    → classify_opened_url
+                                                    (scheme/host/convert/
+                                                     ADS/UNC/ext/is_file)
                                               ──▶  SIDECAR_HEALTHY=true path:
                                                     POST /api/open directly
 ```
@@ -294,11 +297,15 @@ Known limitation: macOS cold-start may briefly show `welcome.md` before the requ
 
 Both OS entry points share one path validator, `validate_open_candidate` (extension against `SUPPORTED_FILE_ASSOC_EXTS` + `is_file()`), so the extension and regular-file checks cannot diverge per platform (#1344). Until that fix those two checks existed only inline in `extract_file_arg`, so the macOS `RunEvent::Opened` surface performed neither: a double-clicked `.pdf`, a folder, or a stale path reached `/api/open`, was refused server-side, and produced nothing but a `log::warn!` while the user sat on `welcome.md`.
 
-Sharing the validator also made the extension list a **shared contract**, so it must match the server's `SUPPORTED_EXTENSIONS` exactly — pinned by `tests/build/file-association-alignment.test.ts`, which asserts set equality rather than a subset. The first version of the shared validator omitted `.htm`, which the server accepts, and that silently made a `.htm` refusable via "Open With" or a Dock drop while the same file dropped on the *window* still opened (`useTauriFileDrop.svelte.ts` validates against the server list). A per-surface difference in what counts as an openable file is not a policy anyone chose; it is what an inline check drifting from a constant looks like.
+`validate_open_candidate` owns **every** path-shaped check — the Windows NTFS alternate-data-stream colon scan, UNC rejection, the extension allowlist, and `is_file()` — and the first two run *before* `is_file()` deliberately: `is_file()` on `\\host\share\…` performs the SMB handshake, so a gate placed after it would leak an NTLM hash from the shell process on a path the server was always going to refuse. The ADS scan lives in the validator rather than in `extract_file_arg` for the same reason the extension check does: `classify_opened_url` is unconditionally compiled, so a future Windows or Linux Opened / deep-link handler would otherwise inherit the extension and `is_file()` checks with no ADS scan.
 
-**Rejections have exactly one delivery surface: the `STARTUP_REJECTION` buffer.** Every entry point that refuses a candidate calls `surface_startup_rejection`, which buffers the stable, path-free reason code and *then* emits a **payload-free** `startup-file-rejected` event. `App.svelte` treats that event purely as a nudge — "something is buffered, don't wait for the next mount" — and both it and the mount poll drain through `get_startup_rejection`, which **takes**. So a nudge nobody hears costs one dropped event, not a lost toast, and a doubled nudge cannot double-toast.
+Sharing the validator also made the extension list a **shared contract**, so it must match the server's `SUPPORTED_EXTENSIONS` exactly — pinned by `tests/build/file-association-alignment.test.ts`, which asserts set equality rather than a subset. The first version of the shared validator omitted `.htm`, which the server accepts, and that silently made a `.htm` refusable via "Open With" or a Dock drop while the same file dropped on the *window* still opened (`useTauriFileDrop.svelte.ts` validates against the server list). A per-surface difference in what counts as an openable file is not a policy anyone chose; it is what an inline check drifting from a constant looks like. Note this is separate from what the OS *advertises*: `tauri.conf.json#bundle.fileAssociations` stays deliberately narrower (no `.htm`), and that asymmetry is a product choice.
 
-An earlier design gated the buffer on a `REJECTION_POLLED` flag, on the theory that a completed mount poll proves the listener is wired. It does not: `App.svelte` wires the listener and polls in two *independent* promise chains, and the shorter poll chain routinely wins, so a rejection landing in that gap was emitted to nobody and never buffered. Buffer-then-nudge needs no readiness signal at all, which is why it replaced it.
+**Rejections have exactly one delivery surface: the `STARTUP_REJECTION` buffer.** Every entry point that refuses a candidate calls `surface_startup_rejection`, which buffers the stable, path-free reason code and *then* emits a **payload-free** `startup-file-rejected` event. The client (`utils/startup-rejection.ts`, wired from `App.svelte`) treats that event purely as a nudge — "something is buffered, don't wait for the next init" — and both it and the init-time drain read through `get_startup_rejection`, which **takes**. So a nudge nobody hears costs one dropped event, not a lost toast, and a doubled nudge cannot double-toast.
+
+The client's two paths are **ordered**, not raced: the init drain is chained onto the listener's resolution. Their completion order is otherwise unguaranteed, and the drain runs once per WebView load rather than on an interval — so a rejection landing after the drain resolved but before the listener was wired would be buffered with nobody left to read it. A macOS batch is likewise collapsed to a single code by `RejectionBatch` before it reaches the buffer, because per-URL surfacing raced the client's async drain: the same five-file drop could produce one toast or two, naming different reasons.
+
+An earlier design gated the buffer on a `REJECTION_POLLED` flag, on the theory that a completed drain proves the listener is wired. It does not, and the decisive case needs no race: **the flag is process-global and the listener is not**, so a WebView reload left the flag set and the listener gone, and every rejection after the first reload took the emit-only path and was dropped permanently. (The two client chains are also independent, so a completed drain never implied a wired listener either — but that window is sub-millisecond and is not what the argument rests on.) Buffer-then-nudge needs no readiness signal at all, which is why it replaced the flag. The design itself lives only in PR #1414's history, not in issue #1344.
 
 ### Start-at-login (#1236, ADR-046)
 

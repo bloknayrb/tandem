@@ -172,9 +172,11 @@ fn key_equals_value_flag_is_skipped_not_parsed() {
 fn each_supported_extension_is_accepted() {
     let dir = TempDir::new().unwrap();
     let cwd = std::env::current_dir().unwrap();
-    // Iterate the constant, never a copy of it: a sixth extension added to
-    // `SUPPORTED_FILE_ASSOC_EXTS` must be exercised here automatically, or it
-    // ships unexercised on the argv path (which is how `.htm` drifted).
+    // Iterate the constant, never a copy of it: an extension added to
+    // `SUPPORTED_FILE_ASSOC_EXTS` is exercised here automatically. The hardcoded
+    // copy this replaced did not cause the `.htm` drift — that was the constant
+    // itself omitting `htm`, with both lists agreeing — but it is what would
+    // have let the *next* addition ship unexercised on the argv path.
     for ext in app_lib::SUPPORTED_FILE_ASSOC_EXTS {
         let p = touch(&dir, &format!("doc.{ext}"));
         let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);

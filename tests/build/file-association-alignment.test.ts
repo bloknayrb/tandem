@@ -9,8 +9,11 @@
  *
  *   1. `bundle.fileAssociations[].ext` in `src-tauri/tauri.conf.json` — what the
  *      OS is told Tandem handles.
- *   2. `SUPPORTED_FILE_ASSOC_EXTS` in `src-tauri/src/lib.rs` — the shell's
- *      defense-in-depth argv filter, before it exports `TANDEM_OPEN_FILE`.
+ *   2. `SUPPORTED_FILE_ASSOC_EXTS` in `src-tauri/src/lib.rs` — the desktop
+ *      shell's open-candidate filter (`validate_open_candidate`), applied to
+ *      argv on Windows/Linux and to macOS `RunEvent::Opened` URLs alike. The
+ *      argv branch gates `TANDEM_OPEN_FILE`; the Opened branch POSTs
+ *      `/api/open` directly and never touches that env var.
  *   3. `SUPPORTED_EXTENSIONS` in `src/shared/constants.ts` — the server, which
  *      is the authority; `resolveAndValidatePath` throws UNSUPPORTED_FORMAT.
  *
@@ -65,7 +68,7 @@ describe("OS file associations align with the server's accepted extensions", () 
     expect(unsupported).toEqual([]);
   });
 
-  it("every extension tauri.conf.json registers passes the Rust argv filter", () => {
+  it("every extension tauri.conf.json registers passes the Rust shell filter", () => {
     const registered = registeredAssociationExts();
     const rust = new Set(rustAssocExts());
     const rejected = registered.filter((ext) => !rust.has(ext));
