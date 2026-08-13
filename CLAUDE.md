@@ -201,7 +201,9 @@ Mechanism, ops, and failure modes: [docs/licensing-explained.md](docs/licensing-
 
 ## Status
 
-**Shipped: v0.22.0** (2026-08-12). Release history is [CHANGELOG.md](CHANGELOG.md); remaining v1.0 work is [docs/roadmap.md](docs/roadmap.md#active--toward-v10). Do not re-narrate either here.
+**Shipped: v0.22.1** (2026-08-13). Release history is [CHANGELOG.md](CHANGELOG.md); remaining v1.0 work is [docs/roadmap.md](docs/roadmap.md#active--toward-v10). Do not re-narrate either here.
+
+**The v0.22.1 smoke run is the first with §1 executed end to end**, results on PR #1430. Two things it settled that no prior cut had: the Windows updater was tested against a **real v0.22.0 baseline** (install 0.22.1 → verify → reinstall 0.22.0 from its own release → publish → update), which costs one extra install and forfeits nothing — do this again rather than arguing the upgrade path from the diff; and the signed installer was **opened and inspected**, which is the only check covering `dist/stdio-bridge/` (new in v0.22.1, and its absence degrades silently to bare `npx` behind a `log::warn!` — the exact bug the release fixes). Two facts worth carrying: **an upgrade does not repair an already-broken Claude Desktop entry** — the boot sweep repairs stale *absolute* paths and deliberately skips bare `npx`, since Tandem emits that as a considered fallback, so those users must re-run `tandem setup --apply`; and the Windows matrix leg **failed on the first attempt inside Azure Trusted Signing**, which is a re-run, not a burned tag — the discriminator is whether the *same commit* passes on retry.
 
 Core is complete — 29 active MCP tools, multi-doc tabs, CRDT-anchored annotations, chat, four push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor stdin), `.md`/`.docx`/`.txt`/`.html`, npm global install, Tauri desktop app.
 
