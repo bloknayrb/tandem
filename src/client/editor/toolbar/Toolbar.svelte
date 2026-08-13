@@ -258,14 +258,10 @@ const primaryAnnotationIntent = $derived(defaultAnnotationIntent(annotationInten
 // #1385's eyebrow. The mock labelled it `DRAFT`, which names a state this
 // component does not have: `annotationText` is plain component-local $state,
 // destroyed on all four exit paths, and `AnnotationStatus` has no draft member.
-// Labelling the AUDIENCE instead is both honest and the more useful of the two
-// — it is the only *resting* surface that states ADR-027's primary axis
-// (private vs outbound). Today that is otherwise inferable only from the
-// placeholder or from which button carries `.is-primary`.
-//
-// $derived, not a plain const: a component-scope const would freeze at mount
-// and keep saying "private" after a native-menu open flipped the intent.
-// `aria-hidden` in the template — see the markup comment for why.
+// Labelling the AUDIENCE instead is honest and more useful — it is the only
+// *resting* surface stating ADR-027's primary axis (private vs outbound), which
+// is otherwise inferable only from the placeholder or from which button carries
+// `.is-primary`.
 const composerAudience = $derived(
   primaryAnnotationIntent === "note" ? "Private note" : `To ${agentLabel.family}`,
 );
@@ -776,24 +772,19 @@ function submitAsComment() {
     // notes/highlights are user-private (ADR-027) and never sent to AI, so a
     // "no AI connected" notice on those would be misleading.
     //
-    // "Post-write only" means exactly that, and until #1385 the dispatch sat
-    // OUTSIDE the guard: a create that returned undefined (`createAnnotation`
-    // bails on a collapsed range) still told the user their comment was saved
-    // and would reach Claude when nothing had been written to the Y.Map. That
-    // broke a contract documented on the CONSUMER side — App.svelte's #1018
-    // block states both dispatchers fire "AFTER persisting" — so the defect was
-    // invisible from either file alone.
+    // Until #1385 this dispatch sat OUTSIDE the guard, so a create that
+    // returned undefined still told the user their comment was saved and would
+    // reach Claude. That broke a contract documented on the CONSUMER side —
+    // App.svelte's #1018 block states both dispatchers fire "AFTER persisting"
+    // — so the defect was invisible from either file alone.
     //
-    // Gated on `id` alone rather than on `id && rect`: the rect is the
-    // fly-animation's input, so a missing one is a cosmetic loss, not a failed
-    // write, and must not suppress the notice.
+    // Gated on `id` alone, not `id && rect`: a missing rect costs the fly
+    // animation, not the write, and must not suppress the notice.
     //
-    // Not reachable through today's UI — the popup requires a non-empty
-    // selection, so `capturedRange` is never collapsed here. It becomes
-    // reachable the moment anything can collapse the range mid-compose, which
-    // is exactly what putting the highlight swatches in this card would do
-    // (handleHighlight collapses the PM selection for #768). Hence: fixed now,
-    // while the reason is written down.
+    // Not reachable today (the popup requires a non-empty selection, so
+    // `capturedRange` can't be collapsed here); it becomes reachable once
+    // anything can collapse mid-compose, which the proposed in-card highlight
+    // swatches would (#1445).
     window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "comment" } }));
   }
   dismissPopup();
@@ -1212,9 +1203,8 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     min-width: 260px;
     max-width: 360px;
   }
-  /* #1385: the eyebrow names the audience, not a draft state. Sized off
-     --tandem-text-2xs with tracking so it reads as a label rather than as the
-     first line of the user's own text. */
+  /* Sized off --tandem-text-2xs with tracking so the eyebrow reads as a label
+     rather than as the first line of the user's own text. */
   .composer-eyebrow {
     display: flex;
     align-items: center;
@@ -1231,9 +1221,9 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
   .composer-eyebrow-dot {
     width: 6px;
     height: 6px;
-    border-radius: 50%;
+    border-radius: var(--tandem-r-circle, 50%);
     background: var(--tandem-author-claude);
-    flex: none;
+    flex-shrink: 0;
   }
   .composer-eyebrow-dot.is-private {
     background: var(--tandem-author-user);
@@ -1250,8 +1240,10 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
        border is kept at 1px `transparent` rather than removed so the
        forced-colors rule below can paint a resting boundary without shifting
        layout by a pixel; with no boundary at all, a borderless textarea is
-       indistinguishable from static text in HCM. Precedent for the pattern:
-       ModeToggle.svelte's forced-colors block. */
+       indistinguishable from static text in HCM. The global token remap
+       (index.html) cannot reach this one — `transparent` is a keyword, not a
+       token — which is the same reason StatusBar's `.status-warning-pill`
+       carries its own block. */
     border: 1px solid transparent;
     background: none;
     color: var(--tandem-fg);
@@ -1263,26 +1255,28 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
   .composer-input::placeholder {
     color: var(--tandem-fg-subtle);
   }
-  /* Coral-keyed focus treatment (A8: chrome keyed to the annotation action).
-     Until #1385 this was a composite of three layers, and only two of them were
-     ever visible in normal mode: a *transparent* outline (the forced-colors
-     path), a border-color swap, and a 10%-alpha tint ring. Un-boxing the field
-     removed the border, which was the load-bearing half — a 10%-alpha
-     box-shadow alone is far under SC 1.4.11's 3:1 for a non-text indicator.
-     So the outline is now opaque and does both jobs: forced-colors still
-     overrides its color to a system color exactly as it did when transparent,
-     and normal mode gets a real ring. --tandem-author-claude-border is the
-     grade audited for this (≥3:1 against both the tint and the card surface,
-     documented at its definition in index.html).
+  /* Until #1385 this was a three-layer composite — a *transparent* outline, a
+     border-color swap, and a 10%-alpha ring — of which the border was the only
+     part carrying normal-mode weight. Un-boxing the field removed it, and a
+     10%-alpha box-shadow alone is far under SC 1.4.11's 3:1, so the outline is
+     now opaque and does the whole job.
+     `--tandem-accent`, not the author-claude family the old border used. A8
+     keys the annotation *chrome* to coral, and on a border that is what the old
+     rule read as; on an `outline` it would read as a focus ring, and every
+     other focus ring in the app is accent — including `.composer-btn` a few
+     rules below, so coral here would put two hues in one component. Accent is
+     also the only correct choice in HCM: it maps to `Highlight`, the system
+     focus color, where `--tandem-author-claude-border` maps to `ButtonText`.
+     The dropped box-shadow used `--tandem-claude-focus-bg`, which despite the
+     name is Claude's *attention* decoration (the awareness gutter rail in
+     `editor/extensions/awareness.ts`), not a keyboard-focus token.
 
-     Deliberately still `:focus`, not `:focus-visible`. The two are equivalent
-     here — UAs always match :focus-visible on text-entry fields, mouse focus
-     included — so switching would buy nothing and stake the only focus
-     indicator on that UA heuristic holding. The composer is also focused
-     programmatically (the rAF in openRequestedComposer), which is exactly the
-     case where the heuristic is worth not relying on. */
+     Deliberately `:focus`, not `:focus-visible`: UAs always match
+     :focus-visible on text-entry fields, so switching buys nothing and would
+     stake the only focus indicator on that heuristic — and this field is also
+     focused programmatically (the rAF in openRequestedComposer). */
   .composer-input:focus {
-    outline: 2px solid var(--tandem-author-claude-border);
+    outline: 2px solid var(--tandem-accent);
     outline-offset: 2px;
     box-shadow: none;
   }
@@ -1291,12 +1285,19 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
       border-color: ButtonText;
     }
   }
-  /* #1385: the action row is separated by a full-bleed hairline rather than by
-     whitespace alone. Negative horizontal margins cancel .composer-card's
-     padding so the rule spans the card edge-to-edge; the padding-top restores
-     the gap the flex `gap` used to supply above the border. That rule is also
-     what gives the un-boxed textarea a visible bottom edge to scroll against
-     once its content passes max-height. */
+  /* #1385: a full-bleed hairline separates the action row instead of whitespace
+     alone, and doubles as the bottom edge the un-boxed textarea scrolls against
+     once its content passes max-height. Negative horizontal margins cancel
+     .composer-card's padding so the rule reaches the card edges; the flex `gap`
+     still supplies the space ABOVE the border, and `padding-top` adds the
+     matching space below it.
+
+     The codebase's other edge-to-edge dividers (ChatPanel, CommandPalette,
+     FindReplaceBar) avoid this cancellation by keeping horizontal padding on
+     the sections rather than the container. That is the tidier shape, but here
+     it would push .composer-input's box out to the card edges, and its focus
+     outline sits at `outline-offset: 2px` — which `.morph-block`'s
+     `overflow: clip` would then cut. Left as-is deliberately. */
   .composer-actions {
     display: flex;
     justify-content: flex-end;
@@ -1306,12 +1307,19 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     padding: var(--tandem-space-2) var(--tandem-space-2) 0;
     border-top: 1px solid var(--tandem-border);
   }
+  /* #1385: no `flex: 1` (equal-width twins read as equal weight — sizing each
+     to its content is where most of the new hierarchy comes from, and unlike a
+     filled-accent pill it contradicts no recorded decision), and the ghost
+     treatment is the BASE rule here rather than a Note-specific one. That is
+     what keeps the hierarchy intent-responsive: openRequestedComposer("note")
+     makes Note primary, and the `.is-primary` variants below win on
+     specificity, so whichever button is secondary is the ghost. `transparent`
+     borders rather than none, so the row does not reflow when intent flips. */
   .composer-btn {
-    /* Deliberately NOT `flex: 1`. Equal-width twins are what made the two
-       submits read as equal weight; letting each size to its own content is
-       where most of #1385's hierarchy comes from, and unlike a filled-accent
-       pill it contradicts no recorded decision (#1006's "tinted, not shouting"
-       stands, and the composer's Send keeps the author-claude family). */
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--tandem-fg-muted);
+    font-weight: 500;
     height: 28px;
     padding: 0 var(--tandem-space-3);
     border-radius: var(--tandem-r-3);
@@ -1334,23 +1342,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     outline: 2px solid var(--tandem-accent);
     outline-offset: 1px;
   }
-  /* #1385: the SECONDARY button is a borderless ghost — whichever one that is.
-     Keying the ghost to `:not(.is-primary)` rather than to Note specifically is
-     what keeps the hierarchy intent-responsive: openRequestedComposer("note")
-     (the desktop native menu) makes Note primary, and a fixed Send-dominant
-     treatment would show an outbound CTA to a user who explicitly chose Private
-     Note while their Ctrl+Enter submits privately. The border is `transparent`
-     rather than absent so both buttons keep identical box metrics and the row
-     does not reflow when the intent flips. */
-  .composer-btn-note,
-  .composer-btn-send {
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--tandem-fg-muted);
-    font-weight: 500;
-  }
-  .composer-btn-note:hover:not(:disabled),
-  .composer-btn-send:hover:not(:disabled) {
+  .composer-btn:hover:not(:disabled) {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
   }

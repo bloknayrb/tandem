@@ -13,14 +13,24 @@ export const SELECTION_TOOLBAR_FLIP_HYSTERESIS = 4;
 // Conservative height used by the A26 morph (#798) to DECIDE placement, so the
 // above/below choice is stable across the format↔annotate morph. Since the A8
 // two-pill restructure the format state is two stacked capsules + a 5px gap
-// (~95–105px); the annotate composer (textarea max-height 120px + buttons)
-// remains the taller, binding case. Only `rect.width` feeds positioning — height
-// reaches the placement math ONLY as this constant — so a taller format state
-// can't move the anchor. Passing this constant rather than the live animating
-// `toolbarHeight` means a placement re-decision can't flip mid-morph and the
-// height-independent edge-anchor (`bottom` for above) always clears MIN_TOP as
-// the popup grows. A deliberate over-estimate that clears every state.
-export const SELECTION_POPUP_HEIGHT_RESERVE = 200;
+// (~95–105px); the annotate composer (eyebrow + textarea max-height 120px +
+// divider + buttons) remains the taller, binding case. Only `rect.width` feeds
+// positioning — height reaches the placement math ONLY as this constant — so a
+// taller format state can't move the anchor. Passing this constant rather than
+// the live animating `toolbarHeight` means a placement re-decision can't flip
+// mid-morph and the height-independent edge-anchor (`bottom` for above) always
+// clears MIN_TOP as the popup grows.
+//
+// Must stay a genuine over-estimate, and this is the half that bites: `above`
+// is bottom-anchored and so immune, but `below` is TOP-anchored, so an
+// under-estimate clips the bottom of the card off-screen. #1385 broke that
+// silently — the eyebrow row, the action row's divider + padding, and a taller
+// type ramp took the fully-scrolled composer to a measured 205px (cozy) / 225px
+// (spacious) including the shell's 2px border, against a reserve of 200. It was
+// invisible because the reserve is a hand-maintained number with nothing
+// asserting it against the rendered card. Measure the real max before trusting
+// this again; density scales it, so `spacious` is the case to measure.
+export const SELECTION_POPUP_HEIGHT_RESERVE = 240;
 
 export type SelectionToolbarPlacement = "above" | "below";
 
