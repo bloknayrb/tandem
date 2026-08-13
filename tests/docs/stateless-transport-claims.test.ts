@@ -98,6 +98,24 @@ function corpus(): Array<{ rel: string; lines: string[] }> {
   });
 }
 
+/**
+ * Walked ONCE at module load, not per test — the same idiom as
+ * `tool-count-drift.test.ts`'s `const SRC = allMcpSource()`.
+ *
+ * Two tests below need this, and computing it inside each of them put a
+ * recursive walk of `docs/**` plus every `.ts` under `src/` and `tests/`, and a
+ * `readFileSync` of every survivor, inside a 15s per-test budget — twice. Under
+ * the parallel pool on a loaded machine both tests then failed together with
+ * `Test timed out in 15000ms`, while passing in isolation and in CI (#1434).
+ * That reads as a real doc regression and names nothing that changed.
+ *
+ * Module evaluation is not subject to `testTimeout`, so hoisting removes the
+ * walk from the budget entirely rather than just halving it. `vitest.config.ts`
+ * already records the sibling case, where `applyConfig`'s icacls/pwsh spawns
+ * push apply-heavy tests past the default under the same contention.
+ */
+const CORPUS = corpus();
+
 /** The refuted assertion, in the wordings it has taken or plausibly could. */
 const BROKEN_PHRASING =
   /crash(es|ed|ing)?\b|does ?n.t work|is unusable|cannot be used|never works?\b|is broken|fails? (after|on|with|once)|hangs?\b|(is )?(not supported|unsupported)|blows? up|errors? out|panics?\b/i;
@@ -200,7 +218,7 @@ const MUST_NOT_FLAG = [
 
 describe("stateless-transport documentation claims (#1332 / #1253)", () => {
   it("nothing asserts that stateless mode crashes without marking it as overturned", () => {
-    const offenders = corpus().flatMap(({ rel, lines }) =>
+    const offenders = CORPUS.flatMap(({ rel, lines }) =>
       offendersIn(lines).map((n) => `${rel}:${n}`),
     );
     expect(offenders).toEqual([]);
@@ -223,7 +241,7 @@ describe("stateless-transport documentation claims (#1332 / #1253)", () => {
     // matcher, but only this exercises the walk that feeds it. Every sibling
     // guard carries an equivalent; `wake-availability-claims.test.ts` is the
     // closest in idiom.
-    const scanned = corpus().map(({ rel }) => rel);
+    const scanned = CORPUS.map(({ rel }) => rel);
     expect(scanned).toContain("docs/decisions.md");
     expect(scanned).toContain("docs/lessons-learned.md");
     expect(scanned).toContain("docs/spikes/stateless-transport-probe.md");
