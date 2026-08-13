@@ -255,6 +255,21 @@ const showPopup = $derived(
 const annotationTextTrimmed = $derived(annotationText.trim());
 const primaryAnnotationIntent = $derived(defaultAnnotationIntent(annotationIntent));
 
+// #1385's eyebrow. The mock labelled it `DRAFT`, which names a state this
+// component does not have: `annotationText` is plain component-local $state,
+// destroyed on all four exit paths, and `AnnotationStatus` has no draft member.
+// Labelling the AUDIENCE instead is both honest and the more useful of the two
+// — it is the only *resting* surface that states ADR-027's primary axis
+// (private vs outbound). Today that is otherwise inferable only from the
+// placeholder or from which button carries `.is-primary`.
+//
+// $derived, not a plain const: a component-scope const would freeze at mount
+// and keep saying "private" after a native-menu open flipped the intent.
+// `aria-hidden` in the template — see the markup comment for why.
+const composerAudience = $derived(
+  primaryAnnotationIntent === "note" ? "Private note" : `To ${agentLabel.family}`,
+);
+
 // Plain `let` — see SelectionToolbarPositionArgs.previousPlacement docstring.
 // This is read+written from a Tiptap event listener, NOT from inside a
 // Svelte $effect, so it does not need to be reactive and must not be
@@ -754,12 +769,33 @@ function submitAsComment() {
   // the popover, so the rect must be read first.
   const rect = toolbarEl?.getBoundingClientRect();
   const id = createAnnotation("comment", annotationTextTrimmed);
-  if (id && rect) registerFlySource(id, rect);
-  // #1018: a comment is outbound (Claude reads it). If no AI is connected, App
-  // shows a "saved, will be seen when AI connects" notice. ONLY comments —
-  // notes/highlights are user-private (ADR-027) and never sent to AI, so a
-  // "no AI connected" notice on those would be misleading. Post-write only.
-  window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "comment" } }));
+  if (id) {
+    if (rect) registerFlySource(id, rect);
+    // #1018: a comment is outbound (Claude reads it). If no AI is connected, App
+    // shows a "saved, will be seen when AI connects" notice. ONLY comments —
+    // notes/highlights are user-private (ADR-027) and never sent to AI, so a
+    // "no AI connected" notice on those would be misleading.
+    //
+    // "Post-write only" means exactly that, and until #1385 the dispatch sat
+    // OUTSIDE the guard: a create that returned undefined (`createAnnotation`
+    // bails on a collapsed range) still told the user their comment was saved
+    // and would reach Claude when nothing had been written to the Y.Map. That
+    // broke a contract documented on the CONSUMER side — App.svelte's #1018
+    // block states both dispatchers fire "AFTER persisting" — so the defect was
+    // invisible from either file alone.
+    //
+    // Gated on `id` alone rather than on `id && rect`: the rect is the
+    // fly-animation's input, so a missing one is a cosmetic loss, not a failed
+    // write, and must not suppress the notice.
+    //
+    // Not reachable through today's UI — the popup requires a non-empty
+    // selection, so `capturedRange` is never collapsed here. It becomes
+    // reachable the moment anything can collapse the range mid-compose, which
+    // is exactly what putting the highlight swatches in this card would do
+    // (handleHighlight collapses the PM selection for #768). Hence: fixed now,
+    // while the reason is written down.
+    window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "comment" } }));
+  }
   dismissPopup();
 }
 
@@ -961,6 +997,19 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
       <!-- Annotate popover. Alt+Enter is always private; Ctrl/Cmd+Enter follows
            the requested menu intent (ordinary opens default to outbound). -->
       <div class="composer-card">
+        <!-- #1385 eyebrow. `aria-hidden` deliberately: it duplicates what the
+             textarea's placeholder already says ("Write a private note…" /
+             "Write an instruction for AI…"), and an announced eyebrow would put
+             a bare audience word ahead of the field's own label on every AT
+             traversal. It carries no data-testid on purpose — the coverage
+             snapshot is a SET over all of src/client/, so *adding* one rewrites
+             a file another branch currently owns. -->
+        <div class="composer-eyebrow" aria-hidden="true">
+          <span
+            class="composer-eyebrow-dot"
+            class:is-private={primaryAnnotationIntent === "note"}
+          ></span>{composerAudience}
+        </div>
         <textarea
           bind:this={textareaEl}
           data-testid="popup-annotation-input"
@@ -1163,6 +1212,32 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     min-width: 260px;
     max-width: 360px;
   }
+  /* #1385: the eyebrow names the audience, not a draft state. Sized off
+     --tandem-text-2xs with tracking so it reads as a label rather than as the
+     first line of the user's own text. */
+  .composer-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: var(--tandem-space-2);
+    font-size: var(--tandem-text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--tandem-fg-subtle);
+  }
+  /* The leading dot follows the same authorship keying the card headers use
+     (derived-spec's "cobalt dot · You" / "coral dot · Claude"): cobalt while the
+     composer is private, coral once it is addressed to the agent. */
+  .composer-eyebrow-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--tandem-author-claude);
+    flex: none;
+  }
+  .composer-eyebrow-dot.is-private {
+    background: var(--tandem-author-user);
+  }
   .composer-input {
     width: 100%;
     box-sizing: border-box;
@@ -1171,37 +1246,72 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     max-height: 120px;
     overflow-y: auto;
     resize: none;
-    border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-3);
-    background: var(--tandem-surface);
+    /* #1385: un-boxed — the draft reads as content, not as a form field. The
+       border is kept at 1px `transparent` rather than removed so the
+       forced-colors rule below can paint a resting boundary without shifting
+       layout by a pixel; with no boundary at all, a borderless textarea is
+       indistinguishable from static text in HCM. Precedent for the pattern:
+       ModeToggle.svelte's forced-colors block. */
+    border: 1px solid transparent;
+    background: none;
     color: var(--tandem-fg);
-    font-size: var(--tandem-text-sm);
+    font-size: var(--tandem-text-base);
+    line-height: 1.45;
     font-family: inherit;
-    padding: var(--tandem-space-1) var(--tandem-space-2);
+    padding: var(--tandem-space-1) 0;
   }
   .composer-input::placeholder {
     color: var(--tandem-fg-subtle);
   }
   /* Coral-keyed focus treatment (A8: chrome keyed to the annotation action).
-     The default outline is replaced by a visible composite indicator: the
-     border swaps to the 3:1 coral border-grade plus a soft 10%-alpha tint
-     ring. Previously the textarea had `outline: none` with no replacement.
-     The outline is transparent rather than `none` so Windows forced-colors
-     mode (which strips box-shadows and forces border colors) still paints a
-     visible system-color focus ring. */
+     Until #1385 this was a composite of three layers, and only two of them were
+     ever visible in normal mode: a *transparent* outline (the forced-colors
+     path), a border-color swap, and a 10%-alpha tint ring. Un-boxing the field
+     removed the border, which was the load-bearing half — a 10%-alpha
+     box-shadow alone is far under SC 1.4.11's 3:1 for a non-text indicator.
+     So the outline is now opaque and does both jobs: forced-colors still
+     overrides its color to a system color exactly as it did when transparent,
+     and normal mode gets a real ring. --tandem-author-claude-border is the
+     grade audited for this (≥3:1 against both the tint and the card surface,
+     documented at its definition in index.html).
+
+     Deliberately still `:focus`, not `:focus-visible`. The two are equivalent
+     here — UAs always match :focus-visible on text-entry fields, mouse focus
+     included — so switching would buy nothing and stake the only focus
+     indicator on that UA heuristic holding. The composer is also focused
+     programmatically (the rAF in openRequestedComposer), which is exactly the
+     case where the heuristic is worth not relying on. */
   .composer-input:focus {
-    outline: 2px solid transparent;
-    outline-offset: 1px;
-    border-color: var(--tandem-author-claude-border);
-    box-shadow: 0 0 0 2px var(--tandem-claude-focus-bg);
+    outline: 2px solid var(--tandem-author-claude-border);
+    outline-offset: 2px;
+    box-shadow: none;
   }
+  @media (forced-colors: active) {
+    .composer-input {
+      border-color: ButtonText;
+    }
+  }
+  /* #1385: the action row is separated by a full-bleed hairline rather than by
+     whitespace alone. Negative horizontal margins cancel .composer-card's
+     padding so the rule spans the card edge-to-edge; the padding-top restores
+     the gap the flex `gap` used to supply above the border. That rule is also
+     what gives the un-boxed textarea a visible bottom edge to scroll against
+     once its content passes max-height. */
   .composer-actions {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
+    align-items: center;
     gap: var(--tandem-space-2);
+    margin: 0 calc(-1 * var(--tandem-space-2));
+    padding: var(--tandem-space-2) var(--tandem-space-2) 0;
+    border-top: 1px solid var(--tandem-border);
   }
   .composer-btn {
-    flex: 1;
+    /* Deliberately NOT `flex: 1`. Equal-width twins are what made the two
+       submits read as equal weight; letting each size to its own content is
+       where most of #1385's hierarchy comes from, and unlike a filled-accent
+       pill it contradicts no recorded decision (#1006's "tinted, not shouting"
+       stands, and the composer's Send keeps the author-claude family). */
     height: 28px;
     padding: 0 var(--tandem-space-3);
     border-radius: var(--tandem-r-3);
@@ -1224,9 +1334,17 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     outline: 2px solid var(--tandem-accent);
     outline-offset: 1px;
   }
+  /* #1385: the SECONDARY button is a borderless ghost — whichever one that is.
+     Keying the ghost to `:not(.is-primary)` rather than to Note specifically is
+     what keeps the hierarchy intent-responsive: openRequestedComposer("note")
+     (the desktop native menu) makes Note primary, and a fixed Send-dominant
+     treatment would show an outbound CTA to a user who explicitly chose Private
+     Note while their Ctrl+Enter submits privately. The border is `transparent`
+     rather than absent so both buttons keep identical box metrics and the row
+     does not reflow when the intent flips. */
   .composer-btn-note,
   .composer-btn-send {
-    border: 1px solid var(--tandem-border);
+    border: 1px solid transparent;
     background: transparent;
     color: var(--tandem-fg-muted);
     font-weight: 500;
