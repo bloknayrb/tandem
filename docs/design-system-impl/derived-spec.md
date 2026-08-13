@@ -240,16 +240,16 @@ Each row:
   Do NOT animate tab insertion — only tab close. Do NOT remove the
   ModeToggle's middle "Tandem" label on narrow viewports; the toggle is
   semantically a 2-position segmented control and label is the
-  affordance. Do NOT size the ModeToggle thumb as a percentage of the
-  track. The segments must be the two equal `1fr` columns of an
-  `inline-grid` — bare `1fr`, deliberately NOT the house
-  `minmax(0, 1fr)`, because the `auto` minimum is what stops a column
-  being squeezed under its own label — and the thumb must be placed into
-  grid area `1 / 1 / 2 / 2` with `inset: 0`. `flex: 1 1 0` does not
-  equalize the segments (a flex item's automatic minimum size is its
-  min-content size, so the longer "Tandem" label wins) and a half-width
-  thumb then matches neither of them: that is how #1383 and #1384
-  shipped.
+  affordance. Do NOT let the ModeToggle thumb derive its own geometry
+  from the track — no percentages, no `calc`, no measured JS. The pill
+  must be positioned by whatever mechanism sizes the segments, so the
+  two cannot desync, and the segments must stay equal at every width.
+  #1383 and #1384 were one desync seen from two sides: `flex: 1 1 0`
+  never equalized the segments (a flex item's automatic minimum size is
+  its min-content size, so the longer "Tandem" label wins), and a
+  half-width thumb then matched neither. The current implementation
+  satisfies this with an `inline-grid` track and a placed thumb; the
+  requirement is the invariant, not that mechanism.
 
 ### 3.10 Annotation decorations — B2 (inline marks)
 

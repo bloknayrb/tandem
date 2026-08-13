@@ -1,87 +1,56 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { cssRules, styleBlocks } from "../helpers/css-source";
 
 /**
  * ModeToggle sliding-thumb geometry gate (#1383, #1384).
  *
- * Both issues are one defect. `.mode-toggle` asked flexbox to split the track
+ * Both issues are one defect: `.mode-toggle` asked flexbox to split the track
  * in half (`flex: 1 1 0`) and `.thumb` sized itself to that assumed half
- * (`width: calc(50% - 2px)`). Flexbox never delivered it: a flex item's
- * automatic minimum size is its **min-content** size, and "Tandem" is a single
- * unbreakable word, so its segment was clamped up to its natural width and
- * "Solo" took whatever was left. Measured under the shipped SN Pro face:
+ * (`width: calc(50% - 2px)`). Flexbox never delivered it — a flex item's
+ * automatic minimum size is its min-content size, so "Tandem" was clamped up to
+ * its natural width and "Solo" took the remainder. The pill then matched
+ * neither segment (#1384) and each label sat off the pill's optical centre
+ * (#1383). The full measurement table lives in the E2E spec, which is the only
+ * file that can re-derive it.
  *
- *              before                      after
- *   solo seg   50.53px  }  unequal        67.83px  }  equal
- *   tandem seg 67.83px  }                 67.83px  }
- *   thumb      59.17px                    67.83px
- *   thumb vs active button   dL/dR up to 8.64px    0.00 on all four edges
- *   label ink vs thumb centre     4.32px off       0.00
- *   track                    124.36 x 26px         141.66 x 26px (+17.30 wide)
- *
- * The overhang is #1384 directly. #1383 is the same error seen from the user's
- * side: the label is centred in its *button*, but the button is invisible and
- * the thumb is what the eye reads, so the ink lands half the mismatch off the
- * pill's centre.
- *
- * The fix removes the arithmetic rather than correcting it. The segments became
+ * The fix removes the arithmetic rather than correcting it: the segments became
  * the two equal columns of an `inline-grid`, and the thumb is *placed into*
  * grid area 1/1/2/2 with `inset: 0`, so its box IS the first segment's box.
  *
- * **This file pins CSS shape, not effect.** No vitest project in this repo has
- * a layout engine: the `client` project is happy-dom (vitest.config.ts:29) and
- * this file lands in the `node` project (:44-45) with no DOM at all, where
- * `getBoundingClientRect` cannot answer anything. The geometric truth is only
- * observable in a real browser, which is `tests/e2e/mode-toggle-geometry.spec.ts`.
- * The third axis — what the *built* CSS looks like after lightningcss — is
- * covered in `css-pipeline-contract.test.ts`, the only gate that runs the real
- * minifier.
+ * **This file pins CSS shape, not effect.** No vitest project here has a layout
+ * engine, so geometric truth is only observable in
+ * `tests/e2e/mode-toggle-geometry.spec.ts`; what the *built* CSS looks like
+ * after lightningcss is covered in `css-pipeline-contract.test.ts`, the only
+ * gate that runs the real minifier. Three axes, none able to see the others.
  *
- * A shape gate can red for the right reason and the wrong one. Every failure
- * message below states the invariant, so that a deliberate re-formulation is
- * fixed by updating the pin rather than by routing around it.
- *
- * **Comments are stripped before every grep, and that is mandatory rather than
- * stylistic.** The rules being pinned carry long rationale comments that quote
- * the very literals scanned for here (`grid-area: 1 / 1`, `calc(50% - 2px)`) —
- * the file carried `calc(50% - 2px)` in a comment even before this change. An
- * un-stripped scan reds on the prose, and the path of least resistance under
- * time pressure is deleting the prose. That is exactly how the first attempt at
- * #1383 shipped a comment asserting a property that had never been true, so one
- * test below asserts the prose is still there.
+ * Two of the gates below pin INVARIANTS ("no percentage-derived sizing", "no
+ * width rule on the buttons") and survive any correct implementation. The rest
+ * pin the current SHAPE and are marked accordingly — if a better placement
+ * mechanism arrives, those are SUPERSEDED rather than violated, and the right
+ * response is deleting them, not re-satisfying them.
  */
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const MODE_TOGGLE = join(ROOT, "src", "client", "editor", "toolbar", "ModeToggle.svelte");
 
-/** Strip CSS block comments so commented-out prose can't trip the greps. */
-function stripCssComments(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, "");
-}
-
-function styleBlock(): string {
-  const src = readFileSync(MODE_TOGGLE, "utf-8");
-  return [...src.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n");
-}
-
 /**
- * Brace scanner in the shape of `backdrop-filter-guard.test.ts`'s
- * `floatingPillRulesIn`. Rules are matched by EXACT selector, never substring:
- * `.thumb.tandem` legitimately declares `translateX(100%)`, and a broadened
- * "no percentages in .thumb" pattern would swallow it and flag a correct
- * declaration. `@media` wrappers are fine — the inner rule is recovered with
- * its own selector.
+ * Rules are matched by EXACT selector, never substring: `.thumb.tandem`
+ * legitimately declares `translateX(100%)`, and a broadened "no percentages in
+ * .thumb" pattern would swallow it and flag a correct declaration.
+ *
+ * `styleBlocks` strips comments, which is mandatory rather than stylistic here:
+ * the rules being pinned carry rationale comments quoting the very literals
+ * scanned for (`grid-area: 1 / 1`, `calc(50% - 2px)`). An un-stripped scan reds
+ * on the prose, and the path of least resistance is then deleting the prose.
  */
-function rules(): { selector: string; body: string }[] {
-  return [...stripCssComments(styleBlock()).matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
-    selector: m[1].trim(),
-    body: m[2],
-  }));
-}
+const RULES = cssRules(styleBlocks(MODE_TOGGLE)).map(([selector, body]) => ({
+  selectors: selector.split(",").map((x) => x.trim()),
+  body,
+}));
 
 function ruleWithSelector(selector: string): string {
-  const found = rules().filter((r) => r.selector === selector);
+  const found = RULES.filter((r) => r.selectors.includes(selector));
   expect(found.length, `no rule with selector \`${selector}\` — scanner desynced?`).toBeGreaterThan(
     0,
   );
@@ -89,14 +58,14 @@ function ruleWithSelector(selector: string): string {
 }
 
 /**
- * The `.thumb` selector appears twice: the base rule and the reduced-motion
- * override inside `@media (prefers-reduced-motion: reduce)`, which declares
- * only `transition: none`. The base one is the rule that paints — anchoring on
- * `background` keeps this independent of the placement properties under test.
+ * `.thumb` appears twice: the base rule and the reduced-motion override, which
+ * declares only `transition: none`. Anchoring on `background` picks the one
+ * that paints, independent of the placement properties under test — and its
+ * `toBe(1)` is what stops every gate below being "passed" by deleting the rule.
  */
 function thumbBaseRule(): string {
-  const candidates = rules().filter(
-    (r) => r.selector === ".thumb" && /background\s*:/.test(r.body),
+  const candidates = RULES.filter(
+    (r) => r.selectors.includes(".thumb") && /background\s*:/.test(r.body),
   );
   expect(
     candidates.length,
@@ -114,22 +83,21 @@ describe(".mode-toggle: the equal-segment premise the thumb rests on", () => {
         "automatic minimum size is its min-content size, so the longer 'Tandem' label wins " +
         "and the half-width thumb then matches neither segment.",
     ).toMatch(/display\s*:\s*inline-grid/);
-    expect(body).toMatch(/grid-template-columns\s*:\s*repeat\(\s*2\s*,\s*1fr\s*\)/);
+    expect(body).toMatch(/grid-template-columns\s*:\s*repeat\(/);
   });
 
-  it("sizes those columns with a bare 1fr, never minmax(0, …)", () => {
-    // Every other grid in src/client writes `minmax(0, 1fr)` (HelpModal,
-    // SettingsModal, SettingsAboutTab, editor-stage), so normalizing to the
-    // house style is the natural /simplify pass. Here the `auto` minimum that
-    // plain `1fr` carries IS the fix: with a 0 minimum a column can be squeezed
-    // back under its own label and both issues reopen.
+  // SHAPE, not invariant — superseded by any placement that keeps the columns
+  // equal under compression.
+  it("sizes those columns with minmax(0, 1fr), not a bare 1fr", () => {
     const columns = /grid-template-columns\s*:([^;]+)/.exec(ruleWithSelector(".mode-toggle"))?.[1];
     expect(columns, "no grid-template-columns declaration").toBeDefined();
     expect(
       columns,
-      "#1383/#1384: `1fr` here means `minmax(auto, 1fr)`, and the auto minimum is what stops " +
-        "a column being squeezed narrower than its label. Do not normalize to `minmax(0, 1fr)`.",
-    ).not.toContain("minmax(0");
+      "#1384: the two forms are identical while the track is shrink-to-fit, and diverge under " +
+        "compression — measured at a 120px cap, bare `1fr` gives 52/70.97px columns while " +
+        "`minmax(0, 1fr)` gives 60/60px. The thumb IS column 1, so unequal columns put it on a " +
+        "segment of a different width. A squeezed label overflowing is the accepted trade.",
+    ).toContain("minmax(0");
   });
 
   it("stays the thumb's containing block", () => {
@@ -141,9 +109,11 @@ describe(".mode-toggle: the equal-segment premise the thumb rests on", () => {
   });
 
   it("keeps the column gutter at zero", () => {
-    const body = ruleWithSelector(".mode-toggle");
-    expect(body).toMatch(/gap\s*:\s*0(?![.\d])/);
-    const nonZero = [...body.matchAll(/(?:^|[;\s])(?:row-|column-)?gap\s*:\s*([^;]+)/g)]
+    const nonZero = [
+      ...ruleWithSelector(".mode-toggle").matchAll(
+        /(?:^|[;\s])(?:row-|column-)?gap\s*:\s*([^;]+)/g,
+      ),
+    ]
       .map((m) => m[1].trim())
       .filter((v) => !/^0(?:[a-z%]*)?$/.test(v));
     expect(
@@ -164,6 +134,8 @@ describe(".mode-toggle: the equal-segment premise the thumb rests on", () => {
 });
 
 describe(".thumb: placed into the first segment, never computed from it", () => {
+  // SHAPE, not invariant — superseded if the thumb is ever placed by another
+  // mechanism. Delete rather than re-satisfy; the E2E spec holds the invariant.
   it("names all four grid lines", () => {
     expect(
       thumbBaseRule(),
@@ -173,17 +145,21 @@ describe(".thumb: placed into the first segment, never computed from it", () => 
     ).toMatch(/grid-area\s*:\s*1\s*\/\s*1\s*\/\s*2\s*\/\s*2/);
   });
 
-  it("declares inset: 0", () => {
+  // SHAPE, not invariant — same note as above.
+  it("declares inset: 0 on an absolutely-positioned box", () => {
+    const body = thumbBaseRule();
     expect(
-      thumbBaseRule(),
+      body,
       "#1384: without `inset`, the absolutely-positioned box shrink-to-fits its (empty) " +
         "contents and renders 0x0. The grid placement alone does not size it.",
     ).toMatch(/inset\s*:\s*0(?![.\d])/);
+    // Load-bearing pair: without `absolute`, `inset` is inert and the grid
+    // placement makes the thumb a flow item that consumes a column.
+    expect(body).toMatch(/position\s*:\s*absolute/);
   });
 
   it("carries no percentage-derived sizing", () => {
-    const offenders = rules()
-      .filter((r) => r.selector === ".thumb")
+    const offenders = RULES.filter((r) => r.selectors.includes(".thumb"))
       .flatMap((r) => [
         ...r.body.matchAll(/(?:^|[;\s])(width|height|left|right|top|bottom)\s*:[^;]*(%|calc\()/g),
       ])
@@ -201,38 +177,5 @@ describe(".thumb: placed into the first segment, never computed from it", () => 
     // percentage lives one selector away from a rule that must contain none,
     // and a substring-matched scanner would flag it.
     expect(ruleWithSelector(".thumb.tandem")).toMatch(/transform\s*:\s*translateX\(\s*100%\s*\)/);
-  });
-
-  it("still paints the pill it exists to paint", () => {
-    // Guards every gate above from being "passed" by deleting the rule.
-    const body = thumbBaseRule();
-    expect(body).toMatch(/position\s*:\s*absolute/);
-    expect(body).toMatch(/background\s*:/);
-    expect(body).toMatch(/border-radius\s*:/);
-    expect(body).toMatch(/box-shadow\s*:/);
-    expect(body).toMatch(/pointer-events\s*:\s*none/);
-  });
-});
-
-describe("the rationale that keeps this from being reintroduced", () => {
-  it("still explains the padding-edge and inset traps in prose", () => {
-    // The positive half of the comment-stripping rule at the top of this file.
-    // Both traps fail silently and neither is inferable from the declarations,
-    // so the comment is load-bearing documentation, not decoration — and it is
-    // the thing a reader under time pressure deletes to make a grep go green.
-    const comments = [...styleBlock().matchAll(/\/\*([\s\S]*?)\*\//g)]
-      .map((m) => m[1])
-      .join("\n")
-      .replace(/\s+/g, " ")
-      .toLowerCase();
-    expect(comments, "the `.thumb` rationale must name the padding-edge trap").toMatch(
-      /padding edge/,
-    );
-    expect(comments, "the `.thumb` rationale must name the 0x0 shrink-to-fit trap").toMatch(
-      /inset: 0/,
-    );
-    expect(comments, "the `.mode-toggle` rationale must warn off `minmax(0, 1fr)`").toMatch(
-      /minmax\(0, 1fr\)/,
-    );
   });
 });

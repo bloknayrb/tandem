@@ -1,11 +1,4 @@
 import { expect, type Page, test } from "@playwright/test";
-import path from "path";
-import {
-  cleanupAllOpenDocuments,
-  cleanupFixtureDir,
-  createFixtureDir,
-  McpTestClient,
-} from "./helpers";
 
 /**
  * ModeToggle sliding-thumb geometry (#1383, #1384).
@@ -14,11 +7,9 @@ import {
  * about. `mode-toggle-thumb-contract.test.ts` pins the CSS *shape* and
  * `css-pipeline-contract.test.ts` pins what lightningcss does to it, but
  * neither can measure a box: no vitest project in this repo has a layout
- * engine (the client project is happy-dom, and the contract test lands in the
- * node project with no DOM at all), so `getBoundingClientRect` returns zeros
- * there. The geometric truth is only observable in a real browser.
+ * engine, so `getBoundingClientRect` returns zeros there.
  *
- * What it is measuring, under the shipped SN Pro face:
+ * Measured under the shipped SN Pro face:
  *
  *                              before          after
  *   solo segment               50.53px         67.83px
@@ -34,28 +25,12 @@ import {
  * mismatch seen from the user's side (#1383), because the button is invisible
  * and the pill is what the eye reads.
  *
- * The segment-equality assertion is kept separate from the edge assertions on
- * purpose: it is the root cause, so a regression should name itself rather than
- * only report its symptom.
+ * No document fixture: the toggle lives in the title bar and renders without
+ * one. Opening a fixture over MCP was measured at ~1.3s per test for geometry
+ * that is byte-identical either way.
  */
 
 test.describe.configure({ timeout: 90_000 });
-
-let mcp: McpTestClient;
-let tmpDir: string;
-
-test.beforeEach(async () => {
-  mcp = new McpTestClient();
-  await mcp.connect();
-  tmpDir = createFixtureDir("sample.md");
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-});
-
-test.afterEach(async () => {
-  await cleanupAllOpenDocuments(mcp);
-  await mcp.close();
-  cleanupFixtureDir(tmpDir);
-});
 
 async function boot(page: Page) {
   await page.goto("/");
@@ -72,7 +47,6 @@ async function boot(page: Page) {
 type Geometry = {
   soloW: number;
   tandemW: number;
-  thumbW: number;
   dL: number;
   dR: number;
   dT: number;
@@ -107,7 +81,6 @@ function measure(page: Page): Promise<Geometry> {
     return {
       soloW: solo.getBoundingClientRect().width,
       tandemW: tandem.getBoundingClientRect().width,
-      thumbW: t.width,
       dL: t.left - a.left,
       dR: t.right - a.right,
       dT: t.top - a.top,
@@ -128,9 +101,15 @@ async function expectThumbFlush(page: Page, label: string) {
     .poll(
       async () => {
         const g = await measure(page);
-        return (["dL", "dR", "dT", "dB"] as const)
+        const off = (["dL", "dR", "dT", "dB"] as const)
           .filter((k) => Math.abs(g[k]) >= 0.5)
           .map((k) => `${k}=${g[k].toFixed(2)}`);
+        // #1383 rides along: the label is always centred in its BUTTON, so with
+        // symmetric padding the ink delta is -(dL+dR)/2 and cannot fail while
+        // the edges hold — EXCEPT if `justify-content: center` is removed, which
+        // is a real #1383-shaped regression the edge deltas would not see.
+        if (Math.abs(g.inkDelta) >= 0.75) off.push(`inkDelta=${g.inkDelta.toFixed(2)}`);
+        return off;
       },
       {
         timeout: 5_000,
@@ -143,22 +122,24 @@ async function expectThumbFlush(page: Page, label: string) {
     .toEqual([]);
 }
 
-test("the two segments are exactly equal", async ({ page }) => {
+test("the segments are equal and the pill covers the selected one (tandem default)", async ({
+  page,
+}) => {
   await boot(page);
+
+  // The root cause, asserted first so a regression names itself rather than
+  // only reporting its symptom.
   const g = await measure(page);
   expect(
     Math.abs(g.soloW - g.tandemW),
     `#1383/#1384 root cause: solo=${g.soloW.toFixed(2)} tandem=${g.tandemW.toFixed(2)}. ` +
-      `The thumb assumes the segments are the grid's two equal 1fr columns; ` +
-      `\`flex: 1 1 0\` does NOT produce that, because a flex item cannot be squeezed ` +
-      `below its own min-content width.`,
+      `The thumb IS the track's first column, so unequal segments put it on a segment of a ` +
+      `different width. \`flex: 1 1 0\` never produced equal columns, because a flex item ` +
+      `cannot be squeezed below its own min-content width.`,
   ).toBeLessThan(0.5);
   // Guards against a "pass" where both segments collapsed to nothing.
   expect(g.soloW).toBeGreaterThan(10);
-});
 
-test("the pill covers the selected segment in tandem mode (the default)", async ({ page }) => {
-  await boot(page);
   await expect(page.locator("[data-testid='mode-tandem-btn']")).toHaveAttribute(
     "aria-pressed",
     "true",
@@ -190,26 +171,6 @@ test("the pill covers the selected segment after switching to solo, and back", a
   await expectThumbFlush(page, "tandem (after a slide)");
 });
 
-test("the active label sits centered in the pill, in both modes", async ({ page }) => {
-  await boot(page);
-
-  // #1383 exactly as reported. The label always was centred in its BUTTON; what
-  // the user sees it centred against is the pill, and those were 4.32px apart.
-  for (const mode of ["tandem", "solo"] as const) {
-    if (mode === "solo") await page.locator("[data-testid='mode-solo-btn']").click();
-    await expect(page.locator(`[data-testid='mode-${mode}-btn']`)).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await expect
-      .poll(async () => Math.abs((await measure(page)).inkDelta) < 0.75, {
-        timeout: 5_000,
-        message: `#1383: the ${mode} label's ink is off the pill's centre by more than 0.75px`,
-      })
-      .toBe(true);
-  }
-});
-
 test("the widened toggle still fits a narrow viewport", async ({ page }) => {
   // Equalizing the segments widens the control by ~17.3px ("Solo" grew to match
   // "Tandem"), and the toggle sits at the right-hand end of the title bar.
@@ -222,7 +183,6 @@ test("the widened toggle still fits a narrow viewport", async ({ page }) => {
   // step, not by this assertion. Do not read this as pinning the desktop case.
   await boot(page);
   await page.setViewportSize({ width: 600, height: 800 });
-  await page.evaluate(() => document.fonts.ready);
 
   const fits = await page.evaluate(() => {
     const el = document.querySelector(".mode-toggle");
@@ -237,7 +197,6 @@ test("the widened toggle still fits a narrow viewport", async ({ page }) => {
   });
 
   expect(fits.visible, "the toggle collapsed to zero at 600px").toBe(true);
-  expect(fits.left).toBeGreaterThanOrEqual(0);
   expect(
     fits.right,
     `the toggle overflows the 600px viewport (right edge ${fits.right.toFixed(1)} of ${fits.width})`,

@@ -42,49 +42,39 @@ const { tandemMode, onModeChange }: Props = $props();
 <style>
   .mode-toggle {
     display: inline-grid;
-    grid-template-columns: repeat(2, 1fr);
+    /* `minmax(0, 1fr)`, not a bare `1fr`. Both measure IDENTICALLY today — the
+       track is shrink-to-fit, so it sizes to max-content and the `auto`
+       minimum never binds. They diverge only under compression, and there the
+       0 minimum is the one that holds this component's whole invariant:
+       measured at a 120px cap, `1fr` gives 52 / 70.97px columns while
+       `minmax(0, 1fr)` gives 60 / 60px. Unequal columns put the thumb (which
+       IS column 1) on a segment of a different width — #1384, reopened. The
+       trade is that a squeezed label can outgrow its column; a visibly
+       overflowing label beats a silently misplaced pill. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    /* The thumb's containing block. Measured: remove it and the thumb sizes
+       itself against the viewport. Fails silently. */
     position: relative;
     /* Bundle's `.a8 .seg` recipe: 2px track padding + a 1px border so the
        segmented control reads as a chip rather than a recessed plate. The
        surface-sunk track is preserved from the prior version because the
-       lighter `surface` active pill needs the contrast in both themes.
-
-       Four details here are load-bearing for #1383/#1384, and each of them
-       fails SILENTLY — no error, no warning, just a misaligned pill:
-
-       (i) The columns are a BARE `1fr`, i.e. `minmax(auto, 1fr)`, and that
-           `auto` minimum IS the fix. Do not normalize it to this codebase's
-           usual `minmax(0, 1fr)` (HelpModal, SettingsModal, SettingsAboutTab,
-           editor-stage): a 0 minimum lets a column be squeezed narrower than
-           its own label, which is the exact condition that made the segments
-           unequal and left the thumb matching neither of them.
-       (ii) `gap` must stay 0. The thumb's slide is exactly one column, so any
-            gutter desyncs `translateX(100%)` from the column pitch.
-       (iii) `position: relative` is the thumb's containing block. Measured:
-             remove it and the thumb sizes itself against the viewport.
-       (iv) `inline-grid` is blockified to `grid` here, because the parent
-            `.title-bar-mode` is an `inline-flex` container. Keep the `inline-`
-            regardless — it is inert in THIS parent, not in general. */
+       lighter `surface` active pill needs the contrast in both themes. */
     padding: 2px;
     background: var(--tandem-surface-sunk);
     border: 1px solid var(--tandem-border);
     border-radius: var(--tandem-r-pill);
     font-size: 11px;
     font-weight: 600;
+    /* Must stay 0: the thumb slides exactly one column, so any gutter desyncs
+       `translateX(100%)` from the column pitch. */
     gap: 0;
   }
   /* A8 (#798): the sliding active pill. Its box IS grid area (1,1) — the first
      segment, to the pixel — so it does no arithmetic of its own and cannot
-     drift from the button underneath it.
+     drift from the button underneath it. Do not reintroduce percentage sizing;
+     derived-spec.md §3.9 forbids it.
 
-     It used to: `width: calc(50% - 2px)` assumed the two segments were exact
-     halves, which `flex: 1 1 0` never delivered (see the button rule below).
-     The pill overhung the selected segment by ~8.6px in both positions, which
-     also left each label ~4.3px off the pill's optical centre — #1384 and
-     #1383 respectively, one defect seen from two sides. Do not reintroduce
-     percentage sizing here; derived-spec.md §3.9 forbids it.
-
-     Two replacements for that arithmetic, both silent if you get them wrong:
+     Two traps in that placement, both silent if you get them wrong:
 
        - ALL FOUR grid lines must be written out. On an absolutely-positioned
          grid child an `auto` end line resolves to the container's PADDING
@@ -93,12 +83,9 @@ const { tandemMode, onModeChange }: Props = $props();
        - `inset: 0` is required. Without it the abspos box shrink-to-fits and
          renders 0x0.
 
-     Verified flush on all four edges under Chromium 145, WebKit 26 (Tandem's
-     Linux WebView engine) and Firefox 146 with the shipped SN Pro webfont;
-     WebKit rounds the translated position by 0.17px, everything else is 0.00.
-     lightningcss keeps the four-line shorthand and `inset: 0` intact — pinned
-     in tests/design-system-impl/css-pipeline-contract.test.ts, because CI's
-     Playwright run drives `npm run dev`, which never minifies. */
+     Flushness is measured, not asserted here — tests/e2e/mode-toggle-geometry
+     .spec.ts. Minifier survival is pinned in css-pipeline-contract.test.ts,
+     because CI's Playwright run drives `npm run dev`, which never minifies. */
   .thumb {
     position: absolute;
     grid-area: 1 / 1 / 2 / 2;
@@ -110,17 +97,18 @@ const { tandemMode, onModeChange }: Props = $props();
     z-index: 0;
     transition: transform 220ms var(--tandem-ease-out);
   }
-  /* Exactly one column — and exact only while the track's `gap` stays 0. */
   .thumb.tandem {
     transform: translateX(100%);
   }
   .mode-toggle button {
     /* No width rule belongs here: the segments ARE the track's two equal grid
        columns and the button stretches to fill its column. The `flex: 1 1 0`
-       this replaces claimed to equalize them and never did — a flex item's
-       automatic minimum size is its min-content size, so "Tandem" (one
-       unbreakable word) kept its natural width and "Solo" took the remainder
-       (measured 67.8px vs 50.5px). That inequality was #1383/#1384. */
+       this replaces never equalized them — a flex item's automatic minimum
+       size is its min-content size, so "Tandem" (one unbreakable word) kept
+       its natural width and "Solo" took the remainder (measured 67.8 vs
+       50.5px). That inequality was #1383/#1384, one defect seen from two
+       sides: the pill matched neither segment, and each label sat off the
+       pill's optical centre. */
     /* Center the label on both axes. `line-height: normal` (not the tight `1`)
        is the load-bearing part: at `line-height: 1` the line box is shorter than
        the glyph's natural box, so the text rendered ~0.7px high (2.6px gap above

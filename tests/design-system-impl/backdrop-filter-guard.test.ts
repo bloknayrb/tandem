@@ -1,7 +1,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { stripCssComments, styleBlocks } from "../helpers/css-source";
+import { cssRules, stripCssComments, styleBlocks } from "../helpers/css-source";
 
 /**
  * backdrop-filter regression gate.
@@ -79,8 +79,8 @@ const RECIPE_SELECTOR = /\.tandem-floating-pill(?![\w-])/;
  * nest this recipe.
  */
 function floatingPillRulesIn(css: string): { selector: string; body: string }[] {
-  return [...stripCssComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-    .map((m) => ({ selector: m[1].trim(), body: m[2] }))
+  return cssRules(stripCssComments(css))
+    .map(([selector, body]) => ({ selector: selector.trim(), body }))
     .filter((r) => RECIPE_SELECTOR.test(r.selector));
 }
 
