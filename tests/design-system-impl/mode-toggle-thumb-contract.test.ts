@@ -13,10 +13,13 @@ import { cssRulesBySelector, styleBlocks } from "../helpers/css-source";
  * literals this file used to assert — `inline-grid`, `minmax(0,`,
  * `grid-area: 1/1/2/2`, `inset: 0`, `position: relative` — moved to
  * css-pipeline-contract.test.ts, which reads the same source and then runs it
- * through the real minifier, so it fails on everything these did *plus*
- * minifier drift. Mutation-tested both ways: those five gates were strictly
- * subsumed, and this file's own rule is that a superseded gate should be
- * deleted rather than re-satisfied.
+ * through the real minifier, so it adds minifier drift to what those caught.
+ * Mutation-tested both ways, with one measured exception in the other
+ * direction: rewriting `inset: 0` to the four longhands failed the old source
+ * regex, and passes the new gate because the minifier collapses it back. That
+ * is a false red removed rather than coverage lost — the two spellings are the
+ * same box — but "everything the old gates caught" would be the wrong claim,
+ * and it is the sort of claim that stops anyone from checking.
  *
  * What survives is what a positive scan cannot express: that something is
  * ABSENT. No percentage geometry, no width rule, no gutter — each of them a
@@ -75,6 +78,17 @@ describe("ModeToggle: the mechanisms that must stay absent", () => {
     // Every `.mode-toggle button*` rule is scanned, not just the base one:
     // `.on` and `:hover:not(.on)` are separate selectors and a width added
     // there would slip past a base-rule-only check.
+    //
+    // Anchor on the exact base selector first, because a negative scan proves
+    // nothing without evidence it scanned something — and this one is defeated
+    // by a rename that changes no behaviour. `.mode-toggle > button` selects the
+    // same elements and fails `startsWith`, so the filter yields zero rules and
+    // `offenders` is `[]` by construction. Mutation-proved: that rename carrying
+    // `min-width: 60px`, the exact bug this gate exists to catch, passed the
+    // whole suite. (Folding a child rule into the base one via CSS nesting would
+    // also empty the scan; `cssRules` throws on that, so it is guarded upstream.)
+    ruleWithSelector(".mode-toggle button");
+
     const offenders = RULES.filter((r) =>
       r.selectors.some((s) => s.startsWith(".mode-toggle button")),
     ).flatMap((r) =>
@@ -90,9 +104,18 @@ describe("ModeToggle: the mechanisms that must stay absent", () => {
     // `inset` because the fix itself now uses it, `margin` because
     // `margin-left: 50%` is percentage positioning the spec forbids and an
     // earlier list let through.
+    //
+    // The `(?:min-|max-)?` prefix and the logical sizes are load-bearing, not
+    // completeness theatre. `[a-z-]*` only extends a property to the RIGHT
+    // (`margin` → `margin-left`), while the `(?:^|[;\s])` anchor requires the
+    // character before the match to be a separator — so `min-width` cannot match
+    // via `width`, whose preceding character is `-`. Mutation-proved: before the
+    // prefix was added, `max-width: 50%` on the thumb passed all 73 tests. The
+    // sibling scan above already spelled `(?:min-|max-)?width`, so this was one
+    // scan of two carrying knowledge the file already had.
     const offenders = [
       ...ruleWithSelector(".thumb").matchAll(
-        /(?:^|[;\s])(inset|margin|width|height|left|right|top|bottom)[a-z-]*\s*:[^;]*(%|calc\()/g,
+        /(?:^|[;\s])((?:min-|max-)?(?:width|height|block-size|inline-size)|inset|margin|left|right|top|bottom)[a-z-]*\s*:[^;]*(%|calc\()/g,
       ),
     ].map((m) => m[0].trim());
     expect(

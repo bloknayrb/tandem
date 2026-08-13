@@ -40,10 +40,16 @@ async function boot(page: Page) {
   await page.goto("/");
   await page.locator("[data-testid='mode-toggle']").waitFor({ state: "visible", timeout: 15_000 });
   // SN Pro ships `font-display: swap` (index.html), and the swap CHANGES these
-  // metrics — measured 50.00 -> 50.53 on the solo segment, 123.39 -> 124.36 on
-  // the track. Every assertion below uses an absolute px tolerance and
+  // metrics: the segments are sized from label text, so every width here moves
+  // when the face does. Every assertion below uses an absolute px tolerance and
   // `expect.poll` re-evaluates, so a pre-swap sample and a post-swap sample
   // would be describing two different layouts.
+  //
+  // (The figures that used to sit here were the PRE-FIX widths, left behind
+  // when the fix changed them, and the same file described the same track three
+  // times with one of the three 17px out. Deleted rather than re-measured: the
+  // point is that the swap moves them, which nothing here can assert and no
+  // number makes truer.)
   await page.evaluate(() => document.fonts.ready);
 }
 
@@ -156,14 +162,15 @@ test("the segments are equal and the pill covers the selected one (tandem defaul
 
   // The only assertion in this file that reads an ABSOLUTE height. Everything
   // else is a thumb-vs-button delta, so the pill and the button could grow
-  // together and every delta would stay 0.00. ModeToggle.svelte trims the button
-  // padding 5px -> 3px precisely to offset `line-height: normal`; reverting the
-  // trim while keeping `normal` measures 24px, and nothing else would notice.
+  // together and every delta would stay 0.00. ModeToggle.svelte's button padding
+  // and its `line-height: normal` are a matched pair — the padding is trimmed to
+  // offset the taller line box — and changing one without the other moves this
+  // height while disturbing no delta in the file.
   expect(
     Math.abs(g.thumbH - 20),
     `the pill is ${g.thumbH.toFixed(2)}px tall; it should hold ~20px under the shipped SN Pro ` +
-      `face (21px pre-swap). 24px means the button's vertical padding was reverted to 5px ` +
-      `without also reverting \`line-height: normal\` — see ModeToggle.svelte.`,
+      `face. If this drifted, the button's vertical padding and \`line-height\` were changed ` +
+      `independently of each other — see ModeToggle.svelte.`,
   ).toBeLessThan(2);
 
   await expect(page.locator("[data-testid='mode-tandem-btn']")).toHaveAttribute(
@@ -197,6 +204,43 @@ test("the pill covers the selected segment after switching to solo, and back", a
   await expectThumbFlush(page, "tandem (after a slide)");
 });
 
+/**
+ * The narrowest track that still holds the pill's guarantee, DERIVED from the
+ * shipped CSS rather than transcribed from it.
+ *
+ * Deriving it is the point. This boundary has been stated as a literal three
+ * times — "~60px" twice in prose, then a worked sum that added to 34 while
+ * claiming 62 — and each time the figure was admissible under whatever rule was
+ * in force and wrong anyway. A comment cannot be made to add up; this can.
+ *
+ * `box-sizing: border-box` is global (index.html), so `max-width` clamps the
+ * BORDER box: the track's own padding and border sit inside the cap, and each
+ * button floors at its own horizontal padding because its content box cannot go
+ * below zero. Two buttons, because both columns must fit — the missing half of
+ * the sum this replaces.
+ */
+async function paddingFloor(page: Page): Promise<number> {
+  const floor = await page.evaluate(() => {
+    const track = document.querySelector<HTMLElement>(".mode-toggle");
+    if (!track) throw new Error("missing .mode-toggle");
+    const buttons = [...track.querySelectorAll<HTMLElement>("button")];
+    if (buttons.length !== 2) throw new Error(`expected 2 segments, found ${buttons.length}`);
+    const px = (v: string) => Number.parseFloat(v) || 0;
+    const sides = (el: Element) => {
+      const s = getComputedStyle(el);
+      return (
+        px(s.paddingLeft) + px(s.paddingRight) + px(s.borderLeftWidth) + px(s.borderRightWidth)
+      );
+    };
+    return sides(track) + buttons.reduce((sum, b) => sum + sides(b), 0);
+  });
+  // A zeroed or absurd floor would make both assertions below meaningless
+  // rather than failing: capping at 0 collapses everything flush.
+  expect(floor, "derived padding floor is implausible — did the query desync?").toBeGreaterThan(20);
+  expect(floor).toBeLessThan(300);
+  return floor;
+}
+
 /** Force a track width the real layout cannot produce. Repeatable within a page. */
 async function setTrackCap(page: Page, px: number) {
   await page.evaluate((cap) => {
@@ -213,9 +257,9 @@ async function setTrackCap(page: Page, px: number) {
 test("the columns stay equal when the track is forced to compress", async ({ page }) => {
   // `minmax(0, 1fr)` versus a bare `1fr` is the most-argued decision in this fix,
   // and NOTHING in the shipped layout exercises it: `.title-bar-mode` is
-  // `flex: 0 0 auto` and `.title-bar-center` carries `min-width: 0`, so the
-  // center strip absorbs every pixel of shrink. Swept 1200 -> 200px, this track
-  // never moved. The regime is therefore injected rather than reached.
+  // `flex: 0 0 auto`, so it overflows rather than compresses at any viewport,
+  // and `.title-bar-center` carries `min-width: 0` and takes the shrink instead.
+  // The regime is therefore injected rather than reached.
   //
   // That is not a hypothetical: it is a unit test of a CSS mechanism, run here
   // because Playwright is the only layout engine in the repo. The source scan in
@@ -223,9 +267,9 @@ test("the columns stay equal when the track is forced to compress", async ({ pag
   // but this can observe that it works.
   await boot(page);
 
-  // 120px is mid-range; 62px is the boundary measured below. A bare `1fr`
-  // floors each column at min-content and fails both.
-  for (const cap of [120, 62]) {
+  // Mid-range, then the floor itself — the two ends of the range the guarantee
+  // covers. A bare `1fr` floors each column at min-content and fails both.
+  for (const cap of [120, await paddingFloor(page)]) {
     await setTrackCap(page, cap);
     const g = await measure(page);
     expect(
@@ -247,35 +291,43 @@ test("the pill's guarantee ends at the padding floor, not below it", async ({ pa
   // derived-spec.md previously carried a "~60px" figure; it was derivable and
   // not derived, and it was wrong.
   //
-  // The floor is the button's own horizontal padding (2 x 14px) plus the track's
-  // padding and border: 28 + 4 + 2 = 62px. Below that the buttons stop shrinking
-  // while the columns keep going, so the thumb — which tracks the COLUMN —
-  // becomes narrower than the button it is supposed to cover. Measured: at 62px
-  // dR = 0.00, at 61px dR = -0.50.
+  // Below the floor the buttons stop shrinking while the columns keep going, so
+  // the thumb — which tracks the COLUMN — becomes narrower than the button it is
+  // supposed to cover. `paddingFloor()` computes where that starts, so a padding
+  // change moves this test with it instead of silently invalidating it.
   await boot(page);
 
-  await setTrackCap(page, 62);
-  await expectThumbFlush(page, "at the 62px floor");
+  const floor = await paddingFloor(page);
 
-  await setTrackCap(page, 61);
+  await setTrackCap(page, floor);
+  await expectThumbFlush(page, `at the ${floor}px floor`);
+
+  await setTrackCap(page, floor - 1);
   const below = await measure(page);
+  // Bounded on BOTH sides, because `< -0.25` alone is satisfied by any breakage
+  // at all — remove `inset: 0` and the thumb renders 0x0 for a dR near -55,
+  // which would read as this test passing. One pixel off the floor splits across
+  // two columns, so the intended desync is half a pixel and nothing else is.
   expect(
     below.dR,
-    `one pixel below the floor the pill should already be narrower than its button. If this ` +
-      `passes, the floor moved — re-derive it from the button padding and the track chrome, ` +
-      `and update the test above rather than adding a comment.`,
+    `one pixel below the floor the pill should be exactly half a pixel narrower than its ` +
+      `button (got ${below.dR.toFixed(2)}). Too small: the floor moved, and since it is now ` +
+      `derived that means the box model changed, not the padding. Too large: the thumb is ` +
+      `mis-sized for a reason that has nothing to do with the floor.`,
   ).toBeLessThan(-0.25);
+  expect(below.dR).toBeGreaterThan(-1);
 });
 
 test("the widened toggle still fits a narrow viewport", async ({ page }) => {
-  // Equalizing the segments widens the control by ~17.3px ("Solo" grew to match
-  // "Tandem"), and the toggle sits at the right-hand end of the title bar.
+  // Equalizing the segments widened the control ("Solo" grew to match "Tandem"),
+  // and the toggle sits at the right-hand end of the title bar.
   //
-  // 360px, not 600px: because the toggle cannot shrink (see above), the fixed
-  // row content is roughly 28px padding + 32px logo + spacers + ~140px toggle,
-  // and the tab strip absorbs all remaining shrink. At 600px the widening this
-  // guards could grow twentyfold before the assertion fired, which made it read
-  // as coverage it was not providing.
+  // 360px, not 600px: the toggle cannot shrink (see above) and neither can the
+  // brand cluster or the row padding, so the tab strip absorbs all remaining
+  // shrink. Those fixed costs leave enough slack at 600px that the widening this
+  // guards could grow many times over before the assertion fired, which made it
+  // read as coverage it was not providing. 360px is the narrowest viewport worth
+  // supporting, so it is the honest place to ask the question.
   //
   // SCOPE: this covers the BROWSER layout only. `isTauriRuntime()` is false
   // here, so `.title-bar-mode` never gets `.native-window-row` and the three

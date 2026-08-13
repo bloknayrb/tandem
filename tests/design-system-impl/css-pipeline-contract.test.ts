@@ -54,8 +54,14 @@ const FORMATTING_BAR = join(CLIENT_ROOT, "shell", "FormattingBar.svelte");
  * rest of Svelte's CSS dialect would still need a real parser.
  */
 function authoredRule(file: string, selector: string, mustDeclare?: RegExp): string {
+  // Stripped of `g`/`y` deliberately: `test()` on a sticky or global regex
+  // advances `lastIndex`, so reusing one inside a `.filter` would skip every
+  // other candidate and the count below would be wrong in a way that reads like
+  // a missing rule. No caller passes one today; this makes it impossible to.
+  const declares =
+    mustDeclare && new RegExp(mustDeclare.source, mustDeclare.flags.replace(/[gy]/g, ""));
   const matches = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(file))).filter(
-    (r) => r.selectors.includes(selector) && (!mustDeclare || mustDeclare.test(r.body)),
+    (r) => r.selectors.includes(selector) && (!declares || declares.test(r.body)),
   );
   expect(
     matches.length,
@@ -67,10 +73,16 @@ function authoredRule(file: string, selector: string, mustDeclare?: RegExp): str
 }
 
 /**
- * `.thumb` appears three times in ModeToggle.svelte (base, the reduced-motion
- * media override, and the in-app `body.tandem-reduce-motion` override), and the
- * two overrides declare only `transition: none`. `background` picks the one that
- * paints, independent of every placement property under test.
+ * Two rules in ModeToggle.svelte carry the exact selector `.thumb` — the base
+ * rule and the reduced-motion media override — and the override declares only
+ * `transition: none`. `background` picks the one that paints, independent of
+ * every placement property under test.
+ *
+ * The in-app `:global(body.tandem-reduce-motion) .thumb` override is a third
+ * `.thumb` rule in the file but not a third *candidate*: it is a descendant
+ * selector, and the filter matches selectors exactly. Worth stating, because a
+ * reader debugging a count failure would otherwise hunt for a rule that was
+ * never in the running.
  */
 const paintingRule = (selector: string) => authoredRule(MODE_TOGGLE, selector, /background\s*:/);
 const trackRule = () => authoredRule(MODE_TOGGLE, ".mode-toggle");
@@ -159,6 +171,56 @@ function minify(css: string): string {
 }
 
 const declares = (css: string, prop: string) => new RegExp(`[;{]\\s*${prop}\\s*:`).test(css);
+
+describe("the shared CSS extractor can still read what this repo authors", () => {
+  // Every gate in this file and in mode-toggle-thumb-contract.test.ts is built on
+  // `tests/helpers/css-source.ts`, which is regexes rather than a parser. Its own
+  // docstring names the hazard — Svelte's CSS dialect can grow, and a splitter
+  // that cannot represent the new form does not fail, it returns fewer rules and
+  // reports green. Two live instances were found by review rather than by any
+  // test: CSS nesting silently drops the parent rule's declarations, and a
+  // `:global()` holding parentheses is left unrewritten.
+  //
+  // Both now throw, which is only useful if something runs them over the real
+  // corpus. That is this: the assertion is not about any one rule, it is that the
+  // extractor still understands the whole surface the other gates trust it on. It
+  // fails the day someone adopts a form the helpers cannot represent, which is
+  // the day those gates would otherwise start passing vacuously.
+  const files = bundledCssFiles(CLIENT_ROOT);
+
+  it("enumerates a plausible corpus", () => {
+    // Guards the sweep below from passing on an empty list.
+    expect(files.length).toBeGreaterThan(50);
+  });
+
+  it("extracts every bundled file without losing structure", () => {
+    const broken: string[] = [];
+    for (const file of files) {
+      const where = relative(ROOT, file).replace(/\\/g, "/");
+      let rules: ReturnType<typeof cssRulesBySelector>;
+      try {
+        rules = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(file)));
+      } catch (err) {
+        broken.push(`${where}: ${(err as Error).message}`);
+        continue;
+      }
+      for (const rule of rules) {
+        // A brace or an empty string in a selector means the splitter lost its
+        // place; a brace in a body means a nested block was swallowed whole.
+        if (rule.selectors.some((s) => s === "" || s.includes("{"))) {
+          broken.push(`${where}: unparseable selector ${JSON.stringify(rule.selectors)}`);
+        }
+        if (rule.body.includes("}")) {
+          broken.push(`${where}: rule body contains a closing brace`);
+        }
+        if (rule.selectors.some((s) => s.includes(":global("))) {
+          broken.push(`${where}: unrewritten :global( in ${JSON.stringify(rule.selectors)}`);
+        }
+      }
+    }
+    expect(broken).toEqual([]);
+  });
+});
 
 describe("the Vite CSS target our authoring rule depends on", () => {
   it("reads Tandem's real Vite config", () => {
@@ -254,21 +316,37 @@ describe("bundled CSS: the #1302 formatting-bar declarations survive minificatio
     // popup — and no E2E test would catch it, because Playwright drives
     // `npm run dev`, which never minifies.
     //
-    // The real selector, not a `.w:has(...)` probe: this gate was synthetic
-    // until #1428, so deleting the rule from FormattingBar left it green. That
-    // is the same defect the line-clamp gate below records and the mode-toggle
-    // block above now avoids — three instances of one class.
-    const wrap = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(FORMATTING_BAR)))
-      .flatMap((r) => r.selectors)
-      .filter((s) => s.includes(":has("));
+    // The real selector AND the real body, not a `.w:has(...){z-index:9}` probe:
+    // this gate was synthetic until #1428, so deleting the rule from
+    // FormattingBar left it green. That is the same defect the line-clamp gate
+    // below records and the mode-toggle block above now avoids — three
+    // instances of one class.
+    //
+    // #1428 fixed only half of it, which is why this reads the way it does.
+    // Scraping the selector but hand-writing the declaration still asserts
+    // nothing about what ships, and taking `wrap[0]` off an at-least-one guard
+    // reintroduced the original hole from the other side: with a second
+    // `:has([aria-expanded])` rule present, deleting THIS one still passed.
+    // Identify the rule by the property that makes it the z-lift, and require
+    // exactly one.
+    const lifts = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(FORMATTING_BAR))).flatMap(
+      (rule) =>
+        rule.selectors
+          .filter((s) => s.includes(":has(") && s.includes("aria-expanded"))
+          .map((selector) => ({ selector, body: rule.body })),
+    );
     expect(
-      wrap,
-      "no `:has()` rule left in FormattingBar.svelte — the #1302 z-lift was removed or renamed",
-    ).not.toEqual([]);
+      lifts.map((l) => l.selector),
+      "expected exactly one `:has([aria-expanded])` rule in FormattingBar.svelte — " +
+        "the #1302 z-lift was removed, renamed, or joined by a lookalike",
+    ).toHaveLength(1);
 
-    const out = minify(`${wrap[0]}{z-index:9}`);
+    const out = minify(`${lifts[0].selector}{${lifts[0].body}}`);
     expect(out).toContain(":has(");
     expect(out).toContain("aria-expanded");
+    // The lift itself, not just its selector: a surviving `:has()` that no
+    // longer raises anything is the bug wearing the gate's own shape.
+    expect(out).toContain("z-index");
   });
 
   it("keeps overflow-x: clip / overflow-y: visible as a clip+visible pair", () => {
@@ -301,7 +379,12 @@ describe("bundled CSS: the #1383/#1384 mode-toggle declarations survive minifica
   //
   // These gates read the REAL rules and minify those, so they also stand in for
   // the source-shape gates that used to live in mode-toggle-thumb-contract.test
-  // .ts — they fail on everything those did, plus minifier drift.
+  // .ts, adding minifier drift to what those caught. Not a strict superset,
+  // and the exception is the first bullet below: a rewrite to the `inset`
+  // longhands failed the old source regex and passes here, because the minifier
+  // collapses it back. Deliberate — the two spellings are the same box — but
+  // the two statements have to agree, and "fails on everything those did" did
+  // not agree with the bullet six lines under it.
   //
   // Two rewrites were investigated and deliberately have no gate, because a test
   // that can only pass is not one — and neither is one that reds on a rename the

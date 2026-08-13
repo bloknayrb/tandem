@@ -24,6 +24,7 @@ const { tandemMode, onModeChange }: Props = $props();
        sits correctly on mount with no slide; only a mode change animates it. -->
   <span class="thumb" class:tandem={tandemMode === "tandem"} aria-hidden="true"></span>
   <button
+    type="button"
     data-testid="mode-solo-btn"
     class={tandemMode === "solo" ? "on" : ""}
     title="Write undisturbed — your AI pauses and won't see your comments or edits until you switch back to Tandem"
@@ -31,6 +32,7 @@ const { tandemMode, onModeChange }: Props = $props();
     onclick={() => onModeChange("solo")}
   >Solo</button>
   <button
+    type="button"
     data-testid="mode-tandem-btn"
     class={tandemMode === "tandem" ? "on" : ""}
     title="Full collaboration — your AI sees your selections, comments, and edits as you make them"
@@ -124,10 +126,11 @@ const { tandemMode, onModeChange }: Props = $props();
        Center the label on both axes. `line-height: normal` (not the tight `1`)
        is the load-bearing part: at `line-height: 1` the line box is shorter
        than the glyph's natural box and the text renders cramped against the
-       top. `normal` distributes the leading evenly, and the padding is trimmed
-       5px -> 3px to offset the taller line box so the pill keeps its height.
-       That pairing is the one thing here a delta-based test cannot see, so the
-       E2E spec asserts the pill's absolute height. */
+       top. `normal` distributes the leading evenly, and the vertical padding
+       below is trimmed to offset the taller line box so the pill keeps its
+       height. Change one without the other and the pill's height moves while
+       every thumb-vs-button delta stays 0.00 — which is why the E2E spec
+       asserts the pill's absolute height, the only such assertion it makes. */
     display: inline-flex;
     align-items: center;
     justify-content: center;
