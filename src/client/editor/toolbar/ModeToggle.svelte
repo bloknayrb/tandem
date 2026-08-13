@@ -41,7 +41,19 @@ const { tandemMode, onModeChange }: Props = $props();
 
 <style>
   .mode-toggle {
-    display: inline-flex;
+    display: inline-grid;
+    /* `minmax(0, 1fr)`, not a bare `1fr`. Both measure IDENTICALLY today — the
+       track is shrink-to-fit, so it sizes to max-content and the `auto`
+       minimum never binds. They diverge only under compression, and there the
+       0 minimum is the one that holds this component's whole invariant:
+       measured at a 120px cap, `1fr` gives 52 / 70.97px columns while
+       `minmax(0, 1fr)` gives 60 / 60px. Unequal columns put the thumb (which
+       IS column 1) on a segment of a different width — #1384, reopened. The
+       trade is that a squeezed label can outgrow its column; a visibly
+       overflowing label beats a silently misplaced pill. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    /* The thumb's containing block. Measured: remove it and the thumb sizes
+       itself against the viewport. Fails silently. */
     position: relative;
     /* Bundle's `.a8 .seg` recipe: 2px track padding + a 1px border so the
        segmented control reads as a chip rather than a recessed plate. The
@@ -53,18 +65,31 @@ const { tandemMode, onModeChange }: Props = $props();
     border-radius: var(--tandem-r-pill);
     font-size: 11px;
     font-weight: 600;
+    /* Must stay 0: the thumb slides exactly one column, so any gutter desyncs
+       `translateX(100%)` from the column pitch. */
     gap: 0;
   }
-  /* A8 (#798): the sliding active pill. Half the track's inner width, anchored
-     left; a mode flip slides it by its own width (translateX 100%) to land
-     exactly on the right segment — the `width: calc(50% - 2px)` accounts for
-     the 2px left track padding so the arithmetic is exact. */
+  /* A8 (#798): the sliding active pill. Its box IS grid area (1,1) — the first
+     segment, to the pixel — so it does no arithmetic of its own and cannot
+     drift from the button underneath it. Do not reintroduce percentage sizing;
+     derived-spec.md §3.9 forbids it.
+
+     Two traps in that placement, both silent if you get them wrong:
+
+       - ALL FOUR grid lines must be written out. On an absolutely-positioned
+         grid child an `auto` end line resolves to the container's PADDING
+         EDGE, not to `span 1`, so a two-line `grid-area: 1 / 1` stretches the
+         thumb across the entire track. Measured; nothing warns.
+       - `inset: 0` is required. Without it the abspos box shrink-to-fits and
+         renders 0x0.
+
+     Flushness is measured, not asserted here — tests/e2e/mode-toggle-geometry
+     .spec.ts. Minifier survival is pinned in css-pipeline-contract.test.ts,
+     because CI's Playwright run drives `npm run dev`, which never minifies. */
   .thumb {
     position: absolute;
-    top: 2px;
-    bottom: 2px;
-    left: 2px;
-    width: calc(50% - 2px);
+    grid-area: 1 / 1 / 2 / 2;
+    inset: 0;
     background: var(--tandem-surface);
     border-radius: var(--tandem-r-pill);
     box-shadow: var(--tandem-shadow-1);
@@ -76,15 +101,22 @@ const { tandemMode, onModeChange }: Props = $props();
     transform: translateX(100%);
   }
   .mode-toggle button {
-    /* Equal-width segments so the half-width thumb lands cleanly on either; the
-       two labels ("Solo"/"Tandem") differ in length, so flex-equalize them. */
-    flex: 1 1 0;
+    /* No width rule belongs here: the segments ARE the track's two equal grid
+       columns and the button stretches to fill its column. The `flex: 1 1 0`
+       this replaces never equalized them — a flex item's automatic minimum
+       size is its min-content size, so "Tandem" (one unbreakable word) kept
+       its natural width and "Solo" took the remainder (measured 67.8 vs
+       50.5px). That inequality was #1383/#1384, one defect seen from two
+       sides: the pill matched neither segment, and each label sat off the
+       pill's optical centre. */
     /* Center the label on both axes. `line-height: normal` (not the tight `1`)
        is the load-bearing part: at `line-height: 1` the line box is shorter than
        the glyph's natural box, so the text rendered ~0.7px high (2.6px gap above
        vs 4px below). `normal` + flex centering distributes the leading evenly
        (3.3px / 3.3px), and the padding is trimmed 5px→3px so the taller line box
-       keeps the pill at its original 21px height. */
+       holds the pill within a pixel of its original 21px height (20px under the
+       shipped SN Pro face; the untrimmed `5px` + `normal` pairing would be
+       24px). */
     display: inline-flex;
     align-items: center;
     justify-content: center;

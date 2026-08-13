@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { transform } from "lightningcss";
 import { resolveConfig } from "vite";
 import { beforeAll, describe, expect, it } from "vitest";
-import { styleBlocks } from "../helpers/css-source";
+import { cssRules, styleBlocks } from "../helpers/css-source";
 
 /**
  * CSS pipeline contract.
@@ -200,10 +200,10 @@ describe("bundled CSS: writing the standard property alone is still the safe adv
     // This exists because the synthetic fixture above does not guard our source: deleting
     // AnnotationCard's declaration failed nothing until this gate was added.
     const missing = bundledCssFiles(CLIENT_ROOT).flatMap((file) =>
-      [...styleBlocks(file).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-        .filter(([, , body]) => /(^|[;\s])line-clamp\s*:/.test(body))
-        .filter(([, , body]) => !/-webkit-line-clamp\s*:/.test(body))
-        .map(([, selector]) => `${relative(ROOT, file).replace(/\\/g, "/")}: ${selector.trim()}`),
+      cssRules(styleBlocks(file))
+        .filter(([, body]) => /(^|[;\s])line-clamp\s*:/.test(body))
+        .filter(([, body]) => !/-webkit-line-clamp\s*:/.test(body))
+        .map(([selector]) => `${relative(ROOT, file).replace(/\\/g, "/")}: ${selector.trim()}`),
     );
     expect(missing).toEqual([]);
   });
@@ -241,6 +241,32 @@ describe("bundled CSS: the #1302 formatting-bar declarations survive minificatio
   });
 });
 
+describe("bundled CSS: the #1383/#1384 mode-toggle declarations survive minification", () => {
+  // ModeToggle.svelte's thumb no longer computes its own box; it is PLACED into
+  // the track's first grid column (`grid-area: 1 / 1 / 2 / 2` + `inset: 0`) so
+  // that it cannot drift from the segment it selects. Those declarations live in
+  // a component <style> block, so they really do ship through lightningcss —
+  // and CI's Playwright run drives `npm run dev`, which never minifies, so no
+  // E2E gate can see this axis. That blind spot is exactly the one that shipped
+  // #1189 inert for six weeks.
+  //
+  // One case, not four. Three siblings were dropped in review for being
+  // unfalsifiable: lightningcss COLLAPSES longhands into `inset: 0` rather than
+  // exploding it, `minmax(auto, 1fr)` → `minmax(0, 1fr)` is a semantic change
+  // no minifier performs, and a percentage in `translateX` cannot be resolved
+  // without a box. A test that can only pass is not a gate.
+
+  it("keeps grid-area as the four-line form", () => {
+    // The load-bearing one. For an ABSOLUTELY-POSITIONED grid child an `auto`
+    // end line resolves to the container's padding edge, not `span 1`, so a
+    // minifier that collapsed `1/1/2/2` to `1/1` would silently stretch the
+    // thumb across the whole track — a visual bug with no failing test
+    // anywhere else.
+    const out = minify(".probe{grid-area:1 / 1 / 2 / 2}");
+    expect(out).toContain("grid-area:1/1/2/2");
+  });
+});
+
 /** Every `.svelte` `<style>` / `.css` file whose CSS the build routes through lightningcss. */
 function bundledCssFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -268,8 +294,7 @@ function handWrittenPairs(): { prop: string; value: string; where: string }[] {
   const found = new Map<string, { prop: string; value: string; where: string }>();
   for (const file of bundledCssFiles(CLIENT_ROOT)) {
     const css = styleBlocks(file);
-    for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      const body = rule[2];
+    for (const [, body] of cssRules(css)) {
       for (const decl of body.matchAll(/-webkit-([a-z-]+)\s*:\s*([^;}]+)/g)) {
         const prop = decl[1];
         if (found.has(prop)) continue;
