@@ -52,3 +52,36 @@ export function styleBlocks(file: string): string {
 export function cssRules(css: string): Array<[string, string]> {
   return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [m[1], m[2]]);
 }
+
+/** One authored rule: its selector list already split, and its declaration body. */
+export type CssRule = { selectors: string[]; body: string };
+
+/**
+ * `cssRules` with the selector list split on `,`, which is what "does this rule
+ * apply to `.foo`?" actually needs.
+ *
+ * Comparing the unsplit list instead is the trap this exists to close: it works
+ * until someone groups the selector, and then `.thumb, .x { … }` stops matching
+ * `.thumb` and the scan reports the rule *missing* rather than reporting the
+ * declaration it was hired to check. Two suites had independently rolled this,
+ * and a third arrived comparing the unsplit form — three answers to one question.
+ */
+export function cssRulesBySelector(css: string): CssRule[] {
+  return cssRules(css).map(([selectorList, body]) => ({
+    selectors: selectorList.split(",").map((s) => s.trim()),
+    body,
+  }));
+}
+
+/**
+ * Rewrite Svelte's `:global(x)` to plain `x` so a component `<style>` block can
+ * be handed to a real CSS parser.
+ *
+ * lightningcss rejects `:global(...)` outright, which matters because the
+ * minifier gates are the only ones that see what actually ships. Without this a
+ * whole-block gate cannot exist, and the fallback — extracting one rule at a
+ * time — is what leaves synthetic-probe tests standing in for real ones.
+ */
+export function neutralizeSvelteGlobal(css: string): string {
+  return css.replace(/:global\(([^()]*)\)/g, "$1");
+}
