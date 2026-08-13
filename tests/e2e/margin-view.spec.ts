@@ -10,6 +10,8 @@ import {
   nextFrames,
   openAnnotatePopup,
   openSettingsViaBrandMenu,
+  RAIL_HANDLE_TESTID,
+  setRailVisible,
 } from "./helpers";
 
 /**
@@ -67,18 +69,8 @@ async function openSettingsAndGotoCowork(page: import("@playwright/test").Page):
  * removed the titlebar panel-toggle buttons; keyboard shortcuts drive it.
  */
 async function closeBothRails(page: import("@playwright/test").Page): Promise<void> {
-  if ((await page.locator("[data-testid='left-panel-resize-handle']").count()) > 0) {
-    await page.keyboard.press("Alt+Shift+ArrowLeft");
-    await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(0, {
-      timeout: 3_000,
-    });
-  }
-  if ((await page.locator("[data-testid='panel-resize-handle']").count()) > 0) {
-    await page.keyboard.press("Alt+Shift+ArrowRight");
-    await expect(page.locator("[data-testid='panel-resize-handle']")).toHaveCount(0, {
-      timeout: 3_000,
-    });
-  }
+  await setRailVisible(page, "left", false);
+  await setRailVisible(page, "right", false);
 }
 
 async function setMarginView(
@@ -669,8 +661,8 @@ test("opening a rail keeps both margin columns (#892 decoupling)", async ({ page
   await seedNoteViaPopup(page, "left-side note");
   const leftCol = page.locator("[data-testid='margin-column-left']");
   const rightCol = page.locator("[data-testid='margin-column-right']");
-  const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
-  const rightHandle = page.locator("[data-testid='panel-resize-handle']");
+  const leftHandle = page.locator(`[data-testid='${RAIL_HANDLE_TESTID.left}']`);
+  const rightHandle = page.locator(`[data-testid='${RAIL_HANDLE_TESTID.right}']`);
   await expect(leftCol).toHaveCount(1);
   await expect(rightCol).toHaveCount(1);
 
@@ -864,7 +856,7 @@ test("Stage A: tracks reserve only while margins render, rail-independent", asyn
   // Open the LEFT rail (outline) → the right track is UNCHANGED (#892
   // decoupling); the left stays 0 (still no note — not because the rail opened).
   await page.keyboard.press("Alt+Shift+ArrowLeft");
-  await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(1, {
+  await expect(page.locator(`[data-testid='${RAIL_HANDLE_TESTID.left}']`)).toHaveCount(1, {
     timeout: 3_000,
   });
   expect((await marginTracks(page)).right).not.toBe("0px");

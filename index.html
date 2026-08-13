@@ -298,10 +298,12 @@
         --tandem-fmtbar-top: max(52px, var(--tandem-banner-stack-bottom, 0px));
         --tandem-rail-top-clearance: 52px;
         --tandem-status-clearance: 36px;
-        /* Bottom inset that any "hugs-content" rail (outline) reserves
-           below itself so the floating status pill (W5) renders into
-           clear space. Sum of pill chrome (status-clearance) + a comfy
-           24px margin. Consumed by PanelSlot's outline branch in W6. */
+        /* Bottom inset reserved by anything in the editor row that must clear
+           the floating status pill (W5). Sum of pill chrome (status-clearance)
+           + a comfy 24px margin. The value rides --tandem-space-5, so it is
+           density-dependent — never restate it at a call site. The literal
+           `var()` fallbacks consumers carry are a degraded cozy-only floor for
+           the token-undefined case, not a copy of the value. */
         --tandem-status-clearance-total: calc(var(--tandem-status-clearance) + var(--tandem-space-5, 24px));
         /* Light-mode floating-pill stack (matches v7 calm-v7.css). Warm/dark
            override --c7-pill-shadow inside their own theme blocks. */

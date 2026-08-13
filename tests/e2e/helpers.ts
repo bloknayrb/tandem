@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -206,6 +206,54 @@ export async function nextFrames(page: Page, n = 3): Promise<void> {
 export async function openSettingsViaBrandMenu(page: Page): Promise<void> {
   await page.locator("[data-testid='titlebar-brand-menu']").click();
   await page.locator("[data-testid='brand-menu-settings']").click();
+}
+
+export type RailSide = "left" | "right";
+
+/**
+ * A rail's resize-handle testid — the presence of which is how every spec
+ * detects rail visibility. The shells' own testids (`rail-float-left` /
+ * `rail-float-right`) cannot serve: they are conditional on the floating state,
+ * so their absence does not mean the rail is closed.
+ *
+ * The right entry is NOT `right-panel-resize-handle`: App.svelte overrides the
+ * snippet's default at the call site. That asymmetry is a documented blind spot
+ * of the testid extractor (docs/design-system-impl/testid-manifest.md) — the
+ * snapshot only ever sees the template form, so a rename of the call-site
+ * literal slips past testid-coverage.test.ts and breaks specs at runtime with
+ * nothing catching it at source level. Hence one copy, here — reference it
+ * rather than re-typing either literal.
+ */
+export const RAIL_HANDLE_TESTID: Record<RailSide, string> = {
+  left: "left-panel-resize-handle",
+  right: "panel-resize-handle",
+};
+
+const RAIL_TOGGLE_KEY: Record<RailSide, string> = {
+  left: "Alt+Shift+ArrowLeft",
+  right: "Alt+Shift+ArrowRight",
+};
+
+/**
+ * Put a rail into the requested visibility state and return its handle locator.
+ *
+ * Toggles only when needed, so a spec never has to assume the product defaults
+ * (`leftPanelVisible: false` / `rightPanelVisible: true` today) — if one flips,
+ * the count assertion here reports it rather than a later assertion measuring a
+ * phantom. Wave M removed the titlebar toggle buttons; keyboard drives it.
+ */
+export async function setRailVisible(
+  page: Page,
+  side: RailSide,
+  visible: boolean,
+): Promise<Locator> {
+  const handle = page.locator(`[data-testid='${RAIL_HANDLE_TESTID[side]}']`);
+  const alreadyVisible = (await handle.count()) > 0;
+  if (alreadyVisible !== visible) {
+    await page.keyboard.press(RAIL_TOGGLE_KEY[side]);
+  }
+  await expect(handle).toHaveCount(visible ? 1 : 0, { timeout: 3_000 });
+  return handle;
 }
 
 /** Success-payload shape for `tandem_status` consumed by `cleanupAllOpenDocuments`. */

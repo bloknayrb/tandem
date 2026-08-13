@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
+import { stripCssComments, styleBlocks } from "../helpers/css-source";
 
 /**
  * backdrop-filter regression gate.
@@ -52,24 +53,6 @@ import { describe, expect, it } from "vitest";
 const ROOT = join(import.meta.dirname, "..", "..");
 const INDEX_HTML = join(ROOT, "index.html");
 const CLIENT_ROOT = join(ROOT, "src", "client");
-
-/** Strip CSS block comments so commented-out prose can't trip the greps. */
-function stripCssComments(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, "");
-}
-
-/**
- * Only `<style>` blocks go through the minifier. An inline `style="..."`
- * attribute is emitted verbatim, so it is exempt (CommandPalette's palette
- * scrim legitimately blurs a translucent backdrop that way).
- */
-function styleBlocks(file: string): string {
-  const src = readFileSync(file, "utf-8");
-  if (file.endsWith(".css")) return stripCssComments(src);
-  return stripCssComments(
-    [...src.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n"),
-  );
-}
 
 /**
  * Matches a selector that targets the recipe class itself.

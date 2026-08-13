@@ -1,8 +1,9 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { transform } from "lightningcss";
 import { resolveConfig } from "vite";
 import { beforeAll, describe, expect, it } from "vitest";
+import { styleBlocks } from "../helpers/css-source";
 
 /**
  * CSS pipeline contract.
@@ -248,18 +249,6 @@ function bundledCssFiles(dir: string, out: string[] = []): string[] {
     else if (full.endsWith(".svelte") || full.endsWith(".css")) out.push(full);
   }
   return out;
-}
-
-function stripCssComments(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, "");
-}
-
-function styleBlocks(file: string): string {
-  const src = readFileSync(file, "utf-8");
-  if (file.endsWith(".css")) return stripCssComments(src);
-  return stripCssComments(
-    [...src.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n"),
-  );
 }
 
 /**
