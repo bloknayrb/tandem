@@ -3258,10 +3258,12 @@ const shouldShowModelPicker = $derived(
 
   /* #1396: the editor row's vertical clearance, declared ONCE for the rail
      shell AND for the drag strip that sits beside it. Both are flex items of
-     the same `align-items: stretch` row, and under `stretch` an item's margins
-     inset its stretched cross size — so while only the shell carried these two
-     margins, the 4px strip stretched the FULL row height and its hover tint
-     painted 52px above and 52-68px below the rail it resizes.
+     the same row, which declares no `align-items` and so stretches them (the
+     initial `normal` resolves to stretch — don't go looking for the keyword,
+     and note that adding one explicitly would change this rule's premise).
+     Under stretch an item's margins inset its stretched cross size, so while
+     only the shell carried these two margins, the 4px strip stretched the FULL
+     row height and its hover tint painted well past the rail at both ends.
 
      One rule, two consumers, deliberately: the bottom inset is
      density-dependent, so a hardcoded copy on the strip would desync at two
@@ -3352,7 +3354,11 @@ const shouldShowModelPicker = $derived(
      is the pinned/collapsed baseline, shared by both rails. */
   .rail-shell-left,
   .rail-shell-right {
-    z-index: 1;
+    /* Same token as .rail-resize-handle, deliberately: the strip's
+       :focus-visible comment reasons from the two being EQUAL (so DOM order
+       decides the paint). A literal here would make that a coincidence between
+       two values authored 80 lines apart. */
+    z-index: var(--tandem-z-base);
   }
   .rail-shell-left {
     border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;

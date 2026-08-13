@@ -212,14 +212,17 @@ export type RailSide = "left" | "right";
 
 /**
  * A rail's resize-handle testid — the presence of which is how every spec
- * detects rail visibility, since the shells carry no testid of their own.
+ * detects rail visibility. The shells' own testids (`rail-float-left` /
+ * `rail-float-right`) cannot serve: they are conditional on the floating state,
+ * so their absence does not mean the rail is closed.
  *
  * The right entry is NOT `right-panel-resize-handle`: App.svelte overrides the
  * snippet's default at the call site. That asymmetry is a documented blind spot
  * of the testid extractor (docs/design-system-impl/testid-manifest.md) — the
  * snapshot only ever sees the template form, so a rename of the call-site
  * literal slips past testid-coverage.test.ts and breaks specs at runtime with
- * nothing catching it at source level. Hence one copy, here.
+ * nothing catching it at source level. Hence one copy, here — reference it
+ * rather than re-typing either literal.
  */
 export const RAIL_HANDLE_TESTID: Record<RailSide, string> = {
   left: "left-panel-resize-handle",
@@ -245,7 +248,8 @@ export async function setRailVisible(
   visible: boolean,
 ): Promise<Locator> {
   const handle = page.locator(`[data-testid='${RAIL_HANDLE_TESTID[side]}']`);
-  if ((await handle.count()) > 0 !== visible) {
+  const alreadyVisible = (await handle.count()) > 0;
+  if (alreadyVisible !== visible) {
     await page.keyboard.press(RAIL_TOGGLE_KEY[side]);
   }
   await expect(handle).toHaveCount(visible ? 1 : 0, { timeout: 3_000 });

@@ -5,6 +5,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  RAIL_HANDLE_TESTID,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -250,7 +251,7 @@ test("Alt+Shift+Left toggles the left panel", async ({ page }) => {
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   // Capture initial left-panel visibility via the resize-handle testid.
-  const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
+  const leftHandle = page.locator(`[data-testid='${RAIL_HANDLE_TESTID.left}']`);
   const initial = await leftHandle.count();
 
   await page.keyboard.press("Alt+Shift+ArrowLeft");
@@ -282,7 +283,7 @@ test("Alt+Shift+Right toggles the right panel", async ({ page }) => {
   await page.goto("http://127.0.0.1:5173");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
-  const rightHandle = page.locator("[data-testid='panel-resize-handle']");
+  const rightHandle = page.locator(`[data-testid='${RAIL_HANDLE_TESTID.right}']`);
   const initial = await rightHandle.count();
 
   await page.keyboard.press("Alt+Shift+ArrowRight");

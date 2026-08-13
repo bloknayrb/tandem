@@ -20,7 +20,10 @@ import {
  *
  * This spec states the invariant itself — the strip's edges coincide with its
  * rail's — by measuring real boxes in a real browser, which is what would
- * actually have caught the bug and what stays true under any correct structure.
+ * actually have caught the bug. The alignment half stays true under any correct
+ * structure; the inset floor below reads margins off the handle itself, so a
+ * structural fix that moved the clearance to a wrapper would SUPERSEDE it, the
+ * same way it supersedes the source-level contract test.
  */
 
 let mcp: McpTestClient;
@@ -34,12 +37,7 @@ const SHELL_SELECTOR: Record<RailSide, string> = {
   right: ".rail-shell-right",
 };
 
-type Measured = {
-  topAligned: boolean;
-  bottomAligned: boolean;
-  marginTop: number;
-  marginBottom: number;
-};
+type Margins = { marginTop: number; marginBottom: number };
 
 async function expectAligned(page: import("@playwright/test").Page, side: RailSide) {
   await setRailVisible(page, side, true);
@@ -48,14 +46,13 @@ async function expectAligned(page: import("@playwright/test").Page, side: RailSi
     SHELL_SELECTOR[side],
   ];
 
-  let last: Measured | null = null;
-
-  // One round-trip per attempt, and polled: the shell carries a 360ms width
-  // transition, so a rail just toggled open is still settling.
+  // Polled because the rail was just toggled open by a keypress and mount plus
+  // layout has to settle. (Not the shell's 360ms width transition — that
+  // animates width and box-shadow, neither of which moves the measured axis.)
   await expect
     .poll(
       async () => {
-        last = await page.evaluate(([handleSel, shellSel]) => {
+        const m = await page.evaluate(([handleSel, shellSel]) => {
           const h = document.querySelector(handleSel);
           const s = document.querySelector(shellSel);
           if (!h || !s) return null;
@@ -69,21 +66,32 @@ async function expectAligned(page: import("@playwright/test").Page, side: RailSi
             marginBottom: parseFloat(hs.marginBottom),
           };
         }, selectors);
-        return last && { topAligned: last.topAligned, bottomAligned: last.bottomAligned };
+        return m && { topAligned: m.topAligned, bottomAligned: m.bottomAligned };
       },
       { timeout: 5_000 },
     )
     .toEqual({ topAligned: true, bottomAligned: true });
 
   // A real inset on the HANDLE. Alignment alone still passes if the shared rule
-  // is deleted outright and BOTH siblings drop to zero — a plausible refactor,
-  // and the only regression this catches that alignment doesn't. No parent hop
-  // (undeclared DOM structure) and no per-density number: the top inset is a
-  // fixed 52px, but the bottom rides --tandem-space-5 and so is 52/60/68px
-  // across compact/cozy/spacious — any exact figure would be wrong at two.
-  expect(last).not.toBeNull();
-  expect((last as unknown as Measured).marginTop).toBeGreaterThanOrEqual(MIN_INSET_PX);
-  expect((last as unknown as Measured).marginBottom).toBeGreaterThanOrEqual(MIN_INSET_PX);
+  // is deleted outright and BOTH siblings drop to zero — the motivating
+  // regression this catches that alignment doesn't (it also catches either token
+  // being retuned below the floor). No parent hop (undeclared DOM structure) and
+  // no per-density number: the top inset is a fixed 52px, but the bottom rides
+  // --tandem-space-5 and so is 52/60/68px across compact/cozy/spacious — any
+  // exact figure would be wrong at two of the three.
+  //
+  // Re-measured rather than captured from the poll: one extra round-trip total,
+  // and it keeps the value type-checked instead of cast out of a closure.
+  const settled: Margins | null = await page.evaluate(([handleSel]) => {
+    const h = document.querySelector(handleSel);
+    if (!h) return null;
+    const hs = getComputedStyle(h);
+    return { marginTop: parseFloat(hs.marginTop), marginBottom: parseFloat(hs.marginBottom) };
+  }, selectors);
+
+  expect(settled).not.toBeNull();
+  expect(settled?.marginTop).toBeGreaterThanOrEqual(MIN_INSET_PX);
+  expect(settled?.marginBottom).toBeGreaterThanOrEqual(MIN_INSET_PX);
 }
 
 test.beforeEach(async ({ page }) => {
