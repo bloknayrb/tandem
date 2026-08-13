@@ -33,6 +33,7 @@ import {
 } from "../../shared/constants.js";
 import type { ApplyItemResult, ExistingMcpInstall } from "../../shared/integrations/contract.js";
 import {
+  COWORK_PREFLIGHT_CHECKING,
   coworkSettingsVariant,
   formatCoworkError,
   isTauriRuntime,
@@ -154,27 +155,23 @@ let coworkBusy = $state(false);
 let coworkError = $state<string | null>(null);
 const coworkProbe = createSubnetPreflight();
 
-// #1390: the plugin install commands, and the state of the button that copies
-// them. The label is the only feedback — deliberately, because the alternative
-// is a transient banner in a modal that already stacks four of them, and a
-// label change on a persistent node is the shape screen readers announce.
+// #1390: the plugin install commands, plus the outcome of the button that
+// copies them. The outcome lives beside the button in its own live region
+// rather than in the button's label — a changed accessible name on a button
+// nobody is focused on is announced by nothing, which is the same mistake
+// #1376 exists to fix.
 const PLUGIN_INSTALL_TEXT = CLAUDE_PLUGIN_INSTALL_COMMANDS.join("\n");
-let pluginCopyState = $state<"idle" | "copied" | "failed">("idle");
-const pluginCopyLabel = $derived(
-  { idle: "Copy", copied: "Copied", failed: "Copy failed — select the text above" }[
-    pluginCopyState
-  ],
-);
+let pluginCopyResult = $state("");
 
 async function copyPluginCommands(): Promise<void> {
   try {
     await navigator.clipboard.writeText(PLUGIN_INSTALL_TEXT);
-    pluginCopyState = "copied";
+    pluginCopyResult = "Copied";
   } catch {
-    // No rethrow and no console noise: the failure is fully described by the
-    // label, and the commands stay on screen to be selected by hand. The
-    // WebView denies clipboard access in more situations than it grants it.
-    pluginCopyState = "failed";
+    // No rethrow and no console noise: the message says everything actionable,
+    // and the commands stay on screen to be selected by hand. The WebView
+    // denies clipboard access in more situations than it grants it.
+    pluginCopyResult = "Couldn't copy — select the commands above";
   }
 }
 
@@ -540,9 +537,10 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
 {/snippet}
 
 <!-- The two push routes that need no flag, in the order `doctor.ts` and
-     `README.md` recommend them. Shared by both halves of the push-mode block
-     because they are true either way: registering the channel shim does not
-     take the built-in watch away, and #1389 was the copy that implied it did.
+     `README.md` recommend them. Rendered ONCE, above the registered/unregistered
+     `{#if}` rather than inside either arm — which is the fix for #1389, whose
+     defect was the registered arm implying that registering the shim takes the
+     built-in watch away. It does not.
 
      Deliberately avoids "every session" in any form. The plugin genuinely does
      apply to every session once installed, but it arms on skill dispatch rather
@@ -563,11 +561,17 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
     Claude uses Tandem's skill, so ask for Tandem by name rather than expecting it to be listening
     beforehand, and launch <code class="iw-code-inline">claude</code> from a terminal so it can
     find Node. It reads the same per-account gate as the built-in Monitor, so it cannot cover for
-    that gate being off — but it does not need Git Bash.
+    that gate being off — but it does not need Git Bash. It also needs Claude Code 2.1.212 or
+    newer: on anything older the install succeeds and the monitor simply never runs, with nothing
+    to tell you so.
   </p>
-  <!-- #1390: registering a marketplace is Claude Code's own trust boundary, so
-       these can only be shown, never run for the user. Before this they were
-       printed by `tandem setup` alone, which a desktop-app user never runs. -->
+  <!-- #1390: shown rather than run. Not because Tandem *cannot* — `apply.ts`
+       already writes `~/.claude.json` and the skill, and `cowork_installer.rs`
+       already writes a plugin registry — but because the personal-Claude-Code
+       registry schema is reverse-engineered rather than supported, and enabling
+       a plugin installs hooks that run in the user's own sessions. See
+       `CLAUDE_PLUGIN_INSTALL_COMMANDS`. Before this they were printed by
+       `tandem setup` alone, which a desktop-app user never runs. -->
   <div class="iw-plugin-install" data-testid="integration-wizard-plugin">
     <pre class="iw-plugin-commands" data-testid="integration-wizard-plugin-commands">{PLUGIN_INSTALL_TEXT}</pre>
     <button
@@ -576,9 +580,12 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
       data-testid="integration-wizard-plugin-copy"
       onclick={() => void copyPluginCommands()}
     >
-      {pluginCopyLabel}
+      Copy
     </button>
   </div>
+  <p class="iw-hint-text" role="status" data-testid="integration-wizard-plugin-copy-status">
+    {pluginCopyResult}
+  </p>
 {/snippet}
 
 {#if open}
@@ -688,19 +695,25 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 </div>
               </details>
             {/if}
-            <!-- #1376: `role="status"` used to sit on the banner itself, which
-                 is created together with its text — a live region generally has
-                 to be in the accessibility tree BEFORE its contents change for
-                 the change to be announced, so the sentence explaining a failed
-                 detection was silent for the users who most needed it. The
-                 region is now mounted for the life of the sub-view and only its
-                 contents swap.
+            <!-- #1376: mounted-before-populated, and the two children are
+                 additive. `useCoworkPreflight.svelte.ts` explains both and is
+                 the one place that should.
 
-                 Not styled `:empty { display: none }` as #1376 sketched: Svelte
-                 leaves comment anchors inside an `{#if}`, so the wrapper is
-                 never `:empty`. It carries no box of its own instead, which
-                 costs nothing when both children are absent. -->
-            <div role="status" data-testid="integration-wizard-cowork-preflight-live">
+                 `display: contents` rather than a box: unlike the other two
+                 surfaces, this wrapper's parent (`.iw-step`) is a flex column
+                 with a `gap`, and a gap applies between items regardless of
+                 their size — so an always-mounted empty wrapper would sit there
+                 as a permanent `--tandem-space-4` of dead air. `:empty` and
+                 `display: none` are both wrong here: Svelte leaves comment
+                 anchors inside an `{#if}` so the wrapper is never `:empty`, and
+                 `display: none` takes a live region back OUT of the
+                 accessibility tree, restoring the exact bug at the exact
+                 moment content arrives. -->
+            <div
+              class="iw-preflight-live"
+              role="status"
+              data-testid="integration-wizard-cowork-preflight-live"
+            >
               {#if coworkProbe.preflight?.status === "blocked"}
                 <!-- #1298: detection already failed once here; say why rather
                      than leaving an Enable button that repeats it. -->
@@ -712,13 +725,8 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                   <span>{coworkProbe.preflight.hint}</span>
                 </div>
               {/if}
-              <!-- Additive rather than an `{:else if}` on `probing`: `run()`
-                   deliberately keeps the previous result, so a retry has both
-                   flags set at once, and swapping the hint out would remove the
-                   testid three tests assert on mid-probe. Appending changes the
-                   region's contents either way, which is what gets announced. -->
               {#if coworkProbe.probing}
-                <p class="iw-hint-text">Checking your network…</p>
+                <p class="iw-hint-text">{COWORK_PREFLIGHT_CHECKING}</p>
               {/if}
             </div>
             {#if coworkError}
@@ -1002,9 +1010,9 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
             </div>
             {#if wizard.channelRegistered !== null && whatsNext !== "stdio-only"}
               <div
-                class="iw-push-mode iw-push-mode-{wizard.channelRegistered ? 'push' : 'polling'}"
+                class="iw-push-mode"
                 data-testid="integration-wizard-push-mode"
-                data-push-mode={wizard.channelRegistered ? "push" : "polling"}
+                data-push-mode={wizard.channelRegistered ? "shim" : "no-shim"}
               >
                 <p>
                   Sessions Tandem starts for you are woken directly and need nothing further. A
@@ -1729,11 +1737,10 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
     font-size: var(--tandem-text-xs);
     line-height: 1.5;
   }
-  .iw-push-mode-push {
-    background: var(--tandem-success-bg);
-    color: var(--tandem-success-fg-strong);
-  }
-  .iw-push-mode-polling {
+  /* One treatment for both arms since #1389. The green/grey split read as
+     "configured" vs "degraded", and the unregistered arm is neither — it now
+     leads with two push routes that need no shim at all. */
+  .iw-push-mode {
     background: var(--tandem-surface-muted);
     color: var(--tandem-fg-muted);
   }
@@ -1768,6 +1775,11 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
   }
   .iw-plugin-copy-btn {
     flex: 0 0 auto;
+  }
+  /* See the markup comment: the parent is a gapped flex column, so a box here
+     would cost a gap whenever the region is empty — which is most of the time. */
+  .iw-preflight-live {
+    display: contents;
   }
 
   /* --- More integrations --- */

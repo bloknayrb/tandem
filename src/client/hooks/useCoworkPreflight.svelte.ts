@@ -31,6 +31,23 @@ export interface SubnetPreflightState {
  *
  * Callers must keep the returned object intact. Destructuring
  * `preflight`/`probing` invokes the getters once and freezes the values.
+ *
+ * **How the three surfaces must render this (#1376).** All of them announce the
+ * result to a screen reader, and all of them got it wrong the same way, so the
+ * rule lives here rather than three times over:
+ *
+ *  1. The `role="status"` region must be mounted BEFORE any text lands in it —
+ *     for the life of the confirm, or of the wizard's sub-view. An ARIA live
+ *     region generally has to be in the accessibility tree before its contents
+ *     change for the change to be announced; a region inserted together with
+ *     its text is commonly not read out at all. That is the whole defect: a
+ *     user asked Tandem to check the network, detection failed, and the
+ *     sentence saying why was silent.
+ *  2. The blocked hint and the in-flight line are ADDITIVE, not an
+ *     `{#if}/{:else if}`. `run()` deliberately keeps the previous result (see
+ *     the comment on `run` below), so a retry has `probing` and `blocked` set
+ *     at once — and swapping would unmount the `-blocked` testid that three
+ *     suites read mid-probe.
  */
 export function createSubnetPreflight(): SubnetPreflightState {
   let preflight = $state<SubnetPreflight | null>(null);

@@ -7,6 +7,7 @@ import {
 } from "../../shared/constants";
 import {
   aggregateWorkspaceStatus,
+  COWORK_PREFLIGHT_CHECKING,
   coworkReachability,
   coworkReachabilityCopy,
   coworkSettingsVariant,
@@ -247,16 +248,9 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
           Cowork can reach your open documents. This adds a Windows firewall rule so the Cowork VM
           can connect back — admin is required once.
         </div>
-        <!-- #1376: the live region is mounted for the life of the confirm and
-             only its contents swap. Carried on the banner itself, `role=status`
-             announced nothing — a region inserted with its text already present
-             is generally not read out, so a screen-reader user asked Tandem to
-             check the network, watched it fail, and heard no reason.
-
-             Both children are shown rather than one `{#if}/{:else if}`: `run()`
-             keeps the previous result on purpose, so a retry has `probing` and
-             `blocked` set together, and swapping would unmount a testid the
-             wizard/settings suites read mid-probe. -->
+        <!-- #1376: mounted-before-populated, and the two children are additive.
+             `useCoworkPreflight.svelte.ts` explains both and is the one place
+             that should. -->
         <div role="status" data-testid="cowork-preflight-live">
           {#if probe.preflight?.status === "blocked"}
             <!-- #1298: we already watched detection fail, so offer a retry rather
@@ -266,7 +260,7 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
             </div>
           {/if}
           {#if probe.probing}
-            <div class="cs-preflight-checking">Checking your network…</div>
+            <div class="cs-help-text">{COWORK_PREFLIGHT_CHECKING}</div>
           {/if}
         </div>
         <div class="cs-actions">
@@ -445,18 +439,13 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
      paragraph of the confirm blurb. It already inherits the warning tokens from
      `.cs-warning-banner`, so a border is what separates it — matching
      `.cos-preflight` in CoworkOnboardingStep, which renders the same hint. */
-  .cs-preflight,
-  .cs-preflight-checking {
+  .cs-preflight {
     font-size: 12px;
     line-height: 1.5;
     border: 1px solid var(--tandem-warning-border);
     border-radius: var(--tandem-r-2);
     padding: 6px 8px;
     margin-bottom: 8px;
-  }
-  .cs-preflight-checking {
-    border-color: var(--tandem-border);
-    color: var(--tandem-fg-muted);
   }
   .cs-link {
     color: var(--tandem-accent);

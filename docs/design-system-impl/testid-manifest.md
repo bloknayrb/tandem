@@ -257,10 +257,13 @@ shipped and were removed:
   This sub-view has no confirm step — its footer button fires the real enable —
   so the probe runs on entry to the view, and the retry button *replaces*
   `cowork-enable-confirm-btn` while blocked rather than sitting beside it.
-- Plugin install (#1390): `integration-wizard-plugin{,-commands,-copy}` in the
-  push-mode block. Tandem cannot run these commands — registering a marketplace
-  is Claude Code's own trust boundary — so `-commands` holds the text and
-  `-copy` is the only affordance. Shown in BOTH channel-registered branches.
+- Plugin install (#1390): `integration-wizard-plugin{,-commands,-copy,-copy-status}`
+  in the push-mode block. Tandem shows these commands rather than running them
+  (the reason is on `CLAUDE_PLUGIN_INSTALL_COMMANDS`), so `-commands` holds the
+  text and `-copy` is the only affordance. `-copy-status` is the button's
+  outcome, in its own live region rather than in the button label — a changed
+  accessible name on an unfocused button announces nothing. Shown in BOTH
+  channel-registered branches.
 
 ### Cowork modals & settings
 - `cowork-onboarding-{step,confirm,error,enable-btn,enable-confirm-btn,enable-cancel-btn,skip-btn,learn-more-btn,learn-more-link}`
@@ -274,7 +277,10 @@ shipped and were removed:
   The `role="status"` wrapper, mounted for the life of the confirm (the wizard's
   for the life of the sub-view) so a hint arriving later is announced rather than
   inserted silently with its region. The `-blocked` testids sit INSIDE it, which
-  is why they still come and go; the wrapper never does.
+  is why they still come and go; the wrapper never does. The wizard's carries
+  `display: contents` — its parent is a gapped flex column, so an empty box
+  there would be a permanent gap; the other two parents are plain blocks.
+  Thirteen more live regions app-wide still have the pre-#1376 shape (#1431).
 - `cowork-admin-declined-{backdrop,modal,confirm-disable,error,status-error,disable-btn,disable-confirm-btn,disable-cancel-btn,retry-btn,learn-more-link}`
 - `cowork-settings{,-loading,-unsupported,-undetected,-error}`,
   `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`, `cowork-explainer`,

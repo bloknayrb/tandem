@@ -18,6 +18,7 @@
 import { render, waitFor } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
+import { coworkStatusFixture } from "../helpers/cowork-fixtures.svelte";
 
 let tauri = true;
 
@@ -30,17 +31,7 @@ vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
 // `$effect` and a real invoke — unmocked, arriving here hits the network.
 vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
   createCoworkStatus: () => ({
-    status: {
-      osSupported: true,
-      coworkDetected: true,
-      enabled: false,
-      vethernetCidr: null,
-      lanIpFallback: null,
-      useLanIpOverride: false,
-      workspaces: [],
-      uacDeclined: false,
-      uacDeclinedAt: null,
-    },
+    status: coworkStatusFixture({ vethernetCidr: null }),
     loading: false,
     error: null,
     refetch: vi.fn(async () => {}),

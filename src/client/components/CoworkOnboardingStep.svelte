@@ -1,6 +1,10 @@
 <script lang="ts">
 import { TANDEM_REPO_URL } from "../../shared/constants";
-import { formatCoworkError, writeCoworkOnboardingSkipped } from "../cowork/cowork-helpers";
+import {
+  COWORK_PREFLIGHT_CHECKING,
+  formatCoworkError,
+  writeCoworkOnboardingSkipped,
+} from "../cowork/cowork-helpers";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke";
 import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte";
 import type { CoworkStatus } from "../types";
@@ -102,11 +106,9 @@ function handleSkip(): void {
         can connect back — admin is required once. To check it worked afterward, ask Claude in a
         Cowork session to open or list your documents.
       </div>
-      <!-- #1376: mounted with the confirm, contents swap inside it. A live
-           region created together with its text is generally not announced, so
-           `role="status"` on the banner itself did nothing for the one user it
-           was written for. Both children can show at once — see CoworkSettings
-           for why a retry has `probing` and `blocked` set together. -->
+      <!-- #1376: mounted-before-populated, and the two children are additive.
+           `useCoworkPreflight.svelte.ts` explains both and is the one place
+           that should. -->
       <div role="status" data-testid="cowork-onboarding-preflight-live">
         {#if probe.preflight?.status === "blocked"}
           <!-- Say what stopped us and offer a retry, rather than an Enable button
@@ -116,7 +118,7 @@ function handleSkip(): void {
           </div>
         {/if}
         {#if probe.probing}
-          <div class="cos-preflight cos-preflight-checking">Checking your network…</div>
+          <div class="cos-checking">{COWORK_PREFLIGHT_CHECKING}</div>
         {/if}
       </div>
       <div class="cos-actions">
@@ -239,10 +241,10 @@ function handleSkip(): void {
     padding: 6px 8px;
     margin-bottom: 8px;
   }
-  .cos-preflight-checking {
+  .cos-checking {
+    font-size: 12px;
     color: var(--tandem-fg-muted);
-    background: var(--tandem-surface-sunk);
-    border-color: var(--tandem-border);
+    margin-bottom: 8px;
   }
   .cos-confirm-heading {
     font-weight: 600;

@@ -17,18 +17,16 @@
  * an `$effect` and a real invoke — an unmocked mount hits the network.
  */
 
-import { render } from "@testing-library/svelte";
+import { render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
+import { coworkStatusCell } from "../helpers/cowork-fixtures.svelte";
 
 const toggleIntegration = vi.fn(async () => ({ ok: true as const }));
 const fakeInvoke = vi.fn();
 
-type Preflight =
-  | { status: "ok"; cidr: string }
-  | { status: "blocked"; hint: string }
-  | { status: "unknown" };
-const preflightSubnet = vi.fn(async (): Promise<Preflight> => ({ status: "unknown" }));
+const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unknown" }));
 
 vi.mock("../../src/client/cowork/cowork-invoke", () => ({
   TAURI_NOT_AVAILABLE: "Tauri runtime not available",
@@ -39,20 +37,23 @@ vi.mock("../../src/client/cowork/cowork-invoke", () => ({
   coworkSetLanIpOverride: vi.fn(async () => {}),
 }));
 
+// A REACTIVE status cell, not a frozen literal: `enabled` is what the surface
+// renders, and a status the component cannot observe changing makes the
+// post-enable checkbox untestable. See the helper for why a plain `let` is
+// worse than useless here.
 const refetch = vi.fn(async () => {});
+
+/** What the Rust side does on success: the toggle commits, the refetch reports it. */
+function enableSucceeds(): void {
+  refetch.mockImplementation(async () => {
+    coworkStatusCell.patch({ enabled: true });
+  });
+}
 
 vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
   createCoworkStatus: () => ({
-    status: {
-      osSupported: true,
-      coworkDetected: true,
-      enabled: false,
-      vethernetCidr: "172.30.16.0/28",
-      lanIpFallback: null,
-      useLanIpOverride: false,
-      workspaces: [],
-      uacDeclined: false,
-      uacDeclinedAt: null,
+    get status() {
+      return coworkStatusCell.value;
     },
     loading: false,
     error: null,
@@ -81,9 +82,11 @@ function mount() {
 
 describe("CoworkSettings — enable confirm wiring (#1375)", () => {
   beforeEach(() => {
+    coworkStatusCell.reset();
     toggleIntegration.mockClear();
     fakeInvoke.mockClear();
-    refetch.mockClear();
+    refetch.mockReset();
+    refetch.mockImplementation(async () => {});
     preflightSubnet.mockClear();
     preflightSubnet.mockResolvedValue({ status: "unknown" });
   });
@@ -142,22 +145,29 @@ describe("CoworkSettings — enable confirm wiring (#1375)", () => {
     expect(toggleIntegration).not.toHaveBeenCalled();
   });
 
-  it("Enable fires the toggle and closes the confirm", async () => {
+  it("Enable fires the toggle, closes the confirm, and leaves the box checked", async () => {
     // `closeEnableConfirm()` on SUCCESS is the reset #1366 made load-bearing:
     // `run()` no longer clears `preflight`, so a path that leaves the confirm
     // without resetting leaves a stale hint waiting for the next open.
     const { container, checkbox } = mount();
     await setChecked(checkbox, true);
 
+    enableSucceeds();
     (q(container, "cowork-enable-confirm-btn") as HTMLButtonElement).click();
-    // `withInvoke` awaits `loadInvoke` → the toggle → `refetch` before it
-    // closes, so the close is four promise hops downstream of the click.
-    for (let i = 0; i < 6; i++) await tick();
+    // `waitFor`, not a tick count: `withInvoke` awaits `loadInvoke` → the toggle
+    // → `refetch`, and a hand-counted number of flushes is a constant nobody
+    // can re-derive when the chain gains a hop.
+    await waitFor(() => {
+      expect(q(container, "cowork-enable-confirm")).toBeNull();
+    });
 
     expect(toggleIntegration).toHaveBeenCalledTimes(1);
     expect(toggleIntegration).toHaveBeenCalledWith(fakeInvoke, true);
     expect(refetch).toHaveBeenCalledTimes(1);
-    expect(q(container, "cowork-enable-confirm")).toBeNull();
+    // The box must still read checked, now because the integration IS enabled
+    // rather than because a confirm is open. With a frozen `enabled: false`
+    // fixture it would silently un-check here and nothing would notice.
+    expect(checkbox.checked).toBe(true);
   });
 
   it("Cancel clears the blocked hint, so a re-open does not paint a stale one", async () => {
@@ -205,8 +215,6 @@ describe("CoworkSettings — pre-flight live region (#1376)", () => {
   });
 
   it("keeps the same region node across probing → blocked", async () => {
-    // Same NODE, not merely a region in both states: a wrapper that unmounts
-    // and remounts is the original bug wearing a testid.
     preflightSubnet.mockResolvedValue({ status: "blocked", hint: "no adapter" });
     const { container, checkbox } = mount();
     await setChecked(checkbox, true);

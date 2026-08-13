@@ -15,18 +15,16 @@
  * this file gives the other surface the same guard.
  */
 
-import { render } from "@testing-library/svelte";
+import { render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
+import { coworkStatusFixture } from "../helpers/cowork-fixtures.svelte";
 
 const toggleIntegration = vi.fn(async () => ({ ok: true as const }));
 const fakeInvoke = vi.fn();
 
-type Preflight =
-  | { status: "ok"; cidr: string }
-  | { status: "blocked"; hint: string }
-  | { status: "unknown" };
-const preflightSubnet = vi.fn(async (): Promise<Preflight> => ({ status: "unknown" }));
+const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unknown" }));
 
 vi.mock("../../src/client/cowork/cowork-invoke", () => ({
   TAURI_NOT_AVAILABLE: "Tauri runtime not available",
@@ -36,19 +34,10 @@ vi.mock("../../src/client/cowork/cowork-invoke", () => ({
 }));
 
 import CoworkOnboardingStep from "../../src/client/components/CoworkOnboardingStep.svelte";
-import type { CoworkStatus } from "../../src/client/types";
 
-const STATUS: CoworkStatus = {
-  osSupported: true,
-  coworkDetected: true,
-  enabled: false,
-  vethernetCidr: "172.30.16.0/28",
-  lanIpFallback: null,
-  useLanIpOverride: false,
-  workspaces: [],
-  uacDeclined: false,
-  uacDeclinedAt: null,
-};
+// A prop, not a hook: this component takes its status from the parent, so the
+// plain fixture is enough — nothing here observes it changing.
+const STATUS = coworkStatusFixture();
 
 function q(container: HTMLElement, testid: string): HTMLElement | null {
   return container.querySelector(`[data-testid='${testid}']`);
@@ -109,11 +98,14 @@ describe("CoworkOnboardingStep — confirm wiring (#1375)", () => {
     await openConfirm(container);
 
     (q(container, "cowork-onboarding-enable-confirm-btn") as HTMLButtonElement).click();
-    for (let i = 0; i < 6; i++) await tick();
+    // `waitFor`, not a tick count: the advance is several promise hops past the
+    // click, and a hand-counted number is a constant nobody can re-derive.
+    await waitFor(() => {
+      expect(onAdvance).toHaveBeenCalledTimes(1);
+    });
 
     expect(toggleIntegration).toHaveBeenCalledTimes(1);
     expect(toggleIntegration).toHaveBeenCalledWith(fakeInvoke, true);
-    expect(onAdvance).toHaveBeenCalledTimes(1);
   });
 
   it("Cancel clears the blocked hint, so a re-open does not paint a stale one", async () => {
@@ -147,7 +139,9 @@ describe("CoworkOnboardingStep — confirm wiring (#1375)", () => {
     await openConfirm(container);
 
     (q(container, "cowork-onboarding-enable-confirm-btn") as HTMLButtonElement).click();
-    for (let i = 0; i < 6; i++) await tick();
+    await waitFor(() => {
+      expect(q(container, "cowork-onboarding-error")).toBeTruthy();
+    });
 
     expect(onAdvance).not.toHaveBeenCalled();
     expect(q(container, "cowork-onboarding-error")?.textContent).toContain(

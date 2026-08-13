@@ -257,6 +257,17 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
       expect(q(container, "integration-wizard-plugin-copy")).toBeTruthy();
     });
 
+    it(`names the plugin's version floor when the ${branch}`, async () => {
+      // `docs/cli.md` records the failure mode this prevents: below 2.1.212 the
+      // install succeeds and the monitor never runs, with nothing to say so. A
+      // wizard that recommends the plugin without the floor sends a desktop
+      // user to a silent no-op — and neither doc-contract test covers this
+      // file's prose, so the assertion has to live here.
+      const { container } = mountPushMode(registered);
+      await tick();
+      expect(q(container, "integration-wizard-push-mode")?.textContent ?? "").toContain("2.1.212");
+    });
+
     it(`does not tell the user to ask Claude to watch when the ${branch}`, async () => {
       // The watch is automatic on first Tandem use as of the ADR-049 amendment;
       // asking is a recovery step. `tests/docs/wake-availability-claims.test.ts`
@@ -303,7 +314,12 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     await tick();
 
     expect(writeText).toHaveBeenCalledWith(CLAUDE_PLUGIN_INSTALL_COMMANDS.join("\n"));
-    expect(q(container, "integration-wizard-plugin-copy")?.textContent?.trim()).toBe("Copied");
+    // The outcome is announced from a live region beside the button, not from
+    // the button's own label — a changed accessible name on a button nobody is
+    // focused on is announced by nothing.
+    const status = q(container, "integration-wizard-plugin-copy-status");
+    expect(status?.getAttribute("role")).toBe("status");
+    expect(status?.textContent?.trim()).toBe("Copied");
     vi.unstubAllGlobals();
   });
 
@@ -324,8 +340,8 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     await tick();
     await tick();
 
-    expect(q(container, "integration-wizard-plugin-copy")?.textContent ?? "").toMatch(
-      /Copy failed/i,
+    expect(q(container, "integration-wizard-plugin-copy-status")?.textContent ?? "").toMatch(
+      /Couldn't copy/i,
     );
     // The commands stay on screen to be selected by hand.
     expect(q(container, "integration-wizard-plugin-commands")?.textContent ?? "").toContain(

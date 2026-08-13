@@ -14,6 +14,17 @@ import type {
 } from "../types";
 
 /**
+ * In-flight text for the subnet pre-flight's live region (#1376).
+ *
+ * Shared because all three Enable surfaces announce the same probe, and a
+ * screen-reader user who moves between Settings, onboarding and the wizard
+ * should not hear three descriptions of one operation. Kept beside the other
+ * Cowork copy helpers rather than in each component, which is how the three
+ * `-checking` styles had already drifted apart within a single commit.
+ */
+export const COWORK_PREFLIGHT_CHECKING = "Checking your network…";
+
+/**
  * High-level branch the Settings UI renders. Collapses the `osSupported` /
  * `coworkDetected` / `uacDeclined` / normal states into a single label.
  */

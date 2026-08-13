@@ -228,6 +228,7 @@ integration-wizard-pick-{*}
 integration-wizard-plugin
 integration-wizard-plugin-commands
 integration-wizard-plugin-copy
+integration-wizard-plugin-copy-status
 integration-wizard-push-mode
 integration-wizard-push-support-{*}
 integration-wizard-reachability-{*}
