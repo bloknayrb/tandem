@@ -231,9 +231,11 @@ The orphaned Hocuspocus `Document`'s close handlers become no-ops when they look
 
 **Problem:** The server startup used a fixed `setTimeout(300)` between `freePort()` and `Hocuspocus.listen()`. On Windows, port release after `taskkill` is not instant — the OS may hold the port in TIME_WAIT for several seconds. The fixed sleep was sometimes too short (causing EADDRINUSE) and always wasteful when the port was already free.
 
-**Solution:** Replace the fixed sleep with `waitForPort()` in `platform.ts`, which polls every 100ms (up to 5s default) by attempting a TCP `connect()` and checking for `ECONNREFUSED` (port free) vs success (port still held). Hocuspocus `.listen()` is also wrapped with EADDRINUSE detection for a clear error message.
+**Solution:** Replace the fixed sleep with `waitForPort()` in `platform.ts`, which polls every 200ms (15s default) by attempting a `listen()` on the port and treating `EADDRINUSE` as "still held". Hocuspocus `.listen()` is also wrapped with EADDRINUSE detection for a clear error message.
 
 **Impact:** Eliminates a class of flaky startup failures on Windows, especially after unclean shutdowns. The polling approach adapts to actual OS port release timing instead of guessing.
+
+**Follow-up (2026-08-12): the ceiling was still a guess.** The polling fix shipped with a 5s default, which is itself a Windows timing assumption — and a beta user hit it on the v0.21.1 → v0.22.0 auto-update, where the machine is at its slowest (fresh files, antivirus scanning them, installer settling) and TIME_WAIT genuinely exceeded 5s. The result was the non-actionable "Server failed to start after 3 restart attempts" dialog. Two lessons: **(a)** replacing a fixed sleep with polling fixes the *shape* of the bug but not the *magnitude* — the ceiling still has to be sized for the worst realistic case, not the common one; **(b)** the ceiling was one of *three* ~5s assumptions on that path (two more in `perform_install`), and a timeout that a caller times from outside the process is coupled to that caller's own deadline — raising `waitForPort` without raising Tauri's `HEALTH_TIMEOUT` would have made the failure *more* likely, not less.
 
 ## 25. Atomic Undo for Accepted Suggestions
 

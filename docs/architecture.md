@@ -770,9 +770,9 @@ On launch, the Rust core:
 1. Copies `sample/` files to the writable app-data dir (first run only — skips if destination exists)
 2. In **debug builds only** (`cfg!(debug_assertions)`), checks whether a server is already healthy (`GET /health`) and skips spawn if so — supports the `cargo tauri dev` + `npm run dev:standalone` workflow. Release builds always spawn their own sidecar (the early-return was gated after a stale `tsx watch` dev session was found answering `/health` for the installed app, producing a silent "Disconnected" state with mismatched auth/session). `freePort()` in the sidecar handles any port conflict on bind.
 3. Spawns `node-sidecar` (bundled Node.js binary named with target triple) with `dist/server/index.js` as the entry point and `TANDEM_DATA_DIR` set to the platform app-data dir
-4. Polls `GET http://127.0.0.1:3479/health` every 200ms with a 15s timeout
+4. Polls `GET http://127.0.0.1:3479/health` every 200ms with a 30s timeout (`HEALTH_TIMEOUT`). It is 30s rather than 15s because it times a wait that happens *inside* the sidecar: `waitForPort` in `src/server/platform.ts` polls up to 15s for the TCP port to release before the server can bind and answer. Lowering either without the other resurrects the post-update failure described under "Install flow" below.
 5. On crash, retries up to `MAX_RESTARTS = 3` times with exponential backoff (1s, 2s, 4s)
-6. On all retries exhausted: shows an error dialog and exits
+6. On all retries exhausted: shows a "Server Error" dialog offering a one-shot **Retry Server Start** (all platforms) that re-runs `start_sidecar` — the respawned sidecar's own `freePort()` is what does any killing. On **Windows only**, the dialog first says *what* is holding the port, via `describe_port_holder` (read-only `netstat -ano` + `tasklist`, resolved out of `%SystemRoot%\System32`). It distinguishes two populations, because they need different sentences: a **live listener** (nameable, and the retry will terminate it) and a **lingering TIME_WAIT connection** left by the previous run (no process to kill, PID 0, no LISTENING row — the retry works only because the state expires). Declining leaves the app running with no sidecar; Settings → Network → Restart server is the remaining recovery.
 7. On clean exit (`RunEvent::Exit`): kills the sidecar process to avoid orphan processes
 
 The sidecar child handle is stored in `SidecarState` (a `Mutex<Option<CommandChild>>`) in Tauri managed state. Stdout/stderr from the sidecar are forwarded to the Tauri log system for diagnostics.
@@ -815,11 +815,14 @@ Update available dialog (Ok/Cancel)
     → User confirms
     → download_and_install()
     → kill_sidecar() — releases ports :3478/:3479
-    → Poll /health until server stops responding (5s deadline)
+    → Poll /health until server stops responding (POST_KILL_PORT_RELEASE_SECS = 15s)
+      + on Windows, concurrently poll until the sidecar exe unlocks (15s)
     → app.restart() — Tauri launches the new version
 ```
 
 The sidecar kill before restart is required to prevent a port conflict when the new process starts up.
+
+Both deadlines were 5s until 2026-08-12, when a beta user's v0.21.1 → v0.22.0 update failed against this class of assumption. Note what each actually observes: the first polls `/health`, so it detects "the old server is gone", not "the OS released the port" — a socket in TIME_WAIT is invisible to it. The second polls a real file write-lock. Both are polling loops that return the moment the resource frees, so the wider ceiling costs a healthy machine nothing. The TIME_WAIT half of the problem is handled on the other side of the restart, by `waitForPort` in `src/server/platform.ts` (also widened to 15s).
 
 ### Origin Handling
 

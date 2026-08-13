@@ -83,14 +83,64 @@ const LICENSE_STATUS_URL: &str = "http://127.0.0.1:3479/api/license/status";
 /// expanded by tauri-plugin-updater at check time.
 const LICENSE_UPDATE_ENDPOINT: &str = "";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
-const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long each `start_sidecar` attempt waits for `/health` before declaring
+/// the sidecar dead.
+///
+/// This times a wait that HAPPENS INSIDE the sidecar: `waitForPort` in
+/// `src/server/platform.ts` polls for the TCP port to release (15s default)
+/// before Hocuspocus/MCP can bind and answer `/health`. So this constant must
+/// stay comfortably above that one — at 15s each, a sidecar that legitimately
+/// waited out a slow Windows TIME_WAIT release would be killed by its own
+/// shell, which is the post-update failure this pairing exists to prevent.
+///
+/// It is NOT universal margin. The store-lock acquisition in
+/// `src/server/index.ts` retries for up to a further 30s when a genuinely live
+/// process holds `store.lock` (a stray `tandem start`, a second app-data dir).
+/// That case is a different failure with its own deadline and its own error
+/// message; we deliberately do not size this constant for it.
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long to wait for the sidecar to exit after POST /api/shutdown before
 /// hard-killing it. The Node shutdown's disk flush is 5s-bounded
 /// (src/server/index.ts), so 6s covers the flush plus the session save in the
 /// common case while keeping the restart button responsive (#1088).
 const GRACEFUL_SHUTDOWN_DEADLINE_SECS: u64 = 6;
+/// How long `perform_install` waits for the killed sidecar to stop answering
+/// `/health` before starting the update download/install anyway.
+///
+/// Note what this actually observes: `wait_for_port_release` polls the HTTP
+/// endpoint, so it detects "the server is gone", NOT "the OS has released the
+/// TCP port" — a socket in TIME_WAIT is invisible to it. The rename would be
+/// `wait_for_server_gone`; the name is kept for churn reasons but do not read a
+/// port-state guarantee into it.
+///
+/// 15s rather than 5s because the machine is at its slowest exactly here —
+/// mid-update, with antivirus scanning freshly written files — and a kill that
+/// takes longer than the deadline means we start overwriting files while the
+/// old process may still be alive. The polling loop returns the instant the
+/// server stops answering, so a wider ceiling costs a healthy machine nothing.
+const POST_KILL_PORT_RELEASE_SECS: u64 = 15;
+/// How long `perform_install` waits for Windows to release the sidecar exe's
+/// file handle so the NSIS installer can overwrite it. Same reasoning, same
+/// budget as POST_KILL_PORT_RELEASE_SECS — TerminateProcess returns before the
+/// OS drops the handle.
+#[cfg(target_os = "windows")]
+const SIDECAR_UNLOCK_DEADLINE_SECS: u64 = 15;
+/// How long `port_holder_for_dialog` waits for `describe_port_holder`'s
+/// `netstat`/`tasklist` calls before giving up and showing the generic
+/// message. Unlike the deadlines above, this isn't coupled to another
+/// timeout elsewhere — it only bounds a best-effort diagnostic on the
+/// terminal failure dialog, so a wedged lookup fails toward "less detail",
+/// never toward blocking the dialog itself.
+#[cfg(target_os = "windows")]
+const PORT_HOLDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESTARTS: u32 = 3;
+/// The two TCP ports the sidecar binds. Used by the port-holder diagnostic on
+/// the exhausted-restarts path; keep in sync with the URL constants above and
+/// with DEFAULT_WS_PORT / DEFAULT_MCP_PORT in src/shared/constants.ts. Pinned
+/// against the URL constants by `port_constants_match_urls`.
+const WS_PORT: u16 = 3478;
+const MCP_PORT: u16 = 3479;
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
 
 /// Cadence of the Cowork self-heal pass (see `cowork_heal_pass`): installs
@@ -1458,19 +1508,39 @@ pub fn run() {
                     log::warn!("Sample file copy failed (non-fatal): {e}");
                 }
 
-                if let Err(e) = start_sidecar(&handle, &client, cold_start_file.as_deref()).await {
+                // Hold RESTART_IN_PROGRESS across the initial spawn. The window
+                // mounts while this is still looping — and that loop is now up
+                // to ~2 minutes (HEALTH_TIMEOUT 30s x 4 attempts) — so Settings
+                // → Network → Restart server is clickable the whole time. Without
+                // the gate, `restart_sidecar` would find it free and run a second
+                // start_sidecar concurrently, racing this one over SidecarState
+                // and orphaning a child. That is the exact failure the gate was
+                // added for; only this call site was outside it.
+                // CAS rather than a bare store, and release only what we took:
+                // a blind store would clear a gate held by someone else. And if
+                // the gate is already held — some other path won the race before
+                // we got here — we must NOT run start_sidecar anyway: doing so
+                // is the exact concurrent-spawn failure this gate exists to
+                // prevent, just from the other direction. Skip, like
+                // `restart_sidecar` itself does on a gate miss.
+                if RESTART_IN_PROGRESS
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    log::warn!(
+                        "initial start_sidecar found RESTART_IN_PROGRESS already held — skipping to avoid a concurrent spawn"
+                    );
+                    return;
+                }
+                let start_result = start_sidecar(&handle, &client, cold_start_file.as_deref()).await;
+                RESTART_IN_PROGRESS.store(false, Ordering::Release);
+
+                if let Err(e) = start_result {
                     log::error!("Sidecar failed: {e}");
-                    use tauri_plugin_dialog::DialogExt;
-                    handle
-                        .dialog()
-                        .message(format!(
-                            "Tandem's server failed to start.\n\n\
-                             Error: {e}\n\n\
-                             Try restarting the application. If the problem persists, \
-                             check that port 3479 is not in use by another process."
-                        ))
-                        .title("Server Error")
-                        .show(|_| {});
+                    // Ask the OS what is actually holding the port instead of
+                    // telling the user to go find out.
+                    let holder = port_holder_for_dialog().await;
+                    show_server_error_dialog(&handle, &e, holder, cold_start_file, true);
                     return;
                 }
 
@@ -1841,10 +1911,17 @@ fn restart_sidecar(app: tauri::AppHandle) {
         // Restart never re-injects the cold-start file: the original `setup()`
         // invocation already opened it and registered it in `openDocuments`.
         if let Err(e) = start_sidecar(&handle, &client, None).await {
-            // Detailed error stays in the log sink only — never user-visible.
             // The emitted event carries a stable code, no error detail, so the
-            // WebView can surface a generic toast without leaking paths, env
-            // vars, errno text, or the auth token.
+            // WebView's toast can never leak paths, env vars, errno text, or
+            // the auth token.
+            //
+            // NB: "the detail stays in the log sink" is not the same as "the
+            // detail is not user-visible" — `tauri-plugin-log` registers
+            // `TargetKind::Webview` at LevelFilter::Warn in release, so this
+            // `log::error!` is forwarded to the WebView as a `log://log` event
+            // (nothing in src/client currently listens). The emit below is what
+            // carries the contract; the log line is not a second, quieter
+            // channel. Keep sensitive detail out of both.
             log::error!("[restart_sidecar] failed to restart sidecar: {e}");
             eprintln!("[restart_sidecar] failed to restart sidecar: {e}");
             if let Err(emit_err) =
@@ -1857,6 +1934,209 @@ fn restart_sidecar(app: tauri::AppHandle) {
         // leave the button usable for another attempt.
         RESTART_IN_PROGRESS.store(false, Ordering::Release);
     });
+}
+
+/// Look up the port holder for the error dialog, off the reactor and bounded.
+///
+/// Two guards, both load-bearing on Windows: `spawn_blocking` because
+/// `describe_port_holder` runs external processes synchronously, and a
+/// timeout because it runs them with no deadline of their own. A wedged
+/// `netstat` (huge connection table, a misbehaving NDIS/LSP filter) must not
+/// stop the user from getting a dialog at all — a generic message beats
+/// silence on the one path whose entire job is to tell the user something
+/// went wrong. On other platforms `describe_port_holder` is a pure `None`
+/// stub, so the async/timeout machinery would only add ceremony around a
+/// function that can't block or panic.
+#[cfg(not(target_os = "windows"))]
+async fn port_holder_for_dialog() -> Option<PortHolder> {
+    describe_port_holder(&[WS_PORT, MCP_PORT])
+}
+
+#[cfg(target_os = "windows")]
+async fn port_holder_for_dialog() -> Option<PortHolder> {
+    let lookup = tauri::async_runtime::spawn_blocking(|| describe_port_holder(&[WS_PORT, MCP_PORT]));
+    match tokio::time::timeout(PORT_HOLDER_LOOKUP_TIMEOUT, lookup).await {
+        Ok(Ok(holder)) => holder,
+        Ok(Err(e)) => {
+            log::debug!("Port-holder lookup panicked: {e}");
+            None
+        }
+        Err(_) => {
+            log::warn!("Port-holder lookup timed out — showing the generic message");
+            None
+        }
+    }
+}
+
+/// Parent a dialog builder to the main window if it exists, else warn and
+/// leave it parentless. Shared by every `show_*_dialog` function below —
+/// `fn_name` names the caller in the log line so a parentless dialog is
+/// traceable to which one fired.
+fn attach_main_window_or_warn<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    builder: tauri_plugin_dialog::MessageDialogBuilder<R>,
+    fn_name: &str,
+) -> tauri_plugin_dialog::MessageDialogBuilder<R> {
+    match app.get_webview_window(MAIN_WINDOW_LABEL) {
+        Some(window) => builder.parent(&window),
+        None => {
+            log::warn!("{fn_name}: main window not found — dialog will appear parentless");
+            builder
+        }
+    }
+}
+
+/// The terminal "your server didn't start" dialog, with a one-shot retry.
+///
+/// This is the dialog a user hits after a Windows auto-update when the old
+/// sidecar's port hasn't released yet. Two things it does that the previous
+/// version did not:
+///
+/// 1. **Names the holder.** `holder` comes from `describe_port_holder`, so the
+///    message says "Port 3479 appears to be held by node.exe (PID 12345)"
+///    instead of asking the user to run `netstat` themselves.
+/// 2. **Offers a retry** (`allow_retry`), which re-runs `start_sidecar` — whose
+///    freshly spawned sidecar calls `freePort()` on both ports as its first act.
+///    The kill therefore stays in `src/server/platform.ts`, its single owner; a
+///    second `taskkill` implementation here would duplicate that logic AND add a
+///    PID-reuse race whose bad outcome is killing the wrong process. Note this
+///    dialog only appears after `start_sidecar` already ran that same
+///    `freePort()` up to MAX_RESTARTS+1 times without success — the retry's
+///    real new leverage is elapsed time, not a fresh kill mechanism, so the
+///    message text says "try to end", not "will end".
+///
+/// `allow_retry: false` on the second showing — an unbounded retry loop at ~2
+/// minutes a cycle is worse than an honest dead end, and the dead end names the
+/// real remaining exit (Settings → Network → Restart server).
+///
+/// Non-blocking `.show(cb)` deliberately: `blocking_show()` from inside a
+/// `tauri::async_runtime::spawn` task parks this task's worker (see
+/// `show_update_available_dialog`'s doc comment), and the callback form is what
+/// lets the retry spawn async work. Note the callback's `bool` is `true` only
+/// for the first (OK) label — Esc and the title-bar X both arrive as `false`,
+/// i.e. as Close.
+fn show_server_error_dialog(
+    app: &tauri::AppHandle,
+    error: &str,
+    holder: Option<PortHolder>,
+    cold_start_file: Option<std::path::PathBuf>,
+    allow_retry: bool,
+) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+    let mut message = format!("Tandem's server failed to start.\n\nError: {error}\n\n");
+    match &holder {
+        Some(h) => message.push_str(&h.message()),
+        None => message.push_str(&format!(
+            "Ports {WS_PORT} and {MCP_PORT} must be free for Tandem's server to start."
+        )),
+    }
+    if allow_retry {
+        // Say what the retry will actually DO. When we have identified a live
+        // process, retrying attempts to terminate it — "free the port" does
+        // not read as "end node.exe, discarding its unsaved state" to a
+        // non-technical user, and the likeliest collision in this codebase's
+        // own workflow is a dev server the user cares about. "Attempts" rather
+        // than a flat promise: by the time this dialog shows, `start_sidecar`
+        // has already run `freePort()` against this same holder up to
+        // MAX_RESTARTS+1 times without success, so a holder that survived all
+        // of those (elevated/protected, or something that respawns) may well
+        // survive one more — don't claim certainty the mechanism hasn't earned.
+        // When the port is merely in TIME_WAIT there is nothing to kill and
+        // the retry works only because time passed; promising to "free the
+        // port" there would be a lie.
+        match holder.as_ref().and_then(|h| h.killable_process()) {
+            Some(proc) => message.push_str(&format!(
+                "\n\nRetry Server Start will try to end {proc} and start Tandem's server again. \
+                 This can take up to two minutes."
+            )),
+            None => message.push_str(
+                "\n\nRetry Server Start will try again, which usually succeeds once Windows \
+                 has released the port. This can take up to two minutes.",
+            ),
+        }
+    } else {
+        message.push_str(
+            "\n\nClose this dialog, then use Settings \u{2192} Network \u{2192} Restart server \
+             to try again.",
+        );
+    }
+
+    let mut builder = app
+        .dialog()
+        .message(message)
+        .title("Server Error")
+        .kind(MessageDialogKind::Error);
+    builder = attach_main_window_or_warn(app, builder, "show_server_error_dialog");
+
+    if !allow_retry {
+        builder.show(|_| {});
+        return;
+    }
+
+    // "Retry Server Start", not "Retry": the WebView shows its own Retry button
+    // in the "Server unavailable" empty state ~3s into this failure, and that
+    // one only re-dials the Hocuspocus WebSocket. Two same-labelled buttons
+    // meaning different things is worse than a longer label.
+    let handle = app.clone();
+    builder
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Retry Server Start".to_string(),
+            "Close".to_string(),
+        ))
+        .show(move |retry| {
+            if !retry {
+                return;
+            }
+            tauri::async_runtime::spawn(async move {
+                // Take the gate INSIDE the task, not around the `.show()` call:
+                // the plugin discards `run_on_main_thread` errors and its dialog
+                // thread can unwind, so a callback is not guaranteed to run. A
+                // gate acquired outside would then be stranded for the process
+                // lifetime, permanently disabling `restart_sidecar`.
+                if RESTART_IN_PROGRESS
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    // Do not just log: the modal is already dismissed, so a
+                    // bare return means the user's explicit click produced
+                    // nothing at all on screen. (Reachable when they hit
+                    // Settings → Network → Restart server first.)
+                    log::warn!("Server-start retry ignored — a restart is already in flight");
+                    show_server_error_dialog(
+                        &handle,
+                        "A server restart is already in progress",
+                        None,
+                        cold_start_file,
+                        false,
+                    );
+                    return;
+                }
+                let client = handle.state::<reqwest::Client>().inner().clone();
+                // Pass the cold-start file through, unlike `restart_sidecar`,
+                // which passes None because setup() already opened it. Here
+                // setup() FAILED, so nothing was opened — dropping it would
+                // silently land a user who double-clicked a .md on welcome.md.
+                let result = start_sidecar(&handle, &client, cold_start_file.as_deref()).await;
+                // Release before anything user-facing, so Settings → Restart
+                // server is usable again while the second dialog is on screen.
+                RESTART_IN_PROGRESS.store(false, Ordering::Release);
+
+                match result {
+                    Ok(()) => {
+                        log::info!("Server-start retry succeeded");
+                        // setup()'s failure path returned before this; without
+                        // it a recovered session gets no update check for 8h.
+                        check_for_update(&handle, false).await;
+                    }
+                    Err(e) => {
+                        log::error!("Server-start retry failed: {e}");
+                        let holder = port_holder_for_dialog().await;
+                        show_server_error_dialog(&handle, &e, holder, cold_start_file, false);
+                    }
+                }
+            });
+        });
 }
 
 /// Build the `(program, args)` tuple that reveals `path` in the host OS file
@@ -2691,6 +2971,262 @@ async fn wait_for_port_release(client: &reqwest::Client, deadline_secs: u64) -> 
         tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
     }
     false
+}
+
+/// One parsed `netstat -ano` TCP row, reduced to the fields that decide whether
+/// it contends with our bind.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+struct NetstatRow {
+    local_port: u16,
+    /// True when the row is a listening socket. Windows LOCALIZES the State
+    /// column, so this is not just a string compare: a foreign address of
+    /// `0.0.0.0:0` / `[::]:0` is the structural signature of a listener and no
+    /// connected state produces it.
+    listening: bool,
+    pid: u32,
+}
+
+/// Parse one `netstat -ano` line, keeping only rows that could block a bind on
+/// our loopback address.
+///
+/// Two subtleties, both regression-tested:
+/// - The port is taken from the LAST `:` of the local-address column, not by
+///   substring match — a substring match also hits `:34790` and the `[::]` prefix.
+/// - A listener on a specific non-loopback interface (WSL/Hyper-V vEthernet,
+///   Docker, a VPN adapter) does NOT prevent a `127.0.0.1` bind, so naming it
+///   would blame an innocent process for a failure it did not cause.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn parse_netstat_row(line: &str) -> Option<NetstatRow> {
+    // Proto | Local Address | Foreign Address | State | PID
+    let cols: Vec<&str> = line.split_whitespace().collect();
+    if cols.len() < 5 || !cols[0].eq_ignore_ascii_case("TCP") {
+        return None;
+    }
+    let (local_addr, local_port_str) = cols[1].rsplit_once(':')?;
+    if !matches!(local_addr, "127.0.0.1" | "0.0.0.0" | "[::]" | "[::1]") {
+        return None;
+    }
+    let local_port = local_port_str.parse::<u16>().ok()?;
+    let foreign_port = cols[2].rsplit_once(':').and_then(|(_, p)| p.parse::<u16>().ok());
+    // The PID is parsed as u32, which is what makes it safe to interpolate into
+    // the tasklist filter later: a u32's Display output is `[0-9]+` by
+    // construction, so no metacharacter can survive. This is the typed
+    // equivalent of the `/^\d+$/` guard in src/server/platform.ts.
+    let pid = cols[4].parse::<u32>().ok()?;
+    Some(NetstatRow {
+        local_port,
+        listening: cols[3].eq_ignore_ascii_case("LISTENING") || foreign_port == Some(0),
+        pid,
+    })
+}
+
+/// Shared scan behind `parse_netstat_listening_pid` and
+/// `parse_netstat_lingering_port` below: find the first row matching one of
+/// `ports` whose `listening` flag equals `listening`. The two callers differ
+/// only in which flag value they want and what they extract from the match.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn find_netstat_row(output: &str, ports: &[u16], listening: bool) -> Option<NetstatRow> {
+    output.lines().find_map(|line| {
+        let row = parse_netstat_row(line)?;
+        (row.listening == listening && ports.contains(&row.local_port)).then_some(row)
+    })
+}
+
+/// Parse `netstat -ano` output for a process LISTENING on one of `ports`.
+/// Returns the first `(port, pid)` match in output order.
+///
+/// Kept out of the `cfg(windows)` block so its tests run on every CI platform;
+/// the allow keeps a non-Windows release build warning-free.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn parse_netstat_listening_pid(output: &str, ports: &[u16]) -> Option<(u16, u32)> {
+    find_netstat_row(output, ports, true).map(|row| (row.local_port, row.pid))
+}
+
+/// Find a port held by a lingering CONNECTION rather than by a live listener —
+/// the Windows TIME_WAIT case.
+///
+/// This is the failure that motivated the whole change and it is invisible to
+/// the function above: a killed listener leaves no LISTENING row, but its
+/// accepted connections sit in TIME_WAIT (owner PID 0) and Windows still
+/// refuses a fresh bind on that port. Without this pass the dialog falls back
+/// to generic text in exactly the headline scenario.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn parse_netstat_lingering_port(output: &str, ports: &[u16]) -> Option<u16> {
+    find_netstat_row(output, ports, false).map(|row| row.local_port)
+}
+
+/// Parse the image name out of `tasklist /NH /FO CSV` output.
+///
+/// Returns None for the `INFO: No tasks are running which match…` line that
+/// tasklist prints — on exit code 0 — when the PID no longer exists.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn parse_tasklist_image_name(output: &str) -> Option<String> {
+    for line in output.lines() {
+        let line = line.trim();
+        // CSV rows are quoted: `"node.exe","12345","Console","1","50,000 K"`.
+        // Anything not starting with a quote is a header, an INFO line, or an
+        // ERROR line — never a row.
+        let Some(rest) = line.strip_prefix('"') else {
+            continue;
+        };
+        let Some((name, _)) = rest.split_once('"') else {
+            continue;
+        };
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+/// Run a Windows system binary and capture stdout, or None on any failure.
+///
+/// Anchored to `%SystemRoot%\System32\` rather than resolved through PATH:
+/// `Command::new("netstat")` searches the application directory (and, absent
+/// `NoDefaultCurrentDirectoryInExePath`, the cwd) ahead of System32, and both
+/// binaries are guaranteed at the fixed path. CREATE_NO_WINDOW keeps a
+/// GUI-subsystem app from flashing a console window.
+///
+/// Fails CLOSED when `SystemRoot` is unset, empty, or non-UTF-8: falling back to
+/// the bare name would do exactly the unanchored PATH lookup this exists to
+/// avoid, and `SystemRoot` is a per-process env var that an unelevated launcher
+/// can set before starting an elevated app. Every caller degrades to generic
+/// text on None, so a skipped diagnostic costs nothing. (`freePortWindows` in
+/// src/server/platform.ts makes the opposite call, deliberately — its lookup is
+/// load-bearing for startup rather than cosmetic.)
+#[cfg(target_os = "windows")]
+fn run_system32_tool(exe: &str, args: &[&str]) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let root = std::env::var("SystemRoot").ok()?;
+    if root.trim().is_empty() {
+        return None;
+    }
+    let program = format!("{root}\\System32\\{exe}");
+    let output = std::process::Command::new(program)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    // netstat/tasklist both report "nothing matched" on exit 0, so a non-zero
+    // status is a genuine tool failure and the parsers handle the empty case.
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// What is holding one of the sidecar's ports, and whether the retry can do
+/// anything about it. An enum rather than a `{ message, killable_process }`
+/// struct deliberately: those two fields were only ever kept in sync by both
+/// return sites of `describe_port_holder` being written carefully by hand —
+/// nothing stopped a future construction site from naming a process in
+/// `message` while leaving `killable_process` `None`, which is exactly the
+/// kind of contradictory-dialog bug this type exists to prevent. With the
+/// population as the only source of truth, `message()` and
+/// `killable_process()` below derive both user-facing strings from the same
+/// value, so that drift is unrepresentable rather than merely avoided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) enum PortHolder {
+    /// A live process we can name and that a retry would terminate.
+    Listener { port: u16, pid: u32, name: Option<String> },
+    /// Windows TIME_WAIT: the old sidecar is gone, so there is no owning
+    /// process, but the OS hasn't released the port yet. Nothing to kill;
+    /// the retry works only because time passed.
+    Lingering { port: u16 },
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+impl PortHolder {
+    /// User-facing sentence, already hedged. Never logged or emitted — it goes
+    /// straight into the native dialog.
+    fn message(&self) -> String {
+        match self {
+            PortHolder::Listener { port, pid, name } => {
+                format!("Port {port} appears to be held by {}.", describe_process(*pid, name.as_deref()))
+            }
+            PortHolder::Lingering { port } => format!(
+                "Port {port} is still tied up by a connection from a previous run \
+                 (Windows releases these after a short delay). No other program is using it."
+            ),
+        }
+    }
+
+    /// A description of the process a retry would terminate, or `None` for
+    /// the `Lingering` case where there is nothing to kill.
+    fn killable_process(&self) -> Option<String> {
+        match self {
+            PortHolder::Listener { pid, name, .. } => Some(describe_process(*pid, name.as_deref())),
+            PortHolder::Lingering { .. } => None,
+        }
+    }
+}
+
+/// Shared by `PortHolder::message` and `PortHolder::killable_process` so the
+/// two can't describe the same process differently.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn describe_process(pid: u32, name: Option<&str>) -> String {
+    match name {
+        Some(n) => format!("{n} (PID {pid})"),
+        None => format!("PID {pid}"),
+    }
+}
+
+/// Describe what is holding one of `ports`.
+///
+/// Two populations, and the second one is the headline case:
+///
+/// 1. **A live listener** — a stale sidecar, a `npm run dev:server`, an
+///    unrelated app. Nameable, and `freePort()` will terminate it on retry.
+/// 2. **A lingering connection (Windows TIME_WAIT)** — the update case. The old
+///    sidecar is gone, so there is no LISTENING row and no owning process, but
+///    Windows still refuses the bind. Nothing to kill; the retry works because
+///    the state expires. Reporting this honestly is the difference between "we
+///    don't know" and "wait a moment and try again".
+///
+/// Best-effort and read-only: every failure returns None and the caller falls
+/// back to generic text. Blocking (up to three `Command::output()` calls) — async
+/// callers must wrap it in `spawn_blocking` AND bound it with a timeout, since a
+/// wedged netstat would otherwise delay the error dialog indefinitely.
+///
+/// The wording is deliberately hedged. Between the netstat lookup and the
+/// tasklist lookup the PID can be recycled, and `docs/troubleshooting.md` tells
+/// users to `taskkill` what we name here — so we re-verify that the same PID
+/// still holds the same port before reporting, and still say "appears to be"
+/// rather than asserting it.
+#[cfg(target_os = "windows")]
+fn describe_port_holder(ports: &[u16]) -> Option<PortHolder> {
+    let netstat = run_system32_tool("netstat.exe", &["-ano"])?;
+
+    let Some(first) = parse_netstat_listening_pid(&netstat, ports) else {
+        // No listener — check for the TIME_WAIT population before giving up.
+        let port = parse_netstat_lingering_port(&netstat, ports)?;
+        return Some(PortHolder::Lingering { port });
+    };
+    let (port, pid) = first;
+
+    let name = run_system32_tool(
+        "tasklist.exe",
+        &["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"],
+    )
+    .and_then(|out| parse_tasklist_image_name(&out));
+
+    // Re-verify: if the holder changed while we were looking it up, anything we
+    // print is about a process that no longer owns the port.
+    let second = parse_netstat_listening_pid(&run_system32_tool("netstat.exe", &["-ano"])?, ports);
+    if second != Some(first) {
+        log::debug!("Port holder changed during lookup — not reporting");
+        return None;
+    }
+
+    Some(PortHolder::Listener { port, pid, name })
+}
+
+/// Non-Windows: no diagnostic. The failures this serves are Windows-specific
+/// (a stale listener surviving an update, or TIME_WAIT after the restart), and
+/// the dialog degrades to its generic text when this returns None.
+#[cfg(not(target_os = "windows"))]
+fn describe_port_holder(_ports: &[u16]) -> Option<PortHolder> {
+    None
 }
 
 /// Resolve the sidecar executable path (alongside the main binary).
@@ -4518,11 +5054,7 @@ fn show_update_available_dialog(app: &tauri::AppHandle, version: &str) -> bool {
         .title("Update Available")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancel);
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        builder = builder.parent(&window);
-    } else {
-        log::warn!("show_update_available_dialog: main window not found — dialog will appear parentless");
-    }
+    builder = attach_main_window_or_warn(app, builder, "show_update_available_dialog");
     builder.blocking_show()
 }
 
@@ -4538,11 +5070,7 @@ fn show_up_to_date_dialog(app: &tauri::AppHandle) {
         ))
         .title("No Updates Available")
         .kind(MessageDialogKind::Info);
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        builder = builder.parent(&window);
-    } else {
-        log::warn!("show_up_to_date_dialog: main window not found — dialog will appear parentless");
-    }
+    builder = attach_main_window_or_warn(app, builder, "show_up_to_date_dialog");
     builder.show(|_| {});
 }
 
@@ -4559,11 +5087,7 @@ fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
         ))
         .title("Update Error")
         .kind(MessageDialogKind::Error);
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        builder = builder.parent(&window);
-    } else {
-        log::warn!("show_update_error_dialog: main window not found — dialog will appear parentless");
-    }
+    builder = attach_main_window_or_warn(app, builder, "show_update_error_dialog");
     builder.show(|_| {});
 }
 
@@ -4713,6 +5237,18 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Log + record the "sidecar didn't release the port in time" warning shared
+/// by `perform_install`'s Windows and non-Windows branches. Interpolates the
+/// const rather than hardcoding the duration: this string reaches the failure
+/// dialog, and a hardcoded duration would silently go stale on the next bump.
+fn warn_port_still_responding(warnings: &mut Vec<String>) {
+    let msg = format!(
+        "Sidecar still responding after {POST_KILL_PORT_RELEASE_SECS}s kill deadline -- proceeding with install anyway"
+    );
+    log::warn!("{msg}");
+    warnings.push(msg);
+}
+
 /// Shared install flow: kill sidecar, await port + file-lock release, then
 /// download+install via the Tauri updater plugin. On success the application
 /// is restarted; on failure a native dialog surfaces the error.
@@ -4742,25 +5278,23 @@ async fn perform_install(
     #[cfg(target_os = "windows")]
     {
         let (port_ok, file_ok) = tokio::join!(
-            wait_for_port_release(&client, 5),
-            wait_for_sidecar_unlock(5),
+            wait_for_port_release(&client, POST_KILL_PORT_RELEASE_SECS),
+            wait_for_sidecar_unlock(SIDECAR_UNLOCK_DEADLINE_SECS),
         );
         if !port_ok {
-            let msg = "Sidecar still responding after 5s kill deadline -- proceeding with install anyway";
-            log::warn!("{msg}");
-            pre_install_warnings.push(msg.to_string());
+            warn_port_still_responding(&mut pre_install_warnings);
         }
         if !file_ok {
-            let msg = "Sidecar exe still locked after 5s -- installer may prompt for retry";
+            let msg = format!(
+                "Sidecar exe still locked after {SIDECAR_UNLOCK_DEADLINE_SECS}s -- installer may prompt for retry"
+            );
             log::warn!("{msg}");
-            pre_install_warnings.push(msg.to_string());
+            pre_install_warnings.push(msg);
         }
     }
     #[cfg(not(target_os = "windows"))]
-    if !wait_for_port_release(&client, 5).await {
-        let msg = "Sidecar still responding after 5s kill deadline -- proceeding with install anyway";
-        log::warn!("{msg}");
-        pre_install_warnings.push(msg.to_string());
+    if !wait_for_port_release(&client, POST_KILL_PORT_RELEASE_SECS).await {
+        warn_port_still_responding(&mut pre_install_warnings);
     }
 
     match update.download_and_install(
@@ -4935,11 +5469,45 @@ mod pending_opens_tests {
 mod url_constants_tests {
     use super::*;
 
+    // The port constants used by the port-holder diagnostic must agree with the
+    // URL literals — they are two spellings of the same fact, and a diagnostic
+    // probing the wrong port silently degrades to "no holder found".
+    #[test]
+    fn port_constants_match_urls() {
+        assert!(
+            HEALTH_URL.contains(&format!(":{MCP_PORT}/")),
+            "MCP_PORT ({MCP_PORT}) must match HEALTH_URL ({HEALTH_URL})"
+        );
+        assert_eq!(WS_PORT + 1, MCP_PORT, "WS/MCP ports are adjacent by convention");
+    }
+
+    // HEALTH_TIMEOUT times a wait that happens INSIDE the sidecar: waitForPort
+    // in src/server/platform.ts polls up to 15s for the TCP port to release
+    // before the server can bind and answer /health. If this drops back to 15s
+    // the shell kills sidecars that were legitimately waiting — the post-update
+    // "Server failed to start after 3 restart attempts" failure.
+    //
+    // This can only pin ITS half of the coupling; Rust cannot read the TS
+    // default. The other half is pinned by "defaults to a 15s ceiling" in
+    // tests/server/platform.test.ts. Raising waitForPort's default without
+    // raising this constant leaves BOTH tests green and reopens the bug —
+    // the two must move together.
+    #[test]
+    fn health_timeout_exceeds_sidecar_port_wait() {
+        assert!(
+            HEALTH_TIMEOUT.as_secs() >= 30,
+            "HEALTH_TIMEOUT ({}s) must stay well above waitForPort's 15s default \
+             in src/server/platform.ts",
+            HEALTH_TIMEOUT.as_secs()
+        );
+    }
+
     // Regression guard for #477 PR 2 + #637 + #686. The server's isHostAllowed
     // gate (api-routes.ts) rejects bare `localhost` Host headers; if these
     // constants drift back to `http://localhost:…`, the supervisor's
-    // health-poll 403's for 15s and `npm run dev:tauri` reports
-    // "Server failed to start after 3 restart attempts".
+    // health-poll 403's for the whole HEALTH_TIMEOUT window and
+    // `npm run dev:tauri` reports "Server failed to start after 3 restart
+    // attempts".
     #[test]
     fn supervisor_urls_use_loopback_ip_not_localhost() {
         for (name, url) in [
@@ -4953,6 +5521,174 @@ mod url_constants_tests {
                 "{name} must use 127.0.0.1 (got {url}) — see #477 PR 2"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod port_holder_tests {
+    use super::*;
+
+    // Verbatim `netstat -ano` output shape (captured on Windows 11), trimmed to
+    // the rows that matter. Fixture realism is the point: a hand-written table
+    // would not have caught the `[::]:` prefix, which is why the parser splits
+    // on the LAST colon rather than matching a substring.
+    const NETSTAT: &str = "
+Active Connections
+
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1520
+  TCP    127.0.0.1:3479         0.0.0.0:0              LISTENING       12345
+  TCP    [::]:445               [::]:0                 LISTENING       4
+";
+
+    #[test]
+    fn finds_the_ipv4_listener_on_a_requested_port() {
+        assert_eq!(parse_netstat_listening_pid(NETSTAT, &[3478, 3479]), Some((3479, 12345)));
+    }
+
+    #[test]
+    fn finds_an_ipv6_listener() {
+        let out = "  TCP    [::]:3479              [::]:0                 LISTENING       777\n";
+        assert_eq!(parse_netstat_listening_pid(out, &[3479]), Some((3479, 777)));
+        // The bracketed address contains colons of its own — a substring match
+        // on ":3479" would work here but break on the negative cases below.
+        assert_eq!(parse_netstat_listening_pid(out, &[3478]), None);
+    }
+
+    #[test]
+    fn does_not_match_a_longer_port_with_the_same_prefix() {
+        let out = "  TCP    127.0.0.1:34790        0.0.0.0:0              LISTENING       999\n";
+        assert_eq!(parse_netstat_listening_pid(out, &[3479]), None);
+    }
+
+    #[test]
+    fn ignores_non_listening_rows() {
+        // An ESTABLISHED row on the same port is a client connection, not the
+        // process holding the port against a fresh bind.
+        let out = "  TCP    127.0.0.1:3479         127.0.0.1:5500         ESTABLISHED     42\n";
+        assert_eq!(parse_netstat_listening_pid(out, &[3479]), None);
+    }
+
+    #[test]
+    fn ignores_listeners_on_non_contending_interfaces() {
+        // A WSL/Hyper-V/Docker adapter listening on its own address does not
+        // prevent a 127.0.0.1 bind, so it is not the cause of our failure —
+        // naming it would blame an innocent process, and the retry would kill it.
+        let out = "  TCP    172.28.16.1:3479       0.0.0.0:0              LISTENING       777\n";
+        assert_eq!(parse_netstat_listening_pid(out, &[3479]), None);
+    }
+
+    #[test]
+    fn treats_a_wildcard_foreign_port_as_listening() {
+        // Windows LOCALIZES the State column, so a non-English host never says
+        // "LISTENING". A foreign address of *:0 is the structural signature of
+        // a listening socket and no connected state produces it.
+        let out = "  TCP    127.0.0.1:3479         0.0.0.0:0              ABIERTO         31\n";
+        assert_eq!(parse_netstat_listening_pid(out, &[3479]), Some((3479, 31)));
+    }
+
+    #[test]
+    fn finds_a_lingering_connection_when_there_is_no_listener() {
+        // THE headline case: the old sidecar is gone (no LISTENING row) but its
+        // connections sit in TIME_WAIT with owner PID 0, and Windows still
+        // refuses the bind. Without this pass the dialog falls back to generic
+        // text in exactly the scenario the feature was built for.
+        let out = "  TCP    127.0.0.1:3479         127.0.0.1:52000        TIME_WAIT       0\n";
+        assert_eq!(parse_netstat_listening_pid(out, &[3479]), None);
+        assert_eq!(parse_netstat_lingering_port(out, &[3479]), Some(3479));
+    }
+
+    #[test]
+    fn a_live_listener_is_not_reported_as_lingering() {
+        assert_eq!(parse_netstat_lingering_port(NETSTAT, &[3479]), None);
+    }
+
+    #[test]
+    fn returns_none_for_empty_or_garbage_output() {
+        assert_eq!(parse_netstat_listening_pid("", &[3479]), None);
+        assert_eq!(parse_netstat_listening_pid("not a table at all", &[3479]), None);
+        assert_eq!(parse_netstat_lingering_port("", &[3479]), None);
+        // Header row: rejected on the Proto column (it is not "TCP").
+        assert_eq!(
+            parse_netstat_listening_pid("  Proto  Local Address  Foreign Address  State  PID", &[3479]),
+            None
+        );
+    }
+
+    #[test]
+    fn reads_the_image_name_from_a_tasklist_csv_row() {
+        // Verbatim `tasklist /FI "PID eq 4" /NH /FO CSV` output.
+        let out = "\"System\",\"4\",\"Services\",\"0\",\"5,060 K\"\n";
+        assert_eq!(parse_tasklist_image_name(out), Some("System".to_string()));
+    }
+
+    #[test]
+    fn returns_none_when_no_task_matches() {
+        // tasklist prints this on EXIT CODE 0 for a PID that no longer exists,
+        // so exit status cannot be used to detect the miss.
+        let out = "INFO: No tasks are running which match the specified criteria.\n";
+        assert_eq!(parse_tasklist_image_name(out), None);
+    }
+
+    // The parser tests above pin the pure logic against captured fixtures; this
+    // one exercises the real pipeline — System32 resolution, CREATE_NO_WINDOW,
+    // the live output format, and the re-verification pass — by holding a port
+    // ourselves and asking who has it. Without it, a wrong argument vector or a
+    // netstat output-format drift would pass every other test in this module.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn describes_a_port_this_test_process_is_holding() {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().expect("local_addr").port();
+
+        let holder = describe_port_holder(&[port]).expect("a held port must be described");
+        let described = holder.message();
+
+        assert!(
+            described.contains(&format!("Port {port}")),
+            "should name the port it was asked about: {described}"
+        );
+        assert!(
+            described.contains(&format!("PID {}", std::process::id())),
+            "should name this test process (pid {}): {described}",
+            std::process::id()
+        );
+        // Without this the tasklist half could fail entirely and the test would
+        // still pass on the PID-only fallback format.
+        assert!(
+            described.to_ascii_lowercase().contains(".exe"),
+            "should resolve the image name via tasklist, not fall back to PID-only: {described}"
+        );
+        // A live listener is killable, so the dialog is allowed to say the
+        // retry will try to end it. The TIME_WAIT branch must report None here.
+        assert!(
+            matches!(holder, PortHolder::Listener { .. }),
+            "a live listener must be reported as the Listener variant"
+        );
+        assert!(
+            holder.killable_process().is_some(),
+            "a live listener must be reported as killable"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn describes_nothing_when_the_port_is_free() {
+        let port = {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+            probe.local_addr().expect("local_addr").port()
+        }; // dropped — port released
+        assert_eq!(describe_port_holder(&[port]), None);
+    }
+
+    #[test]
+    fn returns_none_for_empty_or_malformed_output() {
+        assert_eq!(parse_tasklist_image_name(""), None);
+        assert_eq!(parse_tasklist_image_name("garbage without quotes"), None);
+        assert_eq!(parse_tasklist_image_name("\"\",\"4\""), None);
+        // Unterminated quote — never a real row.
+        assert_eq!(parse_tasklist_image_name("\"node.exe"), None);
     }
 }
 

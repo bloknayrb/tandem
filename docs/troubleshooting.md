@@ -109,7 +109,14 @@ tandem
 
 All three need to match — `TANDEM_URL` is what the channel shim and MCP clients connect to.
 
-If bind still fails after the timeout, the server logs `port {port} still not available after {timeoutMs}ms` and exits. Identify the holding process with `lsof -i :3479` (macOS/Linux) or `netstat -ano | findstr :3479` (Windows).
+If the port is still held after the wait (15s), the server logs `Port {port} still not available after {timeoutMs}ms` and tries to bind anyway — so the visible symptom is usually an `EADDRINUSE` a moment later, not the wait message. Identify the holding process with `lsof -i :3479` (macOS/Linux) or `netstat -ano | findstr :3479` (Windows).
+
+**In the desktop app** you should not have to run that by hand. When the server fails to start, the "Server Error" dialog offers **Retry Server Start**, and on Windows it first tells you what is going on:
+
+- *"Port 3479 appears to be held by …"* — another program owns the port. Retrying ends that process and starts the server again.
+- *"Port 3479 is still tied up by a connection from a previous run"* — nothing to kill; Windows has not finished releasing the port. Retrying usually succeeds once it does.
+
+If you close that dialog, Settings → Network → **Restart server** does the same thing.
 
 ## I sent a chat message (or left a comment) and nothing happened
 

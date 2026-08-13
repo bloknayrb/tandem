@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Updating on Windows no longer strands you at "Server failed to start".** After an auto-update the app restarts and its server has to reclaim ports 3478/3479 from the copy that was just shut down — and Windows does not always hand them back immediately. Three separate steps gave up after five seconds, which is exactly the wrong budget for the one moment a machine is guaranteed to be busy: fresh files on disk, antivirus scanning them, the installer still settling. All three now wait up to fifteen, and the shell's own health deadline moved to thirty so it cannot kill a server that is legitimately waiting. Nothing waits longer on a healthy machine — these are polling loops that finish the moment the port frees.
+
+- **When the server genuinely cannot start, the error now says why and offers to fix it.** The old dialog suggested checking "that port 3479 is not in use" and left you to run `netstat` and `taskkill` yourself. On Windows it now names what is holding the port — the program and its process ID — or tells you the port is still tied up by a connection from the previous run and simply needs a moment. Either way there is a **Retry Server Start** button, and it says plainly what it will do: end the named program, or just try again. The retry keeps the file you opened from Explorer, which the old flow would have quietly replaced with the welcome document.
+
+- **Freeing a busy port no longer risks killing the wrong program.** The Windows port-reclaim step matched `netstat` output with a pattern loose enough to hit a process on port 34790 while looking for 3479, and to pick a process ID from a line it had not matched. It now parses the table properly, ignores listeners on interfaces that cannot conflict with Tandem, and handles non-English Windows, where the "LISTENING" label it depended on does not exist.
+
 ## [0.22.0] - 2026-08-11
 
 This release is about your AI noticing that you said something.

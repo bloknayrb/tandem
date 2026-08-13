@@ -17,8 +17,8 @@
 
 ```
 kill_sidecar(app)                         // free the sidecar exe + port before install
-  → wait_for_port_release(client, 5)      // poll /health until it stops responding
-  → wait_for_sidecar_unlock(5)            // Windows-only, joined via tokio::join!; polls file write-lock
+  → wait_for_port_release(client, POST_KILL_PORT_RELEASE_SECS)  // poll /health until it stops responding
+  → wait_for_sidecar_unlock(SIDECAR_UNLOCK_DEADLINE_SECS)       // Windows-only, joined via tokio::join!; polls file write-lock
   → update.download_and_install(...)      // tauri-plugin-updater; minisign-verified, NSIS on Windows
   → on Ok:  app.restart()                 // divergent — see §3
   → on Err: show_update_error_dialog(...) // threads pre-install warnings into the message
