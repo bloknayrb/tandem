@@ -471,7 +471,11 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
   switch (el.nodeName) {
     case "heading": {
       const depth = Number(el.getAttribute("level") ?? 1) as 1 | 2 | 3 | 4 | 5 | 6;
-      return { type: "heading", depth, children: deltaToPhrasingContent(el) };
+      return {
+        type: "heading",
+        depth,
+        children: flattenHeadingNewlines(deltaToPhrasingContent(el)),
+      };
     }
 
     case "paragraph":
@@ -618,11 +622,73 @@ function stripHashSuffix(key: string): string {
   return dashIdx >= 0 ? key.slice(0, dashIdx) : key;
 }
 
+/**
+ * Replace newlines in a heading's phrasing content with spaces.
+ *
+ * A heading must never carry a literal newline. If one gets in, `remark-stringify`
+ * emits a **setext** heading at depth 1–2 (`first\nsecond\n======`) and an escaped
+ * `&#xA;` at depth 3+ — the first inverting our own documented setext→ATX
+ * normalization, both producing markdown nobody typed.
+ *
+ * This became reachable when `paragraph` gained `whitespace: "pre"` (#1448).
+ * Before that a paragraph could never hold a literal newline — any DOM re-read
+ * split it into `hardBreak` — so a soft-wrapped paragraph promoted to a heading
+ * (toolbar, `Mod-Alt-1`, a slash command: ordinary editing, not an edge case)
+ * could not carry one either. Now it can.
+ *
+ * Fixed here at the serialization boundary rather than in the block-conversion
+ * command, because there is more than one route into a heading and this is the
+ * single point they all pass through. Headings are never raw carriers, so unlike
+ * a general whitespace pass over `yDocToMdast` this cannot touch verbatim
+ * `markdownRaw` or `codeBlock` content.
+ */
+function flattenHeadingNewlines(children: PhrasingContent[]): PhrasingContent[] {
+  return children.map((child) => {
+    // A `break` child is the OTHER half of the trigger, and covering only `text`
+    // left it live: `mdast-util-to-markdown`'s `formatHeadingAsSetext` fires on
+    // `node.type === "break"` just as readily as on a newline in a value, so an
+    // explicit Shift+Enter inside a heading still emitted setext — an h1 landing
+    // on disk as `first line\\\nsecond line\n===========`, which every other
+    // reader then reports as the single heading `# first line second line`.
+    if (child.type === "break") return { type: "text", value: " " };
+    // Any node with a `value`, not `text` alone — `inlineCode` and `html` carry
+    // one too, and `formatHeadingAsSetext` tests `.value` without caring which.
+    // A code span holding a newline produced a setext h2 the same way.
+    if ("value" in child && typeof child.value === "string" && /[\r\n]/.test(child.value)) {
+      return { ...child, value: child.value.replace(/\r\n|[\r\n]/g, " ") };
+    }
+    if ("children" in child && Array.isArray(child.children)) {
+      return { ...child, children: flattenHeadingNewlines(child.children as PhrasingContent[]) };
+    }
+    return child;
+  });
+}
+
+/**
+ * Reconstruct the verbatim source of a raw block (raw HTML, footnote and link
+ * reference definitions) from its Y children.
+ *
+ * A newline inside one of these blocks can be held two ways: as a literal `\n`
+ * in a `Y.XmlText`, or as a sibling `Y.XmlElement("hardBreak")`. Reading only
+ * the `Y.XmlText` children dropped the second form **silently**, collapsing
+ * every multi-line raw block onto one line (#1458):
+ *
+ *     "<div>\n  <span>a</span>\n</div>"  ->  "<div>  <span>a</span></div>"
+ *
+ * That voided the "no silent drop" guarantee in #981 / ADR-042 for precisely
+ * the constructs that ADR exists to protect.
+ *
+ * The `whitespace: "pre"` paragraph fix (#1448) stops the editor manufacturing
+ * hardBreaks out of soft wraps, but it does NOT make this branch dead: an
+ * explicit Shift+Enter still lands a real hardBreak here, so both forms remain
+ * reachable and both must be read.
+ */
 function getElementPlainText(el: Y.XmlElement): string {
   let value = "";
   for (let i = 0; i < el.length; i++) {
     const child = el.get(i);
     if (child instanceof Y.XmlText) value += child.toString();
+    else if (child instanceof Y.XmlElement && child.nodeName === "hardBreak") value += "\n";
   }
   return value;
 }

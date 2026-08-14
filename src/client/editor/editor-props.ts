@@ -7,6 +7,7 @@
 import { TextSelection } from "@tiptap/pm/state";
 import type { EditorProps } from "@tiptap/pm/view";
 import { markdownToSlice } from "./utils/markdown-paste";
+import { normalizePastedHtmlWhitespace } from "./utils/paste-whitespace";
 import { buildPlainTextSlice } from "./utils/plain-paste";
 import { isSafeExternalHref } from "./utils/url-safety";
 
@@ -28,6 +29,12 @@ export function makeEditorProps(spellcheckOnValue: boolean): EditorProps {
       // attribute is symmetric and testable.
       spellcheck: String(spellcheckOnValue),
     },
+    // Collapse whitespace in pasted HTML the way the browser would have. The
+    // paragraph node declares `whitespace: "pre"` (#1448), and that setting
+    // overrides the paste-level `preserveWhitespace: false` once parsing enters
+    // a `<p>` — so without this, pretty-printed markup imports its own source
+    // indentation as content. See utils/paste-whitespace.ts for the mechanism.
+    transformPastedHTML: normalizePastedHtmlWhitespace,
     // Paste raw markdown as formatted rich text (#788). We return a parsed
     // ProseMirror Slice so y-prosemirror's sync plugin captures it via the
     // normal paste transaction — we never touch the Y.Doc directly. When the

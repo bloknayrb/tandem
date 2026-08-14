@@ -34,40 +34,44 @@ describe("editor round-trip: the negative control", () => {
 });
 
 describe("editor round-trip: soft wraps (V3)", () => {
-  it.fails("a soft-wrapped paragraph survives an edit", () => {
+  it("the production paragraph node declares whitespace:'pre'", () => {
+    // The root-cause assertion, and a guard against a silent no-op: the natural
+    // way to write this override (filtering `buildSchemaExtensions()` by name)
+    // matches nothing, because `paragraph` came from `starterKit`. Without this
+    // line the round-trip tests below would pass against a stock schema on a
+    // day when the override had quietly stopped applying.
+    expect(productionSchema().nodes.paragraph.spec.whitespace).toBe("pre");
+  });
+
+  it("a soft-wrapped paragraph survives an edit", () => {
     const { output } = editorRoundTrip(SOFT_WRAPPED);
     expect(output).toBe(SOFT_WRAPPED);
   });
 
-  it("today a soft wrap becomes a hard break, and this is the defect", () => {
-    const { output } = editorRoundTrip(SOFT_WRAPPED);
+  it("a stock paragraph still turns the soft wrap into a hard break", () => {
+    // The negative control for the fix. If this ever goes green, the harness
+    // has stopped exercising the DOM re-read and every assertion above it is
+    // passing for the wrong reason.
+    const stock = schemaWith({ paragraph: { whitespace: null } });
+    expect(stock.nodes.paragraph.spec.whitespace).not.toBe("pre");
+
+    const { output } = editorRoundTrip(SOFT_WRAPPED, { schema: stock });
     expect(output).toContain("write into\\\n");
   });
 
-  it("declaring paragraph whitespace:'pre' fixes it", () => {
-    const schema = schemaWith({ paragraph: { whitespace: "pre" } });
-    // Guard against the silent no-op: a filtered-extension override would
-    // match nothing and this test would "pass" against the stock schema.
-    expect(schema.nodes.paragraph.spec.whitespace).toBe("pre");
-
-    const { output } = editorRoundTrip(SOFT_WRAPPED, { schema });
-    expect(output).toBe(SOFT_WRAPPED);
-  });
-
-  it("an explicit hard break still survives whitespace:'pre'", () => {
+  it("an explicit hard break still survives", () => {
     const withBreak = "first line\\\nsecond line\n";
-    const schema = schemaWith({ paragraph: { whitespace: "pre" } });
-    const { output } = editorRoundTrip(withBreak, { schema });
+    const { output } = editorRoundTrip(withBreak);
     expect(output).toBe(withBreak);
   });
 
-  it("the doc-spanning re-parse is what damages untouched paragraphs", () => {
+  it("the doc-spanning re-parse no longer damages untouched paragraphs", () => {
     // A childList mutation targeting the doc node re-parses every block in one
     // pass, which is why one edit backslashed every wrapped line of README.md.
+    // This is the case that reproduced the original bug report.
     const twoParas = `${SOFT_WRAPPED}\nA second paragraph, also\nwrapped across lines.\n`;
     const { output } = editorRoundTrip(twoParas, { docSpanning: true });
-    const damaged = output.split("\n").filter((l) => l.endsWith("\\")).length;
-    expect(damaged).toBeGreaterThan(1);
+    expect(output).toBe(twoParas);
   });
 });
 
@@ -114,7 +118,7 @@ describe("editor round-trip: multi-line verbatim blocks (V6)", () => {
     expect(serverOnly).toBe(RAW_HTML);
   });
 
-  it.fails("a multi-line raw HTML block survives an edit", () => {
+  it("a multi-line raw HTML block survives an edit", () => {
     const { output } = editorRoundTrip(RAW_HTML);
     expect(output).toBe(RAW_HTML);
   });

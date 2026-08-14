@@ -2,6 +2,7 @@ import { type AnyExtension, mergeAttributes } from "@tiptap/core";
 import Highlight from "@tiptap/extension-highlight";
 import Image from "@tiptap/extension-image";
 import Link, { isAllowedUri as tiptapDefaultIsAllowedUri } from "@tiptap/extension-link";
+import Paragraph from "@tiptap/extension-paragraph";
 import Placeholder from "@tiptap/extension-placeholder";
 import Subscript from "@tiptap/extension-subscript";
 import Superscript from "@tiptap/extension-superscript";
@@ -97,13 +98,79 @@ const LinkWithHoverTitle = Link.extend({
  * ListItemCheckbox after StarterKit's `listItem:false`, and HeadingCollapse after
  * AnnotationExtension (#650).
  */
+/**
+ * Paragraph that preserves soft line wraps instead of converting them to hard
+ * breaks (#1448).
+ *
+ * A soft wrap lives in the Y.Doc as a literal `\n` inside a `Y.XmlText`; a real
+ * hard break is a sibling `Y.XmlElement("hardBreak")`. The Y.Doc distinguishes
+ * the two, ProseMirror does not — so every time the editor re-reads the DOM,
+ * `prosemirror-model` splits paragraph text on `/\r?\n|\r/` and inserts
+ * `hardBreak` nodes. Saving then writes a trailing `\` onto every wrapped line,
+ * which is a semantic hard break: GitHub and every other renderer break the
+ * paragraph at the original author's wrap column, at any viewport width.
+ *
+ * One edit is enough to damage the whole file, because a childList mutation on
+ * the doc node makes `readDOMChange` re-parse a doc-spanning range in one pass.
+ *
+ * `whitespace: "pre"` is what `prosemirror-view` itself keys on: `parseBetween`
+ * passes `preserveWhitespace: "full"` when the parent node's whitespace is
+ * `"pre"`, and `linebreakReplacement` only splits when it is truthy-but-not-
+ * `"full"`. An explicit Shift+Enter `hardBreak` still survives, and it closes
+ * the paste doorway too — any clipboard carrying `text/html` bypasses
+ * `clipboardTextParser` and hits the same split.
+ *
+ * Rejected alternatives: stock is the bug; `linebreakReplacement: false`
+ * collapses the wrap to a space, losing the line entirely.
+ *
+ * **`whitespace` must be an extension config field, not `extendNodeSchema`.**
+ * Tiptap's schema builder spreads `extendNodeSchema`'s result FIRST and then
+ * assigns `whitespace: callOrReturn(getExtensionField(extension, "whitespace"))`
+ * over the top, so an `extendNodeSchema` that returns `{ whitespace: "pre" }`
+ * is overwritten with `undefined` and then dropped by `cleanUpSchemaItem`. It
+ * reads as correct and does nothing.
+ *
+ * Scoped to `paragraph` deliberately — NOT `heading`. A heading carrying a
+ * newline serializes as setext at depth 1–2 (`foo\nbar\n===`), which inverts one
+ * of our own documented normalizations. Table cells need no separate handling: a
+ * cell's content is a paragraph, so they inherit this.
+ *
+ * The obvious objection — that `"pre"` reintroduces the bug, since two trailing
+ * spaces are a markdown hard break and four leading spaces an indented code
+ * block — does not hold. `remark-stringify`'s `safe()` already escapes both to
+ * `&#x20;`, idempotently. Pinned in `tests/server/file-io/whitespace-escaping`.
+ *
+ * Two knock-on effects of `"pre"` that are NOT about the newline split, both
+ * found by reviewing this change rather than by the test suite:
+ *
+ * - **Paste.** The per-node setting beats the paste-level `preserveWhitespace:
+ *   false` once parsing enters a `<p>`, so pretty-printed external HTML would
+ *   import its own indentation as content. Handled at the paste boundary by
+ *   `utils/paste-whitespace.ts` — deliberately not by giving this node's parse
+ *   rule an explicit `preserveWhitespace`, which would fix paste and silently
+ *   reopen the newline split for any paragraph re-read without a node view desc.
+ * - **Trailing whitespace** is no longer stripped when a paragraph is parsed
+ *   from the DOM (`prosemirror-model` `NodeContext.finish` gates stripping on
+ *   the same flag). Trailing spaces the user actually typed now survive, and
+ *   save as a `&#x20;` escape. Accepted: it is cosmetic, it is idempotent, and
+ *   stripping it back out would mean editing text the user typed on purpose.
+ *
+ * A third — that preserved newlines would render as collapsed spaces because
+ * nothing sets `white-space` on `.tandem-editor` — is not real: `@tiptap/core`
+ * injects `.ProseMirror { white-space: pre-wrap }` itself (`injectCSS` defaults
+ * to true and is not disabled here), so do NOT add a rule for it.
+ */
+const SoftWrapParagraph = Paragraph.extend({ whitespace: "pre" });
+
 export function buildSchemaExtensions(): AnyExtension[] {
   return [
     // `listItem:false` disables StarterKit's stock ListItem so our
     // ListItemCheckbox (same node name "listItem", + a `checked` tri-state
-    // attribute for GFM task lists, #982) owns the schema. history:false — Yjs
+    // attribute for GFM task lists, #982) owns the schema. `paragraph:false`
+    // hands the paragraph node to SoftWrapParagraph below. history:false — Yjs
     // handles undo/redo.
-    StarterKit.configure({ history: false, listItem: false }),
+    StarterKit.configure({ history: false, listItem: false, paragraph: false }),
+    SoftWrapParagraph,
     ListItemCheckbox,
     // underline/superscript/subscript: marks the .docx import (mammoth) emits but
     // StarterKit does not provide. Required client-side or y-prosemirror deletes

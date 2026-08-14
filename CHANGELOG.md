@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Editing a document no longer adds line breaks to paragraphs you did not touch (#1448).** If a file wrapped its paragraphs across several lines — the normal way of writing markdown in a text editor — then editing a single word anywhere in it added a `\` to the end of every wrapped line in the whole document. That backslash is a real markdown instruction, so afterwards GitHub and every other viewer broke those paragraphs at the original author's wrap column no matter how wide the window was. Opening a file to read it was never affected; it took an edit.
+- **Multi-line blocks Tandem stores verbatim — raw HTML, footnote definitions, link definitions — no longer get collapsed onto one line (#1458).** Their line breaks were dropped silently on save, with no warning and no fallback.
+
 ## [0.22.1] - 2026-08-13
 
 This release is mostly repair, and the two biggest repairs are both about Tandem failing to start.
