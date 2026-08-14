@@ -95,6 +95,45 @@ function strip(node: unknown): unknown {
   return node;
 }
 
+/** Every phrasing type appearing anywhere in a subtree. */
+function phrasingTypes(node: unknown, into = new Set<string>()): Set<string> {
+  if (Array.isArray(node)) {
+    for (const child of node) phrasingTypes(child, into);
+    return into;
+  }
+  if (node && typeof node === "object") {
+    const type = (node as { type?: string }).type;
+    if (type && PHRASING.has(type)) into.add(type);
+    phrasingTypes((node as { children?: unknown[] }).children ?? [], into);
+  }
+  return into;
+}
+
+/**
+ * True when one side carries a KIND of inline node the other does not.
+ *
+ * This is the line between the two inline families, and drawing it is what makes
+ * this gate able to fail. `inline-marks` is allowlisted — it is the invisible
+ * tier, marks that render identically in a different nesting order — and
+ * `classify` used to return it for a bare `a.type !== b.type` as well. So a
+ * `text` node coming back as a `delete` node scored `inline-marks` and passed:
+ * the gate structurally could not fail on the escape-corruption class it exists
+ * to catch, which is exactly how the `\~\~` defect survived to review.
+ *
+ * A SET difference, deliberately, not a multiset one. The known-benign cases
+ * reorder marks or collapse a degenerate `strong > strong` into one `strong` —
+ * both leave the set of kinds untouched. An escape turning into live syntax
+ * always introduces a kind that was not in the source (or, in reverse, drops one
+ * entirely), and there is no benign case that does that.
+ */
+function inlineTypesDiffer(a: unknown, b: unknown): boolean {
+  const before = phrasingTypes(a);
+  const after = phrasingTypes(b);
+  if (before.size !== after.size) return true;
+  for (const type of before) if (!after.has(type)) return true;
+  return false;
+}
+
 /** Name the first structural difference, coarsely enough to stay stable. */
 function classify(before: unknown, after: unknown): string {
   const a = before as { type?: string; children?: unknown[]; spread?: boolean };
@@ -102,16 +141,18 @@ function classify(before: unknown, after: unknown): string {
 
   // Inline defects manifest as a dozen different node-level symptoms (a `strong`
   // gaining children, a `text` value shifting, a `delete` becoming a `strong`).
-  // They are all one family, so collapse them — otherwise the known-kind set
-  // churns on prose edits and stops meaning anything.
+  // Those that preserve the SET of node kinds are one family and get collapsed —
+  // otherwise the known-kind set churns on prose edits and stops meaning
+  // anything. Those that do not are a different family, and not allowlisted.
   const inline = PHRASING.has(a?.type ?? "") || PHRASING.has(b?.type ?? "");
   if (inline) {
+    if (inlineTypesDiffer(before, after)) return "inline-type-change";
     return a?.type === "inlineCode" || b?.type === "inlineCode"
       ? "inline-code-fence"
       : "inline-marks";
   }
 
-  if (a?.type !== b?.type) return "inline-marks";
+  if (a?.type !== b?.type) return "inline-type-change";
   if (a?.type === "list" && a.spread !== b.spread) return "list.spread";
   if (a?.type === "listItem" && a.spread !== b.spread) return "listItem.spread";
 
@@ -126,6 +167,11 @@ function classify(before: unknown, after: unknown): string {
     // two `text` nodes disagreeing with an extra `inlineCode` after them, and
     // reading only the first divergent pair would blame marks for V7.
     if (PHRASING_PARENTS.has(a?.type ?? "")) {
+      // Checked over the WHOLE children arrays, not the divergent tail: a mark
+      // that appears only in the output is new regardless of where the common
+      // prefix ends, and the `\~\~` corruption lands here (one `text` child
+      // becoming `[text, delete, text]`) rather than in the inline branch above.
+      if (inlineTypesDiffer(ca, cb)) return "inline-type-change";
       let i = 0;
       while (i < ca.length && i < cb.length && sameNode(ca[i], cb[i])) i++;
       const tail = [...ca.slice(i), ...cb.slice(i)] as { type?: string }[];

@@ -794,7 +794,7 @@ const MARK_NESTING_ORDER = ["bold", "italic", "strike", "link"] as const;
 function markKey(name: string, value: any): string {
   if (name !== "link") return name;
   const attrs = value || {};
-  return `link ${attrs.href ?? ""} ${attrs.title ?? ""}`;
+  return `link\u0000${attrs.href ?? ""}\u0000${attrs.title ?? ""}`;
 }
 
 /** The leaf node for a segment, before any mark wrapping. */
@@ -935,7 +935,15 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
         // Embedded elements (hardBreak, etc.)
         if (typeof op.insert !== "string") {
           if (op.insert instanceof Y.XmlElement && op.insert.nodeName === "hardBreak") {
-            segments.push({ text: null, marks: new Map() });
+            // An EMBEDDED break carries the run's marks in its own delta
+            // attributes, so read them — discarding them made the break a
+            // mark-less segment and `buildPhrasingTree` closed every enclosing
+            // run at it (see `inheritBreakMarks`).
+            const marks = new Map<string, any>();
+            for (const [key, value] of Object.entries(op.attributes || {})) {
+              marks.set(stripHashSuffix(key), value);
+            }
+            segments.push({ text: null, marks });
           }
           continue;
         }
@@ -955,7 +963,43 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
     }
   }
 
-  return coalescePhrasing(buildPhrasingTree(segments, new Set()));
+  return coalescePhrasing(buildPhrasingTree(inheritBreakMarks(segments), new Set()));
+}
+
+/**
+ * Give a mark-less hard break the marks its neighbours agree on.
+ *
+ * `buildPhrasingTree` decides nesting by how many consecutive segments carry a
+ * mark, so a segment with an empty mark set TERMINATES every enclosing run.
+ * A hard break in the middle of a bold span is exactly that segment, and the
+ * result was one `strong` per line instead of one spanning the break:
+ *
+ *   "a **b\<newline>c** d"  ->  "a **b**\<newline>**c** d"
+ *
+ * Idempotent, and therefore invisible to every suite that asserts only
+ * `pass2 === pass1` — the same blindness that hid the defect this function's
+ * caller was written to fix.
+ *
+ * The `normalizeHardBreaks` representation is a SIBLING `Y.XmlElement`, which
+ * has no delta attributes of its own, so for that form the marks genuinely are
+ * not stored anywhere and the neighbours are the only evidence. Intersection,
+ * not union: a break between a bold run and a plain one belongs to neither, and
+ * widening a mark across it would ADD formatting rather than preserve it.
+ */
+function inheritBreakMarks(segments: Segment[]): Segment[] {
+  return segments.map((seg, i) => {
+    if (seg.text !== null || seg.marks.size > 0) return seg;
+    const prev = segments[i - 1];
+    const next = segments[i + 1];
+    if (!prev || !next) return seg;
+
+    const nextKeys = new Set([...next.marks].map(([n, v]) => markKey(n, v)));
+    const shared = new Map<string, any>();
+    for (const [name, value] of prev.marks) {
+      if (nextKeys.has(markKey(name, value))) shared.set(name, value);
+    }
+    return shared.size > 0 ? { text: null, marks: shared } : seg;
+  });
 }
 
 /**

@@ -193,9 +193,37 @@ const mdStringifier = unified()
         //    correct trade is the same one rules 1 and 5 make — keep the escape
         //    wherever safety is not provable.
 
-        // 4. `\~` not followed by another `~`. GFM strikethrough needs `~~`
-        //    so a lone `~` is unambiguous prose (e.g. `~4500 tokens`).
-        s = s.replace(/\\~(?!~)/g, "~");
+        // 4. `\~` with no tilde adjacent to it on EITHER side, in either form.
+        //    GFM strikethrough needs `~~`, so a genuinely lone `~` is
+        //    unambiguous prose (`~4500 tokens`) and the escape is noise.
+        //
+        //    The guard used to be a `(?!~)` lookahead, which was structurally
+        //    dead: `safe()` escapes EVERY tilde, so an authored `~~` reaches
+        //    here as `\~\~` and the character after the first `\~` is a
+        //    backslash, never a tilde. The lookahead therefore passed on both
+        //    halves and un-escaped them, turning an author's escaped literal
+        //    `\~\~two\~\~` into a live strikethrough — the rendered document
+        //    gains formatting nobody asked for and loses four visible
+        //    characters. Verified against the real serializer; a passing
+        //    idempotency suite could never see it, because the corrupted output
+        //    is itself stable.
+        //
+        //    Looking at the neighbours instead of a fixed-width lookahead is
+        //    what makes the guard reachable: `\` is what sits between two
+        //    escaped tildes, so the test has to admit the escaped form.
+        //    `info.before` / `info.after` extend it across the node boundary,
+        //    where an adjacent `delete` node's own `~~` lives — same reason
+        //    rule 1 consults `info.after` for a following `[`.
+        const tildeAdjacent = (text: string, atStart: boolean) =>
+          atStart ? /^\\?~/.test(text) : /~$/.test(text);
+        const beforeText = typeof info.before === "string" ? info.before : "";
+        const afterText = typeof info.after === "string" ? info.after : "";
+        s = s.replace(/\\~/g, (match, offset: number) => {
+          const after = offset + match.length === s.length ? afterText : s.slice(offset + 2);
+          const before = offset === 0 ? beforeText : s.slice(0, offset);
+          if (tildeAdjacent(after, true) || tildeAdjacent(before, false)) return match;
+          return "~";
+        });
 
         // 5. `\@` only where the following text is NOT host-shaped. remark-gfm
         //    escapes `@` whenever a word-ish local-part char precedes it

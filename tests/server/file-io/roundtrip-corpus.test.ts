@@ -43,6 +43,8 @@ const CORPUS: Record<string, { blockedOn?: string; why?: string }> = {
   },
   "nested-marks.md": {},
   "inline-code-fence.md": {},
+  "escaped-tilde.md": {},
+  "hardbreak-marks.md": {},
 };
 
 function roundTrip(input: string): string {
