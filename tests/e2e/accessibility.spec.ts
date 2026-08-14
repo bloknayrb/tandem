@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 import path from "path";
+import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -59,6 +60,15 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
+  // Chat lives in CTRL_ROOM, not in the per-test fixture document, so a seeded message
+  // outlives `cleanupAllOpenDocuments` and would persist into every later surface's scan
+  // (workers: 1, one shared server). Clearing it keeps each surface scanning the state it
+  // declares — otherwise surface ORDER silently becomes load-bearing.
+  try {
+    await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}/api/chat`, { method: "DELETE" });
+  } catch {
+    // Best-effort: a failure here must not mask the assertion that just ran.
+  }
   await cleanupAllOpenDocuments(mcp);
   await mcp.close();
   cleanupFixtureDir(tmpDir);
@@ -223,6 +233,38 @@ const SURFACES: Surface[] = [
       const tab = page.locator("[data-testid='chat-tab']");
       if ((await tab.count()) > 0) await tab.click();
       await expect(page.locator("[data-testid='chat-panel']")).toBeVisible({ timeout: 5_000 });
+    },
+  },
+  {
+    name: "chat panel (with messages)",
+    // The surface above scans the panel in its EMPTY state, which is a different
+    // surface, not a lesser version of this one — so this is added alongside it rather
+    // than replacing it. Export, Clear and the whole chat header row are gated on
+    // `messages.length > 0` (ChatPanel.svelte), so before #1454 none of them had ever
+    // been in a scanned DOM. Same reasoning as "annotation card" above: an empty
+    // container is not the surface.
+    //
+    // Seeded over MCP rather than through the composer on purpose. A UI send dispatches
+    // `tandem:addressed-ai` and can raise the push-delivery notice, which would drag an
+    // unrelated component into the scan and make a failure here ambiguous.
+    //
+    // NOT covered by this surface: the unread pill. `useChatState` acknowledges every
+    // claude message while the panel is visible, and the panel has to be visible for axe
+    // to see it, so `unreadCount > 0` cannot hold here. The collapsed-rail unread badge
+    // is a separate surface and is still unaudited.
+    open: async (page) => {
+      await bootEditor(page);
+      await mcp.callTool("tandem_reply", {
+        text: "Contrast probe — a reply long enough to wrap across more than one line in the panel, so the message body, its timestamp and the header action row are all laid out and scannable.",
+      });
+      const tab = page.locator("[data-testid='chat-tab']");
+      if ((await tab.count()) > 0) await tab.click();
+      await expect(page.locator("[data-testid='chat-panel']")).toBeVisible({ timeout: 5_000 });
+      // Load-bearing: this is what proves the header row is actually present. Without it
+      // a seed that silently failed would still produce a clean scan of the empty panel.
+      await expect(page.locator("[data-testid='clear-chat-btn']")).toBeVisible({
+        timeout: 10_000,
+      });
     },
   },
   {
