@@ -88,10 +88,13 @@ describe("MarkdownAdapter — two-phase parse/apply", () => {
     adapter.apply(doc, prepared);
 
     const output = adapter.save?.(doc);
-    expect(output).toContain("| Name  |  Score |");
-    expect(output).toContain("| :---- | -----: |");
-    expect(output).toContain("| Ada   | **99** |");
-    expect(output).toContain("| Empty |        |");
+    // Unpadded since #1448 (`tablePipeAlign: false`): cell width no longer
+    // depends on the widest value in the column, so editing one cell stops
+    // reflowing every other row.
+    expect(output).toContain("| Name | Score |");
+    expect(output).toContain("| :- | -: |");
+    expect(output).toContain("| Ada | **99** |");
+    expect(output).toContain("| Empty | |");
   });
 
   it("apply runs inside an externally-provided transact (single-transact invariant)", async () => {

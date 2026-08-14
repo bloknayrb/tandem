@@ -166,9 +166,18 @@ function blockToYxml(
       if (node.ordered && node.start != null && node.start !== 1) {
         el.setAttribute("start", node.start as any);
       }
+      // `spread` is what distinguishes a loose list (blank lines between items,
+      // each item's content wrapped in <p>) from a tight one. It used to be
+      // hardcoded `false` on the way back out, so every loose list in every
+      // document was silently converted to tight on the first save — 56 files in
+      // this repo. Stored only when true, so a tight list writes no attribute
+      // and reconciles against the editor's default without a phantom
+      // transaction; same reasoning as `checked` below.
+      if (node.spread) el.setAttribute("spread", true as any);
       let listIndex = 0;
       for (const item of node.children) {
         const listItem = new Y.XmlElement("listItem");
+        if (item.spread) listItem.setAttribute("spread", true as any);
         // GFM task list: a list item with non-null `checked` carries the
         // tri-state as an attribute on the ordinary listItem (#982). `null`
         // (plain bullet) stores no attribute so the editor's PM-default `null`
@@ -534,7 +543,11 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
     case "bulletList":
     case "orderedList": {
       const ordered = el.nodeName === "orderedList";
-      const start = ordered ? Number(el.getAttribute("start")) || 1 : undefined;
+      // `|| 1` here silently renumbered a list that starts at ZERO: `0.` was
+      // stored faithfully as "0", read back as the number 0, and then the falsy
+      // check replaced it with 1. Test for a usable number instead of for
+      // truthiness — 0 is a legitimate start (#1448).
+      const start = ordered ? parsedStart(el.getAttribute("start")) : undefined;
       const listItems: any[] = [];
       for (let i = 0; i < el.length; i++) {
         const child = el.get(i);
@@ -552,7 +565,11 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
           // bullet (no `checked` field). Read tolerantly (boolean from
           // y-prosemirror / server writes, or a string from any future writer).
           const checkedAttr = child.getAttribute("checked") as boolean | string | undefined;
-          const listItemNode: any = { type: "listItem", spread: false, children: itemChildren };
+          const listItemNode: any = {
+            type: "listItem",
+            spread: readSpread(child),
+            children: itemChildren,
+          };
           if (checkedAttr != null) {
             listItemNode.checked = checkedAttr === true || checkedAttr === "true";
           }
@@ -562,7 +579,7 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
       return {
         type: "list",
         ordered,
-        spread: false,
+        spread: readSpread(el),
         ...(ordered && start !== 1 ? { start } : {}),
         children: listItems,
       } as any;
@@ -654,6 +671,32 @@ function stripHashSuffix(key: string): string {
 }
 
 /**
+ * Read an ordered list's `start`, defaulting to 1 only when it is genuinely
+ * absent or unusable. Accepts 0, which `Number(x) || 1` did not.
+ */
+function parsedStart(raw: unknown): number {
+  // The absent cases must be rejected BEFORE the numeric coercion: `Number(null)`
+  // is 0, and `Number("")` is 0, so a bare `Number(raw)` would make every list
+  // with no `start` attribute — which is nearly all of them — start at zero.
+  if (raw == null || raw === "") return 1;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  return Number.isFinite(n) ? n : 1;
+}
+
+/**
+ * Read a list/listItem `spread` flag tolerantly.
+ *
+ * The value can arrive as a real boolean (server writes, and what y-prosemirror
+ * writes back) or as the string `"true"` (any writer that stringifies
+ * attributes). Absent means tight. Same tolerance the `checked` tri-state
+ * already needs, and for the same reason: two writers, one attribute.
+ */
+function readSpread(el: Y.XmlElement): boolean {
+  const value = el.getAttribute("spread") as boolean | string | undefined;
+  return value === true || value === "true";
+}
+
+/**
  * Replace newlines in a heading's phrasing content with spaces.
  *
  * A heading must never carry a literal newline. If one gets in, `remark-stringify`
@@ -725,93 +768,194 @@ function getElementPlainText(el: Y.XmlElement): string {
 }
 
 /**
+ * One delta run: its leaf content plus the wrapping marks it carries.
+ * `null` content is a hardBreak, which carries no marks.
+ */
+interface Segment {
+  text: string | null;
+  marks: Map<string, any>;
+}
+
+/**
+ * Outermost-first tie-break for marks that cover exactly the same run.
+ *
+ * A delta segment's attributes are a SET — Yjs does not record which mark was
+ * opened first — so when two marks span an identical run there is genuinely no
+ * information to recover the source nesting from, and a fixed order is the
+ * honest answer. `~~**x**~~` therefore comes back as `**~~x~~**`: different
+ * bytes, identical rendering. Recovering the original would need a per-mark
+ * source-order marker, which is the same layer the invisible tier was ruled out
+ * over. What this order must NOT do is decide nesting when run LENGTH already
+ * does — see `buildPhrasingTree`.
+ */
+const MARK_NESTING_ORDER = ["bold", "italic", "strike", "link"] as const;
+
+/** Identity for run-matching. `link` differs by target, not just by presence. */
+function markKey(name: string, value: any): string {
+  if (name !== "link") return name;
+  const attrs = value || {};
+  return `link ${attrs.href ?? ""} ${attrs.title ?? ""}`;
+}
+
+/** The leaf node for a segment, before any mark wrapping. */
+function segmentLeaf(seg: Segment): PhrasingContent {
+  if (seg.text === null) return { type: "break" };
+  // A `rawMarkdown` run is verbatim markdown source (footnote/reference refs,
+  // inline image, inline html). Emit as an inline `html` node — it serializes
+  // byte-exact, bypassing the `text` escaper (PhrasingContent includes Html, so
+  // the cast is structural only). It still gets wrapped by the marks on its
+  // segment, so:
+  //   (a) an outer mark on the run is preserved (e.g. bold around a footnote
+  //       ref), and
+  //   (b) crucially, a raw inline IMAGE stays wrapped inside its mark rather
+  //       than becoming a bare paragraph-child image — which the #153
+  //       `splitParagraphImages` promotion would otherwise turn into a block
+  //       image on reload, collapsing the inline run's flat length and
+  //       desyncing every later annotation offset.
+  // Two adjacent UNMARKED raw runs (e.g. `[^1][^2]`) stay separate: `html` has
+  // no wrapper, so `coalescePhrasing`'s `sameWrapper` never merges them.
+  //
+  // `code` is a leaf-level mark: the segment is either an inlineCode leaf or a
+  // plain-text leaf. Every other mark wraps whatever this returns — inlineCode
+  // is valid PhrasingContent inside all of them, so a code span keeps its mark
+  // even when combined with bold/italic/etc.
+  if (seg.marks.has(RAW_MARKDOWN_MARK)) return { type: "html", value: seg.text } as any;
+  if (seg.marks.has("code")) return { type: "inlineCode", value: seg.text };
+  return { type: "text", value: seg.text };
+}
+
+function wrapInMark(name: string, value: any, children: PhrasingContent[]): PhrasingContent {
+  switch (name) {
+    case "bold":
+      return { type: "strong", children };
+    case "italic":
+      return { type: "emphasis", children };
+    case "strike":
+      return { type: "delete", children } as any;
+    default: {
+      const attrs = value || {};
+      return {
+        type: "link",
+        url: attrs.href || "",
+        ...(attrs.title ? { title: attrs.title } : {}),
+        children,
+      };
+    }
+  }
+}
+
+/**
+ * Build nested phrasing content from a flat list of marked runs (#1448 V5).
+ *
+ * Nesting is decided by RUN LENGTH — the mark covering the most consecutive
+ * segments becomes the outer node — not by a fixed wrap order. The fixed order
+ * was the defect: each segment was wrapped independently, so a mark spanning a
+ * run that another mark subdivides got emitted once per sub-run and closed at
+ * every internal boundary:
+ *
+ *   "~~a **struck** phrase~~"  ->  "~~a ~~**~~struck~~**~~ phrase~~"
+ *
+ * That is one `delete` per segment where the source had one spanning all three.
+ * It is idempotent — the mangled form reparses to the same mark sets — which is
+ * exactly why every pre-existing suite, all of which assert `pass2 === pass1`,
+ * was blind to it.
+ *
+ * `applied` carries the marks already opened by an enclosing call so an inner
+ * pass doesn't re-emit them.
+ */
+function buildPhrasingTree(segments: Segment[], applied: ReadonlySet<string>): PhrasingContent[] {
+  const out: PhrasingContent[] = [];
+  let i = 0;
+
+  while (i < segments.length) {
+    // Allowlist, not a denylist: `code` and `rawMarkdown` are leaf-level and an
+    // unrecognized mark has no mdast wrapper at all, so both must fall through
+    // to `segmentLeaf` rather than reaching `wrapInMark`'s default branch,
+    // which would silently emit them as links.
+    const open = [...segments[i].marks].filter(
+      ([name, value]) =>
+        (MARK_NESTING_ORDER as readonly string[]).includes(name) &&
+        !applied.has(markKey(name, value)),
+    );
+
+    if (open.length === 0) {
+      out.push(segmentLeaf(segments[i]));
+      i++;
+      continue;
+    }
+
+    // Pick the mark covering the longest run from here. Ties fall back to
+    // MARK_NESTING_ORDER, which is arbitrary but stable — see its comment.
+    let best = open[0];
+    let bestRun = 0;
+    for (const [name, value] of open) {
+      const key = markKey(name, value);
+      let run = i;
+      while (
+        run < segments.length &&
+        [...segments[run].marks].some(([n, v]) => markKey(n, v) === key)
+      ) {
+        run++;
+      }
+      const length = run - i;
+      const rank = MARK_NESTING_ORDER.indexOf(name as (typeof MARK_NESTING_ORDER)[number]);
+      const bestRank = MARK_NESTING_ORDER.indexOf(best[0] as (typeof MARK_NESTING_ORDER)[number]);
+      if (length > bestRun || (length === bestRun && rank < bestRank)) {
+        best = [name, value];
+        bestRun = length;
+      }
+    }
+
+    const [name, value] = best;
+    const key = markKey(name, value);
+    const nextApplied = new Set(applied);
+    nextApplied.add(key);
+    out.push(
+      wrapInMark(name, value, buildPhrasingTree(segments.slice(i, i + bestRun), nextApplied)),
+    );
+    i += bestRun;
+  }
+
+  return out;
+}
+
+/**
  * Convert Y.XmlText delta segments into MDAST phrasing content.
  * Handles marks (bold, italic, strike, code, link) and hardBreaks in either
  * representation — an embed inside a Y.XmlText or a sibling hardBreak element.
  */
 function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
-  const result: PhrasingContent[] = [];
+  const segments: Segment[] = [];
 
   for (let i = 0; i < el.length; i++) {
     const child = el.get(i);
 
     if (child instanceof Y.XmlText) {
-      const delta = child.toDelta();
-      for (const op of delta) {
+      for (const op of child.toDelta()) {
         // Embedded elements (hardBreak, etc.)
         if (typeof op.insert !== "string") {
           if (op.insert instanceof Y.XmlElement && op.insert.nodeName === "hardBreak") {
-            result.push({ type: "break" });
+            segments.push({ text: null, marks: new Map() });
           }
           continue;
         }
+        if (op.insert.length === 0) continue;
 
-        const text = op.insert;
-        if (text.length === 0) continue;
-
-        // Collect marks from delta attributes
-        const attrs = op.attributes || {};
         const marks = new Map<string, any>();
-        for (const [key, value] of Object.entries(attrs)) {
+        for (const [key, value] of Object.entries(op.attributes || {})) {
           marks.set(stripHashSuffix(key), value);
         }
-
-        // A `rawMarkdown` run is verbatim markdown source (footnote/reference
-        // refs, inline image, inline html). Emit as an inline `html` node — it
-        // serializes byte-exact, bypassing the `text` escaper (PhrasingContent
-        // includes Html, so the cast is structural only). It then flows through
-        // the SAME link/strike/italic/bold wrapping below as ordinary text, so:
-        //   (a) an outer mark on the run is preserved (e.g. bold around a
-        //       footnote ref), and
-        //   (b) crucially, a raw inline IMAGE stays wrapped inside its mark
-        //       rather than becoming a bare paragraph-child image — which the
-        //       #153 `splitParagraphImages` promotion would otherwise turn into
-        //       a block image on reload, collapsing the inline run's flat length
-        //       and desyncing every later annotation offset.
-        // Two adjacent UNMARKED raw runs (e.g. `[^1][^2]`) stay separate: `html`
-        // has no wrapper, so `coalescePhrasing`'s `sameWrapper` never merges them.
-        //
-        // `code` is a leaf-level mark: the segment is either an inlineCode leaf
-        // or a plain-text leaf. link/strike/italic/bold then each wrap whatever
-        // `node` is — inlineCode is valid PhrasingContent inside all of them, so
-        // a code span keeps its mark even when combined with bold/italic/etc.
-        let node: PhrasingContent = marks.has(RAW_MARKDOWN_MARK)
-          ? ({ type: "html", value: text } as any)
-          : marks.has("code")
-            ? { type: "inlineCode", value: text }
-            : { type: "text", value: text };
-
-        // Wrap from innermost to outermost: link, then strike, italic, bold.
-        if (marks.has("link")) {
-          const linkAttrs = marks.get("link") || {};
-          node = {
-            type: "link",
-            url: linkAttrs.href || "",
-            ...(linkAttrs.title ? { title: linkAttrs.title } : {}),
-            children: [node],
-          };
-        }
-        if (marks.has("strike")) {
-          node = { type: "delete", children: [node] } as any;
-        }
-        if (marks.has("italic")) {
-          node = { type: "emphasis", children: [node] };
-        }
-        if (marks.has("bold")) {
-          node = { type: "strong", children: [node] };
-        }
-
-        result.push(node);
+        segments.push({ text: op.insert, marks });
       }
     } else if (child instanceof Y.XmlElement) {
       // Non-text child elements embedded in a block (shouldn't happen often)
       if (child.nodeName === "hardBreak") {
-        result.push({ type: "break" });
+        segments.push({ text: null, marks: new Map() });
       }
     }
   }
 
-  return coalescePhrasing(result);
+  return coalescePhrasing(buildPhrasingTree(segments, new Set()));
 }
 
 /**

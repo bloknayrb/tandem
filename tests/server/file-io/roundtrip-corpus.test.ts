@@ -19,9 +19,10 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { visit } from "unist-util-visit";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { loadMarkdown, saveMarkdown } from "../../../src/server/file-io/markdown.js";
+import { loadMarkdown, mdParser, saveMarkdown } from "../../../src/server/file-io/markdown.js";
 
 const CORPUS_DIR = fileURLToPath(new URL("../../fixtures/roundtrip/", import.meta.url));
 
@@ -34,14 +35,14 @@ const CORPUS: Record<string, { blockedOn?: string; why?: string }> = {
   "tight-list.md": {},
   "raw-blocks.md": {},
   "frontmatter.md": {},
-  "loose-list.md": { blockedOn: "V2", why: "spread is hardcoded false in yDocToMdast" },
-  "table-aligned.md": { blockedOn: "V-table-padding", why: "tablePipeAlign defaults to true" },
-  "table-compact.md": { blockedOn: "V-table-padding", why: "tablePipeAlign defaults to true" },
-  "nested-marks.md": { blockedOn: "V5", why: "deltaToPhrasingContent rebuilds nested marks wrong" },
-  "inline-code-fence.md": {
-    blockedOn: "V7",
-    why: "code-span fence length is not recomputed from the content's backtick runs",
+  "loose-list.md": {},
+  "table-aligned.md": {},
+  "table-compact.md": {
+    blockedOn: "table geometry",
+    why: "hand-authored |---|---| cannot be reproduced; mdast carries no source markers",
   },
+  "nested-marks.md": {},
+  "inline-code-fence.md": {},
 };
 
 function roundTrip(input: string): string {
@@ -121,6 +122,88 @@ describe("verbatim blocks keep their newlines (V6, #1458)", () => {
   });
 });
 
+describe("literal backticks in prose never become a code span (V7, #1448)", () => {
+  /** The mdast tree, minus source positions — "does it still mean the same?" */
+  function meaning(markdown: string): string {
+    const strip = (v: unknown): unknown =>
+      Array.isArray(v)
+        ? v.map(strip)
+        : v && typeof v === "object"
+          ? Object.fromEntries(
+              Object.entries(v)
+                .filter(([k]) => k !== "position")
+                .map(([k, x]) => [k, strip(x)]),
+            )
+          : v;
+    return JSON.stringify(strip(mdParser.parse(markdown)));
+  }
+
+  // An escaped backtick is NOT a code-span delimiter, so a fully-escaped run is
+  // inert. Un-escape ONE of several and the survivor pairs with the next, which
+  // is no longer shielded — literal prose becomes inline code, one-way, and an
+  // idempotency-only assertion cannot see it because pass 2 serializes a genuine
+  // code span.
+  const PROSE = "The case that breaks: `x ?? ``y``` and text after it.\n";
+
+  it("does not change what the document means", () => {
+    expect(meaning(roundTrip(PROSE))).toBe(meaning(PROSE));
+  });
+
+  it("emits no inlineCode node, because the source had none", () => {
+    expect(meaning(roundTrip(PROSE))).not.toContain("inlineCode");
+  });
+
+  it("is idempotent — the escapes do not erode on the second save", () => {
+    const once = roundTrip(PROSE);
+    expect(roundTrip(once)).toBe(once);
+  });
+
+  it("a lone literal backtick keeps its escape rather than becoming a delimiter", () => {
+    // Tidier source is not worth a live delimiter. The escaped form renders
+    // identically and cannot pair with a backtick in a sibling node — which is
+    // the case the handler cannot see, and the one that shifted every code-span
+    // boundary in docs/design-system-impl/testid-manifest.md.
+    expect(roundTrip("a lone ` backtick\n")).toBe("a lone \\` backtick\n");
+  });
+
+  it("a text run ending in a backtick does not merge with the next span's fence", () => {
+    const input = "trailing \\` then `a real span` after.\n";
+    expect(roundTrip(input)).toBe(input);
+    expect(meaning(roundTrip(input))).toBe(meaning(input));
+  });
+});
+
+describe("code-span FENCE STYLE is invisible-tier (#1448)", () => {
+  // These render identically and reparse to the same tree. mdast carries no
+  // source marker for either, so no serializer option can reproduce them —
+  // documented, not fixed. They change once and then hold.
+  const CASES: Array<[string, string]> = [
+    ["padding spaces are dropped", "A span: `` a ` b `` done.\n"],
+    ["a longer-than-minimal fence shrinks", "A span: ``` a `` b ``` done.\n"],
+  ];
+
+  /** Every `inlineCode` value in a document, in order. */
+  function codeValues(markdown: string): string[] {
+    const found: string[] = [];
+    visit(mdParser.parse(markdown), "inlineCode", (node) => {
+      found.push(node.value);
+    });
+    return found;
+  }
+
+  it.each(CASES)("%s, but the span's content is unchanged", (_name, input) => {
+    const out = roundTrip(input);
+    expect(out).not.toBe(input); // if this flips, the case is no longer invisible-tier
+    expect(codeValues(input)).toHaveLength(1); // positive anchor: there IS a span
+    expect(codeValues(out)).toEqual(codeValues(input));
+  });
+
+  it.each(CASES)("%s, and then holds — it does not change again", (_name, input) => {
+    const once = roundTrip(input);
+    expect(roundTrip(once)).toBe(once);
+  });
+});
+
 describe("round-trip corpus: line endings (W2)", () => {
   const LF = "# Title\n\nA paragraph soft-wrapped\nacross two lines.\n\n- a\n- b\n";
   const CRLF = LF.replace(/\n/g, "\r\n");
@@ -129,13 +212,20 @@ describe("round-trip corpus: line endings (W2)", () => {
     expect(roundTrip(LF)).toBe(LF);
   });
 
-  it.fails("a CRLF document keeps CRLF endings", () => {
+  it("a CRLF document keeps CRLF endings", () => {
     expect(roundTrip(CRLF)).toBe(CRLF);
   });
 
-  it("today a CRLF document comes back with MIXED endings, which is worse than either", () => {
-    const out = roundTrip(CRLF);
-    expect(out).toContain("\r\n"); // the intra-paragraph soft wrap keeps its \r
-    expect(out).toMatch(/[^\r]\n/); // block separators have lost theirs
+  it("never comes back MIXED, which was the pre-fix behaviour and worse than either", () => {
+    // Before W2 the block separators became LF while the intra-paragraph soft
+    // wrap kept its `\r`, so a Windows-authored file got BOTH forms.
+    expect(roundTrip(CRLF)).not.toMatch(/[^\r]\n/);
+    expect(roundTrip(LF)).not.toContain("\r");
+  });
+
+  it("a mixed-ending document resolves to the dominant form, not to both", () => {
+    // Two CRLF endings against five LF: LF wins, and the `\r`s are gone.
+    const mixed = "a\r\n\r\nb\nc\n\nd\n";
+    expect(roundTrip(mixed)).not.toContain("\r");
   });
 });

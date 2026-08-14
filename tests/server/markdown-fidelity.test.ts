@@ -64,8 +64,11 @@ describe("markdown fidelity fixture (#981)", () => {
     expect(out).toContain("```ts");
     // Thematic break
     expect(out).toMatch(/^---$/m);
-    // GFM table with alignment
-    expect(out).toContain("| :--- | :----: | ----: |");
+    // GFM table with alignment. Delimiter cells are no longer width-padded to
+    // the widest body cell (`tablePipeAlign: false`, #1448) — the alignment
+    // colons are what carry meaning, and the padding is what made a one-word
+    // edit reflow every row of every table in the file.
+    expect(out).toContain("| :- | :-: | -: |");
     expect(out).toContain("**b2**");
     // Block image
     expect(out).toContain("![Standalone image](https://example.com/image.png");

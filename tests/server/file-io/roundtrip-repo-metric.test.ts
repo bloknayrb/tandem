@@ -28,12 +28,27 @@ import { loadMarkdown, mdParser, saveMarkdown } from "../../../src/server/file-i
  * in #1448. Anything outside this set is a new defect.
  */
 const KNOWN_KINDS = new Set([
-  "list.spread", // V2 — loose lists forced tight
-  "listItem.spread", // V2
-  "inline-marks", // V5 — nested mark reconstruction
-  "inline-code-fence", // V7 — code-span fence length not recomputed
-  "table-cells", // trailing empty cells made explicit; renders identically in GFM
-  "listItem-child-count", // a table nested in a list item; see #1448
+  // The invisible tier, as of #1448 PR 4. Every kind here renders identically in
+  // any viewer; what is left is mark ORDER and code-span STYLE, neither of which
+  // mdast records. Recovering them needs a per-node source-marker layer, which
+  // is a different and much larger project — see the plan's "Out of scope".
+  //
+  //   inline-marks       two marks covering the same run come back in a fixed
+  //                      order (`~~**x**~~` -> `**~~x~~**`), and a degenerate
+  //                      `strong > strong` from the source collapses to one.
+  //   inline-code-fence  a code span wrapped across a source line comes back on
+  //                      one line; CommonMark renders its newline as a space
+  //                      either way.
+  //   table-cells        a row's trailing empty cell is made explicit.
+  //   listItem-child-count  a table nested in a list item; see #1448.
+  //
+  // The VISIBLE kinds are deliberately absent, and their absence is the
+  // assertion: `list.spread` / `listItem.spread` (V2, 56 files) and the
+  // code-span-forming escape bug (V7) both appeared here before PR 4.
+  "inline-marks",
+  "inline-code-fence",
+  "table-cells",
+  "listItem-child-count",
 ]);
 
 /** mdast phrasing types — a difference in any of these is an inline defect. */
