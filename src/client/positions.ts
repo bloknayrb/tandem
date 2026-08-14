@@ -206,9 +206,32 @@ function findXmlTextInParallel(
       const child = yEl.get(j);
       if (child instanceof Y.XmlText) {
         if (child === absPos.type) {
+          // The clamp bounds a Y-derived quantity with a PM-derived one, which is only
+          // sound while textblockFlatLength(pmNode) === pmNode.content.size — true for
+          // every inline child in this schema (text contributes its length, hardBreak
+          // contributes 1 either way). An inline node whose PM size differs from its flat
+          // length would silently truncate here, and the warn below only guards the Y side.
           return toPmPos(pmStart + Math.min(charAccum + absPos.index, textblockFlatLength(pmNode)));
         }
         charAccum += child.length;
+      } else if (child instanceof Y.XmlElement) {
+        // A sibling hardBreak is an inline leaf worth exactly 1, matching every other
+        // implementation of this convention: textblockFlatLength() above, and — decisively —
+        // findXmlTextAtOffset() in server/mcp/document-model.ts, which is the function that
+        // MINTS the relRange this loop reads back. Skipping it here made the reader
+        // asymmetric with its own writer, so a resolved range landed short by one char per
+        // preceding break (#1459), leaving an N-char tail when a suggestion was accepted
+        // (#1450). Stored anchors were never skewed — the write side always counted it.
+        if (child.nodeName === "hardBreak") {
+          charAccum += 1;
+        } else {
+          // No other inline-leaf element exists in the production schema (Image is
+          // configured without `inline: true`). A third shape appearing here would desync
+          // silently, so surface it rather than guessing a width for it.
+          console.warn(
+            `[positions] unexpected Y.XmlElement child <${child.nodeName}> of textblock ${pmNode.type.name} — flat-offset alignment is undefined for it`,
+          );
+        }
       }
     }
     return null;
