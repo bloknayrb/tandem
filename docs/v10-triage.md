@@ -122,9 +122,32 @@ Per your redesign-complete rule: every shipped feature must have the new design.
 | ------------------------------------------------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------- |
 | Highlight palette migration (red/purple → pink/blue or sanitize-on-read fallback)    | Likely shipped v0.11.0 — verify                      | Verify; ship gap if any                           | i think shipped?                                                          |
 | `showAuthorship` default flip false→true + optional migration toast                  | Likely shipped v0.11.0 — verify                      | Verify; ship migration toast if missing           | ok                                                                        |
-| OKLCH `from var(...)` → `color-mix()` fallback for older WebView2 (Win 10)           | Status unclear                                       | **Core** if any tokens use OKLCH `from` syntax    | if this is a browser thing, we are deprecating the browser anyway, right? |
+| OKLCH `from var(...)` → `color-mix()` fallback for older WebView2 (Win 10)           | **Resolved 2026-08-14** — no relative-color syntax anywhere; `color-mix()` already in use | Done — see the note below on why the premise did not apply | if this is a browser thing, we are deprecating the browser anyway, right? |
 | `--tandem-*` prefix audit on production CSS (no bare `--accent`/`--ink`/`--surface`) | Production already namespaced; design files use bare | **Core** if any bare-prefixed vars leak into prod | Core                                                                      |
 | `data-author` → `data-tandem-author` rename                                          | Shipped per CLAUDE.md                                | Done                                              | done                                                                      |
+
+> **On the OKLCH row's premise (recorded 2026-08-14).** The row sat unresolved
+> behind "if this is a browser thing, we are deprecating the browser anyway,
+> right?" It is not a browser thing, and the answer would not have retired it
+> either way: the row is about older **WebView2 on Windows 10**, which is the
+> engine the *Tauri desktop app* renders in. Deprecating the browser / npm path
+> would leave it exactly where it was.
+>
+> Verified against the tree rather than argued: there is no `oklch(from …)` (or
+> any other relative-color) syntax in the repo, and the code already uses
+> `color-mix()` — the very fallback the row asks for. So the migration is done.
+> Plain `oklch()` is used widely and is fine; it is the relative-color form that
+> needs a newer engine, and we do not use it.
+>
+> Kept as a worked example of the failure mode: a deferral whose stated reason
+> does not govern the thing deferred survives review, because the reason reads
+> as settled.
+>
+> The deprecation question the premise leaned on is real but separate, and now
+> has its own tracked home with a criterion: **#1467**. Short version: the npm
+> *package* is load-bearing for Claude Desktop and Cowork and is not a
+> candidate; only the browser UI is; and nothing has actually been announced to
+> users yet.
 
 ## 1I. Speculative HANDOFF items explicitly NOT in scope
 
