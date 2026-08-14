@@ -236,26 +236,21 @@ async function exportChat() {
   style="width: 100%; display: flex; flex-direction: column; background: var(--tandem-surface-muted); flex: 1; min-height: 0;"
 >
   <!-- Header. #1382: no "Chat" title — the rail's tab pill above already says
-       so. Removing the word leaves the row with nothing to show on a fresh
-       chat (both the unread pill and Export/Clear are content-gated), so the
-       row is gated too rather than rendering as a bordered, padded empty strip
-       under the tabs — which is itself the redundant chrome this issue is
-       about, and is the exact frame the issue screenshots.
+       so. With the word gone the row has nothing to show on an empty chat (the
+       unread pill and Export/Clear are all content-gated), so the row is gated
+       too rather than rendering as a bordered, padded empty strip under the
+       tabs. It reappears whenever content returns, and `clearChat` can take it
+       away again, so this is a recurring transition rather than a one-time one.
 
-       The trade is a one-time appearance when the first message lands instead
-       of a permanent empty strip. That jump is masked: it coincides with the
-       message list going from empty-state to content, so it is not a shift the
-       user sees happen to stable content.
-
-       Typography (`font-weight: 600`, `--tandem-text-md`) dropped with the
-       text — `.chat-header-action` sets its own, so it styled nothing. -->
+       `font-weight: 600` stays even though the text it was written for is gone:
+       `.chat-header-action` is `font: inherit`, overriding only `font-size`, so
+       the weight here is what renders Export/Clear and the unread count at 600.
+       Dropping it silently demotes all three to 400. `--tandem-text-md` was
+       genuinely inert (that same rule sets its own `font-size`) and is gone. -->
   {#if unreadCount > 0 || messages.length > 0}
     <div
-      style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); display: flex; align-items: center;"
+      style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); font-weight: 600; display: flex; align-items: center;"
     >
-      <!-- `margin-left: auto` rather than `justify-content: space-between`:
-           with the title gone this is the only flex item, and space-between
-           puts a lone item at flex-start. -->
       <div
         style="display: flex; align-items: center; gap: var(--tandem-space-2); margin-left: auto;"
       >
