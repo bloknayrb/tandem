@@ -1,7 +1,11 @@
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import render from "dom-serializer";
 import JSZip from "jszip";
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { listDocBackups } from "../../src/server/file-io/doc-backup.js";
 import {
   applySingleSuggestion,
   applyTrackedChanges,
@@ -16,7 +20,14 @@ import {
   setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
 import { applyChangesCore } from "../../src/server/mcp/docx-apply.js";
+import { resolveAppDataDir } from "../../src/server/platform.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import {
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_EXTERNAL_CONFLICT,
+  Y_MAP_SAVED_AT_VERSION,
+} from "../../src/shared/constants.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -803,5 +814,136 @@ describe("applyChangesCore — UNC backupPath rejection", () => {
       code: "INVALID_PATH",
       message,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyChangesCore — write guards (#1448 W1)
+// ---------------------------------------------------------------------------
+
+describe("applyChangesCore — write guards", () => {
+  // A fresh id per test: `getOrCreateDocument` is a module-level registry, so a
+  // shared id accumulates a paragraph per `beforeEach` and every case after the
+  // first fails on a flat-text mismatch instead of on the guard under test.
+  let counter = 0;
+  let DOC_ID: string;
+  let docPath: string;
+
+  beforeEach(async () => {
+    for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+    setActiveDocId(null);
+
+    counter += 1;
+    DOC_ID = `guard-test-doc-${counter}`;
+    docPath = path.join(
+      await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-apply-guard-")),
+      "doc.docx",
+    );
+    await fsp.writeFile(
+      docPath,
+      await createTestDocx(wrapBody("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")),
+    );
+
+    const doc = getOrCreateDocument(DOC_ID);
+    doc.getXmlFragment("default").insert(0, [makeYParagraph("Hello world")]);
+    // One accepted suggestion, so the guards below are the ONLY thing that can
+    // stop the write. Without it every case would fail on NO_SUGGESTIONS and
+    // pass for the wrong reason.
+    doc.getMap(Y_MAP_ANNOTATIONS).set("a1", {
+      id: "a1",
+      type: "comment",
+      author: "claude",
+      status: "accepted",
+      range: { from: 0, to: 5 },
+      text: "swap it",
+      suggestedText: "Howdy",
+      textSnapshot: "Hello",
+      createdAt: Date.now(),
+    });
+
+    addDoc(DOC_ID, {
+      id: DOC_ID,
+      filePath: docPath,
+      format: "docx",
+      readOnly: false,
+      source: "file",
+    });
+    setActiveDocId(DOC_ID);
+  });
+
+  /** The on-disk bytes, so a guard can be shown to have left the file alone. */
+  const onDisk = () => fsp.readFile(docPath);
+
+  it("refuses a read-only document and leaves the file untouched", async () => {
+    const before = await onDisk();
+    addDoc(DOC_ID, {
+      id: DOC_ID,
+      filePath: docPath,
+      format: "docx",
+      readOnly: true,
+      source: "file",
+    });
+
+    await expect(applyChangesCore(DOC_ID)).rejects.toMatchObject({ code: "READ_ONLY" });
+    expect(await onDisk()).toEqual(before);
+  });
+
+  it("refuses while an external-edit conflict is pending", async () => {
+    const before = await onDisk();
+    getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_EXTERNAL_CONFLICT, {
+      kind: "external-edit",
+      diskChanged: true,
+      detectedAt: Date.now(),
+    });
+
+    await expect(applyChangesCore(DOC_ID)).rejects.toMatchObject({ code: "EXTERNAL_CONFLICT" });
+    expect(await onDisk()).toEqual(before);
+  });
+
+  it("allows an unsaved-restore conflict over an UNCHANGED disk", async () => {
+    // Mirrors saveDocumentToDisk exactly: `diskChanged` is the discriminator,
+    // not the flag's presence. A blanket block here would refuse every apply
+    // after an ordinary restart-with-unsaved-edits.
+    getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_EXTERNAL_CONFLICT, {
+      kind: "unsaved-restore",
+      diskChanged: false,
+      detectedAt: Date.now(),
+    });
+
+    await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
+  });
+
+  it("refuses when the file was modified outside Tandem since our last write", async () => {
+    const before = await onDisk();
+    getOrCreateDocument(DOC_ID)
+      .getMap(Y_MAP_DOCUMENT_META)
+      .set(Y_MAP_SAVED_AT_VERSION, Date.now() - 60_000);
+    await fsp.utimes(docPath, new Date(), new Date());
+
+    await expect(applyChangesCore(DOC_ID)).rejects.toMatchObject({ code: "FILE_MODIFIED" });
+    expect(await onDisk()).toEqual(before);
+  });
+
+  it("does not refuse on mtime drift within the tolerance", async () => {
+    // Positive control for the guard above: without this, a guard that always
+    // threw would satisfy the FILE_MODIFIED test.
+    getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_SAVED_AT_VERSION, Date.now());
+
+    await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
+  });
+
+  it("re-baselines savedAtVersion so its own write does not read as external", async () => {
+    await applyChangesCore(DOC_ID);
+    const meta = getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META);
+    const stat = await fsp.stat(docPath);
+    expect(meta.get(Y_MAP_SAVED_AT_VERSION)).toBe(stat.mtimeMs);
+  });
+
+  it("takes a pre-overwrite snapshot, not just the sidecar backup", async () => {
+    // The `.backup.docx` sidecar lands wherever the CALLER says. The snapshot is
+    // the swept, capped, app-data copy every other write path takes.
+    await applyChangesCore(DOC_ID);
+    const backups = await listDocBackups(docPath, resolveAppDataDir());
+    expect(backups.length).toBe(1);
   });
 });

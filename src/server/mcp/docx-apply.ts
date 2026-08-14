@@ -7,8 +7,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import fs from "fs/promises";
 import path from "path";
 import { z } from "zod";
+import {
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_EXTERNAL_CONFLICT,
+  Y_MAP_SAVED_AT_VERSION,
+} from "../../shared/constants.js";
+import { withInternal } from "../../shared/origins.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
-import { listDocBackups } from "../file-io/doc-backup.js";
+import { listDocBackups, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import {
   type AcceptedSuggestion,
   applyTrackedChanges,
@@ -16,6 +22,7 @@ import {
 } from "../file-io/index.js";
 import { resolveAppDataDir } from "../platform.js";
 import { relPosToFlatOffset } from "../positions.js";
+import { narrowConflict } from "../session/manager.js";
 import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
@@ -92,6 +99,31 @@ export async function applyChangesCore(
     });
   }
 
+  // Read-only is the user's stated intent and dominates everything below. This
+  // is the only write path in the codebase that used to ignore it: the View
+  // Changelog button and every `POST /api/open {readOnly:true}` produce a doc
+  // that refuses `saveDocumentToDisk` and, until now, accepted an overwrite from
+  // `tandem_applyChanges`.
+  if (docState.readOnly) {
+    throw Object.assign(new Error("Cannot apply changes to a read-only document."), {
+      code: "READ_ONLY",
+    });
+  }
+
+  // An unresolved keep-vs-reload choice blocks this the same way it blocks
+  // Ctrl+S and tandem_save (#1238). `diskChanged` is the discriminator, not the
+  // flag's presence: an "unsaved-restore" over an unchanged disk is unambiguous
+  // intent and stays permitted, mirroring `saveDocumentToDisk` exactly. Claude
+  // has no surface that would even tell it a conflict is pending, so applying
+  // over one is never a resolution.
+  const conflict = narrowConflict(ydoc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT));
+  if (conflict?.diskChanged) {
+    throw Object.assign(
+      new Error("The file changed on disk. Resolve the conflict before applying changes."),
+      { code: "EXTERNAL_CONFLICT" },
+    );
+  }
+
   // 3. Collect accepted suggestions.
   // `listAnnotations()` sanitizes legacy shapes through the same migration-log
   // relay (keyed on docHash(filePath)) the inline loop used, and skips
@@ -155,7 +187,24 @@ export async function applyChangesCore(
     throw Object.assign(new Error("No accepted suggestions to apply."), { code: "NO_SUGGESTIONS" });
   }
 
-  // 4. Get ydocFlatText and read the original file
+  // 4. Get ydocFlatText and read the original file.
+  //
+  // The mtime guard runs HERE, immediately before the read whose bytes are
+  // rewritten, not up with the other preconditions: the suggestion collection
+  // above is synchronous but `applyTrackedChanges` below is not, and the value
+  // being protected is the file's content at read time. Same 1-second tolerance
+  // and the same `Y_MAP_SAVED_AT_VERSION` baseline as `saveDocumentToDisk` —
+  // fs.watch debounce plus an atomic rename cause minor drift.
+  const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
+  const lastSavedAt = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
+  const stat = await fs.stat(filePath);
+  if (lastSavedAt && stat.mtimeMs > lastSavedAt + 1000) {
+    throw Object.assign(
+      new Error("The file was modified outside Tandem. Reload it before applying changes."),
+      { code: "FILE_MODIFIED" },
+    );
+  }
+
   const ydocFlatText = extractText(ydoc);
   const buffer = await fs.readFile(filePath);
 
@@ -185,10 +234,37 @@ export async function applyChangesCore(
     });
   }
 
-  // 7. Write modified .docx
+  // 7. Pre-overwrite snapshot of the on-disk original, then write.
+  //
+  // The `.backup.docx` sidecar above is NOT a substitute, and it was this
+  // path's only net. It lands wherever the CALLER says — next to the user's
+  // document by default, or at any `backupPath` an MCP client supplies — so
+  // it is easy to delete, move or lose, and it is not swept or capped.
+  // `snapshotBeforeFirstWrite` is the same once-per-path-per-run
+  // mechanism every other write path calls, stored in app data, size-capped and
+  // swept — and it is format-agnostic, so a `.docx` restores byte-identical.
+  // Never throws: a snapshot failure must not block the write, since the
+  // in-memory edits are the newer data.
+  await snapshotBeforeFirstWrite(filePath, {
+    appDataDir: resolveAppDataDir(),
+    documentId: docState.id,
+  });
+
+  // 8. Write modified .docx
   await atomicWriteBuffer(filePath, result.buffer);
 
-  // 8. Build result
+  // Re-baseline so the write we just made does not read as an EXTERNAL change
+  // to the next save or to the guard added above. The watcher's reload
+  // re-baselines too, but it is async and deliberately un-fingerprinted for
+  // this path (the reload re-imports tracked-changes markup, which is a
+  // semantic change, not an identical-bytes echo), so an explicit save landing
+  // in that window would otherwise be refused as FILE_MODIFIED.
+  const writtenStat = await fs.stat(filePath).catch(() => undefined);
+  withInternal(ydoc, () => {
+    meta.set(Y_MAP_SAVED_AT_VERSION, writtenStat?.mtimeMs ?? Date.now());
+  });
+
+  // 9. Build result
   const output: ApplyChangesResult = {
     applied: result.applied,
     rejected: result.rejected,
