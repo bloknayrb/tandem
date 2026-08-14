@@ -52,6 +52,7 @@ import {
   narrowConflict,
   restoreYDoc,
   saveSession,
+  sessionModelIsStale,
   sourceFileChanged,
   startAutoSave,
 } from "../session/manager.js";
@@ -816,6 +817,15 @@ async function maybeRestoreSession(
   readOnly: boolean,
 ): Promise<RestoreResult> {
   const session = await loadSession(resolved);
+  if (session && sessionModelIsStale(session)) {
+    // #1448 W3. Falling through to a fresh parse of the source file, which is
+    // the same content read by a load path that no longer damages it. Only
+    // clean, on-disk sessions reach here — see `sessionModelIsStale`.
+    console.error(
+      `[Tandem] Session for ${fileName} predates the current document model; re-reading from the file`,
+    );
+    return { restored: false };
+  }
   if (session) {
     const changed = await sourceFileChanged(session);
     const dirtySession = session.dirty === true;

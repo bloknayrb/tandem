@@ -174,6 +174,10 @@ rename without regenerating `tests/design-system-impl/__snapshots__/testid-set.s
 - One PR per concern. Include a problem/solution summary, the commands you ran, screenshots for
   visible UI changes, and `Closes #N` where it applies.
 - Call out configuration, security, or migration impact explicitly.
+- Work that layers — a harness under the fixes it enables, a refactor under the feature needing
+  it — belongs in a **stack**, not a hand-chain of `--base` flags. See
+  [docs/stacked-prs.md](docs/stacked-prs.md); this repo auto-deletes merged branches, which
+  silently *closes* a hand-chained child PR rather than retargeting it.
 
 ## Security
 

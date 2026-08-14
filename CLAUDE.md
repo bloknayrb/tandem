@@ -53,6 +53,7 @@ These WILL break things if violated:
 | Architectural decisions, ADR-001–050 | [docs/decisions.md](docs/decisions.md) |
 | What shipped / what's left to v1.0 | [CHANGELOG.md](CHANGELOG.md), [docs/roadmap.md](docs/roadmap.md) |
 | Cutting a release | [.claude/skills/release/SKILL.md](.claude/skills/release/SKILL.md) |
+| Chaining dependent PRs | [docs/stacked-prs.md](docs/stacked-prs.md) — `gh stack`; hand-chaining `--base` silently closes children |
 
 ## Development Workflow
 
