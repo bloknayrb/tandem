@@ -46,7 +46,7 @@ const PERSIST_DEBOUNCE_MS = 500;
  * their text content with newlines. Inline marks are dropped — recovery is
  * plain text, matching the issue's "unsaved content" scope.
  */
-export function extractFragmentText(fragment: Y.XmlFragment): string {
+export function extractFragmentBlocks(fragment: Y.XmlFragment): string[] {
   const blocks: string[] = [];
   const collect = (node: Y.XmlElement | Y.XmlText | Y.XmlHook): string => {
     if (node instanceof Y.XmlText) return node.toString();
@@ -65,7 +65,48 @@ export function extractFragmentText(fragment: Y.XmlFragment): string {
       blocks.push(collect(child as Y.XmlElement | Y.XmlText));
     }
   }
-  return blocks.join("\n").replace(/\n+$/, "");
+  while (blocks.length > 0 && blocks[blocks.length - 1] === "") blocks.pop();
+  return blocks;
+}
+
+export function extractFragmentText(fragment: Y.XmlFragment): string {
+  return extractFragmentBlocks(fragment).join("\n");
+}
+
+/**
+ * Encode a scratchpad's blocks for localStorage.
+ *
+ * JSON, not `blocks.join("\n")`, because since #1448 a paragraph's own text can
+ * contain a literal `\n` — that is what stops a soft wrap becoming a hard break.
+ * With `\n` doing double duty as both the intra-block character and the
+ * block separator, the split on restore could not tell them apart, and a
+ * recovered scratchpad came back with one paragraph per WRAPPED LINE: crash
+ * recovery silently reformatting the thing it exists to preserve.
+ */
+export function encodeScratchpadBlocks(blocks: string[]): string {
+  return JSON.stringify(blocks);
+}
+
+/**
+ * Decode what {@link encodeScratchpadBlocks} wrote.
+ *
+ * Falls back to the pre-#1448 newline-delimited form for a value already sitting
+ * in a user's localStorage from an older build — an upgrade must not be the
+ * thing that discards their unsaved text. That form genuinely cannot represent
+ * an intra-block newline, so splitting it is the correct reading of it.
+ */
+export function decodeScratchpadBlocks(stored: string): string[] {
+  if (stored.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.every((b) => typeof b === "string")) {
+        return parsed as string[];
+      }
+    } catch {
+      // Not our JSON after all — read it as legacy text below.
+    }
+  }
+  return stored.split("\n");
 }
 
 interface ScratchpadEntry {
@@ -134,9 +175,9 @@ export function createScratchpadPersistence(getTabs: () => OpenTab[]): Scratchpa
 
   const persistEntry = (entry: ScratchpadEntry) => {
     const fragment = entry.ydoc.getXmlFragment("default");
-    const text = extractFragmentText(fragment);
+    const blocks = extractFragmentBlocks(fragment);
     const key = scratchpadStorageKey(entry.uuid);
-    if (text.length === 0) {
+    if (blocks.join("").length === 0) {
       // Empty scratchpad — clear any stale recovery so we don't warn on close.
       removeStorage(key);
       if (readStorage(SCRATCHPAD_LATEST_KEY) === entry.uuid) {
@@ -145,7 +186,7 @@ export function createScratchpadPersistence(getTabs: () => OpenTab[]): Scratchpa
       unsaved[entry.uuid] = false;
       return;
     }
-    writeStorage(key, text);
+    writeStorage(key, encodeScratchpadBlocks(blocks));
     writeStorage(SCRATCHPAD_LATEST_KEY, entry.uuid);
     unsaved[entry.uuid] = true;
   };
@@ -217,10 +258,9 @@ export function createScratchpadPersistence(getTabs: () => OpenTab[]): Scratchpa
     // Insert restored text as paragraphs into the (empty) fragment. y-prosemirror
     // reconciles this into the editor on mount. Build elements detached then
     // insert in one transaction so the populate path stays atomic.
-    const lines = stored.split("\n");
-    const paragraphs = lines.map((line) => {
+    const paragraphs = decodeScratchpadBlocks(stored).map((block) => {
       const p = new Y.XmlElement("paragraph");
-      if (line.length > 0) p.insert(0, [new Y.XmlText(line)]);
+      if (block.length > 0) p.insert(0, [new Y.XmlText(block)]);
       return p;
     });
     // Privacy invariant: BROWSER_ORIGIN is the only origin NOT in CHANNEL_SKIP

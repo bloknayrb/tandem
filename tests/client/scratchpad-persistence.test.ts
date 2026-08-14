@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
+  decodeScratchpadBlocks,
+  encodeScratchpadBlocks,
+  extractFragmentBlocks,
   extractFragmentText,
   scratchpadStorageKey,
 } from "../../src/client/hooks/useScratchpadPersistence.svelte";
@@ -52,5 +55,36 @@ describe("extractFragmentText", () => {
     list.insert(0, [item]);
     fragment.insert(0, [list]);
     expect(extractFragmentText(fragment)).toBe("item text");
+  });
+});
+
+describe("the persisted form survives a paragraph that holds its own newline", () => {
+  // Since #1448 a paragraph's text can contain a literal newline — that is what
+  // keeps a soft wrap a soft wrap. The persisted form used `\n` as the BLOCK
+  // separator too, so restore could not tell the two apart and crash recovery
+  // came back with one paragraph per wrapped line: the recovery path silently
+  // reformatting the content it exists to preserve.
+
+  it("round-trips a soft-wrapped paragraph as ONE block", () => {
+    const doc = docWithParagraphs(["first line\nsecond line", "another paragraph"]);
+    const blocks = extractFragmentBlocks(doc.getXmlFragment("default"));
+    expect(blocks).toEqual(["first line\nsecond line", "another paragraph"]);
+    expect(decodeScratchpadBlocks(encodeScratchpadBlocks(blocks))).toEqual(blocks);
+  });
+
+  it("reads a pre-#1448 newline-delimited value rather than discarding it", () => {
+    // An upgrade must not be the thing that loses a user's unsaved text. The old
+    // form cannot represent an intra-block newline, so splitting it is the
+    // correct reading of it.
+    expect(decodeScratchpadBlocks("first\nsecond")).toEqual(["first", "second"]);
+  });
+
+  it("reads a legacy value that merely STARTS with a bracket as legacy text", () => {
+    expect(decodeScratchpadBlocks("[draft] notes\nmore")).toEqual(["[draft] notes", "more"]);
+  });
+
+  it("keeps extractFragmentText as the plain-text view for the emptiness check", () => {
+    const doc = docWithParagraphs(["a", "b"]);
+    expect(extractFragmentText(doc.getXmlFragment("default"))).toBe("a\nb");
   });
 });

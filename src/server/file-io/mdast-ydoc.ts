@@ -644,8 +644,18 @@ function stripHashSuffix(key: string): string {
  */
 function flattenHeadingNewlines(children: PhrasingContent[]): PhrasingContent[] {
   return children.map((child) => {
-    if (child.type === "text" && child.value.includes("\n")) {
-      return { ...child, value: child.value.replace(/\r?\n/g, " ") };
+    // A `break` child is the OTHER half of the trigger, and covering only `text`
+    // left it live: `mdast-util-to-markdown`'s `formatHeadingAsSetext` fires on
+    // `node.type === "break"` just as readily as on a newline in a value, so an
+    // explicit Shift+Enter inside a heading still emitted setext — an h1 landing
+    // on disk as `first line\\\nsecond line\n===========`, which every other
+    // reader then reports as the single heading `# first line second line`.
+    if (child.type === "break") return { type: "text", value: " " };
+    // Any node with a `value`, not `text` alone — `inlineCode` and `html` carry
+    // one too, and `formatHeadingAsSetext` tests `.value` without caring which.
+    // A code span holding a newline produced a setext h2 the same way.
+    if ("value" in child && typeof child.value === "string" && /[\r\n]/.test(child.value)) {
+      return { ...child, value: child.value.replace(/\r\n|[\r\n]/g, " ") };
     }
     if ("children" in child && Array.isArray(child.children)) {
       return { ...child, children: flattenHeadingNewlines(child.children as PhrasingContent[]) };

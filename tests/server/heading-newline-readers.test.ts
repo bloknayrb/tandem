@@ -80,6 +80,49 @@ describe("every reader flattens a heading's newline", () => {
   });
 });
 
+describe("the other two ways a heading gets a line break", () => {
+  // `formatHeadingAsSetext` fires on `node.type === "break"` OR on any node
+  // whose `.value` holds a newline. Covering the literal-newline `text` case
+  // alone left both of these emitting setext, which is the same corruption by a
+  // different door: what lands on disk is a two-line heading, and every reader
+  // then reports it as one line, so the file and the model disagree silently.
+
+  it("an explicit hard break in a heading does not emit setext", () => {
+    const doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+    const heading = new Y.XmlElement("heading");
+    heading.setAttribute("level", 1 as never);
+    fragment.insert(0, [heading]);
+
+    const first = new Y.XmlText();
+    heading.insert(0, [first]);
+    first.insert(0, "first line");
+    heading.insert(1, [new Y.XmlElement("hardBreak")]);
+    const second = new Y.XmlText();
+    heading.insert(2, [second]);
+    second.insert(0, "second line");
+
+    expect(saveMarkdown(doc)).toBe("# first line second line\n");
+    // And the disk form agrees with what every reader reports.
+    expect(extractText(doc).split("\n")[0]).toBe("# first line second line");
+    doc.destroy();
+  });
+
+  it("a code span holding a newline does not emit setext", () => {
+    const doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+    const heading = new Y.XmlElement("heading");
+    heading.setAttribute("level", 2 as never);
+    fragment.insert(0, [heading]);
+    const text = new Y.XmlText();
+    heading.insert(0, [text]);
+    text.insert(0, "code\nspan", { code: {} });
+
+    expect(saveMarkdown(doc)).toBe("## `code span`\n");
+    doc.destroy();
+  });
+});
+
 describe("flattening does not move any offset", () => {
   it("extractText's heading line is the same length as the raw text plus its prefix", () => {
     // extractText is the annotation coordinate system, and getElementTextLength
