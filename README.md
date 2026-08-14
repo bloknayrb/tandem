@@ -35,7 +35,7 @@ One thing you need, though: an AI client running on your own computer, plus the 
 - You're reviewing what someone else wrote (a thesis chapter, a contract, a spec) and you want a faster pass.
 - The AI wrote a draft and you have to decide what to keep.
 
-I built Tandem for one person working on their own documents. Those three are examples rather than a boundary; the workflow is the same whatever you're writing. The interface is English-only for now.
+I built Tandem for one person working on their own documents. Those three are examples rather than a boundary, and the kind of document doesn't change how any of it works: a contract behaves the same as an essay. The interface is English-only for now.
 
 ## Install
 
@@ -83,11 +83,17 @@ Without any of them nothing breaks and nothing is lost: your messages and commen
 
 ## How you work with Tandem
 
-1. Open a document in Tandem.
-2. Start your AI client, which is Claude Code in the default setup. Once you've been through [Install](#install), Tandem and Claude find each other on their own; you don't reconnect them each time.
-3. Type a question in the chat panel, or highlight text in the document to point the AI at a passage. It sees what you highlight as you highlight it.
-4. The AI's suggestions show up as cards beside the document. You decide what to accept.
-5. Save when you're finished.
+Tandem has to be running, and once you've been through [Install](#install) it and your AI client find each other on their own, so you don't reconnect them each time. From there it works in both directions, and which one you pick changes how you start rather than what you do next.
+
+**Starting in Tandem.** Open a document and the AI can already see it. There's nothing to attach and no session to paste into. If Claude isn't running yet, the desktop app can start it for you.
+
+**Starting in Claude.** Ask it to open the file in Tandem ("pull up the draft in Tandem") and the document appears in a tab with the AI already on it. This is the direction I use most.
+
+Either way, the rest is the same:
+
+1. Type a question in the chat panel, or highlight text in the document to point the AI at a passage. It sees what you highlight as you highlight it.
+2. The AI's suggestions show up as cards beside the document. You decide what to accept.
+3. Save when you're finished.
 
 [docs/workflows.md](docs/workflows.md) has examples of what this looks like day to day.
 
