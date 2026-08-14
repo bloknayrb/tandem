@@ -209,6 +209,30 @@ function findXmlTextInParallel(
           return toPmPos(pmStart + Math.min(charAccum + absPos.index, textblockFlatLength(pmNode)));
         }
         charAccum += child.length;
+      } else {
+        // A `hardBreak`, which lives as a SIBLING Y.XmlElement rather than
+        // inside a Y.XmlText (#1450, #1459). It contributes nothing to the
+        // concatenated-XmlText projection this loop walks, but occupies one
+        // ProseMirror position — so skipping it under-counted by one per
+        // preceding break and resolved every endpoint that many positions
+        // early. `applySuggestion` deletes [from, to) and inserts at `from`,
+        // so that silently corrupted documents: a short `to` left the tail of
+        // the original behind, a short `from` ate text ahead of the range.
+        if (!(child instanceof Y.XmlElement) || child.nodeName !== "hardBreak") {
+          // Unreachable today — `hardBreak` is the only inline leaf in the
+          // schema (pinned by a test) and neither importer puts anything else
+          // in a textblock. Worth a runtime warn rather than a silent guess:
+          // `textblockFlatLength` above counts ONLY hardBreak, and the server's
+          // `directChildSpans` charges a nested element separator + its inner
+          // length, so a third shape would put three conventions in play and
+          // this is the one that would fail without saying anything.
+          console.warn(
+            `[positions] unexpected non-text child in textblock: ${
+              child instanceof Y.XmlElement ? child.nodeName : typeof child
+            }; counting it as one position`,
+          );
+        }
+        charAccum += 1;
       }
     }
     return null;
