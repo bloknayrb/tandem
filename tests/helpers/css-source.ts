@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import postcss from "postcss";
+import postcss, { type Rule } from "postcss";
 
 /**
  * Source-level CSS extraction shared by the `tests/design-system-impl/` suites.
@@ -77,8 +77,40 @@ export function styleBlocks(file: string): string {
   );
 }
 
-/** One authored rule: its selector list already split, and its declaration body. */
-export type CssRule = { selectors: string[]; body: string };
+/**
+ * One authored rule: its selector list already split, its declaration body,
+ * and its selector list resolved against every ancestor rule.
+ */
+export type CssRule = { selectors: string[]; fullSelectors: string[]; body: string };
+
+/**
+ * Resolve `rule`'s selectors against its ancestor rule chain, cross-multiplied
+ * the way CSS nesting actually cascades (`&` substitutes the ancestor list;
+ * its absence implies a descendant combinator). At-rules (`@media`, etc.) are
+ * transparent to this walk — skipped over rather than stopped at — because
+ * they constrain *when* a rule applies, not *what* it matches: `.a { @media
+ * (…) { button { … } } }`'s `button` still resolves to `.a button`. The walk
+ * stops only at Root, where there is no further ancestor to resolve against.
+ */
+function resolveSelectors(rule: Rule, cache: WeakMap<Rule, string[]>): string[] {
+  const cached = cache.get(rule);
+  if (cached) return cached;
+  const own = rule.selectors.map((s) => s.trim());
+  let ancestor = rule.parent;
+  while (ancestor && ancestor.type === "atrule") ancestor = ancestor.parent;
+  const full =
+    ancestor && ancestor.type === "rule"
+      ? resolveSelectors(ancestor as Rule, cache).flatMap((parentSelector) =>
+          own.map((child) =>
+            child.includes("&")
+              ? child.split("&").join(parentSelector)
+              : `${parentSelector} ${child}`,
+          ),
+        )
+      : own;
+  cache.set(rule, full);
+  return full;
+}
 
 /**
  * Every style rule in `css`, at any nesting depth and inside any at-rule.
@@ -96,19 +128,29 @@ export type CssRule = { selectors: string[]; body: string };
  * on `(?:^|[;\s])`, which the `; ` join satisfies.
  *
  * Nested children are returned as their OWN rules, carrying their authored
- * relative selector (`&:hover`, or a bare `span`). No scan in the repo needs
- * them resolved against the parent, and resolving would mean re-implementing
- * the nesting cascade; what matters is that the parent keeps its declarations,
- * which is precisely what the brace splitter got wrong.
+ * relative selector in `selectors` (`&:hover`, or a bare `span`) — that field
+ * is unchanged, so existing scans built on it keep their exact prior meaning.
+ * `fullSelectors` is the same rule's selectors resolved against every ancestor
+ * (`.mode-toggle { button { … } }`'s inner rule gets `[".mode-toggle button"]`
+ * here, not `["button"]`). A `startsWith`/prefix scan for a compound selector
+ * MUST use `fullSelectors`, not `selectors` — a nested rule's bare local
+ * selector will never carry its ancestor's prefix, which is exactly how a CSS
+ * nesting rewrite defeated `mode-toggle-thumb-contract.test.ts`'s width-rule
+ * gate (mutation-proved) before this field existed.
  */
 export function cssRulesBySelector(css: string): CssRule[] {
   const out: CssRule[] = [];
+  const cache = new WeakMap<Rule, string[]>();
   postcss.parse(css).walkRules((rule) => {
     const body = rule.nodes
       .filter((node) => node.type === "decl")
       .map((decl) => `${decl.prop}: ${decl.value}${decl.important ? " !important" : ""}`)
       .join("; ");
-    out.push({ selectors: rule.selectors.map((s) => s.trim()), body });
+    out.push({
+      selectors: rule.selectors.map((s) => s.trim()),
+      fullSelectors: resolveSelectors(rule, cache),
+      body,
+    });
   });
   return out;
 }

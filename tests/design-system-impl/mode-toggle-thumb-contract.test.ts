@@ -89,11 +89,16 @@ describe("ModeToggle: the mechanisms that must stay absent", () => {
     // "remove the unused expression" cleanup cannot quietly reopen the hole.
     assertRuleExists(".mode-toggle button");
 
+    // `fullSelectors`, not `selectors`: a `.mode-toggle { button { … } }` CSS
+    // nesting rewrite gives the inner rule a bare local selector (`"button"`),
+    // which never carries the `.mode-toggle` prefix a `startsWith` scan needs —
+    // `fullSelectors` resolves it against the ancestor chain first. Reintroduces
+    // the exact hole `assertRuleExists` above already guards against by name.
     const offenders = RULES.filter((r) =>
-      r.selectors.some((s) => s.startsWith(".mode-toggle button")),
+      r.fullSelectors.some((s) => s.startsWith(".mode-toggle button")),
     ).flatMap((r) =>
       [...r.body.matchAll(/(?:^|[;\s])((?:min-|max-)?width|flex)\s*:[^;]*/g)].map(
-        (m) => `${r.selectors.join(", ")} { ${m[0].trim()} }`,
+        (m) => `${r.fullSelectors.join(", ")} { ${m[0].trim()} }`,
       ),
     );
     expect(offenders).toEqual([]);

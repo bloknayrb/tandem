@@ -80,6 +80,50 @@ describe("cssRulesBySelector: shapes that must not lose declarations", () => {
   });
 });
 
+describe("cssRulesBySelector: fullSelectors resolves nesting against ancestors", () => {
+  // THE bypass: `selectors` on a nested rule is only its own local text
+  // (`"button"`), which never carries `.mode-toggle`'s prefix — a
+  // `startsWith(".mode-toggle button")` scan built on `selectors` reports zero
+  // offenders no matter what the nested rule declares. Reproduced against
+  // mode-toggle-thumb-contract.test.ts's real gate before fullSelectors existed.
+  it("resolves a bare nested selector against its ancestor", () => {
+    const css = ".mode-toggle{button{min-width:60px}}";
+    expect(rules(css).find((r) => r.selectors[0] === "button")?.fullSelectors).toEqual([
+      ".mode-toggle button",
+    ]);
+  });
+
+  it("substitutes & with the ancestor rather than prefixing it", () => {
+    const css = ".mode-toggle button{&:hover{color:blue}}";
+    expect(rules(css).find((r) => r.selectors[0] === "&:hover")?.fullSelectors).toEqual([
+      ".mode-toggle button:hover",
+    ]);
+  });
+
+  it("cross-multiplies grouped selectors at both levels", () => {
+    const css = ".a, .b { .c, .d { color: red } }";
+    expect(rules(css).find((r) => r.selectors[0] === ".c")?.fullSelectors).toEqual([
+      ".a .c",
+      ".a .d",
+      ".b .c",
+      ".b .d",
+    ]);
+  });
+
+  it("does not resolve past an at-rule boundary, but still resolves within it", () => {
+    const css = ".mode-toggle{@media (forced-colors: active){button{min-width:60px}}}";
+    expect(rules(css).find((r) => r.selectors[0] === "button")?.fullSelectors).toEqual([
+      ".mode-toggle button",
+    ]);
+  });
+
+  // A top-level (non-nested) rule's fullSelectors equals its selectors —
+  // resolution is a no-op when there is no rule ancestor to resolve against.
+  it("leaves an unnested rule's fullSelectors equal to its selectors", () => {
+    expect(rules(".thumb{width:50%}")[0].fullSelectors).toEqual([".thumb"]);
+  });
+});
+
 describe("cssRulesBySelector: selector lists split the way CSS splits them", () => {
   it("splits a grouped selector", () => {
     expect(rules(".a, .b { color: red }")[0].selectors).toEqual([".a", ".b"]);
