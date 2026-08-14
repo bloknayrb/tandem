@@ -73,13 +73,23 @@ const BLOCK = new Set([
 const COLLAPSIBLE = /[ \t\n\r\f]+/g;
 
 /**
- * The parents the HTML parser requires before it will accept a given tag, from
- * `prosemirror-view`'s `wrapMap`. A clipboard payload from a spreadsheet or a
- * partial table selection starts at `<tr>` or `<td>`, and `parseFromString`
- * foster-parents an orphan one straight out of the tree — the cells survive as
- * bare text and the table is gone. ProseMirror wraps before parsing for exactly
- * this reason; a transform that runs BEFORE it has to do the same or it
- * destroys the paste before ProseMirror ever sees it.
+ * The parents the HTML parser requires before it will accept a given tag,
+ * mirroring `prosemirror-view`'s own `wrapMap`.
+ *
+ * The hazard: `parseFromString` foster-parents an orphan `<tr>`/`<td>` straight
+ * out of the tree, so the cells survive as bare text and the table is gone. A
+ * transform running BEFORE ProseMirror would destroy such a paste before
+ * ProseMirror's own wrapping ever got the chance to save it.
+ *
+ * Honest about the evidence: this is defensive, and the premise is UNREPRODUCED.
+ * The claim is that a spreadsheet or a partial table selection puts a bare `<tr>`
+ * on the clipboard. Two real spreadsheet-family sources were measured (LibreOffice
+ * Calc and Writer) and BOTH emit a full `<table>` wrapper, so neither exercises
+ * this path. Excel — the app the claim specifically rests on — was not available
+ * to test. What justifies keeping it is upstream precedent, not observation:
+ * `prosemirror-view` carries this identical map in its clipboard reader, which is
+ * reasonable evidence the shape occurs somewhere. It is inert unless the payload's
+ * first tag is actually one of these, so the cost of being wrong is zero.
  */
 const WRAP_MAP: Record<string, string[]> = {
   thead: ["table"],
