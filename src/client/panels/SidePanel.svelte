@@ -584,12 +584,18 @@ function handleRailBackgroundClick(e: MouseEvent) {
 
   <!-- Header -->
   <div style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border);">
-    <!-- #1382: no "Annotations" title — the tab pill directly above says it.
+    <!-- #1382: no "Annotations" title — the rail tab directly above says it,
+         and the region is named independently (`role="complementary"
+         aria-label="Annotations and chat"` in App.svelte), so deleting the
+         heading leaves nothing unnamed.
+
          The count is NOT redundant with the tab badge and must stay: that badge
-         hides on the active tab and counts a narrower set (see #1382).
-         `aria-hidden` because the live region below already speaks it, and no
-         heading element because an <h3> holding only a pill trips axe's
-         `empty-heading` in the zero-pending state. -->
+         hides on the active tab, and it counts a strict subset (see #1382).
+         `aria-hidden` because the live region below already speaks it. No
+         heading element either — an <h3> whose only child is an `aria-hidden`
+         pill has no accessible text in ANY state, so it would trip axe's
+         `empty-heading` (live: see the disabled-rules list in
+         tests/e2e/accessibility.spec.ts). -->
     <div style="display: flex; align-items: center;">
       {#if filteredData.allPending.length > 0}
         <span
@@ -608,11 +614,12 @@ function handleRailBackgroundClick(e: MouseEvent) {
           : ""}
       </span>
       <!-- `margin-left: auto`, not the row's old `justify-content:
-           space-between`: the pill is conditional, so the row alternates
-           between one and two flex items, and `space-between` puts a lone item
-           at flex-start — measured as these controls jumping ~180px left and
-           back each time the pending count crossed 0/1. ChatPanel's header row
-           is the same shape for the same reason. -->
+           space-between`. The leading item is now conditional, so
+           `space-between` can't be trusted to hold these right: with the pill
+           absent it parked the lone controls div at flex-start, and they
+           snapped to the left edge and back each time the pending count
+           crossed 0/1. (The `aria-live` span above is `position: absolute`, so
+           it is out of flow and not a flex item at all.) -->
       <div
         style="display: flex; align-items: center; gap: var(--tandem-space-2); margin-left: auto;"
       >
