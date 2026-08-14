@@ -33,7 +33,7 @@ const CORPUS: Record<string, { blockedOn?: string; why?: string }> = {
   "soft-wrap.md": {},
   "tight-list.md": {},
   "raw-blocks.md": {},
-  "frontmatter.md": { blockedOn: "V1", why: "no remark-frontmatter; the fences parse as setext" },
+  "frontmatter.md": {},
   "loose-list.md": { blockedOn: "V2", why: "spread is hardcoded false in yDocToMdast" },
   "table-aligned.md": { blockedOn: "V-table-padding", why: "tablePipeAlign defaults to true" },
   "table-compact.md": { blockedOn: "V-table-padding", why: "tablePipeAlign defaults to true" },

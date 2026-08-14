@@ -1,4 +1,5 @@
 import type { PhrasingContent, Root, RootContent } from "mdast";
+import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
@@ -40,8 +41,26 @@ function normalizeLabel(s: string): string {
  */
 const HOST_AFTER_AT = /^[A-Za-z0-9._-]*\.[A-Za-z0-9_-]*[A-Za-z]/;
 
+/**
+ * Frontmatter flavours to recognize. Both halves of the pipeline must be given
+ * the SAME list — a flavour the parser knows and the stringifier does not comes
+ * back out as an unhandled node.
+ *
+ * Without this, CommonMark rules apply to a frontmatter block and destroy it:
+ * the opening `---` is a thematic break and the closing `---` is a setext
+ * underline for the line above, so `---\ntitle: X\n---` saves back as
+ * `---\n\ntitle: X\n---------` and is no longer frontmatter at all. For an
+ * Obsidian vault that silently voids every note's tags, aliases and dates
+ * (#1457).
+ */
+const FRONTMATTER_FLAVOURS: ["yaml", "toml"] = ["yaml", "toml"];
+
 /** Markdown parser shared by production and tests. */
-export const mdParser = unified().use(remarkParse).use(remarkGfm).freeze();
+export const mdParser = unified()
+  .use(remarkParse)
+  .use(remarkFrontmatter, FRONTMATTER_FLAVOURS)
+  .use(remarkGfm)
+  .freeze();
 
 const stringifyOptions = {
   bullet: "-",
@@ -77,6 +96,7 @@ let activeRefDefs = new Set<string>();
  * time, so the same frozen processor serves every tree.
  */
 const mdStringifier = unified()
+  .use(remarkFrontmatter, FRONTMATTER_FLAVOURS)
   .use(remarkGfm)
   .use(remarkStringify, {
     ...stringifyOptions,

@@ -35,6 +35,7 @@ const SOURCES = [
   '<div class="raw">block</div>\n',
   "[ref]: https://example.com\n\nSee [ref].\n",
   "Text[^1]\n\n[^1]: A footnote.\n",
+  "---\ntitle: A Note\ntags: [x]\n---\n\nBody.\n",
 ];
 
 /** Every (nodeName, attribute) pair the server actually writes. */
@@ -51,7 +52,12 @@ function serverWrittenAttributes(): Map<string, Set<string>> {
 }
 
 describe("Y attribute parity between server and client schema", () => {
-  it("every attribute the server writes is declared on the client node", () => {
+  it("no server-written attribute is discarded by the client schema", () => {
+    // The permanent gate. An attribute the client schema does not declare is
+    // dropped by `computeAttrs` when the PM doc is built from the Y.Doc, and
+    // `updateYFragment` then prunes it from the Y.Doc — so the data is gone from
+    // disk on the user's first edit, silently and irrecoverably. That is what
+    // happened to `table.align`.
     const schema = productionSchema();
     const dropped: string[] = [];
 
@@ -67,19 +73,21 @@ describe("Y attribute parity between server and client schema", () => {
       }
     }
 
-    // V4 is open: `table.align` is the one casualty today. When PR 3 declares
-    // it, this list empties and the assertion below becomes the permanent gate.
-    expect(dropped).toEqual(["table.align"]);
+    expect(dropped).toEqual([]);
   });
 
-  it.fails("no server-written attribute is discarded by the client schema", () => {
-    const schema = productionSchema();
-    const dropped: string[] = [];
-    for (const [nodeName, attrs] of serverWrittenAttributes()) {
-      const declared = new Set(Object.keys(schema.nodes[nodeName]?.spec.attrs ?? {}));
-      for (const attr of attrs) if (!declared.has(attr)) dropped.push(`${nodeName}.${attr}`);
-    }
-    expect(dropped).toEqual([]);
+  it("actually derives attributes, rather than passing on an empty set", () => {
+    // The positive anchor. Without it, a change that made
+    // `serverWrittenAttributes()` return nothing would satisfy the "zero
+    // dropped" assertion above and report perfect health on an empty scan.
+    const written = serverWrittenAttributes();
+    expect(written.size).toBeGreaterThan(4);
+    // Spread each Set — `.flat()` does not flatten a Set, so a plain
+    // `[...written.values()].flat()` silently yields an array OF Sets and the
+    // `toContain` below can never match.
+    const all = [...written.values()].flatMap((set) => [...set]);
+    expect(all).toContain("align");
+    expect(all).toContain("markdownFrontmatter");
   });
 
   it("the attributes that do survive are still surviving", () => {
@@ -91,8 +99,9 @@ describe("Y attribute parity between server and client schema", () => {
       orderedList: ["start"],
       listItem: ["checked"],
       codeBlock: ["language"],
-      paragraph: ["markdownHtml", "markdownRaw"],
+      paragraph: ["markdownHtml", "markdownRaw", "markdownFrontmatter"],
       image: ["src", "alt", "title"],
+      table: ["align"],
     };
     for (const [nodeName, attrs] of Object.entries(expected)) {
       const declared = Object.keys(schema.nodes[nodeName]?.spec.attrs ?? {});

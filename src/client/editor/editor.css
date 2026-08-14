@@ -119,6 +119,19 @@
 .hide-raw-md .tandem-editor [data-markdown-raw] {
   display: none;
 }
+/* YAML/TOML frontmatter (#1457) rides the same raw-passthrough carrier, but it
+   is the one raw construct that is never part of the document's text — it is
+   metadata about the note. Given its own box so it reads as a header block
+   rather than as a dimmed first paragraph, which is what an Obsidian user
+   expects to see above their note. It still obeys the "Show raw markdown"
+   toggle above via the [data-markdown-raw] rule, and the source is always in
+   the Y.Doc either way, so nothing here can affect the saved file. */
+.tandem-editor [data-markdown-frontmatter] {
+  border-left: 2px solid var(--tandem-border);
+  padding: var(--tandem-space-2) var(--tandem-space-3);
+  background: var(--tandem-surface-sunk);
+  white-space: pre-wrap;
+}
 /* Inline/embedded images (issue #153): markdown `![alt](url)` + .docx images.
    Constrain to the content width so large embedded images don't overflow. */
 .tandem-editor img {

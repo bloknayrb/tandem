@@ -162,6 +162,41 @@ const LinkWithHoverTitle = Link.extend({
  */
 const SoftWrapParagraph = Paragraph.extend({ whitespace: "pre" });
 
+/**
+ * Table that carries GFM column alignment (#1448).
+ *
+ * `@tiptap/extension-table` declares no attributes at all, so the `align` array
+ * the server writes on the table element was discarded by `computeAttrs` the
+ * moment the ProseMirror doc was built from the Y.Doc — before the DOM was
+ * involved — and `updateYFragment` then pruned it from the Y.Doc on the next
+ * write. `|:--|:-:|--:|` became `|---|---|---|` on the user's first edit, and
+ * permanently: reopening the file cannot recover what is no longer on disk.
+ *
+ * Stored the way the server stores it: a JSON array at the TABLE level, not
+ * per-cell — that mirrors mdast's own shape and avoids per-cell plumbing.
+ *
+ * **Deliberately NOT `parseHTML: () => null`.** The `markdownRaw` /
+ * `markdownHtml` attributes next door use that pattern so pasted HTML can never
+ * forge a verbatim-passthrough block, which would let arbitrary pasted text
+ * serialize as un-escaped markdown source. Alignment carries no such risk, and
+ * copying the pattern here would re-break the thing being fixed: the attribute
+ * would reset to null on the next DOM re-read. It must survive a DOM round trip,
+ * so it renders to `data-align` and parses back from it.
+ */
+const TableWithAlignment = Table.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      align: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute("data-align"),
+        renderHTML: (attrs: Record<string, unknown>) =>
+          attrs.align ? { "data-align": String(attrs.align) } : {},
+      },
+    };
+  },
+});
+
 export function buildSchemaExtensions(): AnyExtension[] {
   return [
     // `listItem:false` disables StarterKit's stock ListItem so our
@@ -238,7 +273,7 @@ export function buildSchemaExtensions(): AnyExtension[] {
     Placeholder.configure({
       placeholder: "Start typing…",
     }),
-    Table.configure({ resizable: true }),
+    TableWithAlignment.configure({ resizable: true }),
     TableRow,
     TableCell,
     TableHeader,
