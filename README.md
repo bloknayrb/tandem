@@ -159,18 +159,18 @@ Tandem is close to v1.0, and I keep shipping. [CHANGELOG.md](CHANGELOG.md) recor
 
 **Something not working?** Run the built-in diagnostics first, since they check the setup problems behind most first-launch failures. In the desktop app: **Settings → About → Copy Diagnostics**. On an npm install: `tandem doctor`. (The desktop app doesn't install the `tandem` command, so use the button rather than the CLI.) Then see [docs/troubleshooting.md](docs/troubleshooting.md).
 
-|                                                                                                                                                                          |                                                                        |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| [User guide](docs/user-guide.md)                                                                                                                                         | a longer walkthrough of the editor                                     |
-| [Workflows](docs/workflows.md)                                                                                                                                           | daily usage patterns                                                   |
-| [Troubleshooting](docs/troubleshooting.md)                                                                                                                               | when something goes wrong                                              |
-| [Data locations](docs/data-locations.md)                                                                                                                                 | where Tandem stores data, and clean uninstall                          |
-| [Integrations](docs/integrations.md)                                                                                                                                     | which AI clients connect, and how                                      |
-| [Security](docs/security.md)                                                                                                                                             | the full security model                                                |
-| [Licensing](docs/licensing-explained.md)                                                                                                                                 | how licensing works at v1.0, plain English first                       |
-| [Configuration](docs/configuration.md) · [CLI](docs/cli.md)                                                                                                              | advanced setup and command reference                                   |
+| | |
+| - | - |
+| [User guide](docs/user-guide.md) | a longer walkthrough of the editor |
+| [Workflows](docs/workflows.md) | daily usage patterns |
+| [Troubleshooting](docs/troubleshooting.md) | when something goes wrong |
+| [Data locations](docs/data-locations.md) | where Tandem stores data, and clean uninstall |
+| [Integrations](docs/integrations.md) | which AI clients connect, and how |
+| [Security](docs/security.md) | the full security model |
+| [Licensing](docs/licensing-explained.md) | how licensing works at v1.0, plain English first |
+| [Configuration](docs/configuration.md) · [CLI](docs/cli.md) | advanced setup and command reference |
 | [Positioning](docs/positioning.md) · [Decisions](docs/decisions.md) · [Roadmap](docs/roadmap.md) · [Architecture](docs/architecture.md) · [MCP tools](docs/mcp-tools.md) | why Tandem exists, ADRs, what's next, diagrams, the MCP tool reference |
-| [CHANGELOG](CHANGELOG.md)                                                                                                                                                | release notes                                                          |
+| [CHANGELOG](CHANGELOG.md) | release notes |
 
 ## License
 
