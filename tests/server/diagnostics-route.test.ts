@@ -278,9 +278,11 @@ describe("GET /api/diagnostics — home-path redaction", () => {
 
 describe("GET /api/diagnostics — dev-repo check filtering", () => {
   it("drops node-modules and mcp-json results and recomputes aggregates", async () => {
-    // A Tauri/npm-global user's server cwd is arbitrary — these two checks
-    // would FAIL on every field report. The route must not let them poison
-    // ok/failures/summary.
+    // A Tauri/npm-global user's server cwd is arbitrary, so these two checks
+    // answer a question about someone else's directory. Neither can FAIL from
+    // such a cwd any more (mcp-json since #1404, node-modules since its
+    // sibling fix) — but the route must still not let a report that carries
+    // them poison ok/failures/summary, which is what these fixtures pin.
     const collect = vi.fn(async () =>
       makeReport([
         result("node-version", "pass"),

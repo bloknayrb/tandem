@@ -186,8 +186,46 @@ function checkNodeVersion(r: Recorder): void {
 
 // ── Check: node_modules exists ──────────────────────────────────────
 
-function checkNodeModules(r: Recorder): void {
-  if (existsSync(join(process.cwd(), "node_modules"))) {
+/**
+ * `node_modules/` in the CWD is a finding only inside the dev checkout.
+ *
+ * This used to run ungated, so `tandem doctor` on a global install FAILed from
+ * every ordinary directory and prescribed `npm install` there — which is worse
+ * than the `.mcp.json` remedy that motivated #1404. That one merely could not
+ * work; this one SUCCEEDS at the wrong thing, writing a `node_modules/` and a
+ * `package-lock.json` into whatever folder the user happened to be standing in.
+ *
+ * Skip-shaped pass rather than a silent gate, following {@link checkMcpJson}
+ * and {@link evaluateAbsentChannelEntry} — including their rule that guidance
+ * goes in the MESSAGE, never `fix`.
+ *
+ * The probe is tri-state and both non-`"yes"` arms skip, but they must not say
+ * the same thing. `"unreadable"` means a `package.json` we could not parse:
+ * asserting "this is not the checkout" there would contradict the `dev-repo`
+ * warning printed a few lines later, and the pass would be the false half.
+ * Deliberately NOT a finding either — an end user whose own project has a
+ * corrupt `package.json` would be back to the FAIL this fix removes, and for
+ * the case where it *is* the checkout, the `dev-repo` warn already carries the
+ * actionable remedy.
+ */
+function checkNodeModules(r: Recorder, repo: RepoProbe, cwd: string): void {
+  if (repo !== "yes") {
+    // `reason` so a --json consumer can tell the two arms apart without
+    // string-matching prose, as `evaluateOrphanedVite` and `evaluatePushPath`
+    // already do for their own multi-armed skips.
+    const unreadable = repo === "unreadable";
+    recordEvaluation(r, {
+      status: "skip",
+      message: unreadable
+        ? "cannot tell whether this directory is the tandem-editor checkout (package.json " +
+          "unreadable), and node_modules/ is only a finding inside it"
+        : "the current directory is not the tandem-editor checkout, so its node_modules/ is " +
+          "not Tandem's to check — a global install keeps its dependencies in the npm prefix",
+      data: { reason: unreadable ? "package-json-unreadable" : "not-checkout" },
+    });
+    return;
+  }
+  if (existsSync(join(cwd, "node_modules"))) {
     r.pass("node_modules/ exists");
   } else {
     r.fail("node_modules/ not found", "npm install");
@@ -229,6 +267,27 @@ function recordEvaluation(r: Recorder, result: EvalOutcome | null): void {
  * dev-repo checks below.
  */
 export type RepoProbe = "yes" | "no" | "unreadable";
+
+/**
+ * Check names whose answer depends on `process.cwd()`.
+ *
+ * Lives here, next to the three `process.cwd()` reads it describes, so that
+ * adding a fourth trips over it. `/api/diagnostics` and `tandem_diagnostics`
+ * import this to strip these from field reports, where the server's cwd is
+ * arbitrary — see `filterDevRepoChecks`.
+ *
+ * NOT the same set as "checks gated on {@link probeTandemEditorRepo}":
+ * `mcp-json` deliberately keeps inspecting a hand-written `.mcp.json` in a
+ * user's own project (see {@link checkMcpJson}), so it is cwd-dependent
+ * without being dev-gated. Deriving one set from the other would be a bug.
+ */
+export const CWD_DEPENDENT_CHECKS = [
+  "node-modules",
+  "dev-repo",
+  "npm-staleness",
+  "mcp-json",
+  "orphaned-vite",
+] as const;
 
 /** Classify `dir/package.json`: the tandem-editor repo, not it, or broken. */
 export function probeTandemEditorRepo(dir: string): RepoProbe {
@@ -1945,7 +2004,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   const mcpPort = opts.mcpPort ?? DEFAULT_MCP_PORT;
   const vitePort = opts.vitePort ?? VITE_DEV_PORT;
   const r = new Recorder();
-  // Resolve the dev-repo gate once — both gated checks share the answer.
+  // Resolve the dev-repo probe once — every cwd-scoped check shares the answer.
   const cwd = process.cwd();
   const repo = probeTandemEditorRepo(cwd);
   const devRepo = repo === "yes";
@@ -1958,7 +2017,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
     : "Launch the Tandem desktop app, or run `tandem` in a terminal";
 
   await r.check("node-version", () => checkNodeVersion(r));
-  await r.check("node-modules", () => checkNodeModules(r));
+  await r.check("node-modules", () => checkNodeModules(r, repo, cwd));
   if (repo === "unreadable") {
     // A package.json we cannot read also silently disables both dev-repo
     // checks below — so say so instead of skipping as if this were simply
@@ -1967,7 +2026,8 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
     await r.check("dev-repo", () =>
       r.warn(
         "package.json in the current directory could not be read — if this is the " +
-          "tandem-editor checkout, the npm-staleness and orphaned-Vite checks are being skipped",
+          "tandem-editor checkout, the node_modules, npm-staleness and orphaned-Vite checks " +
+          "are being skipped",
         "Check for merge-conflict markers or a truncated file: git checkout package.json",
       ),
     );

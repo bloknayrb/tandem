@@ -970,7 +970,7 @@ Read-only, takes **no parameters**, and is **not** license-gated — diagnostics
 Everything from `osRelease` down is **optional and best-effort** (`collectHostInfo()` in `src/server/mcp/host-info.ts`): `os.cpus()` returns `[]` on some cgroup-restricted hosts and `os.version()` can throw, so any of these keys may be absent. They are deliberately non-identifying — no hostname, username, home path, network interfaces, locale or timezone — because this payload is what "Copy Diagnostics" puts on the clipboard and what the Report-a-bug link prefills into a public issue.
 
 **Notes:**
-- The five source-checkout-only checks (`node-modules`, `dev-repo`, `npm-staleness`, `mcp-json`, `orphaned-vite`) are filtered out and `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop / npm-global install. (`tandem doctor` on the CLI keeps them; there the cwd is meaningful.)
+- The five source-checkout-only checks (`node-modules`, `dev-repo`, `npm-staleness`, `mcp-json`, `orphaned-vite`) are filtered out and `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()`, which is arbitrary for a desktop or npm-global install. (`tandem doctor` on the CLI keeps them; there the cwd is meaningful.)
 - The report embeds absolute paths and PIDs in per-check `data` bags — surfaced only over the loopback-gated MCP transport, the same posture that makes `GET /api/diagnostics` loopback-only.
 - Use this instead of asking the user to run `tandem doctor` when an MCP call fails unexpectedly.
 
@@ -1069,7 +1069,7 @@ Returns app metadata for the client's About panel and version indicator. All fie
 
 Runs the embedded `tandem doctor` collector and returns the report plus environment metadata. Backs the client's **Settings → About → Copy Diagnostics** button.
 
-**Loopback-only, unconditionally** — non-loopback callers get `403` regardless of auth, because the report embeds absolute paths and PIDs. It never contains token material or document content. Home-directory paths are `~`-redacted before they reach the wire (`redactHomePaths`), since this payload also prefills the Report-a-bug issue body; that narrows what leaks into a public issue but does not change the loopback posture. The five source-checkout-only checks (`node-modules`, `dev-repo`, `npm-staleness`, `mcp-json`, `orphaned-vite`) are filtered out of the report with `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop/npm-global install. Concurrent requests share one in-flight collector run (single-flight).
+**Loopback-only, unconditionally** — non-loopback callers get `403` regardless of auth, because the report embeds absolute paths and PIDs. It never contains token material or document content. Home-directory paths are `~`-redacted before they reach the wire (`redactHomePaths`), since this payload also prefills the Report-a-bug issue body; that narrows what leaks into a public issue but does not change the loopback posture. The five source-checkout-only checks (`node-modules`, `dev-repo`, `npm-staleness`, `mcp-json`, `orphaned-vite`) are filtered out of the report with `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()`, which is arbitrary for a desktop or npm-global install. Concurrent requests share one in-flight collector run (single-flight).
 
 **Response (200):**
 ```json
