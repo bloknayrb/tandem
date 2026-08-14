@@ -471,7 +471,11 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
   switch (el.nodeName) {
     case "heading": {
       const depth = Number(el.getAttribute("level") ?? 1) as 1 | 2 | 3 | 4 | 5 | 6;
-      return { type: "heading", depth, children: deltaToPhrasingContent(el) };
+      return {
+        type: "heading",
+        depth,
+        children: flattenHeadingNewlines(deltaToPhrasingContent(el)),
+      };
     }
 
     case "paragraph":
@@ -616,6 +620,38 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
 function stripHashSuffix(key: string): string {
   const dashIdx = key.indexOf("--");
   return dashIdx >= 0 ? key.slice(0, dashIdx) : key;
+}
+
+/**
+ * Replace newlines in a heading's phrasing content with spaces.
+ *
+ * A heading must never carry a literal newline. If one gets in, `remark-stringify`
+ * emits a **setext** heading at depth 1–2 (`first\nsecond\n======`) and an escaped
+ * `&#xA;` at depth 3+ — the first inverting our own documented setext→ATX
+ * normalization, both producing markdown nobody typed.
+ *
+ * This became reachable when `paragraph` gained `whitespace: "pre"` (#1448).
+ * Before that a paragraph could never hold a literal newline — any DOM re-read
+ * split it into `hardBreak` — so a soft-wrapped paragraph promoted to a heading
+ * (toolbar, `Mod-Alt-1`, a slash command: ordinary editing, not an edge case)
+ * could not carry one either. Now it can.
+ *
+ * Fixed here at the serialization boundary rather than in the block-conversion
+ * command, because there is more than one route into a heading and this is the
+ * single point they all pass through. Headings are never raw carriers, so unlike
+ * a general whitespace pass over `yDocToMdast` this cannot touch verbatim
+ * `markdownRaw` or `codeBlock` content.
+ */
+function flattenHeadingNewlines(children: PhrasingContent[]): PhrasingContent[] {
+  return children.map((child) => {
+    if (child.type === "text" && child.value.includes("\n")) {
+      return { ...child, value: child.value.replace(/\r?\n/g, " ") };
+    }
+    if ("children" in child && Array.isArray(child.children)) {
+      return { ...child, children: flattenHeadingNewlines(child.children as PhrasingContent[]) };
+    }
+    return child;
+  });
 }
 
 /**

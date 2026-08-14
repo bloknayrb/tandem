@@ -139,6 +139,26 @@ const LinkWithHoverTitle = Link.extend({
  * spaces are a markdown hard break and four leading spaces an indented code
  * block — does not hold. `remark-stringify`'s `safe()` already escapes both to
  * `&#x20;`, idempotently. Pinned in `tests/server/file-io/whitespace-escaping`.
+ *
+ * Two knock-on effects of `"pre"` that are NOT about the newline split, both
+ * found by reviewing this change rather than by the test suite:
+ *
+ * - **Paste.** The per-node setting beats the paste-level `preserveWhitespace:
+ *   false` once parsing enters a `<p>`, so pretty-printed external HTML would
+ *   import its own indentation as content. Handled at the paste boundary by
+ *   `utils/paste-whitespace.ts` — deliberately not by giving this node's parse
+ *   rule an explicit `preserveWhitespace`, which would fix paste and silently
+ *   reopen the newline split for any paragraph re-read without a node view desc.
+ * - **Trailing whitespace** is no longer stripped when a paragraph is parsed
+ *   from the DOM (`prosemirror-model` `NodeContext.finish` gates stripping on
+ *   the same flag). Trailing spaces the user actually typed now survive, and
+ *   save as a `&#x20;` escape. Accepted: it is cosmetic, it is idempotent, and
+ *   stripping it back out would mean editing text the user typed on purpose.
+ *
+ * A third — that preserved newlines would render as collapsed spaces because
+ * nothing sets `white-space` on `.tandem-editor` — is not real: `@tiptap/core`
+ * injects `.ProseMirror { white-space: pre-wrap }` itself (`injectCSS` defaults
+ * to true and is not disabled here), so do NOT add a rule for it.
  */
 const SoftWrapParagraph = Paragraph.extend({ whitespace: "pre" });
 

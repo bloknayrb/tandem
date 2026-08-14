@@ -86,6 +86,65 @@ describe("preserved whitespace cannot become markdown syntax", () => {
   });
 });
 
+describe("a heading never carries a newline", () => {
+  /**
+   * Build a heading holding `text` as one run. Reachable in the product by
+   * promoting a soft-wrapped paragraph to a heading — toolbar, `Mod-Alt-1`, a
+   * slash command. `setBlockType` changes the node type and does not re-split
+   * the text by the target type's whitespace spec, so the newline rides along.
+   */
+  function serializeHeading(level: number, text: string): string {
+    const doc = new Y.Doc();
+    try {
+      const heading = new Y.XmlElement("heading");
+      heading.setAttribute("level", level as never);
+      doc.getXmlFragment("default").insert(0, [heading]);
+      const content = new Y.XmlText();
+      heading.insert(0, [content]);
+      content.insert(0, text);
+      return saveMarkdown(doc);
+    } finally {
+      doc.destroy();
+    }
+  }
+
+  it.each([1, 2])("depth %i does not become a setext heading", (level) => {
+    // Setext is what remark-stringify emits for a multi-line heading, and it
+    // inverts our own documented setext -> ATX normalization.
+    const out = serializeHeading(level, "first line\nsecond line");
+    expect(out).not.toMatch(/^[=-]+$/m);
+    expect(out).toBe(`${"#".repeat(level)} first line second line\n`);
+  });
+
+  it.each([3, 4, 5, 6])("depth %i does not emit an escaped newline entity", (level) => {
+    const out = serializeHeading(level, "first line\nsecond line");
+    expect(out).not.toContain("&#xA;");
+    expect(out).toBe(`${"#".repeat(level)} first line second line\n`);
+  });
+
+  it("flattens a newline nested inside a mark", () => {
+    const doc = new Y.Doc();
+    const heading = new Y.XmlElement("heading");
+    heading.setAttribute("level", 2 as never);
+    doc.getXmlFragment("default").insert(0, [heading]);
+    const content = new Y.XmlText();
+    heading.insert(0, [content]);
+    // Delta mark key is `bold`; `deltaToPhrasingContent` maps it to mdast
+    // `strong`. Using the mdast name here would apply no mark at all and the
+    // test would pass while exercising only the flat branch.
+    content.insert(0, "bold\nwrapped", { bold: {} });
+
+    const out = saveMarkdown(doc);
+    expect(out).not.toContain("\n\n");
+    expect(out).toBe("## **bold wrapped**\n");
+    doc.destroy();
+  });
+
+  it("leaves a single-line heading exactly alone", () => {
+    expect(serializeHeading(2, "An ordinary heading")).toBe("## An ordinary heading\n");
+  });
+});
+
 describe("ordinary soft wraps stay ordinary", () => {
   const WRAPPED =
     "At work I kept asking Claude to draft a report for me. I had it write into\na scratch file in my vault, and it updated the instant Claude touched it.\n";
