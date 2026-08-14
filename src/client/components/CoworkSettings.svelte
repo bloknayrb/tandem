@@ -106,11 +106,24 @@ async function withInvoke(
 }
 
 async function handleToggleOn(): Promise<void> {
+  // Same hazard `handleToggleOff` guards against, mirrored: `refetch()` can
+  // swallow its own failure into `coworkState.error` and return without
+  // storing a fresh status, so after a successful enable whose refetch failed,
+  // `status.enabled` is still stale at `false`. Closing the confirm
+  // unconditionally would drop the only `true` term left in `enableBoxChecked`
+  // and visibly UNCHECK the box over an integration that is now actually on --
+  // the more security-relevant direction, since it under-reports an active
+  // integration rather than over-reporting one. Leaving `confirming` set keeps
+  // the box checked (still accurate) until a later successful refetch -- the
+  // 30s poll, or a retry -- closes it for real. If the toggle itself threw,
+  // `readBack` stays at its initial `true`, so the confirm still closes and
+  // `enableBoxChecked` correctly falls back to the unchanged, accurate status.
+  let readBack = true;
   await withInvoke(async (invoke) => {
     await coworkToggleIntegration(invoke, true);
-    await refetch();
-    closeEnableConfirm();
+    readBack = await refetch();
   }, "Failed to enable Cowork");
+  if (readBack) closeEnableConfirm();
 }
 
 /**

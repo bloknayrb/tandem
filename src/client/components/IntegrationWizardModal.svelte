@@ -294,15 +294,23 @@ function leaveCoworkView(): void {
  *  footer, never sub-view mount. On success (or UAC-declined, which the Rust
  *  side leaves fail-closed with enabled:false) we refetch and return to MAIN
  *  so the Cowork row reflects the committed outcome; a thrown firewall error
- *  (incl. adminDeclined) shows inline and keeps the user on the sub-view. */
+ *  (incl. adminDeclined) shows inline and keeps the user on the sub-view.
+ *
+ *  Same hazard as `CoworkSettings.svelte`'s `handleToggleOn`: `refetch()` can
+ *  swallow its own failure and return without storing a fresh status. Leaving
+ *  the sub-view on a failed read-back would paint `coworkRowDetail` from the
+ *  stale pre-enable status on MAIN — "Let a teammate's Claude join…" over an
+ *  integration that is actually now connected. Gate the return on the
+ *  read-back succeeding; a failed one leaves the user on the sub-view, whose
+ *  own copy is accurate, until a retry or the next poll catches up. */
 async function enableCowork(): Promise<void> {
   coworkBusy = true;
   coworkError = null;
   try {
     const invoke: InvokeFn = await loadInvoke();
     await coworkToggleIntegration(invoke, true);
-    await coworkStatus.refetch();
-    leaveCoworkView();
+    const readBack = await coworkStatus.refetch();
+    if (readBack) leaveCoworkView();
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
     coworkError = formatCoworkError(raw);

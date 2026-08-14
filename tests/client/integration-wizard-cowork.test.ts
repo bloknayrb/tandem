@@ -68,7 +68,12 @@ vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
     status: coworkStatusFixture(),
     loading: false,
     error: null,
-    refetch: vi.fn(async () => {}),
+    // The real hook resolves `true`/`false` (a fresh status was/wasn't
+    // stored) and `enableCowork`/`handleToggleOn` gate a UI transition on it —
+    // stubbing `undefined` here would make every enable in this file look
+    // like a failed read-back to that gate, whether or not that's this file's
+    // intent to test.
+    refetch: vi.fn(async () => true),
   }),
 }));
 

@@ -419,6 +419,34 @@ describe("CoworkSettings — enable confirm wiring (#1375)", () => {
     expect(checkbox.checked).toBe(true);
   });
 
+  it("an enable whose read-back fails leaves the box checked and the confirm open", async () => {
+    // The mirror of "a disable whose read-back fails leaves the box off and
+    // says why", in the more security-relevant direction: the write landed
+    // (Cowork IS enabled), only the re-read did not, so `status.enabled` is
+    // still stale at `false`. Closing the confirm unconditionally would drop
+    // the only `true` term left in `enableBoxChecked` and visibly UNCHECK a
+    // box over an integration that is actually on. Leaving the confirm open
+    // is the accurate reflection: nothing here is confidently wrong.
+    const { container, checkbox } = mount();
+    await setChecked(checkbox, true);
+
+    readBackFails();
+    (q(container, "cowork-enable-confirm-btn") as HTMLButtonElement).click();
+    // Both edges, as in the disable read-back-fail test above: waiting only on
+    // `disabled === false` risks reading before the click's async chain even
+    // starts, which would pass this test no matter what the handler does.
+    await waitFor(() => expect(checkbox.disabled).toBe(true), { interval: 5 });
+    await waitFor(() => expect(checkbox.disabled).toBe(false), { interval: 5 });
+
+    expect(toggleIntegration).toHaveBeenCalledWith(fakeInvoke, true);
+    expect(refetch).toHaveBeenCalledTimes(1);
+    // Confirm still open: closing it is exactly what a fresh read-back gates.
+    expect(q(container, "cowork-enable-confirm")).not.toBeNull();
+    // Box still checked via `confirming === "enable"`, not via `status.enabled`
+    // (which a frozen `enabled: false` fixture would leave stale) — accurate.
+    expect(checkbox.checked).toBe(true);
+  });
+
   it("Cancel clears the blocked hint, so a re-open does not paint a stale one", async () => {
     // `reset()` has no observable handle — `probe` is component-local. So this
     // asserts through the DOM instead: blocked hint, Cancel, re-open with a
