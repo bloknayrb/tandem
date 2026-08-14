@@ -26,6 +26,35 @@ import {
 let homeOverride: string;
 let skillPath: string;
 
+/**
+ * Every test below except the deadline one is about overwrite / no-op /
+ * error-recording semantics, not about the deadline. Left on the production
+ * default (`SKILL_REFRESH_TIMEOUT_MS`, 5s) they inherit a wall-clock race they
+ * never meant to enter: under a loaded 460-file parallel run this worker can be
+ * descheduled for seconds, the timer fires by wall clock while the real
+ * `readFile`/`mkdir`/`atomicWrite` are still queued, and a refresh that would
+ * have succeeded is recorded as `{ code: "timed-out" }` instead.
+ *
+ * That is not hypothetical: it took down three different tests in this file
+ * across three consecutive pre-push runs, each failing on a different
+ * assertion, while CI stayed green on the same commit. A budget this far above
+ * the default cannot be reached by scheduling noise, and no test here asserts
+ * anything about how long a refresh takes -- the one that does owns the
+ * deadline explicitly and overrides this via the spread below.
+ */
+const GENEROUS_TIMEOUT_MS = 60_000;
+
+type RefreshOpts = Parameters<typeof refreshExistingSkillIfStale>[0];
+
+/** Calls the real function with a deadline that scheduling noise cannot trip. */
+function refresh(opts: RefreshOpts = {}): Promise<void> {
+  return refreshExistingSkillIfStale({
+    homeOverride,
+    timeoutMs: GENEROUS_TIMEOUT_MS,
+    ...opts,
+  });
+}
+
 beforeEach(async () => {
   homeOverride = await fs.promises.mkdtemp(path.join(os.tmpdir(), "refresh-skill-test-"));
   skillPath = path.join(homeOverride, ".claude", "skills", "tandem", "SKILL.md");
@@ -47,7 +76,7 @@ function readSkillVersion(content: string): number {
 describe("refreshExistingSkillIfStale — first-run (no on-disk file)", () => {
   it("does not install a standalone skill when SKILL.md does not exist", async () => {
     expect(fs.existsSync(skillPath)).toBe(false);
-    await refreshExistingSkillIfStale({ homeOverride });
+    await refresh();
     expect(fs.existsSync(skillPath)).toBe(false);
     expect(getSkillRefreshError()).toBeNull();
   });
@@ -62,7 +91,7 @@ describe("refreshExistingSkillIfStale — stale on-disk", () => {
       "---\nname: tandem\nversion: 1\ndescription: stale\n---\n\nstale body\n",
       "utf8",
     );
-    await refreshExistingSkillIfStale({ homeOverride });
+    await refresh();
     const written = await readFile(skillPath, "utf8");
     expect(readSkillVersion(written)).toBeGreaterThanOrEqual(2);
     expect(written).not.toContain("stale body");
@@ -77,7 +106,7 @@ describe("refreshExistingSkillIfStale — newer-or-equal on-disk", () => {
     const customized = `${bundled}\n<!-- user customization -->\n`;
     await writeFile(skillPath, customized, "utf8");
 
-    await refreshExistingSkillIfStale({ homeOverride });
+    await refresh();
 
     expect(await readFile(skillPath, "utf8")).toBe(customized);
     expect(getSkillRefreshError()).toBeNull();
@@ -89,7 +118,7 @@ describe("refreshExistingSkillIfStale — newer-or-equal on-disk", () => {
     const userCustomized =
       "---\nname: tandem\nversion: 999\ndescription: user-edit\n---\n\nuser custom body\n";
     await writeFile(skillPath, userCustomized, "utf8");
-    await refreshExistingSkillIfStale({ homeOverride });
+    await refresh();
     const after = await readFile(skillPath, "utf8");
     expect(after).toBe(userCustomized);
     expect(getSkillRefreshError()).toBeNull();
@@ -110,7 +139,7 @@ describe("refreshExistingSkillIfStale — failure recording", () => {
         process.platform === "win32" ? "junction" : "dir",
       );
 
-      await refreshExistingSkillIfStale({ homeOverride });
+      await refresh();
 
       expect(getSkillRefreshError()).toMatchObject({ code: "path-rejected" });
       expect(await readFile(realSkillPath, "utf8")).toBe(stale);
@@ -125,7 +154,7 @@ describe("refreshExistingSkillIfStale — failure recording", () => {
     // still read mode 000 and CI may run as root on POSIX).
     await mkdir(skillPath, { recursive: true });
 
-    await refreshExistingSkillIfStale({ homeOverride });
+    await refresh();
 
     expect(getSkillRefreshError()?.code).toBe("read-failed");
     expect((await fs.promises.stat(skillPath)).isDirectory()).toBe(true);
@@ -136,8 +165,7 @@ describe("refreshExistingSkillIfStale — failure recording", () => {
     const stale = "---\nname: tandem\nversion: 1\n---\n\nstale body\n";
     await writeFile(skillPath, stale, "utf8");
 
-    await refreshExistingSkillIfStale({
-      homeOverride,
+    await refresh({
       _writeSkillForTests: async () => {
         throw new Error("simulated disk failure");
       },
@@ -154,8 +182,7 @@ describe("refreshExistingSkillIfStale — failure recording", () => {
     await mkdir(path.dirname(skillPath), { recursive: true });
     await writeFile(skillPath, "---\nname: tandem\nversion: 1\n---\n", "utf8");
 
-    await refreshExistingSkillIfStale({
-      homeOverride,
+    await refresh({
       _beforeSkillCommitForTests: async () => {
         await fs.promises.unlink(skillPath);
       },
@@ -171,8 +198,7 @@ describe("refreshExistingSkillIfStale — failure recording", () => {
     await writeFile(skillPath, stale, "utf8");
     let writerObservedAbort = false;
 
-    await refreshExistingSkillIfStale({
-      homeOverride,
+    await refresh({
       // The deadline clock starts at function entry, but `readFile` and
       // `mkdir` both run before the writer is reached. At 20ms this test
       // failed intermittently under a full-suite run: the abort landed in
@@ -209,15 +235,14 @@ describe("refreshExistingSkillIfStale — failure recording", () => {
   it("clears lastSkillRefreshError after a successful refresh", async () => {
     await mkdir(path.dirname(skillPath), { recursive: true });
     await writeFile(skillPath, "---\nname: tandem\nversion: 1\n---\n", "utf8");
-    await refreshExistingSkillIfStale({
-      homeOverride,
+    await refresh({
       _writeSkillForTests: async () => {
         throw new Error("simulated disk failure");
       },
     });
     expect(getSkillRefreshError()?.code).toBe("write-failed");
 
-    await refreshExistingSkillIfStale({ homeOverride });
+    await refresh();
     expect(getSkillRefreshError()).toBeNull();
   });
 });
