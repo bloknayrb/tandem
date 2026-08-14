@@ -932,11 +932,35 @@ describe("applyChangesCore — write guards", () => {
     await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
   });
 
-  it("re-baselines savedAtVersion so its own write does not read as external", async () => {
-    await applyChangesCore(DOC_ID);
+  it("leaves savedAtVersion STALE so a save before the reload is refused", async () => {
+    // The inverse of every other write path, and deliberate. What lands on disk is
+    // tracked-changes markup the Y.Doc cannot represent — mammoth drops revisions on
+    // import — so until the watcher's reload the Y.Doc is genuinely older than the
+    // file, and an explicit Ctrl+S in that window would export it over the revisions
+    // just written. The stale baseline is what makes saveDocumentToDisk refuse.
+    const baseline = Date.now() - 60_000;
     const meta = getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META);
+    meta.set(Y_MAP_SAVED_AT_VERSION, baseline);
+    // Not a drift refusal: touch the file back to the baseline first, so the apply
+    // itself is what moves mtime past it.
+    await fsp.utimes(docPath, new Date(baseline), new Date(baseline));
+
+    await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
+
+    expect(meta.get(Y_MAP_SAVED_AT_VERSION)).toBe(baseline);
     const stat = await fsp.stat(docPath);
-    expect(meta.get(Y_MAP_SAVED_AT_VERSION)).toBe(stat.mtimeMs);
+    expect(stat.mtimeMs).toBeGreaterThan(baseline + 1000);
+  });
+
+  it("reports a source file deleted mid-apply as SOURCE_MISSING, not an fs crash", async () => {
+    // An ordinary state (the user moved or deleted the file), so it has to come back
+    // as a structured refusal. Unguarded it leaves as a raw ENOENT: an unhandled MCP
+    // protocol failure on one side and a 500 logged as "Unhandled API error" with a
+    // stack on the other — a Tandem crash report for something Tandem did not do.
+    getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_SAVED_AT_VERSION, Date.now());
+    await fsp.rm(docPath);
+
+    await expect(applyChangesCore(DOC_ID)).rejects.toMatchObject({ code: "SOURCE_MISSING" });
   });
 
   it("takes a pre-overwrite snapshot, not just the sidecar backup", async () => {

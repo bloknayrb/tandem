@@ -12,7 +12,6 @@ import {
   Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
-import { withInternal } from "../../shared/origins.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { listDocBackups, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import {
@@ -195,9 +194,34 @@ export async function applyChangesCore(
   // being protected is the file's content at read time. Same 1-second tolerance
   // and the same `Y_MAP_SAVED_AT_VERSION` baseline as `saveDocumentToDisk` —
   // fs.watch debounce plus an atomic rename cause minor drift.
+  //
+  // The stat is wrapped the way `saveDocumentToDisk` wraps its own. A `.docx`
+  // held open by Word raises EPERM/EBUSY on Windows and a deleted or moved file
+  // raises ENOENT — both ordinary states, and both would otherwise leave here as
+  // an unhandled fs error: an MCP protocol failure on one side, and a 500 logged
+  // as "[Tandem] Unhandled API error" with a stack on the other, reporting an
+  // expected condition as a Tandem crash in the one artefact (Copy Diagnostics)
+  // a user would send us about it.
+  //
+  // Anything that is not ENOENT is re-thrown with its ORIGINAL errno code rather
+  // than a code of our own, because EBUSY / EPERM / EACCES already map to
+  // accurate labels (FILE_LOCKED, PERMISSION_DENIED) in `routes/_shared.ts`. A
+  // new code would land on `default: INTERNAL` and say less.
   const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
   const lastSavedAt = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
-  const stat = await fs.stat(filePath);
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stat = await fs.stat(filePath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw Object.assign(new Error("The source file no longer exists."), {
+        code: "SOURCE_MISSING",
+      });
+    }
+    console.error("[docx-apply] Unexpected stat error for %s:", filePath, err);
+    throw Object.assign(new Error("Cannot verify the file's state."), { code });
+  }
   if (lastSavedAt && stat.mtimeMs > lastSavedAt + 1000) {
     throw Object.assign(
       new Error("The file was modified outside Tandem. Reload it before applying changes."),
@@ -251,18 +275,24 @@ export async function applyChangesCore(
   });
 
   // 8. Write modified .docx
+  //
+  // `Y_MAP_SAVED_AT_VERSION` is deliberately NOT re-baselined here, unlike every
+  // other write path. An earlier revision of this PR did re-baseline it, on the
+  // reasoning that a path's own write should not read as an external change —
+  // which is true everywhere else and wrong here.
+  //
+  // What went on disk is tracked-changes markup (`w:ins` / `w:del`). The
+  // in-memory Y.Doc still holds the PRE-apply body and cannot represent
+  // revisions at all: mammoth silently accepts every insertion and discards
+  // every deletion on import, which is why `docx-lost-features.ts` exists. So
+  // between this write and the watcher's reload, the Y.Doc is genuinely STALE
+  // relative to the file, and an explicit Ctrl+S in that window would export it
+  // over the revisions that were just written.
+  //
+  // The stale baseline is what makes `saveDocumentToDisk`'s
+  // `stat.mtimeMs > lastSavedAt + 1000` fire and refuse that save. The refusal
+  // is correct. The reload re-baselines when it lands.
   await atomicWriteBuffer(filePath, result.buffer);
-
-  // Re-baseline so the write we just made does not read as an EXTERNAL change
-  // to the next save or to the guard added above. The watcher's reload
-  // re-baselines too, but it is async and deliberately un-fingerprinted for
-  // this path (the reload re-imports tracked-changes markup, which is a
-  // semantic change, not an identical-bytes echo), so an explicit save landing
-  // in that window would otherwise be refused as FILE_MODIFIED.
-  const writtenStat = await fs.stat(filePath).catch(() => undefined);
-  withInternal(ydoc, () => {
-    meta.set(Y_MAP_SAVED_AT_VERSION, writtenStat?.mtimeMs ?? Date.now());
-  });
 
   // 9. Build result
   const output: ApplyChangesResult = {
@@ -311,6 +341,18 @@ export function registerApplyTools(server: McpServer): void {
         if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
         if (e.code === "INVALID_PATH") return mcpError("FORMAT_ERROR", e.message);
         if (e.code === "BACKUP_FAILED") return mcpError("BACKUP_FAILED", e.message);
+        // The write guards (#1448 W1). Every one of these is an expected policy
+        // refusal, so it has to come back as a structured error the AI can read
+        // and act on. Rethrowing would surface "the file changed on disk" as an
+        // unhandled MCP protocol failure.
+        if (e.code === "READ_ONLY") return mcpError("READ_ONLY", e.message);
+        if (e.code === "EXTERNAL_CONFLICT") return mcpError("EXTERNAL_CONFLICT", e.message);
+        if (e.code === "FILE_MODIFIED") return mcpError("FILE_MODIFIED", e.message);
+        if (e.code === "SOURCE_MISSING") return mcpError("SOURCE_MISSING", e.message);
+        // A locked or unreadable source keeps its own errno rather than a code of
+        // ours, so it is matched by code here too — same reasoning as the stat guard.
+        if (e.code === "EBUSY" || e.code === "EPERM" || e.code === "EACCES")
+          return mcpError("FILE_LOCKED", e.message);
         throw err;
       }
     }),
