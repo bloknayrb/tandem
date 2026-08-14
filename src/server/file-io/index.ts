@@ -28,6 +28,7 @@ import {
   structuralLossLines,
 } from "./docx-lost-features.js";
 import { assertDocxWithinSizeLimits } from "./docx-size-gate.js";
+import { normalizeAndRecordLineEnding, restoreLineEndings } from "./line-endings.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
@@ -43,7 +44,15 @@ export type { ApplyContext, FormatAdapter, LoadIssue, Prepared } from "./types.j
 
 const markdownAdapter: FormatAdapter = {
   async parse(content): Promise<Prepared> {
-    return { format: "md", content: content as string, issues: [] };
+    // Decode here, not at the consumer. `unified().parse` accepts a Buffer
+    // (it is VFile-compatible), so a Buffer used to flow all the way through
+    // and only surfaced once something did real string work on it. Mirrors
+    // `plaintextAdapter.parse` below.
+    return {
+      format: "md",
+      content: typeof content === "string" ? content : content.toString("utf-8"),
+      issues: [],
+    };
   },
   apply(doc, prepared) {
     if (prepared.format !== "md") return [];
@@ -62,11 +71,15 @@ const plaintextAdapter: FormatAdapter = {
   },
   apply(doc, prepared) {
     if (prepared.format !== "other") return [];
-    populateYDoc(doc, prepared.content);
+    populateYDoc(doc, normalizeAndRecordLineEnding(doc, prepared.content));
     return [];
   },
   save(doc) {
-    return extractText(doc);
+    // Restoring here rather than inside `extractText` is deliberate: that
+    // function is also the flat-offset coordinate system every annotation range
+    // is expressed in (Critical Rule 5), and a `\r` there would shift every
+    // offset past it. Only the disk-bound copy gets the file's own endings.
+    return restoreLineEndings(doc, extractText(doc));
   },
 };
 

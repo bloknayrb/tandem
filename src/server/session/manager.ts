@@ -3,6 +3,7 @@ import path from "path";
 import * as Y from "yjs";
 import {
   CTRL_ROOM,
+  DOCUMENT_MODEL_REVISION,
   SESSION_MAX_AGE,
   Y_MAP_CHAT,
   Y_MAP_CHAT_DOCUMENT_NAMES,
@@ -67,6 +68,7 @@ export async function saveSession(
     ydocState,
     sourceFileMtime,
     lastAccessed: Date.now(),
+    modelRevision: DOCUMENT_MODEL_REVISION,
     ...(opts?.dirty ? { dirty: true } : {}),
     ...(opts?.conflict ? { conflict: opts.conflict } : {}),
   };
@@ -140,6 +142,27 @@ export async function sourceFileChanged(session: SessionData): Promise<boolean> 
   } catch {
     return true; // File doesn't exist — treat as changed
   }
+}
+
+/**
+ * True when this session was written by a load path that has since been fixed,
+ * and re-parsing the source file is strictly better than replaying it (#1448).
+ *
+ * `ydocState` is a bare `Y.encodeStateAsUpdate` of an ALREADY-parsed document,
+ * so a parser fix cannot reach it. Without this check a user who upgrades keeps
+ * every defect their pre-fix session baked in for up to `SESSION_MAX_AGE` — the
+ * fix ships but never arrives.
+ *
+ * Two populations are deliberately exempt, because for them the session is the
+ * only copy of the content and discarding it is the data loss this whole effort
+ * is about:
+ *   - `dirty` sessions hold unsaved edits that exist nowhere else.
+ *   - `upload://` paths have no disk file to re-read.
+ */
+export function sessionModelIsStale(session: SessionData): boolean {
+  if (session.dirty === true) return false;
+  if (isUploadPath(session.filePath)) return false;
+  return (session.modelRevision ?? 0) < DOCUMENT_MODEL_REVISION;
 }
 
 /** Delete a session file */

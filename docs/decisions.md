@@ -945,12 +945,28 @@ Both are silent from the user's perspective today; both end when the integration
 
 "Idempotency + content-preservation, not byte-identity" sounds like a modest, honest contract. It is not: **every defect found in #1448 satisfies it.** Each one mangles the document exactly once and is then a stable fixed point, so `pass2 === pass1` holds and the suite stays green while the file on disk is wrong. The contract could not fail, which is why nothing failed for months. It is replaced by **byte-identity on the first pass** for anything a reader would notice, measured by `tests/server/file-io/roundtrip-corpus.test.ts` and `tests/client/editor-roundtrip.test.ts`.
 
-Two specific corrections:
+Three specific corrections:
 
 - **"Hard-break style" was never a normalization.** What actually happened is that the *editor* converted **soft line wraps into hard breaks** — a semantic change, not a style choice. A soft wrap lives in the Y.Doc as a literal `\n` inside a `Y.XmlText`; a hard break is a sibling `Y.XmlElement("hardBreak")`. The Y.Doc distinguishes them; ProseMirror does not, so its DOM re-read split paragraph text on newlines. Saving then wrote a trailing `\` onto every wrapped line and renderers broke the paragraph at the author's wrap column. Fixed by declaring `whitespace: "pre"` on the paragraph node. Genuine hard-break *style* (`  ` vs `\`) is still normalized and that part stands.
 - **The "no silent drop" guarantee did not hold for the raw carriers this ADR introduces.** `getElementPlainText` read only `Y.XmlText` children, so a newline held as a sibling `hardBreak` was dropped without warning and every multi-line raw block collapsed onto one line (#1458) — the exact failure mode this ADR exists to prevent, in the exact constructs it was written to protect.
 
-Loose→tight (`spread: false` hardcoded) remains as described here and remains a defect rather than a normalization; it is tracked in #1448 and not yet fixed.
+- **Loose→tight was never a normalization either, and is now fixed.** `spread` was hardcoded `false` on both the list and each item in `yDocToMdast`, so every loose list in 56 of this repo's files was rewritten tight on the first save. It is now carried through the Y.Doc and declared on the Tiptap nodes (`ListSpreadExtension`), because an attribute the client schema does not declare is discarded by `computeAttrs` before the DOM is ever involved and then pruned from the Y.Doc — the same mechanism that destroyed table alignment.
+
+**The replacement contract, in full.** A difference is either **visible** — a reader opening the file in another editor or viewer would see it — or **invisible**. Visible differences are defects and are held at zero by the corpus. Invisible ones are canonicalization: they are permitted, they must be idempotent (change once, then hold), and they are enumerated here so they are a stated behaviour rather than a discovery.
+
+The invisible set, measured across all 245 tracked `.md` files in this repo:
+
+- Marker and structure style with no mdast representation: setext→ATX headings, indented→fenced code, bullet/emphasis/fence/ordered markers, `***`→`---`, blank-line runs collapsed, entity decoding, autolinks to angle form.
+- Table geometry: hand-authored `|---|---|` cannot be reproduced, and a row's trailing empty cell is made explicit. Cell *padding* no longer churns (`tablePipeAlign: false`), which was 112 of the 201 originally-differing files; alignment colons survive (they are carried as a declared `align` attribute).
+- Code-span style: padding spaces inside a fence, a longer-than-minimal fence, and a span wrapped across a source line coming back on one line. CommonMark renders all three identically.
+- Mark order where the source cannot be recovered: two marks covering exactly the same run come back in a fixed order (`~~**x**~~` → `**~~x~~**`). A delta segment's attributes are a set — Yjs does not record which mark opened first. Where run *lengths* differ, nesting IS recovered; that was the V5 defect and it is fixed.
+- Escape noise: a literal backtick, a `\[label]` matching a real definition, and a `\@` before a host-shaped string all keep their backslash. Each is a deliberate over-keep — see the `text` handler in `markdown.ts`, whose rule 3 documents two corruptions caused by trying to be tidier.
+
+Everything above renders identically. Recovering any of it needs a per-node source-marker layer, which is a materially larger project and is out of scope.
+
+**Line endings are preserved, not normalized** (`src/server/file-io/line-endings.ts`): the dominant ending is detected at load and restored at save, while the model itself is always LF. A CRLF file previously came back mixed — block separators LF, intra-paragraph soft wraps CRLF — which is worse than either pure form and invisible to a repo corpus, since `.gitattributes` pins `*.md text eol=lf`.
+
+**A persisted session is stamped with `DOCUMENT_MODEL_REVISION`.** `ydocState` is a bare `Y.encodeStateAsUpdate` of an already-parsed document, so none of the above reaches it; a session written under an older revision is discarded on reopen in favour of a fresh parse, unless it is `dirty` or an `upload://` path, where it is the only copy of the content.
 
 **Deferred (#982):** GFM task lists / checkboxes need a first-class `TaskList`/`TaskItem` node and `checked` mapping; today they degrade to plain bullets. This is a documented gap pinned by `markdown-fidelity.test.ts` so it can never become a silent drop.
 
