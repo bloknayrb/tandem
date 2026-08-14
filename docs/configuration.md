@@ -14,7 +14,7 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 | `TANDEM_MCP_PORT` | `3479` | MCP HTTP + REST API port (AI client ↔ server). |
 | `TANDEM_URL` | `http://127.0.0.1:3479` | URL the channel shim and other clients use to reach the MCP HTTP endpoint. Must match `TANDEM_MCP_PORT` if you override it. |
 | `TANDEM_TRANSPORT` | `http` | Transport mode. Either `http` (default; recommended) or `stdio` (the server speaks MCP over stdin/stdout — used only by the plugin-bridge subcommands). |
-| `TANDEM_REQUEST_TIMEOUT_MS` | `30000` | Per-request timeout (ms) for the stdio bridge. Increase if your environment has slow loopback. |
+| `TANDEM_REQUEST_TIMEOUT_MS` | `30000` | Per-request timeout (ms) for the stdio bridge. Increase if your environment has slow loopback. Must be a positive integer no greater than `MAX_TIMEOUT_MS` (2³¹−1, in `src/cli/mcp-stdio.ts`); an out-of-range value is ignored with a stderr warning and the 30000 default is used. |
 
 ### Startup behavior
 
@@ -27,6 +27,8 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 | `TANDEM_OPEN_FILE` | unset | Absolute path to a file the server should open on startup. Set by the Tauri runtime when Tandem is launched via an OS file association; not intended for manual use. |
 | `TANDEM_TAURI_SIDECAR` | unset | Set to `1` by the Tauri runtime when the server is running as a sidecar process. Suppresses noisy stderr logs in production builds. Not intended for manual use. |
 | `TANDEM_CHANNEL_DIST` | unset | Absolute path to the bundled channel-shim entry point, injected by the Tauri runtime so `tandem setup --apply --with-channel-shim` registers the shipped shim rather than a source checkout. Not intended for manual use. |
+| `TANDEM_STDIO_BRIDGE_DIST` | unset | Absolute path to the bundled stdio-bridge entry point, injected by the Tauri runtime so `tandem setup --apply` registers the shipped bridge rather than falling back to a bare `npx`. Exact sibling of `TANDEM_CHANNEL_DIST`. Not intended for manual use. |
+| `TANDEM_REAPER_PATH` | unset | Absolute path to the `tandem-reaper` sidecar, injected by the Tauri runtime; the supervisor falls back to its own resolution when unset or when the path does not exist. Not intended for manual use. |
 | `TANDEM_DEFER_LAUNCHER` | unset | Set to `1` by the Tauri runtime on a start-at-login launch, so the auto-launcher holds off until you open the window. **Not the same as `TANDEM_DISABLE_LAUNCHER`:** this one is temporary and self-releasing, and it is ignored unless `TANDEM_TAURI_SIDECAR=1` (otherwise an exported var would permanently disable the launcher on the npm install, which has no way to release it). `TANDEM_DISABLE_LAUNCHER=1` outranks it. Not intended for manual use. |
 | `TANDEM_DISABLE_AUTOSTART` | unset | Set to `1` to make a start-at-login launch behave like an ordinary one — the window shows and the AI launcher is not deferred. Debugging escape hatch; does not remove the OS registration (turn the setting off in Settings → Network for that). Desktop app only. |
 

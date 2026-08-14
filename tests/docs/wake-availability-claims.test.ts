@@ -34,6 +34,31 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = join(__dirname, "..", "..");
 
+/**
+ * The release whose notes describe this behaviour. Once shipped, that record is
+ * permanent and lives in its own section -- it is not a property of whatever
+ * happens to be unreleased today, which is what the previous sliding window
+ * assumed. Bump this only if the claims are re-described in a later release.
+ */
+const INTRODUCED_IN = "## [0.22.0]";
+
+/**
+ * Slice one CHANGELOG section by heading, exclusive of the next `## [` heading.
+ *
+ * Throws rather than returning "" on a missing heading: `indexOf` returning -1 is
+ * exactly how the previous version of this guard degraded into silently asserting
+ * against an empty or whole-file window. If the section is archived out of
+ * CHANGELOG.md this must fail loudly and name the heading -- the record moved,
+ * and that is a real finding rather than something to paper over.
+ */
+function changelogSection(text: string, heading: string): string {
+  const start = text.indexOf(heading);
+  if (start === -1) throw new Error(`CHANGELOG.md has no ${heading} heading`);
+  const rest = text.slice(start + heading.length);
+  const end = rest.indexOf("\n## [");
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
 /** Files that pitch the watch to a user. Add a surface here when one appears. */
 const CARRIERS = [
   "README.md",
@@ -131,11 +156,19 @@ describe("hand-started sessions get the automatic first-use contract", () => {
     }
   });
 
-  it("records the combined release behavior and plugin-only timing under Unreleased", () => {
+  it("records the combined release behavior and plugin-only timing in the release that shipped it", () => {
     const text = readFileSync(join(ROOT, "CHANGELOG.md"), "utf-8");
-    const unreleased = text.slice(text.indexOf("## [Unreleased]"), text.indexOf("## [0.21.0]"));
-    expect(unreleased).toMatch(/automatically/i);
-    expect(unreleased).toMatch(/missing[^.]*skill[^.]*not install/i);
-    expect(unreleased).toMatch(/plugin-only[^.]*Claude Code[^.]*cache/i);
+    const section = changelogSection(text, INTRODUCED_IN);
+    // Fail closed. The bug this replaced sliced `## [Unreleased]` -> `## [0.21.0]`,
+    // a window that grew by a whole section every release and was in fact satisfied
+    // by shipped 0.22.0 text -- while the test's name said "under Unreleased". The
+    // naive re-anchor (to the first heading after Unreleased) is worse: the release
+    // convention preserves an EMPTY `## [Unreleased]`, so the window becomes "" and
+    // every assertion below fails as `expected '' to match /automatically/i`, naming
+    // nothing the editor touched. An empty window must be an error, never a pass.
+    expect(section.trim().length).toBeGreaterThan(0);
+    expect(section).toMatch(/automatically/i);
+    expect(section).toMatch(/missing[^.]*skill[^.]*not install/i);
+    expect(section).toMatch(/plugin-only[^.]*Claude Code[^.]*cache/i);
   });
 });

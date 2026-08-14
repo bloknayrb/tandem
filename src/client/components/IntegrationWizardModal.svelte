@@ -917,22 +917,32 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
               >
                 {#if wizard.channelRegistered}
                   The channel shim is registered. Sessions Tandem starts for you are woken directly
-                  and need nothing further. A session you start yourself needs the
-                  <code class="iw-code-inline">--dangerously-load-development-channels</code> flag
-                  as well — registration alone does not switch the channel on.
+                  and need nothing further. For a session you start yourself, the simplest route is
+                  still to ask Claude to arm a watch on Tandem's wake stream — nothing to install,
+                  no flag — where Claude Code offers a Monitor tool. If Claude says it has none,
+                  that is what the shim is for: start it with the
+                  <code class="iw-code-inline">--dangerously-load-development-channels</code> flag,
+                  since registration alone does not switch the channel on. Either way, Claude also
+                  sees your comments and messages when it next checks its inbox. Use one, not both.
                 {:else}
                   Sessions Tandem starts for you are woken directly and need nothing further. A
                   session you start yourself will see your comments and messages when it next
-                  checks its inbox — to have it react as they happen, the simplest way is to ask
-                  Claude to watch Tandem for updates, which needs nothing installed. That one
-                  depends on your Claude Code offering a Monitor tool, which not every one does;
-                  if Claude says it has none, come back here and register the channel shim, which
-                  does not need it. Installing the Tandem plugin does the same in any session
-                  where you ask for Tandem by name — it starts watching the first time Claude
-                  uses the Tandem skill, not the moment the session opens — as long as you launch
+                  checks its inbox — to have it react as they happen, the simplest route is to ask
+                  Claude to arm a watch on Tandem's wake stream, which needs nothing installed.
+                  That one depends on Claude Code offering a Monitor tool, which not every one
+                  does; if Claude says it has none, come back here and register the channel shim,
+                  which does not need it. Installing the Tandem plugin covers any session where you
+                  ask for Tandem by name — it starts watching the first time Claude uses the Tandem
+                  skill, not the moment the session opens — as long as you launch
                   <code class="iw-code-inline">claude</code> from a terminal so it can find Node.
                   Use one, not both.
                 {/if}
+                <p class="iw-hint-text">
+                  To install the plugin, run these in a terminal:
+                  <code class="iw-code-inline">claude plugin marketplace add bloknayrb/tandem</code>
+                  then
+                  <code class="iw-code-inline">claude plugin install tandem@tandem-editor</code>.
+                </p>
               </div>
             {/if}
           </section>

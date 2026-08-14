@@ -6,63 +6,55 @@ disable-model-invocation: true
 
 # Capture README Screenshots
 
-Take a fresh set of 8 numbered screenshots for the README documentation.
+Regenerate the numbered screenshot set in `docs/screenshots/`.
 
 ## When to Use
 
-After UI changes that affect any of these areas: editor layout, side panel (annotations/chat), toolbar/tab bar, status bar, review mode, toast notifications, or the onboarding tutorial card.
+After UI changes that affect any of these areas: editor layout, the right rail
+(annotations/chat), toolbar/tab bar, the status pill, toast notifications, the
+margin view, the outline rail, the Settings modal, the integration wizard, or the
+onboarding tutorial card.
 
-## Prerequisites
-
-1. The dev server MUST already be running:
-   ```bash
-   npm run dev:standalone
-   ```
-
-2. Verify health before proceeding:
-   ```bash
-   curl -sf http://127.0.0.1:3479/health && echo "Ready" || echo "Server not running — start it first"
-   ```
-
-## Critical Warnings
-
-### Stale CRDT State
-If Tandem is already open in Chrome, the browser tab holds a stale Y.Doc in memory. On reconnect it merges old state back, clobbering fresh content. You MUST:
-1. Navigate the Chrome tab away from Tandem (e.g., go to `about:blank`)
-2. Then run the screenshot script — it creates its own browser context
-
-### Port Conflict with E2E Tests
-Do NOT run `npm run test:e2e` while taking screenshots. Playwright's `webServer` config calls `freePort()` which kills processes on :3478/:3479, terminating your dev server mid-screenshot.
-
-## Run the Script
+## One pipeline
 
 ```bash
-node scripts/take-screenshots.mjs
+npm run capture:screenshots
 ```
 
-The script:
-- Connects to the MCP server at `http://127.0.0.1:3479/mcp`
-- Opens `sample/welcome.md` and creates demo annotations (highlight, comment, suggestion, flag)
-- Opens extra temp documents for the multi-tab screenshot
-- Captures 8 screenshots with specific viewport clips
-- Cleans up temp files on exit
-- Uses `headless: false` so you will see a Chrome window appear
+That is `scripts/screenshots/capture.spec.ts` behind its own Playwright config.
+It brings its own server, so there is **no** `dev:standalone` precondition, and
+it runs against an isolated per-run `TANDEM_APP_DATA_DIR`, so it cannot capture
+the operator's real chat history into a public image.
+
+`scripts/take-screenshots.mjs` no longer exists. It was deleted in the
+post-v0.22.1 documentation overhaul: two pipelines writing the same filenames
+meant whichever ran last decided what the README showed, and for the three shots
+they shared they used different framing and different seed data. Its unique
+recipes were ported into the spec first.
+
+## Critical warning — free the ports first
+
+The capture config spreads the root `playwright.config.ts`, whose `webServer`
+calls `freePort()`. It **kills whatever holds :3478 / :3479** — a running
+`npm run dev:server`, or the installed Tandem desktop app. Confirm those ports
+(and :5173) are free before running, and do not run `npm run test:e2e`
+concurrently.
 
 ## Output
 
-Screenshots are saved to `docs/screenshots/`:
+The slot table — what each image must depict, which document embeds it, which
+ones are manual, and the privacy check slot 13 needs — lives in
+[docs/screenshots/README.md](../../../docs/screenshots/README.md). It is the
+single copy on purpose; do not restate it here, in `.agents/skills/screenshots/`,
+or in the spec.
 
-| File | Content |
-|------|---------|
-| `01-editor-overview.png` | Full editor with annotations visible |
-| `02-chat-sidebar.png` | Chat panel with conversation |
-| `03-side-panel.png` | Annotation cards in side panel |
-| `04-toolbar-actions.png` | Tab bar + toolbar with text selected |
-| `05-review-mode.png` | Keyboard review mode overlay |
-| `06-claude-presence.png` | Status bar with Claude activity |
-| `07-toast-notification.png` | Toast notification popup |
-| `08-onboarding-tutorial.png` | Tutorial card for new users |
+One slot is not automatable: `14-desktop-window.png`. Neither pipeline drives the
+Tauri WebView, so the desktop-window shot is taken by hand.
 
-## After Running
+## After running
 
-Review the screenshots in `docs/screenshots/` and commit any that look correct. Annotations created by the script persist until the server restarts or documents are closed.
+Read the run output — every step asserts on what it is photographing, and a skip
+is a hard failure rather than a `console.warn`. Then **look at each image**:
+assertions distinguish "rendered" from "did not render", never "the right thing"
+from "a plausible-looking wrong thing". Commit only what you have actually
+looked at.

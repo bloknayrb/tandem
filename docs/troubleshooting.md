@@ -10,6 +10,8 @@ If you're running from a source checkout, `npm run doctor` checks the most commo
 - `node_modules/` present
 - `.mcp.json` valid (both `tandem` and `tandem-channel` entries)
 - `~/.claude.json` MCP registration (when present)
+- Claude Desktop's own config file, and whether the entry Tandem wrote there has gone stale
+- The Node toolchain the MCP connection depends on
 - **Claude Code is installed *and startable*** — on Windows these are different questions, and an `npm install -g` install passes the first while failing the second (see [below](#tandem-cant-start-claude-on-windows-but-claude-works-in-a-terminal))
 - No stale global `tandem-editor` shadowing the version you meant to run
 - Ports `3478` (Hocuspocus WebSocket) and `3479` (MCP HTTP) listening
@@ -23,7 +25,7 @@ can't be read — a warning that the other two were skipped rather than passed. 
 checks (`/health`, SSE) are conditional: they run only once the port probe finds the server up,
 so a report that stops early is reporting a down server, not a passing one.
 
-For desktop-app installs, use **Settings → About → Copy Diagnostics** to run the same checks in-app, minus those five source-checkout-only items — see [Sharing diagnostics](#sharing-diagnostics). Or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
+In the editor — desktop app or browser — **Settings → About → Copy Diagnostics** runs the same checks in-app, minus those five source-checkout-only items — see [Sharing diagnostics](#sharing-diagnostics). Or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
 
 ## Windows SmartScreen warning
 
@@ -116,7 +118,7 @@ If the port is still held after the wait (15s), the server logs `Port {port} sti
 - *"Port 3479 appears to be held by …"* — another program owns the port. Retrying ends that process and starts the server again.
 - *"Port 3479 is still tied up by a connection from a previous run"* — nothing to kill; Windows has not finished releasing the port. Retrying usually succeeds once it does.
 
-If you close that dialog, Settings → Network → **Restart server** does the same thing.
+If you close that dialog, Settings → Network → **Restart server** does the same thing. The button is desktop-app only: with the npm install, stop the running `tandem` process in its terminal (`Ctrl+C`) and run `tandem` again.
 
 ## I sent a chat message (or left a comment) and nothing happened
 
@@ -143,7 +145,7 @@ Either way, look for the push line. `No real-time push consumer attached` means 
 
 **Fix it** — three setup routes; choose one setup route where possible.
 
-*The quickest, where it is available:* **ask Claude to watch for updates.** It needs nothing installed, but it does need a Claude Code that offers a `Monitor` tool — enabled per account rather than per version, and on Windows it also wants Git Bash. The plugin monitor shares the same per-account feature gate, so it cannot help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it may help when Git Bash is the missing precondition. The channel shim further down avoids both requirements. Tandem's bundled skill tells Claude how to open a watch on Tandem's wake stream, which wakes it whenever you comment or send a message. No install, no flag, and it lives and dies with that session. If Claude says it cannot, check that the session actually has Tandem's MCP tools (`/mcp` lists them), that your Claude Code offers a `Monitor` tool, and that `tandem_status` reports a `wakeUrl` — the watch has nothing to attach to without one, and stdio-mode Tandem reports none. The current bundled skill tells a hand-started session to try once after its first successful read-mode `tandem_status`; asking directly is recovery if that attempt was skipped, not a subscriber-count override.
+*The quickest, where it is available:* **ask Claude to watch for updates.** It needs nothing installed, but it does need a Claude Code that offers a `Monitor` tool — enabled per account rather than per version, and on Windows it also wants Git Bash. The plugin monitor shares the same per-account feature gate, so it cannot help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it may help when Git Bash is the missing precondition. The channel shim further down avoids both requirements. Tandem's bundled skill tells Claude how to open a watch on Tandem's wake stream, which wakes it whenever you comment or send a message. No install, no flag, and it lasts only for that session. If Claude says it cannot, check that the session actually has Tandem's MCP tools (`/mcp` lists them), that your Claude Code offers a `Monitor` tool, and that `tandem_status` reports a `wakeUrl` — the watch has nothing to attach to without one, and stdio-mode Tandem reports none. The current bundled skill tells a hand-started session to try once after its first successful read-mode `tandem_status`; asking directly is recovery if that attempt was skipped, not a subscriber-count override.
 
 *Or* install the Tandem plugin, which registers a monitor that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it). It starts watching when Claude first uses Tandem's skill in a session, so ask for Tandem by name; if you have been chatting about something else, it is not listening yet. Start `claude` from a terminal window: the monitor runs with whatever program path that session was given, and a Claude Code launched from a desktop icon may have no usable Node on it. That failure shows up as [`exit 127`](#plugin-monitor-reports-script-failed-exit-127).
 
@@ -368,6 +370,20 @@ On first run, `sample/welcome.md` auto-opens. On upgrades, `CHANGELOG.md` opens 
 
 Click the **+** in the tab bar, drop a file onto the editor, or ask your AI to open one (`"open notes.md in tandem"`).
 
+## A link in the document won't open
+
+Clicking a link used to do nothing at all when Tandem refused it. It now says why, as a notification — and three of the refusals are raised as errors rather than warnings, because they indicate a hostile link rather than a mistyped one.
+
+Plain relative paths render and open normally: `[spec](docs/spec.md)` works, as does `./docs/spec.md`, a path with a query string, and a path mixing `/` and `\`. What stays refused is anything that would resolve outside the document's own folder, or a network (UNC) path — resolving one of those on Windows opens a connection and performs an authentication handshake, so it is refused before any filesystem call happens.
+
+Two related gaps are known and still open (#1420): a **middle-click** does not go through the same check a left-click does, and a pasted **image source** isn't checked for the same characters a pasted link is.
+
+## Double-clicking a file does nothing
+
+If Tandem is your registered handler and you open a file it can't accept — an unsupported type, a path that no longer exists, or a folder — it now tells you so. Older builds sat on the welcome document with no message and recorded the reason only in the log.
+
+Tandem opens `.md`, `.txt`, `.docx`, `.html` and `.htm`. Both routes a file can arrive by — the command line on Windows and Linux, an Apple Event on macOS — now run the same checks, so a file accepted one way is no longer silently dropped the other. If the refusal happens before the window exists, the message is held and shown once the window is ready.
+
 ## Reset session state
 
 Sessions live in `{APP_DATA_DIR}/sessions/`, with one file per opened document plus a `CTRL_ROOM.json` for cross-document state (chat history, Solo/Tandem mode). To find the directory per OS:
@@ -425,10 +441,11 @@ If you ever see what looks like a normal log line on stdout, that's a bug — fi
 
 When [filing an issue](https://github.com/bloknayrb/tandem/issues), attach a diagnostics report:
 
-- **In the app:** **Settings → About → Copy Diagnostics** puts a plain-text report on the clipboard — version, platform, and the result of every health check (ports, `/health`, SSE, annotation store). The endpoint behind it only answers loopback callers.
+- **In the app:** **Settings → About → Copy Diagnostics** puts a plain-text report on the clipboard — version, the result of every health check (ports, `/health`, SSE, annotation store), and the machine facts a bug report otherwise costs a round trip to collect: platform, architecture, OS release and version, CPU model and core count, total memory, Node version, and in the browser distribution a short browser descriptor. The endpoint behind it only answers loopback callers.
+- **Report a bug**, also in Settings, opens a GitHub issue with that block already filled into the body. It gathers the report only once your pointer or keyboard focus rests on the link briefly — collecting it is not an inert read — and the link still works, unfilled, if gathering fails.
 - **From a terminal:** `tandem doctor` prints the same checks (plus the five source-checkout-only ones the button omits); `tandem doctor --json` emits a machine-readable report.
 
-> **Privacy note:** the copied text contains local absolute paths (which include your username) and process IDs. Skim it before pasting into a public issue. It never contains auth tokens or document content.
+> **Privacy note:** the report deliberately omits your machine name, username, home directory path, network interfaces, locale and timezone. Paths that do survive are collapsed — your home directory becomes `~` and Tandem's data directory `<app-data>` — including paths embedded in raw filesystem error messages. Process IDs and port numbers remain. It never contains auth tokens or document content. The `tandem_diagnostics` MCP tool is the exception and is *not* path-collapsed: it serves an agent that may need to act on the real path, and it does not feed an issue form.
 
 ## Auth rejection on LAN bind
 

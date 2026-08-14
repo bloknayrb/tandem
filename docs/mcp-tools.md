@@ -50,7 +50,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `READ_ONLY` | The document is read-only, so the mutation was refused. |
 | `EXTERNAL_CONFLICT` | The file changed on disk since Tandem loaded it. Saving is blocked until the user answers the keep-vs-reload banner, so a save reports this rather than claiming success. |
 | `RELOAD_IN_PROGRESS` | A reload from disk is mid-flight; retry once it settles. |
-| `LICENSE_REQUIRED` | The license gate is active and restricted. Reads, `tandem_open`, saves and exports still work; content mutations do not. Never returned while the gate ships dark. |
+| `LICENSE_REQUIRED` | The license gate is active and restricted. Reads, plain `tandem_open`, saves and exports still work; content mutations do not. `tandem_open` with `force: true` **is** gated -- it runs `clearAndReload`, which wipes the durable annotation file. Never returned while the gate ships dark. |
 | `NO_SUGGESTIONS` | `tandem_applyChanges` found no accepted suggestions to write. |
 | `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
 | `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
@@ -257,7 +257,7 @@ tandem_edit({ from: 180, to: 193, newText: "$13.1 million" })
 - Newlines in `newText` are inserted as literal characters, not new paragraphs.
 - Cross-element edits (spanning multiple paragraphs) are supported but merge into one paragraph.
 - Edits appear instantly in the editor.
-- Read-only documents (.docx) reject edits -- use annotations instead.
+- Read-only documents (uploads, and files opened with `readOnly`) reject edits -- use annotations instead. A disk-opened `.docx` is **not** read-only (#576).
 - On an **empty** document `tandem_edit` returns `EMPTY_DOCUMENT` -- seed content with `tandem_appendContent` or `tandem_scratchpad({ content })` first.
 
 ---
@@ -289,7 +289,7 @@ tandem_appendContent({ content: "# Notes\n\n- First point\n- Second point\n\nA c
 - Content is **appended at the end** — it never deletes or overwrites existing content. To replace text, use `tandem_edit`; to reload a file wholesale, use `tandem_open({ force: true })`.
 - Appending shifts no existing offsets, so existing annotations and authorship ranges stay valid.
 - Appended text is attributed to Claude (authorship overlay), matching `tandem_edit`.
-- Markdown documents only in v1. Read-only (.docx) and non-`md` documents are rejected with `FORMAT_ERROR`.
+- Markdown documents only in v1. Non-markdown documents are rejected with `FORMAT_ERROR` -- the check is the document's format, not its read-only flag.
 - For arbitrary mid-document insertion (not just append), use `tandem_edit` per block, or open the file after writing it.
 
 ---
@@ -336,9 +336,13 @@ Check editor status (running state, open documents, active document) and optiona
     { "documentId": "invoice-d4e5f6", "filePath": "...", "format": "docx", "readOnly": true }
   ],
   "documentCount": 2,
-  "mode": "tandem"
+  "mode": "tandem",
+  "storeReadOnly": false,
+  "wakeUrl": "ws://127.0.0.1:3479/api/wake"
 }
 ```
+
+`storeReadOnly` reports whether the durable annotation store could take its lock; when `true`, annotations live only for this run. `wakeUrl` is the `/api/wake` WebSocket endpoint ([ADR-049](decisions.md)) -- where the client can hold a persistent watch, arming one there is the push path that needs no install and no flag. It is omitted when no endpoint is available (stdio mode). See [architecture.md](architecture.md) for how it relates to the other push paths.
 
 **Returns (write mode — with `text` param):**
 ```json
@@ -392,7 +396,7 @@ Rename an open on-disk document's file, keeping the same directory and extension
 { "renamed": true, "from": "C:\\Users\\bkolb\\docs\\draft.md", "to": "C:\\Users\\bkolb\\docs\\final.md", "fileName": "final.md" }
 ```
 
-**Notes:** Only on-disk files (`source: "file"`) are renamable — scratchpads/uploads use Save As, and read-only docs (incl. `.docx`) are rejected. The basename is validated against path separators, `..`, Windows-illegal characters (`< > : " | ? *`, the `:` NTFS alternate-data-stream vector), reserved device names (`CON`/`NUL`/`COM1`…), trailing dots/spaces, and UNC/symlink targets.
+**Notes:** Only on-disk files (`source: "file"`) are renamable — scratchpads/uploads use Save As, and read-only docs (uploads, `readOnly` opens) are rejected. A disk-opened `.docx` is renamable (#576). The basename is validated against path separators, `..`, Windows-illegal characters (`< > : " | ? *`, the `:` NTFS alternate-data-stream vector), reserved device names (`CON`/`NUL`/`COM1`…), trailing dots/spaces, and UNC/symlink targets.
 
 **Errors:** `NOT_FOUND`, `READ_ONLY`, `NOT_RENAMABLE`, `INVALID_NAME`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `INVALID_PATH`, `PATH_REJECTED`
 
@@ -457,7 +461,7 @@ Convert a `.docx` document to an editable Markdown file. Writes the `.md` file t
 }
 ```
 
-**Notes:** The source document must be a `.docx` file. The converted Markdown file opens as a new editable tab alongside the original read-only `.docx`.
+**Notes:** The source document must be a `.docx` file. The converted Markdown file opens as a new editable tab alongside the original `.docx`.
 
 **Errors:** `NO_DOCUMENT` (no active document or `documentId` not found), `FORMAT_ERROR` (source is not `.docx`, invalid output path, or conversion produced empty result)
 
@@ -948,7 +952,7 @@ Read-only, takes **no parameters**, and is **not** license-gated — diagnostics
     { "check": "health", "status": "pass", "message": "MCP HTTP /health responded", "data": { "port": 3479, "hasSession": true } },
     { "check": "user-mcp-config", "status": "warn", "message": "No active MCP session — Claude Code hasn't connected yet", "fix": "Restart Claude and run /mcp" }
   ],
-  "version": "0.14.0",
+  "version": "0.22.1",
   "transport": "http",
   "platform": "win32",
   "arch": "x64",
@@ -966,17 +970,53 @@ Read-only, takes **no parameters**, and is **not** license-gated — diagnostics
 Everything from `osRelease` down is **optional and best-effort** (`collectHostInfo()` in `src/server/mcp/host-info.ts`): `os.cpus()` returns `[]` on some cgroup-restricted hosts and `os.version()` can throw, so any of these keys may be absent. They are deliberately non-identifying — no hostname, username, home path, network interfaces, locale or timezone — because this payload is what "Copy Diagnostics" puts on the clipboard and what the Report-a-bug link prefills into a public issue.
 
 **Notes:**
-- The two dev-repo-only checks (`node-modules`, `mcp-json`) are filtered out and `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop / npm-global install. (`tandem doctor` on the CLI keeps them; there the cwd is meaningful.)
+- The five source-checkout-only checks (`node-modules`, `dev-repo`, `npm-staleness`, `mcp-json`, `orphaned-vite`) are filtered out and `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop / npm-global install. (`tandem doctor` on the CLI keeps them; there the cwd is meaningful.)
 - The report embeds absolute paths and PIDs in per-check `data` bags — surfaced only over the loopback-gated MCP transport, the same posture that makes `GET /api/diagnostics` loopback-only.
 - Use this instead of asking the user to run `tandem doctor` when an MCP call fails unexpectedly.
 
 ---
 
-## HTTP API (Editor File Opening)
+## HTTP API
 
-In addition to MCP tools, the server exposes REST endpoints on the same port (:3479) for editor-initiated file opening. These are NOT MCP tools — they use standard HTTP request/response with JSON bodies.
+In addition to MCP tools, the server exposes REST endpoints on the same port (:3479). These are NOT MCP tools — they use standard HTTP request/response with JSON bodies. The routes below are the ones the editor UI calls for file opening; the index that follows covers the rest.
 
-Both endpoints converge with `tandem_open` in `file-opener.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
+### Route index
+
+Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/health` and the `/api/wake` upgrade registered in `src/server/mcp/server.ts`. The **Gate** column names what each route holds *beyond* the two path-wide controls every `/api` route gets — `authMiddleware` (Bearer for non-loopback callers) and, since #1320, `enforceLoopbackMutation` (non-GET/HEAD/OPTIONS is loopback-only). "one layer" marks the nine mutating routes that call neither `assertOriginAllowlisted` nor `assertLoopbackForMutation` and rely solely on that invariant — the review inventory enumerated in [security.md](security.md).
+
+| Route | Purpose | Gate beyond the path-wide controls |
+|---|---|---|
+| `GET /health` | Liveness + version. Auth-exempt, payload scrubbed for non-loopback. | public |
+| `GET /api/info` | App metadata for the About panel. | scrubs non-public fields |
+| `GET /api/diagnostics` | `tandem doctor` report + host info. | loopback-only by hand (403) |
+| `GET /api/notify-stream` | SSE stream of server notifications. | — |
+| `GET /api/mode` · `POST /api/mode/release` | Read / release Solo mode. | origin + loopback |
+| `GET /api/license/status` · `POST /api/license/activate` | License status and activation. | origin + loopback |
+| `POST /api/open` | Open a file by absolute path. | **one layer** |
+| `POST /api/close` | Close a document by id. | **one layer** |
+| `POST /api/save` | Save / Save As. | **one layer** |
+| `POST /api/rename` | Rename an on-disk file. | origin + loopback |
+| `POST /api/upload` | Open uploaded content (no disk path). | **one layer** |
+| `POST /api/scratchpad` | New Scratchpad tab. | origin + loopback + license gate |
+| `POST /api/convert` | Convert `.docx` to Markdown. | **one layer** |
+| `POST /api/apply-changes` | Write accepted suggestions into a `.docx`. | **one layer** + license gate |
+| `GET /api/document/raw` | Raw document bytes. | loopback-only by hand |
+| `POST /api/document/reload` | Reload the document from disk. | origin + loopback + license gate |
+| `GET /api/backups` · `POST /api/backups/restore` | List / restore pre-overwrite snapshots. | origin + loopback (restore also license-gated); list scrubs paths |
+| `POST /api/external-conflict/resolve` | Answer the keep-vs-reload banner. | origin + loopback + license gate |
+| `POST /api/annotation-reply` | Post a reply to an annotation. | **one layer** + license gate |
+| `POST /api/remove-annotation` | Delete an annotation. | **one layer** + license gate |
+| `POST /api/store/reclaim-lock` | Reclaim the annotation-store lock. | origin + loopback |
+| `GET /api/sessions` · `POST /api/sessions/delete` · `POST /api/sessions/clear` | Session management. | origin + loopback; list scrubs paths |
+| `POST /api/rotate-token` | Rotate the auth token. | **one layer** |
+| `POST /api/shutdown` | Graceful shutdown. | hand-rolled `isLoopback` (must accept an absent `Origin`) |
+| `GET/POST /api/launcher/*` | Claude launcher status, nonce, relaunch, working directory. | origin + loopback + nonce |
+| `/api/channel-*`, `DELETE /api/chat` | Channel shim + monitor transport. | carved out of the loopback invariant by name |
+| `/api/wake` | WebSocket upgrade for the self-armed idle watch (ADR-049). | own Origin guard; never reaches Express |
+
+The channel routes and `GET /api/events` are documented in [Channel API](#channel-api-real-time-push) below.
+
+`/api/open` and `/api/upload` converge with `tandem_open` in `file-opener.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
 
 ### GET /api/info
 
@@ -985,8 +1025,8 @@ Returns app metadata for the client's About panel and version indicator. All fie
 **Response (200) — loopback caller:**
 ```json
 {
-  "version": "0.8.0",
-  "toolCount": 28,
+  "version": "0.22.1",
+  "toolCount": 32,
   "mcpSdkVersion": "1.27.1",
   "transport": "http",
   "storagePath": "C:\\Users\\user\\AppData\\Local\\tandem\\Data\\sessions",
@@ -997,7 +1037,7 @@ Returns app metadata for the client's About panel and version indicator. All fie
 **Response (200) — non-loopback caller (public fields only):**
 ```json
 {
-  "version": "0.20.1",
+  "version": "0.22.1",
   "toolCount": 32,
   "mcpSdkVersion": "1.27.1",
   "transport": "http",
@@ -1029,13 +1069,13 @@ Returns app metadata for the client's About panel and version indicator. All fie
 
 Runs the embedded `tandem doctor` collector and returns the report plus environment metadata. Backs the client's **Settings → About → Copy Diagnostics** button.
 
-**Loopback-only, unconditionally** — non-loopback callers get `403` regardless of auth, because the report embeds absolute paths and PIDs. It never contains token material or document content. Home-directory paths are `~`-redacted before they reach the wire (`redactHomePaths`), since this payload also prefills the Report-a-bug issue body; that narrows what leaks into a public issue but does not change the loopback posture. The two dev-repo-only checks (`node-modules`, `mcp-json`) are filtered out of the report with `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop/npm-global install. Concurrent requests share one in-flight collector run (single-flight).
+**Loopback-only, unconditionally** — non-loopback callers get `403` regardless of auth, because the report embeds absolute paths and PIDs. It never contains token material or document content. Home-directory paths are `~`-redacted before they reach the wire (`redactHomePaths`), since this payload also prefills the Report-a-bug issue body; that narrows what leaks into a public issue but does not change the loopback posture. The five source-checkout-only checks (`node-modules`, `dev-repo`, `npm-staleness`, `mcp-json`, `orphaned-vite`) are filtered out of the report with `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop/npm-global install. Concurrent requests share one in-flight collector run (single-flight).
 
 **Response (200):**
 ```json
 {
   "report": { "ok": true, "crashed": false, "failures": 0, "warnings": 0, "summary": "All checks passed. Tandem is ready.", "error": null, "results": [ { "check": "node-version", "status": "pass", "message": "Node.js v22.0.0 (>= 22 required)" } ] },
-  "version": "0.13.6",
+  "version": "0.22.1",
   "transport": "http",
   "platform": "win32",
   "arch": "x64",
@@ -1068,25 +1108,32 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `filePath` | string | yes | Absolute path to the file |
-| `force` | boolean | no | Reload from disk even if already open (clears annotations + session) |
+| `force` | boolean | no | Reload from disk even if already open (clears annotations + session). Gated by the license gate; plain open is not. |
+| `readOnly` | boolean | no | Force read-only mode. Used by the View Changelog button. |
 
 **Response (200):**
 ```json
 { "data": { "documentId": "report-a1b2c3", "fileName": "report.md", "format": "md", "readOnly": false, "source": "file", ... } }
 ```
 
-**Errors:** `404 FILE_NOT_FOUND`, `400 UNSUPPORTED_FORMAT`, `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED`, `403 PERMISSION_DENIED`
+**Errors:** `400 BAD_REQUEST` (missing/non-string `filePath`, and unsupported format -- `UNSUPPORTED_FORMAT` is mapped to `BAD_REQUEST` by `errorCodeToLabel`), `404 NOT_FOUND` (the wire label; `FILE_NOT_FOUND`/`ENOENT` map to it), `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED`, `403 PERMISSION_DENIED`, `403 LICENSE_REQUIRED` (on `force: true`)
 
 ### POST /api/scratchpad
 
-Create and open a new empty Scratchpad tab. Equivalent to `tandem_scratchpad` but callable from the editor UI (used by the `Ctrl+N` shortcut and the `+` button's "New Scratchpad" option).
+Create and open a Scratchpad tab. Equivalent to `tandem_scratchpad` but callable from the editor UI (used by the `Ctrl+N` shortcut and the `+` button's "New Scratchpad" option). Gated by `licenseGateMiddleware` (#1318).
 
-**Request:** No body required.
+**Request:** Body optional. When present it must be exactly `{ "content"?: string }` -- any other key is rejected.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `content` | string | no | Initial Scratchpad content. Capped at 1 MiB. |
 
 **Response (200):**
 ```json
 { "data": { "documentId": "abc123", "fileName": "Scratchpad.md", "format": "md", "readOnly": false, "source": "upload", ... } }
 ```
+
+**Errors:** `400 BAD_REQUEST` (unknown key, or non-string `content`), `413 PAYLOAD_TOO_LARGE` (content over 1 MiB), `403 LICENSE_REQUIRED`
 
 ### POST /api/close
 
@@ -1103,10 +1150,12 @@ Close an open document by its document ID. Equivalent to `tandem_close` but call
 
 **Response (200):**
 ```json
-{ "data": { "closed": true, "was": "C:\\Users\\bkolb\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" } }
+{ "data": { "closedPath": "C:\\Users\\bkolb\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" } }
 ```
 
-**Errors:** `400 BAD_REQUEST` (missing documentId), `404 NO_DOCUMENT` (document not found)
+`closedPath` is scrubbed to a basename for non-loopback callers (#1294).
+
+**Errors:** `400 BAD_REQUEST` (missing documentId), `404 NOT_FOUND` (document not found)
 
 ---
 
@@ -1128,11 +1177,13 @@ For binary formats (.docx), `content` is base64-encoded.
 
 Uploaded files are always read-only — there is no disk path to save to. The synthetic `upload://` path is used as the session key. `tandem_save` on an uploaded file returns a session-only save.
 
-**Errors:** `400 UNSUPPORTED_FORMAT`, `400 BAD_REQUEST`
+**Errors:** `400 BAD_REQUEST` -- covers both a malformed body and an unsupported format (`UNSUPPORTED_FORMAT` is mapped to `BAD_REQUEST` by `errorCodeToLabel`)
 
 ### CORS
 
-Both `/api/*` endpoints include CORS headers reflecting any `http://127.0.0.1:*` origin (dynamic port; bare `localhost` was narrowed out in PR #637). The body size limit is 70MB to accommodate base64-encoded .docx files (50MB file → ~67MB base64).
+Every `/api/*` route registered today passes the CORS + Host middleware explicitly as its `mw` argument. It is threaded **per route**, not mounted path-wide — only `enforceLoopbackMutation` is `app.use("/api", …)` — so a registration that omits `mw` loses both the CORS allowlist and the Host-header DNS-rebinding check (`isHostAllowed`). True by convention, not by construction.
+
+The allowlist is three origins: `http(s)://127.0.0.1` and `http(s)://tauri.localhost` with any port, plus the Linux Tauri scheme `tauri://localhost` matched as an **exact string, never a `tauri://*` wildcard**. Bare `localhost` was narrowed out in PR #637. Absence of `Access-Control-Allow-Origin` is the denial — never `null` (#1291). Full posture: [security.md](security.md#cors-allowlist). The body size limit is 70MB to accommodate base64-encoded .docx files (50MB file → ~67MB base64).
 
 ---
 

@@ -2,13 +2,11 @@
  * Tandem CLI — entry point for the `tandem` global command.
  * Shebang is added by tsup banner at build time.
  *
- * Usage:
- *   tandem               Start the Tandem server and open the editor
- *   tandem setup         Print first-run setup guidance (setup is wizard-driven)
- *   tandem setup --apply Non-interactively write MCP config to detected clients
- *   tandem doctor        Diagnose setup issues (add --json for machine-readable output)
- *   tandem --help        Show this help
- *   tandem --version     Show version
+ * Usage: run `tandem --help` for the full subcommand list. It is built below
+ * from a single template literal, so that is the one place the list can go
+ * stale — a second copy here had already drifted, omitting `start`,
+ * `rotate-token`, `activate`, `license`, `mcp-stdio`, `channel`, `monitor` and
+ * `--uninstall-scrub`.
  */
 
 import { nodeVersionError } from "./node-version.js";
@@ -59,8 +57,9 @@ Usage:
                                     Restrict --apply to specific client(s)
   tandem setup --apply --with-channel-shim
                                     Also register the stdio channel shim (legacy opt-in)
-  tandem doctor                     Diagnose setup issues (Node version, .mcp.json,
-                                    ports, server health, annotation store)
+  tandem doctor                     Diagnose setup issues (Node version, MCP config,
+                                    ports, server health, push path, annotation
+                                    store)
   tandem doctor --json              Same checks, emit a single JSON report on stdout
   tandem rotate-token               Rotate the auth token with a 60-second grace window
   tandem activate <license|path>    Activate a signed license (string or file path)

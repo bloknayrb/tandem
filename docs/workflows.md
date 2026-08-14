@@ -36,7 +36,7 @@ Then in Claude, your tandem_* tools will be available.
 
 Bare `tandem setup` (no flags) prints this guidance instead of writing anything — setup is wizard-driven; `--apply` is the explicit opt-in to write config.
 
-The skill teaches Claude how to use Tandem's MCP tools effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
+The skill teaches Claude how to use Tandem's MCP tools effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. The skill loads when you first use Tandem in a session — ask for Tandem by name.
 
 Start Tandem from any directory:
 ```bash
@@ -45,17 +45,26 @@ tandem
 
 The server starts and the editor opens (Tauri WebView in desktop, or `http://127.0.0.1:5173` in dev). `sample/welcome.md` loads on first run with the onboarding tutorial.
 
-In a separate terminal, open Claude Code with the channel flag for real-time push notifications:
+In a separate terminal, start Claude Code as you normally would:
 ```bash
-claude --dangerously-load-development-channels server:tandem-channel
+claude
 ```
 
 Then try:
 ```
-"Let's work on the welcome document together"
+"Let's work on the welcome document in Tandem"
 ```
 
-Claude connects to the running Tandem server, opens the document, and starts reading. With the channel active, chat messages and annotation actions push to Claude instantly. Without it, Claude falls back to polling via `tandem_checkInbox`.
+Claude connects to the running Tandem server, opens the document, and starts reading. Asking for Tandem by name is what runs the bundled skill on first use. Where Claude Code offers a Monitor tool, the skill makes one automatic attempt to open a watch on Tandem's wake stream after its first successful read-mode `tandem_status`, so your comments and chat messages reach it while it is idle.
+
+If that route is not available to you, the channel shim is the fallback — and it needs both halves, registration and the flag:
+
+```bash
+tandem setup --apply --with-channel-shim
+claude --dangerously-load-development-channels server:tandem-channel
+```
+
+See [troubleshooting → I sent a chat message and nothing happened](troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) for choosing between the routes. Whichever you use, `tandem_checkInbox` is what the AI actually reads, so nothing is ever lost.
 
 **After upgrading** (re-apply to update the skill and MCP paths):
 ```bash
@@ -252,41 +261,40 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 // Sees all annotations from all agents
 ```
 
-## Keyboard Review Mode
+## Reviewing Annotations from the Keyboard
 
-**Setup:** Claude has finished and left 15+ annotations. Bryan wants to process them efficiently.
+**Setup:** Your AI has finished and left 15+ annotations. Bryan wants to process them efficiently.
 
 The editor's side panel shows all pending annotations with filter controls:
+
 - Filter by type (highlights, comments, notes) — comments with replacement text show as "With replacement"
-- Filter by author (Claude, You)
+- Filter by author (the AI, You)
 - Filter by status (pending, accepted, dismissed)
 
-Bryan clicks the **Review** button (or presses `Ctrl+Shift+R`) to enter keyboard review mode:
+There is no separate review mode to enter — the shortcuts work wherever you are:
 
 ```
-Tab       → Jump to next pending annotation (editor scrolls to it)
-Shift+Tab → Previous annotation
-Y         → Accept the current annotation
-N         → Dismiss the current annotation
-Z         → Undo the last accept/dismiss (within 10-second window)
-Escape    → Exit review mode
+Alt+]              → Jump to the next annotation (the editor scrolls to it)
+Alt+[              → Previous annotation
+Ctrl+Enter         → Accept the selected annotation (or the first pending one)
+Ctrl+Shift+Enter   → Dismiss the selected annotation (or the first pending one)
+Escape             → Deselect
 ```
 
-The side panel shows progress: "Reviewing 3 / 15". Each accepted suggestion applies its text change automatically. After accepting or dismissing, a 10-second undo window appears on the annotation card with an "Undo" link. For accepted suggestions, undo atomically reverts both the text edit and the annotation status.
+Each accepted suggestion applies its text change automatically. After accepting or dismissing, the resolved card briefly offers an **Undo** action; for accepted comments with replacement text, undo reverts the text change and the annotation status together.
 
-When all annotations are resolved, a **Review Summary** overlay appears showing:
-- Total reviewed, accepted count, dismissed count, accept rate
+`Alt+]` and `Alt+[` are remappable in **Settings → Shortcuts**. Accept and dismiss are not.
 
-For bulk operations, use **Accept All** or **Dismiss All** buttons in the side panel header. These require a confirmation step before executing. When filters are active, bulk actions only affect the filtered annotations (e.g., "Accept 3 of 12 pending?").
+For bulk operations, use **Accept All** or **Dismiss All** in the side panel header. These require a confirmation step. When filters are active, bulk actions only affect the filtered annotations (e.g. "Accept 3 of 12 pending?").
 
 ### Solo / Tandem Mode
 
-The toolbar includes a **Solo / Tandem** toggle that controls how Claude's annotations appear.
+The **Solo / Tandem** toggle in the title bar (`Ctrl+Shift+M`) holds work back in *both* directions.
 
-- **Tandem** (default) — Claude's annotations appear as they arrive.
-- **Solo** — Claude's pending annotations are held back. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
+- **Tandem** (default) — the AI's annotations appear as they arrive, and the comments and replies you write are visible to it.
+- **Solo** — the AI's pending annotations are held back from the document, *and* the comments and replies you author are withheld from the AI. Each held item shows an amber **Held** pill, and the status bar keeps a running count. Resolved annotations are always visible regardless of mode. Solo also hides the right rail, so the annotation list is out of sight while you write.
 
-This lets Bryan control how aggressively Claude's output interrupts the editing flow. During focused writing, switch to Solo; when ready to review, switch to Tandem to release all held annotations at once.
+Switching back to Tandem releases the whole set at once, in both directions. See [User Guide → Solo / Tandem Mode](user-guide.md#solo--tandem-mode) for exactly which surfaces the hold covers.
 
 ## Reviewing a .docx with Imported Word Comments
 
@@ -319,24 +327,25 @@ Claude: tandem_comment({
 })
 ```
 
-Bryan filters annotations by author in the SidePanel — "Imported" shows the original Word comments, "Claude" shows new findings. He can accept/dismiss both types using the same review workflow (Tab/Y/N/Z keys).
+Bryan filters annotations by author in the SidePanel — "Imported" shows the original Word comments, "Claude" shows new findings. He can accept/dismiss both types using the same accept/dismiss shortcuts.
 
 ## Onboarding Tutorial (First Run)
 
 **Setup:** First-time user launches Tandem with no restored sessions.
 
-The server auto-opens `sample/welcome.md` and injects 3 tutorial annotations:
+The server auto-opens `sample/welcome.md` and injects four tutorial annotations:
 1. A **highlight** on the welcome heading — demonstrates visual markers
 2. A **comment** on a paragraph — shows the annotation side panel
 3. A **comment** with replacement text — introduces accept/reject workflow
+4. A **note** on a paragraph — a private reminder the AI never sees
 
-A floating tutorial card appears at the bottom-left of the editor with three steps:
+A floating tutorial card appears at the bottom-left of the editor with three actionable steps, followed by a "You're ready!" completion card:
 
-**Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the tutorial annotations. Clicking Accept or Dismiss on any annotation card (or using Y/N in keyboard review mode) completes this step.
+**Step 1: Review an annotation.** The card prompts the user to accept or dismiss one of the tutorial annotations. Clicking Accept or Dismiss on any annotation card (or pressing `Ctrl+Enter` / `Ctrl+Shift+Enter`) completes this step.
 
-**Step 2: Annotate the text.** The card prompts the user to select text and create a Comment (sent to Claude) or a Note (private to the user). Creating any user annotation completes this step.
+**Step 2: Ask a question.** The card prompts the user to select text and create a Comment (sent to the AI) or a Note (private to the user). Creating any user annotation completes this step.
 
-**Step 3: Try editing.** The card prompts the user to click in the document and type something. Focusing the editor and making any keystroke completes this step.
+**Step 3: Make an edit.** The card prompts the user to click in the document and type something. Focusing the editor and making any keystroke completes this step.
 
 After all three steps, the tutorial card disappears and doesn't return (persisted to localStorage). The tutorial is suppressed entirely if the user opened a different document or has completed it before.
 

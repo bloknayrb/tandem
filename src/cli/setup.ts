@@ -259,11 +259,25 @@ function printPushStatus(shimRegisteredFor: string[]): void {
 
   console.error(
     "\n\x1b[1mReal-time push notifications:\x1b[0m\n" +
+      // Lead with the path that needs no install. Every other shipped surface
+      // (doctor's push-path fix string, the wizard, SKILL.md) puts the
+      // self-armed watch first; this file used to open on the channel shim, so
+      // a `tandem setup --apply` user heard about two paths that need
+      // installing and nothing about the one that does not.
+      "  Simplest first: ask Claude to watch for updates. It can arm a watch on\n" +
+      "  Tandem's wake stream itself — nothing to install, no flag — where Claude\n" +
+      "  Code offers a Monitor tool. That tool is enabled per account rather than\n" +
+      "  per version, so upgrading may not add it, and on Windows it also needs Git\n" +
+      "  Bash. If Claude says it has none, the channel shim below is the option that\n" +
+      "  never needs it.\n\n" +
       status +
       "  A Tandem plugin is also published (skill + MCP + a real-time monitor that\n" +
       "  needs no flag on Claude Code 2.1.212+ interactive sessions). The monitor\n" +
       "  starts when Claude first uses the Tandem skill in a session, not at session\n" +
       "  start — so ask for Tandem by name rather than expecting it to be listening.\n" +
+      "  It also needs Node on the PATH Claude Code itself started with (start\n" +
+      "  `claude` from a terminal), and it shares the built-in Monitor tool's\n" +
+      "  per-account gate — so it cannot stand in when that gate is off.\n" +
       "  Use one or the other — both active in one session deliver every event twice:\n\n" +
       "    claude plugin marketplace add bloknayrb/tandem\n" +
       "    claude plugin install tandem@tandem-editor\n\n" +

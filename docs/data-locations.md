@@ -55,7 +55,8 @@ Two service names in the platform keychain (Windows Credential Manager,
 macOS Keychain, Linux Secret Service):
 
 - `tandem-integrations` — Tandem's own auth tokens
-- `tandem-models` — API keys you added in Settings → Models
+- `tandem-models` — API keys for the bring-your-own-model integration, when that
+  feature is enabled. Present only if you have added a key.
 
 ## Entries Tandem writes into other programs' config
 

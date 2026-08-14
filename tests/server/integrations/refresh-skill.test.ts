@@ -173,7 +173,16 @@ describe("refreshExistingSkillIfStale — failure recording", () => {
 
     await refreshExistingSkillIfStale({
       homeOverride,
-      timeoutMs: 20,
+      // The deadline clock starts at function entry, but `readFile` and
+      // `mkdir` both run before the writer is reached. At 20ms this test
+      // failed intermittently under a full-suite run: the abort landed in
+      // that prefix, `throwIfAborted` threw, the writer was never invoked,
+      // and `writerObservedAbort` stayed false while the `timed-out` code
+      // below still passed. The budget has to clear two filesystem ops on a
+      // loaded machine. Widening it costs nothing and loses no coverage --
+      // the fake writer below never resolves, so the deadline still fires
+      // inside it, which is the branch under test.
+      timeoutMs: 500,
       _writeSkillForTests: async (_content, _dest, signal) => {
         if (!signal) throw new Error("refresh did not pass an AbortSignal to the writer");
         await new Promise<void>((_resolve, reject) => {

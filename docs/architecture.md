@@ -431,7 +431,8 @@ The shim is a separate Node.js process (`src/channel/index.ts`) spawned by Claud
 
 Components:
 - **`index.ts`** — MCP server setup, `tandem_reply` tool, permission relay handler
-- **`event-bridge.ts`** — SSE client with reconnection (5 retries, 2s delay), debounced awareness posts (500ms), selection event debouncing (1.5s) with cleared-selection filtering
+- **`event-bridge.ts`** — a thin adapter over `src/shared/sse-consumer.ts`, which owns the SSE client and its reconnection policy (exponential 2/4/8/16s, capped at 30s). Awareness posts are debounced here; there is **no** selection debouncing on this path at all — selections are buffered server-side in `events/queue.ts` and there is no selection event type on the wire.
+- **`run.ts`** — the runtime the CLI imports; `tandem_reply` HTTP calls and outbound timeouts
 
 The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously. This is not a split of the tool surface: every Tandem tool is registered on the HTTP server, `tandem_reply` included. The shim exists to carry channel push, and it re-exposes `tandem_reply` so a reply can be sent on the same transport that delivered the event.
 
@@ -443,7 +444,7 @@ When Claude Code asks for tool approval, it sends `notifications/claude/channel/
 
 ## Plugin Monitor
 
-> **Activates on Claude Code 2.1.212+; the channel shim remains the default push transport by decision (2026-07-19).** The plugin monitor was found inactive on Claude Code 2.1.143 (the historical Spike B NO-GO — `docs/spikes/plugin-monitor-viability-spike.md`, whose probes also ran in `-p` print mode, where monitors never activate by design). It activates on 2.1.212+ interactive sessions with a persistent install (v0.18.0 acceptance run; the `--plugin-dir` half of the 2026-07-17 re-test was UNREPRODUCED as of 2026-08-06 and was **reproduced on 2026-08-09** (2.1.226, interactive; `docs/spikes/plugin-monitor-tty-activation.md`) — see the ADR-028 correction and `docs/spikes/plugin-delivery.md`), and it ships installable via `npx -y tandem-editor@<version> monitor` (the manifest previously ran `node ${CLAUDE_PLUGIN_ROOT}/dist/monitor/index.js`, but `dist/` is gitignored so a github-marketplace clone carried no monitor binary; npm ships `dist`, so npx delivers it). It is an independent push path needing no `--dangerously-...` flag. **Since #1354 it arms on `on-skill-invoke`, not at session start** — two entries, `on-skill-invoke:tandem:tandem` and `on-skill-invoke:tandem`, because the published skill name is qualified iff the dispatched copy came from the plugin and Tandem ships that skill twice (see `plugin-monitor-tty-activation.md` F6–F8). A session that never dispatches the skill therefore has no monitor, which is the deliberate trade for it no longer failing `exit 127` in sessions unrelated to Tandem. The channel shim remains the canonical transport by decision (2026-07-19 — Tandem is not going monitor-canonical and not deprecating the channel), but "canonical" is no longer the same as "default": since Track E `tandem setup` registers **no** push transport unless asked, so a plain setup gets neither the shim nor the monitor and relies on the self-armed watch or polling. Any two active in one session double-deliver. Deleting `experimental.monitors` was proposed and **declined** on 2026-08-08, and the review gate was **closed permanently on 2026-08-09** (#1349) when the delivery condition it was waiting on was measured the other way: on 2.1.226 a manifest monitor arms in an interactive session and every stdout line becomes a model turn (`docs/spikes/plugin-monitor-tty-activation.md`). See the dated updates in [ADR-028](decisions.md#adr-028-plugin-monitor-url-and-auth-resolution--userconfig-over-hardcoded-default). The design below describes the monitor's role.
+> **Activates on Claude Code 2.1.212+; the channel shim remains the canonical push transport by decision (2026-07-19) — canonical, not default: since Track E `tandem setup` registers no push transport unless asked.** The plugin monitor was found inactive on Claude Code 2.1.143 (the historical Spike B NO-GO — `docs/spikes/plugin-monitor-viability-spike.md`, whose probes also ran in `-p` print mode, where monitors never activate by design). It activates on 2.1.212+ interactive sessions with a persistent install (v0.18.0 acceptance run; the `--plugin-dir` half of the 2026-07-17 re-test was UNREPRODUCED as of 2026-08-06 and was **reproduced on 2026-08-09** (2.1.226, interactive; `docs/spikes/plugin-monitor-tty-activation.md`) — see the ADR-028 correction and `docs/spikes/plugin-delivery.md`), and it ships installable via `npx -y tandem-editor@<version> monitor` (the manifest previously ran `node ${CLAUDE_PLUGIN_ROOT}/dist/monitor/index.js`, but `dist/` is gitignored so a github-marketplace clone carried no monitor binary; npm ships `dist`, so npx delivers it). It is an independent push path needing no `--dangerously-...` flag. **Since #1354 it arms on `on-skill-invoke`, not at session start** — two entries, `on-skill-invoke:tandem:tandem` and `on-skill-invoke:tandem`, because the published skill name is qualified iff the dispatched copy came from the plugin and Tandem ships that skill twice (see `plugin-monitor-tty-activation.md` F6–F8). A session that never dispatches the skill therefore has no monitor, which is the deliberate trade for it no longer failing `exit 127` in sessions unrelated to Tandem. The channel shim remains the canonical transport by decision (2026-07-19 — Tandem is not going monitor-canonical and not deprecating the channel), but "canonical" is no longer the same as "default": since Track E `tandem setup` registers **no** push transport unless asked, so a plain setup gets neither the shim nor the monitor and relies on the self-armed watch or polling. Any two active in one session double-deliver. Deleting `experimental.monitors` was proposed and **declined** on 2026-08-08, and the review gate was **closed permanently on 2026-08-09** (#1349) when the delivery condition it was waiting on was measured the other way: on 2.1.226 a manifest monitor arms in an interactive session and every stdout line becomes a model turn (`docs/spikes/plugin-monitor-tty-activation.md`). See the dated updates in [ADR-028](decisions.md#adr-028-plugin-monitor-url-and-auth-resolution--userconfig-over-hardcoded-default). The design below describes the monitor's role.
 
 The plugin monitor (`src/monitor/index.ts`) is a shipped, installable alternative to the channel shim (in-tree since #1201; reachable by end users once a release republishes `tandem-editor` with the `monitor` subcommand) for receiving real-time events from Tandem. It is installed as a Claude Code plugin rather than spawned as a stdio subprocess.
 
@@ -503,7 +504,7 @@ On SIGINT/SIGTERM, `finalClearAwareness()` drains any in-flight awareness POSTs 
 
 ### Fetch Timeouts
 
-The plugin monitor and channel shim both bound their outbound HTTP calls so a half-open Tandem server cannot wedge the push bridge silently. The shared timeout helper lives in `src/shared/fetch-with-timeout.ts` and is used by `src/monitor/`, `src/channel/event-bridge.ts`, and `src/channel/run.ts`.
+The plugin monitor and channel shim both bound their outbound HTTP calls so a half-open Tandem server cannot wedge the push bridge silently. The shared timeout helper lives in `src/shared/fetch-with-timeout.ts`. Its callers are `src/shared/sse-consumer.ts` — which both the monitor and the channel shim delegate to — and `src/channel/run.ts`.
 
 1. **`fetchWithTimeout(url, init, ms)`** — delegates through `authFetch`, applies `AbortSignal.timeout(ms)`, and composes it with any caller-provided abort signal. Used for all request-response routes.
 2. **Split handshake + inactivity watchdog** — used for the streaming `/api/events` route. A local `AbortController` bounds the handshake; once the response headers arrive the controller's timer is cleared, and a separate inactivity watchdog cancels the body stream if no bytes arrive for `SSE_INACTIVITY_TIMEOUT_MS`. See [lesson #42](./lessons-learned.md#42-abortsignal-passed-to-fetch-governs-the-response-body-too).
@@ -570,12 +571,15 @@ Each Y.Map has observers attached by different subsystems. Understanding who own
 
 | Y.Map Key | Observer Owner | Location | Purpose |
 |---|---|---|---|
-| `annotations` | Server event queue | `src/server/events/queue.ts` → `attachObservers()` | Emit channel events (annotation:created/accepted/dismissed) |
+| `annotations` | Server event queue | `events/observers/annotations.ts`, attached via `observers/factory.ts` → `queue.ts` `attachObservers()` | Emit channel events (annotation:created/accepted/dismissed) |
 | `annotations` | Client Svelte hook | `src/client/hooks/yjsSync.svelte.ts` → `setupTabObservers()` | Drive sidebar annotation list via `setAnnotations()` |
 | `annotations` | Client ProseMirror | `src/client/editor/extensions/annotation.ts` → `buildDecorations()` | Render inline highlights/underlines |
 | `awareness` | Client Svelte hook | `yjsSync.svelte.ts` → `setupTabObservers()` | Drive "Claude -- typing" status indicator |
-| `userAwareness` | Server event queue | `queue.ts` → `attachObservers()` | Buffer selection for chat messages |
-| `documentMeta` | Client Svelte hook | `yjsSync.svelte.ts` → `handleDocumentListRef` | Sync tab list from server broadcasts (CTRL_ROOM) |
+| `userAwareness` | Server event queue | `events/observers/awareness.ts`, via `observers/factory.ts` | Buffer selection for chat messages |
+| `chat` (CTRL_ROOM) | Server event queue | `events/observers/ctrl-chat.ts`, attached via `attachCtrlObservers()` | Emit `chat:message` |
+| `documentMeta` (CTRL_ROOM) | Server event queue | `events/observers/ctrl-meta.ts`, via `attachCtrlObservers()` | Emit `document:opened` / `closed` / `switched` (the latter from `activeDocumentId`) |
+| `annotationReplies` | Server event queue | `events/observers/replies.ts`, via `observers/factory.ts` | Emit reply events |
+| `documentMeta` (CTRL_ROOM) | Client Svelte hook | `yjsSync.svelte.ts` → `handleDocumentListRef` | Sync tab list from server broadcasts (CTRL_ROOM) |
 | `documentMeta` (per-doc) | Client Svelte hook | `yjsSync.svelte.ts` → `setupTabObservers()` | Sync readOnly flag per tab |
 | `documentMeta` → `fidelityReport` (per-doc) | Client Svelte component | `src/client/components/FidelityReportBanner.svelte` | Render the `.docx` fidelity notice (#1145). **No server-side observer** — server write-only (open/reload/save), client read-only. |
 
@@ -729,13 +733,13 @@ Browser renders OnboardingTutorial floating card (bottom-left)
 
 ## Security
 
-- Server binds to `127.0.0.1` only -- not accessible from network
+- Binds to `127.0.0.1` **by default**. A non-loopback bind is supported and gated -- see [security.md](security.md#network-posture) and `src/server/bind-check.ts`. Non-loopback callers need a Bearer token and, since #1320, may only *read* `/api`.
 - WebSocket origin validation rejects non-localhost connections (prevents DNS rebinding)
-- UNC paths rejected (prevents NTLM credential hash leakage via SMB)
-- Symlinks resolved before path validation
+- UNC paths rejected (prevents NTLM credential hash leakage via SMB) -- **order-dependent, and not universally correct today**: [#1417](https://github.com/bloknayrb/tandem/issues/1417) records three places where a filesystem call runs *before* the guard that would reject the path, plus four weaker hand-rolled copies of the UNC predicate. Read these two bullets as the intent, not as a ratified guarantee, until #1417 lands.
+- Symlinks resolved before path validation -- same #1417 caveat.
 - File size limit: 50MB
 - Atomic file saves: write to temp file, then rename
-- Max 4 concurrent WebSocket connections, 10MB max payload
+- **No WebSocket connection cap and no WebSocket payload cap.** `src/server/yjs/provider.ts` configures Hocuspocus with `port`, `address`, `quiet` and hooks only. The one payload limit in the tree is 1 KiB on the `/api/wake` upgrade (`src/server/events/wake-socket.ts`). The bound on WS exposure is the loopback bind plus origin validation, not a quota -- do not read a quota into this list.
 
 ---
 
@@ -792,7 +796,7 @@ The window hides (rather than closes) when the user clicks the OS close button �
 | Item | Action |
 |------|--------|
 | Open Editor | Show + focus the main window |
-| Setup Claude | Re-run MCP config (with result dialog) |
+| Setup AI Assistant | Re-run MCP config (with result dialog) |
 | Check for Updates | Manual update check |
 | About Tandem | Version dialog |
 | Quit | Kill sidecar, then exit |
@@ -839,11 +843,11 @@ Tauri v2 uses a capabilities model to grant permissions:
 - `capabilities/default.json` -- core window permissions, shell (sidecar), fs, dialog
 - `capabilities/desktop.json` -- desktop-only plugins: single-instance, window-state, updater
 
-`single-instance` must be the **first** plugin registered in `lib.rs` — later registration breaks instance detection. When a second instance is launched, it brings the existing window to the front (future: pass file path arguments to open the file in the running instance).
+`single-instance` must be the **first** plugin registered in `lib.rs` — later registration breaks instance detection. When a second instance is launched, it brings the existing window to the front **and opens any file path passed on its command line** — `extract_file_arg` in `lib.rs` feeds the shared `validate_open_candidate` (#1344, the same validator the cold-start path uses), then POSTs `/api/open` against the running sidecar.
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-046), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-050), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket
@@ -867,8 +871,15 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
 - `notifications.ts` -- Toast notification system: ring buffer of `NotificationPayload` objects, `pushNotification()` + `subscribe()`/`unsubscribe()` for SSE consumers
 - `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API; `openScratchpad()` for ephemeral in-memory docs via `source:"upload"`), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`, `broadcastStoreReadOnly()`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`, `snapshotToolCount()` for diagnostic tool census, `findRepoFile()` for locating bundled docs), `transport-registry.ts` (live MCP sessions keyed by `Mcp-Session-Id` — one `McpServer` per session, LRU cap + idle reaper; ADR-045), `../sessions/context.ts` (`AsyncLocalStorage` carrying the calling Claude session id into tool handlers), `api-routes.ts` (REST API: `GET /api/info`, `/api/open`, `/api/upload`, `/api/close`, `POST /api/scratchpad`, `GET /api/notify-stream`), `routes/info.ts` (`makeInfoHandler()` factory for `GET /api/info` — loopback-gated fields, token mtime, `changelogPath`, `workflowsPath`), `routes/diagnostics.ts` (`makeDiagnosticsHandler()` factory for `GET /api/diagnostics` — embedded `runDoctor()` report for the About tab's Copy Diagnostics button; loopback-only, dev-repo checks filtered, single-flight), `routes/scratchpad.ts` (handler for `POST /api/scratchpad`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
-- `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer + subscriber-gated payload tracking), `sse.ts` (SSE endpoint handler), `push-liveness.ts` (consumer heartbeat counters — diagnostics only, never Claude's presence), `observers/` (per-map event derivation), `file-sync-registry.ts` (durable-annotation file-watcher binding)
+- `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer + subscriber-gated payload tracking), `sse.ts` (SSE endpoint handler), `push-liveness.ts` (consumer heartbeat counters — diagnostics only, never Claude's presence), `observers/` (per-map event derivation), `file-sync-registry.ts` (durable-annotation file-watcher binding), `wake-socket.ts` (the self-armed `ws://…/api/wake` transport — ADR-049), `delivery-state.ts` (per-item surfaced/pushed bookkeeping)
 - `yjs/` -- Y.Doc management, the authoritative document state
+- `mode.ts` -- Solo/Tandem authority (CTRL_ROOM `Y_MAP_MODE`), read by `shouldForwardExternally`
+- `startup-file.ts` -- `maybeOpenStartupFile()`; consumes `TANDEM_OPEN_FILE` before HTTP bind
+- `bind-check.ts` -- Bind-host policy: `TANDEM_BIND_HOST`, `TANDEM_LAN_IP`, wildcard handling, the token-provisioned refusal
+- `documents/` -- Per-document state helpers
+- `integrations/` -- `IntegrationConfig` schema, atomic storage, keychain, `apply.ts` (writes the MCP entries), HTTP routes, the Claude CLI installer
+- `launcher/` -- Auto-launcher and `supervisor.ts` (writes wake turns on the child's stdin)
+- `license/`, `local-model/` -- both ship dark; see CLAUDE.md
 - `file-watcher.ts` -- File change detection: `fs.watch` wrapper with 500ms debounce, self-write suppression (`suppressNextChange`), per-path watcher lifecycle (`watchFile`/`unwatchFile`/`unwatchAll`)
 - `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html, docx-comments), `atomicWrite` helper
 - `file-io/doc-backup.ts` -- Pre-overwrite snapshots of user documents (`.md`/`.txt`/`.docx`): first write per path per run copies the on-disk bytes verbatim to `{APP_DATA}/doc-backups/<path-hash>/` (format-agnostic raw-byte copy, so `.docx` snapshots are byte-identical; 3 per path, 30-day boot sweep, 500 MB cap)
@@ -912,10 +923,14 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 ### Channel Shim (`src/channel/`)
 
 - `index.ts` -- Standalone stdio MCP server spawned by Claude Code as a channel subprocess. Low-level `Server` class (not `McpServer`). Declares `claude/channel` + `claude/channel/permission` capabilities. Exposes `tandem_reply` tool.
-- `event-bridge.ts` -- SSE client that connects to `GET /api/events` on the Tandem server, parses events, pushes `notifications/claude/channel` to Claude Code, and posts awareness updates back.
+- `event-bridge.ts` -- 33-line adapter over `src/shared/sse-consumer.ts`: connects to `GET /api/events`, parses events, pushes `notifications/claude/channel` to Claude Code, and posts awareness updates back. The reconnection policy lives in the shared consumer (exponential 2/4/8/16s, capped at 30s), not here.
+- `run.ts` -- The runtime the CLI's `channel` branch imports; owns the `tandem_reply` HTTP calls and the outbound `fetchWithTimeout` usage.
 
 ### Client (`src/client/`)
 
+- `cowork/` -- Cowork onboarding, admin-declined and settings surfaces (ADR-044)
+- `shell/` -- Window chrome: `TitleBar.svelte` (Solo/Tandem toggle) and siblings
+- `layout/`, `status/`, `annotations/`, `keychain/`, `tauri/` -- layout model, status surfaces, annotation UI, keychain bridge, Tauri IPC wrappers
 - `positions.ts` -- Unified client position module: `annotationToPmRange` (with `method` diagnostic), `pmSelectionToFlat`, `flatOffsetToPmPos`/`pmPosToFlatOffset`
 - Tiptap editor with collaboration extensions, connects to Hocuspocus via WebSocket (@hocuspocus/provider)
 - `App.svelte` -- Layout + UI state only; `useYjsSync` hook (`src/client/hooks/`) manages `OpenTab` objects (one per open document), each with its own Y.Doc + provider
@@ -952,7 +967,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `SidePanel` -- Annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 10-second undo window on accept/dismiss, inline annotation editing (pencil button on pending annotations)
 - `panels/FilterBar.svelte` -- Filter controls row: type/author/status chip groups (ChipGroup.svelte, A15) + Clear button (extracted from SidePanel)
 - `panels/BulkActions.svelte` -- Bulk accept/dismiss confirmation UI (extracted from SidePanel)
-- `panels/useAnnotationReview.ts` -- Review-mode state: reviewIndex, keyboard navigation, accept/dismiss, undo timers, bulk action handlers (extracted from SidePanel)
+- `panels/useAnnotationReview.svelte.ts` -- Review-mode state (the `.svelte.ts` suffix is load-bearing; it is a rune-based hook): reviewIndex, keyboard navigation, accept/dismiss, undo timers, bulk action handlers (extracted from SidePanel)
 - `panels/AnnotationCardActions.svelte` -- Action buttons for an annotation card: accept, dismiss, edit (extracted from AnnotationCard)
 - `panels/AnnotationEditForm.svelte` -- Inline edit form for pending annotations (extracted from AnnotationCard)
 - `panels/ReplyThread.svelte` -- Reply thread display and reply input for an annotation (extracted from AnnotationCard)
@@ -962,12 +977,25 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 
 ### Tauri Desktop (`src-tauri/`)
 
-- `Cargo.toml` -- Rust dependencies: tauri v2, tauri-plugin-shell, tauri-plugin-fs, tauri-plugin-dialog, tauri-plugin-single-instance, tauri-plugin-window-state, tauri-plugin-process, tauri-plugin-updater, tauri-plugin-log, tauri-plugin-prevent-default, tauri-plugin-decorum (custom window chrome — preserves Aero Snap and macOS traffic lights), reqwest, tokio, serde_json
-- `tauri.conf.json` -- App config: identifier (`com.tandem.editor`), window dimensions (1200×800, min 800×600), `bundle.externalBin` (node-sidecar), `bundle.resources` (dist/server/, dist/channel/, dist/client/, sample/), CSP, updater endpoint (GitHub Releases `latest.json`), `bundle.createUpdaterArtifacts: true`
+- `Cargo.toml` -- Rust dependencies: tauri v2, tauri-plugin-shell, tauri-plugin-fs, tauri-plugin-dialog, tauri-plugin-single-instance, tauri-plugin-window-state, tauri-plugin-process, tauri-plugin-updater, tauri-plugin-log, tauri-plugin-prevent-default, tauri-plugin-decorum (custom window chrome — preserves Aero Snap and macOS traffic lights), tauri-plugin-autostart (the basis of start-at-login), tauri-plugin-sentry (opt-in crash reporting), tauri-plugin-devtools (optional, mutually exclusive with tauri-plugin-log), reqwest, tokio, serde_json
+- `tauri.conf.json` -- App config: identifier (`com.tandem.editor`), window dimensions (1200×800, min 800×600), `bundle.externalBin` (**two**: `binaries/node-sidecar` and `binaries/tandem-reaper` — both must exist or `cargo tauri dev/build` fails its existence check), `bundle.resources` (`dist/server/`, `dist/channel/`, `dist/stdio-bridge/`, `dist/client/`, `sample/`, `skills/`, `CHANGELOG.md`, `docs/workflows.md` — `tauri_build::build()` checks this list at build time, so keep it in sync here), CSP, updater endpoint (GitHub Releases `latest.json`), `bundle.createUpdaterArtifacts: true`
 - `capabilities/default.json` -- Core permissions: window events, shell sidecar, fs read/write, dialog
 - `capabilities/desktop.json` -- Desktop-only permissions: single-instance, window-state save/restore, updater
-- `src/lib.rs` -- All Tauri logic: plugin registration (single-instance **first**), sidecar lifecycle (spawn, health-poll, exponential backoff, kill on exit), `resolve_channel_dist()` (injects `TANDEM_CHANNEL_DIST` into the sidecar so the channel shim registers from the resource dir; replaced `run_setup()`/`/api/setup` in #477 PR 3c-ii-c), system tray build + event handlers (tray "Setup AI Assistant" emits `open-integration-wizard`), window hide-on-close, auto-updater (launch + periodic 8h), `strip_win_prefix()` for Windows `\\?\` paths, `copy_sample_files()` (first-run copy to app-data dir)
+- `src/lib.rs` -- The Tauri entry logic (not all of it — thirteen sibling modules are listed below): plugin registration (single-instance **first**), sidecar lifecycle (spawn, health-poll, exponential backoff, kill on exit), `resolve_channel_dist()` (injects `TANDEM_CHANNEL_DIST` into the sidecar so the channel shim registers from the resource dir; replaced `run_setup()`/`/api/setup` in #477 PR 3c-ii-c), system tray build + event handlers (tray "Setup AI Assistant" emits `open-integration-wizard`), window hide-on-close, auto-updater (launch + periodic 8h), `strip_win_prefix()` for Windows `\\?\` paths, `copy_sample_files()` (first-run copy to app-data dir)
 - `src/main.rs` -- Entry point, delegates to `lib::run()`
+- `src/autostart.rs` -- Start-at-login registration (ADR-046, #1236)
+- `src/cowork_installer.rs`, `cowork_workspace_scan.rs`, `cowork_meta.rs`, `cowork_atomic_json.rs` -- Cowork per-workspace plugin registration and the four-step path guard (ADR-044); paired with `src/client/cowork/` on the client
+- `src/firewall.rs` -- `Tandem Cowork*` firewall rule scoping (Windows)
+- `src/integrations_probe.rs` -- Detects installed AI clients for the wizard
+- `src/keychain.rs`, `src/token_store.rs` -- OS keychain access and auth-token storage
+- `src/sentry_reporting.rs` -- Opt-in crash reporting (`TANDEM_SENTRY_DSN`)
+- `src/sidecar_job.rs` -- Windows job-object containment for the sidecar
+- `src/uninstall_scrub.rs` -- The scrub the NSIS uninstaller hook invokes (Cowork entries, firewall rules, start-at-login). Distinct from `src/cli/uninstall-scrub.ts`, which is the npm CLI's scrub (MCP entries + skill) and is never invoked by NSIS.
+- `src/win_app_mode.rs` -- Windows app-mode detection
+
+### stdio bridge (`src/stdio-bridge/`)
+
+- `index.ts` -- The script the generated `tandem` MCP entry runs, bundled to `dist/stdio-bridge/` and shipped as a Tauri resource. It exists as its own tsup entry because the CLI bundle is deliberately *not* self-contained and so cannot run from a resource dir with no `node_modules`. The runtime itself stays in `src/cli/mcp-stdio.ts` so the two cannot drift. When the bundle is missing, `apply.ts` falls back to a bare `npx` entry — silently, behind a `log::warn!`.
 
 ### Shared (`src/shared/`)
 
@@ -979,11 +1007,11 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 ### Scripts & Config
 
 - `scripts/ci/stdio-smoke.mjs` -- CI smoke test: spawns real HTTP server + stdio proxy, sends MCP initialize → tools/list, asserts ≥20 tools registered. Self-contained ESM with cleanup watchdogs.
-- `tsup.config.ts` -- Four-entry tsup build (server, channel, monitor, CLI). Server entry injects `__MCP_SDK_VERSION__` at build time. `selfContained` config for Tauri bundles (no node_modules).
+- `tsup.config.ts` -- Five-entry tsup build (server, CLI, channel, monitor, stdio-bridge). Server entry injects `__MCP_SDK_VERSION__` at build time. `selfContained` config for Tauri bundles (no node_modules).
 
 ### Claude Code Automation (`.claude/`)
 
 - `.claude/settings.json` -- Hook wiring: PreToolUse (block) and PostToolUse (warn) matchers
 - `.claude/hooks/` -- 19 shell scripts plus one `.mjs` helper, enforcing Critical Rules, type-checking, formatting, test running, and the workflow nudges. Inventory and semantics: [`.claude/hooks/README.md`](../.claude/hooks/README.md)
-- `.claude/agents/` -- 11 agents: 4 specialized reviewers (annotation-model, svelte-migration, crdt, security) plus the 7 frame generators and critic used by `/diverge`
-- `.claude/skills/` -- Project-local skills: changelog, dev-server, e2e, e2e-debug, release, screenshots
+- `.claude/agents/` -- 4 specialized reviewers (annotation-model, svelte-migration, crdt, security) plus the six `/diverge` frame generators and its critic
+- `.claude/skills/` -- Six Tandem-specific project skills (changelog, dev-server, e2e, e2e-debug, release, screenshots). Other entries resolving under this path at runtime are user-level or plugin skills, not part of this repo's set.
