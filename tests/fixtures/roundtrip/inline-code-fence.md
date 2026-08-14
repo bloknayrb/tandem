@@ -1,8 +1,13 @@
-A code span whose content contains a backtick run needs a fence longer than any
-run inside it. The serializer escapes the inner backticks instead of lengthening
-the fence, so the span ends early and the words on either side get glued
-together.
+Code spans and literal backticks in prose. Fence *style* (padding spaces, fence
+length beyond the minimum) is invisible-tier and pinned separately — everything
+here must come back byte-identical.
 
-Control, and this one is clean: `console.error(\` followed by prose.
+An ordinary span: `const x = 1` and prose after it.
 
-The case that breaks: `x ?? ``y``` and text after it.
+A span ending in a backslash: `console.error(\` followed by prose.
+
+A literal backtick keeps its escape: a lone \` in prose, and a \`\` pair on the
+same line, because un-escaping either would make it a live delimiter.
+
+A text run ending in a backtick, immediately before a real span: the escape is
+what stops it merging with `the span's opening fence`.

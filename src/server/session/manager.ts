@@ -3,6 +3,7 @@ import path from "path";
 import * as Y from "yjs";
 import {
   CTRL_ROOM,
+  DOCUMENT_MODEL_REVISION,
   SESSION_MAX_AGE,
   Y_MAP_CHAT,
   Y_MAP_CHAT_DOCUMENT_NAMES,
@@ -67,6 +68,7 @@ export async function saveSession(
     ydocState,
     sourceFileMtime,
     lastAccessed: Date.now(),
+    modelRevision: DOCUMENT_MODEL_REVISION,
     ...(opts?.dirty ? { dirty: true } : {}),
     ...(opts?.conflict ? { conflict: opts.conflict } : {}),
   };
@@ -140,6 +142,40 @@ export async function sourceFileChanged(session: SessionData): Promise<boolean> 
   } catch {
     return true; // File doesn't exist — treat as changed
   }
+}
+
+/**
+ * True when this session was written by a load path that has since been fixed,
+ * and re-parsing the source file is strictly better than replaying it (#1448).
+ *
+ * `ydocState` is a bare `Y.encodeStateAsUpdate` of an ALREADY-parsed document,
+ * so a parser fix cannot reach it. Without this check a user who upgrades keeps
+ * every defect their pre-fix session baked in for up to `SESSION_MAX_AGE` — the
+ * fix ships but never arrives.
+ *
+ * Two populations are deliberately exempt, because for them the session is the
+ * only copy of the content and discarding it is the data loss this whole effort
+ * is about:
+ *   - `dirty` sessions hold unsaved edits that exist nowhere else.
+ *   - `upload://` paths have no disk file to re-read.
+ *   - a session carrying an UNRESOLVED conflict is the only record that the
+ *     conflict happened. `maybeRestoreSession` carries `session.conflict`
+ *     forward precisely because it cannot be re-derived — `saveSession` stats
+ *     the file at save time, so `sourceFileMtime` IS the external write's mtime
+ *     and `sourceFileChanged` reads false on reopen. Discarding the session
+ *     here returns before that carry, which does not defer the conflict, it
+ *     destroys it: the keep-vs-reload banner never appears and the next
+ *     autosave tick overwrites the external edit. That is the same laundering
+ *     the carry exists to prevent, and it costs a user their file, which is a
+ *     strictly worse outcome than replaying a stale parse of it. Re-reading is
+ *     an improvement, not an emergency; it can wait for the conflict to be
+ *     resolved and the next save to re-stamp the revision.
+ */
+export function sessionModelIsStale(session: SessionData): boolean {
+  if (session.dirty === true) return false;
+  if (isUploadPath(session.filePath)) return false;
+  if (narrowConflict(session.conflict) !== undefined) return false;
+  return (session.modelRevision ?? 0) < DOCUMENT_MODEL_REVISION;
 }
 
 /** Delete a session file */

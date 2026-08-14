@@ -6,6 +6,7 @@ import remarkStringify from "remark-stringify";
 import { unified } from "unified";
 import { visit } from "unist-util-visit";
 import * as Y from "yjs";
+import { normalizeAndRecordLineEnding, restoreLineEndings } from "./line-endings.js";
 import { mdastToYDoc, yDocToMdast } from "./mdast-ydoc.js";
 
 /**
@@ -70,15 +71,20 @@ const stringifyOptions = {
   rule: "-",
 } as const;
 
-/** Parse markdown string and populate a Y.Doc's XmlFragment */
+/**
+ * Parse markdown string and populate a Y.Doc's XmlFragment.
+ *
+ * Line endings are normalized to LF for the model and the file's own ending is
+ * recorded on the doc for `saveMarkdown` to restore — see `line-endings.ts`.
+ */
 export function loadMarkdown(doc: Y.Doc, markdown: string): void {
-  const tree = mdParser.parse(markdown) as Root;
+  const tree = mdParser.parse(normalizeAndRecordLineEnding(doc, markdown)) as Root;
   mdastToYDoc(doc, tree);
 }
 
-/** Serialize a Y.Doc's XmlFragment back to markdown */
+/** Serialize a Y.Doc's XmlFragment back to markdown, in the doc's own endings. */
 export function saveMarkdown(doc: Y.Doc): string {
-  return serializeMdast(yDocToMdast(doc));
+  return restoreLineEndings(doc, serializeMdast(yDocToMdast(doc)));
 }
 
 /**
@@ -97,7 +103,22 @@ let activeRefDefs = new Set<string>();
  */
 const mdStringifier = unified()
   .use(remarkFrontmatter, FRONTMATTER_FLAVOURS)
-  .use(remarkGfm)
+  // `tablePipeAlign: false` MUST go on remarkGfm, not on remarkStringify below.
+  // Tables are a GFM extension and it owns their serialization, so the option
+  // placed on remarkStringify — which is where this repo puts every other
+  // serializer option, and therefore the natural place to reach for — is a
+  // silent no-op. Verified:
+  //
+  //   baseline / on remarkStringify   "| :--- | :----: | ----: |\n| a    |    b   |     c |"
+  //   on remarkGfm                    "| :- | :-: | -: |\n| a | b | c |"
+  //
+  // Width-padding every cell to the widest value in its column is what made a
+  // one-word edit produce a 262-line diff: change any cell and every row in the
+  // table reflows. This decouples the delimiter and body rows from cell width.
+  // It does NOT reproduce hand-authored `|---|---|` geometry, and no option can
+  // — mdast carries no source markers — so compact delimiter rows still change
+  // once, and only once.
+  .use(remarkGfm, { tablePipeAlign: false })
   .use(remarkStringify, {
     ...stringifyOptions,
     handlers: {
@@ -138,13 +159,71 @@ const mdStringifier = unified()
         //    `(\_foo\_)`) stays escaped — those flanks CAN form emphasis.
         s = s.replace(/(?<=\w)\\_(?=\w)/g, "_");
 
-        // 3. `` \` `` standalone, not adjacent to another backtick. Real code
-        //    spans round-trip through the `inlineCode` handler, never `text`.
-        s = s.replace(/(?<![`\\])\\`(?!`)/g, "`");
+        // 3. NO backtick un-escaping. There used to be a rule here that
+        //    stripped `\` from a backtick judged "standalone"; it was removed in
+        //    #1448 after it was shown to CORRUPT two real documents, in two
+        //    different ways, and after two attempts to narrow it failed.
+        //
+        //    A bare backtick is a code-span delimiter and an escaped one is not
+        //    (verified: `a \` b \` c` parses as a single text node). So
+        //    un-escaping one turns an inert character into a live delimiter, and
+        //    whether that is safe depends on every other backtick REACHABLE FROM
+        //    IT — including ones in sibling nodes this handler never sees:
+        //
+        //      "`x ?? ``y```"          -> code("x ?? \") + text
+        //          the survivor pairs with the next escaped backtick, which the
+        //          backslash no longer shields once its partner is bare
+        //
+        //      "…-resize-handle`" + inlineCode("in the snapshot…")
+        //          -> the freed backtick merges with the SIBLING span's opening
+        //             fence, shifting every code-span boundary in the paragraph
+        //             and gluing words together (docs/design-system-impl/
+        //             testid-manifest.md)
+        //
+        //    Both are one-way: the mangled form reparses to different marks, so
+        //    the second save serializes something else again. An
+        //    idempotency-only assertion — which is what every pre-#1448 suite
+        //    was — cannot see either.
+        //
+        //    Narrowing this to "only when it is the sole backtick in the run"
+        //    fixes the first case and not the second: the paragraph's other
+        //    backticks live in sibling nodes, and `info.before`/`info.after`
+        //    reach only the immediate neighbour. Since the escape renders
+        //    identically and the un-escape buys nothing but tidier source, the
+        //    correct trade is the same one rules 1 and 5 make — keep the escape
+        //    wherever safety is not provable.
 
-        // 4. `\~` not followed by another `~`. GFM strikethrough needs `~~`
-        //    so a lone `~` is unambiguous prose (e.g. `~4500 tokens`).
-        s = s.replace(/\\~(?!~)/g, "~");
+        // 4. `\~` with no tilde adjacent to it on EITHER side, in either form.
+        //    GFM strikethrough needs `~~`, so a genuinely lone `~` is
+        //    unambiguous prose (`~4500 tokens`) and the escape is noise.
+        //
+        //    The guard used to be a `(?!~)` lookahead, which was structurally
+        //    dead: `safe()` escapes EVERY tilde, so an authored `~~` reaches
+        //    here as `\~\~` and the character after the first `\~` is a
+        //    backslash, never a tilde. The lookahead therefore passed on both
+        //    halves and un-escaped them, turning an author's escaped literal
+        //    `\~\~two\~\~` into a live strikethrough — the rendered document
+        //    gains formatting nobody asked for and loses four visible
+        //    characters. Verified against the real serializer; a passing
+        //    idempotency suite could never see it, because the corrupted output
+        //    is itself stable.
+        //
+        //    Looking at the neighbours instead of a fixed-width lookahead is
+        //    what makes the guard reachable: `\` is what sits between two
+        //    escaped tildes, so the test has to admit the escaped form.
+        //    `info.before` / `info.after` extend it across the node boundary,
+        //    where an adjacent `delete` node's own `~~` lives — same reason
+        //    rule 1 consults `info.after` for a following `[`.
+        const tildeAdjacent = (text: string, atStart: boolean) =>
+          atStart ? /^\\?~/.test(text) : /~$/.test(text);
+        const beforeText = typeof info.before === "string" ? info.before : "";
+        const afterText = typeof info.after === "string" ? info.after : "";
+        s = s.replace(/\\~/g, (match, offset: number) => {
+          const after = offset + match.length === s.length ? afterText : s.slice(offset + 2);
+          const before = offset === 0 ? beforeText : s.slice(0, offset);
+          if (tildeAdjacent(after, true) || tildeAdjacent(before, false)) return match;
+          return "~";
+        });
 
         // 5. `\@` only where the following text is NOT host-shaped. remark-gfm
         //    escapes `@` whenever a word-ish local-part char precedes it

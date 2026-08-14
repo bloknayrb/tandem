@@ -124,6 +124,28 @@ export const DOCX_INLINE_MARKS = [
 
 export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 export const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
+/**
+ * Revision of the document model a persisted session was written under (#1448).
+ *
+ * A session's `ydocState` is a bare `Y.encodeStateAsUpdate` — it carries the
+ * document as it was ALREADY parsed, so a parser fix does not reach it. Without
+ * a stamp a user who upgrades keeps every defect their pre-fix session baked in
+ * (manufactured hard breaks, tightened lists, destroyed frontmatter) for up to
+ * `SESSION_MAX_AGE`, and the fix effectively never ships to existing documents.
+ *
+ * A session stamped below this number is discarded on reopen in favour of a
+ * fresh parse from the source file — unless it is `dirty` or an `upload://`
+ * path, where the session is the only copy of the content and dropping it would
+ * be the data loss the stamp exists to prevent.
+ *
+ * Bump this whenever a change to the load path makes an already-parsed Y.Doc
+ * differ from what the same source file would produce now.
+ *
+ *   1 — pre-#1448 (implicit; absent field reads as 0, which is also stale)
+ *   2 — #1448: whitespace/hardBreak, frontmatter, table alignment, list spread,
+ *       code-span fences, line endings
+ */
+export const DOCUMENT_MODEL_REVISION = 2;
 export const TYPING_DEBOUNCE = 3000; // 3 seconds
 export const DISCONNECT_DEBOUNCE_MS = 3000; // 3 seconds before showing "server not reachable"
 export const PROLONGED_DISCONNECT_MS = 30_000; // 30 seconds before showing App-level disconnect banner
@@ -249,6 +271,22 @@ export const Y_MAP_FIDELITY_REPORT = "fidelityReport";
  * per-document documentMeta, so the write is server-only, client/Claude-invisible.
  */
 export const Y_MAP_FOOTNOTE_BODIES = "footnoteBodies";
+/**
+ * The line ending this document arrived with — `"\r\n"` or `"\n"` (#1448 W2).
+ * Written off-fragment under Y_MAP_DOCUMENT_META at load and consumed at save,
+ * so a Windows-authored file goes back to disk with the endings it came with.
+ *
+ * The model itself is ALWAYS LF: a `\r` inside a `Y.XmlText` would be a
+ * character every coordinate system counts and no editor shows, so it would
+ * shift flat offsets, ProseMirror positions and RelativePositions apart from
+ * what the user sees. Normalizing at the boundary and restoring at the boundary
+ * keeps one representation inside and honours the file's own on disk.
+ *
+ * Same inertness as Y_MAP_FIDELITY_REPORT and Y_MAP_FOOTNOTE_BODIES: no
+ * observer on per-document documentMeta, so the write is server-only and
+ * client/Claude-invisible.
+ */
+export const Y_MAP_LINE_ENDING = "lineEnding";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
 /**

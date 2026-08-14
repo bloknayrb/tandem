@@ -141,10 +141,45 @@ There are three ways to open a file:
 
 ### Supported Formats
 
-- **Markdown** (`.md`) — Full read-write support with lossless round-trip formatting.
+- **Markdown** (`.md`) — Full read-write support. Your content round-trips exactly; some *formatting style* is canonicalized on the first save. See [Markdown formatting](#markdown-formatting) below.
 - **Word** (`.docx`) — Read-write. Saving writes your edits back to the `.docx` body, and pending comments are written back as real Word comments. Existing Word comments (`<w:comment>` elements) are imported as annotations with author "import". External edits (e.g. from Word) are detected: a clean document reloads in place, while a document with unsaved edits shows a keep-vs-reload banner instead of losing anything. A **Convert to Markdown** option is also available if you prefer working in Markdown. See [Word fidelity](#word-fidelity) below.
 - **Plain text** (`.txt`) — Full read-write support.
 - **HTML** (`.html`, `.htm`) — Read support.
+
+### Markdown Formatting
+
+Tandem stores your document as structure, not as source text, so saving re-writes the
+file from that structure. **What you wrote is preserved. How you wrote it may be
+normalized** — once, on the first save. After that the file holds still.
+
+Nothing in this list changes how the document renders in any viewer. These are the
+things that do change:
+
+- **Marker style.** Setext headings (`Title` over `=====`) become `# Title`; `*` bullets
+  become `-`; `_em_` becomes `*em*`; `1)` becomes `1.`; `~~~` fences become backtick
+  fences; indented code becomes fenced; `***` becomes `---`; runs of blank lines collapse
+  to one.
+- **Tables.** Column alignment (`:---`, `:-:`, `---:`) is preserved, but hand-aligned
+  cell padding is not — cells are written compactly rather than padded to the widest
+  value in the column. That is deliberate: with padded cells, editing one word reflows
+  every row of the table.
+- **Code spans.** Padding spaces inside a fence, and fences longer than they need to be,
+  are trimmed to the shortest form that still works. A code span wrapped across two
+  source lines comes back on one.
+- **Escapes.** A literal backtick, a bracketed word matching a link definition, and an
+  `@` before something host-shaped all keep their backslash. Tandem keeps an escape
+  wherever removing it could change what the line means.
+- **Emphasis nesting.** Where two styles cover exactly the same words — `~~**both**~~` —
+  the order can come back swapped (`**~~both~~**`). Markdown records no trace of which
+  was opened first. Where the two cover different spans, the nesting is preserved.
+
+Everything else is written back as you left it: YAML and TOML frontmatter (fences and
+all), loose vs tight list spacing, ordered-list start numbers, footnote and reference
+definitions, raw HTML blocks, and your file's line endings — a CRLF file stays CRLF.
+
+If a save ever looks wrong, the original is recoverable. Tandem copies the file's bytes
+verbatim before its first write to it in a session; see
+[troubleshooting → Recovering a previous version](troubleshooting.md#recovering-a-previous-version-of-a-document).
 
 ### Word Fidelity
 

@@ -387,6 +387,14 @@ export interface SessionData {
    * and on any session whose document had no pending conflict.
    */
   conflict?: ExternalConflictState;
+  /**
+   * `DOCUMENT_MODEL_REVISION` at session-save time (#1448). A session stamped
+   * below the current revision holds a document parsed by a load path that has
+   * since been fixed, so reopening it would replay the old damage; it is
+   * discarded in favour of a fresh parse. Absent on sessions written before this
+   * field existed, which is exactly the population that needs discarding.
+   */
+  modelRevision?: number;
 }
 
 /**

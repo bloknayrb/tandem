@@ -14,6 +14,7 @@ import Underline from "@tiptap/extension-underline";
 import StarterKit from "@tiptap/starter-kit";
 import { FootnoteRefMark } from "./extensions/footnote-ref";
 import { ListItemCheckbox } from "./extensions/list-item-checkbox";
+import { ListSpreadExtension } from "./extensions/list-spread";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { RawMarkdownMark } from "./extensions/raw-markdown";
 import { isSafeExternalHref, isSchemelessPathHref } from "./utils/url-safety";
@@ -207,6 +208,7 @@ export function buildSchemaExtensions(): AnyExtension[] {
     StarterKit.configure({ history: false, listItem: false, paragraph: false }),
     SoftWrapParagraph,
     ListItemCheckbox,
+    ListSpreadExtension,
     // underline/superscript/subscript: marks the .docx import (mammoth) emits but
     // StarterKit does not provide. Required client-side or y-prosemirror deletes
     // the marked text on sync (see DOCX_INLINE_MARKS). Underline → Mod-u.
