@@ -13,6 +13,17 @@ const MARKDOWN_HTML_ATTR = "markdownHtml";
  */
 const MARKDOWN_RAW_ATTR = "markdownRaw";
 /**
+ * Marks a `markdownRaw` paragraph that is specifically YAML/TOML frontmatter
+ * (#1457), so the client can present it as a metadata block rather than prose.
+ *
+ * Presentation only — it does NOT affect serialization, which goes through the
+ * same `html`-node path as any other raw block. It exists because frontmatter
+ * is the one raw construct that is never part of the document's text: showing
+ * it as an editable paragraph in the body would put `---` and `title:` at the
+ * top of every Obsidian note.
+ */
+const FRONTMATTER_ATTR = "markdownFrontmatter";
+/**
  * Delta-attribute key for an inline run holding verbatim markdown source
  * (footnoteReference, linkReference, imageReference, inline image, inline html).
  * MUST byte-match the Tiptap `rawMarkdown` Mark name. Listed in ALL_MARKS so
@@ -94,6 +105,21 @@ function blockToYxml(
   node: RootContent,
   deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }>,
 ): Y.XmlElement[] {
+  // Frontmatter (#1457), handled before the switch. It must NOT fall through to
+  // the `default:` branch: a yaml/toml node HAS a `.value`, so that branch would
+  // match and store only the body, dropping the `---` fences — which is exactly
+  // what makes it frontmatter. `serializeMdastBlock` re-emits the fences because
+  // `remarkFrontmatter` is registered on the stringifier too.
+  //
+  // Checked here rather than as switch cases because `toml` is not in mdast's
+  // node union: @types/mdast declares `yaml` natively, and `toml` only arrives
+  // via a module augmentation in `mdast-util-frontmatter` that TypeScript elides
+  // from a type-only import. Widening the switch subject to `string` would cost
+  // narrowing on every other case.
+  if (node.type === "yaml" || (node.type as string) === "toml") {
+    return [rawBlockParagraph(serializeMdastBlock(node), deferred, { frontmatter: true })];
+  }
+
   switch (node.type) {
     case "heading": {
       const el = new Y.XmlElement("heading");
@@ -260,9 +286,14 @@ function blockToYxml(
 function rawBlockParagraph(
   source: string,
   deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }>,
+  opts: { frontmatter?: boolean } = {},
 ): Y.XmlElement {
   const el = new Y.XmlElement("paragraph");
   el.setAttribute(MARKDOWN_RAW_ATTR, true as any);
+  // Frontmatter rides the same carrier but is tagged so the client can style it
+  // as a metadata block rather than prose. Serialization is identical either
+  // way — the attribute is presentation only.
+  if (opts.frontmatter) el.setAttribute(FRONTMATTER_ATTR, true as any);
   const text = new Y.XmlText();
   el.insert(0, [text]);
   deferred.push({ xmlText: text, plainText: source });

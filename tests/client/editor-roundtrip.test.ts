@@ -78,21 +78,33 @@ describe("editor round-trip: soft wraps (V3)", () => {
 describe("editor round-trip: table column alignment (V4)", () => {
   const ALIGNED = "| L | C | R |\n| :- | :-: | -: |\n| 1 | 2 | 3 |\n";
 
-  it("the Tiptap table node declares no attributes, so align cannot survive", () => {
-    // The loss happens at `schema.node()` when the PM doc is built from the
-    // Y.Doc — before the DOM is involved at all. This assertion is the root
-    // cause; the round-trip below is the symptom.
-    expect(Object.keys(productionSchema().nodes.table.spec.attrs ?? {})).not.toContain("align");
+  it("the Tiptap table node declares align, which is what lets it survive", () => {
+    // The root-cause assertion. The loss happened at `schema.node()` when the
+    // PM doc is built from the Y.Doc — before the DOM is involved at all — so
+    // no parseHTML/renderHTML choice could have rescued it. Only declaring the
+    // attribute does.
+    expect(Object.keys(productionSchema().nodes.table.spec.attrs ?? {})).toContain("align");
   });
 
-  it.fails("an aligned table survives an edit", () => {
+  it("an aligned table survives an edit", () => {
     const { output } = editorRoundTrip(ALIGNED);
     expect(output).toContain(":-:");
   });
 
-  it("today alignment is silently dropped, permanently", () => {
+  it("the alignment reaches the PM doc and comes back unchanged", () => {
     const { output, attached } = editorRoundTrip(ALIGNED);
-    expect(attached.child(0).attrs.align).toBeUndefined();
+    expect(attached.child(0).attrs.align).toBe('["left","center","right"]');
+    // The delimiter row is what carries alignment, and it is byte-identical.
+    // The body rows are still width-padded — that is the `tablePipeAlign`
+    // canonicalization, a separate (invisible-tier) item, not alignment loss.
+    expect(output.split("\n")[1]).toBe("| :- | :-: | -: |");
+  });
+
+  it("a stock table node still drops it", () => {
+    // Negative control. If this goes green the harness has stopped exercising
+    // the attribute path and the assertions above prove nothing.
+    const stock = schemaWith({ table: { attrs: {} } });
+    const { output } = editorRoundTrip(ALIGNED, { schema: stock });
     expect(output).not.toContain(":-:");
   });
 });

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **YAML and TOML frontmatter is no longer destroyed when you save (#1457).** A block of `---` at the top of a note was being read as a horizontal rule followed by a heading, so saving turned it into exactly that. For an Obsidian vault this quietly stopped every note's tags, aliases and dates from being metadata at all — queries and filters that relied on them returned nothing, while the note still looked about right. Frontmatter is now kept exactly as written, and shown as a metadata block above the note rather than as body text.
+- **Table column alignment survives editing (#1448).** A table written as `|:--|:-:|--:|` lost its alignment the first time you edited the document, and permanently — reopening the file could not recover it, because it was no longer on disk.
 - **Editing a document no longer adds line breaks to paragraphs you did not touch (#1448).** If a file wrapped its paragraphs across several lines — the normal way of writing markdown in a text editor — then editing a single word anywhere in it added a `\` to the end of every wrapped line in the whole document. That backslash is a real markdown instruction, so afterwards GitHub and every other viewer broke those paragraphs at the original author's wrap column no matter how wide the window was. Opening a file to read it was never affected; it took an edit.
 - **Multi-line blocks Tandem stores verbatim — raw HTML, footnote definitions, link definitions — no longer get collapsed onto one line (#1458).** Their line breaks were dropped silently on save, with no warning and no fallback.
 
