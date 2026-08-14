@@ -235,40 +235,59 @@ async function exportChat() {
   data-testid="chat-panel"
   style="width: 100%; display: flex; flex-direction: column; background: var(--tandem-surface-muted); flex: 1; min-height: 0;"
 >
-  <!-- Header -->
-  <div
-    style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); font-weight: 600; font-size: var(--tandem-text-md); display: flex; justify-content: space-between; align-items: center;"
-  >
-    Chat
-    <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
-      {#if unreadCount > 0}
-        <span
-          style="background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: var(--tandem-r-pill); padding: 2px 8px; font-size: var(--tandem-text-xs);"
-        >
-          {unreadCount}
-        </span>
-      {/if}
-      {#if messages.length > 0}
-        <button
-          onclick={exportChat}
-          disabled={exporting}
-          title="Export complete chat to a scratchpad"
-          class="chat-header-action"
-        >
-          {exporting ? "Exporting…" : "Export"}
-        </button>
-        <button
-          onclick={clearChat}
-          disabled={clearing}
-          title="Clear chat history"
-          data-testid="clear-chat-btn"
-          class="chat-header-action"
-        >
-          {clearing ? "Clearing…" : "Clear"}
-        </button>
-      {/if}
+  <!-- Header. #1382: no "Chat" title — the rail's tab pill above already says
+       so. Removing the word leaves the row with nothing to show on a fresh
+       chat (both the unread pill and Export/Clear are content-gated), so the
+       row is gated too rather than rendering as a bordered, padded empty strip
+       under the tabs — which is itself the redundant chrome this issue is
+       about, and is the exact frame the issue screenshots.
+
+       The trade is a one-time appearance when the first message lands instead
+       of a permanent empty strip. That jump is masked: it coincides with the
+       message list going from empty-state to content, so it is not a shift the
+       user sees happen to stable content.
+
+       Typography (`font-weight: 600`, `--tandem-text-md`) dropped with the
+       text — `.chat-header-action` sets its own, so it styled nothing. -->
+  {#if unreadCount > 0 || messages.length > 0}
+    <div
+      style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); display: flex; align-items: center;"
+    >
+      <!-- `margin-left: auto` rather than `justify-content: space-between`:
+           with the title gone this is the only flex item, and space-between
+           puts a lone item at flex-start. -->
+      <div
+        style="display: flex; align-items: center; gap: var(--tandem-space-2); margin-left: auto;"
+      >
+        {#if unreadCount > 0}
+          <span
+            style="background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: var(--tandem-r-pill); padding: 2px 8px; font-size: var(--tandem-text-xs);"
+          >
+            {unreadCount}
+          </span>
+        {/if}
+        {#if messages.length > 0}
+          <button
+            onclick={exportChat}
+            disabled={exporting}
+            title="Export complete chat to a scratchpad"
+            class="chat-header-action"
+          >
+            {exporting ? "Exporting…" : "Export"}
+          </button>
+          <button
+            onclick={clearChat}
+            disabled={clearing}
+            title="Clear chat history"
+            data-testid="clear-chat-btn"
+            class="chat-header-action"
+          >
+            {clearing ? "Clearing…" : "Clear"}
+          </button>
+        {/if}
+      </div>
     </div>
-  </div>
+  {/if}
 
   <!-- Messages -->
   <div

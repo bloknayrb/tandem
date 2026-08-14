@@ -584,17 +584,31 @@ function handleRailBackgroundClick(e: MouseEvent) {
 
   <!-- Header -->
   <div style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border);">
-    <div style="display: flex; justify-content: space-between; align-items: center;">
-      <h3 style="font-size: 13px; font-weight: 600; margin: 0;">
-        Annotations
-        {#if filteredData.allPending.length > 0}
-          <span
-            style="margin-left: 8px; padding: 1px 6px; font-size: var(--tandem-text-xs); background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: var(--tandem-r-pill);"
-          >
-            {filteredData.allPending.length}
-          </span>
-        {/if}
-      </h3>
+    <!-- #1382: no "Annotations" title — the rail's tab pill directly above
+         already says which tab you are on. The COUNT stays, and that is not
+         cosmetic: both rail-tab badges are gated on their tab being inactive
+         (`pendingAnnotationBadge` returns 0 on the active tab), so while you
+         are looking at this panel the pill below is the only pending count on
+         screen. It also counts something the tab badge does not — the badge
+         filters on `isPendingReviewTarget`, which excludes user-authored
+         annotations, so a user who highlights three phrases sees 3 here and
+         would have seen 0 from the badge.
+
+         `aria-hidden` because the visually-hidden live region below already
+         announces "N pending annotations"; without it the count is spoken
+         twice. No heading element: an <h3> holding only the pill is an
+         `empty-heading` axe violation in the (default) zero-pending state, and
+         `accessibility.spec.ts` builds its scan with no `.withTags()`, so
+         best-practice rules are live. -->
+    <div style="display: flex; align-items: center;">
+      {#if filteredData.allPending.length > 0}
+        <span
+          aria-hidden="true"
+          style="padding: 1px 6px; font-size: var(--tandem-text-xs); background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: var(--tandem-r-pill);"
+        >
+          {filteredData.allPending.length}
+        </span>
+      {/if}
       <span
         aria-live="polite"
         style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0);"
@@ -603,7 +617,14 @@ function handleRailBackgroundClick(e: MouseEvent) {
           ? "s"
           : ""}
       </span>
-      <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
+      <!-- `margin-left: auto`, NOT the row's old `justify-content:
+           space-between`. With the title gone the pill is conditional, so the
+           row alternates between one and two flex items — and `space-between`
+           puts a lone item at flex-start, which made these controls jump ~180px
+           left and back every time the pending count crossed 0/1. -->
+      <div
+        style="display: flex; align-items: center; gap: var(--tandem-space-2); margin-left: auto;"
+      >
         <button
           data-testid="annotation-sort-toggle"
           onclick={toggleSortMode}
