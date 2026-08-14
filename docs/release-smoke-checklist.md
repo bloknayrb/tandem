@@ -90,3 +90,23 @@ before it meets a paying user.
 Note the outcome (platforms covered, anything skipped, anything found) in a
 comment on the release's tracking issue or the release PR. A skipped platform
 is fine when stated; an unstated skip reads as "verified" and isn't.
+
+## What the v0.22.1 run settled
+
+v0.22.1 (2026-08-13) was the first cut with §1 executed end to end; results are on
+PR #1430. Four things it established that no prior cut had, kept here because each
+one changes how a future run should be done:
+
+- **Test the updater against a real previous-version baseline**, not against the
+  diff. The v0.22.1 run installed 0.22.1 → verified → reinstalled 0.22.0 from its
+  own release → published → updated. That costs one extra install and forfeits
+  nothing. Arguing the upgrade path from the diff is not the same check.
+- **Open and inspect the signed installer.** This is the only check that covers
+  `dist/stdio-bridge/` — new in v0.22.1, and its absence degrades silently to bare
+  `npx` behind a `log::warn!`, which is the exact bug that release fixed.
+- **An upgrade does not repair an already-broken Claude Desktop entry.** The boot
+  sweep repairs stale *absolute* paths and deliberately skips bare `npx`, because
+  Tandem emits that as a considered fallback. Affected users must re-run
+  `tandem setup --apply`; do not expect the release to fix them.
+- **A Windows matrix leg failing inside Azure Trusted Signing is a re-run, not a
+  burned tag.** The discriminator is whether the *same commit* passes on retry.
