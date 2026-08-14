@@ -21,15 +21,31 @@ export const SELECTION_TOOLBAR_FLIP_HYSTERESIS = 4;
 // mid-morph and the height-independent edge-anchor (`bottom` for above) always
 // clears MIN_TOP as the popup grows.
 //
-// Must stay a genuine over-estimate, and this is the half that bites: `above`
-// is bottom-anchored and so immune, but `below` is TOP-anchored, so an
-// under-estimate clips the bottom of the card off-screen. #1385 broke that
-// silently — the eyebrow row, the action row's divider + padding, and a taller
-// type ramp took the fully-scrolled composer to a measured 205px (cozy) / 225px
-// (spacious) including the shell's 2px border, against a reserve of 200. It was
-// invisible because the reserve is a hand-maintained number with nothing
-// asserting it against the rendered card. Measure the real max before trusting
-// this again; density scales it, so `spacious` is the case to measure.
+// Must stay a genuine over-estimate. An under-estimate bites hardest on
+// `below`, which is TOP-anchored, so the bottom of the card is clipped
+// off-screen; `above` is bottom-anchored and immune to that, though not to the
+// constant generally — `fitsAbove` consumes it too, so an under-estimate also
+// lets an above-placed popup's top edge render past MIN_TOP into the chrome.
+//
+// #1385 broke the `below` half silently: the eyebrow row and the action row's
+// divider + padding took the fully-scrolled composer to a measured 205px (cozy)
+// / 225px (spacious) including the shell's 2px border, against a reserve of
+// 200. (The larger type ramp is NOT a contributor — `.composer-input` is
+// `box-sizing: border-box` under a hard `max-height`, so a taller line box
+// changes how fast the field reaches the cap, not the cap. Both densities
+// reconcile to the same 14px eyebrow row without it.) It was invisible because
+// the reserve is a hand-maintained number with nothing asserting it against the
+// rendered card. Measure the real max before trusting this again; density
+// scales it — only `--tandem-space-*` is density-dependent, not the type ramp —
+// so `spacious` is the case to measure.
+//
+// The cost of raising it, stated so it is not mistaken for a new bug: the
+// neither-fits fallback pins `below` at `maxTop`, which moves UP as this grows.
+// Below a viewport height of roughly 548px there is now a band where the popup
+// is pinned above the cursor and can overlap the selection it annotates. Not
+// reachable in the desktop app (`minHeight: 600` in tauri.conf.json), reachable
+// in a short browser window. Accepted deliberately: overlapping a selection is
+// recoverable, clipping the submit buttons off-screen is not.
 export const SELECTION_POPUP_HEIGHT_RESERVE = 240;
 
 export type SelectionToolbarPlacement = "above" | "below";
