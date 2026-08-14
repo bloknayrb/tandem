@@ -59,7 +59,7 @@ exactly this residual).
 
 ## 4. npm path (any platform)
 
-- [ ] `npm install -g tandem-editor@<new version>` → `tandem` starts the server (a browser-deprecation notice is expected — the desktop app is the primary form factor); the editor loads at `http://127.0.0.1:3479`.
+- [ ] `npm install -g tandem-editor@<new version>` → `tandem` starts the server (it prints the editor URL first, then a note that the desktop app is the primary form factor — that note is a *recommendation*, not a deprecation notice, and `src/cli/start.ts:17-21` records why it is deliberately not phrased as one; removal of the browser UI is gated in #1467); the editor loads at `http://127.0.0.1:3479`.
 - [ ] `tandem doctor` — run in a **second terminal while the server from the previous step is still running** (otherwise the ports check adds a third failure). Exits 1 with exactly two `[FAIL]` lines, for `node_modules/` and `.mcp.json` (expected: those check the current working directory, which is never the source repo for a global install). Everything else `[PASS]` or `[WARN]` (warnings acceptable, as in section 1).
 
 ## 5. Release-candidate extras (RC tags toward v1.0 only)
