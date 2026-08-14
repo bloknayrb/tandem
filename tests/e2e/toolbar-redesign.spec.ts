@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
+import { SELECTION_POPUP_HEIGHT_RESERVE } from "../../src/client/editor/toolbar/selection-toolbar";
+import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -133,6 +135,68 @@ test("floating selection toolbar stays within a short viewport", async ({ page }
   expect(viewport).not.toBeNull();
   expect(box!.y).toBeGreaterThanOrEqual(48);
   expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
+});
+
+/**
+ * #1385 regression net for SELECTION_POPUP_HEIGHT_RESERVE.
+ *
+ * That constant is the ONLY way height reaches the placement math — the live
+ * measurement path feeds `rect.width` alone. So it is a numeric contract
+ * between `selection-toolbar.ts` and a card whose real height is entirely CSS,
+ * and until this test nothing tied the two together. #1385 broke it silently by
+ * adding an eyebrow row and a divider: the composer grew past the reserve, and
+ * because `below` is top-anchored, `fitsBelow` kept admitting a placement whose
+ * bottom is off-screen. Nothing failed; the submit buttons just left the
+ * viewport.
+ *
+ * Asserting the HEIGHT rather than viewport slack is deliberate. On the
+ * neither-fits branch the pin is `viewportHeight - RESERVE - EDGE_GAP`, so
+ * overflow reduces to `realHeight > RESERVE + EDGE_GAP` — independent of
+ * viewport size, which makes this a stable bound instead of a geometry puzzle.
+ * It also covers the `above` half, where an under-estimate overruns MIN_TOP
+ * into the fixed chrome rather than clipping.
+ *
+ * Seeded `spacious` because only `--tandem-space-*` is density-scoped, so
+ * spacious is the binding case. The assertion discriminates at cozy too, but
+ * seeding keeps it honest about which case it guards.
+ */
+test("the annotate composer never exceeds its placement reserve", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+
+  await page.addInitScript(
+    ([key, density]) => {
+      const raw = window.localStorage.getItem(key);
+      const parsed = raw ? JSON.parse(raw) : {};
+      window.localStorage.setItem(key, JSON.stringify({ ...parsed, density }));
+    },
+    [TANDEM_SETTINGS_KEY, "spacious"] as const,
+  );
+
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await expect(page.locator("html")).toHaveAttribute("data-density", "spacious", {
+    timeout: 5_000,
+  });
+
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  await openAnnotatePopup(page);
+
+  // Overfill so `field-sizing: content` pins the textarea at its max-height —
+  // the worst case the reserve has to cover. Fewer lines would measure a card
+  // that has not finished growing and pass against a too-small reserve.
+  const input = page.locator("[data-testid='popup-annotation-input']");
+  await input.fill(Array.from({ length: 15 }, (_, i) => `line ${i + 1}`).join("\n"));
+  await expect(page.locator("[data-testid='popup-comment-submit']")).toBeVisible();
+
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  const composerBox = await toolbar.boundingBox();
+  expect(composerBox).not.toBeNull();
+  expect(composerBox!.height).toBeLessThanOrEqual(SELECTION_POPUP_HEIGHT_RESERVE);
 });
 
 test("floating selection toolbar exposes first-pass formatting actions", async ({ page }) => {
