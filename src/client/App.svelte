@@ -2534,6 +2534,7 @@ const shouldShowModelPicker = $derived(
         aria-label="Document outline"
         class:collapsed={!effectiveLeftVisible}
         class:animating={railAnimating.left}
+        class:dragging={dragResizeLeft.dragging}
         class:rail-floating-chrome={railFloat.left || railFloatClosing.left}
         class:floating={railFloat.left}
         class:float-closing={railFloatClosing.left}
@@ -2595,6 +2596,7 @@ const shouldShowModelPicker = $derived(
         aria-label="Annotations and chat"
         class:collapsed={!effectiveRightVisible}
         class:animating={railAnimating.right}
+        class:dragging={dragResizeRight.dragging}
         class:rail-floating-chrome={railFloat.right || railFloatClosing.right || chatReveal}
         class:floating={railFloat.right || chatReveal}
         class:float-closing={railFloatClosing.right}
@@ -3397,6 +3399,20 @@ const shouldShowModelPicker = $derived(
   /* Float→pin: snap the shell to the floated width for the commit frame so the
      panel stays put instead of replaying the 14→full open from collapsed. */
   .rail-shell.pin-snap {
+    transition: none;
+  }
+  /* #1426: the drag writes `width` continuously, and the 360ms ease above animates
+     every one of those writes — so the rendered width trails the width the drag set
+     (measured: inline 375px against an offsetWidth of 325, converging only ~360ms
+     after release), and the strip slides out from under the pointer. #798's ease is
+     for open/close, not for direct manipulation.
+
+     NOTE: this does NOT rely on source order to stay clear of the reduce-motion
+     guards above — being two classes, it outranks the `@media` rule on specificity
+     and would win regardless of placement. It is safe only because it declares the
+     same value they do. Anything other than `transition: none` here would silently
+     override the reduce-motion guard. */
+  .rail-shell.dragging {
     transition: none;
   }
   /* Width-grow is :hover ONLY — never :focus-within. The peek strip is
