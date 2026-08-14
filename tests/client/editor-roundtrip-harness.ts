@@ -170,7 +170,11 @@ export function editorRoundTrip(
   let reparsed = attached;
   if (edit) {
     reparsed = reparseThroughDom(attached, schema, docSpanning);
-    updateYFragment(doc, fragment, reparsed, { mapping: new Map() } as never);
+    // BindingMetadata requires both maps: `mapping` for node identity reuse and `isOMark`
+    // for overlapping-mark hashing. y-prosemirror's marksToAttributes() calls
+    // map.setIfUndefined(meta.isOMark, ...) unconditionally for any marked text run, so an
+    // omitted isOMark throws the moment a fixture contains an inline mark (bold/italic/code/link).
+    updateYFragment(doc, fragment, reparsed, { mapping: new Map(), isOMark: new Map() } as never);
   }
 
   const output = saveMarkdown(doc);

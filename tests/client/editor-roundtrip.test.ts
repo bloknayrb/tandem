@@ -71,6 +71,19 @@ describe("editor round-trip: soft wraps (V3)", () => {
   });
 });
 
+describe("editor round-trip: inline marks", () => {
+  // updateYFragment's BindingMetadata needs both `mapping` and `isOMark` --
+  // y-prosemirror's marksToAttributes() calls map.setIfUndefined(meta.isOMark, ...)
+  // unconditionally for every marked text run, so an omitted isOMark throws the
+  // moment a fixture contains a mark. None of the other suites in this file touch
+  // marked text, so this is the only thing that exercises that argument at all.
+  const MARKED = "Some **bold** and *italic* and `code` text.\n";
+
+  it("an edit through a marked paragraph does not throw", () => {
+    expect(() => editorRoundTrip(MARKED)).not.toThrow();
+  });
+});
+
 describe("editor round-trip: table column alignment (V4)", () => {
   const ALIGNED = "| L | C | R |\n| :- | :-: | -: |\n| 1 | 2 | 3 |\n";
 
