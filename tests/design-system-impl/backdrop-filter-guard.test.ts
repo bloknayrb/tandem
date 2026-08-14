@@ -1,7 +1,6 @@
-import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { cssRules, stripCssComments, styleBlocks } from "../helpers/css-source";
+import { bundledCssFiles, cssRules, stripCssComments, styleBlocks } from "../helpers/css-source";
 
 /**
  * backdrop-filter regression gate.
@@ -82,21 +81,6 @@ function floatingPillRulesIn(css: string): { selector: string; body: string }[] 
   return cssRules(stripCssComments(css))
     .map(([selector, body]) => ({ selector: selector.trim(), body }))
     .filter((r) => RECIPE_SELECTOR.test(r.selector));
-}
-
-/**
- * Every file whose CSS Vite routes through lightningcss. Deliberately excludes
- * `index.html`: its inline `<style>` is emitted verbatim, so it is NOT a bundled
- * source and the collapse cannot reach it. The two obey different rules — see
- * `allRecipeSources` and the `-webkit-` gate below.
- */
-function bundledCssFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) bundledCssFiles(full, out);
-    else if (full.endsWith(".svelte") || full.endsWith(".css")) out.push(full);
-  }
-  return out;
 }
 
 /**

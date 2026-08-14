@@ -1,9 +1,9 @@
-import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { transform } from "lightningcss";
 import { resolveConfig } from "vite";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  bundledCssFiles,
   cssRules,
   cssRulesBySelector,
   neutralizeSvelteGlobal,
@@ -67,10 +67,16 @@ function authoredRule(file: string, selector: string, mustDeclare?: RegExp): str
 }
 
 /**
- * `.thumb` appears three times in ModeToggle.svelte (base, the reduced-motion
- * media override, and the in-app `body.tandem-reduce-motion` override), and the
- * two overrides declare only `transition: none`. `background` picks the one that
- * paints, independent of every placement property under test.
+ * Two rules in ModeToggle.svelte carry the exact selector `.thumb` — the base
+ * rule and the reduced-motion media override — and the override declares only
+ * `transition: none`. `background` picks the one that paints, independent of
+ * every placement property under test.
+ *
+ * The in-app `:global(body.tandem-reduce-motion) .thumb` override is a third
+ * `.thumb` rule in the file but not a third *candidate*: it is a descendant
+ * selector, and the filter matches selectors exactly. Worth stating, because a
+ * reader debugging a count failure would otherwise hunt for a rule that was
+ * never in the running.
  */
 const paintingRule = (selector: string) => authoredRule(MODE_TOGGLE, selector, /background\s*:/);
 const trackRule = () => authoredRule(MODE_TOGGLE, ".mode-toggle");
@@ -254,21 +260,31 @@ describe("bundled CSS: the #1302 formatting-bar declarations survive minificatio
     // popup — and no E2E test would catch it, because Playwright drives
     // `npm run dev`, which never minifies.
     //
-    // The real selector, not a `.w:has(...)` probe: this gate was synthetic
-    // until #1428, so deleting the rule from FormattingBar left it green. That
-    // is the same defect the line-clamp gate below records and the mode-toggle
-    // block above now avoids — three instances of one class.
-    const wrap = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(FORMATTING_BAR)))
-      .flatMap((r) => r.selectors)
-      .filter((s) => s.includes(":has("));
+    // The real rule, both halves, not a `.w:has(...){z-index:9}` probe. Two
+    // mutations, both of which passed a previous spelling of this gate:
+    // deleting the rule outright (it was fully synthetic), and deleting it
+    // while any other `:has([aria-expanded])` rule remained (the selector was
+    // scraped, but taken as `wrap[0]` off an at-least-one guard). Identifying
+    // it by the property that makes it the z-lift, and requiring exactly one,
+    // closes both.
+    const isLift = (s: string) => s.includes(":has(") && s.includes("aria-expanded");
+    const lifts = cssRulesBySelector(neutralizeSvelteGlobal(styleBlocks(FORMATTING_BAR))).filter(
+      (rule) => rule.selectors.some(isLift),
+    );
     expect(
-      wrap,
-      "no `:has()` rule left in FormattingBar.svelte — the #1302 z-lift was removed or renamed",
-    ).not.toEqual([]);
+      lifts.map((r) => r.selectors.join(", ")),
+      "expected exactly one `:has([aria-expanded])` rule in FormattingBar.svelte — " +
+        "the #1302 z-lift was removed, renamed, or joined by a lookalike",
+    ).toHaveLength(1);
 
-    const out = minify(`${wrap[0]}{z-index:9}`);
+    // Grouped as authored: counting RULES rather than selectors means a legal
+    // `.a:has(…), .b:has(…)` grouping is one rule, not a false red.
+    const out = minify(`${lifts[0].selectors.join(", ")}{${lifts[0].body}}`);
     expect(out).toContain(":has(");
     expect(out).toContain("aria-expanded");
+    // The lift itself, not just its selector: a surviving `:has()` that no
+    // longer raises anything is the bug wearing the gate's own shape.
+    expect(out).toContain("z-index");
   });
 
   it("keeps overflow-x: clip / overflow-y: visible as a clip+visible pair", () => {
@@ -301,7 +317,12 @@ describe("bundled CSS: the #1383/#1384 mode-toggle declarations survive minifica
   //
   // These gates read the REAL rules and minify those, so they also stand in for
   // the source-shape gates that used to live in mode-toggle-thumb-contract.test
-  // .ts — they fail on everything those did, plus minifier drift.
+  // .ts, adding minifier drift to what those caught. Not a strict superset,
+  // and the exception is the first bullet below: a rewrite to the `inset`
+  // longhands failed the old source regex and passes here, because the minifier
+  // collapses it back. Deliberate — the two spellings are the same box — but
+  // the two statements have to agree, and "fails on everything those did" did
+  // not agree with the bullet six lines under it.
   //
   // Two rewrites were investigated and deliberately have no gate, because a test
   // that can only pass is not one — and neither is one that reds on a rename the
@@ -350,16 +371,6 @@ describe("bundled CSS: the #1383/#1384 mode-toggle declarations survive minifica
     expect(out).toContain("gap:0");
   });
 });
-
-/** Every `.svelte` `<style>` / `.css` file whose CSS the build routes through lightningcss. */
-function bundledCssFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) bundledCssFiles(full, out);
-    else if (full.endsWith(".svelte") || full.endsWith(".css")) out.push(full);
-  }
-  return out;
-}
 
 /**
  * Every rule body in bundled CSS that hand-writes both `-webkit-X` and `X`.
