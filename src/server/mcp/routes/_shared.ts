@@ -94,6 +94,11 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "FILE_NOT_FOUND":
     case "NO_DOCUMENT":
     case "NOT_FOUND":
+    // `SOURCE_MISSING` and `FILE_MODIFIED` are `saveDocumentToDisk`'s skip codes
+    // (see `saveSkippedMessage`), which docx-apply reuses rather than minting a
+    // parallel vocabulary for the same two conditions. They reach sendApiError
+    // only from there — a skipped save returns 200 with a `skipCode`.
+    case "SOURCE_MISSING":
       return 404;
     case "INVALID_PATH":
     case "UNSUPPORTED_FORMAT":
@@ -111,6 +116,7 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "RENAME_IN_PROGRESS":
     case "RELOAD_IN_PROGRESS":
     case "EXTERNAL_CONFLICT":
+    case "FILE_MODIFIED":
       return 409;
     // DOCX_TOO_LARGE (#1310) is the decompressed-size sibling of FILE_TOO_LARGE's compressed cap.
     // Without this case it falls through to 500, which makes sendApiError log
@@ -138,6 +144,7 @@ export function errorCodeToLabel(code: string): string {
     case "FILE_NOT_FOUND":
     case "NO_DOCUMENT":
     case "NOT_FOUND":
+    case "SOURCE_MISSING":
       return "NOT_FOUND";
     case "INVALID_PATH":
       return "INVALID_PATH";
@@ -159,7 +166,13 @@ export function errorCodeToLabel(code: string): string {
       return "READ_ONLY";
     case "RELOAD_IN_PROGRESS":
       return "RELOAD_IN_PROGRESS";
+    // `FILE_MODIFIED` folds onto EXTERNAL_CONFLICT for the same reason
+    // DOCX_TOO_LARGE folds onto FILE_TOO_LARGE below: they are one condition
+    // ("the file changed under us") reported by two code paths, `saveSkippedMessage`
+    // already gives them identical user-facing copy, and a novel label would be an
+    // unrecognized string to every existing client.
     case "EXTERNAL_CONFLICT":
+    case "FILE_MODIFIED":
       return "EXTERNAL_CONFLICT";
     // Deliberately the SAME label as the compressed-size cap rather than a new one: both are
     // "this file is too big to open", the distinction between them is in `message`, and a novel
