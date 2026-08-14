@@ -80,6 +80,47 @@ describe("round-trip corpus", () => {
   });
 });
 
+describe("verbatim blocks keep their newlines (V6, #1458)", () => {
+  /**
+   * Put a raw block's source into the Y.Doc with its newline held as a sibling
+   * `hardBreak` element rather than a literal `\n`, then serialize.
+   *
+   * This is the shape a deliberate Shift+Enter produces inside a raw block. It
+   * stays reachable after the `whitespace: "pre"` paragraph fix — that fix stops
+   * the editor MANUFACTURING hardBreaks from soft wraps, it does not stop a user
+   * typing one — so the reader has to handle both forms regardless.
+   */
+  function serializeRawBlockWithHardBreak(before: string, after: string): string {
+    const doc = new Y.Doc();
+    try {
+      const fragment = doc.getXmlFragment("default");
+      const para = new Y.XmlElement("paragraph");
+      para.setAttribute("markdownRaw", "true");
+      // Attach before populating — a detached Y.XmlText reverses segment order.
+      fragment.insert(0, [para]);
+      const head = new Y.XmlText();
+      const tail = new Y.XmlText();
+      para.insert(0, [head, new Y.XmlElement("hardBreak"), tail]);
+      head.insert(0, before);
+      tail.insert(0, after);
+      return saveMarkdown(doc);
+    } finally {
+      doc.destroy();
+    }
+  }
+
+  it("a hardBreak between two text runs is read back as a newline", () => {
+    // Before the fix this silently dropped the break and emitted
+    // "<div></div>" on one line.
+    expect(serializeRawBlockWithHardBreak("<div>", "</div>")).toContain("<div>\n</div>");
+  });
+
+  it("a multi-line raw HTML block round-trips", () => {
+    const raw = '<div class="callout">\n  <span>one</span>\n  <span>two</span>\n</div>\n';
+    expect(roundTrip(raw)).toBe(raw);
+  });
+});
+
 describe("round-trip corpus: line endings (W2)", () => {
   const LF = "# Title\n\nA paragraph soft-wrapped\nacross two lines.\n\n- a\n- b\n";
   const CRLF = LF.replace(/\n/g, "\r\n");

@@ -941,6 +941,17 @@ Both are silent from the user's perspective today; both end when the integration
 
 **Documented normalizations (deliberate, not loss):** `remark-stringify` canonicalizes setext→ATX headings, indented→fenced code, bullet/emphasis markers to `-`/`*`, hard-break style, entity decoding, autolinks to angle form (`<https://…>`), and loose-list paragraphs → tight (blank lines between list items are dropped; `spread: false` is hardcoded in `yDocToMdast`). The fidelity test asserts **idempotency + content-preservation**, not byte-identity to hand-authored input.
 
+**Amendment (2026-08-14, #1448): two claims in that paragraph were wrong, and the test contract in its last sentence is what let them stand.**
+
+"Idempotency + content-preservation, not byte-identity" sounds like a modest, honest contract. It is not: **every defect found in #1448 satisfies it.** Each one mangles the document exactly once and is then a stable fixed point, so `pass2 === pass1` holds and the suite stays green while the file on disk is wrong. The contract could not fail, which is why nothing failed for months. It is replaced by **byte-identity on the first pass** for anything a reader would notice, measured by `tests/server/file-io/roundtrip-corpus.test.ts` and `tests/client/editor-roundtrip.test.ts`.
+
+Two specific corrections:
+
+- **"Hard-break style" was never a normalization.** What actually happened is that the *editor* converted **soft line wraps into hard breaks** — a semantic change, not a style choice. A soft wrap lives in the Y.Doc as a literal `\n` inside a `Y.XmlText`; a hard break is a sibling `Y.XmlElement("hardBreak")`. The Y.Doc distinguishes them; ProseMirror does not, so its DOM re-read split paragraph text on newlines. Saving then wrote a trailing `\` onto every wrapped line and renderers broke the paragraph at the author's wrap column. Fixed by declaring `whitespace: "pre"` on the paragraph node. Genuine hard-break *style* (`  ` vs `\`) is still normalized and that part stands.
+- **The "no silent drop" guarantee did not hold for the raw carriers this ADR introduces.** `getElementPlainText` read only `Y.XmlText` children, so a newline held as a sibling `hardBreak` was dropped without warning and every multi-line raw block collapsed onto one line (#1458) — the exact failure mode this ADR exists to prevent, in the exact constructs it was written to protect.
+
+Loose→tight (`spread: false` hardcoded) remains as described here and remains a defect rather than a normalization; it is tracked in #1448 and not yet fixed.
+
 **Deferred (#982):** GFM task lists / checkboxes need a first-class `TaskList`/`TaskItem` node and `checked` mapping; today they degrade to plain bullets. This is a documented gap pinned by `markdown-fidelity.test.ts` so it can never become a silent drop.
 
 **Consequences:** the round-trip is a stable fixed point (re-open re-parses the emitted source into the same gfm nodes and re-stores them). Coverage: `tests/fixtures/markdown-fidelity.md` + `markdown-fidelity.test.ts` (every construct, idempotency, the #982 gap) and `markdown-raw-constructs.test.ts` (forward/reverse mapping + slice-level flat-offset stability). New settings fields must be enumerated in `normalizeKnownFields` (an allowlist) or they are silently dropped at runtime — `showRawMarkdown` is pinned by a presence/default regression.

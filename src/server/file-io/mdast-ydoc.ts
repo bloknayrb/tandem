@@ -618,11 +618,31 @@ function stripHashSuffix(key: string): string {
   return dashIdx >= 0 ? key.slice(0, dashIdx) : key;
 }
 
+/**
+ * Reconstruct the verbatim source of a raw block (raw HTML, footnote and link
+ * reference definitions) from its Y children.
+ *
+ * A newline inside one of these blocks can be held two ways: as a literal `\n`
+ * in a `Y.XmlText`, or as a sibling `Y.XmlElement("hardBreak")`. Reading only
+ * the `Y.XmlText` children dropped the second form **silently**, collapsing
+ * every multi-line raw block onto one line (#1458):
+ *
+ *     "<div>\n  <span>a</span>\n</div>"  ->  "<div>  <span>a</span></div>"
+ *
+ * That voided the "no silent drop" guarantee in #981 / ADR-042 for precisely
+ * the constructs that ADR exists to protect.
+ *
+ * The `whitespace: "pre"` paragraph fix (#1448) stops the editor manufacturing
+ * hardBreaks out of soft wraps, but it does NOT make this branch dead: an
+ * explicit Shift+Enter still lands a real hardBreak here, so both forms remain
+ * reachable and both must be read.
+ */
 function getElementPlainText(el: Y.XmlElement): string {
   let value = "";
   for (let i = 0; i < el.length; i++) {
     const child = el.get(i);
     if (child instanceof Y.XmlText) value += child.toString();
+    else if (child instanceof Y.XmlElement && child.nodeName === "hardBreak") value += "\n";
   }
   return value;
 }
