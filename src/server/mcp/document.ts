@@ -591,8 +591,12 @@ export function registerDocumentTools(server: McpServer): void {
           // This runs in a separate transaction because anchoredRange() reads the
           // Y.Doc state *after* the edit to compute RelativePositions for the new
           // text. Combining it into the edit transaction would anchor against
-          // pre-edit state. The race window is acceptable for v1 — authorship is
-          // decorative (highlight overlay), not semantic.
+          // pre-edit state.
+          //
+          // The split opens no race: `anchoredRange` is synchronous and nothing
+          // between the two `withMcp` calls awaits, so Node cannot interleave a
+          // remote Y update into the gap. Adding an `await` in this span would
+          // create one.
           if (newText.length > 0) {
             const newFrom = from;
             const newTo = toFlatOffset(newFrom + newText.length);

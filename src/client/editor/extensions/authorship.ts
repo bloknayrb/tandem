@@ -1,15 +1,94 @@
 import { Extension } from "@tiptap/core";
 import type { Node as PmNode } from "@tiptap/pm/model";
-import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Plugin, PluginKey, type Transaction } from "@tiptap/pm/state";
+import { Mapping } from "@tiptap/pm/transform";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import { ySyncPluginKey } from "y-prosemirror";
 import * as Y from "yjs";
 import { AUTHORSHIP_TOGGLE_KEY, Y_MAP_AUTHORSHIP } from "../../../shared/constants";
+import { withBrowser } from "../../../shared/origins";
 import { toPmPos } from "../../../shared/positions/types";
 import type { AuthorshipRange } from "../../../shared/types";
+import { isAuthorshipAuthor } from "../../../shared/types";
 import { generateAuthorshipId } from "../../../shared/utils";
-import { flatOffsetToPmPos, pmPosToFlatOffset, relRangeToPmPositions } from "../../positions";
+import { flatOffsetToPmPos, pmSelectionToFlat, relRangeToPmPositions } from "../../positions";
 
 export const authorshipPluginKey = new PluginKey("tandemAuthorship");
+
+/**
+ * Transaction meta naming who authored the content a transaction inserts.
+ *
+ * Set it on any dispatch that puts Claude's words into the document —
+ * accepting a suggestion, inserting a Claude chat message — or the insertion
+ * is attributed to the user, which is worse than leaving it unattributed
+ * (#1388).
+ *
+ * A `PluginKey` rather than a bare string, matching every other meta key in
+ * the codebase, and deliberately NOT `authorshipPluginKey`: `onTransaction`
+ * early-returns on that one, because it marks the plugin's own rebuild/toggle
+ * transactions. Overloading it would make the stamp path skip the very
+ * transactions it exists to label.
+ */
+export const AUTHORSHIP_ORIGIN_META = new PluginKey("tandemAuthorshipOrigin");
+
+/**
+ * Read {@link AUTHORSHIP_ORIGIN_META}, narrowed to the two authors the schema
+ * allows.
+ *
+ * `getMeta` is typed `any`, and this value reaches a Y.Map that
+ * `buildAuthorshipDecorations` switches on — an unvalidated read would put an
+ * off-schema author into a CRDT the decoration builder then switches on. An
+ * unrecognised value falls back to `"user"` rather than throwing: the caller
+ * is a keystroke handler, and refusing to attribute is a smaller failure than
+ * refusing to record the edit. Note the read path makes the opposite call —
+ * `buildAuthorshipDecorations` DROPS an off-schema entry rather than coercing
+ * it — which is right for each side: coercing on read would paint a lie.
+ */
+function readAuthorshipOrigin(transaction: Transaction): AuthorshipRange["author"] {
+  const origin: unknown = transaction.getMeta(AUTHORSHIP_ORIGIN_META);
+  return isAuthorshipAuthor(origin) ? origin : "user";
+}
+
+/**
+ * Ids of authorship entries lying entirely inside one of `deletedSpans`.
+ *
+ * Without this, accepting a suggestion leaves the replaced text's `"user"`
+ * entry sitting at flat offsets the new `"claude"` text now occupies, and the
+ * decoration builder paints both — which is the same wrong-author render #1388
+ * is about, arrived at from the other side.
+ *
+ * **One pass over the map for the whole transaction, not one per deleted
+ * span.** The map grows by one entry per doc-changing transaction and is never
+ * compacted, so it reaches five figures in an afternoon's typing; a per-span
+ * scan would multiply that by the match count on a replace-all. Duplicate ids
+ * across spans are harmless — `Y.Map.delete` of an absent key is a no-op.
+ *
+ * **Fully contained only.** A partially overlapping entry needs its stored
+ * range rewritten, not dropped, and rewriting it correctly means giving client
+ * stamps a `relRange` they do not have today (#1471). Half a remap would turn
+ * a drifted entry into a confidently wrong one.
+ *
+ * **Known limitation, measured, same root cause (#1471).** Stored client
+ * ranges are frozen flat offsets that nothing remaps, so an entry that has
+ * drifted since it was written no longer lies inside the span that deletes its
+ * text, and escapes the reap. One unrelated keystroke above the span is enough.
+ * Pinned executably in `authorship-stamp.test.ts` so the fix has a test waiting
+ * for it rather than a comment.
+ */
+function reapableEntryIds(
+  authorshipMap: Y.Map<unknown>,
+  deletedSpans: readonly { from: number; to: number }[],
+): string[] {
+  if (deletedSpans.length === 0 || authorshipMap.size === 0) return [];
+  const ids: string[] = [];
+  authorshipMap.forEach((value, key) => {
+    const entry = value as AuthorshipRange;
+    if (!entry?.range) return;
+    const { from, to } = entry.range;
+    if (deletedSpans.some((span) => from >= span.from && to <= span.to)) ids.push(key);
+  });
+  return ids;
+}
 
 const GUTTER_NODE_TYPES = new Set(["paragraph", "heading"]);
 
@@ -50,13 +129,12 @@ export function buildAuthorshipDecorations(
   const maxPos = doc.content.size;
 
   // Single pass: build inline spans and collect resolved ranges for the block gutter pass.
-  type ResolvedEntry = { author: "user" | "claude"; from: number; to: number };
+  type ResolvedEntry = { author: AuthorshipRange["author"]; from: number; to: number };
   const resolvedRanges: ResolvedEntry[] = [];
 
   authorshipMap.forEach((value) => {
     const entry = value as AuthorshipRange;
-    if (!entry.author || !entry.range) return;
-    if (entry.author !== "user" && entry.author !== "claude") return;
+    if (!isAuthorshipAuthor(entry.author) || !entry.range) return;
 
     const r = resolveAuthorshipRange(entry, doc, ydoc);
     if (!r) return;
@@ -71,7 +149,7 @@ export function buildAuthorshipDecorations(
       console.warn("[authorship] Decoration RangeError for entry", entry.id, err);
     }
 
-    resolvedRanges.push({ author: entry.author as "user" | "claude", from, to });
+    resolvedRanges.push({ author: entry.author, from, to });
   });
 
   // Per-block dominant-author gutter decoration — descendants() visits nested blocks too
@@ -134,8 +212,10 @@ interface AuthorshipOptions {
  * as ProseMirror inline decorations. Uses the Y.Map overlay strategy (not inline
  * marks) to avoid CRDT size overhead -- see tests/crdt/authorship-marks-size.test.ts.
  *
- * User attribution: onTransaction detects local (non-y-sync) text insertions
- * and records them as author="user" in the authorship Y.Map.
+ * Attribution: onTransaction records local (non-y-sync) text insertions in the
+ * authorship Y.Map, against `"user"` unless the dispatch tagged itself with
+ * {@link AUTHORSHIP_ORIGIN_META}, and drops entries whose text the same
+ * transaction deleted.
  */
 export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
   name: "tandemAuthorship",
@@ -224,6 +304,17 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
         view(editorView) {
           // Observe Y.Map changes and trigger decoration rebuild
           const observer = () => {
+            // `buildAuthorshipDecorations` short-circuits to an empty set while
+            // the overlay is hidden, so a rebuild dispatched now is a whole
+            // ProseMirror transaction for a discarded result. Nothing is lost
+            // by skipping: the `toggle` branch rebuilds from scratch when the
+            // overlay comes back on. This matters because the reap made map
+            // writes fire on DELETIONS too — backspacing over your own recent
+            // text hits this on nearly every keypress.
+            const current = authorshipPluginKey.getState(editorView.state) as
+              | AuthorshipPluginState
+              | undefined;
+            if (!current?.visible) return;
             const tr = editorView.state.tr.setMeta(authorshipPluginKey, { type: "rebuild" });
             editorView.dispatch(tr);
           };
@@ -246,46 +337,127 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
   },
 
   /**
-   * User attribution via onTransaction: detect local text insertions
-   * (not y-sync remotes) and record them as author="user".
+   * Attribution via onTransaction: record local text insertions (not y-sync
+   * remotes) against an author, and drop the entries the same transaction
+   * deleted out from under.
+   *
+   * The author is `"user"` unless the dispatcher set
+   * {@link AUTHORSHIP_ORIGIN_META}. That default is deliberate and must stay:
+   * find-replace, drag-drop and context-menu paste are genuine user authorship
+   * with no obvious place to hang an explicit tag, and an opt-in default would
+   * silently leave them unattributed instead of correctly attributed. It is
+   * the *insertions Claude owns* that carry the tag — see #1388, which was
+   * filed because accepting a Claude suggestion rendered the words as the
+   * user's own.
    */
   onTransaction({ transaction }) {
     const ydoc = this.options.ydoc;
     if (!ydoc) return;
 
-    // Skip remote syncs -- y-sync$ meta is set by the collaboration extension
-    if (transaction.getMeta("y-sync$")) return;
+    // Skip remote syncs — y-prosemirror tags its own applies with this key.
+    if (transaction.getMeta(ySyncPluginKey)) return;
     // Skip our own rebuild/toggle transactions
     if (transaction.getMeta(authorshipPluginKey)) return;
     // Skip if doc didn't change
     if (!transaction.docChanged) return;
 
+    const author = readAuthorshipOrigin(transaction);
     const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
     const pmDoc = transaction.doc;
+    const beforeDoc = transaction.before;
 
-    transaction.steps.forEach((step) => {
-      const stepMap = step.getMap();
+    const additions: AuthorshipRange[] = [];
+    /** Deleted spans as flat offsets in the whole-transaction BEFORE frame. */
+    const deletedSpans: { from: number; to: number }[] = [];
+
+    // `mapping.maps`, not `steps`. They are pushed in lockstep by
+    // `Transform.addStep` so they align today, but `i` is what `mapping.slice`
+    // is keyed on — and `src/client/editor/slash-menu/extension.ts` already
+    // carries that warning about this exact idiom. Iterating one and indexing
+    // the other is how the two copies would drift apart.
+    transaction.mapping.maps.forEach((stepMap, i) => {
+      // Step i's `new*` positions address the doc as it stood immediately
+      // after step i, NOT `transaction.doc`. Reading them against the final
+      // doc silently mis-attributes any multi-step transaction whose later
+      // steps shift earlier ones — find-and-replace-all applies its matches in
+      // reverse document order, so every step but the last is affected.
+      // `slice` shares the maps array and just sets bounds, so this is free.
+      const toFinal = transaction.mapping.slice(i + 1);
+      // The mirror image, built lazily because most transactions delete
+      // nothing: step i's `old*` positions address the doc BEFORE step i,
+      // while stored entries are in whole-transaction before-frame coordinates.
+      let toBefore: Mapping | null = null;
+
       stepMap.forEach((oldStart, oldEnd, newStart, newEnd) => {
         const insertedLen = newEnd - newStart - (oldEnd - oldStart);
+
+        if (oldEnd > oldStart) {
+          try {
+            // Built from a real `maps` slice rather than `mapping.slice(0, i)`,
+            // because `Mapping.invert()` does NOT honour a slice's bounds: it
+            // calls `appendMappingInverted`, which walks the whole `maps` array
+            // and ignores `from`/`to` (prosemirror-transform, `invert` → line
+            // 282). `mapping.slice(0, 0).invert()` is therefore the inverse of
+            // EVERY step, not of none — which silently collapsed every reap
+            // range to zero width and made the reap a no-op that nothing threw
+            // over.
+            toBefore ??= new Mapping(transaction.mapping.maps.slice(0, i)).invert();
+            const span = pmSelectionToFlat(beforeDoc, {
+              from: toPmPos(toBefore.map(oldStart, 1)),
+              to: toPmPos(toBefore.map(oldEnd, -1)),
+            });
+            // Node-boundary steps (heading toggle, list wrap) report a deleted
+            // range that carries no TEXT, so it collapses to zero flat width.
+            // Correctness does not need this guard — a zero-width span contains
+            // no entry, since a zero-width entry is never stored. It is an
+            // early-out: dropping the span leaves `deletedSpans` empty, which
+            // skips the whole map scan. Formatting keystrokes are common enough
+            // to be worth not charging them an O(entries) walk. Verified by
+            // mutation: removing this line fails no test, which is the point.
+            if (span.to > span.from) deletedSpans.push(span);
+          } catch (err) {
+            console.warn("[authorship] Position conversion failed reaping a deleted span", err);
+          }
+        }
+
+        // Its own try/catch: a reap that cannot resolve its span must not also
+        // cost the transaction its attribution. These are independent failures.
         if (insertedLen > 0) {
           try {
-            const flatFrom = pmPosToFlatOffset(pmDoc, toPmPos(newStart));
-            const flatTo = pmPosToFlatOffset(pmDoc, toPmPos(newEnd));
-            if (flatTo <= flatFrom) return;
-
-            const rangeId = generateAuthorshipId("user");
-            const entry: AuthorshipRange = {
-              id: rangeId,
-              author: "user",
-              range: { from: flatFrom, to: flatTo },
+            const range = pmSelectionToFlat(pmDoc, {
+              from: toPmPos(toFinal.map(newStart, 1)),
+              to: toPmPos(toFinal.map(newEnd, -1)),
+            });
+            if (range.to <= range.from) return;
+            additions.push({
+              id: generateAuthorshipId(author),
+              author,
+              range,
               timestamp: Date.now(),
-            };
-            authorshipMap.set(rangeId, entry);
+            });
           } catch (err) {
-            console.warn("[authorship] Position conversion failed during user attribution", err);
+            console.warn("[authorship] Position conversion failed stamping an insertion", err);
           }
         }
       });
+    });
+
+    const removals = reapableEntryIds(authorshipMap, deletedSpans);
+    if (additions.length === 0 && removals.length === 0) return;
+    // One transaction for both halves, and removals first: the reap compares
+    // BEFORE-frame offsets, while an addition's range is in final-frame
+    // offsets, so an addition visible to the scan could be deleted by a
+    // coincidental containment across the two frames. Collecting first makes
+    // that structurally impossible rather than ordering-dependent.
+    //
+    // Critical Rule 2: every Y.Doc write is origin-tagged. `browser` is right
+    // for all of them — this handler only ever runs for a local dispatch, the
+    // remote and self-originated cases having returned above. No observer
+    // filters on Y_MAP_AUTHORSHIP today, so the tag buys identity rather than
+    // behaviour; that is the point of the universal rule.
+    withBrowser(ydoc, () => {
+      for (const id of removals) authorshipMap.delete(id);
+      for (const entry of additions) authorshipMap.set(entry.id, entry);
     });
   },
 });

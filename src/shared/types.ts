@@ -246,6 +246,22 @@ export function isPendingReviewTarget(a: Annotation): boolean {
 }
 
 /**
+ * Narrow an untrusted value to the two-member authorship author union.
+ *
+ * Distinct from `Annotation.author`, which has a third member (`"import"`,
+ * for .docx Word comments). Attribution has no import case: an imported
+ * comment is a note ABOUT text, never a claim to have written it.
+ *
+ * Exists because the union's membership was being re-spelled at four sites —
+ * the client stamp's meta read, the decoration builder's validity check (plus
+ * the `as` cast that check failed to narrow away), and
+ * `generateAuthorshipId`'s parameter.
+ */
+export function isAuthorshipAuthor(value: unknown): value is AuthorshipRange["author"] {
+  return value === "user" || value === "claude";
+}
+
+/**
  * Authorship tracking range stored in Y.Map('authorship').
  * Uses the same flat-offset coordinate system as annotations.
  * RelativePositions anchor the range to survive concurrent edits.
