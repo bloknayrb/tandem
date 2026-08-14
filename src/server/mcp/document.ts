@@ -29,6 +29,7 @@ import { convertToMarkdown } from "./convert.js";
 // Document model (pure logic)
 import {
   extractText,
+  flattenHeadingText,
   getElementText,
   getElementTextLength,
   getHeadingPrefixLength,
@@ -144,7 +145,10 @@ export function getOutline(fragment: Y.XmlFragment): OutlineEntry[] {
     const node = fragment.get(i);
     if (node instanceof Y.XmlElement && node.nodeName === "heading") {
       const level = Number(node.getAttribute("level") ?? 1);
-      outline.push({ level, text: getElementText(node), index: i });
+      // A heading can hold a literal newline since paragraphs gained
+      // whitespace:"pre" (#1448) — flatten it so the AI is never handed an
+      // outline entry that spans two lines. See flattenHeadingText.
+      outline.push({ level, text: flattenHeadingText(getElementText(node)), index: i });
     }
   }
   return outline;
@@ -163,7 +167,13 @@ export function getSection(
     const node = fragment.get(i);
     if (!(node instanceof Y.XmlElement)) continue;
 
-    const text = getElementText(node);
+    // Headings are flattened here for the same reason as in `getOutline`, and
+    // the two MUST agree: the AI gets a section name from `tandem_getOutline`
+    // and passes it straight back here. If the outline flattened and this
+    // comparison did not, a heading holding a newline would be listed under a
+    // name that then matched nothing.
+    const raw = getElementText(node);
+    const text = node.nodeName === "heading" ? flattenHeadingText(raw) : raw;
 
     if (node.nodeName === "heading") {
       const level = Number(node.getAttribute("level") ?? 1);
