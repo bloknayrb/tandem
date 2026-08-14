@@ -584,17 +584,27 @@ function handleRailBackgroundClick(e: MouseEvent) {
 
   <!-- Header -->
   <div style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border);">
-    <div style="display: flex; justify-content: space-between; align-items: center;">
-      <h3 style="font-size: 13px; font-weight: 600; margin: 0;">
-        Annotations
-        {#if filteredData.allPending.length > 0}
-          <span
-            style="margin-left: 8px; padding: 1px 6px; font-size: var(--tandem-text-xs); background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: var(--tandem-r-pill);"
-          >
-            {filteredData.allPending.length}
-          </span>
-        {/if}
-      </h3>
+    <!-- #1382: no "Annotations" title — the rail tab directly above says it,
+         and the region is named independently (`role="complementary"
+         aria-label="Annotations and chat"` in App.svelte), so deleting the
+         heading leaves nothing unnamed.
+
+         The count is NOT redundant with the tab badge and must stay: that badge
+         hides on the active tab, and it counts a strict subset (see #1382).
+         `aria-hidden` because the live region below already speaks it. No
+         heading element either — an <h3> whose only child is an `aria-hidden`
+         pill has no accessible text in ANY state, so it would trip axe's
+         `empty-heading` (live: see the disabled-rules list in
+         tests/e2e/accessibility.spec.ts). -->
+    <div style="display: flex; align-items: center;">
+      {#if filteredData.allPending.length > 0}
+        <span
+          aria-hidden="true"
+          style="padding: 1px 6px; font-size: var(--tandem-text-xs); background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: var(--tandem-r-pill);"
+        >
+          {filteredData.allPending.length}
+        </span>
+      {/if}
       <span
         aria-live="polite"
         style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0);"
@@ -603,7 +613,16 @@ function handleRailBackgroundClick(e: MouseEvent) {
           ? "s"
           : ""}
       </span>
-      <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
+      <!-- `margin-left: auto`, not the row's old `justify-content:
+           space-between`. The leading item is now conditional, so
+           `space-between` can't be trusted to hold these right: with the pill
+           absent it parked the lone controls div at flex-start, and they
+           snapped to the left edge and back each time the pending count
+           crossed 0/1. (The `aria-live` span above is `position: absolute`, so
+           it is out of flow and not a flex item at all.) -->
+      <div
+        style="display: flex; align-items: center; gap: var(--tandem-space-2); margin-left: auto;"
+      >
         <button
           data-testid="annotation-sort-toggle"
           onclick={toggleSortMode}

@@ -211,6 +211,13 @@ async function clearChat() {
   actionError = null;
   try {
     await onClear();
+    // Clearing empties `messages`, which closes the header gate and destroys
+    // the button the user just pressed. Without this, focus falls to <body>:
+    // the next Tab restarts at the top of the document, and the rail shell's
+    // `onfocusout` sees a null `relatedTarget` (App.svelte) — so a
+    // hover-revealed rail either collapses mid-task or latches open. The
+    // composer is both inside the shell and the natural next action.
+    internalInputEl?.focus();
   } catch (err) {
     actionError = err instanceof Error ? err.message : "Chat history could not be cleared.";
   } finally {
@@ -235,40 +242,49 @@ async function exportChat() {
   data-testid="chat-panel"
   style="width: 100%; display: flex; flex-direction: column; background: var(--tandem-surface-muted); flex: 1; min-height: 0;"
 >
-  <!-- Header -->
-  <div
-    style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); font-weight: 600; font-size: var(--tandem-text-md); display: flex; justify-content: space-between; align-items: center;"
-  >
-    Chat
-    <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
+  <!-- Header. #1382: no "Chat" title — the rail tab above already says so. With
+       the word gone the row has nothing left to show on an empty chat, so it is
+       gated rather than rendering as a bordered, padded empty strip.
+
+       `font-weight: 600` stays even though the text it was written for is gone.
+       Export/Clear are `.chat-header-action`, which is `font: inherit`
+       overriding only `font-size`; the unread pill sets no weight of its own.
+       All three inherit 600 from here, so dropping it demotes all three to 400.
+       `--tandem-text-md` really was inert — nothing in the row consumes it. -->
+  {#if messages.length > 0}
+    <div
+      style="padding: var(--tandem-space-3) var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); font-weight: 600; display: flex; align-items: center; justify-content: flex-end; gap: var(--tandem-space-2);"
+    >
       {#if unreadCount > 0}
+        <!-- The count was legible as "Chat 3" by adjacency; alone it is a bare
+             number, so it needs the label the word used to supply. Matches how
+             the collapsed-rail badge names the same count (App.svelte). -->
         <span
+          aria-label="{unreadCount} unread message{unreadCount === 1 ? '' : 's'}"
           style="background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: var(--tandem-r-pill); padding: 2px 8px; font-size: var(--tandem-text-xs);"
         >
           {unreadCount}
         </span>
       {/if}
-      {#if messages.length > 0}
-        <button
-          onclick={exportChat}
-          disabled={exporting}
-          title="Export complete chat to a scratchpad"
-          class="chat-header-action"
-        >
-          {exporting ? "Exporting…" : "Export"}
-        </button>
-        <button
-          onclick={clearChat}
-          disabled={clearing}
-          title="Clear chat history"
-          data-testid="clear-chat-btn"
-          class="chat-header-action"
-        >
-          {clearing ? "Clearing…" : "Clear"}
-        </button>
-      {/if}
+      <button
+        onclick={exportChat}
+        disabled={exporting}
+        title="Export complete chat to a scratchpad"
+        class="chat-header-action"
+      >
+        {exporting ? "Exporting…" : "Export"}
+      </button>
+      <button
+        onclick={clearChat}
+        disabled={clearing}
+        title="Clear chat history"
+        data-testid="clear-chat-btn"
+        class="chat-header-action"
+      >
+        {clearing ? "Clearing…" : "Clear"}
+      </button>
     </div>
-  </div>
+  {/if}
 
   <!-- Messages -->
   <div
