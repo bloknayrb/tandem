@@ -211,8 +211,8 @@ function checkNodeVersion(r: Recorder): void {
 function checkNodeModules(r: Recorder, repo: RepoProbe, cwd: string): void {
   if (repo !== "yes") {
     // `reason` so a --json consumer can tell the two arms apart without
-    // string-matching prose, as `evaluateOrphanedVite` and `evaluatePushPath`
-    // already do for their own multi-armed skips.
+    // string-matching prose, as `evaluateNpmStaleness` (four arms) and
+    // `evaluateOrphanedVite` (two) already do for their own skips.
     const unreadable = repo === "unreadable";
     recordEvaluation(r, {
       status: "skip",
@@ -239,6 +239,13 @@ function checkNodeModules(r: Recorder, repo: RepoProbe, cwd: string): void {
 // where `package.json` belongs to someone else's project — so both checks
 // gate on the cwd actually being the tandem-editor repo and skip SILENTLY
 // otherwise (not warn: the absence of a dev checkout is not a finding).
+//
+// Silence is NOT the rule for a new checkout-scoped check, only the rule for
+// these two. `checkNodeModules` gates on the same probe and emits a VISIBLE
+// skip, because it shipped with the original `tandem doctor` subcommand and a
+// `--json` consumer has always seen its key — a key that vanishes is a
+// breaking change, while these two were born gated and never had one. Pick by
+// that history, not by symmetry with whichever neighbour you read first.
 
 /**
  * Record an {@link EvalOutcome} on the recorder, mapping `"skip"` onto the
@@ -263,18 +270,26 @@ function recordEvaluation(r: Recorder, result: EvalOutcome | null): void {
  *
  * Tri-state on purpose. A single boolean made "this is not the repo" and "the
  * repo's package.json is corrupt" the same silent answer — and the corrupt
- * case is the one worth reporting, since it also silently disables the two
- * dev-repo checks below.
+ * case is the one worth reporting, since it also disables the checkout-scoped
+ * checks below. How many of those there are is deliberately not stated here:
+ * that count has already drifted between copies, and it is not `RepoProbe`'s
+ * business.
  */
 export type RepoProbe = "yes" | "no" | "unreadable";
 
 /**
  * Check names whose answer depends on `process.cwd()`.
  *
- * Lives here, next to the three `process.cwd()` reads it describes, so that
- * adding a fourth trips over it. `/api/diagnostics` and `tandem_diagnostics`
- * import this to strip these from field reports, where the server's cwd is
- * arbitrary — see `filterDevRepoChecks`.
+ * Lives in this module rather than in the diagnostics route so that the list
+ * and the checks it names are added in one place. There is exactly ONE
+ * `process.cwd()` read left in this file — {@link runDoctor}'s, threaded into
+ * every check that needs it — so "which checks are cwd-scoped" is answerable
+ * by following that value rather than by grepping.
+ *
+ * `filterDevRepoChecks` (`server/mcp/routes/diagnostics.ts`) builds its Set
+ * from this and strips these from `/api/diagnostics`; `tandem_diagnostics`
+ * reaches the same filter through that function. Field reports run with an
+ * arbitrary server cwd, where these answers describe someone else's directory.
  *
  * NOT the same set as "checks gated on {@link probeTandemEditorRepo}":
  * `mcp-json` deliberately keeps inspecting a hand-written `.mcp.json` in a
@@ -644,8 +659,8 @@ function checkNpmStaleness(r: Recorder, repoDir: string): void {
  * present-but-broken file stays a finding, but a `warn` — it must not fail a
  * run whose user-level registration is healthy.
  */
-function checkMcpJson(r: Recorder): void {
-  const mcpPath = join(process.cwd(), ".mcp.json");
+function checkMcpJson(r: Recorder, cwd: string): void {
+  const mcpPath = join(cwd, ".mcp.json");
   // Shared by every present-but-broken branch below, replacing the old
   // `git checkout` remedy. Both halves are real: `.mcp.json.example` ships as
   // the hand-copy template, and deleting the file is safe because the
@@ -2019,9 +2034,10 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   await r.check("node-version", () => checkNodeVersion(r));
   await r.check("node-modules", () => checkNodeModules(r, repo, cwd));
   if (repo === "unreadable") {
-    // A package.json we cannot read also silently disables both dev-repo
-    // checks below — so say so instead of skipping as if this were simply
-    // someone else's directory. This check is in DEV_REPO_CHECKS: it is
+    // A package.json we cannot read also disables npm-staleness and
+    // orphaned-Vite below, and turns the node-modules check above into a skip
+    // — so say so instead of staying quiet as if this were simply someone
+    // else's directory. This check is in {@link CWD_DEPENDENT_CHECKS}: it is
     // cwd-dependent, so /api/diagnostics strips it from field reports.
     await r.check("dev-repo", () =>
       r.warn(
@@ -2035,7 +2051,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   if (devRepo) {
     await r.check("npm-staleness", () => checkNpmStaleness(r, cwd));
   }
-  await r.check("mcp-json", () => checkMcpJson(r));
+  await r.check("mcp-json", () => checkMcpJson(r, cwd));
   await r.check("user-mcp-config", () => checkUserMcpConfig(r));
   await r.check("desktop-mcp-config", () => checkDesktopMcpConfig(r));
   await r.check("node-toolchain", () => checkNodeToolchain(r));

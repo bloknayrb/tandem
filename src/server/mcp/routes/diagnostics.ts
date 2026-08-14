@@ -16,10 +16,13 @@ import type { Handler } from "./_shared.js";
  * This is now noise-suppression, not failure-suppression. It used to be the
  * latter: `mcp-json` and `node-modules` both FAILed here and buried the real
  * signal under two false failures. `mcp-json` stopped being able to fail in
- * #1404 and `node-modules` followed it, so today the worst any member emits is
- * a `dev-repo` warn plus some skip lines about someone else's directory. Do
- * not read that as "the filter can go" — those skip lines are still cwd noise,
- * and the warn still reaches a field report.
+ * #1404 and `node-modules` followed it, so no member can FAIL from an
+ * arbitrary cwd today (short of a check crashing, which `Recorder.check`
+ * records as a fail under the check's own name). Do NOT read that as "the
+ * filter can go": `dev-repo` still warns, and `mcp-json` still warns down
+ * seven paths about a hand-written `.mcp.json` that belongs to whatever
+ * project the server's cwd happens to be — plus the skip lines, which are cwd
+ * noise in a report where cwd is meaningless.
  *
  * All four of `npm-staleness`, `orphaned-vite`, `dev-repo` and `node-modules`
  * self-gate on `probeTandemEditorRepo(cwd)` — the first three by vanishing,
@@ -49,7 +52,7 @@ export interface DiagnosticsHandlerDeps {
   collect?: (opts: RunDoctorOptions) => Promise<DoctorReport>;
 }
 
-/** Drop dev-repo-only checks and recompute the report's aggregate fields. */
+/** Drop the cwd-dependent checks and recompute the report's aggregate fields. */
 export function filterDevRepoChecks(report: DoctorReport): DoctorReport {
   const results = report.results.filter((res) => !DEV_REPO_CHECKS.has(res.check));
   const failures = results.filter((res) => res.status === "fail").length;

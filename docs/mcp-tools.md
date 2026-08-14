@@ -939,7 +939,7 @@ Read-only, takes **no parameters**, and is **not** license-gated — diagnostics
 |-----------|------|----------|-------------|
 | _(none)_ | | | |
 
-**Returns** (the dev-repo-filtered `DoctorReport` plus runtime environment fields — identical payload shape to `GET /api/diagnostics`, advertised via `outputSchema`):
+**Returns** (the cwd-filtered `DoctorReport` plus runtime environment fields — identical payload shape to `GET /api/diagnostics`, advertised via `outputSchema`):
 ```json
 {
   "ok": true,

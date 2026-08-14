@@ -26,7 +26,7 @@ tell you to run `npm install` in whatever directory you happened to be standing 
 checks (`/health`, SSE) are conditional: they run only once the port probe finds the server up,
 so a report that stops early is reporting a down server, not a passing one.
 
-In the editor — desktop app or browser — **Settings → About → Copy Diagnostics** runs the same checks in-app, minus those five source-checkout-only items — see [Sharing diagnostics](#sharing-diagnostics). Or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
+In the editor — desktop app or browser — **Settings → About → Copy Diagnostics** runs the same checks in-app, minus the five source-checkout-only items (the four above plus the `.mcp.json` check) — see [Sharing diagnostics](#sharing-diagnostics). Or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
 
 ## Windows SmartScreen warning
 
