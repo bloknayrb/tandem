@@ -214,35 +214,30 @@ function findXmlTextInParallel(
           return toPmPos(pmStart + Math.min(charAccum + absPos.index, textblockFlatLength(pmNode)));
         }
         charAccum += child.length;
-      } else if (child instanceof Y.XmlElement) {
-        // A sibling hardBreak is an inline leaf worth exactly 1, matching every other
-        // implementation of this convention: textblockFlatLength() above, and — decisively —
-        // findXmlTextAtOffset() in server/mcp/document-model.ts, which is the function that
-        // MINTS the relRange this loop reads back. Skipping it here made the reader
-        // asymmetric with its own writer, so a resolved range landed short by one char per
-        // preceding break (#1459), leaving an N-char tail when a suggestion was accepted
-        // (#1450). Stored anchors were never skewed — the write side always counted it.
-        if (child.nodeName === "hardBreak") {
-          charAccum += 1;
-        } else {
-          // No other inline-leaf element exists in the production schema (Image is
-          // configured without `inline: true`), so this should be unreachable. It is not
-          // that the width is undefined — the server DOES define one
-          // (`getElementTextLength`: a separator if there is prior content, plus the
-          // element's own text length) — it is that this reader does not implement that
-          // rule and silently contributes 0 instead. Surface it rather than guessing.
-          //
-          // Gated on the Y/PM node names agreeing, because this branch is selected by the
-          // PM node's `isTextblock` while iterating the Y element's children, and callers
-          // pair the two by index alone. A transient index slip would otherwise report a
-          // schema anomaly when the real fault is the mismatch the recursive branch
-          // already warns about.
-          if (yEl.nodeName === pmNode.type.name) {
-            console.warn(
-              `[positions] unexpected Y.XmlElement child <${child.nodeName}> of textblock ${pmNode.type.name} — this reader counts it as 0, the server counts it as 1 + its text length`,
-            );
-          }
+      } else {
+        // A `hardBreak`, which lives as a SIBLING Y.XmlElement rather than
+        // inside a Y.XmlText (#1450, #1459). It contributes nothing to the
+        // concatenated-XmlText projection this loop walks, but occupies one
+        // ProseMirror position — so skipping it under-counted by one per
+        // preceding break and resolved every endpoint that many positions
+        // early. `applySuggestion` deletes [from, to) and inserts at `from`,
+        // so that silently corrupted documents: a short `to` left the tail of
+        // the original behind, a short `from` ate text ahead of the range.
+        if (!(child instanceof Y.XmlElement) || child.nodeName !== "hardBreak") {
+          // Unreachable today — `hardBreak` is the only inline leaf in the
+          // schema (pinned by a test) and neither importer puts anything else
+          // in a textblock. Worth a runtime warn rather than a silent guess:
+          // `textblockFlatLength` above counts ONLY hardBreak, and the server's
+          // `directChildSpans` charges a nested element separator + its inner
+          // length, so a third shape would put three conventions in play and
+          // this is the one that would fail without saying anything.
+          console.warn(
+            `[positions] unexpected non-text child in textblock: ${
+              child instanceof Y.XmlElement ? child.nodeName : typeof child
+            }; counting it as one position`,
+          );
         }
+        charAccum += 1;
       }
     }
     return null;

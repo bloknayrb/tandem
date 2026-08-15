@@ -198,6 +198,33 @@ set (`tests/server/license-gate-coverage.test.ts` enforces this) — because an
 MCP write bypasses Surface A entirely, so gating a route without its twin leaves
 a hole.
 
+### The gated set — this list IS the `/api` half's review
+
+The MCP half is CI-enforced by `tests/server/license-gate-coverage.test.ts`. **The `/api` half
+has no test: this enumeration is the review**, referenced by Critical Rule 9 in `CLAUDE.md`.
+Adding a mutating MCP tool or `/api` route means adding it here, in both halves.
+
+**MCP** — `tandem_edit`, `tandem_appendContent`, `tandem_scratchpad`, `tandem_comment`,
+`tandem_suggest`, `tandem_highlight`, `tandem_flag`, `tandem_editAnnotation`,
+`tandem_annotationReply`, `tandem_removeAnnotation`, `tandem_applyChanges`,
+`tandem_restoreBackup`.
+
+**`/api`** — `apply-changes`, `annotation-reply`, `remove-annotation`, `document/reload`,
+`external-conflict/resolve`, `backups/restore`, `scratchpad`.
+
+Gate each pair together (`tandem_scratchpad` *and* `/api/scratchpad`). The three deprecated
+stubs are gated too, so un-stubbing one cannot silently ship a hole.
+
+**The gate has two mechanisms, and grepping `licenseGateMiddleware` finds only the first**: the
+middleware mount, *plus* direct in-handler `licenseGate()` calls. `src/server/mcp/routes/open.ts`
+gates the `force === true` sub-path of `POST /api/open`, mirroring the `tandem_open` MCP handler
+— so a route can be gated without the middleware appearing anywhere near it. **Audit the handler
+body, not the registration site.**
+
+**Deliberately ungated:** all reads, *plain* `open` (only the destructive `force: true` reload is
+gated, on both halves), save/export, `GET` routes, chat, and `tandem_resolveAnnotation` — a
+status flip, not a content write.
+
 ## Delivery: why the email looks the way it does
 
 The `.license` attachment's `content` is **`btoa(blob)`** — base64 of the

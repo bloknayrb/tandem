@@ -124,6 +124,7 @@ has them is not thereby safe to expose. `docs/decisions.md` ADR-046 states the s
 - **Notes are user-private (ADR-027).** Annotations with `type: "note"` are stripped from every MCP tool response and never appear in channel events. The AI cannot read them.
 - **What the AI sees:** the document content you open, selections you hold (subject to dwell-time gating), annotations you create or that the AI itself creates, and chat messages sent through the Tandem sidebar.
 - **What the AI doesn't see:** files you haven't opened, notes (per above), the auth token, and any environment variables that aren't surfaced through MCP tools.
+- **Read routes scrub absolute paths for non-loopback callers.** `GET /api/sessions` and `GET /api/backups` strip paths to their basename, so a LAN caller holding a token learns filenames but not the directory layout of the machine (#1121). `GET /api/document/raw` is loopback-only outright. All path-taking routes reject UNC, enforce an extension allowlist and a 50 MB limit, and write atomically.
 
 ## Telemetry: none by default, crash reporting strictly opt-in
 
