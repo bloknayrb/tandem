@@ -7,6 +7,7 @@ import {
 } from "../../shared/constants";
 import {
   aggregateWorkspaceStatus,
+  COWORK_PREFLIGHT_CHECKING,
   coworkReachability,
   coworkReachabilityCopy,
   coworkSettingsVariant,
@@ -27,6 +28,7 @@ import {
 import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte";
 import type { WorkspaceFileStatus, WorkspaceStatus } from "../types";
+import { resyncCheckbox } from "../utils/checkbox-sync";
 
 const STATUS_TOKENS: Record<StatusTokenFamily, { bg: string; fg: string; border: string }> = {
   success: {
@@ -104,18 +106,96 @@ async function withInvoke(
 }
 
 async function handleToggleOn(): Promise<void> {
+  // Same hazard `handleToggleOff` guards against, mirrored: `refetch()` can
+  // swallow its own failure into `coworkState.error` and return without
+  // storing a fresh status, so after a successful enable whose refetch failed,
+  // `status.enabled` is still stale at `false`. Closing the confirm
+  // unconditionally would drop the only `true` term left in `enableBoxChecked`
+  // and visibly UNCHECK the box over an integration that is now actually on --
+  // the more security-relevant direction, since it under-reports an active
+  // integration rather than over-reporting one. Leaving `confirming` set keeps
+  // the box checked (still accurate) until a later successful refetch -- the
+  // 30s poll, or a retry -- closes it for real. If the toggle itself threw,
+  // `readBack` stays at its initial `true`, so the confirm still closes and
+  // `enableBoxChecked` correctly falls back to the unchanged, accurate status.
+  let readBack = true;
   await withInvoke(async (invoke) => {
     await coworkToggleIntegration(invoke, true);
-    await refetch();
-    closeEnableConfirm();
+    readBack = await refetch();
   }, "Failed to enable Cowork");
+  if (readBack) closeEnableConfirm();
 }
 
-async function handleToggleOff(): Promise<void> {
+/**
+ * The Enable checkbox's rendered state, in ONE place.
+ *
+ * `resyncCheckbox` writes `box.checked` directly and does not update the cache
+ * Svelte's `set_checked` keeps, so a resync to a value the `checked=` expression
+ * disagrees with LATCHES: the next re-computation back to the cached value is
+ * skipped and the box can no longer be moved. Passing the same expression to
+ * both makes that structurally impossible instead of incidentally true.
+ */
+const enableBoxChecked = $derived(
+  (coworkState.status?.enabled ?? false) || confirming === "enable",
+);
+
+/**
+ * The LAN-IP override checkbox's rendered state, in ONE place — same
+ * `resyncCheckbox` latch hazard as {@link enableBoxChecked}, and the same fix:
+ * the resync call and the `checked=` binding must read the identical
+ * expression, not two copies that happen to agree today only because
+ * `useLanIpOverride` is a non-optional `boolean`.
+ */
+const lanIpOverrideChecked = $derived(coworkState.status?.useLanIpOverride ?? false);
+
+async function handleToggleOff(box: HTMLInputElement): Promise<void> {
+  // Gate the resync on the READ-BACK, not on the write. `refetch()` swallows
+  // its own failure into `coworkState.error`, so after a successful toggle
+  // whose refetch failed, `status` still says `enabled: true` — and resyncing
+  // from it would visibly re-check the box over an integration that is now off.
+  // Three cases, and only the middle one is safe to paint from:
+  //   toggle threw            -> status unchanged AND accurate  -> resync
+  //   toggle ok, refetch ok   -> status fresh                   -> resync
+  //   toggle ok, refetch fail -> status stale and WRONG         -> leave the
+  //     box where the user put it, which is what the write we know landed did.
+  // Not the same thing as #1437, which is an HONEST refetch reporting a partial
+  // commit — there `status` is fresh and must be believed.
+  let readBack = true;
   await withInvoke(async (invoke) => {
     await coworkToggleIntegration(invoke, false);
-    await refetch();
+    readBack = await refetch();
   }, "Failed to disable Cowork");
+  if (readBack) resyncCheckbox(box, enableBoxChecked);
+}
+
+/**
+ * The Enable checkbox's only handler — and three of its four cases are not an
+ * enable.
+ *
+ * Checking a box that already shows off while the integration is ON is the user
+ * correcting the display, not asking for an enable — so that branch suppresses
+ * the confirm and lets the click stand rather than firing a UAC prompt and a
+ * firewall write for the state the user is already in. (It needs no
+ * `resyncCheckbox`: the browser's own toggle is what heals it, and an
+ * assignment there would write `true` over `true`.)
+ *
+ * Unchecking while the confirm is open is a cancel, not a disable — it used to
+ * fall through to `handleToggleOff` and fire a real
+ * `coworkToggleIntegration(invoke, false)` for a transition that had never
+ * happened, leaving the confirm standing behind it. The two unchecked-branch
+ * conditions are independent rather than either/or: the 30s status poll can
+ * report an enable from another surface while this confirm sits open, so
+ * cancelling a pending enable and disabling a live one are separate
+ * obligations that can both be due.
+ */
+function handleToggleChange(box: HTMLInputElement): void {
+  const enabled = coworkState.status?.enabled ?? false;
+  if (box.checked) {
+    if (!enabled) openEnableConfirm();
+    return;
+  }
+  if (confirming === "enable") closeEnableConfirm();
+  if (enabled) void handleToggleOff(box);
 }
 
 function handleRescan(): void {
@@ -127,11 +207,16 @@ function handleRescan(): void {
   });
 }
 
-async function handleToggleLanIp(enabled: boolean): Promise<void> {
+async function handleToggleLanIp(box: HTMLInputElement): Promise<void> {
+  const enabled = box.checked;
+  let readBack = true;
   await withInvoke(async (invoke) => {
     await coworkSetLanIpOverride(invoke, enabled);
-    await refetch();
+    readBack = await refetch();
   }, "Failed to update LAN-IP override");
+  // Same hazard as the Enable toggle, same read-back gate — and with no confirm
+  // banner to mask it, the snap-back is this row's entire signal.
+  if (readBack) resyncCheckbox(box, lanIpOverrideChecked);
 }
 
 function workspaceRowStyle(ws: WorkspaceStatus): string {
@@ -177,16 +262,23 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
       class:is-busy={busy}
       data-testid="cowork-toggle"
     >
+      <!-- `enableBoxChecked`, not a second copy of the expression: the resync
+           in `handleToggleOff` must pass the SAME value this renders, or the two
+           writers latch against each other. The `|| confirming` term is what
+           makes Cancel un-check the box again — `s.enabled` never changed on the
+           way in, so binding to it alone left a checked box sitting over a
+           disabled integration until the next status refetch. What this
+           expression cannot do is repair the disable half, and not because it
+           computes the wrong value: it computes the right one and `set_checked`
+           skips the write because its cache already holds it. See
+           `utils/checkbox-sync.ts`. -->
       <input
         class="cs-accent-cbx"
         data-testid="cowork-toggle-checkbox"
         type="checkbox"
-        checked={s.enabled}
+        checked={enableBoxChecked}
         disabled={busy}
-        onchange={(e) => {
-          if ((e.target as HTMLInputElement).checked) openEnableConfirm();
-          else void handleToggleOff();
-        }}
+        onchange={(e) => handleToggleChange(e.currentTarget)}
       />
       <span>Enable Cowork integration</span>
     </label>
@@ -238,13 +330,21 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
           Cowork can reach your open documents. This adds a Windows firewall rule so the Cowork VM
           can connect back — admin is required once.
         </div>
-        {#if probe.preflight?.status === "blocked"}
-          <!-- #1298: we already watched detection fail, so offer a retry rather
-               than an Enable button whose outcome we know. -->
-          <div class="cs-preflight" data-testid="cowork-preflight-blocked" role="status">
-            {probe.preflight.hint}
-          </div>
-        {/if}
+        <!-- #1376: mounted-before-populated, and the two children are additive.
+             `useCoworkPreflight.svelte.ts` explains both and is the one place
+             that should. -->
+        <div role="status" data-testid="cowork-preflight-live">
+          {#if probe.preflight?.status === "blocked"}
+            <!-- #1298: we already watched detection fail, so offer a retry rather
+                 than an Enable button whose outcome we know. -->
+            <div class="cs-preflight" data-testid="cowork-preflight-blocked">
+              {probe.preflight.hint}
+            </div>
+          {/if}
+          {#if probe.probing}
+            <div class="cs-help-text">{COWORK_PREFLIGHT_CHECKING}</div>
+          {/if}
+        </div>
         <div class="cs-actions">
           {#if probe.preflight?.status === "blocked"}
             <button
@@ -297,9 +397,9 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
             class="cs-accent-cbx"
             data-testid="cowork-lan-ip-override-checkbox"
             type="checkbox"
-            checked={s.useLanIpOverride}
+            checked={lanIpOverrideChecked}
             disabled={busy}
-            onchange={(e) => void handleToggleLanIp((e.target as HTMLInputElement).checked)}
+            onchange={(e) => void handleToggleLanIp(e.currentTarget)}
           />
           <span>Use LAN IP instead of host.docker.internal</span>
         </label>
@@ -350,9 +450,15 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
     </div>
   {/if}
 
-  {#if coworkState.error && !coworkState.status}
+  <!-- Not gated on `!coworkState.status`. That gate made this dead for every
+       failure after the first load — which is every failure a user of the
+       toggle can cause, since the toggle only exists once a status has loaded.
+       `refetch()` reports its failure by setting `error` and returning false
+       rather than throwing, so without this a re-read that fails leaves the
+       whole surface showing stale values with nothing to say so. -->
+  {#if coworkState.error}
     <div class="cs-error-banner" data-testid="cowork-settings-error" role="alert">
-      Failed to load Cowork status: {coworkState.error}
+      {coworkState.status ? "Couldn't refresh Cowork status" : "Failed to load Cowork status"}: {coworkState.error}
     </div>
   {/if}
 

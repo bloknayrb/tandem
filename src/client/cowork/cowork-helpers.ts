@@ -14,6 +14,20 @@ import type {
 } from "../types";
 
 /**
+ * In-flight text for the subnet pre-flight's live region (#1376).
+ *
+ * Shared because all three Enable surfaces announce the same probe, and a
+ * screen-reader user who moves between Settings, onboarding and the wizard
+ * should not hear three descriptions of one operation.
+ *
+ * The STRING is what is shared, and only that — the three surfaces still style
+ * it three ways (`.cs-help-text`, `.cos-checking`, `.iw-hint-text`), because
+ * each sits in a differently-tinted container. Sharing the text is what a
+ * screen reader hears; sharing the CSS would be a visual regression.
+ */
+export const COWORK_PREFLIGHT_CHECKING = "Checking your network…";
+
+/**
  * High-level branch the Settings UI renders. Collapses the `osSupported` /
  * `coworkDetected` / `uacDeclined` / normal states into a single label.
  */

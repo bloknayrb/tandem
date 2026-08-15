@@ -1,3 +1,4 @@
+import { tick } from "svelte";
 import {
   coworkPreflightSubnet,
   loadInvoke,
@@ -31,6 +32,32 @@ export interface SubnetPreflightState {
  *
  * Callers must keep the returned object intact. Destructuring
  * `preflight`/`probing` invokes the getters once and freezes the values.
+ *
+ * **How the three surfaces must render this (#1376).** All of them announce the
+ * result to a screen reader, and all of them got it wrong the same way, so the
+ * rule lives here rather than three times over:
+ *
+ *  1. The `role="status"` region must be mounted BEFORE any text lands in it —
+ *     for the life of the confirm, or of the wizard's sub-view. An ARIA live
+ *     region generally has to be in the accessibility tree before its contents
+ *     change for the change to be announced; a region inserted together with
+ *     its text is commonly not read out at all. That is the whole defect: a
+ *     user asked Tandem to check the network, detection failed, and the
+ *     sentence saying why was silent.
+ *
+ *     Mounting the region early is only half of it: the in-flight line is the
+ *     FIRST text to arrive, so `run()` defers `probing` one flush (see the
+ *     comment on it). Callers may keep flipping their mount condition and
+ *     calling `run()` in one tick; the hook absorbs it.
+ *  2. The blocked hint and the in-flight line are ADDITIVE, not an
+ *     `{#if}/{:else if}`. `run()` deliberately keeps the previous result (see
+ *     the comment on `run` below), so a retry has `probing` and `blocked` set
+ *     at once — and swapping would unmount the blocked hint that all three
+ *     mounted suites read mid-probe (`cowork-settings-mounted.test.ts`,
+ *     `cowork-onboarding-step-mounted.test.ts`,
+ *     `integration-wizard-cowork.test.ts`), each via the live region's
+ *     `textContent` and the retry button node rather than the `-blocked`
+ *     testid itself.
  */
 export function createSubnetPreflight(): SubnetPreflightState {
   let preflight = $state<SubnetPreflight | null>(null);
@@ -56,16 +83,40 @@ export function createSubnetPreflight(): SubnetPreflightState {
     //
     // The cost is that every path which closes a surface MUST call `reset()`,
     // or a stale hint paints on reopen. All three do; the tests pin it.
-    probing = true;
+
     try {
+      // Rule 1's deferral. The three ENTRY points (`CoworkSettings`,
+      // `CoworkOnboardingStep`, `IntegrationWizardModal`) flip their mount
+      // condition (`confirming`, `view`) and call `run()` in one tick, so
+      // setting `probing` synchronously would insert the region and its first
+      // line in ONE mutation — the pattern that is not announced. The three
+      // retry buttons mount nothing and flip nothing; for them this is a pure
+      // one-flush delay. The ticket is taken above, synchronously, so a
+      // `reset()` landing inside this gap still wins.
+      //
+      // Inside the `try` on purpose: `tick()` is `await Promise.resolve()` then
+      // `flushSync()`, and `flushSync` runs every pending effect in the app
+      // synchronously — an unrelated component's `$effect` can throw through it.
+      // Every caller is `void run()` with no `.catch()`, so outside the `try`
+      // that would surface as an unhandled rejection AND leave the probe
+      // silently un-issued.
+      await tick();
+      // Consequence worth knowing: a probe superseded during this gap never
+      // issues at all, so two `run()`s in one tick cost ONE PowerShell
+      // round-trip. That is the desirable reading of a double-clicked retry
+      // button, and `cowork-preflight-hook.test.ts` pins both halves — this one,
+      // and that a probe superseded AFTER issuing still cannot write.
+      if (mine !== token) return;
+      probing = true;
       const invoke = await loadInvoke();
       const result = await coworkPreflightSubnet(invoke);
       if (mine !== token) return;
       preflight = result;
     } catch (err) {
       if (mine !== token) return;
-      // Reaching here means the bridge didn't load, or `coworkPreflightSubnet`
-      // threw rather than resolving — several distinct causes that all say
+      // Reaching here means the bridge didn't load, `coworkPreflightSubnet`
+      // threw rather than resolving, or an unrelated `$effect` threw through
+      // the `tick()` flush above — several distinct causes that all say
       // nothing about whether enabling would work, so fall through to the
       // unguarded button. Log it: `unknown` is never rendered, so without this
       // a genuine client fault is invisible on both sides of the bridge.

@@ -74,8 +74,15 @@ export function createAutostart(getActive: () => boolean): AutostartState {
     error = null;
     try {
       // The result carries the OS's read-back value, not `next` — so a write
-      // that was virtualized away or blocked leaves the toggle where it was
-      // and reports `readback-mismatch` instead of lying.
+      // that was virtualized away or blocked reports `readback-mismatch`
+      // instead of lying about the STATUS.
+      //
+      // It does not, on its own, put the checkbox back: `status.enabled` is
+      // unchanged, so the one-way `checked=` expression re-computes to the
+      // value Svelte last wrote and the DOM write is skipped, leaving the box
+      // where the user clicked. `NetworkSettings.svelte` calls `resyncCheckbox`
+      // after this for that reason. (An earlier version of this comment claimed
+      // the toggle stayed put by itself. It does not.)
       applyResult(await autostartSetEnabled(await loadInvoke(), next));
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);

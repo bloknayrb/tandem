@@ -15,6 +15,36 @@ export const TRIAL_DAYS = 14;
 export const TANDEM_REPO_URL = "https://github.com/bloknayrb/tandem";
 export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
 
+/**
+ * The two commands that install Tandem's Claude Code plugin, in order.
+ *
+ * THE canonical rationale for showing rather than running them; other surfaces
+ * point here rather than restating it.
+ *
+ * It is a choice, not a limitation — `POST /api/integrations/install-claude-code`
+ * already shells out to install the Claude CLI, `apply.ts` already writes
+ * `~/.claude.json` and the skill, and `cowork_installer.rs` already writes a
+ * plugin registry. The capability plainly exists. Two things make this the one
+ * we decline to automate: the personal-Claude-Code registry schema is
+ * reverse-engineered rather than supported, so a write we get wrong breaks a
+ * tool that is not ours; and enabling a plugin installs hooks that run in the
+ * user's own sessions. Registering a marketplace adds a trusted source, and
+ * that consent should be typed by the user, in the user's shell.
+ *
+ * Being display-only is what made them easy to leave in exactly one place:
+ * `tandem setup` printed them and the desktop wizard did not, so on the primary
+ * distribution channel a whole push route was undiscoverable (#1390). Shared so
+ * the CLI and the wizard cannot say different things.
+ *
+ * The identities here are the manifest's: plugin `tandem` from marketplace
+ * `tandem-editor`, sourced from `bloknayrb/tandem`. `tests/plugin-manifest.test.ts`
+ * pins this array against `.claude-plugin/*.json` rather than trusting the match.
+ */
+export const CLAUDE_PLUGIN_INSTALL_COMMANDS = [
+  "claude plugin marketplace add bloknayrb/tandem",
+  "claude plugin install tandem@tandem-editor",
+] as const;
+
 /** Tandem's website. The public face — distinct from the source repo. */
 export const TANDEM_SITE_URL = "https://tandem.ink";
 

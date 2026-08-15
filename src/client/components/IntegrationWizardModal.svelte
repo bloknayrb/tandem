@@ -25,10 +25,15 @@
  * --tandem-z-above-titlebar, r-5 + shadow-3) and a Tab focus trap re-queried
  * per keypress (the Advanced <details> changes the focusable set while open).
  */
-import { untrack } from "svelte";
-import { BYO_MODELS_ENABLED, DEFAULT_MCP_PORT } from "../../shared/constants.js";
+import { tick, untrack } from "svelte";
+import {
+  BYO_MODELS_ENABLED,
+  CLAUDE_PLUGIN_INSTALL_COMMANDS,
+  DEFAULT_MCP_PORT,
+} from "../../shared/constants.js";
 import type { ApplyItemResult, ExistingMcpInstall } from "../../shared/integrations/contract.js";
 import {
+  COWORK_PREFLIGHT_CHECKING,
   coworkSettingsVariant,
   formatCoworkError,
   isTauriRuntime,
@@ -150,6 +155,85 @@ let coworkBusy = $state(false);
 let coworkError = $state<string | null>(null);
 const coworkProbe = createSubnetPreflight();
 
+// #1390: the plugin install commands, plus the outcome of the button that
+// copies them. The outcome lives beside the button in its own live region
+// rather than in the button's label — a changed accessible name on a button
+// nobody is focused on is announced by nothing, which is the same mistake
+// #1376 exists to fix.
+const PLUGIN_INSTALL_TEXT = CLAUDE_PLUGIN_INSTALL_COMMANDS.join("\n");
+
+/**
+ * Outcome of the Copy button, announced from its own live region.
+ *
+ * MUST be `""` whenever the push-routes block is about to (re)mount — a live
+ * region created already holding its text is announced by nothing, which is
+ * #1376's defect reintroduced inside the fix for it. Unlike `coworkProbe`,
+ * there is no single choke point to hang that on, so the reset is explicit at
+ * each transition that can remount the block — `openCoworkView` and
+ * `retryDetection` — and `copyToken` is what makes that safe.
+ *
+ * `close()` deliberately does not reset, and that is the one leg of this
+ * invariant the component does not own: it holds only because `App.svelte`
+ * renders the modal under `{#if shouldShowWizard}`, so closing DESTROYS this
+ * state rather than hiding it. The component is otherwise written for a
+ * persistent `open` prop, and under that shape a close/reopen would remount the
+ * block still holding "Copied". If the parent ever stops unmounting, this needs
+ * a third reset site.
+ */
+let pluginCopyResult = $state("");
+
+/**
+ * Monotonic ticket, same device as `createSubnetPreflight`'s. The clear is
+ * synchronous and the write is two awaits later, so without it a clear cannot
+ * dominate an in-flight copy: click Copy, click the Cowork row before the
+ * clipboard settles, and the continuation writes "Copied" into an unmounted
+ * region that then remounts holding it — the exact thing the clear exists to
+ * prevent, caused by the clear's own async gap.
+ */
+let copyToken = 0;
+
+async function copyPluginCommands(): Promise<void> {
+  const mine = ++copyToken;
+  let result: string;
+  // `writeText` FIRST, with no await before it. WebKit invalidates the
+  // user-gesture token across an `await`, so a clipboard write placed after one
+  // can be rejected for want of transient activation — hence the clear-and-flush
+  // below happens after the write, not before. (Not testable here: happy-dom
+  // models no activation state, so this is pinned by the comment, deliberately.)
+  try {
+    await navigator.clipboard.writeText(PLUGIN_INSTALL_TEXT);
+    result = "Copied";
+  } catch (err) {
+    // Not rethrown: the message says everything actionable and the commands
+    // stay on screen to be selected by hand. Logged anyway — a denied
+    // permission, a WebView with no `navigator.clipboard`, and a security
+    // policy rejection are three different bugs with three different fixes,
+    // and after this catch nobody can tell which one a user hit.
+    console.warn("[wizard] clipboard write failed:", err);
+    result = "Couldn't copy — select the commands above";
+  }
+  // THIS is the load-bearing guard: `writeText` spans real tasks, so a user can
+  // click the Cowork row while it is pending, and without this the superseded
+  // continuation both blanks a region it no longer owns and lands a stale
+  // "Copied" in it. Pinned by "drops a copy result that lands after the user has
+  // left for the sub-view".
+  if (mine !== copyToken) return;
+  // Clear and flush before the outcome: a second click with the SAME outcome
+  // would otherwise re-assign an identical string, mutate no text node, and
+  // announce nothing — so the user clicks the retry the failure message asks
+  // for and hears silence.
+  pluginCopyResult = "";
+  await tick();
+  // Defensive, and unreachable today: every `copyToken` mutator is an `onclick`,
+  // a click is a task, and the gap above is a microtask — so nothing can
+  // supersede across it. Kept because it costs one line and Svelte's async mode
+  // would make `tick()` span a task, at which point it becomes the load-bearing
+  // one. Deliberately NOT tested: reaching it needs a synthetic click dispatched
+  // inside a microtask flush, which pins an interleaving no user can produce.
+  if (mine !== copyToken) return;
+  pluginCopyResult = result;
+}
+
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
 // User-entered token text per integration id (cleared after submit).
@@ -187,6 +271,10 @@ $effect(() => {
 function openCoworkView(): void {
   coworkError = null;
   coworkBusy = false;
+  // Remount incoming — see the declaration. Bumping the token is what stops an
+  // in-flight copy from writing its result after this clear.
+  copyToken++;
+  pluginCopyResult = "";
   view = "cowork";
   void coworkProbe.run();
 }
@@ -206,15 +294,23 @@ function leaveCoworkView(): void {
  *  footer, never sub-view mount. On success (or UAC-declined, which the Rust
  *  side leaves fail-closed with enabled:false) we refetch and return to MAIN
  *  so the Cowork row reflects the committed outcome; a thrown firewall error
- *  (incl. adminDeclined) shows inline and keeps the user on the sub-view. */
+ *  (incl. adminDeclined) shows inline and keeps the user on the sub-view.
+ *
+ *  Same hazard as `CoworkSettings.svelte`'s `handleToggleOn`: `refetch()` can
+ *  swallow its own failure and return without storing a fresh status. Leaving
+ *  the sub-view on a failed read-back would paint `coworkRowDetail` from the
+ *  stale pre-enable status on MAIN — "Let a teammate's Claude join…" over an
+ *  integration that is actually now connected. Gate the return on the
+ *  read-back succeeding; a failed one leaves the user on the sub-view, whose
+ *  own copy is accurate, until a retry or the next poll catches up. */
 async function enableCowork(): Promise<void> {
   coworkBusy = true;
   coworkError = null;
   try {
     const invoke: InvokeFn = await loadInvoke();
     await coworkToggleIntegration(invoke, true);
-    await coworkStatus.refetch();
-    leaveCoworkView();
+    const readBack = await coworkStatus.refetch();
+    if (readBack) leaveCoworkView();
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
     coworkError = formatCoworkError(raw);
@@ -277,6 +373,11 @@ function close(): void {
 function retryDetection(): void {
   wizard.reset();
   secretInputs = {};
+  // Same reason as `openCoworkView`: `wizard.reset()` sets `step = "connect"`,
+  // and the push-routes block gates on `step === "done"` — so leaving "done" is
+  // what unmounts it, not the `detecting` flag `reset()` also clears.
+  copyToken++;
+  pluginCopyResult = "";
   void wizard.begin();
   void cliStatus.refetch();
   // The Cowork poller only refreshes every 30s — "Check again" must reflect a
@@ -511,6 +612,54 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
   {/if}
 {/snippet}
 
+<!-- The two push routes that need no flag, in the order `doctor.ts` and
+     `README.md` recommend them. Rendered ONCE, above the registered/unregistered
+     `{#if}` rather than inside either arm — which is the fix for #1389, whose
+     defect was the registered arm implying that registering the shim takes the
+     built-in watch away. It does not.
+
+     Deliberately avoids "every session" in any form. The plugin genuinely does
+     apply to every session once installed, but it arms on skill dispatch rather
+     than at session start, and `tests/docs/monitor-arming-claims.test.ts` scores
+     that claim per LINE — a sentence that reads honestly here is one wrap away
+     from an unqualified promise. Saying when it starts and leaving the scope
+     implied is both shorter and not the thing that keeps breaking. -->
+{#snippet pushRoutes()}
+  <p>
+    <strong>The built-in Monitor watch</strong> installs nothing and needs no flag: on first
+    Tandem use, Tandem's bundled skill reads the wake address from Claude's first
+    <code class="iw-code-inline">tandem_status</code> and starts it for that session. It needs a
+    Claude Code that offers a built-in Monitor tool — that is granted per account rather than per
+    version, so upgrading will not add it, and on Windows it also needs Git Bash.
+  </p>
+  <p>
+    <strong>The Tandem plugin</strong> needs no flag either. It starts watching the first time
+    Claude uses Tandem's skill, so ask for Tandem by name rather than expecting it to be listening
+    beforehand, and launch <code class="iw-code-inline">claude</code> from a terminal so it can
+    find Node. It reads the same per-account gate as the built-in Monitor, so it cannot cover for
+    that gate being off — but it does not need Git Bash. It also needs Claude Code 2.1.212 or
+    newer: on anything older the install succeeds and the monitor simply never runs, with nothing
+    to tell you so.
+  </p>
+  <!-- #1390: shown rather than run — see `CLAUDE_PLUGIN_INSTALL_COMMANDS` for
+       why. Before this they were printed by `tandem setup` alone, which a
+       desktop-app user never runs. -->
+  <div class="iw-plugin-install" data-testid="integration-wizard-plugin">
+    <pre class="iw-plugin-commands" data-testid="integration-wizard-plugin-commands">{PLUGIN_INSTALL_TEXT}</pre>
+    <button
+      type="button"
+      class="iw-btn iw-btn-secondary iw-plugin-copy-btn"
+      data-testid="integration-wizard-plugin-copy"
+      onclick={() => void copyPluginCommands()}
+    >
+      Copy
+    </button>
+  </div>
+  <p class="iw-hint-text" role="status" data-testid="integration-wizard-plugin-copy-status">
+    {pluginCopyResult}
+  </p>
+{/snippet}
+
 {#if open}
   <div
     role="presentation"
@@ -618,18 +767,52 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 </div>
               </details>
             {/if}
-            {#if coworkProbe.preflight?.status === "blocked"}
-              <!-- #1298: detection already failed once here; say why rather
-                   than leaving an Enable button that repeats it. -->
-              <div
-                class="iw-banner-warning"
-                role="status"
-                data-testid="integration-wizard-cowork-preflight-blocked"
-              >
-                {@render warningIcon()}
-                <span>{coworkProbe.preflight.hint}</span>
-              </div>
-            {/if}
+            <!-- #1376: mounted-before-populated, and the two children are
+                 additive. `useCoworkPreflight.svelte.ts` explains both and is
+                 the one place that should.
+
+                 `display: contents` rather than a box: unlike the other two
+                 surfaces, this wrapper's parent (`.iw-step`) is a flex column
+                 with a `gap`, and a gap applies between items regardless of
+                 their size — so an always-mounted empty wrapper would sit there
+                 as a permanent `--tandem-space-4` of dead air.
+
+                 `:empty` and `display: none` are both wrong here. `:empty`
+                 because the two `{#if}` blocks compile to two `<!>` anchors on
+                 separate source lines, and the WHITESPACE between them is a
+                 text node — `:empty` ignores comments but not that, so the
+                 wrapper never matches. (Joining the source lines would fix the
+                 selector and is not worth the fragility.) `display: none`
+                 because it takes a live region back OUT of the accessibility
+                 tree, restoring the exact bug at the exact moment content
+                 arrives.
+
+                 `display: contents` has its own history of dropping elements
+                 from the a11y tree; Chromium has exposed them since 89 and
+                 this sub-view is WebView2-only (gated on `isTauriRuntime()`
+                 and an `osSupported` Cowork status), so the WebKit path never
+                 renders it. Re-check before reusing this on a surface macOS
+                 can reach. -->
+            <div
+              class="iw-preflight-live"
+              role="status"
+              data-testid="integration-wizard-cowork-preflight-live"
+            >
+              {#if coworkProbe.preflight?.status === "blocked"}
+                <!-- #1298: detection already failed once here; say why rather
+                     than leaving an Enable button that repeats it. -->
+                <div
+                  class="iw-banner-warning"
+                  data-testid="integration-wizard-cowork-preflight-blocked"
+                >
+                  {@render warningIcon()}
+                  <span>{coworkProbe.preflight.hint}</span>
+                </div>
+              {/if}
+              {#if coworkProbe.probing}
+                <p class="iw-hint-text">{COWORK_PREFLIGHT_CHECKING}</p>
+              {/if}
+            </div>
             {#if coworkError}
               <div
                 class="iw-banner-warning"
@@ -911,38 +1094,32 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
             </div>
             {#if wizard.channelRegistered !== null && whatsNext !== "stdio-only"}
               <div
-                class="iw-push-mode iw-push-mode-{wizard.channelRegistered ? 'push' : 'polling'}"
+                class="iw-push-mode"
                 data-testid="integration-wizard-push-mode"
-                data-push-mode={wizard.channelRegistered ? "push" : "polling"}
+                data-push-mode={wizard.channelRegistered ? "shim" : "no-shim"}
               >
-                {#if wizard.channelRegistered}
-                  The channel shim is registered. Sessions Tandem starts for you are woken directly
-                  and need nothing further. For a session you start yourself, the simplest route is
-                  still to ask Claude to arm a watch on Tandem's wake stream — nothing to install,
-                  no flag — where Claude Code offers a Monitor tool. If Claude says it has none,
-                  that is what the shim is for: start it with the
-                  <code class="iw-code-inline">--dangerously-load-development-channels</code> flag,
-                  since registration alone does not switch the channel on. Either way, Claude also
-                  sees your comments and messages when it next checks its inbox. Use one, not both.
-                {:else}
+                <p>
                   Sessions Tandem starts for you are woken directly and need nothing further. A
-                  session you start yourself will see your comments and messages when it next
-                  checks its inbox — to have it react as they happen, the simplest route is to ask
-                  Claude to arm a watch on Tandem's wake stream, which needs nothing installed.
-                  That one depends on Claude Code offering a Monitor tool, which not every one
-                  does; if Claude says it has none, come back here and register the channel shim,
-                  which does not need it. Installing the Tandem plugin covers any session where you
-                  ask for Tandem by name — it starts watching the first time Claude uses the Tandem
-                  skill, not the moment the session opens — as long as you launch
-                  <code class="iw-code-inline">claude</code> from a terminal so it can find Node.
-                  Use one, not both.
-                {/if}
-                <p class="iw-hint-text">
-                  To install the plugin, run these in a terminal:
-                  <code class="iw-code-inline">claude plugin marketplace add bloknayrb/tandem</code>
-                  then
-                  <code class="iw-code-inline">claude plugin install tandem@tandem-editor</code>.
+                  session you start yourself sees your comments and messages when it next checks
+                  its inbox; to have it react as they happen, use one of these — not several.
                 </p>
+                {@render pushRoutes()}
+                {#if wizard.channelRegistered}
+                  <p>
+                    The channel shim is registered here, and it is the one route that needs
+                    neither of those. Registration alone does not switch it on, though: start the
+                    session with
+                    <code class="iw-code-inline"
+                      >claude --dangerously-load-development-channels server:tandem-channel</code
+                    >.
+                  </p>
+                {:else}
+                  <p>
+                    If Claude reports no Monitor tool at all, come back here and register the
+                    channel shim — it is the one route that depends on neither gate, at the cost
+                    of a flag on every session you start.
+                  </p>
+                {/if}
               </div>
             {/if}
           </section>
@@ -1635,22 +1812,55 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
     margin-top: 1px;
   }
 
-  /* Push-vs-polling readout (WS-B). A config-truth line, not a live claim:
-     "configured" (success-tinted) vs "polling" (neutral/muted). */
+  /* Push-routes readout. ONE treatment for both arms since #1389: the old
+     green/grey split tinted "configured" vs "polling", which read as
+     configured-vs-degraded, and the unregistered arm is neither — it now leads
+     with two push routes that need no shim at all. */
   .iw-push-mode {
     margin-top: var(--tandem-space-2);
     padding: var(--tandem-space-2) var(--tandem-space-3);
     border-radius: var(--tandem-r-3);
     font-size: var(--tandem-text-xs);
     line-height: 1.5;
-  }
-  .iw-push-mode-push {
-    background: var(--tandem-success-bg);
-    color: var(--tandem-success-fg-strong);
-  }
-  .iw-push-mode-polling {
     background: var(--tandem-surface-muted);
     color: var(--tandem-fg-muted);
+  }
+  /* The block is now several paragraphs rather than one sentence; scoped so it
+     cannot reach the `<p>`s in the Cowork sub-view. */
+  .iw-push-mode p {
+    margin: 0 0 var(--tandem-space-2);
+  }
+  .iw-push-mode p:last-child {
+    margin-bottom: 0;
+  }
+  .iw-plugin-install {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--tandem-space-2);
+    margin-bottom: var(--tandem-space-2);
+  }
+  .iw-plugin-commands {
+    /* `min-width: 0` because a flex item's automatic minimum size is
+       min-content, and these are two unbreakable command lines — without it the
+       <pre> refuses to shrink and pushes the button out of the dialog. */
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    padding: var(--tandem-space-2);
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-xs);
+    line-height: 1.6;
+    background: var(--tandem-surface-sunk);
+    border-radius: var(--tandem-r-2);
+    overflow-x: auto;
+  }
+  .iw-plugin-copy-btn {
+    flex: 0 0 auto;
+  }
+  /* See the markup comment: the parent is a gapped flex column, so a box here
+     would cost a gap whenever the region is empty — which is most of the time. */
+  .iw-preflight-live {
+    display: contents;
   }
 
   /* --- More integrations --- */

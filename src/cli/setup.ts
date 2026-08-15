@@ -14,6 +14,7 @@ import {
   type TargetKind,
   validateChannelShimPrereq,
 } from "../server/integrations/apply.js";
+import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../shared/constants.js";
 
 /**
  * Parse repeatable `--target=<kind>` CLI args into valid target kinds plus the
@@ -219,7 +220,7 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
  * starts are woken over the supervisor's stdin instead, so they need nothing
  * from this report. See `src/shared/launcher/contract.ts`.
  */
-function printPushStatus(shimRegisteredFor: string[]): void {
+export function printPushStatus(shimRegisteredFor: string[]): void {
   const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
   // `--plugin-dir` DOES activate the monitor. The previous copy here said it
   // did not, citing a 2026-08-06 null on 2.1.223; that null was the print-mode
@@ -279,8 +280,8 @@ function printPushStatus(shimRegisteredFor: string[]): void {
       "  `claude` from a terminal), and it shares the built-in Monitor tool's\n" +
       "  per-account gate — so it cannot stand in when that gate is off.\n" +
       "  Use one or the other — both active in one session deliver every event twice:\n\n" +
-      "    claude plugin marketplace add bloknayrb/tandem\n" +
-      "    claude plugin install tandem@tandem-editor\n\n" +
+      CLAUDE_PLUGIN_INSTALL_COMMANDS.map((cmd) => `    ${cmd}\n`).join("") +
+      "\n" +
       devInstructions,
   );
 }

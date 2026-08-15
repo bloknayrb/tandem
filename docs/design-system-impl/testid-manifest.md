@@ -257,6 +257,14 @@ shipped and were removed:
   This sub-view has no confirm step — its footer button fires the real enable —
   so the probe runs on entry to the view, and the retry button *replaces*
   `cowork-enable-confirm-btn` while blocked rather than sitting beside it.
+- Plugin install (#1390): `integration-wizard-plugin{,-commands,-copy,-copy-status}`
+  in the push-mode block. Tandem shows these commands rather than running them
+  (the reason is on `CLAUDE_PLUGIN_INSTALL_COMMANDS`), so `-commands` holds the
+  text and `-copy` is the only affordance. `-copy-status` is the button's
+  outcome, in its own live region rather than in the button label — a changed
+  accessible name on an unfocused button announces nothing. Rendered once from
+  a snippet ABOVE the registered/unregistered split rather than twice inside it
+  — both branches carry it because neither one can omit it.
 
 ### Cowork modals & settings
 - `cowork-onboarding-{step,confirm,error,enable-btn,enable-confirm-btn,enable-cancel-btn,skip-btn,learn-more-btn,learn-more-link}`
@@ -265,6 +273,15 @@ shipped and were removed:
   `cowork-preflight-{blocked,retry-btn}`. The retry button **replaces** the
   enable-confirm button while detection is known-failing, so a spec asserting
   `*-enable-confirm-btn` visible must first establish the probe did not block.
+- Pre-flight live regions (#1376): `cowork-preflight-live`,
+  `cowork-onboarding-preflight-live` and `integration-wizard-cowork-preflight-live`.
+  The `role="status"` wrapper, mounted for the life of the confirm (the wizard's
+  for the life of the sub-view) so a hint arriving later is announced rather than
+  inserted silently with its region. The `-blocked` testids sit INSIDE it, which
+  is why they still come and go; the wrapper never does. The wizard's carries
+  `display: contents` — its parent is a gapped flex column, so an empty box
+  there would be a permanent gap; the other two parents are plain blocks.
+  Thirteen more live regions app-wide still have the pre-#1376 shape (#1431).
 - `cowork-admin-declined-{backdrop,modal,confirm-disable,error,status-error,disable-btn,disable-confirm-btn,disable-cancel-btn,retry-btn,learn-more-link}`
 - `cowork-settings{,-loading,-unsupported,-undetected,-error}`,
   `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`, `cowork-explainer`,

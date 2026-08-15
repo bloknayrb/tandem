@@ -1,6 +1,10 @@
 <script lang="ts">
 import { TANDEM_REPO_URL } from "../../shared/constants";
-import { formatCoworkError, writeCoworkOnboardingSkipped } from "../cowork/cowork-helpers";
+import {
+  COWORK_PREFLIGHT_CHECKING,
+  formatCoworkError,
+  writeCoworkOnboardingSkipped,
+} from "../cowork/cowork-helpers";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke";
 import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte";
 import type { CoworkStatus } from "../types";
@@ -102,13 +106,21 @@ function handleSkip(): void {
         can connect back — admin is required once. To check it worked afterward, ask Claude in a
         Cowork session to open or list your documents.
       </div>
-      {#if probe.preflight?.status === "blocked"}
-        <!-- Say what stopped us and offer a retry, rather than an Enable button
-             whose failure we have already observed. -->
-        <div class="cos-preflight" data-testid="cowork-onboarding-preflight-blocked" role="status">
-          {probe.preflight.hint}
-        </div>
-      {/if}
+      <!-- #1376: mounted-before-populated, and the two children are additive.
+           `useCoworkPreflight.svelte.ts` explains both and is the one place
+           that should. -->
+      <div role="status" data-testid="cowork-onboarding-preflight-live">
+        {#if probe.preflight?.status === "blocked"}
+          <!-- Say what stopped us and offer a retry, rather than an Enable button
+               whose failure we have already observed. -->
+          <div class="cos-preflight" data-testid="cowork-onboarding-preflight-blocked">
+            {probe.preflight.hint}
+          </div>
+        {/if}
+        {#if probe.probing}
+          <div class="cos-checking">{COWORK_PREFLIGHT_CHECKING}</div>
+        {/if}
+      </div>
       <div class="cos-actions">
         {#if probe.preflight?.status === "blocked"}
           <button
@@ -227,6 +239,11 @@ function handleSkip(): void {
     border: 1px solid var(--tandem-warning-border);
     border-radius: var(--tandem-r-2);
     padding: 6px 8px;
+    margin-bottom: 8px;
+  }
+  .cos-checking {
+    font-size: 12px;
+    color: var(--tandem-fg-muted);
     margin-bottom: 8px;
   }
   .cos-confirm-heading {
