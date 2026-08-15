@@ -58,11 +58,23 @@ export function createDragResize(opts: {
         document.body.style.userSelect = "";
         document.body.style.cursor = "";
         dragListeners = null;
+        // Inert today (the object dies with the component), but kept so all three exit
+        // paths clear the same set — the asymmetry is what would rot.
+        dragging = false;
       }
     };
   });
 
   const handleResizeStart = (e: MouseEvent) => {
+    // Re-entrant start (a second mousedown with no intervening mouseup): release the
+    // previous drag first. Otherwise its listeners stay on `document` unreachable by
+    // either cleanup path, and its stale `onMouseUp` can later fire mid-drag — clearing
+    // `dragging` and re-enabling the ease it exists to suppress.
+    if (dragListeners) {
+      document.removeEventListener("mousemove", dragListeners.move);
+      document.removeEventListener("mouseup", dragListeners.up);
+      dragListeners = null;
+    }
     e.preventDefault();
     const startX = e.clientX;
     const startWidth = width;

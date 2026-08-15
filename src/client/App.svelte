@@ -3407,11 +3407,12 @@ const shouldShowModelPicker = $derived(
      after release), and the strip slides out from under the pointer. #798's ease is
      for open/close, not for direct manipulation.
 
-     NOTE: this does NOT rely on source order to stay clear of the reduce-motion
-     guards above — being two classes, it outranks the `@media` rule on specificity
-     and would win regardless of placement. It is safe only because it declares the
-     same value they do. Anything other than `transition: none` here would silently
-     override the reduce-motion guard. */
+     NOTE on the reduce-motion guards above: this rule OUTRANKS the `@media` one
+     (two classes to its one) but LOSES to `:global(body.tandem-reduce-motion)
+     .rail-shell`, which adds an element to two classes. So neither source order nor
+     specificity is what keeps reduce-motion users safe here — all three rules simply
+     declare the same value. Anything other than `transition: none` on this rule would
+     silently override the `@media` guard. */
   .rail-shell.dragging {
     transition: none;
   }

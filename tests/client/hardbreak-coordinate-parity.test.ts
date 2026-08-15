@@ -61,34 +61,49 @@ function countHardBreaks(doc: Y.Doc): number {
  * The invariant: resolving a relRange through the CLIENT reader and converting back to a
  * flat offset must equal what the SERVER reader says that same RelativePosition means.
  *
- * Offsets that land ON a break are excluded: `findXmlTextAtOffset` deliberately returns
- * null there (an inline-leaf break is unaddressable, like a separator), so no relRange
- * can be minted for them in the first place.
+ * EVERY offset is probed, including those landing on a break. `findXmlTextAtOffset` does
+ * return null on a break, but `flatOffsetToRelPos`'s `assoc === 0` fallback retries at
+ * `textOffset + 1` and rescues all of them — measured: `probed` equals
+ * `flatText.length + 1` for every fixture here. That total is asserted rather than
+ * `> 0`, so a future change that made most offsets unmintable fails loudly instead of
+ * quietly shrinking the suite to a handful of probes.
+ *
+ * A null from either reader is recorded as a mismatch, never skipped: `relPosToFlatOffset`
+ * returns null when it resolves a `Y.XmlText` that `collectXmlTexts` never visits — a
+ * mint/read asymmetry *inside the server*, which is exactly the class of bug this suite
+ * exists to catch.
  */
-function assertReaderParity(md: string, label: string) {
+function assertReaderParity(md: string, label: string, expectedBreaks: number) {
   const { doc, pm } = fixture(md);
+  expect(countHardBreaks(doc), `${label} — fixture lost its hardBreaks`).toBe(expectedBreaks);
   const flatText = getElementText(doc.getXmlFragment("default") as unknown as Y.XmlElement);
 
   const mismatches: string[] = [];
   let probed = 0;
   for (let off = 0; off <= flatText.length; off++) {
     const rel = flatOffsetToRelPos(doc, off, 0);
-    if (!rel) continue; // unaddressable (lands on a break/separator)
+    if (!rel) {
+      mismatches.push(`off=${off}: no relPos could be minted`);
+      continue;
+    }
+    probed += 1;
     const serverFlat = relPosToFlatOffset(doc, rel);
-    if (serverFlat === null) continue;
+    if (serverFlat === null) {
+      mismatches.push(`off=${off}: server reader resolved to null`);
+      continue;
+    }
     const resolved = relRangeToPmPositions(doc, pm, { fromRel: rel, toRel: rel });
     if (!resolved) {
       mismatches.push(`off=${off}: client resolved to null`);
       continue;
     }
-    probed += 1;
     const clientFlat = pmPosToFlatOffset(pm, resolved.from);
     if (clientFlat !== serverFlat) {
       mismatches.push(`off=${off}: client=${clientFlat} server=${serverFlat}`);
     }
   }
 
-  expect(probed).toBeGreaterThan(0);
+  expect(probed, `${label} — offsets became unmintable`).toBe(flatText.length + 1);
   expect(mismatches, `${label} — client/server reader disagreement`).toEqual([]);
 }
 
@@ -101,33 +116,33 @@ describe("hardBreak coordinate parity (#1459, #1450)", () => {
   });
 
   it("one break", () => {
-    assertReaderParity("alpha\\\nbravo\n", "one break");
+    assertReaderParity("alpha\\\nbravo\n", "one break", 1);
   });
 
   it("two breaks", () => {
-    assertReaderParity("alpha\\\nbravo\\\ncharlie\n", "two breaks");
+    assertReaderParity("alpha\\\nbravo\\\ncharlie\n", "two breaks", 2);
   });
 
   it("five breaks", () => {
-    assertReaderParity("a\\\nb\\\nc\\\nd\\\ne\\\nf\n", "five breaks");
+    assertReaderParity("a\\\nb\\\nc\\\nd\\\ne\\\nf\n", "five breaks", 5);
   });
 
   it("paragraph-leading break (empty leading Y.XmlText is preserved)", () => {
     // splitDeltaOnHardBreak deliberately keeps the empty leading XmlText here. Pre-fix
     // EVERY offset in this paragraph was skewed, starting at 0.
-    assertReaderParity("\\\nbravo\n", "leading break");
+    assertReaderParity("\\\nbravo\n", "leading break", 1);
   });
 
   it("break inside a list item (recursive path)", () => {
-    assertReaderParity("- alpha\\\n  bravo\n", "listItem");
+    assertReaderParity("- alpha\\\n  bravo\n", "listItem", 1);
   });
 
   it("break inside a blockquote (recursive path)", () => {
-    assertReaderParity("> alpha\\\n> bravo\n", "blockquote");
+    assertReaderParity("> alpha\\\n> bravo\n", "blockquote", 1);
   });
 
   it("breaks alongside sibling paragraphs", () => {
-    assertReaderParity("intro\n\nalpha\\\nbravo\n\noutro\n", "mixed blocks");
+    assertReaderParity("intro\n\nalpha\\\nbravo\n\noutro\n", "mixed blocks", 1);
   });
 
   it("resolves a range spanning a break to the full span", () => {

@@ -690,7 +690,17 @@ export function initTauriTheme(): void {
     cancelRetry();
     releaseThemeListener();
   };
-  window.addEventListener("pagehide", teardown, { once: true });
+  // `event.persisted` means the page is going into the bfcache and can be restored with
+  // this module instance intact. Tearing down there would be worse than the leak this
+  // change fixes: `_initialized` stays true, so `initTauriTheme` can never re-run, and
+  // the restored page would come back with no theme listener and no poll — no path back
+  // to an OS signal. Only a real unload releases.
+  // Not `{ once: true }`: a persisted hide returns without tearing down, and consuming
+  // the listener there would leave the real unload unhandled.
+  window.addEventListener("pagehide", (event: PageTransitionEvent) => {
+    if (event.persisted) return;
+    teardown();
+  });
   // `disposed` is latched HERE and only here — see the declaration for why routing it
   // through `teardown` (which `pagehide` also calls) would be wrong.
   import.meta.hot?.dispose(() => {

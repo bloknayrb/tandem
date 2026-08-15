@@ -226,11 +226,22 @@ function findXmlTextInParallel(
           charAccum += 1;
         } else {
           // No other inline-leaf element exists in the production schema (Image is
-          // configured without `inline: true`). A third shape appearing here would desync
-          // silently, so surface it rather than guessing a width for it.
-          console.warn(
-            `[positions] unexpected Y.XmlElement child <${child.nodeName}> of textblock ${pmNode.type.name} — flat-offset alignment is undefined for it`,
-          );
+          // configured without `inline: true`), so this should be unreachable. It is not
+          // that the width is undefined — the server DOES define one
+          // (`getElementTextLength`: a separator if there is prior content, plus the
+          // element's own text length) — it is that this reader does not implement that
+          // rule and silently contributes 0 instead. Surface it rather than guessing.
+          //
+          // Gated on the Y/PM node names agreeing, because this branch is selected by the
+          // PM node's `isTextblock` while iterating the Y element's children, and callers
+          // pair the two by index alone. A transient index slip would otherwise report a
+          // schema anomaly when the real fault is the mismatch the recursive branch
+          // already warns about.
+          if (yEl.nodeName === pmNode.type.name) {
+            console.warn(
+              `[positions] unexpected Y.XmlElement child <${child.nodeName}> of textblock ${pmNode.type.name} — this reader counts it as 0, the server counts it as 1 + its text length`,
+            );
+          }
         }
       }
     }

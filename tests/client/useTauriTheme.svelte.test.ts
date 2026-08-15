@@ -817,6 +817,10 @@ describe("setNativeTheme (#992)", () => {
       initTauriTheme();
       // Let the dynamic import() of @tauri-apps/api/window resolve.
       await vi.waitFor(() => expect(themeChangedCapture.current).not.toBeNull());
+      // The mock records the subscribe synchronously, one microtask BEFORE the SUT stores
+      // the handle. Wait for the store, not the subscribe, or this asserts on a handle
+      // that does not exist yet and passes only by grace of waitFor's scheduler.
+      await flushAsync();
 
       expect(unlistenSpy).not.toHaveBeenCalled();
       _resetForTests();
@@ -836,6 +840,7 @@ describe("setNativeTheme (#992)", () => {
         _resetForTests();
         initTauriTheme();
         await vi.waitFor(() => expect(subscribeCount.current).toBe(i + 1));
+        await flushAsync(); // see note above: subscribe is recorded before the handle lands
       }
       _resetForTests();
 
@@ -861,7 +866,14 @@ describe("setNativeTheme (#992)", () => {
       _resetForTests();
       initTauriTheme();
       await vi.waitFor(() => expect(subscribeCount.current).toBe(2));
+      await flushAsync();
       expect(themeChangedCapture.current).not.toBeNull();
+      // These three are the only tests in the file that would otherwise END initialized —
+      // leaving `_initialized` true, a live subscription and a running 3s poll for
+      // anything appended after them. The test at the top of this file exists to assert
+      // that poll does not leak across tests; do not make it a liar by relying on being
+      // last in the file.
+      _resetForTests();
     });
   });
 });

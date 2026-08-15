@@ -60,15 +60,6 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
-  // Chat lives in CTRL_ROOM, not in the per-test fixture document, so a seeded message
-  // outlives `cleanupAllOpenDocuments` and would persist into every later surface's scan
-  // (workers: 1, one shared server). Clearing it keeps each surface scanning the state it
-  // declares — otherwise surface ORDER silently becomes load-bearing.
-  try {
-    await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}/api/chat`, { method: "DELETE" });
-  } catch {
-    // Best-effort: a failure here must not mask the assertion that just ran.
-  }
   await cleanupAllOpenDocuments(mcp);
   await mcp.close();
   cleanupFixtureDir(tmpDir);
@@ -208,6 +199,18 @@ type Surface = {
   name: string;
   /** Leaves the surface visible and ready to scan. */
   open: (page: Page) => Promise<void>;
+  /**
+   * Undo state that `open` created OUTSIDE the per-test fixture document, and that
+   * would therefore survive `cleanupAllOpenDocuments` into later surfaces' scans.
+   *
+   * Deliberately per-surface rather than a blanket `afterEach`: the only thing needing
+   * it today clears chat, which is a DURABLE server-side delete, and the backend
+   * `webServer` runs with `reuseExistingServer: !CI` — so locally this can execute
+   * against a dev server holding the developer's real app data rather than the
+   * throwaway `TANDEM_APP_DATA_DIR` the e2e server boots with. Running it after every
+   * test would multiply that by the whole surface table for no benefit.
+   */
+  close?: (page: Page) => Promise<void>;
 };
 
 /**
@@ -249,9 +252,12 @@ const SURFACES: Surface[] = [
     // unrelated component into the scan and make a failure here ambiguous.
     //
     // NOT covered by this surface: the unread pill. `useChatState` acknowledges every
-    // claude message while the panel is visible, and the panel has to be visible for axe
-    // to see it, so `unreadCount > 0` cannot hold here. The collapsed-rail unread badge
-    // is a separate surface and is still unaudited.
+    // claude message while the chat tab is active, and this surface activates it, so
+    // `unreadCount > 0` cannot hold *here*. That is a property of this surface, NOT an
+    // impossibility — `chatVisible` requires the chat TAB to be active (App.svelte), and
+    // these scans are deliberately unscoped (see the header), so seeding while the
+    // Annotations tab is active would leave the pill unacknowledged and in scope. #1454
+    // asks for that; it is a separate surface and is still unaudited.
     open: async (page) => {
       await bootEditor(page);
       await mcp.callTool("tandem_reply", {
@@ -265,6 +271,18 @@ const SURFACES: Surface[] = [
       await expect(page.locator("[data-testid='clear-chat-btn']")).toBeVisible({
         timeout: 10_000,
       });
+    },
+    // Chat lives in CTRL_ROOM, not in the per-test fixture document, so the seeded
+    // message outlives `cleanupAllOpenDocuments`. Without this the theme loop reruns the
+    // table three times and the SECOND pass's "chat panel" (empty) surface would scan a
+    // panel that still holds this message — i.e. surface order silently becomes
+    // load-bearing and the empty-state audit quietly stops auditing the empty state.
+    close: async () => {
+      try {
+        await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}/api/chat`, { method: "DELETE" });
+      } catch {
+        // Best-effort: a failure here must not mask the assertion that just ran.
+      }
     },
   },
   {
@@ -424,11 +442,17 @@ for (const theme of ["light", "dark", "warm"] as const) {
           (t) => document.documentElement.setAttribute("data-theme", t),
           theme,
         );
-        await surface.open(page);
-        await setTheme(page, theme);
-        await settle(page);
-        const results = await scan(page);
-        expect(results.violations).toEqual([]);
+        try {
+          await surface.open(page);
+          await setTheme(page, theme);
+          await settle(page);
+          const results = await scan(page);
+          expect(results.violations).toEqual([]);
+        } finally {
+          // In `finally` so a failing scan still cleans up — otherwise the first red
+          // surface poisons every later one and the real failure gets buried in noise.
+          await surface.close?.(page);
+        }
       });
     }
   });
