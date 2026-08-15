@@ -2534,6 +2534,7 @@ const shouldShowModelPicker = $derived(
         aria-label="Document outline"
         class:collapsed={!effectiveLeftVisible}
         class:animating={railAnimating.left}
+        class:dragging={dragResizeLeft.dragging}
         class:rail-floating-chrome={railFloat.left || railFloatClosing.left}
         class:floating={railFloat.left}
         class:float-closing={railFloatClosing.left}
@@ -2595,6 +2596,7 @@ const shouldShowModelPicker = $derived(
         aria-label="Annotations and chat"
         class:collapsed={!effectiveRightVisible}
         class:animating={railAnimating.right}
+        class:dragging={dragResizeRight.dragging}
         class:rail-floating-chrome={railFloat.right || railFloatClosing.right || chatReveal}
         class:floating={railFloat.right || chatReveal}
         class:float-closing={railFloatClosing.right}
@@ -3397,6 +3399,21 @@ const shouldShowModelPicker = $derived(
   /* Float→pin: snap the shell to the floated width for the commit frame so the
      panel stays put instead of replaying the 14→full open from collapsed. */
   .rail-shell.pin-snap {
+    transition: none;
+  }
+  /* #1426: the drag writes `width` continuously, and the 360ms ease above animates
+     every one of those writes — so the rendered width trails the width the drag set
+     (measured: inline 375px against an offsetWidth of 325, converging only ~360ms
+     after release), and the strip slides out from under the pointer. #798's ease is
+     for open/close, not for direct manipulation.
+
+     NOTE on the reduce-motion guards above: this rule OUTRANKS the `@media` one
+     (two classes to its one) but LOSES to `:global(body.tandem-reduce-motion)
+     .rail-shell`, which adds an element to two classes. So neither source order nor
+     specificity is what keeps reduce-motion users safe here — all three rules simply
+     declare the same value. Anything other than `transition: none` on this rule would
+     silently override the `@media` guard. */
+  .rail-shell.dragging {
     transition: none;
   }
   /* Width-grow is :hover ONLY — never :focus-within. The peek strip is

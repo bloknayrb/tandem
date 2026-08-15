@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 import path from "path";
+import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -198,6 +199,18 @@ type Surface = {
   name: string;
   /** Leaves the surface visible and ready to scan. */
   open: (page: Page) => Promise<void>;
+  /**
+   * Undo state that `open` created OUTSIDE the per-test fixture document, and that
+   * would therefore survive `cleanupAllOpenDocuments` into later surfaces' scans.
+   *
+   * Deliberately per-surface rather than a blanket `afterEach`: the only thing needing
+   * it today clears chat, which is a DURABLE server-side delete, and the backend
+   * `webServer` runs with `reuseExistingServer: !CI` — so locally this can execute
+   * against a dev server holding the developer's real app data rather than the
+   * throwaway `TANDEM_APP_DATA_DIR` the e2e server boots with. Running it after every
+   * test would multiply that by the whole surface table for no benefit.
+   */
+  close?: (page: Page) => Promise<void>;
 };
 
 /**
@@ -223,6 +236,53 @@ const SURFACES: Surface[] = [
       const tab = page.locator("[data-testid='chat-tab']");
       if ((await tab.count()) > 0) await tab.click();
       await expect(page.locator("[data-testid='chat-panel']")).toBeVisible({ timeout: 5_000 });
+    },
+  },
+  {
+    name: "chat panel (with messages)",
+    // The surface above scans the panel in its EMPTY state, which is a different
+    // surface, not a lesser version of this one — so this is added alongside it rather
+    // than replacing it. Export, Clear and the whole chat header row are gated on
+    // `messages.length > 0` (ChatPanel.svelte), so before #1454 none of them had ever
+    // been in a scanned DOM. Same reasoning as "annotation card" above: an empty
+    // container is not the surface.
+    //
+    // Seeded over MCP rather than through the composer on purpose. A UI send dispatches
+    // `tandem:addressed-ai` and can raise the push-delivery notice, which would drag an
+    // unrelated component into the scan and make a failure here ambiguous.
+    //
+    // NOT covered by this surface: the unread pill. `useChatState` acknowledges every
+    // claude message while the chat tab is active, and this surface activates it, so
+    // `unreadCount > 0` cannot hold *here*. That is a property of this surface, NOT an
+    // impossibility — `chatVisible` requires the chat TAB to be active (App.svelte), and
+    // these scans are deliberately unscoped (see the header), so seeding while the
+    // Annotations tab is active would leave the pill unacknowledged and in scope. #1454
+    // asks for that; it is a separate surface and is still unaudited.
+    open: async (page) => {
+      await bootEditor(page);
+      await mcp.callTool("tandem_reply", {
+        text: "Contrast probe — a reply long enough to wrap across more than one line in the panel, so the message body, its timestamp and the header action row are all laid out and scannable.",
+      });
+      const tab = page.locator("[data-testid='chat-tab']");
+      if ((await tab.count()) > 0) await tab.click();
+      await expect(page.locator("[data-testid='chat-panel']")).toBeVisible({ timeout: 5_000 });
+      // Load-bearing: this is what proves the header row is actually present. Without it
+      // a seed that silently failed would still produce a clean scan of the empty panel.
+      await expect(page.locator("[data-testid='clear-chat-btn']")).toBeVisible({
+        timeout: 10_000,
+      });
+    },
+    // Chat lives in CTRL_ROOM, not in the per-test fixture document, so the seeded
+    // message outlives `cleanupAllOpenDocuments`. Without this the theme loop reruns the
+    // table three times and the SECOND pass's "chat panel" (empty) surface would scan a
+    // panel that still holds this message — i.e. surface order silently becomes
+    // load-bearing and the empty-state audit quietly stops auditing the empty state.
+    close: async () => {
+      try {
+        await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}/api/chat`, { method: "DELETE" });
+      } catch {
+        // Best-effort: a failure here must not mask the assertion that just ran.
+      }
     },
   },
   {
@@ -382,11 +442,17 @@ for (const theme of ["light", "dark", "warm"] as const) {
           (t) => document.documentElement.setAttribute("data-theme", t),
           theme,
         );
-        await surface.open(page);
-        await setTheme(page, theme);
-        await settle(page);
-        const results = await scan(page);
-        expect(results.violations).toEqual([]);
+        try {
+          await surface.open(page);
+          await setTheme(page, theme);
+          await settle(page);
+          const results = await scan(page);
+          expect(results.violations).toEqual([]);
+        } finally {
+          // In `finally` so a failing scan still cleans up — otherwise the first red
+          // surface poisons every later one and the real failure gets buried in noise.
+          await surface.close?.(page);
+        }
       });
     }
   });

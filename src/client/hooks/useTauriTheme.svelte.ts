@@ -88,6 +88,48 @@ let invokePromise: Promise<InvokeFn> | null = null;
 // `initTauriTheme`) so `_resetForTests()` can clear it.
 let pollIntervalHandle: ReturnType<typeof setInterval> | null = null;
 
+// The onThemeChanged unlisten handle. A subscription handle, NOT a push-pipeline
+// fact — so the "belongs as a field on lastPush/lastResolved" rule above does not
+// apply to it. Its sibling is `pollIntervalHandle` directly above: held at module
+// scope for exactly the same reason, that `_resetForTests()` must be able to
+// release it. Plain `let`, never `$state`, per the REQUIRED note above.
+let unlistenTheme: (() => void) | null = null;
+
+// HMR-only latch. Set solely from `import.meta.hot.dispose` — deliberately NOT from
+// `teardown`, which is ALSO the `pagehide` handler: `pagehide` fires on bfcache-eligible
+// navigations where this module survives and the page can be restored, so latching there
+// would poison every later init into unlistening the moment its import resolved. A hot
+// reload, by contrast, guarantees a fresh module instance with this back at `false`.
+let disposed = false;
+
+/** Release the onThemeChanged subscription, if one was ever stored. */
+function releaseThemeListener(): void {
+  if (!unlistenTheme) return;
+  try {
+    unlistenTheme();
+  } catch (e) {
+    console.warn("[useTauriTheme] onThemeChanged unlisten failed:", e);
+  }
+  unlistenTheme = null;
+}
+
+// The `pagehide` listener registered by `initTauriTheme`, held here for the same
+// reason as `unlistenTheme` directly above: `_resetForTests()` and `teardown()`
+// both need to remove exactly the listener THIS generation registered, and a
+// function-local closure would be unreachable from `_resetForTests()` — the same
+// "structurally unobservable" trap the #1413 fix exists to close for
+// `onThemeChanged`. Storing only the module-scope handle (never a name a second
+// call could shadow) is what makes a later generation unable to remove an
+// earlier one's listener by accident.
+let pagehideHandler: ((event: PageTransitionEvent) => void) | null = null;
+
+/** Release the `pagehide` listener, if one was ever registered. */
+function releasePageHideListener(): void {
+  if (!pagehideHandler) return;
+  window.removeEventListener("pagehide", pagehideHandler);
+  pagehideHandler = null;
+}
+
 // Monotonic ticket dispenser, bumped on every `setNativeTheme` call. A push
 // compares its own ticket against THIS counter, never against `lastPush`, and
 // no `seq` field lives on that record. The durable reason: this counter is
@@ -257,6 +299,13 @@ export function _resetForTests(): void {
   retryAttempts = 0;
   cancelRetry();
   stopPoll();
+  releaseThemeListener();
+  releasePageHideListener();
+  // Must be cleared, even though the sibling `useTauriFileDrop._resetForTests` omits the
+  // equivalent line: there the omission is inert because HMR never runs under vitest, but
+  // any test here that drives the dispose path would otherwise leave this latched and
+  // silently turn every subsequent `initTauriTheme` into a no-op subscription.
+  disposed = false;
   if (typeof window !== "undefined") window.__TANDEM_INITIAL_THEME__ = undefined;
 }
 
@@ -549,7 +598,13 @@ export function initTauriTheme(): void {
       console.warn("[useTauriTheme] Tauri API import failed:", e);
     });
 
-  // Subscribe to onThemeChanged events
+  // Subscribe to onThemeChanged events.
+  //
+  // Every failure path below is survivable rather than fatal, which is why they warn
+  // and return instead of escalating: `systemTheme` falls through to
+  // `window.__TANDEM_INITIAL_THEME__` and then to `matchMedia` (useTheme.svelte.ts),
+  // so the app still resolves a theme with no Tauri signal at all. What is lost is
+  // live OS-flip tracking, and the poll below independently covers that.
   import("@tauri-apps/api/window")
     .then(({ getCurrentWindow }) => {
       getCurrentWindow()
@@ -559,6 +614,20 @@ export function initTauriTheme(): void {
           // `pushSeq`. The poll below has a real gap and must capture it
           // before its `invoke`.
           acceptReadback(pushSeq, theme === "dark" ? "dark" : "light");
+        })
+        .then((unlistenFn) => {
+          // HMR fired between `initTauriTheme` and this import resolving: the dispose
+          // hook has already run and will not run again for this generation, so release
+          // immediately rather than storing a handle nothing will ever clear.
+          if (disposed) {
+            try {
+              unlistenFn();
+            } catch (e) {
+              console.warn("[useTauriTheme] onThemeChanged unlisten failed:", e);
+            }
+            return;
+          }
+          unlistenTheme = unlistenFn;
         })
         .catch((e) => {
           console.warn("[useTauriTheme] onThemeChanged subscribe failed:", e);
@@ -628,10 +697,39 @@ export function initTauriTheme(): void {
   // nothing has been pushed yet while the OS surfaces are still showing a
   // theme forced before the reload, until the next real `setNativeTheme`
   // call reconciles it.
+  //
+  // The onThemeChanged subscription is the one thing here that ACCUMULATED across
+  // reloads rather than resetting: its unlisten handle was discarded, so each
+  // generation left a live listener behind, and every survivor kept writing the
+  // process-global `window.__TANDEM_INITIAL_THEME__`. It is now released on dispose
+  // along with the poll and the retry (#1413).
   const teardown = (): void => {
     stopPoll();
     cancelRetry();
+    releaseThemeListener();
+    releasePageHideListener();
   };
-  window.addEventListener("pagehide", teardown, { once: true });
-  import.meta.hot?.dispose(teardown);
+  // `event.persisted` means the page is going into the bfcache and can be restored with
+  // this module instance intact. Tearing down there would be worse than the leak this
+  // change fixes: `_initialized` stays true, so `initTauriTheme` can never re-run, and
+  // the restored page would come back with no theme listener and no poll — no path back
+  // to an OS signal. Only a real unload releases.
+  // Not `{ once: true }`: a persisted hide returns without tearing down, and consuming
+  // the listener there would leave the real unload unhandled. Named and stored in
+  // `pagehideHandler` (rather than an inline arrow, as an earlier version of this fix
+  // had it) so `teardown()` can remove exactly this listener — an unstored listener is
+  // the same leak this whole change exists to close, one function below the fix for it:
+  // every HMR generation would otherwise register a `pagehide` listener nothing ever
+  // removes, on `window`, for the life of the page.
+  pagehideHandler = (event: PageTransitionEvent) => {
+    if (event.persisted) return;
+    teardown();
+  };
+  window.addEventListener("pagehide", pagehideHandler);
+  // `disposed` is latched HERE and only here — see the declaration for why routing it
+  // through `teardown` (which `pagehide` also calls) would be wrong.
+  import.meta.hot?.dispose(() => {
+    disposed = true;
+    teardown();
+  });
 }

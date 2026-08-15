@@ -206,6 +206,11 @@ function findXmlTextInParallel(
       const child = yEl.get(j);
       if (child instanceof Y.XmlText) {
         if (child === absPos.type) {
+          // The clamp bounds a Y-derived quantity with a PM-derived one, which is only
+          // sound while textblockFlatLength(pmNode) === pmNode.content.size — true for
+          // every inline child in this schema (text contributes its length, hardBreak
+          // contributes 1 either way). An inline node whose PM size differs from its flat
+          // length would silently truncate here, and the warn below only guards the Y side.
           return toPmPos(pmStart + Math.min(charAccum + absPos.index, textblockFlatLength(pmNode)));
         }
         charAccum += child.length;
