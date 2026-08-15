@@ -6,6 +6,7 @@ import type { SanitizationEvent } from "../../shared/sanitize";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
+import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship";
 import { annotationToPmRange } from "../positions";
 
 /** Browser DevTools breadcrumb — only forensic trail client-side when sanitize coerces. */
@@ -13,8 +14,20 @@ const devSanitizeWarn = (event: SanitizationEvent): void => {
   console.warn("[sanitize]", event);
 };
 
-/** Apply an annotation's replacement text in the editor */
-function applySuggestion(ann: Annotation, editor: TiptapEditor, ydoc: Y.Doc | null): boolean {
+/**
+ * Apply an annotation's replacement text in the editor.
+ *
+ * Exported for tests only. The hook's own suite drives it through a fully
+ * mocked editor, which cannot observe the transaction — and a mutation that
+ * deletes the authorship tag below passes every assertion there. The real
+ * behaviour is pinned in `tests/client/authorship-stamp.test.ts` against a
+ * live Tiptap editor.
+ */
+export function applySuggestion(
+  ann: Annotation,
+  editor: TiptapEditor,
+  ydoc: Y.Doc | null,
+): boolean {
   if (ann.suggestedText === undefined) return false;
 
   const newText = ann.suggestedText;
@@ -25,17 +38,23 @@ function applySuggestion(ann: Annotation, editor: TiptapEditor, ydoc: Y.Doc | nu
   }
 
   try {
-    editor
-      .chain()
-      .focus()
-      .deleteRange({ from: resolved.from, to: resolved.to })
-      .insertContentAt(resolved.from, newText)
-      .run();
+    return (
+      editor
+        .chain()
+        .focus()
+        // Claude wrote this text; without the tag `Authorship.onTransaction`
+        // stamps it as the user's, which is #1388. The tag must live INSIDE the
+        // chain — a chain batches every step into one transaction, and a
+        // separate dispatch would tag a different one.
+        .setMeta(AUTHORSHIP_ORIGIN_META, "claude")
+        .deleteRange({ from: resolved.from, to: resolved.to })
+        .insertContentAt(resolved.from, newText)
+        .run()
+    );
   } catch (err) {
     console.error("[SidePanel] Editor mutation failed for suggestion", ann.id, err);
     return false;
   }
-  return true;
 }
 
 export interface UseAnnotationReviewParams {
@@ -186,6 +205,14 @@ export function useAnnotationReview({
             scheduleRemoval(id);
             return false;
           }
+          // Deliberately NOT tagged with AUTHORSHIP_ORIGIN_META, so this falls
+          // to the `"user"` default. `textSnapshot` is the document's PRIOR
+          // content, whose author this site does not know: usually the user,
+          // but Claude if an earlier `tandem_edit` wrote it and then suggested
+          // a revision on top. The correct answer is to restore the authorship
+          // entry the accept reaped, which needs the durable/`relRange` work in
+          // #1471 — until then the common case is right and the rare one is
+          // #1388's inversion in miniature. Tracked there, not silently left.
           editor
             .chain()
             .focus()

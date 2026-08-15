@@ -2062,7 +2062,7 @@ async function exportChatToScratchpad(): Promise<void> {
 function insertChatMessage(message: ChatMessage): boolean {
   const targetEditor = editor;
   if (!chatCanInsert || !targetEditor) return false;
-  insertChatMarkdown(targetEditor, message.text);
+  insertChatMarkdown(targetEditor, message.text, message.author);
   return true;
 }
 

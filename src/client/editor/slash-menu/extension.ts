@@ -1,5 +1,6 @@
 import { Extension, type Editor as TiptapEditor } from "@tiptap/core";
 import { type EditorState, Plugin, PluginKey, type Transaction } from "@tiptap/pm/state";
+import { ySyncPluginKey } from "y-prosemirror";
 import {
   filterSlashCommands,
   findSlashCommandMatch,
@@ -45,13 +46,17 @@ function activeKey(active: ActiveSlashCommand): string {
  * Used to gate slash-menu *opening* (#998): a bare caret move/click that merely
  * lands after a pre-existing "/" must NOT re-open the menu -- only typing the
  * "/" (or query chars while already open) may. Mirrors the local-vs-remote
- * discrimination in `authorship.ts` (`y-sync$` meta marks remote/MCP syncs).
+ * discrimination in `authorship.ts` — y-prosemirror tags remote/MCP syncs with
+ * `ySyncPluginKey`, which is the same thing the literal `"y-sync$"` used to
+ * name here (a `PluginKey` stringifies to `name + "$"`). The imported key is
+ * the one both sites now use; the literal was only correct for as long as
+ * y-prosemirror's remained the FIRST `PluginKey("y-sync")` constructed.
  */
 function isTypedInsertionAtCaret(tr: Transaction): boolean {
   // Selection-only transactions (click, arrow keys) never open the menu.
   if (!tr.docChanged) return false;
   // Remote collaborative / MCP-driven syncs are not local typing.
-  if (tr.getMeta("y-sync$")) return false;
+  if (tr.getMeta(ySyncPluginKey)) return false;
   // Clipboard paste / drag-drop are explicit UI events, not typing.
   const uiEvent = tr.getMeta("uiEvent");
   if (uiEvent === "paste" || uiEvent === "drop" || tr.getMeta("paste")) return false;
