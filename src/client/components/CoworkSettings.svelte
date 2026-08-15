@@ -139,6 +139,15 @@ const enableBoxChecked = $derived(
   (coworkState.status?.enabled ?? false) || confirming === "enable",
 );
 
+/**
+ * The LAN-IP override checkbox's rendered state, in ONE place — same
+ * `resyncCheckbox` latch hazard as {@link enableBoxChecked}, and the same fix:
+ * the resync call and the `checked=` binding must read the identical
+ * expression, not two copies that happen to agree today only because
+ * `useLanIpOverride` is a non-optional `boolean`.
+ */
+const lanIpOverrideChecked = $derived(coworkState.status?.useLanIpOverride ?? false);
+
 async function handleToggleOff(box: HTMLInputElement): Promise<void> {
   // Gate the resync on the READ-BACK, not on the write. `refetch()` swallows
   // its own failure into `coworkState.error`, so after a successful toggle
@@ -207,7 +216,7 @@ async function handleToggleLanIp(box: HTMLInputElement): Promise<void> {
   }, "Failed to update LAN-IP override");
   // Same hazard as the Enable toggle, same read-back gate — and with no confirm
   // banner to mask it, the snap-back is this row's entire signal.
-  if (readBack) resyncCheckbox(box, coworkState.status?.useLanIpOverride ?? false);
+  if (readBack) resyncCheckbox(box, lanIpOverrideChecked);
 }
 
 function workspaceRowStyle(ws: WorkspaceStatus): string {
@@ -388,7 +397,7 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
             class="cs-accent-cbx"
             data-testid="cowork-lan-ip-override-checkbox"
             type="checkbox"
-            checked={s.useLanIpOverride}
+            checked={lanIpOverrideChecked}
             disabled={busy}
             onchange={(e) => void handleToggleLanIp(e.currentTarget)}
           />
