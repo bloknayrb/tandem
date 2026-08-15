@@ -162,7 +162,11 @@ describe("useTauriTheme", () => {
     const { initTauriTheme, _resetForTests } = await import(
       "../../src/client/hooks/useTauriTheme.svelte.js"
     );
-    vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      __TANDEM_INITIAL_THEME__: undefined,
+    });
 
     initTauriTheme();
     await flushAsync();
@@ -193,6 +197,7 @@ describe("useTauriTheme", () => {
     vi.stubGlobal("window", {
       __TANDEM_INITIAL_THEME__: "light" as "light" | "dark",
       addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
       hasFocus: () => true,
     });
 
@@ -227,7 +232,7 @@ describe("useTauriTheme", () => {
       );
       _resetForTests();
       vi.stubGlobal("document", { hasFocus: () => true });
-      vi.stubGlobal("window", { addEventListener: vi.fn() });
+      vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
 
       initTauriTheme();
       await vi.advanceTimersByTimeAsync(0); // let the initial get_app_theme settle
@@ -391,7 +396,11 @@ describe("setNativeTheme (#992)", () => {
     const { setNativeTheme, initTauriTheme } = await import(
       "../../src/client/hooks/useTauriTheme.svelte.js"
     );
-    vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      __TANDEM_INITIAL_THEME__: undefined,
+    });
     invoke.mockImplementation((cmd: string) => {
       if (cmd === "get_app_theme") return Promise.resolve("light");
       return Promise.resolve({ overrideActive: true, osTheme: null });
@@ -446,6 +455,7 @@ describe("setNativeTheme (#992)", () => {
     );
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
       __TANDEM_INITIAL_THEME__: undefined,
     });
     invoke.mockImplementation((cmd: string) => {
@@ -494,7 +504,11 @@ describe("setNativeTheme (#992)", () => {
       );
       _resetForTests();
       vi.stubGlobal("document", { hasFocus: () => true });
-      vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+      vi.stubGlobal("window", {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        __TANDEM_INITIAL_THEME__: undefined,
+      });
 
       invoke.mockImplementation((cmd: string) => {
         if (cmd === "get_app_theme") return Promise.resolve("light");
@@ -550,7 +564,11 @@ describe("setNativeTheme (#992)", () => {
     const { setNativeTheme, initTauriTheme } = await import(
       "../../src/client/hooks/useTauriTheme.svelte.js"
     );
-    vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      __TANDEM_INITIAL_THEME__: undefined,
+    });
     // hasFocus false so no poll tick can confound the assertions below.
     vi.stubGlobal("document", { hasFocus: () => false });
     // invoke default comes from beforeEach; the two commands in play behave identically.
@@ -599,7 +617,11 @@ describe("setNativeTheme (#992)", () => {
       const { setNativeTheme, initTauriTheme, _resetForTests } = await import(
         "../../src/client/hooks/useTauriTheme.svelte.js"
       );
-      vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+      vi.stubGlobal("window", {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        __TANDEM_INITIAL_THEME__: undefined,
+      });
       vi.stubGlobal("document", { hasFocus: () => false });
       // invoke default comes from beforeEach; the two commands in play behave identically.
 
@@ -655,7 +677,11 @@ describe("setNativeTheme (#992)", () => {
     const { setNativeTheme, initTauriTheme } = await import(
       "../../src/client/hooks/useTauriTheme.svelte.js"
     );
-    vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      __TANDEM_INITIAL_THEME__: undefined,
+    });
     vi.stubGlobal("document", { hasFocus: () => false });
     invoke.mockImplementation((cmd: string) =>
       cmd === "get_app_theme" ? Promise.resolve("dark") : new Promise(() => {}),
@@ -685,7 +711,11 @@ describe("setNativeTheme (#992)", () => {
       const { setNativeTheme, initTauriTheme, _resetForTests } = await import(
         "../../src/client/hooks/useTauriTheme.svelte.js"
       );
-      vi.stubGlobal("window", { addEventListener: vi.fn(), __TANDEM_INITIAL_THEME__: undefined });
+      vi.stubGlobal("window", {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        __TANDEM_INITIAL_THEME__: undefined,
+      });
       vi.stubGlobal("document", { hasFocus: () => false });
 
       invoke.mockImplementation((cmd: string) =>
@@ -873,6 +903,105 @@ describe("setNativeTheme (#992)", () => {
       // anything appended after them. The test at the top of this file exists to assert
       // that poll does not leak across tests; do not make it a liar by relying on being
       // last in the file.
+      _resetForTests();
+    });
+  });
+
+  // Regression guard: the fix for #1413 (above) introduced the SAME leak class one
+  // function below it. The `pagehide` listener that replaced the old `{ once: true }`
+  // registration was, for a time, an inline arrow function stored nowhere and never
+  // removed — every HMR generation left a permanent listener on the real `window`.
+  // These tests use happy-dom's real `window` (no `vi.stubGlobal` here) and spy on its
+  // real `addEventListener`/`removeEventListener`, so a listener that is registered but
+  // never removed is observable the same way the #1413 tests make `unlistenSpy` observable.
+  describe("pagehide listener lifecycle", () => {
+    it("removes the pagehide listener on _resetForTests()", async () => {
+      isTauri.mockReturnValue(true);
+      vi.resetModules();
+      const addSpy = vi.spyOn(window, "addEventListener");
+      const removeSpy = vi.spyOn(window, "removeEventListener");
+      const { initTauriTheme, _resetForTests } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      _resetForTests();
+      addSpy.mockClear();
+      removeSpy.mockClear();
+
+      initTauriTheme();
+      expect(addSpy).toHaveBeenCalledWith("pagehide", expect.any(Function));
+      expect(removeSpy).not.toHaveBeenCalledWith("pagehide", expect.any(Function));
+
+      _resetForTests();
+      expect(removeSpy).toHaveBeenCalledWith("pagehide", expect.any(Function));
+
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    });
+
+    it("does not accumulate pagehide listeners across reset + re-init", async () => {
+      isTauri.mockReturnValue(true);
+      vi.resetModules();
+      const addSpy = vi.spyOn(window, "addEventListener");
+      const removeSpy = vi.spyOn(window, "removeEventListener");
+      const { initTauriTheme, _resetForTests } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      _resetForTests();
+      addSpy.mockClear();
+      removeSpy.mockClear();
+
+      // Three generations, exactly as the #1413 accumulation test above does for
+      // onThemeChanged. Before this fix, only `addEventListener` calls would show here —
+      // three registrations and zero removals, i.e. three permanent listeners. Each loop
+      // iteration's leading `_resetForTests()` releases the PRIOR iteration's listener (a
+      // no-op on iteration 0, since nothing is registered yet), and the trailing reset
+      // after the loop releases the third: three `initTauriTheme()` calls, three releases.
+      for (let i = 0; i < 3; i++) {
+        _resetForTests();
+        initTauriTheme();
+      }
+      _resetForTests();
+
+      const pagehideAdds = addSpy.mock.calls.filter((c) => c[0] === "pagehide");
+      const pagehideRemoves = removeSpy.mock.calls.filter((c) => c[0] === "pagehide");
+      expect(pagehideAdds).toHaveLength(3); // one per initTauriTheme() call in the loop
+      expect(pagehideRemoves).toHaveLength(3); // every registered generation must be released
+
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    });
+
+    it("a persisted (bfcache) pagehide does not remove the listener; a real one does", async () => {
+      // The whole reason this listener is not `{ once: true }`: a bfcache-eligible hide
+      // must leave the module subscribed so a restored page still has a path back to a
+      // real unload. Invoking the captured handler directly (rather than dispatching a
+      // real `pagehide` event, which some describe-block-local window stubs elsewhere in
+      // this file leave unable to do) exercises exactly the branch `initTauriTheme` reads
+      // — `event.persisted` — without depending on happy-dom's event plumbing surviving
+      // whatever the previous test in this file left `window` as.
+      isTauri.mockReturnValue(true);
+      vi.resetModules();
+      const addSpy = vi.spyOn(window, "addEventListener");
+      const removeSpy = vi.spyOn(window, "removeEventListener");
+      const { initTauriTheme, _resetForTests } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      _resetForTests();
+      initTauriTheme();
+      const handler = addSpy.mock.calls.find((c) => c[0] === "pagehide")?.[1] as (e: {
+        persisted: boolean;
+      }) => void;
+      expect(handler).toBeTypeOf("function");
+      removeSpy.mockClear();
+
+      handler({ persisted: true });
+      expect(removeSpy).not.toHaveBeenCalledWith("pagehide", expect.any(Function));
+
+      handler({ persisted: false });
+      expect(removeSpy).toHaveBeenCalledWith("pagehide", expect.any(Function));
+
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
       _resetForTests();
     });
   });

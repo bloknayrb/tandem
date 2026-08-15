@@ -113,6 +113,23 @@ function releaseThemeListener(): void {
   unlistenTheme = null;
 }
 
+// The `pagehide` listener registered by `initTauriTheme`, held here for the same
+// reason as `unlistenTheme` directly above: `_resetForTests()` and `teardown()`
+// both need to remove exactly the listener THIS generation registered, and a
+// function-local closure would be unreachable from `_resetForTests()` — the same
+// "structurally unobservable" trap the #1413 fix exists to close for
+// `onThemeChanged`. Storing only the module-scope handle (never a name a second
+// call could shadow) is what makes a later generation unable to remove an
+// earlier one's listener by accident.
+let pagehideHandler: ((event: PageTransitionEvent) => void) | null = null;
+
+/** Release the `pagehide` listener, if one was ever registered. */
+function releasePageHideListener(): void {
+  if (!pagehideHandler) return;
+  window.removeEventListener("pagehide", pagehideHandler);
+  pagehideHandler = null;
+}
+
 // Monotonic ticket dispenser, bumped on every `setNativeTheme` call. A push
 // compares its own ticket against THIS counter, never against `lastPush`, and
 // no `seq` field lives on that record. The durable reason: this counter is
@@ -283,6 +300,7 @@ export function _resetForTests(): void {
   cancelRetry();
   stopPoll();
   releaseThemeListener();
+  releasePageHideListener();
   // Must be cleared, even though the sibling `useTauriFileDrop._resetForTests` omits the
   // equivalent line: there the omission is inert because HMR never runs under vitest, but
   // any test here that drives the dispose path would otherwise leave this latched and
@@ -689,6 +707,7 @@ export function initTauriTheme(): void {
     stopPoll();
     cancelRetry();
     releaseThemeListener();
+    releasePageHideListener();
   };
   // `event.persisted` means the page is going into the bfcache and can be restored with
   // this module instance intact. Tearing down there would be worse than the leak this
@@ -696,11 +715,17 @@ export function initTauriTheme(): void {
   // the restored page would come back with no theme listener and no poll — no path back
   // to an OS signal. Only a real unload releases.
   // Not `{ once: true }`: a persisted hide returns without tearing down, and consuming
-  // the listener there would leave the real unload unhandled.
-  window.addEventListener("pagehide", (event: PageTransitionEvent) => {
+  // the listener there would leave the real unload unhandled. Named and stored in
+  // `pagehideHandler` (rather than an inline arrow, as an earlier version of this fix
+  // had it) so `teardown()` can remove exactly this listener — an unstored listener is
+  // the same leak this whole change exists to close, one function below the fix for it:
+  // every HMR generation would otherwise register a `pagehide` listener nothing ever
+  // removes, on `window`, for the life of the page.
+  pagehideHandler = (event: PageTransitionEvent) => {
     if (event.persisted) return;
     teardown();
-  });
+  };
+  window.addEventListener("pagehide", pagehideHandler);
   // `disposed` is latched HERE and only here — see the declaration for why routing it
   // through `teardown` (which `pagehide` also calls) would be wrong.
   import.meta.hot?.dispose(() => {
