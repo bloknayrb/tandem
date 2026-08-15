@@ -1,7 +1,7 @@
 import os from "node:os";
 import type { Request, Response } from "express";
 import type { DoctorReport, RunDoctorOptions } from "../../../cli/doctor.js";
-import { runDoctor, summarizeDoctorResults } from "../../../cli/doctor.js";
+import { CWD_DEPENDENT_CHECKS, runDoctor, summarizeDoctorResults } from "../../../cli/doctor.js";
 import type { RedactRoot } from "../../../shared/redact-user-paths.js";
 import { diagnosticsRedactRoots, redactUserPaths } from "../../../shared/redact-user-paths.js";
 import { isLoopback } from "../../auth/middleware.js";
@@ -9,27 +9,34 @@ import { collectHostInfo } from "../host-info.js";
 import type { Handler } from "./_shared.js";
 
 /**
- * Checks that read `process.cwd()` and only make sense in a dev-repo checkout.
- * For a Tauri/npm-global user the server's cwd is arbitrary, so these would
- * FAIL on every field report and bury the real signal under two false
- * failures. `tandem doctor` (CLI) keeps them — there the cwd is meaningful.
+ * Checks that read `process.cwd()`, which for a Tauri/npm-global user is an
+ * arbitrary directory. `tandem doctor` (CLI) keeps them — there the cwd is
+ * meaningful; a field report strips them.
  *
- * `npm-staleness`, `orphaned-vite` and `dev-repo` self-gate on
- * `probeTandemEditorRepo(cwd) === "yes"` and so are usually absent here
- * anyway — but that is NOT a substitute for listing them. The self-gate is a
- * property of the cwd, not of the caller: an end user whose cwd happens to be
- * a tandem-editor checkout (or, for `dev-repo`, merely holds an unreadable
- * package.json) would otherwise have cwd-dependent findings recomputed into
- * /api/diagnostics and Copy Diagnostics. This list is the contract; the gate
- * is an optimization.
+ * This is now noise-suppression, not failure-suppression. It used to be the
+ * latter: `mcp-json` and `node-modules` both FAILed here and buried the real
+ * signal under two false failures. `mcp-json` stopped being able to fail in
+ * #1404 and `node-modules` followed it, so no member can FAIL from an
+ * arbitrary cwd today (short of a check crashing, which `Recorder.check`
+ * records as a fail under the check's own name). Do NOT read that as "the
+ * filter can go": `dev-repo` still warns, and `mcp-json` still warns down
+ * seven paths about a hand-written `.mcp.json` that belongs to whatever
+ * project the server's cwd happens to be — plus the skip lines, which are cwd
+ * noise in a report where cwd is meaningless.
+ *
+ * All four of `npm-staleness`, `orphaned-vite`, `dev-repo` and `node-modules`
+ * self-gate on `probeTandemEditorRepo(cwd)` — the first three by vanishing,
+ * `node-modules` by emitting a skip. That is NOT a substitute for listing
+ * them. The self-gate is a property of the cwd, not of the caller: an end user
+ * whose cwd happens to be a tandem-editor checkout (or, for `dev-repo`, merely
+ * holds an unreadable package.json) would otherwise have cwd-dependent
+ * findings recomputed into /api/diagnostics and Copy Diagnostics. This list is
+ * the contract; the gate is an optimization.
+ *
+ * The membership itself lives in `src/cli/doctor.ts` beside the `cwd` reads it
+ * describes, so a new cwd-dependent check trips over it there.
  */
-const DEV_REPO_CHECKS = new Set([
-  "node-modules",
-  "mcp-json",
-  "npm-staleness",
-  "orphaned-vite",
-  "dev-repo",
-]);
+const DEV_REPO_CHECKS = new Set<string>(CWD_DEPENDENT_CHECKS);
 
 export interface DiagnosticsHandlerDeps {
   /** Running app version string (APP_VERSION from server.ts). */
@@ -45,7 +52,7 @@ export interface DiagnosticsHandlerDeps {
   collect?: (opts: RunDoctorOptions) => Promise<DoctorReport>;
 }
 
-/** Drop dev-repo-only checks and recompute the report's aggregate fields. */
+/** Drop the cwd-dependent checks and recompute the report's aggregate fields. */
 export function filterDevRepoChecks(report: DoctorReport): DoctorReport {
   const results = report.results.filter((res) => !DEV_REPO_CHECKS.has(res.check));
   const failures = results.filter((res) => res.status === "fail").length;

@@ -7,7 +7,6 @@ Common first-launch and runtime issues, with diagnostic steps.
 If you're running from a source checkout, `npm run doctor` checks the most common setup issues at once:
 
 - Node.js ≥ 22 installed
-- `node_modules/` present
 - `.mcp.json` valid (both `tandem` and `tandem-channel` entries)
 - `~/.claude.json` MCP registration (when present)
 - Claude Desktop's own config file, and whether the entry Tandem wrote there has gone stale
@@ -19,13 +18,15 @@ If you're running from a source checkout, `npm run doctor` checks the most commo
 - `/api/events` SSE endpoint responds with `text/event-stream`
 - Annotation store readable; schema version, corruption state, lock status
 
-Three more run only in a source checkout: whether `npm install` is stale against
-`package-lock.json`, whether an orphaned Vite process is holding a port, and — if `package.json`
-can't be read — a warning that the other two were skipped rather than passed. The last two
+Four more are meaningful only in a source checkout: whether `node_modules/` is present, whether
+`npm install` is stale against `package-lock.json`, whether an orphaned Vite process is holding a
+port, and — if `package.json` can't be read — a warning that the other three were skipped rather
+than passed. Outside a checkout the `node_modules/` check reports as skipped (it would otherwise
+tell you to run `npm install` in whatever directory you happened to be standing in). The last two
 checks (`/health`, SSE) are conditional: they run only once the port probe finds the server up,
 so a report that stops early is reporting a down server, not a passing one.
 
-In the editor — desktop app or browser — **Settings → About → Copy Diagnostics** runs the same checks in-app, minus those five source-checkout-only items — see [Sharing diagnostics](#sharing-diagnostics). Or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
+In the editor — desktop app or browser — **Settings → About → Copy Diagnostics** runs the same checks in-app, minus the five source-checkout-only items (the four above plus the `.mcp.json` check) — see [Sharing diagnostics](#sharing-diagnostics). Or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
 
 ## Windows SmartScreen warning
 

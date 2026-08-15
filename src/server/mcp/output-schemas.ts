@@ -279,7 +279,7 @@ const doctorResultSchema = z.object({
 });
 
 /**
- * The filtered `DoctorReport` (dev-repo-only checks dropped) plus the runtime
+ * The filtered `DoctorReport` (cwd-dependent checks dropped) plus the runtime
  * environment fields the /api/diagnostics route also returns. Keep in lockstep
  * with the handler payload in `diagnostics.ts`.
  */

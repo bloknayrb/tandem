@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DoctorReport, DoctorResult } from "../../src/cli/doctor.js";
+import { CWD_DEPENDENT_CHECKS } from "../../src/cli/doctor.js";
 import {
   filterDevRepoChecks,
   makeDiagnosticsHandler,
@@ -10,14 +11,19 @@ import {
 /**
  * Unit tests for GET /api/diagnostics. The collector is injected so no real
  * port probes / filesystem reads happen; what's under test is the route's
- * contract: loopback-only gate, dev-repo check filtering with recomputed
+ * contract: loopback-only gate, cwd-dependent check filtering with recomputed
  * aggregates, generic 500 on collector crash, and single-flight collapsing
  * of concurrent requests (the collector self-probes the server's own ports,
  * so request bursts must not amplify into probe bursts).
  */
 
-function result(check: string, status: DoctorResult["status"], message = "msg"): DoctorResult {
-  return { check, status, message };
+function result(
+  check: string,
+  status: DoctorResult["status"],
+  message = "msg",
+  data?: DoctorResult["data"],
+): DoctorResult {
+  return data ? { check, status, message, data } : { check, status, message };
 }
 
 function makeReport(results: DoctorResult[]): DoctorReport {
@@ -278,9 +284,11 @@ describe("GET /api/diagnostics — home-path redaction", () => {
 
 describe("GET /api/diagnostics — dev-repo check filtering", () => {
   it("drops node-modules and mcp-json results and recomputes aggregates", async () => {
-    // A Tauri/npm-global user's server cwd is arbitrary — these two checks
-    // would FAIL on every field report. The route must not let them poison
-    // ok/failures/summary.
+    // A Tauri/npm-global user's server cwd is arbitrary, so these two checks
+    // answer a question about someone else's directory. Neither can FAIL from
+    // such a cwd any more (mcp-json since #1404, node-modules since its
+    // sibling fix) — but the route must still not let a report that carries
+    // them poison ok/failures/summary, which is what these fixtures pin.
     const collect = vi.fn(async () =>
       makeReport([
         result("node-version", "pass"),
@@ -313,16 +321,16 @@ describe("GET /api/diagnostics — dev-repo check filtering", () => {
   });
 
   // ── Finding 13 ──
-  // These three read process.cwd(). They self-gate on the cwd being a
+  // Every member reads process.cwd(). They self-gate on the cwd being a
   // tandem-editor checkout, but the gate is a property of the CWD, not of the
   // caller: an end user whose cwd happens to be a checkout — or, for
   // dev-repo, merely holds an unreadable package.json — would otherwise have
   // cwd-dependent findings recomputed into /api/diagnostics and Copy
-  // Diagnostics. The self-gate is an optimization; this list is the contract.
+  // Diagnostics. The self-gate is an optimization; the constant is the
+  // contract — so this iterates the constant rather than a transcription of
+  // it, and a newly added cwd-dependent check arrives here already covered.
   it.each([
-    "npm-staleness",
-    "orphaned-vite",
-    "dev-repo",
+    ...CWD_DEPENDENT_CHECKS,
   ])("strips the cwd-dependent %s check from field reports", (check) => {
     const filtered = filterDevRepoChecks(
       makeReport([result("node-version", "pass"), result(check, "warn")]),
@@ -330,6 +338,24 @@ describe("GET /api/diagnostics — dev-repo check filtering", () => {
     expect(filtered.results.map((r) => r.check)).toEqual(["node-version"]);
     expect(filtered.warnings).toBe(0);
     expect(filtered.summary).toBe("All checks passed. Tandem is ready.");
+  });
+
+  it("strips the node-modules SKIP, which is the shape a real field report carries", () => {
+    // The others vanish from a non-checkout cwd; node-modules is the one that
+    // still emits — as a skip-shaped pass — so it is the only member the
+    // filter meets in production. A pass carries no failure or warning to
+    // recompute, which is exactly why dropping it has to be asserted
+    // separately: the aggregate assertions above would pass on a no-op filter.
+    const filtered = filterDevRepoChecks(
+      makeReport([
+        result("node-version", "pass"),
+        result("node-modules", "pass", "skipped — the current directory is not the checkout", {
+          skipped: true,
+          reason: "not-checkout",
+        }),
+      ]),
+    );
+    expect(filtered.results.map((r) => r.check)).toEqual(["node-version"]);
   });
 });
 

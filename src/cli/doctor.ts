@@ -186,8 +186,46 @@ function checkNodeVersion(r: Recorder): void {
 
 // ── Check: node_modules exists ──────────────────────────────────────
 
-function checkNodeModules(r: Recorder): void {
-  if (existsSync(join(process.cwd(), "node_modules"))) {
+/**
+ * `node_modules/` in the CWD is a finding only inside the dev checkout.
+ *
+ * This used to run ungated, so `tandem doctor` on a global install FAILed from
+ * every ordinary directory and prescribed `npm install` there — which is worse
+ * than the `.mcp.json` remedy that motivated #1404. That one merely could not
+ * work; this one SUCCEEDS at the wrong thing, writing a `node_modules/` and a
+ * `package-lock.json` into whatever folder the user happened to be standing in.
+ *
+ * Skip-shaped pass rather than a silent gate, following {@link checkMcpJson}
+ * and {@link evaluateAbsentChannelEntry} — including their rule that guidance
+ * goes in the MESSAGE, never `fix`.
+ *
+ * The probe is tri-state and both non-`"yes"` arms skip, but they must not say
+ * the same thing. `"unreadable"` means a `package.json` we could not parse:
+ * asserting "this is not the checkout" there would contradict the `dev-repo`
+ * warning printed a few lines later, and the pass would be the false half.
+ * Deliberately NOT a finding either — an end user whose own project has a
+ * corrupt `package.json` would be back to the FAIL this fix removes, and for
+ * the case where it *is* the checkout, the `dev-repo` warn already carries the
+ * actionable remedy.
+ */
+function checkNodeModules(r: Recorder, repo: RepoProbe, cwd: string): void {
+  if (repo !== "yes") {
+    // `reason` so a --json consumer can tell the two arms apart without
+    // string-matching prose, as `evaluateNpmStaleness` (four arms) and
+    // `evaluateOrphanedVite` (two) already do for their own skips.
+    const unreadable = repo === "unreadable";
+    recordEvaluation(r, {
+      status: "skip",
+      message: unreadable
+        ? "cannot tell whether this directory is the tandem-editor checkout (package.json " +
+          "unreadable), and node_modules/ is only a finding inside it"
+        : "the current directory is not the tandem-editor checkout, so its node_modules/ is " +
+          "not Tandem's to check — a global install keeps its dependencies in the npm prefix",
+      data: { reason: unreadable ? "package-json-unreadable" : "not-checkout" },
+    });
+    return;
+  }
+  if (existsSync(join(cwd, "node_modules"))) {
     r.pass("node_modules/ exists");
   } else {
     r.fail("node_modules/ not found", "npm install");
@@ -201,6 +239,13 @@ function checkNodeModules(r: Recorder): void {
 // where `package.json` belongs to someone else's project — so both checks
 // gate on the cwd actually being the tandem-editor repo and skip SILENTLY
 // otherwise (not warn: the absence of a dev checkout is not a finding).
+//
+// Silence is NOT the rule for a new checkout-scoped check, only the rule for
+// these two. `checkNodeModules` gates on the same probe and emits a VISIBLE
+// skip, because it shipped with the original `tandem doctor` subcommand and a
+// `--json` consumer has always seen its key — a key that vanishes is a
+// breaking change, while these two were born gated and never had one. Pick by
+// that history, not by symmetry with whichever neighbour you read first.
 
 /**
  * Record an {@link EvalOutcome} on the recorder, mapping `"skip"` onto the
@@ -225,10 +270,39 @@ function recordEvaluation(r: Recorder, result: EvalOutcome | null): void {
  *
  * Tri-state on purpose. A single boolean made "this is not the repo" and "the
  * repo's package.json is corrupt" the same silent answer — and the corrupt
- * case is the one worth reporting, since it also silently disables the two
- * dev-repo checks below.
+ * case is the one worth reporting, since it also disables the checkout-scoped
+ * checks below. How many of those there are is deliberately not stated here:
+ * that count has already drifted between copies, and it is not `RepoProbe`'s
+ * business.
  */
 export type RepoProbe = "yes" | "no" | "unreadable";
+
+/**
+ * Check names whose answer depends on `process.cwd()`.
+ *
+ * Lives in this module rather than in the diagnostics route so that the list
+ * and the checks it names are added in one place. There is exactly ONE
+ * `process.cwd()` read left in this file — {@link runDoctor}'s, threaded into
+ * every check that needs it — so "which checks are cwd-scoped" is answerable
+ * by following that value rather than by grepping.
+ *
+ * `filterDevRepoChecks` (`server/mcp/routes/diagnostics.ts`) builds its Set
+ * from this and strips these from `/api/diagnostics`; `tandem_diagnostics`
+ * reaches the same filter through that function. Field reports run with an
+ * arbitrary server cwd, where these answers describe someone else's directory.
+ *
+ * NOT the same set as "checks gated on {@link probeTandemEditorRepo}":
+ * `mcp-json` deliberately keeps inspecting a hand-written `.mcp.json` in a
+ * user's own project (see {@link checkMcpJson}), so it is cwd-dependent
+ * without being dev-gated. Deriving one set from the other would be a bug.
+ */
+export const CWD_DEPENDENT_CHECKS = [
+  "node-modules",
+  "dev-repo",
+  "npm-staleness",
+  "mcp-json",
+  "orphaned-vite",
+] as const;
 
 /** Classify `dir/package.json`: the tandem-editor repo, not it, or broken. */
 export function probeTandemEditorRepo(dir: string): RepoProbe {
@@ -585,8 +659,8 @@ function checkNpmStaleness(r: Recorder, repoDir: string): void {
  * present-but-broken file stays a finding, but a `warn` — it must not fail a
  * run whose user-level registration is healthy.
  */
-function checkMcpJson(r: Recorder): void {
-  const mcpPath = join(process.cwd(), ".mcp.json");
+function checkMcpJson(r: Recorder, cwd: string): void {
+  const mcpPath = join(cwd, ".mcp.json");
   // Shared by every present-but-broken branch below, replacing the old
   // `git checkout` remedy. Both halves are real: `.mcp.json.example` ships as
   // the hand-copy template, and deleting the file is safe because the
@@ -1945,7 +2019,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   const mcpPort = opts.mcpPort ?? DEFAULT_MCP_PORT;
   const vitePort = opts.vitePort ?? VITE_DEV_PORT;
   const r = new Recorder();
-  // Resolve the dev-repo gate once — both gated checks share the answer.
+  // Resolve the dev-repo probe once — every cwd-scoped check shares the answer.
   const cwd = process.cwd();
   const repo = probeTandemEditorRepo(cwd);
   const devRepo = repo === "yes";
@@ -1958,16 +2032,18 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
     : "Launch the Tandem desktop app, or run `tandem` in a terminal";
 
   await r.check("node-version", () => checkNodeVersion(r));
-  await r.check("node-modules", () => checkNodeModules(r));
+  await r.check("node-modules", () => checkNodeModules(r, repo, cwd));
   if (repo === "unreadable") {
-    // A package.json we cannot read also silently disables both dev-repo
-    // checks below — so say so instead of skipping as if this were simply
-    // someone else's directory. This check is in DEV_REPO_CHECKS: it is
+    // A package.json we cannot read also disables npm-staleness and
+    // orphaned-Vite below, and turns the node-modules check above into a skip
+    // — so say so instead of staying quiet as if this were simply someone
+    // else's directory. This check is in {@link CWD_DEPENDENT_CHECKS}: it is
     // cwd-dependent, so /api/diagnostics strips it from field reports.
     await r.check("dev-repo", () =>
       r.warn(
         "package.json in the current directory could not be read — if this is the " +
-          "tandem-editor checkout, the npm-staleness and orphaned-Vite checks are being skipped",
+          "tandem-editor checkout, the node_modules, npm-staleness and orphaned-Vite checks " +
+          "are being skipped",
         "Check for merge-conflict markers or a truncated file: git checkout package.json",
       ),
     );
@@ -1975,7 +2051,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   if (devRepo) {
     await r.check("npm-staleness", () => checkNpmStaleness(r, cwd));
   }
-  await r.check("mcp-json", () => checkMcpJson(r));
+  await r.check("mcp-json", () => checkMcpJson(r, cwd));
   await r.check("user-mcp-config", () => checkUserMcpConfig(r));
   await r.check("desktop-mcp-config", () => checkDesktopMcpConfig(r));
   await r.check("node-toolchain", () => checkNodeToolchain(r));

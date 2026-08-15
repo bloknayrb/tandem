@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CWD_DEPENDENT_CHECKS,
   evaluateAbsentChannelEntry,
   evaluateClaudeCli,
   evaluateNodeToolchain,
@@ -1028,9 +1029,12 @@ describe("dev-repo gating in runDoctor", () => {
     );
   }
 
-  it("skips both gated checks silently in a non-tandem cwd (global-install user)", async () => {
+  it("skips npm-staleness and orphaned-vite silently in a non-tandem cwd", async () => {
     // An end-user cwd with their OWN project's package.json — the exact case
-    // the gate exists for: no warn, no fail, no mention at all.
+    // the gate exists for. These two vanish outright; `node-modules` is the
+    // one cwd-dependent check that still emits (as a visible skip), because
+    // it has shipped ungated since 4654ee08 and a --json consumer has always
+    // seen the key. Its own tests are below.
     //
     // Seeded with a COMPLETE, CONSISTENT lockfile trio and a live Vite
     // listener, so both gated checks would produce a result here if the gate
@@ -1071,6 +1075,12 @@ describe("dev-repo gating in runDoctor", () => {
     const result = report.results.find((res) => res.check === "dev-repo");
     expect(result?.status).toBe("warn");
     expect(result?.message).toContain("could not be read");
+    // It is the ONLY line the user gets about the other three, so it has to
+    // name all of them — the two that vanish AND node-modules, whose own skip
+    // message deliberately does not assert which side of the probe it is on.
+    expect(result?.message).toContain("node_modules");
+    expect(result?.message).toContain("npm-staleness");
+    expect(result?.message).toContain("orphaned-Vite");
   });
 
   it("stays silent about dev-repo in an ordinary end-user cwd", async () => {
@@ -1081,6 +1091,90 @@ describe("dev-repo gating in runDoctor", () => {
 
     writeFileSync(join(repoDir, "package.json"), JSON.stringify({ name: "someones-app" }));
     expect((await runDoctor()).results.map((r) => r.check)).not.toContain("dev-repo");
+  });
+
+  // ── node_modules is a finding only inside the checkout (#1404 sibling) ──
+  //
+  // Why this matters, and why the remedy is the harmful half rather than the
+  // FAIL: see `checkNodeModules`'s header in src/cli/doctor.ts.
+  it("skips node-modules outside the checkout, with no npm install remedy", async () => {
+    // No node_modules here, which is exactly what used to produce the FAIL.
+    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ name: "someones-app" }));
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "node-modules");
+    // Still REPORTED, not silently gated away — a `--json` consumer that has
+    // always seen this key must not have it vanish.
+    expect(result).toBeDefined();
+    expect(result?.status).toBe("pass");
+    expect(result?.data).toMatchObject({ skipped: true });
+    // `fix` is dropped by the human renderer on a pass, so guidance that lands
+    // there reaches --json and nobody else. It must not be set at all.
+    expect(result?.fix).toBeUndefined();
+    expect(result?.message).not.toContain("npm install");
+  });
+
+  it("skips node-modules outside the checkout even when node_modules IS present", async () => {
+    // The positive half: the gate is the repo probe, not the directory
+    // listing. A user whose own project happens to have node_modules must not
+    // get a green line claiming Tandem checked something.
+    seedRepo({ pkg: "9.9.9", lock: "9.9.9", hidden: "9.9.9", name: "someones-app" });
+    mockCwd(repoDir);
+
+    const result = (await runDoctor()).results.find((res) => res.check === "node-modules");
+    expect(result?.data).toMatchObject({ skipped: true, reason: "not-checkout" });
+  });
+
+  it("still FAILs node-modules inside the checkout — the fix must not neuter the real case", async () => {
+    // Tandem checkout, no node_modules: a genuine failure with a remedy that
+    // genuinely works. If this ever goes green the fix has gone too far.
+    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ name: "tandem-editor" }));
+    mockCwd(repoDir);
+
+    // A real vitePort: this is the one node-modules test that satisfies the
+    // dev-repo gate, so orphaned-vite un-gates too and would otherwise probe
+    // the live :5173 of whoever is running the suite.
+    const report = await runDoctor({ vitePort: await allocPort() });
+    const result = report.results.find((res) => res.check === "node-modules");
+    expect(result?.status).toBe("fail");
+    expect(result?.fix).toBe("npm install");
+  });
+
+  it("lets no cwd-dependent check FAIL from a non-checkout cwd", async () => {
+    // The invariant the whole gate exists for, stated once over the constant
+    // rather than per check — so a NEW cwd-dependent check that can fail in
+    // someone else's directory is caught here even if nobody writes it a test.
+    // Seeded so every member has real material to work with: a consistent
+    // lockfile trio (npm-staleness), node_modules (node-modules), and someone
+    // else's package name (the probe answer that must gate them all).
+    seedRepo({ pkg: "9.9.9", lock: "9.9.9", hidden: "9.9.9", name: "someones-app" });
+    writeFileSync(join(repoDir, ".mcp.json"), "{ not json");
+    mockCwd(repoDir);
+
+    const report = await runDoctor({ vitePort: await allocPort() });
+    const failed = report.results
+      .filter((res) => res.status === "fail")
+      .map((res) => res.check)
+      .filter((check) => (CWD_DEPENDENT_CHECKS as readonly string[]).includes(check));
+    expect(failed).toEqual([]);
+  });
+
+  it("does not claim 'not the checkout' when package.json is unreadable", async () => {
+    // `devRepo` collapses "no" and "unreadable", so a boolean gate would print
+    // "this is not the tandem-editor checkout" immediately above the dev-repo
+    // warning that says it might be — two adjacent lines contradicting each
+    // other, with the pass as the false half.
+    writeFileSync(join(repoDir, "package.json"), "{ not json");
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "node-modules");
+    // Assert on `reason`, not prose — the message is free to be reworded.
+    expect(result?.data).toMatchObject({ skipped: true, reason: "package-json-unreadable" });
+    expect(result?.message).not.toContain("is not the tandem-editor checkout");
+    // And the warning it must not contradict is genuinely there.
+    expect(report.results.find((res) => res.check === "dev-repo")?.status).toBe("warn");
   });
 
   // ── Finding 5: absent vs broken lockfiles ──

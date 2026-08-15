@@ -190,10 +190,12 @@ describe("tandem_diagnostics structured output (#1174 gap #2)", () => {
     expect((results[0].data as Record<string, unknown>).port).toBe(3479);
   });
 
-  it("drops dev-repo-only checks (node-modules / mcp-json) from the report", async () => {
-    // A fresh client whose collector includes dev-repo checks — they must be
-    // filtered out so a desktop/global install (arbitrary cwd) isn't told it
-    // failed two meaningless checks.
+  it("drops the cwd-dependent checks (node-modules / mcp-json) from the report", async () => {
+    // A fresh client whose collector includes cwd-dependent checks. Neither of
+    // these can FAIL from an arbitrary cwd any more — `mcp-json` since #1404,
+    // `node-modules` since its sibling fix — so this is noise-suppression, not
+    // failure-suppression: a desktop/global install's cwd is someone else's
+    // directory, and answers about it do not belong in the report at all.
     const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
     registerDiagnosticsTools(server, {
       version: "9.9.9-test",

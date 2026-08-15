@@ -42,9 +42,13 @@ export interface DiagnosticsToolDeps {
 /**
  * Register the read-only `tandem_diagnostics` MCP tool on `server`.
  *
- * Mirrors the `/api/diagnostics` payload: the dev-repo-filtered `DoctorReport`
- * (node-modules / mcp-json checks dropped — the server cwd is arbitrary for a
- * desktop/global install) plus the runtime environment fields.
+ * Mirrors the `/api/diagnostics` payload: the cwd-filtered `DoctorReport`
+ * (every member of `CWD_DEPENDENT_CHECKS` dropped — the server cwd is
+ * arbitrary for a desktop/global install, so their answers describe someone
+ * else's directory) plus the runtime environment fields. Naming the constant
+ * rather than listing two of its five members is deliberate: a short
+ * enumeration reads as complete and sends the next reader hunting for a bug
+ * in the checks it omitted.
  */
 export function registerDiagnosticsTools(server: McpServer, deps: DiagnosticsToolDeps = {}): void {
   const version = deps.version ?? "unknown";
