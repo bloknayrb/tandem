@@ -138,8 +138,13 @@ export interface AppInfoData {
    * recovery depends on that: the client only derives its install id once a
    * generation id has bootstrapped it. `tests/server/info-route.test.ts` pins
    * the two together.
+   *
+   * `null`, not just absent, for a loopback caller: `info.ts` sets it to
+   * `deps.getGenerationId?.() ?? null` unconditionally inside the loopback
+   * branch, so a loopback response with no generation yet assigned still
+   * includes the field as `null` rather than omitting it.
    */
-  generationId?: string;
+  generationId?: string | null;
   /** Loopback-only: mtime of the auth token file in ms, or null if not yet created. */
   tokenRotatedAt?: number | null;
   /** Absolute path to CHANGELOG.md on the server host. Undefined if not found at startup. */

@@ -244,3 +244,60 @@ describe("restore deferred until the provider syncs", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("Scratchpad recovery skipped"));
   });
 });
+
+const INSTALL_B = "bbbb2222";
+
+describe("install id locks to the entry, surviving a later live change", () => {
+  // A generation-rebuild (server swapped behind the same host:port — e.g.
+  // `npm run test:e2e` killing and replacing a dev server on :3478/:3479)
+  // updates the live install id BEFORE tearing tabs down, and `detach()`
+  // flushes each entry's pending debounced write as part of that teardown.
+  // Reading `getInstallId()` live at flush time would persist content typed
+  // under the OLD server under the NEW server's key — the #1387 leak,
+  // reopened through the teardown path instead of the initial-open one these
+  // tests can't otherwise see. These tests flip the live id directly (the
+  // same shape a rebuild produces) without needing to drive the reactive
+  // tabs-diff effect that would normally trigger it.
+
+  it("persistEntry keeps writing under the id locked when the entry first resolved it", () => {
+    const { ydoc, box } = harness({ installId: INSTALL_A }); // locks to A via restoreInto at attach
+    type(ydoc, "typed while still on A");
+    box.id = INSTALL_B; // the live id moves on before the debounce fires
+    vi.advanceTimersByTime(PERSIST_MS);
+
+    expect(localStorage.getItem(contentKey(INSTALL_A, UUID))).toContain("typed while still on A");
+    expect(localStorage.getItem(latestKey(INSTALL_A))).toBe(UUID);
+    expect(localStorage.getItem(contentKey(INSTALL_B, UUID))).toBeNull();
+    expect(localStorage.getItem(latestKey(INSTALL_B))).toBeNull();
+  });
+
+  it("clearUnsaved removes the locked install's key, not the live-changed one", () => {
+    const { ydoc, persistence, box } = harness({ installId: INSTALL_A });
+    type(ydoc, "about to be discarded");
+    vi.advanceTimersByTime(PERSIST_MS);
+    box.id = INSTALL_B; // live id moves on before the confirmed-close callback runs
+
+    persistence.clearUnsaved(UUID);
+
+    expect(localStorage.getItem(contentKey(INSTALL_A, UUID))).toBeNull();
+    expect(localStorage.getItem(latestKey(INSTALL_A))).toBeNull();
+  });
+
+  it("still locks to whichever id is live on first resolution when attach starts unsynced", () => {
+    // Attach defers restoreInto (and so the lock) to the synced listener when
+    // the provider hasn't synced yet — this pins that the lock is taken at
+    // THAT point, not at attach(), and survives a live change afterward.
+    const { ydoc, box, emitSynced } = harness({ installId: INSTALL_A, synced: false });
+    box.id = INSTALL_B; // flips before synced fires
+    emitSynced(); // resolveInstallId locks to whatever is live now: B
+
+    type(ydoc, "typed after sync, locked to B");
+    box.id = INSTALL_A; // live id moves on again — must not un-stick the lock
+    vi.advanceTimersByTime(PERSIST_MS);
+
+    expect(localStorage.getItem(contentKey(INSTALL_B, UUID))).toContain(
+      "typed after sync, locked to B",
+    );
+    expect(localStorage.getItem(contentKey(INSTALL_A, UUID))).toBeNull();
+  });
+});

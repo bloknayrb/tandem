@@ -54,9 +54,15 @@ export function scratchpadStorageKey(installId: string, uuid: string): string {
  * The `tandem:scratchpad:` prefix is load-bearing beyond tidiness: the E2E
  * cleanups clear recovery by prefix match, so keeping it means that clearing
  * still reaches both key kinds, for every install.
+ *
+ * Delegates to `scratchpadStorageKey` rather than repeating its template —
+ * `"latest"` can never collide with a real scratchpad UUID, and hand-writing
+ * the same prefix twice would let a future format change (e.g. a version
+ * segment) update one and not the other, desyncing the content key from its
+ * own pointer.
  */
 function scratchpadLatestKey(installId: string): string {
-  return `tandem:scratchpad:${installId}:latest`;
+  return scratchpadStorageKey(installId, "latest");
 }
 
 /**
@@ -191,6 +197,11 @@ interface ScratchpadEntry {
   /** One-shot `synced` listener used to defer restore until after initial sync. */
   syncedHandler: (() => void) | null;
   persist: Debounced<[]>;
+  /**
+   * The install id this entry's content belongs to, locked in the first time
+   * `resolveInstallId` observes a non-null value — see that function for why.
+   */
+  lockedInstallId: string | null;
 }
 
 export interface ScratchpadPersistence {
@@ -272,6 +283,39 @@ export function createScratchpadPersistence(
 
   purgeLegacyScratchpadKeys();
 
+  /**
+   * Resolve the install id an entry's storage writes belong to, and lock it
+   * onto the entry the first time it's non-null.
+   *
+   * Locking (not a live re-read every call) closes a leak the live-read design
+   * left open: `getInstallId()` reflects the CURRENTLY connected server, but a
+   * generation-rebuild swaps that value BEFORE tearing tabs down — the
+   * scheduler's `fetchGenerationId` (aliased to `fetchServerIdentity`, which
+   * updates the module-level install id) resolves first, then `rebuild()`
+   * calls `teardownAllTabs()`. `detach()` flushes each entry's pending
+   * debounced write as part of that teardown, so an unflushed keystroke typed
+   * in the moment before a same-port server swap (dev server replaced by the
+   * E2E server `npm run test:e2e` boots on :3478/:3479, for instance) would
+   * otherwise be persisted under the NEW server's install id — content
+   * misattributed to a foreign installation, the same leak class #1387 exists
+   * to close, reopened through the teardown path instead of the initial-open
+   * one.
+   *
+   * Once locked, a later live change is deliberately ignored: the only way the
+   * connected install id changes during an entry's life IS that rebuild path,
+   * which destroys every entry shortly after via the tabs-diff effect, so a
+   * locked entry never legitimately needs to follow it. Locking still starts
+   * as null and keeps re-reading live until a value lands — that's what lets
+   * persistence recover once `/api/info` answers after a tab attached before
+   * it did (documented on `getInstallId` above).
+   */
+  const resolveInstallId = (entry: ScratchpadEntry): string | null => {
+    if (entry.lockedInstallId !== null) return entry.lockedInstallId;
+    const id = getInstallId();
+    if (id !== null) entry.lockedInstallId = id;
+    return id;
+  };
+
   const persistEntry = (entry: ScratchpadEntry) => {
     const fragment = entry.ydoc.getXmlFragment("default");
     const blocks = extractFragmentBlocks(fragment);
@@ -287,7 +331,7 @@ export function createScratchpadPersistence(
     // write the flag stays true and the user is warned.)
     unsaved[entry.uuid] = hasContent;
 
-    const installId = getInstallId();
+    const installId = resolveInstallId(entry);
     if (installId === null) return; // fail closed on STORAGE only — see getInstallId
     const latestKey = scratchpadLatestKey(installId);
     const key = scratchpadStorageKey(installId, entry.uuid);
@@ -313,6 +357,7 @@ export function createScratchpadPersistence(
       updateHandler: () => {},
       syncedHandler: null,
       persist: debounce(() => {}, PERSIST_DEBOUNCE_MS),
+      lockedInstallId: null,
     };
     entry.persist = debounce(() => persistEntry(entry), PERSIST_DEBOUNCE_MS);
     // Observe the Y.Doc `update` event (NOT a content-reading $effect, which
@@ -341,7 +386,7 @@ export function createScratchpadPersistence(
   };
 
   const restoreInto = (entry: ScratchpadEntry) => {
-    const installId = getInstallId();
+    const installId = resolveInstallId(entry);
     if (installId === null) {
       // Fail closed — see getInstallId. Warn rather than return silently: this
       // is one-shot, so the user simply sees an empty scratchpad and cannot
@@ -439,14 +484,21 @@ export function createScratchpadPersistence(
     // and the fallback below can restore the very text the user confirmed
     // discarding. Acceptable only because the null branch is unreachable in
     // production (see getInstallId) — not because it self-heals.
-    const installId = getInstallId();
+    //
+    // Prefers the entry's locked id (see resolveInstallId) over a live read:
+    // content was persisted under whichever id was locked when it was written,
+    // and a live read could have already moved on to a different server's id
+    // in the same rebuild-teardown window `resolveInstallId` guards against —
+    // targeting the wrong key here would leave the real content key behind.
+    const entry = entries.get(uuid);
+    const installId = entry?.lockedInstallId ?? getInstallId();
     if (installId !== null) {
       removeStorage(scratchpadStorageKey(installId, uuid));
       const latestKey = scratchpadLatestKey(installId);
       if (readStorage(latestKey) === uuid) removeStorage(latestKey);
     }
     // Drop any pending debounced write so it can't re-persist after discard.
-    entries.get(uuid)?.persist.cancel();
+    entry?.persist.cancel();
     unsaved[uuid] = false;
   };
 
