@@ -22,13 +22,11 @@
  *
  * SCOPE. These assert the RANGE and what a plain-text replacement over it
  * produces. They deliberately do NOT assert what the shipping accept path
- * inserts: `insertContentAt` HTML-parses its string argument and collapses
- * newlines, which is a separate defect (#1477) with its own corruption modes,
- * pinned in its own describe block below. Conflating the two would let a fix
- * for one hide a regression in the other.
+ * inserts: `insertContentAt` HTML-parses its string argument, a separate defect
+ * (#1477) covered by `suggestion-literal-insert.test.ts` against a live editor.
+ * Conflating the two would let a fix for one hide a regression in the other.
  */
 
-import { createNodeFromContent } from "@tiptap/core";
 import { EditorState } from "@tiptap/pm/state";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -218,47 +216,18 @@ describe("#1450: replacing the resolved range", () => {
   });
 });
 
-describe("#1477: what the SHIPPING insert path does (known defect, pinned)", () => {
-  /**
-   * `applySuggestion` passes `suggestedText` to `insertContentAt`, which
-   * HTML-parses the string rather than inserting it literally. That is a
-   * separate bug from #1450 and is tracked as #1477.
-   *
-   * These assert the CURRENT broken behaviour on purpose, following the same
-   * convention as `roundtrip-corpus.test.ts`: when #1477 is fixed these fail,
-   * which is the signal to update them — rather than the defect quietly
-   * surviving because nothing described it.
-   */
-  const build = (input: string) =>
-    createNodeFromContent(input, productionSchema(), { preserveWhitespace: "full" });
-
-  const asJson = (input: string) => JSON.stringify(build(input).toJSON());
-
-  it("collapses a newline to a space instead of making a hard break", () => {
-    // The realistic case: textSnapshot renders every hard break as "\n", so a
-    // suggestion over a break-bearing paragraph normally contains newlines.
-    expect(asJson("one\ntwo")).toBe('[{"type":"text","text":"one two"}]');
-    // Not a preserveWhitespace problem — the other setting collapses too.
-    const loose = createNodeFromContent("one\ntwo", productionSchema(), {
-      preserveWhitespace: true,
-    });
-    expect(JSON.stringify(loose.toJSON())).toBe('[{"type":"text","text":"one two"}]');
-  });
-
-  it("parses markup in the suggestion instead of inserting it literally", () => {
-    // A suggestion that merely MENTIONS a tag splits the paragraph in two.
-    expect(asJson("use <div> for layout")).toContain('"type":"paragraph"');
-    // ...and inline tags become real marks.
-    expect(asJson("<b>bold</b> text")).toContain('"marks":[{"type":"bold"}]');
-    // ...and entities are decoded.
-    expect(asJson("AT&amp;T")).toContain('"text":"AT&T"');
-  });
-
-  it("leaves ordinary prose alone (the reason this went unnoticed)", () => {
-    expect(asJson("plain replacement")).toBe('[{"type":"text","text":"plain replacement"}]');
-    expect(asJson("a < b && c > d")).toBe('[{"type":"text","text":"a < b && c > d"}]');
-  });
-});
+// The insert half of the same action (#1477) is covered by
+// `suggestion-literal-insert.test.ts`, against a LIVE Tiptap editor.
+//
+// This file previously pinned that defect here using `createNodeFromContent`
+// directly. That was the wrong instrument and two of its assertions were simply
+// false of the shipping path: in isolation the helper collapses "one\ntwo" to
+// "one two" and decodes "&amp;", but a real editor — whose paragraph carries
+// `whitespace: "pre"` (#1461) — does neither. Worse, those assertions would have
+// stayed green after #1477 was fixed, so the known-defect convention they
+// claimed to follow could never have fired. Removed rather than corrected in
+// place: a probe that cannot observe the product does not become trustworthy by
+// having its expected values patched.
 
 describe("#1450: the schema assumption the fix rests on", () => {
   it("hardBreak is the only inline non-text node in the production schema", () => {
