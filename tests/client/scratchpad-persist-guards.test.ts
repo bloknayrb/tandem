@@ -283,21 +283,44 @@ describe("install id locks to the entry, surviving a later live change", () => {
     expect(localStorage.getItem(latestKey(INSTALL_A))).toBeNull();
   });
 
-  it("still locks to whichever id is live on first resolution when attach starts unsynced", () => {
-    // Attach defers restoreInto (and so the lock) to the synced listener when
-    // the provider hasn't synced yet — this pins that the lock is taken at
-    // THAT point, not at attach(), and survives a live change afterward.
+  it("locks at attach() itself, not deferred to the synced listener", () => {
+    // A first pass at this fix locked lazily, in whichever of restoreInto /
+    // persistEntry / detach's flush happened to call resolveInstallId first.
+    // For a tab that attaches unsynced, that let a live id change BEFORE the
+    // synced listener ever fires decide the lock — this pins that attach()
+    // grabs the live id immediately instead, so a later change (here, before
+    // sync even completes) cannot touch it.
     const { ydoc, box, emitSynced } = harness({ installId: INSTALL_A, synced: false });
-    box.id = INSTALL_B; // flips before synced fires
-    emitSynced(); // resolveInstallId locks to whatever is live now: B
+    box.id = INSTALL_B; // flips before synced fires — must NOT become the lock
+    emitSynced();
 
-    type(ydoc, "typed after sync, locked to B");
-    box.id = INSTALL_A; // live id moves on again — must not un-stick the lock
+    type(ydoc, "typed after sync, still locked to A");
     vi.advanceTimersByTime(PERSIST_MS);
 
-    expect(localStorage.getItem(contentKey(INSTALL_B, UUID))).toContain(
-      "typed after sync, locked to B",
+    expect(localStorage.getItem(contentKey(INSTALL_A, UUID))).toContain(
+      "typed after sync, still locked to A",
     );
-    expect(localStorage.getItem(contentKey(INSTALL_A, UUID))).toBeNull();
+    expect(localStorage.getItem(contentKey(INSTALL_B, UUID))).toBeNull();
+  });
+
+  it("survives a rebuild that completes before the entry ever synced", () => {
+    // The gap a review found in the first pass: an entry whose provider never
+    // syncs before a rebuild tears it down defers restoreInto — and so its
+    // lock attempt — behind the one-shot `synced` listener that never fires.
+    // If the entry's first-ever resolveInstallId call were the detach flush
+    // itself (post-rebuild, live id already the NEW server's), content typed
+    // under the OLD server would lock onto — and persist under — the new
+    // one. Locking eagerly in attach() closes this: the entry captures A the
+    // moment it opens, before sync, before typing, before any rebuild could
+    // occur.
+    const { ydoc, box, persistence } = harness({ installId: INSTALL_A, synced: false });
+    type(ydoc, "typed before this room ever synced");
+    box.id = INSTALL_B; // rebuild's fetchServerIdentity() resolves the new id...
+    persistence.destroy(); // ...then teardownAllTabs() detaches and flushes — never synced
+
+    expect(localStorage.getItem(contentKey(INSTALL_A, UUID))).toContain(
+      "typed before this room ever synced",
+    );
+    expect(localStorage.getItem(contentKey(INSTALL_B, UUID))).toBeNull();
   });
 });

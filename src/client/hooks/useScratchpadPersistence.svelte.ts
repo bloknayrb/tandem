@@ -366,6 +366,22 @@ export function createScratchpadPersistence(
     ydoc.on("update", entry.updateHandler);
     entries.set(uuid, entry);
 
+    // Prime the lock HERE, synchronously, rather than leaving it to whichever
+    // of restoreInto/persistEntry/detach's flush happens to call
+    // resolveInstallId first. attach() always runs while the live id still
+    // genuinely corresponds to this entry's own room — a rebuild's install-id
+    // flip and its teardownAllTabs() (which destroys this entry) happen
+    // together inside one synchronous `rebuild()` call, so they can never
+    // straddle a still-live entry the way a LATER first-lock could. Without
+    // this, an entry whose provider hasn't synced yet defers restoreInto (and
+    // so its lock attempt) behind the one-shot `synced` listener; if a
+    // rebuild's detach-triggered flush fires first, THAT becomes the entry's
+    // first resolution and locks onto the NEW server's id instead of the one
+    // this room was actually opened against. A no-op when the id isn't known
+    // yet (resolveInstallId leaves it unlocked, matching the documented
+    // null-retry behavior on `getInstallId` above).
+    resolveInstallId(entry);
+
     // Restore must wait until the provider has synced the room's authoritative
     // state — restoring before sync races the incoming server content and the
     // CRDT merge would DUPLICATE it (server content + our injected paragraphs).
