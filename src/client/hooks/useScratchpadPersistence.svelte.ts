@@ -33,9 +33,10 @@ import { type Debounced, debounce } from "../utils/debounce.js";
 /**
  * localStorage key for a scratchpad's persisted text.
  *
- * Keyed by INSTALL as well as UUID (#1387). Every Tandem server on a machine
- * shares one browser origin, so a key carrying only the UUID is visible to all
- * of them — and since a fresh scratchpad has no key of its own, the
+ * Keyed by INSTALL as well as UUID (#1387). Successive Tandem servers are
+ * reached at the same host:port, which is one `localStorage` bucket, so a key
+ * carrying only the UUID is readable by all of them in turn — and since a
+ * fresh scratchpad has no key of its own, the
  * latest-pointer fallback below would restore one server's content into
  * another's document. Scoping by install makes that lookup miss, which is the
  * whole fix; see `utils/install-id.ts` for why the server's session-store path
@@ -60,7 +61,7 @@ function scratchpadLatestKey(installId: string): string {
 
 /**
  * Delete the pre-#1387 unscoped keys (`tandem:scratchpad:<uuid>` and
- * `tandem:scratchpad:latest`) once, without reading them.
+ * `tandem:scratchpad:latest`) on hook creation, without reading them.
  *
  * Nothing addresses those keys any more, so left alone they sit in the user's
  * browser forever holding document text — and it is precisely the text that
@@ -76,8 +77,21 @@ function scratchpadLatestKey(installId: string): string {
  *
  * The discriminator is segment count: a scoped key is
  * `tandem:scratchpad:<install>:<uuid|latest>` (four segments) and neither an
- * install id nor a UUID contains a colon, so exactly three segments means
- * legacy.
+ * install id (8 hex chars) nor a `randomUUID()` contains a colon, so exactly
+ * three segments means legacy. The `tandem:scratchpad:` prefix check is the
+ * other half of the guard and is load-bearing: `tandem:headingCollapse:<docId>`
+ * is a real neighbour with the same segment count, and sweeping it would wipe
+ * every user's heading-collapse state on every start.
+ *
+ * Scoped keys belonging to an install this browser no longer talks to are
+ * deliberately NOT swept. Two installs alternate legitimately on one machine —
+ * the desktop sidecar and a dev server take turns on the same port — so
+ * "not the current install" does not mean "dead", and deleting on that basis
+ * would destroy a real draft. Growth is bounded in practice because the paths
+ * that vary are fixed, not per-run (`playwright.config.ts` pins
+ * `/tmp/tandem-e2e-data`, design baselines pin their own); a user accumulates
+ * one or two ids for life, and a new one is minted only by something as rare as
+ * an app-data root move.
  */
 function purgeLegacyScratchpadKeys(): void {
   try {
@@ -92,7 +106,9 @@ function purgeLegacyScratchpadKeys(): void {
     // the loop and would skip every other match.
     for (const key of doomed) localStorage.removeItem(key);
   } catch {
-    // ignore — storage-disabled browsers (CLAUDE.md gotcha)
+    // Ignore — storage-disabled browsers (CLAUDE.md gotcha). A SecurityError
+    // mid-loop leaves a PARTIAL purge rather than none; harmless, since this
+    // runs again on the next hook creation and nothing writes these keys.
   }
 }
 
@@ -223,9 +239,23 @@ function removeStorage(key: string): void {
  * @param getInstallId Accessor for the connected server's install id, or `null`
  *   before `/api/info` has answered. Injected rather than read from module
  *   state so the cross-install behaviour is testable without a live connection.
- *   **Persistence and restore are both suppressed while this is `null`** —
- *   fail closed. A fail-open default here would restore under whatever key
- *   happened to be reachable, which is the #1387 bug with extra steps.
+ *   **Storage is suppressed while this is `null`** — fail closed. A fail-open
+ *   default would restore under whatever key happened to be reachable, which is
+ *   the #1387 bug with extra steps.
+ *
+ *   Scoped deliberately to *storage*: the unsaved-content warning still fires
+ *   (see `persistEntry`), and `clearUnsaved` still clears its flag. Widening the
+ *   guard to those would trade a content leak for silent content loss.
+ *
+ *   Note the two suppressed paths recover differently. Persist retries on the
+ *   next debounced update, so a null window costs nothing once the id lands.
+ *   **Restore does not retry** — it runs once per attach (directly, or from a
+ *   one-shot `synced` listener), so a null read forfeits recovery for that tab's
+ *   whole lifetime. That asymmetry is tolerable only because the branch is
+ *   unreachable in production: `yjsSync` builds no provider until
+ *   `fetchServerIdentity` resolves, and that same response carries both the
+ *   generation id and `storagePath` (they share one `if (loopback)` block in
+ *   `server/mcp/routes/info.ts`). Split those two fields and this comes alive.
  */
 export function createScratchpadPersistence(
   getTabs: () => OpenTab[],
@@ -243,24 +273,35 @@ export function createScratchpadPersistence(
   purgeLegacyScratchpadKeys();
 
   const persistEntry = (entry: ScratchpadEntry) => {
-    const installId = getInstallId();
-    if (installId === null) return; // fail closed — see getInstallId
-    const latestKey = scratchpadLatestKey(installId);
     const fragment = entry.ydoc.getXmlFragment("default");
     const blocks = extractFragmentBlocks(fragment);
+    const hasContent = blocks.join("").length > 0;
+    // The warning flag tracks the DOCUMENT, not whether we managed to store it.
+    // It is set before the fail-closed return below and outside the empty/
+    // non-empty split, because the two questions are independent: "is there
+    // unsaved text here" is answered by the fragment alone. Deriving it from a
+    // successful write instead would mean content we could not persist closes
+    // with no prompt at all — the case where the warning matters MOST, since
+    // the recovery net is exactly what is missing. (The pre-existing storage
+    // wrappers swallow QuotaExceededError for the same reason: on a failed
+    // write the flag stays true and the user is warned.)
+    unsaved[entry.uuid] = hasContent;
+
+    const installId = getInstallId();
+    if (installId === null) return; // fail closed on STORAGE only — see getInstallId
+    const latestKey = scratchpadLatestKey(installId);
     const key = scratchpadStorageKey(installId, entry.uuid);
-    if (blocks.join("").length === 0) {
-      // Empty scratchpad — clear any stale recovery so we don't warn on close.
+    if (!hasContent) {
+      // Empty scratchpad — clear any stale recovery so a later open doesn't
+      // resurrect text the user deleted.
       removeStorage(key);
       if (readStorage(latestKey) === entry.uuid) {
         removeStorage(latestKey);
       }
-      unsaved[entry.uuid] = false;
       return;
     }
     writeStorage(key, encodeScratchpadBlocks(blocks));
     writeStorage(latestKey, entry.uuid);
-    unsaved[entry.uuid] = true;
   };
 
   const attach = (uuid: string, ydoc: Y.Doc, provider: HocuspocusProvider) => {
@@ -301,7 +342,17 @@ export function createScratchpadPersistence(
 
   const restoreInto = (entry: ScratchpadEntry) => {
     const installId = getInstallId();
-    if (installId === null) return; // fail closed — see getInstallId
+    if (installId === null) {
+      // Fail closed — see getInstallId. Warn rather than return silently: this
+      // is one-shot, so the user simply sees an empty scratchpad and cannot
+      // distinguish "nothing to recover" from "recovery was skipped", and a
+      // developer chasing it has no artifact but an unread localStorage key.
+      // Same reasoning as `buildDecorations`' CRDT-fallback warning.
+      console.warn(
+        "[Tandem] Scratchpad recovery skipped: install id unknown (/api/info reported no storagePath). This does not retry for this scratchpad.",
+      );
+      return;
+    }
 
     const fragment = entry.ydoc.getXmlFragment("default");
     // Only restore into a genuinely empty scratchpad (provider has synced, so
@@ -377,8 +428,17 @@ export function createScratchpadPersistence(
   const clearUnsaved = (uuid: string) => {
     // Unlike persist/restore this does NOT fail closed on a null install id:
     // the reactive flag must still clear so a confirmed close stops warning.
-    // Only the storage removal is skipped, and it is re-reachable — the next
-    // persist under a known install id rewrites the key.
+    // Guarding it too would latch `unsaved[uuid]` true forever — the confirm
+    // dialog would re-fire on every close attempt and `beforeunload` would warn
+    // permanently, since detach() runs right after and nothing recomputes it.
+    //
+    // The storage removal IS skipped, and there is NO retry to recover it: the
+    // sole caller is the confirmed-close path, after which detach() drops the
+    // entry and each new scratchpad mints a fresh UUID. A skipped removal
+    // therefore leaves both the content key and the `latest` pointer behind,
+    // and the fallback below can restore the very text the user confirmed
+    // discarding. Acceptable only because the null branch is unreachable in
+    // production (see getInstallId) — not because it self-heals.
     const installId = getInstallId();
     if (installId !== null) {
       removeStorage(scratchpadStorageKey(installId, uuid));

@@ -191,8 +191,8 @@ export function createYjsSync(opts?: {
    * See `installIdFromStoragePath` for what this is and why it is derived the
    * way it is. Two things true only here: unlike `generationId` it is NOT an
    * auth token and never travels to the server, and it is a plain `let` rather
-   * than `$state` because its only consumer reads it inside a callback at
-   * attach time, never in a template.
+   * than `$state` because its consumer reads it from callbacks (debounced
+   * persist, restore-on-attach, clear-on-close), never in a template.
    */
   let installId: string | null = null;
   // Last activation epoch applied from the server. Lets handleDocumentList tell a
@@ -296,16 +296,37 @@ export function createYjsSync(opts?: {
       });
       // A non-ok response returns before the assignment below, so a transient
       // blip preserves the previous install id rather than disabling recovery.
+      // The poll loop already surfaces unreachability as a "disconnected"
+      // banner, so there is nothing to add here.
       if (!res.ok) return null;
       const body = (await res.json()) as AppInfoData;
-      // `storagePath` is loopback-only, so a response without it leaves the id
-      // null — and every consumer of `installId` fails closed on that.
-      installId =
+      // Note the asymmetry with the line above, which is deliberate but reads
+      // backwards at first: an unreachable server KEEPS the old id, while a
+      // successful response that has stopped reporting `storagePath` REPLACES
+      // it with null. `storagePath` is loopback-only, so for a client that
+      // always calls 127.0.0.1 its disappearance means something is genuinely
+      // wrong — and unlike a blip it is invisible, since a 200 raises no
+      // banner. Hence the warning: this silently disables scratchpad recovery,
+      // and restore never retries.
+      const nextInstallId =
         typeof body.storagePath === "string" && body.storagePath.length > 0
           ? installIdFromStoragePath(body.storagePath)
           : null;
+      if (nextInstallId === null && installId !== null) {
+        console.warn(
+          `[Tandem] ${API_INFO} stopped reporting storagePath — scratchpad crash recovery is now disabled.`,
+        );
+      }
+      installId = nextInstallId;
       return body.generationId ?? null;
-    } catch {
+    } catch (err) {
+      // A SyntaxError here means the server answered with something that is not
+      // JSON — a broken server, not an unreachable one, and the banner cannot
+      // tell the two apart. Everything else (abort/timeout, network) is the
+      // routine case the banner already covers.
+      if ((err as Error | undefined)?.name === "SyntaxError") {
+        console.warn(`[Tandem] ${API_INFO} returned a non-JSON body`, err);
+      }
       return null;
     }
   };

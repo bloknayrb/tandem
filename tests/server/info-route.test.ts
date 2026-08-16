@@ -242,6 +242,30 @@ describe("GET /api/info — non-loopback branch (unit)", () => {
     expect("tokenRotatedAt" in body).toBe(false);
     expect("generationId" in body).toBe(false);
   });
+
+  it("gates storagePath and generationId TOGETHER, for both caller kinds", async () => {
+    // A client-side invariant enforced here because only this file can see it.
+    // The browser derives its scratchpad install id from `storagePath` (#1387),
+    // but only reaches that code once `generationId` has bootstrapped it. They
+    // share one `if (loopback)` block today, which is what makes the client's
+    // fail-closed branch unreachable in production.
+    //
+    // Split them and the failure is silent and total: scratchpad crash recovery
+    // stops (restore is one-shot and never retries) AND the unsaved-content
+    // warning goes with it, with no error and no other failing test. The
+    // assertions above pin each field independently, which cannot catch that.
+    const handler = makeInfoHandler(BASE_DEPS);
+    for (const peer of ["127.0.0.1", "192.168.1.50"]) {
+      const res = makeMockRes();
+      await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+        makeMockReq(peer),
+        res,
+        () => {},
+      );
+      const b = res._body as Record<string, unknown>;
+      expect("storagePath" in b, `mismatched gating for peer ${peer}`).toBe("generationId" in b);
+    }
+  });
 });
 
 describe("GET /api/info — generationId field (unit)", () => {

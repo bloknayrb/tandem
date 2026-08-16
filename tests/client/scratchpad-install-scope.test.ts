@@ -177,6 +177,21 @@ describe("scratchpad recovery is scoped to the installation", () => {
     expect(localStorage.getItem(latestKey(INSTALL_A))).not.toBeNull();
   });
 
+  it("leaves same-shaped keys belonging to other features alone", () => {
+    // The purge matches on segment count, so the `tandem:scratchpad:` prefix
+    // check is the only thing standing between it and a real neighbour:
+    // `tandem:headingCollapse:<docId>` is also three segments under `tandem:`.
+    // Widen or drop that check and every user silently loses heading-collapse
+    // state on every app start.
+    localStorage.setItem("tandem:headingCollapse:doc123", '{"h1":true}');
+    localStorage.setItem("tandem:showAuthorship", "true");
+
+    attachTo(new Y.Doc(), UUID_NEW, INSTALL_A);
+
+    expect(localStorage.getItem("tandem:headingCollapse:doc123")).toBe('{"h1":true}');
+    expect(localStorage.getItem("tandem:showAuthorship")).toBe("true");
+  });
+
   it("keeps a foreign installation's recovery data intact", () => {
     // Declining to restore must not also destroy the other installation's
     // recovery: the restore path rewrites the latest pointer and deletes the

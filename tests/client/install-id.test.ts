@@ -21,17 +21,35 @@ describe("installIdFromStoragePath", () => {
     expect(a).toBe(c);
   });
 
+  it("pins the exact hash, so a silent re-key of every user is impossible", () => {
+    // Golden vectors, and they earn their keep: swapping `Math.imul` for plain
+    // `*` — which loses low bits once the product passes 2^53 — leaves every
+    // other assertion in this file passing (sampled paths stay distinct, output
+    // is still 8 hex chars, still deterministic). Any drift in the hash OR the
+    // normalisation re-keys every existing user, and their orphaned 4-segment
+    // keys are exactly what the legacy purge (3-segment only) will never
+    // collect. Regenerate these only with a deliberate migration.
+    expect(installIdFromStoragePath("/home/x/.local/share/tandem/sessions")).toBe("53640ea4");
+    expect(installIdFromStoragePath("C:\\Users\\x\\AppData\\Local\\tandem\\Data\\sessions")).toBe(
+      "de3381f5",
+    );
+  });
+
   it("separates the real store from an isolated test store", () => {
-    // The case that matters: E2E, perf, design-baselines and screenshots each
-    // set their own TANDEM_APP_DATA_DIR.
+    // The case that matters: E2E, perf and design baselines each set their own
+    // TANDEM_APP_DATA_DIR. (Screenshots do not — that config spreads the root
+    // Playwright webServer, so it shares E2E's dir and id.)
     expect(installIdFromStoragePath("C:/Users/x/AppData/Local/tandem/Data/sessions")).not.toBe(
       installIdFromStoragePath("C:/tmp/tandem-e2e-data/sessions"),
     );
   });
 
-  it("returns a stable, filesystem-safe token", () => {
+  it("returns a filesystem- and key-safe token", () => {
+    // The shape matters independently of the value above: the legacy purge
+    // discriminates on colon count, so an id containing a colon would make a
+    // scoped key look like a legacy one and get swept on every start.
     const id = installIdFromStoragePath("/home/x/.local/share/tandem/sessions");
     expect(id).toMatch(/^[0-9a-f]{8}$/);
-    expect(installIdFromStoragePath("/home/x/.local/share/tandem/sessions")).toBe(id);
+    expect(id).not.toContain(":");
   });
 });
