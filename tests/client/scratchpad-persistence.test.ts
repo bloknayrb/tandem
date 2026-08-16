@@ -23,8 +23,26 @@ function docWithParagraphs(lines: string[]): Y.Doc {
 
 describe("scratchpadStorageKey", () => {
   it("namespaces by uuid so distinct scratchpads never collide", () => {
-    expect(scratchpadStorageKey("uuid-a")).toBe("tandem:scratchpad:uuid-a");
-    expect(scratchpadStorageKey("uuid-a")).not.toBe(scratchpadStorageKey("uuid-b"));
+    expect(scratchpadStorageKey("inst1", "uuid-a")).toBe("tandem:scratchpad:inst1:uuid-a");
+    expect(scratchpadStorageKey("inst1", "uuid-a")).not.toBe(
+      scratchpadStorageKey("inst1", "uuid-b"),
+    );
+  });
+
+  it("namespaces by install so two servers never read each other's recovery (#1387)", () => {
+    // The whole fix in one assertion. Every Tandem server on a machine shares
+    // one browser origin, so without this segment a scratchpad opened on any
+    // server can restore content persisted while talking to another one.
+    expect(scratchpadStorageKey("inst1", "uuid-a")).not.toBe(
+      scratchpadStorageKey("inst2", "uuid-a"),
+    );
+  });
+
+  it("keeps the `tandem:scratchpad:` prefix that the E2E cleanup matches on", () => {
+    // The E2E cleanups clear recovery with a prefix match. If the install
+    // segment were prepended instead of inserted, that cleanup would silently
+    // stop matching and the suite would leak state between tests.
+    expect(scratchpadStorageKey("inst1", "uuid-a").startsWith("tandem:scratchpad:")).toBe(true);
   });
 });
 

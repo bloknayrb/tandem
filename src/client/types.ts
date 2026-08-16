@@ -127,6 +127,24 @@ export interface AppInfoData {
   bindPort?: number;
   /** Loopback-only: absolute path to session storage directory. */
   storagePath?: string;
+  /**
+   * Loopback-only: identifies this server RUN. New on every boot — every
+   * Hocuspocus provider pins it as its auth token so a Y.Doc that predates a
+   * restart is rejected before it can merge back. Undefined for non-loopback
+   * callers; stdio mode serves no `/api/info` at all, so the field is not
+   * "null in stdio" — it is unreachable there.
+   *
+   * Emitted in the SAME `if (loopback)` block as `storagePath`, and scratchpad
+   * recovery depends on that: the client only derives its install id once a
+   * generation id has bootstrapped it. `tests/server/info-route.test.ts` pins
+   * the two together.
+   *
+   * `null`, not just absent, for a loopback caller: `info.ts` sets it to
+   * `deps.getGenerationId?.() ?? null` unconditionally inside the loopback
+   * branch, so a loopback response with no generation yet assigned still
+   * includes the field as `null` rather than omitting it.
+   */
+  generationId?: string | null;
   /** Loopback-only: mtime of the auth token file in ms, or null if not yet created. */
   tokenRotatedAt?: number | null;
   /** Absolute path to CHANGELOG.md on the server host. Undefined if not found at startup. */
