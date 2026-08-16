@@ -69,7 +69,7 @@ scripts.
 |---|---|
 | `npm run typecheck` | tsc server + client + `svelte-check --fail-on-warnings` |
 | `npm test` | Vitest — unit and integration |
-| `npm run test:e2e` | Playwright — **kills anything on :3478/:3479** |
+| `npm run test:e2e` | Playwright — **refuses to run while Tandem or `dev:server` holds :3479**, and frees :3478/:3479 when it starts its own |
 | `npm run check:tokens` | Raw hex/rgba scan over `src/client/` |
 | `npm run check:links` | Relative markdown links across the repo. Runs in neither CI nor the hooks |
 | `npm run audit:origins` / `npm run audit:ymap-keys` | Static walks for the Y.Doc origin-tagging and Y.Map-key invariants |

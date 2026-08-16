@@ -8,7 +8,7 @@ import { DEFAULT_MCP_PORT, TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "./src/sha
  * This config's own directory, for `globalSetup` below.
  *
  * Playwright resolves `globalSetup` against the LOADED config file's directory
- * (`node_modules/playwright/lib/common/config.js:69`), and
+ * (`resolveScript` in `node_modules/playwright/lib/common/config.js`), and
  * `scripts/screenshots/playwright.config.ts` spreads this whole object — so a
  * relative `"./scripts/e2e-guard.ts"` would resolve there as
  * `scripts/screenshots/scripts/e2e-guard.ts` and die with MODULE_NOT_FOUND
@@ -32,9 +32,11 @@ export default defineConfig({
   timeout: 30_000,
   retries: 1,
   workers: 1, // server supports one MCP session at a time
-  // #1483: refuses to run against a server this suite did not start — see
-  // scripts/e2e-guard.ts for the ordering, the fail-closed rule, and why this
-  // is not `reuseExistingServer: false`.
+  // #1483: refuses to run when :3479 is held by a server whose storage dir is
+  // not the isolated E2E one. That is narrower than "a server this suite
+  // started" — an adopted STALE E2E server still passes, and skips the per-run
+  // wipe. See scripts/e2e-guard.ts for the ordering, the fail-closed rule, both
+  // residual gaps, and why this is not `reuseExistingServer: false`.
   globalSetup: resolve(CONFIG_DIR, "scripts/e2e-guard.ts"),
   use: {
     baseURL: "http://127.0.0.1:5173",

@@ -21,15 +21,20 @@ const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`;
  * mistake a deleted fixture path as a rename signal for the next test's
  * identical fixture.
  *
- * The fallback imports the shared constant rather than re-spelling the literal:
- * a second copy that drifts sends `cleanupFixtureDir` at the wrong directory,
- * and the failure mode is the orphaned-envelope cascade `scripts/e2e-server.mjs`
+ * Imports the shared constant rather than re-spelling the literal: a second
+ * copy that drifts sends `cleanupFixtureDir` at the wrong directory, and the
+ * failure mode is the orphaned-envelope cascade `scripts/e2e-server.mjs`
  * documents — "expected 1 annotation card, received N" across the whole suite.
+ *
+ * **Deliberately does not consult `process.env.TANDEM_APP_DATA_DIR`**, which it
+ * used to. `playwright.config.ts` sets that var inside `webServer.env` — the
+ * server child's environment — and never on the runner's `process.env`, so in
+ * this process it only ever holds a developer's own ambient export. Reading it
+ * therefore had no reachable correct case and one wrong one: cleanup aimed at
+ * the developer's dir while the server wrote envelopes here, silently no-oping
+ * against the directory that matters and re-creating the very cascade above.
  */
-const E2E_ANNOTATIONS_DIR = path.join(
-  process.env.TANDEM_APP_DATA_DIR ?? E2E_APP_DATA_DIR,
-  "annotations",
-);
+const E2E_ANNOTATIONS_DIR = path.join(E2E_APP_DATA_DIR, "annotations");
 
 /**
  * MCP test client using the SDK's built-in Client + StreamableHTTPClientTransport.

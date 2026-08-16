@@ -92,10 +92,38 @@ elif [[ "$MATCH_COUNT" -gt 1 ]]; then
 fi
 
 TEST_FILE="${MATCH_ARR[0]}"
+
+# Call vitest's entry directly rather than through `npx`: measured on Windows,
+# `npx`'s bin resolution is roughly half the wall time of a one-file run. (Ratio
+# only — absolute timings are machine- and file-specific and were dropped after
+# a re-measure on the same OS reproduced the ratio but not the numbers.) The
+# #1408 fallback above arms this path on 19 more modules, so the cost lands ~5x
+# more often. `playwright.config.ts` invokes the tsx CLI by path too, but for a
+# different reason — #244/#672, shim buffering and a stdout deadlock, not speed.
+#
+# A bare relative `node_modules/...` is NOT equivalent to `npx`, which also
+# searches ancestor `node_modules/.bin`. Git worktrees under `.claude/worktrees/`
+# have `tests/` (tracked) but no `node_modules` (not), so the check at :62 lets
+# them through and `node` would die with ERR_MODULE_NOT_FOUND into a `|| true`
+# — printing "Running related test:" for a test that never ran, which is the
+# silent-zero class #1408 was filed for. Walk up for the entry, keep `npx` as
+# the fallback that still works there.
+VITEST_ENTRY=""
+SEARCH_DIR="$PWD"
+while true; do
+  if [[ -f "$SEARCH_DIR/node_modules/vitest/vitest.mjs" ]]; then
+    VITEST_ENTRY="$SEARCH_DIR/node_modules/vitest/vitest.mjs"
+    break
+  fi
+  PARENT_DIR="$(dirname "$SEARCH_DIR")"
+  [[ "$PARENT_DIR" == "$SEARCH_DIR" ]] && break
+  SEARCH_DIR="$PARENT_DIR"
+done
+
 echo "Running related test: $TEST_FILE"
-# Call vitest's entry directly rather than through `npx`. Measured on Windows,
-# `npx` spends 2.4-3.8s resolving the bin before vitest starts — roughly half
-# the wall time of a one-file run (7.0s -> 3.7s). Pre-existing, but the #1408
-# fallback above arms this path on 19 more modules, so it now costs 19x more
-# often. Same reason `playwright.config.ts` invokes the tsx CLI by path.
-node node_modules/vitest/vitest.mjs run --reporter=dot --bail=1 "$TEST_FILE" 2>&1 || true
+if [[ -n "$VITEST_ENTRY" ]]; then
+  node "$VITEST_ENTRY" run --reporter=dot --bail=1 "$TEST_FILE" 2>&1 || echo "✗ Related test FAILED: $TEST_FILE"
+else
+  npx vitest run --reporter=dot --bail=1 "$TEST_FILE" 2>&1 || echo "✗ Related test FAILED: $TEST_FILE"
+fi
+exit 0

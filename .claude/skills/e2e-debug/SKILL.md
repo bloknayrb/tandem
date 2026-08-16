@@ -10,7 +10,7 @@ Post-mortem guide for Playwright E2E failures in Tandem. Complements the `/e2e` 
 
 ## Critical Warning
 
-E2E tests use `freePort()` which **kills any process on :3478/:3479**. Confirm with the user that no dev server is in use before running.
+E2E **refuses to start while a non-E2E server holds :3479** (#1483) — `scripts/e2e-guard.ts` runs as `globalSetup` and fails closed on anything whose `/api/info` storage dir is not the isolated E2E one. A run that dies immediately with "Refusing to run this Playwright suite…" is that guard, not a broken suite: quit Tandem or stop the dev server. Once E2E starts its own server, `freePort()` frees :3478/:3479.
 
 ## Pre-Flight Checklist
 
