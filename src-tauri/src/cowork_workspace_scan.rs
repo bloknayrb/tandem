@@ -602,11 +602,31 @@ fn claude_desktop_detected_under(
 // Security guard
 // ---------------------------------------------------------------------------
 
-/// Apply the four-step path security guard (invariant §3).
+/// Apply the five-step path security guard (invariant §3).
 ///
 /// Returns the canonicalized path on success, or a human-readable rejection
 /// reason string on failure.
+///
+/// **(a0) is the #1417 fix.** The UNC check used to live only at (c), testing
+/// `canonical` — the *output* of `canonicalize` — so `symlink_metadata` and
+/// `canonicalize` both touched the raw candidate first. Why that is dangerous
+/// is stated once in `src/shared/windows-path-safety.ts`. What is specific here
+/// is that the comment on (a) ordered the *junction* threat correctly and the
+/// *UNC* threat backwards: for a junction the danger is what the path resolves
+/// to, so the lstat walk must precede `canonicalize`; for UNC the danger is the
+/// syscall itself. Both are satisfiable — a string test goes first, and (c)
+/// stays because a junction can still resolve *to* a UNC path.
+///
+/// Exact twin of `src/cli/win-path-guard.ts`; keep the two in step.
 pub(crate) fn check_path_safe(candidate: &Path, canonical_root: &Path) -> Result<PathBuf, String> {
+    // (a0) Reject UNC on the RAW candidate, before any syscall touches it.
+    if is_unc_path(candidate) {
+        return Err(format!(
+            "UNC path rejected before any filesystem call: {}",
+            candidate.display()
+        ));
+    }
+
     // (a) Fail-closed reparse check on candidate + ancestors via lstat.
     //     MUST run before canonicalize — canonicalize resolves reparse points
     //     on Windows and would hide junction/symlink components.
@@ -638,11 +658,36 @@ pub(crate) fn check_path_safe(candidate: &Path, canonical_root: &Path) -> Result
     Ok(canonical)
 }
 
-/// Returns true if the path looks like a UNC path.
+/// Returns true if `path` is UNC or otherwise unsafe to hand to a syscall.
+///
+/// **Allowlist, not blacklist** — the twin of `isUncPath` in
+/// `src/cli/win-path-guard.ts`, and for the same reason. Every `\\`-rooted
+/// path is unsafe except one shape: the extended-length LOCAL drive path
+/// `\\?\C:\…` that Tauri's path APIs return on Windows, which this guard
+/// permits on purpose and then confines by canonicalized containment.
+///
+/// The previous version enumerated the bad forms, and let three through:
+/// `//server/share` and every other forward-slash form, which
+/// `starts_with(r"\\")` never sees at all; `\\?\unc\server\share`, because
+/// Windows prefixes are case-insensitive and the literal `UNC` was not; and
+/// `\\?\GLOBALROOT\Device\Mup\server\share`, which reaches SMB by another
+/// route. All three are covered here for free, because the allowlist has to
+/// *match* `\\?\<drive>:\` rather than fail to match a bypass — a distinction
+/// with no tail of undiscovered forms.
 fn is_unc_path(path: &Path) -> bool {
-    let s = path.to_string_lossy();
-    // Extended UNC: \\?\UNC\  or classic UNC: \\server\share
-    s.starts_with(r"\\?\UNC\") || (s.starts_with(r"\\") && !s.starts_with(r"\\?\"))
+    let s = path.to_string_lossy().to_lowercase();
+    if !s.starts_with(r"\\") && !s.starts_with("//") {
+        return false;
+    }
+    let b = s.as_bytes();
+    let sep = |c: u8| c == b'\\' || c == b'/';
+    let is_local_extended = b.len() >= 7
+        && b[2] == b'?'
+        && sep(b[3])
+        && b[4].is_ascii_lowercase()
+        && b[5] == b':'
+        && sep(b[6]);
+    !is_local_extended
 }
 
 /// Returns true if any component in the path chain (from root to candidate)
@@ -651,29 +696,30 @@ fn is_unc_path(path: &Path) -> bool {
 /// Fails closed: if `symlink_metadata` returns an error, returns `true` (reject)
 /// rather than `false` (allow). This prevents a metadata failure from silently
 /// bypassing the reparse-point guard.
+///
+/// **Walks shallowest-first — root down to the candidate.** Ascending inspected
+/// the deepest component first, so a symlinked *parent* was only noticed after
+/// its children had already been touched; descending rejects it before that.
+///
+/// **This ordering does nothing for UNC, and `check_path_safe` step (a0) is the
+/// only thing that does.** `ancestors()` bottoms out at the path *prefix*, so
+/// for `\\server\share\a\b` the shallowest entry it yields is `\\server\share`
+/// itself — and `symlink_metadata` on that performs the very SMB handshake the
+/// guard exists to prevent. (a0) is load-bearing, not defence in depth; do not
+/// delete it on the strength of this walk.
 fn has_reparse_point_in_chain(path: &Path) -> bool {
-    // Check the candidate itself. Fail closed on metadata errors.
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                return true;
-            }
-        }
-        Err(_) => return true, // Can't inspect — reject for safety.
-    }
-    // Check each ancestor. Fail closed on metadata errors.
-    let mut ancestor = path.parent();
-    while let Some(p) = ancestor {
-        match std::fs::symlink_metadata(p) {
+    // `ancestors()` yields the path itself, then each parent up to the root.
+    for entry in path.ancestors().collect::<Vec<_>>().iter().rev() {
+        match std::fs::symlink_metadata(entry) {
             Ok(metadata) => {
                 if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
                     return true;
                 }
             }
-            Err(_) => return true, // Can't inspect ancestor — reject for safety.
+            Err(_) => return true, // Can't inspect — reject for safety.
         }
-        ancestor = p.parent();
     }
+
     false
 }
 
@@ -710,6 +756,48 @@ mod tests {
     const WS_UUID: &str = "ff68c797-99aa-416c-9b7d-f21bceeddb8d";
     const VM_UUID: &str = "ca28ad17-dcdb-4ea1-8178-8a8861613939";
     const VM_UUID_2: &str = "0b30dd94-eb52-48e2-851c-025e7b9a45ad";
+
+    /// #1417 §1C. The UNC check used to run only at step (c), on the OUTPUT of
+    /// `canonicalize` — so `symlink_metadata` and `canonicalize` both touched
+    /// the raw candidate first, and on Windows each performs the SMB handshake
+    /// that leaks an NTLM hash. Step (a0) is a pure string test that runs before
+    /// any syscall, and the error text is what distinguishes the two paths: a
+    /// candidate rejected at (a0) never reached the filesystem, whereas
+    /// "canonicalize failed" means it did.
+    #[test]
+    fn check_path_safe_rejects_unc_before_touching_the_filesystem() {
+        let root = std::env::temp_dir();
+        for candidate in [
+            r"\\attacker\share\ws\vm",
+            r"\\?\UNC\attacker\share\ws",
+            // The three the enumerate-the-bad-forms check let through.
+            "//attacker/share/ws/vm",
+            r"\\?\unc\attacker\share\ws",
+            r"\\?\GLOBALROOT\Device\Mup\attacker\share",
+        ] {
+            let err = check_path_safe(Path::new(candidate), &root)
+                .expect_err("UNC candidate must be refused");
+            assert!(
+                err.contains("before any filesystem call"),
+                "expected the pre-syscall rejection for {candidate}, got: {err}"
+            );
+        }
+    }
+
+    /// The extended-length LOCAL prefix stays permitted — containment under the
+    /// canonical root is what confines it, and Tauri's path APIs hand it back.
+    /// It must fall through (a0) to the filesystem steps rather than be refused
+    /// outright, so the rejection it eventually earns is a different one.
+    #[test]
+    fn check_path_safe_still_admits_extended_length_local_paths_to_the_fs_steps() {
+        let root = std::env::temp_dir();
+        let err = check_path_safe(Path::new(r"\\?\C:\definitely\not\here"), &root)
+            .expect_err("nonexistent path must still be refused");
+        assert!(
+            !err.contains("before any filesystem call"),
+            "extended-length local prefix must not be rejected by (a0), got: {err}"
+        );
+    }
 
     #[test]
     fn test_is_uuid_like() {
@@ -907,10 +995,39 @@ mod tests {
 
     #[test]
     fn test_is_unc_path() {
-        assert!(is_unc_path(Path::new(r"\\?\UNC\server\share")));
-        assert!(is_unc_path(Path::new(r"\\server\share")));
-        assert!(!is_unc_path(Path::new(r"\\?\C:\Users\foo")));
-        assert!(!is_unc_path(Path::new(r"C:\Users\foo")));
+        for unsafe_path in [
+            r"\\?\UNC\server\share",
+            r"\\server\share",
+            // Forward-slash forms: `starts_with(r"\\")` alone never saw these.
+            "//server/share",
+            "//?/UNC/server/share",
+            // Windows prefixes are case-insensitive; a literal `UNC` was not.
+            r"\\?\unc\server\share",
+            r"\\?\Unc\server\share",
+            // Other routes to SMB under the same `\\?\` namespace.
+            r"\\?\GLOBALROOT\Device\Mup\server\share",
+            r"\\.\UNC\server\share",
+        ] {
+            assert!(
+                is_unc_path(Path::new(unsafe_path)),
+                "must reject {unsafe_path}"
+            );
+        }
+
+        // The one permitted `\\`-rooted shape, plus ordinary local paths. The
+        // allowlist must not be narrower than what Windows and Tauri produce.
+        for safe_path in [
+            r"\\?\C:\Users\foo",
+            r"\\?\c:\Users\foo",
+            "//?/C:/Users/foo",
+            r"C:\Users\foo",
+            "/home/foo",
+        ] {
+            assert!(
+                !is_unc_path(Path::new(safe_path)),
+                "must permit {safe_path}"
+            );
+        }
     }
 
     #[test]

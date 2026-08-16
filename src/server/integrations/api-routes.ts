@@ -869,7 +869,7 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
               errorResult(
                 entry.id,
                 ERROR_CODE_PATH_REJECTED,
-                "Refused to operate on a symlinked or out-of-tree config path",
+                "Refused to operate on a symlinked, network, or out-of-tree config path",
               ),
             );
             continue;

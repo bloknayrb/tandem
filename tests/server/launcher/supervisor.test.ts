@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emptyIntegrationsFile,
   type IntegrationsFile,
@@ -271,6 +271,44 @@ describe("resolveSafeCwd — path normalization (security I2)", () => {
 
   it.skipIf(process.platform !== "win32")("rejects UNC paths", () => {
     expect(resolveSafeCwd("\\\\server\\share\\folder")).toBeNull();
+  });
+
+  // #1417. The forward-slash UNC form was the gap: the hand-rolled screen this
+  // replaced named `\\`, `\\?\` and `\\.\` but not `//`, and
+  // `path.win32.isAbsolute("//attacker/share")` is true — so it passed the
+  // screen and reached `realpath`, performing the SMB handshake that leaks an
+  // NTLM hash. Reachable with no precondition from an HTTP request body via
+  // `launcher/api-routes.ts` (`body.cwd`, `workingDirectory`) and from
+  // `cwd-preview.ts` at tab-switch frequency.
+  //
+  // These deliberately do NOT skip off win32. The old screen was gated on
+  // `process.platform === "win32"`, which meant a Linux or macOS server
+  // accepted a UNC string, stored it, and handed it back to a Windows client
+  // later. The check is now cross-platform, so the test is too — and on posix
+  // `//attacker/share` really does clear `isAbsolute`, making this the branch
+  // that has to catch it.
+  // **The observable is the SYSCALL, not the return value.** Both the fixed and
+  // the broken screen return null for `//attacker/share`, because `realpath`
+  // throws on a host that does not answer — but reaching `realpath` at all is
+  // the whole vulnerability: on Windows that call performs the SMB handshake
+  // and the hash is gone before the throw. Asserting `toBeNull()` here passes
+  // against the unfixed code and proves nothing.
+  it.each([
+    "//attacker/share/folder",
+    "//attacker/share",
+    "//?/UNC/attacker/share",
+    "//./C:/",
+  ])("rejects %s WITHOUT touching the filesystem, on every platform", (candidate) => {
+    const realpathSync = vi.spyOn(fs, "realpathSync");
+    const statSync = vi.spyOn(fs, "statSync");
+    try {
+      expect(resolveSafeCwd(candidate)).toBeNull();
+      expect(realpathSync).not.toHaveBeenCalled();
+      expect(statSync).not.toHaveBeenCalled();
+    } finally {
+      realpathSync.mockRestore();
+      statSync.mockRestore();
+    }
   });
 
   it("rejects non-string input", () => {

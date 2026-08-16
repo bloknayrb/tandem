@@ -65,8 +65,44 @@ type ScrubLogger = {
   close: () => Promise<void>;
 };
 
+/**
+ * `%LOCALAPPDATA%`, or `undefined` if it is unset or not a safe local path.
+ *
+ * **Screened at the source, because every path in this file is a `path.join`
+ * off this value (#1417).** `logDir`, `packagesDir`, `sessionsRoot`, the
+ * workspace dirs and the VM dirs all inherit whatever it holds, and the first
+ * thing each does is `mkdir` / `readdir` / `stat`. A UNC value therefore leaks
+ * a credential hash from every one of them — and this runs during MSIX
+ * uninstall, which can be elevated, so it is a privilege-escalation step rather
+ * than a same-privilege annoyance. Guarding the two reads of the variable beats
+ * guarding each derived directory, and `assertSafeWorkspacePath` only ever saw
+ * the deepest path, long after the damage.
+ *
+ * **Uses `assertPathSafe` rather than a bare prefix test**, matching what
+ * `detectTargets` already does to this same variable in `apply.ts`. A prefix
+ * test alone would leave the name and the caller's log line ("not a safe local
+ * path") promising more than they deliver: `LOCALAPPDATA=C:\Users\Public\x`, or
+ * a symlinked one, passes a UNC check and still gets scrubbed. `assertPathSafe`
+ * adds the symlink rejection and home containment, and since #1417 its own
+ * first statement is the UNC test.
+ */
+function usableLocalAppData(logger?: ScrubLogger): string | undefined {
+  const value = process.env.LOCALAPPDATA;
+  if (!value) return undefined;
+  try {
+    assertPathSafe(value, { allowedRoots: [homedir()] });
+    return value;
+  } catch (err) {
+    // Never silent: this returns the same `undefined` as "unset", and the two
+    // mean very different things to whoever is reading an uninstall log.
+    const reason = err instanceof PathRejectedError ? err.reason : (err as Error).message;
+    logger?.warn(`%LOCALAPPDATA% rejected (${reason}) — skipping`);
+    return undefined;
+  }
+}
+
 async function openLogger(): Promise<ScrubLogger> {
-  const localAppData = process.env.LOCALAPPDATA;
+  const localAppData = usableLocalAppData();
   if (!localAppData) {
     // No log file — just use stderr.
     const write = (level: string, msg: string): void => {
@@ -104,6 +140,36 @@ async function openLogger(): Promise<ScrubLogger> {
 }
 
 /**
+ * `readdir`, but refuses to descend through a reparse point (#1417).
+ *
+ * The scan walks four levels down from `%LOCALAPPDATA%` before
+ * {@link assertSafeWorkspacePath} gets a say, and `readdir`/`stat` **follow**
+ * junctions. A junction planted at any of those levels pointing at
+ * `\\attacker\share` therefore made the syscall — and leaked an NTLM
+ * handshake — before the guard at the bottom ever ran. `lstat` does not
+ * follow, so checking each directory *before* reading it is what closes the
+ * window; the string screens in `usableLocalAppData` cannot, because the
+ * hostile part of the path is on disk rather than in the env var.
+ *
+ * Returns null (already logged) when the directory is unreadable, is not a
+ * directory, or is a reparse point.
+ */
+async function readdirNoFollow(dir: string, logger: ScrubLogger): Promise<string[] | null> {
+  try {
+    const stat = await fsPromises.lstat(dir);
+    if (stat.isSymbolicLink()) {
+      logger.warn(`refusing to descend into reparse point: ${dir}`);
+      return null;
+    }
+    if (!stat.isDirectory()) return null;
+    return await fsPromises.readdir(dir);
+  } catch (err) {
+    logger.info(`cannot read ${dir}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+/**
  * Find all Cowork workspace directories.
  *
  * Matches `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\
@@ -115,9 +181,9 @@ async function openLogger(): Promise<ScrubLogger> {
  * Returns an empty array on any error (e.g. Cowork not installed).
  */
 export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[]> {
-  const localAppData = process.env.LOCALAPPDATA;
+  const localAppData = usableLocalAppData(logger);
   if (!localAppData) {
-    logger.info("%LOCALAPPDATA% not set — skipping workspace scan");
+    logger.info("%LOCALAPPDATA% unset or not a safe local path — skipping workspace scan");
     return [];
   }
 
@@ -130,13 +196,8 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
   }
 
   const packagesDir = path.join(localAppData, "Packages");
-  let packageEntries: string[];
-  try {
-    packageEntries = await fsPromises.readdir(packagesDir);
-  } catch (err) {
-    logger.info(`cannot read Packages dir: ${(err as Error).message}`);
-    return [];
-  }
+  const packageEntries = await readdirNoFollow(packagesDir, logger);
+  if (packageEntries === null) return [];
 
   const claudePackages = packageEntries.filter((name) => name.startsWith("Claude_"));
   if (claudePackages.length === 0) {
@@ -155,28 +216,19 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
       "local-agent-mode-sessions",
     );
 
-    let wsEntries: string[];
-    try {
-      wsEntries = await fsPromises.readdir(sessionsRoot);
-    } catch (err) {
-      logger.warn(`cannot read sessions root ${sessionsRoot}: ${(err as Error).message}`);
-      continue;
-    }
+    const wsEntries = await readdirNoFollow(sessionsRoot, logger);
+    if (wsEntries === null) continue;
 
     for (const ws of wsEntries) {
       const wsPath = path.join(sessionsRoot, ws);
-      let vmEntries: string[];
-      try {
-        vmEntries = await fsPromises.readdir(wsPath);
-      } catch (err) {
-        logger.warn(`cannot read workspace dir ${wsPath}: ${(err as Error).message}`);
-        continue;
-      }
+      const vmEntries = await readdirNoFollow(wsPath, logger);
+      if (vmEntries === null) continue;
 
       for (const vm of vmEntries) {
         const vmPath = path.join(wsPath, vm);
         try {
-          const stat = await fsPromises.stat(vmPath);
+          // lstat, not stat (#1417) — see readdirNoFollow.
+          const stat = await fsPromises.lstat(vmPath);
           if (!stat.isDirectory()) continue;
 
           // 4-step path guard — only include validated, realpath'd paths.

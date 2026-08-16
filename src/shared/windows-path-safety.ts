@@ -19,11 +19,15 @@
  *
  *  - `server/file-io/docx-export.ts` and its spike twin — bare `\\` only, so
  *    they genuinely miss the forward-slash forms.
- *  - `server/launcher/supervisor.ts` — names `\\?\` and `\\.\` explicitly; its
- *    gap is `//`, which `path.isAbsolute` accepts on Windows.
- *  - `cli/win-path-guard.ts` — handles both flavours of extended UNC and is
- *    deliberately LOOSER on `\\?\C:\…`, which it allows on purpose before
- *    applying realpath'd containment. It is not a defect; do not "fix" it.
+ *  - `server/launcher/supervisor.ts` — names `\\?\` and `\\.\` explicitly, and
+ *    its `//` gap is now covered because `rejectedSyntactically` calls this
+ *    function first; the local check survives only as the shape filter.
+ *  - `cli/win-path-guard.ts` and its Rust twin `is_unc_path` in
+ *    `src-tauri/src/cowork_workspace_scan.rs` — deliberately LOOSER, because
+ *    they allow `\\?\C:\…` on purpose and confine it by realpath'd
+ *    containment instead. They are not defects; do not "fix" them. They are
+ *    written as an allowlist of that one shape rather than a blacklist of the
+ *    bad ones, which is the only form that has no bypass tail.
  *
  * See #1417, which also covers the ordering defect where a filesystem call runs
  * *before* the check — a class this string test cannot detect.

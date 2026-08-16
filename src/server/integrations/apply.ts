@@ -52,6 +52,7 @@ import {
 import { targetPushSupport } from "../../shared/integrations/contract.js";
 import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
 import type { SkillRefreshError } from "../../shared/launcher/contract.js";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
 import { backupDir, pruneOldBackups, shouldBackup, writeBackup } from "./backup.js";
@@ -278,7 +279,7 @@ export class PathRejectedError extends Error {
   override readonly name = "PathRejectedError";
   constructor(
     public readonly path: string,
-    public readonly reason: "symlink" | "outside-home" | "unreadable",
+    public readonly reason: "symlink" | "outside-home" | "unreadable" | "unc",
     message: string,
   ) {
     super(message);
@@ -478,6 +479,33 @@ function realpathCached(p: string): string {
  * read or write. The ancestor check is the closed-set boundary — any path
  * outside the allowed roots is refused even if it's not a symlink.
  *
+ * **UNC is screened first, before any syscall (#1417).** This is an exported,
+ * total guard — and the very first thing it did was `existsSync(targetPath)`
+ * on the raw string, which on Windows performs the SMB handshake that leaks an
+ * NTLM hash. Every attacker-facing caller happened to prefix-check first, so
+ * it was not exploitable through today's callers; it is exported, and "not
+ * currently reachable" is not a property a guard should rely on. The check is
+ * a pure string test and runs before every syscall in here.
+ *
+ * It uses the STRICT shared predicate, so `\\?\C:\…` is refused too — unlike
+ * `src/cli/win-path-guard.ts`, which permits that prefix because containment
+ * under %LOCALAPPDATA% confines it. Deliberate: this function's allowed-roots
+ * test compares against `realpath`'d roots, and an extended-length spelling
+ * would not match them, so admitting the prefix would produce a confusing
+ * "outside-home" rejection one step later rather than a clear one here. The
+ * visible consequence is in `detectTargets`, which passes `%LOCALAPPDATA%`
+ * through this guard: an extended-length value there disables MSIX detection,
+ * which is why that call site logs rather than returning empty in silence.
+ *
+ * **Known trade-off: enterprise folder redirection.** A machine whose
+ * `%APPDATA%` / `%USERPROFILE%` is redirected to a UNC share now has its
+ * Claude Desktop config refused here, where before it was written. That is
+ * deliberate and consistent rather than a new policy — Tandem already refuses
+ * to *open a document* from a UNC path (`validate_open_candidate` in
+ * `src-tauri/src/lib.rs`, before any filesystem call), so such a profile
+ * already cannot use the product's primary surface. Config writes were the
+ * inconsistent hold-out.
+ *
  * Residual TOCTOU: the lstat-then-write window admits a same-uid attacker
  * who swaps a regular file for a symlink between check and write. Node's
  * `fs` doesn't expose `O_NOFOLLOW` / `openat`-style per-component
@@ -488,6 +516,10 @@ function realpathCached(p: string): string {
  * roots (e.g., test fixtures that operate inside a specific tmpdir).
  */
 export function assertPathSafe(targetPath: string, opts: { allowedRoots?: string[] } = {}): void {
+  const unsafePrefix = rejectUnsafeWindowsPrefix(targetPath);
+  if (unsafePrefix !== null) {
+    throw new PathRejectedError(targetPath, "unc", unsafePrefix);
+  }
   const allowedRoots = (opts.allowedRoots ?? [homedir(), tmpdir()]).map(realpathCached);
 
   // `lstat` a path that may not exist yet (e.g., apply will create the
@@ -572,7 +604,15 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
     appDataOverride: opts.appDataOverride,
   });
 
-  if (opts.force || existsSync(desktopConfig)) {
+  // (#1417) Screen before `existsSync`, which follows and connects — on Windows
+  // it performs the SMB handshake for a UNC path. `%APPDATA%` and `%USERPROFILE%`
+  // both feed this path and both can be redirected to a share by enterprise
+  // folder redirection, so `assertPathSafe` downstream is one syscall too late.
+  // The compatibility trade-off is recorded on `assertPathSafe`.
+  const desktopPrefixRejection = rejectUnsafeWindowsPrefix(desktopConfig);
+  if (desktopPrefixRejection !== null) {
+    console.error(`[Tandem] Claude Desktop config path rejected: ${desktopPrefixRejection}`);
+  } else if (opts.force || existsSync(desktopConfig)) {
     targets.push({ label: "Claude Desktop", configPath: desktopConfig, kind: "claude-desktop" });
   }
 
@@ -591,7 +631,14 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
     // could otherwise redirect us to write under any directory.
     try {
       assertPathSafe(localAppData, { allowedRoots: [home] });
-    } catch {
+    } catch (err) {
+      // Never silent. Since #1417 this guard's first statement is a strict UNC
+      // and extended-length screen, so a value that used to reach the readdir
+      // now stops here — and the symptom is "MSIX Claude Desktop was not
+      // detected", which is indistinguishable from "not installed" unless the
+      // reason is written down.
+      const reason = err instanceof PathRejectedError ? err.reason : (err as Error).message;
+      console.error(`[Tandem] %LOCALAPPDATA% rejected (${reason}); skipping MSIX detection`);
       return targets;
     }
     const packagesDir = join(localAppData, "Packages");

@@ -11,6 +11,19 @@ import {
 import { isValidNodeBinary } from "../../../src/shared/integrations/node-binary-name.js";
 
 /**
+ * `statSync`, observable. It delegates to the real implementation, so every
+ * other test here is unaffected — the point is only to be able to assert that
+ * a call did NOT happen. `vi.spyOn(fs, …)` cannot do this: an ESM module
+ * namespace is not configurable.
+ */
+const { _statSyncSpy } = vi.hoisted(() => ({ _statSyncSpy: vi.fn() }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  _statSyncSpy.mockImplementation(actual.statSync as never);
+  return { ...actual, statSync: _statSyncSpy };
+});
+
+/**
  * The channel shim's `command`.
  *
  * A bare `"node"` was found failing in the field two ways, both silent: Node
@@ -181,5 +194,30 @@ describe("probeNodeBinary", () => {
 
   it("returns true for a real file", () => {
     expect(probeNodeBinary(process.execPath)).toBe(true);
+  });
+
+  /**
+   * #1417. `statSync` on `\\host\share\node.exe` performs the SMB handshake
+   * that leaks an NTLM hash, and the value probed here comes out of a config
+   * file this process does not own — `mcpServers.*.command` in `~/.claude.json`
+   * — reachable at server start and via `/api/diagnostics`.
+   *
+   * **Asserts the syscall, not the return value.** A UNC path to a host that
+   * does not answer already produced `null` via the catch, so `toBeNull()`
+   * alone passes against the vulnerable code and proves nothing. The fix is
+   * that `statSync` is never reached.
+   */
+  it.each([
+    ["classic UNC", "\\\\attacker\\share\\node.exe"],
+    ["forward-slash UNC", "//attacker/share/node.exe"],
+    ["extended UNC", "\\\\?\\UNC\\attacker\\share\\node.exe"],
+    ["device namespace", "\\\\.\\C:\\node.exe"],
+  ])("refuses %s without calling statSync", (_label, candidate) => {
+    _statSyncSpy.mockClear();
+
+    // `null`, not `false`: refusing to look is not evidence of absence, and
+    // `false` would license a rewrite of the user's config.
+    expect(probeNodeBinary(candidate)).toBeNull();
+    expect(_statSyncSpy).not.toHaveBeenCalled();
   });
 });

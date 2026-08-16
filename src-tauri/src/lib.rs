@@ -767,8 +767,7 @@ fn validate_open_candidate(
     // Matches the server's `resolveAndValidatePath`, which rejects both
     // prefixes — but the server refusing it is one HTTP hop too late to stop
     // `is_file()` from having already performed the SMB handshake here.
-    let as_str = absolute.to_string_lossy();
-    if as_str.starts_with(r"\\") || as_str.starts_with("//") {
+    if is_unc_or_network_path(&absolute.to_string_lossy()) {
         return Err(RejectionReason::NotAFile { path: absolute });
     }
 
@@ -2139,6 +2138,23 @@ fn show_server_error_dialog(
         });
 }
 
+/// True when `path` is a UNC / network path, in either separator flavour.
+///
+/// Pure string test with no syscall, for the reason `windows-path-safety.ts`
+/// documents once for the whole codebase: on Windows the syscall IS the threat.
+/// Callers must run this *before* touching the filesystem, never on the result
+/// of resolving it (#1417).
+///
+/// Deliberately stricter than `cowork_workspace_scan::is_unc_path`, which
+/// permits `\\?\C:\…` because containment under %LOCALAPPDATA% confines it.
+/// Here there is no containment to lean on, and `strip_win_prefix()` is
+/// supposed to have removed the extended-length prefix upstream anyway, so the
+/// blunt form is correct: a false reject costs a failed "reveal in Explorer",
+/// a false accept costs a credential hash.
+fn is_unc_or_network_path(path: &str) -> bool {
+    path.starts_with(r"\\") || path.starts_with("//")
+}
+
 /// Build the `(program, args)` tuple that reveals `path` in the host OS file
 /// manager, parameterized by target OS string so the construction can be unit
 /// tested for every platform without spawning a process.
@@ -2185,6 +2201,14 @@ fn reveal_command_args(path: &str, target_os: &str) -> (&'static str, Vec<String
 /// as a separate argv element, so there is no shell-injection surface.
 #[tauri::command]
 fn show_in_file_manager(path: String) -> Result<(), String> {
+    // #1417: `path` is a raw string from the webview, and `explorer /select,…`
+    // makes EXPLORER perform the SMB handshake on our behalf — the credential
+    // leak happens in a process we do not control and never see fail. Needs
+    // editor XSS or a compromised client to reach, so this is defence in depth,
+    // but it is one string comparison against a hash disclosure.
+    if is_unc_or_network_path(&path) {
+        return Err("Refusing to reveal a network path in the file manager.".to_string());
+    }
     let (program, args) = reveal_command_args(&path, std::env::consts::OS);
     match std::process::Command::new(program).args(&args).spawn() {
         Ok(_) => Ok(()),
@@ -5742,6 +5766,33 @@ mod reveal_command_tests {
         let nasty = "/Users/me/$(rm -rf ~) file.md";
         let (_program, args) = reveal_command_args(nasty, "macos");
         assert_eq!(args, vec!["-R".to_string(), nasty.to_string()]);
+    }
+
+    /// #1417. `show_in_file_manager` builds `explorer /select,<path>` from a raw
+    /// webview string, so a UNC path makes EXPLORER perform the SMB handshake —
+    /// the credential leak happens in a process we do not control and never see
+    /// fail. The check is a pure string test with no syscall, because on Windows
+    /// the syscall IS the threat.
+    #[test]
+    fn unc_and_network_paths_are_recognized_in_both_separator_flavours() {
+        assert!(is_unc_or_network_path(r"\\attacker\share\x"));
+        assert!(is_unc_or_network_path("//attacker/share/x"));
+        assert!(is_unc_or_network_path(r"\\?\UNC\attacker\share"));
+        assert!(is_unc_or_network_path("//?/UNC/attacker/share"));
+        // Stricter than cowork_workspace_scan::is_unc_path on purpose: there is
+        // no containment check here to confine an extended-length local path,
+        // and strip_win_prefix() should have removed it upstream anyway.
+        assert!(is_unc_or_network_path(r"\\?\C:\Windows"));
+    }
+
+    #[test]
+    fn ordinary_local_paths_are_not_mistaken_for_network_paths() {
+        assert!(!is_unc_or_network_path(r"C:\Users\me\notes.md"));
+        assert!(!is_unc_or_network_path("/home/me/notes.md"));
+        assert!(!is_unc_or_network_path("/Users/me/notes.md"));
+        assert!(!is_unc_or_network_path("notes.md"));
+        // A single leading slash is a normal posix absolute path, not UNC.
+        assert!(!is_unc_or_network_path("/notes.md"));
     }
 }
 

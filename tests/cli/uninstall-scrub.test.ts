@@ -6,6 +6,8 @@
  * via .mockResolvedValue / .mockReturnValue.
  */
 
+import { homedir } from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── Top-level stubs (referenced by vi.mock factories) ────────────────────────
@@ -191,6 +193,94 @@ describe("rewriteJson", () => {
     expect(result).toBe(true);
     expect(_writeFileSpy).toHaveBeenCalledOnce();
     expect(_renameSpy).toHaveBeenCalledOnce();
+  });
+});
+
+// ── findCoworkWorkspaces: no-follow descent (#1417) ───────────────────────────
+
+/**
+ * These assert the SYSCALL, not the return value.
+ *
+ * The bug being pinned is that `readdir`/`stat` **follow** reparse points, so a
+ * junction planted anywhere on the four-level descent leaked an SMB handshake
+ * before `assertSafeWorkspacePath` at the bottom got a say. Asserting only that
+ * the result is `[]` does not pin it — a junction pointing at an unreadable
+ * share yields `[]` either way, so that assertion passes against the vulnerable
+ * code. What distinguishes fixed from broken is whether the following call was
+ * ever made.
+ */
+describe("findCoworkWorkspaces reparse-point handling", () => {
+  // Anchored under the real homedir because `usableLocalAppData` runs the real
+  // (unmocked, sync) `assertPathSafe`, which requires containment there. No
+  // directory has to exist: that guard walks up to the first existing ancestor.
+  const FAKE_LAD = path.join(homedir(), "AppData", "Local");
+  const PACKAGES = path.join(FAKE_LAD, "Packages");
+  const SESSIONS = path.join(
+    PACKAGES,
+    "Claude_abc",
+    "LocalCache",
+    "Roaming",
+    "Claude",
+    "local-agent-mode-sessions",
+  );
+  const WS = path.join(SESSIONS, "ws1");
+  const VM = path.join(WS, "vm1");
+
+  const dir = () => ({ isSymbolicLink: () => false, isDirectory: () => true });
+  const junction = () => ({ isSymbolicLink: () => true, isDirectory: () => false });
+
+  let logger: { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    for (const spy of [_readdirSpy, _lstatSpy, _realpathSpy, _statSpy]) spy.mockReset();
+    vi.stubEnv("LOCALAPPDATA", FAKE_LAD);
+    _realpathSpy.mockImplementation(async (p: string) => p);
+    _readdirSpy.mockImplementation(async (p: string) => {
+      if (p === PACKAGES) return ["Claude_abc"];
+      if (p === SESSIONS) return ["ws1"];
+      if (p === WS) return ["vm1"];
+      return [];
+    });
+    logger = { info: vi.fn(), warn: vi.fn() };
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** Every path is a plain directory except `plantedAt`, which is a junction. */
+  function plantJunction(plantedAt: string | null): void {
+    _lstatSpy.mockImplementation(async (p: string) => (p === plantedAt ? junction() : dir()));
+  }
+
+  it("descends a clean chain and returns the validated workspace", async () => {
+    plantJunction(null);
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await findCoworkWorkspaces(logger as never)).toEqual([VM]);
+  });
+
+  it.each([
+    ["the Packages dir", PACKAGES],
+    ["a Claude_* sessions root", SESSIONS],
+    ["a workspace dir", WS],
+  ])("refuses to readdir through a junction at %s", async (_label, planted) => {
+    plantJunction(planted);
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+    // The load-bearing assertion: the following call never happened.
+    expect(_readdirSpy).not.toHaveBeenCalledWith(planted);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("reparse point"));
+  });
+
+  it("refuses to stat a junction at the vm level", async () => {
+    plantJunction(VM);
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+    // `stat` follows; the fix is that only `lstat` ever sees this path.
+    expect(_statSpy).not.toHaveBeenCalled();
   });
 });
 
