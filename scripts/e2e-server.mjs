@@ -24,9 +24,14 @@ import path from "node:path";
 // this script only ever runs via playwright.config.ts, which sets the var.
 // Resolve before checking so `..` segments or a coincidental substring
 // elsewhere in the path can't smuggle the wipe outside its scope.
+// Deliberately a literal, NOT an import from scripts/e2e-paths.ts: this check
+// exists to re-validate the dir independently before wiping it, and that
+// independence is what keeps a bad import from becoming a bad `rm`. Must match
+// `E2E_APP_DATA_BASENAME` there. (Same shape as tests/perf/perf-server.mjs.)
+const E2E_APP_DATA_BASENAME = "tandem-e2e-data";
 const dir = process.env.TANDEM_APP_DATA_DIR;
 const resolved = dir ? path.resolve(dir) : null;
-if (!resolved || path.basename(resolved) !== "tandem-e2e-data") {
+if (!resolved || path.basename(resolved) !== E2E_APP_DATA_BASENAME) {
   console.error(
     `[e2e-server] refusing to wipe unexpected TANDEM_APP_DATA_DIR: ${dir ?? "(unset)"}`,
   );

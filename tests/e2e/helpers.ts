@@ -5,6 +5,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import { E2E_APP_DATA_DIR } from "../../scripts/e2e-paths.js";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 import type { ToolResponse } from "../../src/shared/types.js";
@@ -15,13 +16,18 @@ const __dirname = path.dirname(__filename);
 const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`;
 
 /**
- * Annotation dir used by the E2E test server (mirrors TANDEM_APP_DATA_DIR in
- * playwright.config.ts webServer.env). Used to clean up orphaned envelopes in
- * cleanupFixtureDir so the rename-recovery feature (#313) doesn't mistake a
- * deleted fixture path as a rename signal for the next test's identical fixture.
+ * Annotation dir used by the E2E test server. Used to clean up orphaned
+ * envelopes in cleanupFixtureDir so the rename-recovery feature (#313) doesn't
+ * mistake a deleted fixture path as a rename signal for the next test's
+ * identical fixture.
+ *
+ * The fallback imports the shared constant rather than re-spelling the literal:
+ * a second copy that drifts sends `cleanupFixtureDir` at the wrong directory,
+ * and the failure mode is the orphaned-envelope cascade `scripts/e2e-server.mjs`
+ * documents — "expected 1 annotation card, received N" across the whole suite.
  */
 const E2E_ANNOTATIONS_DIR = path.join(
-  process.env.TANDEM_APP_DATA_DIR ?? "/tmp/tandem-e2e-data",
+  process.env.TANDEM_APP_DATA_DIR ?? E2E_APP_DATA_DIR,
   "annotations",
 );
 

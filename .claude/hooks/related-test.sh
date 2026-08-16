@@ -64,6 +64,24 @@ if [[ ! -d "$TEST_DIR" ]]; then
 fi
 
 mapfile -t MATCH_ARR < <(find "$TEST_DIR" -name "${BASENAME}.test.ts" 2>/dev/null)
+
+# `basename foo.svelte.ts .ts` leaves "foo.svelte", so a Svelte-5 rune module
+# only matched a suite named `foo.svelte.test.ts`. Both naming conventions are
+# in the tree — 5 modules use that name, 19 use plain `foo.test.ts` and matched
+# nothing at all, exiting 0 silently (#1408). A quiet hook reads as a green
+# hook. Fallback runs ONLY on an empty result, so nothing that already matched
+# changes behaviour.
+#
+# Note the semantics this encodes: one convention wins, rather than both being
+# valid. If a module ever grows BOTH `X.svelte.test.ts` and `X.test.ts`, the
+# first lookup is non-empty, the fallback never fires, and the plain suite
+# silently never runs — the same silent-zero class #1408 was filed for, one
+# level down. Unreachable today (no such collision exists in the tree); if one
+# appears, union the two results and let the >1 ambiguity warning below speak.
+if [[ "${#MATCH_ARR[@]}" -eq 0 && "$BASENAME" == *.svelte ]]; then
+  mapfile -t MATCH_ARR < <(find "$TEST_DIR" -name "${BASENAME%.svelte}.test.ts" 2>/dev/null)
+fi
+
 MATCH_COUNT=${#MATCH_ARR[@]}
 
 if [[ "$MATCH_COUNT" -eq 0 ]]; then
@@ -75,4 +93,9 @@ fi
 
 TEST_FILE="${MATCH_ARR[0]}"
 echo "Running related test: $TEST_FILE"
-npx vitest run --reporter=dot --bail=1 "$TEST_FILE" 2>&1 || true
+# Call vitest's entry directly rather than through `npx`. Measured on Windows,
+# `npx` spends 2.4-3.8s resolving the bin before vitest starts — roughly half
+# the wall time of a one-file run (7.0s -> 3.7s). Pre-existing, but the #1408
+# fallback above arms this path on 19 more modules, so it now costs 19x more
+# often. Same reason `playwright.config.ts` invokes the tsx CLI by path.
+node node_modules/vitest/vitest.mjs run --reporter=dot --bail=1 "$TEST_FILE" 2>&1 || true
