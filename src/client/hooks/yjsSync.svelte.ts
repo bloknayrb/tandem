@@ -21,7 +21,8 @@ import {
 } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, ClaudeAwareness } from "../../shared/types";
-import type { DocListEntry, OpenTab } from "../types";
+import type { AppInfoData, DocListEntry, OpenTab } from "../types";
+import { installIdFromStoragePath } from "../utils/install-id.js";
 import { createRebuildScheduler } from "./rebuild-scheduler.js";
 import { resolveActiveTabId } from "./tab-reconcile.js";
 import type { SidecarRetryStrategy } from "./useTandemSettings";
@@ -83,6 +84,8 @@ export interface YjsSyncState {
   readonly connectionStatus: ConnectionStatus;
   readonly reconnectAttempts: number;
   readonly disconnectedSince: number | null;
+  /** Identifies the connected INSTALLATION (not the run); null until `/api/info` answers. */
+  readonly installId: string | null;
   readonly annotations: Annotation[];
   readonly claudeStatus: string | null;
   readonly claudeActive: boolean;
@@ -136,7 +139,7 @@ export function createYjsSync(opts?: {
    * built providers / the next rebuild — in-flight sockets are not re-wired.
    * Lazy by design: the getter may close over state initialized AFTER this
    * factory is called (e.g. App.svelte builds settings below createYjsSync), and
-   * it is only ever invoked after `await fetchGenerationId()`, so the closed-over
+   * it is only ever invoked after `await fetchServerIdentity()`, so the closed-over
    * binding is live by call time.
    */
   getRetryStrategy?: () => SidecarRetryStrategy;
@@ -184,6 +187,14 @@ export function createYjsSync(opts?: {
    * state can merge back.
    */
   let generationId: string | null = null;
+  /**
+   * See `installIdFromStoragePath` for what this is and why it is derived the
+   * way it is. Two things true only here: unlike `generationId` it is NOT an
+   * auth token and never travels to the server, and it is a plain `let` rather
+   * than `$state` because its only consumer reads it inside a callback at
+   * attach time, never in a template.
+   */
+  let installId: string | null = null;
   // Last activation epoch applied from the server. Lets handleDocumentList tell a
   // genuine (re)activation (epoch advanced) from a stale re-broadcast of an
   // unchanged active id (epoch same), so the latter never clobbers a local tab
@@ -261,16 +272,38 @@ export function createYjsSync(opts?: {
   // ---------- Generation fetch + full-rebuild plumbing (stale-tab resync) ----------
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-  /** Fetch the current server generation id, or null if unreachable/absent.
-   *  Timeboxed: a half-open server (accepts TCP, never responds) must not
-   *  hang the connect/rebuild poll loops forever. */
-  const fetchGenerationId = async (): Promise<string | null> => {
+  /**
+   * Fetch the server's identity: returns the generation id (or null if
+   * unreachable/absent) and, as a side effect, refreshes `installId` from the
+   * SAME response — named for that rather than for the return value, because a
+   * caller who reads this as a pure probe and memoizes it would silently freeze
+   * the install id.
+   *
+   * One response for both is deliberate: two fetches could straddle a server
+   * swap and pair one server's generation with another's identity.
+   *
+   * Timeboxed: a half-open server (accepts TCP, never responds) must not hang
+   * the connect/rebuild poll loops forever.
+   *
+   * Deliberately does NOT reuse `fetchAppInfo` (`useAppInfo.ts`), which caches
+   * at module scope: the rebuild path exists precisely to observe a CHANGED
+   * generation, so a cached body would defeat stale-tab resync entirely.
+   */
+  const fetchServerIdentity = async (): Promise<string | null> => {
     try {
       const res = await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_INFO}`, {
         signal: AbortSignal.timeout(5000),
       });
+      // A non-ok response returns before the assignment below, so a transient
+      // blip preserves the previous install id rather than disabling recovery.
       if (!res.ok) return null;
-      const body = (await res.json()) as { generationId?: string | null };
+      const body = (await res.json()) as AppInfoData;
+      // `storagePath` is loopback-only, so a response without it leaves the id
+      // null — and every consumer of `installId` fails closed on that.
+      installId =
+        typeof body.storagePath === "string" && body.storagePath.length > 0
+          ? installIdFromStoragePath(body.storagePath)
+          : null;
       return body.generationId ?? null;
     } catch {
       return null;
@@ -315,7 +348,7 @@ export function createYjsSync(opts?: {
    */
   const scheduleRebuild = createRebuildScheduler({
     isDestroyed: () => destroyed,
-    fetchGenerationId,
+    fetchGenerationId: fetchServerIdentity,
     getPinnedGeneration: () => generationId,
     onGenerationUnchanged: () => {
       // Near-unreachable (/api/info and the gate disagreeing). Nothing to
@@ -603,7 +636,7 @@ export function createYjsSync(opts?: {
   // poll keeps running and bootstraps the moment the server answers.
   void (async () => {
     while (!destroyed) {
-      const gen = await fetchGenerationId();
+      const gen = await fetchServerIdentity();
       if (destroyed) return;
       if (gen) {
         startBootstrap(gen);
@@ -746,6 +779,10 @@ export function createYjsSync(opts?: {
   return {
     get tabs() {
       return tabsState;
+    },
+    /** See `installId` above — null until `/api/info` answers. */
+    get installId() {
+      return installId;
     },
     get activeTabId() {
       return activeTabIdState;

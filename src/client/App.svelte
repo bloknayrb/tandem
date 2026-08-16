@@ -151,7 +151,10 @@ onDestroy(() => yjsSync.destroy());
 
 // #864: persist unsaved scratchpad content for recovery + warn before losing
 // it. Logic lives in the hook to keep App.svelte minimal.
-const scratchpadPersistence = createScratchpadPersistence(() => yjsSync.tabs);
+const scratchpadPersistence = createScratchpadPersistence(
+  () => yjsSync.tabs,
+  () => yjsSync.installId,
+);
 onDestroy(() => scratchpadPersistence.destroy());
 
 // #1116: license gate (ADR-040). Polls /api/license/status; on any

@@ -127,6 +127,12 @@ export interface AppInfoData {
   bindPort?: number;
   /** Loopback-only: absolute path to session storage directory. */
   storagePath?: string;
+  /**
+   * Loopback-only: identifies this server RUN. New on every boot — every
+   * Hocuspocus provider pins it as its auth token so a Y.Doc that predates a
+   * restart is rejected before it can merge back. Null in stdio mode.
+   */
+  generationId?: string | null;
   /** Loopback-only: mtime of the auth token file in ms, or null if not yet created. */
   tokenRotatedAt?: number | null;
   /** Absolute path to CHANGELOG.md on the server host. Undefined if not found at startup. */
