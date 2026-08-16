@@ -184,8 +184,11 @@ describe("buildAwarenessDecorations", () => {
     // Flat text is "Hi" (length 2), doc.content.size = 4, offset 999 exceeds both
     buildAwarenessDecorations(doc as any, makeAwareness({ focusOffset: 999 }));
     expect(capturedWidgets).toHaveLength(1);
-    // flatOffsetToPmPos falls through to doc.content.size = 4
-    expect(capturedWidgets[0].pos).toBe(doc.content.size);
+    // Clamps to the end of the last block's TEXT (3), not to `doc.content.size`
+    // (4). Changed by #1485: `content.size` is the position after the paragraph
+    // closes, whose parent is the doc node — a remote cursor rendered there sits
+    // outside every textblock. 3 is where the caret actually belongs.
+    expect(capturedWidgets[0].pos).toBe(3);
   });
 
   it("adds idle class when active is false", () => {
