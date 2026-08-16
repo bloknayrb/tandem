@@ -378,6 +378,61 @@ describe("applyTrackedChanges", () => {
     expect(output.rejectedDetails[0].reason).toContain("snapshot mismatch");
   });
 
+  it("accepts a TRUNCATED textSnapshot that is still a prefix of the range (#1486)", async () => {
+    // The snapshot is capped at 200 chars, so for any longer range it is a
+    // prefix and can never equal the whole slice. Compared exactly, this
+    // guard rejected every long suggestion and blamed the document — the one
+    // failure mode that reads as "someone else edited this" when nobody had.
+    const body = Array.from({ length: 30 }, (_, i) => `clause ${i} distinct.`).join(" ");
+    const xml = wrapBody(`<w:p><w:r><w:t>${body}</w:t></w:r></w:p>`);
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [
+        {
+          id: "s1",
+          from: 0,
+          to: body.length,
+          newText: "Replaced.",
+          textSnapshot: body.slice(0, 200),
+          textSnapshotTruncated: true,
+        },
+      ],
+      { author: "Test", ydocFlatText: body },
+    );
+
+    expect(output.rejectedDetails).toEqual([]);
+    expect(output.applied).toBe(1);
+  });
+
+  it("still rejects a truncated snapshot whose prefix no longer matches (#1486)", async () => {
+    // The positive control. Relaxing the comparison to `startsWith` must not
+    // relax it to "always true" — a truncated snapshot still has to detect
+    // that the text underneath it changed, which is the guard's whole job.
+    const body = Array.from({ length: 30 }, (_, i) => `clause ${i} distinct.`).join(" ");
+    const xml = wrapBody(`<w:p><w:r><w:t>${body}</w:t></w:r></w:p>`);
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [
+        {
+          id: "s1",
+          from: 0,
+          to: body.length,
+          newText: "Replaced.",
+          textSnapshot: `something else entirely${body.slice(23, 200)}`,
+          textSnapshotTruncated: true,
+        },
+      ],
+      { author: "Test", ydocFlatText: body },
+    );
+
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails[0]?.reason).toContain("snapshot mismatch");
+  });
+
   it("throws on comparison guard failure", async () => {
     const xml = wrapBody(`<w:p><w:r><w:t>Hello World</w:t></w:r></w:p>`);
     const docxBuffer = await createTestDocx(xml);

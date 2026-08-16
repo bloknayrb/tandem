@@ -30,7 +30,7 @@ import type * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { withMcp } from "../../shared/origins.js";
 import type { AgentIdentity } from "../../shared/types.js";
-import { addReplyToAnnotation, createAnnotation } from "../mcp/annotations.js";
+import { addReplyToAnnotation, captureSnapshot, createAnnotation } from "../mcp/annotations.js";
 import { getOutline, getSection } from "../mcp/document.js";
 import { extractText } from "../mcp/document-model.js";
 import { licenseGate } from "../mcp/license-gate.js";
@@ -239,9 +239,20 @@ function annotateFromQuote(
       },
     };
   }
-  // #1123 M3: stamp the authoring agent. When absent, pass `extra` unchanged so
-  // the created record is byte-identical to pre-M3.
-  const mergedExtra = agentIdentity ? { ...extra, agentIdentity } : extra;
+  // Capture the same snapshot `tandem_comment` does (#1486). Without it the
+  // record has no `textSnapshot` at all, and the undo path is gated on the
+  // snapshot being a string — so undoing one of these annotations silently
+  // returns success, clears the Undo button and flips the record back to
+  // `pending` while the replacement text is still in the document. Declining
+  // is a designed outcome here; succeeding without reverting is not.
+  const snap = captureSnapshot(ydoc, r.anchored.range.from, r.anchored.range.to);
+  const mergedExtra = {
+    ...extra,
+    textSnapshot: snap.text,
+    ...(snap.truncated ? { textSnapshotTruncated: true } : {}),
+    // #1123 M3: stamp the authoring agent.
+    ...(agentIdentity ? { agentIdentity } : {}),
+  };
   const id = createAnnotation(annotations, ydoc, "comment", r.anchored, body, mergedExtra);
   return {
     result: { ok: true, annotation_id: id },

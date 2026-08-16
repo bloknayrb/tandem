@@ -8,6 +8,7 @@ import { withBrowser, withMcp } from "../../shared/origins.js";
 import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
+import { SNAPSHOT_CAP } from "../../shared/snapshot.js";
 import type {
   AgentIdentity,
   Annotation,
@@ -316,11 +317,34 @@ function notifyDeprecatedTool(toolName: string): void {
   });
 }
 
-const SNAPSHOT_CAP = 200;
-/** Capture a text snapshot from the document at the given range, truncated to SNAPSHOT_CAP chars. */
-function captureSnapshot(ydoc: Y.Doc, from: number, to: number): string {
+/**
+ * Capture a text snapshot from the document at the given range, capped at
+ * {@link SNAPSHOT_CAP} chars.
+ *
+ * Reports `truncated` out of band rather than marking the cut with a trailing
+ * `"..."` (#1486). Undo restores this string verbatim into the document, so a
+ * snapshot cut short deletes everything past the cap — and the old ellipsis was
+ * written INTO the user's document as three literal characters when it did. An
+ * in-band marker is also ambiguous by construction: prose that legitimately
+ * ends in an ellipsis is indistinguishable from a cut, so the reader had to
+ * choose between refusing honest undos and missing dishonest ones. A separate
+ * boolean has neither problem. `isSnapshotTruncated` still sniffs for the old
+ * marker, but only on records that carry no flag — see `shared/snapshot.ts` for
+ * why that residual ambiguity is acceptable there and not here.
+ *
+ * The cap itself stays. It bounds annotation record size against pathological
+ * ranges (#1000 security review R2); the fix is for the consumers that need the
+ * text lossless to know when it isn't.
+ */
+export function captureSnapshot(
+  ydoc: Y.Doc,
+  from: number,
+  to: number,
+): { text: string; truncated: boolean } {
   const text = extractText(ydoc).slice(from, to);
-  return text.length > SNAPSHOT_CAP ? text.slice(0, SNAPSHOT_CAP - 3) + "..." : text;
+  return text.length > SNAPSHOT_CAP
+    ? { text: text.slice(0, SNAPSHOT_CAP), truncated: true }
+    : { text, truncated: false };
 }
 
 /** Create an annotation from an anchored range result and store it in the Y.Map.
@@ -482,7 +506,8 @@ export function registerAnnotationTools(server: McpServer): void {
           }
           const snap = captureSnapshot(store.ydoc, result.range.from, result.range.to);
           const id = store.createAnnotation("comment", result, text, {
-            textSnapshot: snap,
+            textSnapshot: snap.text,
+            ...(snap.truncated ? { textSnapshotTruncated: true } : {}),
             ...(suggestedText !== undefined ? { suggestedText } : {}),
           });
           return mcpSuccess({ annotationId: id });

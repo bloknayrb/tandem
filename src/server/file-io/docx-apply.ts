@@ -8,6 +8,7 @@ import type { ChildNode } from "domhandler";
 import { Element, Text } from "domhandler";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
+import { isSnapshotTruncated, snapshotSearchPrefix } from "../../shared/snapshot.js";
 import { assertDocxWithinSizeLimits } from "./docx-size-gate.js";
 import {
   findAllByName,
@@ -69,6 +70,13 @@ export interface AcceptedSuggestion {
   to: number;
   newText: string;
   textSnapshot?: string;
+  /**
+   * Carried from the annotation so the staleness check below knows whether
+   * `textSnapshot` is the whole annotated text or only its first 200
+   * characters (#1486). Without it, every suggestion over a long range is
+   * rejected as "changed" when nothing changed.
+   */
+  textSnapshotTruncated?: boolean;
   /** Word comment ID if this suggestion overlaps an imported comment. */
   importCommentId?: string;
 }
@@ -526,10 +534,18 @@ export async function applyTrackedChanges(
   const rejectedDetails: Array<{ id: string; reason: string }> = [];
 
   for (const s of sorted) {
-    // textSnapshot check
+    // textSnapshot check — has the text under this range changed since the
+    // suggestion was accepted?
     if (s.textSnapshot !== undefined) {
       const actual = offsetMap.flatText.slice(s.from, s.to);
-      if (actual !== s.textSnapshot) {
+      // A capped snapshot is a PREFIX (#1486), so it can never equal the whole
+      // slice and exact comparison rejects EVERY suggestion over a 200-char
+      // range — reported as "the text changed", which it had not. Compare what
+      // the snapshot actually claims to be: the range's opening characters.
+      const stale = isSnapshotTruncated(s)
+        ? !actual.startsWith(snapshotSearchPrefix(s))
+        : actual !== s.textSnapshot;
+      if (stale) {
         rejectedDetails.push({
           id: s.id,
           reason: `Text snapshot mismatch: expected "${s.textSnapshot}", got "${actual}"`,

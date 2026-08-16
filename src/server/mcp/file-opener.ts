@@ -22,6 +22,8 @@ import {
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withReload } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
+import { toFlatOffset } from "../../shared/positions/types.js";
+import { isSnapshotTruncated, snapshotSearchPrefix } from "../../shared/snapshot.js";
 import type { Annotation, ExternalConflictState, FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
@@ -1615,14 +1617,45 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
         for (const ann of refreshed) {
           if (!ann.textSnapshot) continue;
 
-          const vr = validateRange(doc, ann.range.from, ann.range.to, {
-            textSnapshot: ann.textSnapshot,
-          });
+          // A capped snapshot is a PREFIX of the annotated text, not all of it
+          // (#1486), so it can locate the range's START but says nothing about
+          // its END. Both halves of that matter here:
+          //
+          //  - Searching with it and taking `match + snapshot.length` as the
+          //    end — what this pass does for a whole snapshot — silently
+          //    shrinks a long annotation to the cap on every reload, after
+          //    which accept replaces only that much and the .docx apply guard,
+          //    comparing the same slice, starts PASSING on the shrunken range.
+          //  - Skipping the annotation entirely is no better and was this
+          //    fix's first draft: `refreshAllRanges` above has already
+          //    re-anchored a fresh `relRange` from the STALE flat offsets, so
+          //    the record ends up durably pinned to the wrong text and every
+          //    later reload resolves it cleanly and never revisits it.
+          //
+          // So: search on the prefix, and carry the span across unchanged. That
+          // is exact whenever the annotated text moved without changing length,
+          // which is the same assumption the whole-snapshot branch makes.
+          const truncated = isSnapshotTruncated(ann);
+          const probe = snapshotSearchPrefix(ann);
+          if (probe.length === 0) continue;
+          const span = ann.range.to - ann.range.from;
+
+          // For a truncated snapshot the staleness question is "is the prefix
+          // still at `from`?", so the range handed to `validateRange` is the
+          // prefix's own, not the annotation's.
+          const probeTo = truncated ? toFlatOffset(ann.range.from + probe.length) : ann.range.to;
+          const vr = validateRange(doc, ann.range.from, probeTo, { textSnapshot: probe });
 
           if (vr.ok) continue; // Range is still valid
 
           if (vr.code === "RANGE_MOVED") {
-            const relocated = anchoredRange(doc, vr.resolvedFrom, vr.resolvedTo, ann.textSnapshot);
+            const resolvedTo = truncated ? toFlatOffset(vr.resolvedFrom + span) : vr.resolvedTo;
+            // No snapshot argument on the truncated branch: `anchoredRange`
+            // would re-validate the prefix against the FULL relocated range
+            // and reject the very placement just computed.
+            const relocated = truncated
+              ? anchoredRange(doc, vr.resolvedFrom, resolvedTo)
+              : anchoredRange(doc, vr.resolvedFrom, resolvedTo, ann.textSnapshot);
             if (relocated.ok) {
               const updated: Annotation = {
                 ...ann,

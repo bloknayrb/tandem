@@ -1,4 +1,5 @@
 <script lang="ts">
+import { isSnapshotTruncated } from "../../shared/snapshot";
 import type { Annotation } from "../../shared/types";
 import { diffWords } from "../utils/word-diff";
 import AnnotationCardHeader from "./AnnotationCardHeader.svelte";
@@ -23,6 +24,14 @@ let { annotation, isPending, isReviewTarget, isEditing, canEdit, onEnterEdit }: 
 const segments = $derived(
   annotation.textSnapshot ? diffWords(annotation.textSnapshot, annotation.suggestedText) : null,
 );
+
+// The original is capped at 200 characters, and since #1486 the cut is no
+// longer marked inside the text. This card is the one surface where that
+// marker was carrying real information: the diff is computed against the
+// prefix, so without a cue a 900-character original reads as a 200-character
+// one and the card understates what the suggestion replaces. Display-only —
+// this appends nothing to the stored snapshot.
+const originalTruncated = $derived(isSnapshotTruncated(annotation));
 </script>
 
 <AnnotationCardHeader
@@ -73,6 +82,15 @@ const segments = $derived(
         style="color: var(--tandem-success-fg-strong); background-color: var(--tandem-success-bg); padding: 0 2px; border-radius: var(--tandem-r-1);"
       >
         {annotation.suggestedText}
+      </span>
+    {/if}
+    {#if originalTruncated}
+      <span
+        data-testid="suggestion-original-truncated-{annotation.id}"
+        title="Only the first 200 characters of the original text were saved, so this comparison is partial."
+        style="display: block; margin-top: 4px; font-size: 11px; font-style: italic; color: var(--tandem-fg-muted);"
+      >
+        Original shown in part — it continues past what was saved.
       </span>
     {/if}
   </div>

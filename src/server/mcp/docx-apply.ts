@@ -178,6 +178,12 @@ export async function applyChangesCore(
       to,
       newText,
       textSnapshot: ann.textSnapshot,
+      // Must travel with the snapshot: the guard downstream compares against
+      // it, and without this flag a truncated prefix reads as a mismatch and
+      // rejects a suggestion whose text is intact (#1486).
+      ...(ann.textSnapshotTruncated !== undefined
+        ? { textSnapshotTruncated: ann.textSnapshotTruncated }
+        : {}),
       importCommentId,
     });
   }

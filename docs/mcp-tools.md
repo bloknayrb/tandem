@@ -233,7 +233,7 @@ Replace text at a specific range. Single-paragraph replacements only.
 | `to` | number | yes | End position (flat text character offset) |
 | `newText` | string | yes | Replacement text (no newlines -- inserted literally) |
 | `documentId` | string | no | Target document ID (defaults to active document) |
-| `textSnapshot` | string | no | The text you expect to find at `[from, to]`. Strongly recommended: on mismatch the edit is refused rather than applied to whatever moved into that range. |
+| `textSnapshot` | string | no | The text you expect to find at `[from, to]`. Strongly recommended: on mismatch the edit is refused rather than applied to whatever moved into that range. **Do not pass back a `textSnapshot` read from an annotation whose `textSnapshotTruncated` is `true`** — it is only the first 200 characters, so it relocates to a 200-character range and the edit lands on a shorter span than the annotation covers (#1486). Read the current text instead. |
 
 **Returns:**
 ```json
@@ -488,7 +488,7 @@ Add a comment attached to a text range. Appears in the side panel. Use `suggeste
 | `text` | string | yes | Comment text |
 | `suggestedText` | string | no | Proposed replacement text. When set, the comment renders as a tracked-change suggestion with accept/reject controls. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
-| `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
+| `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted. Same caveat as `tandem_edit`: never pass back a snapshot flagged `textSnapshotTruncated`. |
 | `directedAt` | `"claude"` | no | **Deprecated (ADR-027).** Still accepted by the schema, but passing it returns `DEPRECATED` — omit it. |
 
 **Returns:**

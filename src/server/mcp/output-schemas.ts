@@ -59,7 +59,24 @@ const annotationBaseShape = {
   content: z.string(),
   status: AnnotationStatusSchema,
   timestamp: z.number(),
-  textSnapshot: z.string().optional().describe("Document text at creation time (≤200 chars)"),
+  textSnapshot: z
+    .string()
+    .optional()
+    .describe(
+      "Document text at creation time, capped at 200 chars. Check textSnapshotTruncated before treating it as the annotation's full text.",
+    ),
+  // Declared, not merely tolerated (#1486). The schemas are not `.strict()` so
+  // an undeclared field survives at runtime, but Claude is told to pass
+  // `textSnapshot` back as a range guard on `tandem_edit` — and a truncated one
+  // resolves to `match + 200`, editing a 200-character span where the
+  // annotation covers far more. Without this field there is no way for a caller
+  // to tell a capped snapshot from a genuinely 200-character one.
+  textSnapshotTruncated: z
+    .boolean()
+    .optional()
+    .describe(
+      "True when textSnapshot is only the first 200 chars of the annotated text. Do not pass a truncated snapshot back as a range guard — it will resolve to a shorter range than the annotation covers.",
+    ),
   editedAt: z.number().optional(),
   rev: z.number().optional().describe("Durable-store last-writer-wins counter"),
   audience: z.enum(["private", "outbound"]),

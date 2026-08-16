@@ -417,6 +417,7 @@ store-readonly-dismiss
 store-readonly-reclaim
 store-readonly-reclaim-error
 suggestion-diff-{*}
+suggestion-original-truncated-{*}
 tab-name-{*}
 tab-scroll-container
 tab-{*}
