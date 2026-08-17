@@ -5,6 +5,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import { E2E_APP_DATA_DIR } from "../../scripts/e2e-paths.js";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 import type { ToolResponse } from "../../src/shared/types.js";
@@ -15,15 +16,25 @@ const __dirname = path.dirname(__filename);
 const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`;
 
 /**
- * Annotation dir used by the E2E test server (mirrors TANDEM_APP_DATA_DIR in
- * playwright.config.ts webServer.env). Used to clean up orphaned envelopes in
- * cleanupFixtureDir so the rename-recovery feature (#313) doesn't mistake a
- * deleted fixture path as a rename signal for the next test's identical fixture.
+ * Annotation dir used by the E2E test server. Used to clean up orphaned
+ * envelopes in cleanupFixtureDir so the rename-recovery feature (#313) doesn't
+ * mistake a deleted fixture path as a rename signal for the next test's
+ * identical fixture.
+ *
+ * Imports the shared constant rather than re-spelling the literal: a second
+ * copy that drifts sends `cleanupFixtureDir` at the wrong directory, and the
+ * failure mode is the orphaned-envelope cascade `scripts/e2e-server.mjs`
+ * documents — "expected 1 annotation card, received N" across the whole suite.
+ *
+ * **Deliberately does not consult `process.env.TANDEM_APP_DATA_DIR`**, which it
+ * used to. `playwright.config.ts` sets that var inside `webServer.env` — the
+ * server child's environment — and never on the runner's `process.env`, so in
+ * this process it only ever holds a developer's own ambient export. Reading it
+ * therefore had no reachable correct case and one wrong one: cleanup aimed at
+ * the developer's dir while the server wrote envelopes here, silently no-oping
+ * against the directory that matters and re-creating the very cascade above.
  */
-const E2E_ANNOTATIONS_DIR = path.join(
-  process.env.TANDEM_APP_DATA_DIR ?? "/tmp/tandem-e2e-data",
-  "annotations",
-);
+const E2E_ANNOTATIONS_DIR = path.join(E2E_APP_DATA_DIR, "annotations");
 
 /**
  * MCP test client using the SDK's built-in Client + StreamableHTTPClientTransport.

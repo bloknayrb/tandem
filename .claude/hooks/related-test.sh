@@ -64,6 +64,24 @@ if [[ ! -d "$TEST_DIR" ]]; then
 fi
 
 mapfile -t MATCH_ARR < <(find "$TEST_DIR" -name "${BASENAME}.test.ts" 2>/dev/null)
+
+# `basename foo.svelte.ts .ts` leaves "foo.svelte", so a Svelte-5 rune module
+# only matched a suite named `foo.svelte.test.ts`. Both naming conventions are
+# in the tree — 5 modules use that name, 19 use plain `foo.test.ts` and matched
+# nothing at all, exiting 0 silently (#1408). A quiet hook reads as a green
+# hook. Fallback runs ONLY on an empty result, so nothing that already matched
+# changes behaviour.
+#
+# Note the semantics this encodes: one convention wins, rather than both being
+# valid. If a module ever grows BOTH `X.svelte.test.ts` and `X.test.ts`, the
+# first lookup is non-empty, the fallback never fires, and the plain suite
+# silently never runs — the same silent-zero class #1408 was filed for, one
+# level down. Unreachable today (no such collision exists in the tree); if one
+# appears, union the two results and let the >1 ambiguity warning below speak.
+if [[ "${#MATCH_ARR[@]}" -eq 0 && "$BASENAME" == *.svelte ]]; then
+  mapfile -t MATCH_ARR < <(find "$TEST_DIR" -name "${BASENAME%.svelte}.test.ts" 2>/dev/null)
+fi
+
 MATCH_COUNT=${#MATCH_ARR[@]}
 
 if [[ "$MATCH_COUNT" -eq 0 ]]; then
@@ -74,5 +92,38 @@ elif [[ "$MATCH_COUNT" -gt 1 ]]; then
 fi
 
 TEST_FILE="${MATCH_ARR[0]}"
+
+# Call vitest's entry directly rather than through `npx`: measured on Windows,
+# `npx`'s bin resolution is roughly half the wall time of a one-file run. (Ratio
+# only — absolute timings are machine- and file-specific and were dropped after
+# a re-measure on the same OS reproduced the ratio but not the numbers.) The
+# #1408 fallback above arms this path on 19 more modules, so the cost lands ~5x
+# more often. `playwright.config.ts` invokes the tsx CLI by path too, but for a
+# different reason — #244/#672, shim buffering and a stdout deadlock, not speed.
+#
+# A bare relative `node_modules/...` is NOT equivalent to `npx`, which also
+# searches ancestor `node_modules/.bin`. Git worktrees under `.claude/worktrees/`
+# have `tests/` (tracked) but no `node_modules` (not), so the check at :62 lets
+# them through and `node` would die with ERR_MODULE_NOT_FOUND into a `|| true`
+# — printing "Running related test:" for a test that never ran, which is the
+# silent-zero class #1408 was filed for. Walk up for the entry, keep `npx` as
+# the fallback that still works there.
+VITEST_ENTRY=""
+SEARCH_DIR="$PWD"
+while true; do
+  if [[ -f "$SEARCH_DIR/node_modules/vitest/vitest.mjs" ]]; then
+    VITEST_ENTRY="$SEARCH_DIR/node_modules/vitest/vitest.mjs"
+    break
+  fi
+  PARENT_DIR="$(dirname "$SEARCH_DIR")"
+  [[ "$PARENT_DIR" == "$SEARCH_DIR" ]] && break
+  SEARCH_DIR="$PARENT_DIR"
+done
+
 echo "Running related test: $TEST_FILE"
-npx vitest run --reporter=dot --bail=1 "$TEST_FILE" 2>&1 || true
+if [[ -n "$VITEST_ENTRY" ]]; then
+  node "$VITEST_ENTRY" run --reporter=dot --bail=1 "$TEST_FILE" 2>&1 || echo "✗ Related test FAILED: $TEST_FILE"
+else
+  npx vitest run --reporter=dot --bail=1 "$TEST_FILE" 2>&1 || echo "✗ Related test FAILED: $TEST_FILE"
+fi
+exit 0

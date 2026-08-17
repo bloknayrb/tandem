@@ -33,7 +33,7 @@ These WILL break things if violated:
 - `npm run build` -- typecheck + vite build + font-asset check + tsup -> `dist/{server,channel,monitor,cli,client}/`
 - `npm run build:server` -- tsup only (all four entries)
 - `npm run typecheck` -- tsc server + client + `svelte-check --fail-on-warnings`
-- `npm test` -- vitest. `npm run test:e2e` -- Playwright (auto-starts servers; **kills anything on :3478/:3479**)
+- `npm test` -- vitest. `npm run test:e2e` -- Playwright (auto-starts servers; **refuses to run while Tandem or `dev:server` holds :3479**, and frees :3478/:3479 when it starts its own)
 - `npm run doctor` -- Diagnose setup issues. `npm run check:tokens` -- raw hex/rgba scan (also pre-commit)
 - `npm run audit:origins` / `npm run audit:ymap-keys` -- static walks for Critical Rules 1 and 2
 - **Start the server before connecting Claude Code.** Vite hot-reloads client code; restart `dev:server` then `/mcp` in Claude Code for server changes.
@@ -204,7 +204,7 @@ code in one of these areas; the one-liner is enough to avoid the trap, not enoug
 - **Pre-overwrite document backups are path-keyed and once-per-run**, covering the text and `.docx` binary branches, keyed by path hash rather than docId. **The failure contract is the opposite of `integrations/backup.ts`**: a failed snapshot warns and lets the save proceed, while deliberate skips *do* set the gate.
 
 ### Testing & E2E
-- **E2E starts its own server and kills anything on :3478/:3479** — running it alongside `dev:server` terminates your dev server.
+- **E2E refuses to start while a non-E2E server holds :3479, and frees :3478/:3479 once it starts its own.** The refusal is the load-bearing half (#1483): `reuseExistingServer: !CI` means a local run *adopts* whatever answers the port, and the desktop sidecar answers it — so the destructive suite used to run against real documents with none of the `env:` isolation applied, because `freePort` and `e2e-server.mjs`'s per-run wipe only execute on the branch where nothing was listening. `scripts/e2e-guard.ts` fails closed: anything it cannot prove is an E2E server is refused.
 - Uploaded (`upload://`) files are read-only; `tandem_save` returns a session-only save.
 - **`cargo test` requires GTK libs plus both sidecar stubs, and the pre-push hook runs it** — a fresh clone cannot push until they exist. Keep the stub list synced with `bundle.resources`, not with `dist/`. **`libxdo-dev` is required to link and is easy to miss**: it fails as a bare `rust-lld: unable to find library -lxdo`, thousands of lines into linker output. Setup recipe: [docs/gotchas.md](docs/gotchas.md#testing--e2e).
 

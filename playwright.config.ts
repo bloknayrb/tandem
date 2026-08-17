@@ -1,5 +1,23 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
+import { E2E_APP_DATA_DIR } from "./scripts/e2e-paths";
 import { DEFAULT_MCP_PORT, TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "./src/shared/constants";
+
+/**
+ * This config's own directory, for `globalSetup` below.
+ *
+ * Playwright resolves `globalSetup` against the LOADED config file's directory
+ * (`resolveScript` in `node_modules/playwright/lib/common/config.js`), and
+ * `scripts/screenshots/playwright.config.ts` spreads this whole object — so a
+ * relative `"./scripts/e2e-guard.ts"` would resolve there as
+ * `scripts/screenshots/scripts/e2e-guard.ts` and die with MODULE_NOT_FOUND
+ * before a single frame was captured. That is the identical failure that file
+ * documents at its head for `webServer.cwd`, which it re-roots by hand. An
+ * absolute path is inheritance-safe by construction, so no child config has to
+ * know this key exists.
+ */
+const CONFIG_DIR = dirname(fileURLToPath(import.meta.url));
 
 // Set before defineConfig so the tsx webServer inherits it via process.env
 // without needing an explicit `env:` key. Playwright's webServer.env REPLACES
@@ -9,19 +27,17 @@ import { DEFAULT_MCP_PORT, TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "./src/sha
 // and avoids that problem entirely.
 process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV] = "1";
 
-// The isolated app-data dir (TANDEM_APP_DATA_DIR below) must be RESET per run,
-// not just isolated — stale annotation envelopes cascade failures through the
-// whole suite (see scripts/e2e-server.mjs for the full rationale). The wipe
-// lives in that launcher, NOT here: Playwright re-imports this config in every
-// worker process, so a config-eval rmSync would re-fire mid-run underneath
-// the live server.
-const E2E_APP_DATA_DIR = "/tmp/tandem-e2e-data";
-
 export default defineConfig({
   testDir: "tests/e2e",
   timeout: 30_000,
   retries: 1,
   workers: 1, // server supports one MCP session at a time
+  // #1483: refuses to run when :3479 is held by a server whose storage dir is
+  // not the isolated E2E one. That is narrower than "a server this suite
+  // started" — an adopted STALE E2E server still passes, and skips the per-run
+  // wipe. See scripts/e2e-guard.ts for the ordering, the fail-closed rule, both
+  // residual gaps, and why this is not `reuseExistingServer: false`.
+  globalSetup: resolve(CONFIG_DIR, "scripts/e2e-guard.ts"),
   use: {
     baseURL: "http://127.0.0.1:5173",
     headless: true,
