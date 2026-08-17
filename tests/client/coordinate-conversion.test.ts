@@ -96,7 +96,12 @@ describe("flatOffsetToPmPos", () => {
     expect(flatOffsetToPmPos(doc as any, 0)).toBe(1);
     expect(flatOffsetToPmPos(doc as any, 2)).toBe(3);
     expect(flatOffsetToPmPos(doc as any, 4)).toBe(5);
-    expect(flatOffsetToPmPos(doc as any, 5)).toBe(doc.content.size); // past end → content.size
+    // End of the text, NOT `doc.content.size` (7). Changed by #1485: 7 is the
+    // position after the paragraph's close token, whose parent is the doc node,
+    // so an insert there appends a stray sibling paragraph instead of extending
+    // this one. This assertion pinned that defect — note it is a MOCK doc, the
+    // same instrument that let #1450 through.
+    expect(flatOffsetToPmPos(doc as any, 5)).toBe(6);
   });
 
   it('H1 heading — prefix "# " (length 2) clamps to text start', () => {

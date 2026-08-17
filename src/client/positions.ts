@@ -71,15 +71,54 @@ function resolveWithinNode(node: PmNode, textOffset: number, pmStart: number): P
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     const childStart = pmOffset + 1;
-    if (i > 0) accumulated += 1;
     const childLen = pmNodeFlatTextLength(child);
     if (accumulated + childLen > textOffset) {
       return resolveWithinNode(child, textOffset - accumulated, childStart);
     }
     accumulated += childLen;
     pmOffset += child.nodeSize;
+
+    if (i < node.childCount - 1) {
+      // The FLAT_SEPARATOR between two block children. An offset that lands ON
+      // it means "the end of this child" — and it MUST be resolved here (#1485).
+      //
+      // Charging the separator at the top of the next iteration instead, which
+      // is what this loop used to do, makes the next child's test pass with a
+      // NEGATIVE `textOffset - accumulated`, so the recursion resolves inside
+      // the WRONG child and returns a position one past the previous child's
+      // close token. For a table that put `to` inside the next CELL, and the
+      // accept's deleteRange then ate it: a suggestion on the first cell of a
+      // row silently deleted the second.
+      accumulated += 1;
+      if (accumulated > textOffset) {
+        // Recurse rather than `childStart + child.content.size`: for a container
+        // child (a cell, a list item) that sum lands between the inner block's
+        // close token and the container's, which is not a text position.
+        return resolveWithinNode(child, childLen, childStart);
+      }
+    }
   }
-  return toPmPos(pmStart + node.content.size);
+
+  // Past the end of every child — clamp to the end of the LAST one. The old
+  // `pmStart + node.content.size` is the container's own inner boundary, which
+  // is a text position only when the container's last child is inline. For a
+  // table cell wrapping a paragraph it sits BETWEEN the paragraph's close token
+  // and the cell's, and a range ending there spans a structural boundary.
+  //
+  // Recursion terminates because each step descends exactly one level in a
+  // finite tree, and this branch is reached with `textOffset` already equal to
+  // the node's full flat length, so no child's test can fire and re-enter here.
+  // It does NOT always bottom out in a textblock — a container whose last child
+  // is a LEAF (a `horizontalRule`) or which is empty ends the descent early,
+  // and the `+1` below assumes an open token a leaf does not have. Both return
+  // the same value the old code did, so those shapes are unimproved rather than
+  // broken; say so rather than claiming an invariant this does not establish.
+  if (node.childCount > 0) {
+    const last = node.child(node.childCount - 1);
+    const lastStart = pmStart + node.content.size - last.nodeSize + 1;
+    return resolveWithinNode(last, pmNodeFlatTextLength(last), lastStart);
+  }
+  return toPmPos(pmStart);
 }
 
 /**
@@ -116,11 +155,34 @@ export function flatOffsetToPmPos(doc: PmNode, flatOffset: FlatOffset): PmPos {
     if (i < nodeCount - 1) {
       accumulated += 1; // \n separator
       if (accumulated > flatOffset) {
-        return toPmPos(childStart + child.content.size);
+        // End of this block. Recurse rather than `childStart + content.size`:
+        // that sum is only a text position when the child is a TEXTBLOCK. For a
+        // container (a table, a list, a blockquote) it lands between the last
+        // inner block's close token and the container's own, which resolves to
+        // a structural position and makes the surrounding deleteRange take the
+        // node boundary with it. Same defect as #1485, one level up.
+        return resolveWithinNode(child, textLen, childStart);
       }
     }
   }
 
+  // Past the end of the document — the end of the LAST block, by the same
+  // reasoning as `resolveWithinNode`'s fallthrough. `doc.content.size` is the
+  // position AFTER the last block closes, whose parent is the doc node, and it
+  // is reached for `flatOffset === flat.length` in EVERY document shape, not
+  // just container-ending ones. `tr.delete` survives it (ProseMirror re-fits the
+  // slice) but an insert does not: `insertContentAt(doc.content.size, …)`
+  // appends a new sibling paragraph AFTER the last block, so a suggestion whose
+  // range ends at the end of the document grew a stray paragraph instead of
+  // extending the last one.
+  if (doc.childCount > 0) {
+    const last = doc.child(doc.childCount - 1);
+    return resolveWithinNode(
+      last,
+      pmNodeFlatTextLength(last),
+      doc.content.size - last.nodeSize + 1,
+    );
+  }
   return toPmPos(doc.content.size);
 }
 
