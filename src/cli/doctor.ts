@@ -667,9 +667,15 @@ function checkMcpJson(r: Recorder, cwd: string, cliAvailable: CliAvailability): 
   // `git checkout` remedy. Both halves are real: `.mcp.json.example` ships as
   // the hand-copy template, and deleting the file is safe because the
   // user-level registration is the one Tandem actually manages.
-  const brokenFileFix =
-    "Copy .mcp.json.example over it, or delete it and rely on the global " +
-    "registration from `tandem setup --apply`.";
+  //
+  // A thunk, and it routes through `setupApplyRemedy` rather than naming the
+  // CLI directly: this was the last remedy in the file that hard-coded
+  // `tandem setup --apply`, which a desktop-app reader has no way to run. Lazy
+  // for the same reason as everywhere else here — every branch that uses it is
+  // a failure branch, so a healthy run must not pay for the PATH walk.
+  const brokenFileFix = () =>
+    "Copy .mcp.json.example over it, or delete it and rely on Tandem's global registration. " +
+    setupApplyRemedy(cliAvailable());
   if (!existsSync(mcpPath)) {
     // Skip-shaped pass, not a warn: absence is the normal state everywhere
     // except a dev checkout. No `fix` — a pass's `fix` reaches --json and
@@ -687,7 +693,7 @@ function checkMcpJson(r: Recorder, cwd: string, cliAvailable: CliAvailability): 
   try {
     raw = readFileSync(mcpPath, "utf-8");
   } catch (err) {
-    r.warn(`.mcp.json could not be read: ${errMsg(err)}`, brokenFileFix);
+    r.warn(`.mcp.json could not be read: ${errMsg(err)}`, brokenFileFix());
     return;
   }
 
@@ -709,20 +715,20 @@ function checkMcpJson(r: Recorder, cwd: string, cliAvailable: CliAvailability): 
     // Deliberately no parse detail: V8 SyntaxErrors embed a snippet of the
     // source text, and this file carries auth-token headers. Doctor output
     // gets pasted into public issues.
-    r.warn(".mcp.json is not valid JSON", brokenFileFix);
+    r.warn(".mcp.json is not valid JSON", brokenFileFix());
     return;
   }
 
   const servers = config.mcpServers;
   if (!servers) {
-    r.warn('.mcp.json missing "mcpServers" key', brokenFileFix);
+    r.warn('.mcp.json missing "mcpServers" key', brokenFileFix());
     return;
   }
 
   // Check tandem (HTTP MCP) entry
   const tandem = servers.tandem;
   if (!tandem) {
-    r.warn('.mcp.json missing "tandem" server entry', brokenFileFix);
+    r.warn('.mcp.json missing "tandem" server entry', brokenFileFix());
   } else if (tandem.type !== "http" || !tandem.url?.includes("/mcp")) {
     r.warn(`.mcp.json tandem: unexpected config — type=${tandem.type}, url=${tandem.url}`);
   } else {
@@ -747,15 +753,22 @@ function checkMcpJson(r: Recorder, cwd: string, cliAvailable: CliAvailability): 
     }
     // Same stale-path check as the user-config branch — the condition is
     // identical here and previously went unreported for project configs.
-    // `suffix`, not just `stalePathFix`: a project-local `.mcp.json` is outside
-    // everything Tandem manages, so the bare-command branch's generic "run the
-    // wizard / run setup --apply" remedy is wrong here too — it must be followed
-    // by the scoping sentence, not only the stale-path branch.
+    //
+    // BOTH branches are overridden, because a project-local `.mcp.json` is
+    // outside everything Tandem manages and the default remedy for either one
+    // names a surface that cannot touch this file. The `suffix` alone was not
+    // enough: it *retracted* the bare-command remedy three sentences after
+    // leading with it, so a reader who acted on the first sentence ran the
+    // wizard and saw nothing change. The suffix now explains a remedy that is
+    // already correct rather than withdrawing one that is not.
     reportEntryCommand(r, channel, "tandem-channel", ".mcp.json", {
+      bareCommandFix:
+        "Edit .mcp.json and give tandem-channel an absolute path to a Node binary — a bare " +
+        "name is resolved against the MCP client's PATH, not the PATH you ran doctor with.",
       stalePathFix: "Edit .mcp.json and point tandem-channel at a Node binary that exists",
       suffix:
         "This project-local file is not managed by Tandem's startup repair, by " +
-        "`tandem setup --apply`, or by the integration wizard — edit it by hand.",
+        "`tandem setup --apply`, or by the integration wizard — it is yours to edit.",
       cliAvailable,
     });
 
@@ -944,6 +957,23 @@ export function setupApplyRemedy(cliAvailable: boolean): string {
 /** Remedy context for one call site of {@link reportEntryCommand}. */
 interface EntryRemedy {
   /**
+   * Override for the *bare command* remedy.
+   *
+   * The symmetric partner of {@link stalePathFix}, and it exists for the same
+   * reason: the default remedy names the surfaces Tandem manages, and a call
+   * site outside that set must be able to replace it rather than *retract* it.
+   * `.mcp.json` did the latter — the default fix opened with "run the wizard /
+   * run `tandem setup --apply`" and the call-site `suffix` took it back three
+   * sentences later. A reader who acts on the first sentence, as most will,
+   * runs a command that cannot touch the file and sees nothing change. Leading
+   * with advice that is wrong for the reader is the #1404 doctrine inverted,
+   * so the fix is an override, not a longer caveat.
+   *
+   * Only the `fix` is overridable: the `message` states the *diagnosis*, which
+   * is identical wherever a bare command appears.
+   */
+  bareCommandFix?: string;
+  /**
    * Override for the *stale absolute path* remedy.
    *
    * Optional, and defaulted from `cliAvailable` at the single consumer: three of
@@ -1012,14 +1042,26 @@ function reportEntryCommand(
   label: string,
   remedy: EntryRemedy,
 ): void {
-  const bare = evaluateSpawnedEntryCommand(entry, entryName, label, remedy.cliAvailable);
+  const bare = evaluateSpawnedEntryCommand(
+    entry,
+    entryName,
+    label,
+    remedy.cliAvailable,
+    remedy.bareCommandFix,
+  );
   if (bare) {
     r.warn(bare.message, withSuffix(bare.fix, remedy.suffix));
     return;
   }
-  // Default resolved here, not at the call sites — see `EntryRemedy.stalePathFix`.
-  const stalePathFix = remedy.stalePathFix ?? setupApplyRemedy(remedy.cliAvailable());
-  reportSpawnedCommand(r, entry, entryName, label, withSuffix(stalePathFix, remedy.suffix));
+  // Passed as a THUNK, not a string. Defaults are resolved here rather than at
+  // the call sites (see `EntryRemedy.stalePathFix`), but building one eagerly
+  // would call `cliAvailable()` — a full PATH walk — before
+  // `reportSpawnedCommand` has decided whether anything is even wrong, which is
+  // exactly the healthy-machine cost `makeCliAvailability` defers to avoid.
+  // `/api/diagnostics` is a request path, so that walk is not free.
+  reportSpawnedCommand(r, entry, entryName, label, () =>
+    withSuffix(remedy.stalePathFix ?? setupApplyRemedy(remedy.cliAvailable()), remedy.suffix),
+  );
 }
 
 // ── Check: Claude Desktop MCP config ───────────────────────────────
@@ -1040,7 +1082,13 @@ function reportEntryCommand(
  *
  * Claude Desktop reads `mcpServers` at launch and does not watch the file, so
  * any repair — the wizard's, the CLI's, or the server's own boot sweep — is
- * invisible until the client restarts. Applied via {@link EntryRemedy.suffix}.
+ * invisible until the client restarts.
+ *
+ * Belongs on **every** remedy that rewrites that file, which is why it is a
+ * shared const rather than {@link EntryRemedy.suffix}'s private business:
+ * threading it through `EntryRemedy` alone reached the two entry-shaped
+ * branches and missed the missing-entry and unreadable-JSON ones, i.e. it
+ * missed the state a fresh desktop install is actually in.
  */
 const DESKTOP_RESTART_NOTE =
   "Restart Claude Desktop afterwards — it does not reload MCP config while running.";
@@ -1119,16 +1167,38 @@ function checkDesktopMcpConfig(
     // No parse detail, same rule as `~/.claude.json`: V8 SyntaxErrors embed a
     // snippet of the source, and this file holds `env.TANDEM_AUTH_TOKEN`. This
     // message reaches the Copy Diagnostics clipboard and public issues.
+    // Two `withSuffix` hops rather than one interpolation: the remedy this
+    // wraps ends differently in each branch (`…store lock)` vs `…desktop app.)`),
+    // and the old `${remedy} — that rewrites it, and …` phrasing was written
+    // when only the CLI branch existed. Against the wizard text it rendered a
+    // dangling clause after a parenthetical, restating what that sentence had
+    // just said. The backup fact is the only genuinely additive part, so it is
+    // now its own sentence.
     r.warn(
       "Claude Desktop config could not be read as JSON",
-      `${setupApplyRemedy(cliAvailable())} — that rewrites it, and Tandem backs the file up first`,
+      withSuffix(
+        withSuffix(
+          setupApplyRemedy(cliAvailable()),
+          "Tandem backs the file up before rewriting it.",
+        ),
+        DESKTOP_RESTART_NOTE,
+      ),
     );
     return;
   }
 
   const tandem = config?.mcpServers?.tandem;
   if (!tandem) {
-    r.warn("tandem not registered in the Claude Desktop config", setupApplyRemedy(cliAvailable()));
+    // The restart note belongs here as much as on the entry branches below, and
+    // this is the branch a *fresh* desktop install actually lands on — no
+    // `tandem` entry at all. Without it the user runs the wizard, Claude Desktop
+    // still shows nothing (it reads `mcpServers` only at launch), and the
+    // diagnostic that just told them how to fix it never mentioned the one step
+    // standing between them and a working setup.
+    r.warn(
+      "tandem not registered in the Claude Desktop config",
+      withSuffix(setupApplyRemedy(cliAvailable()), DESKTOP_RESTART_NOTE),
+    );
     return;
   }
   r.pass("tandem registered in the Claude Desktop config");
@@ -1221,14 +1291,20 @@ function checkNodeToolchain(r: Recorder): void {
  *
  * `cliAvailable` is a PARAMETER, not a `process.env` read, precisely to keep
  * that purity — the resolution happens once in `runDoctor` and is threaded in.
- * It defaults to `true` so the degraded case is the historical text rather than
- * silence: a call site that forgets to thread it produces today's behaviour.
+ * It is REQUIRED, with no default: this function's entire purpose is to stop
+ * prescribing a command the reader cannot run, so a default would convert a
+ * forgetful call site from a compile error into a silent instance of the very
+ * bug. (An earlier draft defaulted it to `true` on "degrade to today's
+ * behaviour" grounds, which had it backwards — today's behaviour IS the bug.)
  */
 export function evaluateSpawnedEntryCommand(
   entry: unknown,
   entryName: string,
   label: string,
   cliAvailable: CliAvailability,
+  /** See {@link EntryRemedy.bareCommandFix} — replaces the managed remedy for
+   *  call sites Tandem does not manage. */
+  bareCommandFix?: string,
 ): { status: "warn"; message: string; fix: string } | null {
   if (entry === null || typeof entry !== "object") return null;
   const command = (entry as { command?: unknown }).command;
@@ -1236,6 +1312,15 @@ export function evaluateSpawnedEntryCommand(
   // spawns no process and cannot have this problem.
   if (typeof command !== "string" || command === "") return null;
   if (isRecordedPathAbsolute(command)) return null;
+
+  const message = `${label} ${entryName} runs the bare command "${command}", which the MCP client must find on its own PATH`;
+
+  // Returned BEFORE `cliAvailable()` is consulted. An override replaces the
+  // whole remedy, not just its first half: a call site that supplies one is
+  // saying Tandem does not manage this file, which moots the plugin/Cowork
+  // provenance question below too — and it moots "is the CLI installed?", so
+  // asking would be a PATH walk whose answer is discarded.
+  if (bareCommandFix) return { status: "warn", message, fix: bareCommandFix };
 
   // The unmanaged half is identical either way and stays last: a plugin- or
   // Cowork-authored entry is not Tandem's to rewrite, so neither the CLI nor the
@@ -1249,11 +1334,7 @@ export function evaluateSpawnedEntryCommand(
     : `In Tandem, open ${WIZARD_LOCATION} and run the integration wizard — Tandem now ` +
       "writes an absolute path for entries it manages. ";
 
-  return {
-    status: "warn",
-    message: `${label} ${entryName} runs the bare command "${command}", which the MCP client must find on its own PATH`,
-    fix: managed + unmanaged,
-  };
+  return { status: "warn", message, fix: managed + unmanaged };
 }
 
 /**
@@ -1287,7 +1368,9 @@ function reportSpawnedCommand(
   entry: unknown,
   entryName: string,
   label: string,
-  fix: string,
+  /** Deferred — see the call in {@link reportEntryCommand}. Only the final
+   *  branch uses it, and most entries never reach it. */
+  fix: () => string,
 ): void {
   if (entry === null || typeof entry !== "object") return;
   const command = (entry as { command?: unknown }).command;
@@ -1328,7 +1411,7 @@ function reportSpawnedCommand(
     return;
   }
   if (!isRecordedPathGone(command, () => probed)) return;
-  r.warn(`${label} ${entryName} points at a binary that no longer exists: ${command}`, fix);
+  r.warn(`${label} ${entryName} points at a binary that no longer exists: ${command}`, fix());
 }
 
 // ── Check: Claude CLI presence ──────────────────────────────────────
@@ -2303,16 +2386,19 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   if (devRepo) {
     await r.check("npm-staleness", () => checkNpmStaleness(r, cwd));
   }
+  // Ahead of every config check, not just the toolchain one. Translocation is a
+  // *cause* of the bare-command symptoms, and those are emitted by the three
+  // config checks below — so sitting merely above `node-toolchain` still printed
+  // the explanation after most of what it explains, which was the one thing the
+  // placement was for. Silent (`null`) unless translocated, so the machines that
+  // are not affected see no extra line for the earlier position.
+  await r.check("app-translocation", () =>
+    recordEvaluation(r, evaluateAppTranslocation(process.execPath)),
+  );
   await r.check("mcp-json", () => checkMcpJson(r, cwd, cliAvailable));
   await r.check("user-mcp-config", () => checkUserMcpConfig(r, cliAvailable));
   await r.check("desktop-mcp-config", () =>
     checkDesktopMcpConfig(r, cliAvailable, opts.homeOverride),
-  );
-  // Before the toolchain check: translocation is a *cause* of the bare-command
-  // and missing-Node symptoms below, so a reader scanning top-down meets the
-  // explanation before the things it explains.
-  await r.check("app-translocation", () =>
-    recordEvaluation(r, evaluateAppTranslocation(process.execPath)),
   );
   await r.check("node-toolchain", () => checkNodeToolchain(r));
   await r.check("claude-cli", () => checkClaudeCli(r));

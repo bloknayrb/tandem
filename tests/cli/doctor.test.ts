@@ -1725,6 +1725,44 @@ describe("evaluateSpawnedEntryCommand", () => {
     );
     expect(outcome?.fix).not.toMatch(/[/\\]/);
   });
+
+  // An unmanaged call site must be able to REPLACE the remedy, not append a
+  // retraction to it. `.mcp.json` used to lead with "run the wizard / run
+  // `tandem setup --apply`" and withdraw it three sentences later; a reader who
+  // acts on the first sentence — most of them — runs a command that cannot
+  // touch the file.
+  describe("bareCommandFix override", () => {
+    const overridden = (cliAvailable: () => boolean) =>
+      evaluateSpawnedEntryCommand(
+        { command: "node", args: ["src/channel/index.ts"] },
+        "tandem-channel",
+        ".mcp.json",
+        cliAvailable,
+        "Edit .mcp.json by hand.",
+      );
+
+    it("replaces the whole remedy, including the plugin/Cowork half", () => {
+      const outcome = overridden(() => true);
+      expect(outcome?.fix).toBe("Edit .mcp.json by hand.");
+      expect(outcome?.fix).not.toContain("setup --apply");
+      expect(outcome?.fix).not.toMatch(/plugin|Cowork/);
+    });
+
+    it("still names the diagnosis — only the fix is overridable", () => {
+      expect(overridden(() => true)?.message).toContain("bare command");
+    });
+
+    it("does not consult cliAvailable, whose answer it would discard", () => {
+      let calls = 0;
+      overridden(() => {
+        calls++;
+        return true;
+      });
+      // Not a micro-optimisation: `isOnPath` walks every PATH directory, and
+      // this runs inside `/api/diagnostics`, a request path.
+      expect(calls).toBe(0);
+    });
+  });
 });
 
 // The bug this suite exists for, reproduced from a real field report: a
@@ -1788,6 +1826,35 @@ describe("desktop-mcp-config remedies reach both branches", () => {
 
     const warn = await desktopResult();
     expect(warn?.fix).toContain("Restart Claude Desktop");
+  });
+
+  // The two branches below reach NO entry at all, so they never touch
+  // `reportEntryCommand` — which is exactly how the first version of this fix
+  // missed them. They are not edge cases: "no tandem entry" is the state every
+  // fresh desktop install is in before the wizard has ever run, i.e. the most
+  // common way to arrive at this check.
+  it("carries the restart caveat when there is no tandem entry at all", async () => {
+    const configPath = claudeDesktopConfigPath({ homeOverride: home });
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ mcpServers: {} }, null, 2));
+
+    const warn = await desktopResult();
+    expect(warn?.message).toContain("not registered");
+    expect(warn?.fix).toContain("Restart Claude Desktop");
+    expect(warn?.fix).not.toContain("..");
+  });
+
+  it("carries the restart caveat when the config is unreadable JSON", async () => {
+    const configPath = claudeDesktopConfigPath({ homeOverride: home });
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, "{ not json");
+
+    const warn = await desktopResult();
+    expect(warn?.fix).toContain("Restart Claude Desktop");
+    expect(warn?.fix).not.toContain("..");
+    // The parse detail must stay out: V8 SyntaxErrors quote the source, and
+    // this file holds `env.TANDEM_AUTH_TOKEN`.
+    expect(warn?.message).not.toContain("not json");
   });
 });
 
