@@ -38,6 +38,15 @@ const ALLOWED = new Map<string, string>([
       "EXTERNAL navigation rather than a document-relative path. Same spelling, different domain.",
   ],
   [
+    "src/shared/image-src-safety.ts",
+    "Not a UNC check at all: `//host/img.png` is a protocol-relative image src, rejected as an " +
+      "EXTERNAL fetch rather than a document-relative path — the image-src sibling of the " +
+      "`url-safety.ts` entry above. It is a separate file rather than a duplicate of that check " +
+      "because file-import (`mdast-ydoc.ts`, `docx-html.ts`) needs the identical guard " +
+      "server-side; `sanitizeImageSrcForPaste` now re-exports this module's `sanitizeImageSrc` " +
+      "instead of carrying its own copy (#1420).",
+  ],
+  [
     "src/server/file-io/docx-export.ts",
     "Redundant pre-filter inside a URL validator that already refuses every non-http(s)/mailto " +
       "scheme four lines later, so the `\\\\` test cannot be the only thing standing between a " +
