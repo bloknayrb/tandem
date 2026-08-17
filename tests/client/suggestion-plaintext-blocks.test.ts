@@ -317,6 +317,54 @@ describe("#1460: undo still recognises what accept wrote", () => {
     editor.destroy();
   });
 
+  it("restores a multi-line ORIGINAL as blocks, not as a literal newline", () => {
+    // Undo's other half of #1460. `textSnapshot` here carries a `"\n"` and NO
+    // recorded structure — a record written before #1486, or one whose range was
+    // relocated so the offsets no longer land on newlines. The inline branch would
+    // put that `"\n"` back as a literal newline inside one paragraph: the forbidden
+    // shape, restored by the feature whose job is to put the document back. Found
+    // in review.
+    const ann = {
+      id: "a1",
+      type: "comment",
+      author: "claude",
+      status: "accepted",
+      text: "why",
+      suggestedText: "MERGED",
+      textSnapshot: "first line\nsecond line",
+      createdAt: 0,
+      range: { from: 0, to: 6 },
+    } as unknown as Annotation;
+    const { editor, review } = setup("<p>MERGED</p>", ann, "txt");
+
+    expect(review.undoResolveAnnotation("a1")).toBe(true);
+    expect(editor.getHTML()).toBe("<p>first line</p><p>second line</p>");
+    editor.destroy();
+  });
+
+  it("leaves the same restore as a hard break in MARKDOWN — the control", () => {
+    // Markdown can spell an intra-paragraph break, and with no recorded structure
+    // the existing behaviour is a literal newline (a soft wrap). Turning that into
+    // a paragraph split would be a change of its own, in the format that can
+    // actually represent the difference.
+    const ann = {
+      id: "a1",
+      type: "comment",
+      author: "claude",
+      status: "accepted",
+      text: "why",
+      suggestedText: "MERGED",
+      textSnapshot: "first line\nsecond line",
+      createdAt: 0,
+      range: { from: 0, to: 6 },
+    } as unknown as Annotation;
+    const { editor, review } = setup("<p>MERGED</p>", ann, "md");
+
+    expect(review.undoResolveAnnotation("a1")).toBe(true);
+    expect(editor.state.doc.content.childCount, "still one paragraph").toBe(1);
+    editor.destroy();
+  });
+
   it("still refuses when the text really did change — the control", () => {
     // Without this, the two above could pass with the guard deleted outright,
     // which would make undo destructive rather than declining.

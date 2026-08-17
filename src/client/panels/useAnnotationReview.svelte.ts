@@ -10,6 +10,7 @@ import { isSnapshotTruncated } from "../../shared/snapshot";
 import type { Annotation } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship";
+import type { RestoreBreak } from "../editor/utils/literal-content";
 import { literalInlineContent, literalRestoreContent } from "../editor/utils/literal-content";
 import { annotationToPmRange } from "../positions";
 
@@ -159,6 +160,33 @@ function plaintextBlockPlan(
   // space, so a two-line heading serializes as `# one two`. Splitting would invent
   // a second heading and a second line that the file will not contain.
   return { lines, collapse: host?.isTextblock === true && host.type.name === "heading" };
+}
+
+/**
+ * In a plaintext document, every newline in a snapshot is a BLOCK boundary —
+ * `null` when that does not apply.
+ *
+ * Undo's other half of #1460, and the mirror of the accept path. Without this, a
+ * snapshot whose recorded structure is absent (a record written before #1486, or
+ * one whose range was relocated so the offsets no longer land on newlines) falls
+ * to `literalRestoreContent`'s inline branch, which puts the raw `"\n"` back as a
+ * LITERAL newline inside one textblock — the forbidden shape, restored by the
+ * feature meant to put the document back. Found in review.
+ *
+ * Overriding a recorded `"hard"` here is deliberate, not a loss: a hard break is
+ * unrepresentable in this file, so whatever the record says, the bytes said
+ * boundary and the next open will too.
+ */
+function plaintextRestoreBreaks(
+  oldText: string,
+  format: string | undefined,
+): RestoreBreak[] | null {
+  if (!isPlaintextFormat(format) || !oldText.includes("\n")) return null;
+  const breaks: RestoreBreak[] = [];
+  for (let i = oldText.indexOf("\n"); i !== -1; i = oldText.indexOf("\n", i + 1)) {
+    breaks.push({ at: i, kind: "block" });
+  }
+  return breaks;
 }
 
 /** The flat text that accepting `newText` at `pos` actually writes. */
@@ -564,7 +592,9 @@ export function useAnnotationReview({
             // inside one a newline is genuinely a newline — so the recorded
             // structure is deliberately ignored rather than used to build
             // schema-invalid content. Mirrors `asCodeText` on the accept path.
-            inCode ? [] : ann.textSnapshotBreaks,
+            inCode
+              ? []
+              : (plaintextRestoreBreaks(oldText, getFormat?.()) ?? ann.textSnapshotBreaks),
             marksAcrossRange(editor, resolved.from, resolved.to),
           );
           // Checked BEFORE `restored.blocks`, because an opaque boundary produces
