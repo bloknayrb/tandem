@@ -735,8 +735,8 @@ Browser renders OnboardingTutorial floating card (bottom-left)
 
 - Binds to `127.0.0.1` **by default**. A non-loopback bind is supported and gated -- see [security.md](security.md#network-posture) and `src/server/bind-check.ts`. Non-loopback callers need a Bearer token and, since #1320, may only *read* `/api`.
 - WebSocket origin validation rejects non-localhost connections (prevents DNS rebinding)
-- UNC paths rejected (prevents NTLM credential hash leakage via SMB) -- **order-dependent, and not universally correct today**: [#1417](https://github.com/bloknayrb/tandem/issues/1417) records three places where a filesystem call runs *before* the guard that would reject the path, plus four weaker hand-rolled copies of the UNC predicate. Read these two bullets as the intent, not as a ratified guarantee, until #1417 lands.
-- Symlinks resolved before path validation -- same #1417 caveat.
+- UNC paths rejected (prevents NTLM credential hash leakage via SMB) -- **and the rejection is order-dependent, which is the part that regresses silently.** The screen is worthless unless it runs *before* the `stat`/`realpath`/`readdir`/`existsSync`/`canonicalize` it protects, because on Windows those perform the SMB handshake themselves. [#1417](https://github.com/bloknayrb/tandem/issues/1417) fixed seven sites where they ran in the wrong order. A new site needs a new ordering test -- the static duplication detector cannot see ordering, and a return-value assertion passes against the broken code. See [security.md](security.md#open-findings).
+- Symlinks resolved before path validation -- and, where a reparse point could be planted mid-descent, `lstat` before `readdir` rather than after (`readdirNoFollow` in `src/cli/uninstall-scrub.ts`).
 - File size limit: 50MB
 - Atomic file saves: write to temp file, then rename
 - **No WebSocket connection cap and no WebSocket payload cap.** `src/server/yjs/provider.ts` configures Hocuspocus with `port`, `address`, `quiet` and hooks only. The one payload limit in the tree is 1 KiB on the `/api/wake` upgrade (`src/server/events/wake-socket.ts`). The bound on WS exposure is the loopback bind plus origin validation, not a quota -- do not read a quota into this list.
@@ -984,7 +984,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `src/lib.rs` -- The Tauri entry logic (not all of it — thirteen sibling modules are listed below): plugin registration (single-instance **first**), sidecar lifecycle (spawn, health-poll, exponential backoff, kill on exit), `resolve_channel_dist()` (injects `TANDEM_CHANNEL_DIST` into the sidecar so the channel shim registers from the resource dir; replaced `run_setup()`/`/api/setup` in #477 PR 3c-ii-c), system tray build + event handlers (tray "Setup AI Assistant" emits `open-integration-wizard`), window hide-on-close, auto-updater (launch + periodic 8h), `strip_win_prefix()` for Windows `\\?\` paths, `copy_sample_files()` (first-run copy to app-data dir)
 - `src/main.rs` -- Entry point, delegates to `lib::run()`
 - `src/autostart.rs` -- Start-at-login registration (ADR-046, #1236)
-- `src/cowork_installer.rs`, `cowork_workspace_scan.rs`, `cowork_meta.rs`, `cowork_atomic_json.rs` -- Cowork per-workspace plugin registration and the four-step path guard (ADR-044); paired with `src/client/cowork/` on the client
+- `src/cowork_installer.rs`, `cowork_workspace_scan.rs`, `cowork_meta.rs`, `cowork_atomic_json.rs` -- Cowork per-workspace plugin registration and the five-step path guard (ADR-044); paired with `src/client/cowork/` on the client
 - `src/firewall.rs` -- `Tandem Cowork*` firewall rule scoping (Windows)
 - `src/integrations_probe.rs` -- Detects installed AI clients for the wizard
 - `src/keychain.rs`, `src/token_store.rs` -- OS keychain access and auth-token storage

@@ -148,8 +148,16 @@ function fallBackToBareNode(rejected: string): string {
  *
  *   - `false` — definitely not a usable binary (absent, or a directory).
  *   - `null`  — could not determine; callers must leave the config alone.
+ *
+ * A UNC path is refused before the `stat` rather than after (#1417): `stat` on
+ * `\\host\share\node.exe` performs the SMB handshake that leaks an NTLM hash,
+ * and the value reaching here came out of a config file we do not own. The
+ * screen sits at the sink, not at `isRecordedPathAbsolute`, so it covers
+ * `tandem doctor`'s direct calls too. `null` is the honest answer — refusing
+ * to look is not evidence of absence, and `false` would rewrite the config.
  */
 export function probeNodeBinary(path: string): boolean | null {
+  if (rejectUnsafeWindowsPrefix(path) !== null) return null;
   try {
     const stat = statSync(path, { throwIfNoEntry: false });
     if (stat === undefined) return false; // ENOENT — definitely gone

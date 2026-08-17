@@ -291,7 +291,7 @@ pub fn install_tandem_plugin_into_workspace(
     let vm_id = leaf_component(ws_path);
 
     // Write-time revalidation (#433 defense, applied to ALL write paths — not
-    // just the handle-based install): re-run the four-layer path guard
+    // just the handle-based install): re-run the five-step path guard
     // immediately before any file I/O so a directory swapped for a junction
     // after the scan cannot receive the token.
     let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
@@ -468,7 +468,7 @@ pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
             let workspace_id = parent_component(ws_path);
             let vm_id = leaf_component(ws_path);
 
-            // Write-time revalidation (#433): re-run the four-layer path guard
+            // Write-time revalidation (#433): re-run the five-step path guard
             // immediately before the token rewrite so a dir swapped for a
             // junction after the scan cannot receive the rotated token.
             let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
@@ -567,7 +567,7 @@ pub fn reconcile_orphan_firewall_rules() -> Vec<String> {
 pub fn reconcile_stale_workspace_tokens(workspaces: &[PathBuf], current_token: &str) -> Vec<String> {
     let mut rewritten = Vec::new();
     for ws_path in workspaces {
-        // Write-time revalidation (#433): re-run the four-layer path guard
+        // Write-time revalidation (#433): re-run the five-step path guard
         // before the per-workspace token rewrite. Per this function's ordering
         // contract (§4), the caller has already run orphan firewall-rule cleanup
         // and a successful firewall add before reaching here.

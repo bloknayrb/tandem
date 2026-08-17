@@ -6,7 +6,10 @@
  * via .mockResolvedValue / .mockReturnValue.
  */
 
+import { homedir } from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NETWORK_PATHS } from "../helpers/unc-fixtures.js";
 
 // ── Top-level stubs (referenced by vi.mock factories) ────────────────────────
 
@@ -191,6 +194,134 @@ describe("rewriteJson", () => {
     expect(result).toBe(true);
     expect(_writeFileSpy).toHaveBeenCalledOnce();
     expect(_renameSpy).toHaveBeenCalledOnce();
+  });
+});
+
+// ── findCoworkWorkspaces: no-follow descent (#1417) ───────────────────────────
+
+/**
+ * These assert the SYSCALL, not the return value.
+ *
+ * The bug being pinned is that `readdir`/`stat` **follow** reparse points, so a
+ * junction planted anywhere on the four-level descent leaked an SMB handshake
+ * before `assertSafeWorkspacePath` at the bottom got a say. Here the result is
+ * `[]` either way — see `tests/helpers/unc-fixtures.ts` for why that makes the
+ * return value worthless as an observable.
+ */
+describe("findCoworkWorkspaces reparse-point handling", () => {
+  // Anchored under the real homedir because `usableLocalAppData` runs the real
+  // (unmocked, sync) `assertPathSafe`, which requires containment there. No
+  // directory has to exist: that guard walks up to the first existing ancestor.
+  const FAKE_LAD = path.join(homedir(), "AppData", "Local");
+  const PACKAGES = path.join(FAKE_LAD, "Packages");
+  const SESSIONS = path.join(
+    PACKAGES,
+    "Claude_abc",
+    "LocalCache",
+    "Roaming",
+    "Claude",
+    "local-agent-mode-sessions",
+  );
+  const WS = path.join(SESSIONS, "ws1");
+  const VM = path.join(WS, "vm1");
+
+  const dir = () => ({ isSymbolicLink: () => false, isDirectory: () => true });
+  const junction = () => ({ isSymbolicLink: () => true, isDirectory: () => false });
+
+  let logger: { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    for (const spy of [_readdirSpy, _lstatSpy, _realpathSpy, _statSpy]) spy.mockReset();
+    vi.stubEnv("LOCALAPPDATA", FAKE_LAD);
+    _realpathSpy.mockImplementation(async (p: string) => p);
+    _readdirSpy.mockImplementation(async (p: string) => {
+      if (p === PACKAGES) return ["Claude_abc"];
+      if (p === SESSIONS) return ["ws1"];
+      if (p === WS) return ["vm1"];
+      return [];
+    });
+    logger = { info: vi.fn(), warn: vi.fn() };
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** Every path is a plain directory except `plantedAt`, which is a junction. */
+  function plantJunction(plantedAt: string | null): void {
+    _lstatSpy.mockImplementation(async (p: string) => (p === plantedAt ? junction() : dir()));
+  }
+
+  it.each(
+    NETWORK_PATHS,
+  )("refuses a UNC %%LOCALAPPDATA%% (%s) without reading anything", async (_label, hostile) => {
+    // The screen the file's own docblock calls the consequential one: every
+    // path here is a `path.join` off this value, and the scrub runs during an
+    // MSIX uninstall that can be elevated. Nothing covered it, and deleting
+    // `usableLocalAppData`'s `assertPathSafe` left the whole suite green.
+    plantJunction(null);
+    vi.stubEnv("LOCALAPPDATA", hostile);
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+    expect(_readdirSpy).not.toHaveBeenCalled();
+    expect(_lstatSpy).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("LOCALAPPDATA"));
+  });
+
+  it("descends a clean chain and returns the validated workspace", async () => {
+    plantJunction(null);
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await findCoworkWorkspaces(logger as never)).toEqual([VM]);
+  });
+
+  it.each([
+    ["the Packages dir", PACKAGES],
+    ["a Claude_* sessions root", SESSIONS],
+    ["a workspace dir", WS],
+  ])("refuses to readdir through a junction at %s", async (_label, planted) => {
+    plantJunction(planted);
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+    // The load-bearing assertion: the following call never happened.
+    expect(_readdirSpy).not.toHaveBeenCalledWith(planted);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("reparse point"));
+  });
+
+  // **`path.join`, not a hardcoded separator**, and this is a correctness
+  // requirement rather than tidiness. `plantJunction` matches by string
+  // equality against the path `descendNoFollow` builds — with `path.join`. A
+  // backslash literal here matches on win32 and matches NOTHING on posix, so
+  // the junction is never planted, the descent runs clean, and the test asserts
+  // the guard works while never having exercised it. The first version of these
+  // four rows was written that way; it passed on Windows and CI caught it.
+  it.each([
+    ["a Claude_* package root", path.join(PACKAGES, "Claude_abc")],
+    ["LocalCache", path.join(PACKAGES, "Claude_abc", "LocalCache")],
+    ["Roaming", path.join(PACKAGES, "Claude_abc", "LocalCache", "Roaming")],
+    ["Claude", path.join(PACKAGES, "Claude_abc", "LocalCache", "Roaming", "Claude")],
+  ])("refuses to traverse a junction at %s, mid-join", async (_label, planted) => {
+    // `lstat` declines to follow only the FINAL component, so screening the
+    // assembled six-segment `sessionsRoot` checked one level and traversed
+    // these four. All are user-writable and all sit inside the tree the
+    // reachable instance of #1417 lived in.
+    plantJunction(planted);
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+    expect(_readdirSpy).not.toHaveBeenCalledWith(SESSIONS);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("reparse point"));
+  });
+
+  it("refuses to stat a junction at the vm level", async () => {
+    plantJunction(VM);
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+    // `stat` follows; the fix is that only `lstat` ever sees this path.
+    expect(_statSpy).not.toHaveBeenCalled();
   });
 });
 

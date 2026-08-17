@@ -47,6 +47,7 @@ import {
   SUPERVISOR_WAKE_PROMPT,
   serializeUserTurn,
 } from "../../shared/launcher/contract.js";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { subscribe, unsubscribe } from "../events/queue.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 
@@ -1500,16 +1501,27 @@ export async function resolveSafeCwdAsync(candidate: string): Promise<string | n
 }
 
 /** Pure, I/O-free rejections shared by both resolvers: non-strings, relative
- * paths, Windows UNC (`\\server\share`) and the `\\?\` / `\\.\` device
- * namespaces. Checked before any fs call so a hostile path never reaches the
- * filesystem. */
+ * paths, Windows UNC (`\\server\share` and `//server/share`) and the `\\?\` /
+ * `\\.\` device namespaces. Checked before any fs call so a hostile path never
+ * reaches the filesystem.
+ *
+ * **Delegates to `rejectUnsafeWindowsPrefix` rather than re-spelling the rule.**
+ * The hand-rolled copy this replaced named `\\?\`, `\\.\` and `\\` but not the
+ * forward-slash forms, and `path.win32.isAbsolute("//attacker/share")` is
+ * `true` — so `//attacker/share` passed the screen and reached `realpath`. That
+ * made this the one #1417 site needing no precondition at all: it is reachable
+ * straight from an HTTP request body via `launcher/api-routes.ts` (`body.cwd`,
+ * `workingDirectory`) and from `cwd-preview.ts` at tab-switch frequency.
+ *
+ * The prefix check runs on **every** platform, not just win32. The old
+ * `process.platform === "win32"` gate meant a Linux or macOS server accepted a
+ * UNC string, stored it, and handed it back to a Windows client later — the
+ * cross-platform hole `windows-path-safety.ts` exists to close. `isAbsolute`
+ * stays platform-native, since that is a real portability question rather than
+ * a safety one. */
 function rejectedSyntactically(candidate: string): boolean {
   if (typeof candidate !== "string" || !path.isAbsolute(candidate)) return true;
-  if (process.platform === "win32") {
-    if (candidate.startsWith("\\\\?\\") || candidate.startsWith("\\\\.\\")) return true;
-    if (candidate.startsWith("\\\\")) return true; // UNC
-  }
-  return false;
+  return rejectUnsafeWindowsPrefix(candidate) !== null;
 }
 
 /** Is `candidate` (already canonical) inside `homeReal`, or home itself?

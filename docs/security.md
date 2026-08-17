@@ -149,15 +149,18 @@ It lives here rather than in `CLAUDE.md` deliberately. `CLAUDE.md` is auto-loade
 
 Open as of v0.22.1:
 
-- **[#1417](https://github.com/bloknayrb/tandem/issues/1417) — a filesystem call runs before the guard that would reject the path**, in three places, plus four weaker hand-rolled copies of the UNC predicate. The reachable one is `src/cli/uninstall-scrub.ts:179`: a junction under `%LOCALAPPDATA%` pointing at a UNC share leaks on `tandem uninstall` — same uid, no crafted document and no click. That is an **easier trigger than #1407**, the one v0.22.1 actually fixed, so do not read that fix as closing the class.
-- **[#1420](https://github.com/bloknayrb/tandem/issues/1420) — two link-handling escapes.** Middle-click never reaches the link intercept (`Editor.svelte` registers `onclick` and no `onauxclick`), and `/\evil.com/x.md` renders live because the guard is `defaultValidate(url) || isSchemelessPathHref(url)` and the first operand short-circuits the second away. Pasted image sources have no downstream gate at all, so they resolve cross-host on render with no click.
+- **[#1420](https://github.com/bloknayrb/tandem/issues/1420) — two link-handling escapes.** Middle-click never reaches the link intercept (`Editor.svelte` registers `onclick` and no `onauxclick`), and `/\evil.com/x.md` renders live because the guard is `defaultValidate(url) || isSchemelessPathHref(url)` and the first operand short-circuits the second away. Pasted image sources have no downstream gate at all, so they resolve cross-host on render with no click. **Partially reduced by the #1417 fix, and do not read that as closed:** the mixed-separator normalisation in `rejectUnsafeWindowsPrefix` means `resolveRelativeLink` now refuses `/\evil.com/x.md` and `\/evil.com/x.md`, so the *click-navigation* path is guarded. The mark still renders as a live link (the `defaultValidate(url) || isSchemelessPathHref(url)` short-circuit is untouched), middle-click still bypasses the intercept, and pasted image sources are still ungated.
 
 Still open from the v0.21.0 security gate, whose RC re-run failed on 2026-08-05 with two HIGH:
 
 - **#1292 — the last HIGH.** Its code fix shipped in v0.21.0, but it gates on the BYO-models flag flip rather than on the release, so the v0.21.0 changelog entry does not close it. Verify the issue state, not the changelog.
-- **#1295.** Three of its six LOW findings shipped in v0.21.0 (the scratchpad gate, the restore documentId binding, the reply cap); the other three did not. A batch issue closes when the batch does, so its open state does not tell you which half remains — read the issue.
 
-Closed from that same gate: #1291 (CORS opaque-origin grant), #1293 (inverted loopback gate), and #1294.
+Closed from that same gate: #1291 (CORS opaque-origin grant), #1293 (inverted loopback gate), #1294, and #1295 (the six-finding LOW batch).
+
+**#1417 is closed** (ordering fixed at seven sites; both hand-rolled `isUncPath` copies rewritten as an allowlist of `\\?\C:\…` rather than an enumeration of bad forms). Two things about it are worth carrying forward rather than forgetting:
+
+- **The class is "syscall before verdict", and a static check cannot see it.** `tests/shared/unc-check-duplication.test.ts` catches duplicated *predicates*; ordering is pinned per-site in `tests/server/unc-guard-ordering.test.ts`, `tests/server/launcher/supervisor.test.ts`, `tests/cli/win-path-guard.test.ts` and the reparse-point block in `tests/cli/uninstall-scrub.test.ts`. A new site needs a new ordering test — nothing will fail without one.
+- **Those tests assert the syscall, not the return value, and that is not stylistic.** A UNC path to a host that does not answer already returned `null`/`false`/`[]` before the fix, so a return-value assertion passes against the vulnerable code. The first attempt at one of these tests was written that way and the mutant survived.
 
 ## Reporting security issues
 

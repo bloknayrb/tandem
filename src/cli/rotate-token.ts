@@ -172,6 +172,19 @@ export async function rotateToken(): Promise<void> {
   console.error(`  New fingerprint: ${fingerprint(newToken)}`);
   console.error(`  Updated ${updatedCount} config file(s).`);
 
+  // Zero updated with zero errors is the quietest bad outcome this command has:
+  // the server now only accepts the new token, every client config still holds
+  // the old one, and nothing above says so. It is what a detection refusal
+  // looks like from here (#1417 rejects the home root and `detectTargets`
+  // returns an empty list), so name the state rather than letting a clean-looking
+  // exit 0 imply the clients were re-pointed.
+  if (updatedCount === 0 && configErrors.length === 0) {
+    console.error(
+      "  Warning: no config file was updated, so every client still holds the OLD\n" +
+        "  token and will be rejected. Re-point them with: tandem setup --apply",
+    );
+  }
+
   for (const e of configErrors) {
     console.error(`  Warning: could not update config — ${e}`);
   }
