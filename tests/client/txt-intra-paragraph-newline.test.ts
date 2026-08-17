@@ -10,18 +10,22 @@
  * `tests/server/txt-byte-fidelity.test.ts` — so this was never file corruption;
  * it is the editor showing a different shape than the one you saved.
  *
- * #1460 was filed believing plain-text paste was a live doorway to it. It is
- * not, and neither is rich paste — `buildPlainTextSlice` splits on newline runs
- * and `normalizePastedHtmlWhitespace` collapses them to a space. Both were
- * verified by driving them, not by reading them.
+ * The reason this is a test: `buildPlainTextSlice` splits on newline runs and
+ * `normalizePastedHtmlWhitespace` collapses a newline inside a `<p>` to a space,
+ * both were added for unrelated reasons (#923 and the #1448 sweep), and nothing
+ * on their side records that `.txt`'s round-trip leans on them. Loosening either
+ * one to a preserved newline would reopen the divergence, and the failure would
+ * surface as "reopening my file splits my paragraphs" with no trail back.
  *
- * The reason this is a test rather than a note on the issue: those two
- * normalizers are the whole argument, they were added for unrelated reasons
- * (#923 and the #1448 sweep), and nothing else records that `.txt`'s round-trip
- * now leans on them. Loosening either one to a `<br>` or a preserved newline
- * would silently reopen the divergence, and the failure would surface as
- * "reopening my file splits my paragraphs" with no trail back to the paste
- * change that caused it.
+ * **What this file does NOT cover, stated because its earlier header claimed the
+ * opposite.** That header read this suite as proof that #1460 was unreachable and
+ * therefore document-don't-fix. Both normalizers are about *literal newline
+ * characters*, and a break can also arrive as a `hardBreak` NODE — which
+ * `extractText` renders as `"\n"` just the same. Shift+Enter is a one-keystroke
+ * doorway by that route and a `<br>` in a rich paste is a second, and neither
+ * normalizer sees either of them. Those are guarded separately, and pinned by
+ * `tests/client/plaintext-newline-invariant.test.ts`. Do not read a green run
+ * here as "nothing can produce an intra-block break".
  */
 
 import { Editor } from "@tiptap/core";
