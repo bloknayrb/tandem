@@ -121,36 +121,126 @@ function purgeLegacyScratchpadKeys(): void {
 const PERSIST_DEBOUNCE_MS = 500;
 
 /**
- * Extract plain text from a Y.XmlFragment ("default" document content). Walks
- * top-level block elements (paragraphs, headings, list items, etc.) and joins
- * their text content with newlines. Inline marks are dropped — recovery is
- * plain text, matching the issue's "unsaved content" scope.
+ * One run of text in a scratchpad block, with whatever inline marks it carries.
+ *
+ * This is Yjs's own delta shape (`Y.XmlText.toDelta()`), kept as-is so no third
+ * format has to be maintained.
+ *
+ * INLINE formatting round-trips; block structure does not. Every block restores
+ * as a `paragraph`, so a heading or a list item comes back as plain text — the
+ * pre-existing scope, unchanged here. And two sibling `Y.XmlText` nodes inside
+ * one block concatenate into a single run, which is also pre-existing (the old
+ * code concatenated the characters the same way). So this is not a general
+ * inverse of the editor's state; it preserves the characters and their marks.
  */
-export function extractFragmentBlocks(fragment: Y.XmlFragment): string[] {
-  const blocks: string[] = [];
-  const collect = (node: Y.XmlElement | Y.XmlText | Y.XmlHook): string => {
-    if (node instanceof Y.XmlText) return node.toString();
-    if (node instanceof Y.XmlElement) {
-      let s = "";
-      for (let i = 0; i < node.length; i++) {
-        s += collect(node.get(i) as Y.XmlElement | Y.XmlText | Y.XmlHook);
+export interface ScratchpadOp {
+  insert: string;
+  attributes?: Record<string, unknown>;
+}
+
+/** A block (paragraph, heading, list item…) as its sequence of formatted runs. */
+export type ScratchpadBlock = ScratchpadOp[];
+
+/**
+ * Extract a Y.XmlFragment's blocks, preserving inline formatting.
+ *
+ * Uses `toDelta()`, NEVER `toString()` (#1489). `Y.XmlText.toString()` renders
+ * marks as HTML TAGS — a bolded run comes back as the literal characters
+ * `<strong>bold</strong>`. Those were persisted verbatim and then restored into
+ * a plain `Y.XmlText`, so crash recovery handed the user their own text with
+ * markup spelled out in it. Same reason `getElementText()` uses `toDelta()` on
+ * the server side.
+ *
+ * Marks are CARRIED rather than stripped, which is a change from the previous
+ * "recovery is plain text" scope. Stripping them would also fix the tags, but
+ * silently unbolding recovered text is its own unexpected change to the user's
+ * content — and this hook exists precisely to not lose their work.
+ */
+export function extractFragmentBlocks(fragment: Y.XmlFragment): ScratchpadBlock[] {
+  const blocks: ScratchpadBlock[] = [];
+  const collect = (node: Y.XmlElement | Y.XmlText | Y.XmlHook, into: ScratchpadBlock): void => {
+    if (node instanceof Y.XmlText) {
+      for (const op of node.toDelta() as ScratchpadOp[]) {
+        // A delta can carry embeds, whose `insert` is an object rather than a
+        // string. Nothing in a scratchpad produces one today; skip rather than
+        // stringify, so a future embed cannot arrive as "[object Object]".
+        if (typeof op.insert !== "string" || op.insert.length === 0) continue;
+        into.push(
+          op.attributes ? { insert: op.insert, attributes: op.attributes } : { insert: op.insert },
+        );
       }
-      return s;
+      return;
     }
-    return "";
+    if (node instanceof Y.XmlElement) {
+      for (let i = 0; i < node.length; i++) {
+        collect(node.get(i) as Y.XmlElement | Y.XmlText | Y.XmlHook, into);
+      }
+    }
   };
   for (let i = 0; i < fragment.length; i++) {
     const child = fragment.get(i);
     if (child instanceof Y.XmlElement || child instanceof Y.XmlText) {
-      blocks.push(collect(child as Y.XmlElement | Y.XmlText));
+      const block: ScratchpadBlock = [];
+      collect(child as Y.XmlElement | Y.XmlText, block);
+      blocks.push(block);
     }
   }
-  while (blocks.length > 0 && blocks[blocks.length - 1] === "") blocks.pop();
+  while (blocks.length > 0 && blockText(blocks[blocks.length - 1]).length === 0) blocks.pop();
   return blocks;
 }
 
+/** The plain characters of a block, marks discarded. */
+export function blockText(block: ScratchpadBlock): string {
+  return block.map((op) => op.insert).join("");
+}
+
+/**
+ * Rebuild a paragraph from a stored block. The inverse of one iteration of
+ * {@link extractFragmentBlocks}, and exported so the tests exercise the code
+ * that actually runs rather than re-implementing it beside it.
+ *
+ * EVERY mark key is passed on EVERY run, `null` where the run does not carry
+ * it. That is not defensive noise — it is the whole correctness of this
+ * function. `Y.XmlText.insert` with `undefined` attributes does not insert
+ * unformatted text; it INHERITS whatever formatting is active at the insertion
+ * point. And `toDelta()` normalizes a mark-off to the absence of a key, so an
+ * unformatted run always extracts as a bare `{insert}`. Take the two together
+ * and a bolded word followed by ordinary typing — the single most common
+ * formatting gesture there is — comes back with the rest of the paragraph
+ * bolded:
+ *
+ *     stored    "plain " + "bold"{strong} + " tail"
+ *     restored  "plain " + "bold tail"{strong}
+ *
+ * Passing an explicit `null` is what turns the mark off. A fresh object per run
+ * also matters: `insert` MUTATES the attributes object it is given, adding the
+ * keys it turned off, so a shared one would accumulate them.
+ */
+export function scratchpadBlockToParagraph(block: ScratchpadBlock): Y.XmlElement {
+  const p = new Y.XmlElement("paragraph");
+  if (block.length === 0) return p;
+
+  const text = new Y.XmlText();
+  p.insert(0, [text]);
+  const markKeys = new Set<string>();
+  for (const op of block) for (const key of Object.keys(op.attributes ?? {})) markKeys.add(key);
+
+  let at = 0;
+  for (const op of block) {
+    const attributes: Record<string, unknown> = {};
+    for (const key of markKeys) attributes[key] = op.attributes?.[key] ?? null;
+    text.insert(at, op.insert, attributes);
+    at += op.insert.length;
+  }
+  return p;
+}
+
+/**
+ * Plain-text view of the fragment, used only for the "is there anything here"
+ * emptiness check. Deliberately marks-free — that question is about characters.
+ */
 export function extractFragmentText(fragment: Y.XmlFragment): string {
-  return extractFragmentBlocks(fragment).join("\n");
+  return extractFragmentBlocks(fragment).map(blockText).join("\n");
 }
 
 /**
@@ -163,7 +253,7 @@ export function extractFragmentText(fragment: Y.XmlFragment): string {
  * recovered scratchpad came back with one paragraph per WRAPPED LINE: crash
  * recovery silently reformatting the thing it exists to preserve.
  */
-export function encodeScratchpadBlocks(blocks: string[]): string {
+export function encodeScratchpadBlocks(blocks: ScratchpadBlock[]): string {
   return JSON.stringify(blocks);
 }
 
@@ -175,18 +265,47 @@ export function encodeScratchpadBlocks(blocks: string[]): string {
  * thing that discards their unsaved text. That form genuinely cannot represent
  * an intra-block newline, so splitting it is the correct reading of it.
  */
-export function decodeScratchpadBlocks(stored: string): string[] {
+export function decodeScratchpadBlocks(stored: string): ScratchpadBlock[] {
+  const plain = (blocks: string[]): ScratchpadBlock[] =>
+    blocks.map((b) => (b.length > 0 ? [{ insert: b }] : []));
+
   if (stored.startsWith("[")) {
     try {
       const parsed: unknown = JSON.parse(stored);
-      if (Array.isArray(parsed) && parsed.every((b) => typeof b === "string")) {
-        return parsed as string[];
+      if (Array.isArray(parsed)) {
+        // Current form: an array of blocks, each an array of delta ops. A block
+        // is an ARRAY where the pre-#1489 form had a STRING, so the two are
+        // structurally distinguishable and no version field is needed.
+        if (parsed.every(isScratchpadBlock)) return parsed as ScratchpadBlock[];
+        // Pre-#1489 form: an array of plain strings.
+        if (parsed.every((b) => typeof b === "string")) return plain(parsed as string[]);
       }
     } catch {
       // Not our JSON after all — read it as legacy text below.
     }
   }
-  return stored.split("\n");
+  return plain(stored.split("\n"));
+}
+
+/**
+ * Is this a block of delta ops? Validates the op SHAPE, not just that it is an
+ * array — an empty array is a valid (empty) block and would otherwise satisfy
+ * both branches above, and anything reaching here came out of `localStorage`,
+ * which the user can edit.
+ */
+function isScratchpadBlock(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (op) =>
+        typeof op === "object" &&
+        op !== null &&
+        typeof (op as ScratchpadOp).insert === "string" &&
+        ((op as ScratchpadOp).attributes === undefined ||
+          (typeof (op as ScratchpadOp).attributes === "object" &&
+            (op as ScratchpadOp).attributes !== null)),
+    )
+  );
 }
 
 interface ScratchpadEntry {
@@ -319,7 +438,7 @@ export function createScratchpadPersistence(
   const persistEntry = (entry: ScratchpadEntry) => {
     const fragment = entry.ydoc.getXmlFragment("default");
     const blocks = extractFragmentBlocks(fragment);
-    const hasContent = blocks.join("").length > 0;
+    const hasContent = blocks.some((b) => blockText(b).length > 0);
     // The warning flag tracks the DOCUMENT, not whether we managed to store it.
     // It is set before the fail-closed return below and outside the empty/
     // non-empty split, because the two questions are independent: "is there
@@ -445,11 +564,11 @@ export function createScratchpadPersistence(
     // Insert restored text as paragraphs into the (empty) fragment. y-prosemirror
     // reconciles this into the editor on mount. Build elements detached then
     // insert in one transaction so the populate path stays atomic.
-    const paragraphs = decodeScratchpadBlocks(stored).map((block) => {
-      const p = new Y.XmlElement("paragraph");
-      if (block.length > 0) p.insert(0, [new Y.XmlText(block)]);
-      return p;
-    });
+    const paragraphs = decodeScratchpadBlocks(stored).map(scratchpadBlockToParagraph);
+    // A stored "[]" decodes to zero blocks. Clearing the fragment and inserting
+    // nothing leaves it empty, which y-prosemirror does not expect — bail
+    // instead, leaving whatever is already there.
+    if (paragraphs.length === 0) return;
     // Privacy invariant: BROWSER_ORIGIN is the only origin NOT in CHANNEL_SKIP
     // (see src/shared/origins.ts and src/server/events/queue.ts). Tagging this
     // restore as `browser` is safe ONLY because there is no channel observer
