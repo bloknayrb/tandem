@@ -11,6 +11,7 @@ import {
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
 import type { ExternalConflictState, SessionData } from "../../shared/types.js";
+import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash, ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
 import { parseAnnotationDoc } from "../annotations/schema.js";
 import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
@@ -87,7 +88,18 @@ export async function loadSession(filePath: string): Promise<SessionData | null>
   const sessionPath = path.join(SESSION_DIR, `${key}.json`);
   try {
     const content = await fs.readFile(sessionPath, "utf-8");
-    return JSON.parse(content) as SessionData;
+    const data = JSON.parse(content) as SessionData;
+    // **The caller's path wins over the stored one (#1417).** This record was
+    // found at `sessionKey(filePath)`, so `filePath` is the authoritative
+    // identity of the document; `data.filePath` is an unvalidated string from a
+    // bare `JSON.parse` that a tampered session file controls outright, and
+    // `sourceFileChanged` used to `stat` it. Overwriting deletes that untrusted
+    // value rather than screening one hostile shape of it — and the two spellings
+    // are equivalent by construction, since `sessionKey` normalizes separators,
+    // so this cannot change which document is restored. `narrowConflict` below
+    // is the same don't-trust-loadSession-fields rule applied to `conflict`.
+    data.filePath = filePath;
+    return data;
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return null;
@@ -132,10 +144,23 @@ export function restoreYDoc(doc: Y.Doc, session: SessionData): void {
   Y.applyUpdate(doc, new Uint8Array(state));
 }
 
-/** Check if the source file has changed since the session was saved */
+/** Check if the source file has changed since the session was saved
+ *
+ * **The screen below is belt-and-braces; the real fix is in `loadSession`
+ * (#1417).** This `stat` was the first thing to touch `session.filePath`, which
+ * a tampered session file controlled outright — so a record carrying
+ * `\\attacker\share\x` performed an SMB handshake on every open-with-restore.
+ * `loadSession` now overwrites that field with the caller's validated path, so
+ * the value cannot be hostile by the time it arrives here. This function is
+ * exported, though, and a hand-built `SessionData` bypasses that, so the screen
+ * stays for the exported surface rather than being deleted as unreachable. */
 export async function sourceFileChanged(session: SessionData): Promise<boolean> {
   // Uploaded files have no disk path — session is the only truth
   if (isUploadPath(session.filePath)) return false;
+  // Treat an unsafe path as "changed": it is the conservative answer, and it
+  // routes into the same re-parse-from-disk branch a missing file takes, which
+  // re-reads the path the CALLER validated rather than this one.
+  if (rejectUnsafeWindowsPrefix(session.filePath) !== null) return true;
   try {
     const stat = await fs.stat(session.filePath);
     return stat.mtimeMs !== session.sourceFileMtime;
@@ -356,6 +381,20 @@ export async function listSessionFilePaths(): Promise<
         const raw = await fs.readFile(path.join(SESSION_DIR, file), "utf-8");
         const data = JSON.parse(raw) as SessionData;
         if (!data.filePath || isUploadPath(data.filePath)) continue;
+        // Same screen as `sourceFileChanged` (#1417): these strings come off
+        // disk and are handed to restore callers that will open them. Those
+        // callers validate too, so this is defence in depth — but keeping an
+        // unsafe path out of the restore list entirely is cheaper than relying
+        // on every future consumer of this list to re-check.
+        const unsafe = rejectUnsafeWindowsPrefix(data.filePath);
+        if (unsafe !== null) {
+          // Logged, not silently dropped: this list is what the restore UI
+          // shows, so a session vanishing from it with no explanation looks
+          // like data loss to the user and like nothing at all to whoever is
+          // debugging it.
+          console.error(`[Tandem] Omitting session ${file} from restore list: ${unsafe}`);
+          continue;
+        }
         results.push({ filePath: data.filePath, lastAccessed: data.lastAccessed ?? 0 });
       } catch (err) {
         console.error(`[Tandem] Skipping unreadable session file ${file}:`, err);

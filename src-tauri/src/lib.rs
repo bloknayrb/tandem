@@ -767,8 +767,7 @@ fn validate_open_candidate(
     // Matches the server's `resolveAndValidatePath`, which rejects both
     // prefixes — but the server refusing it is one HTTP hop too late to stop
     // `is_file()` from having already performed the SMB handshake here.
-    let as_str = absolute.to_string_lossy();
-    if as_str.starts_with(r"\\") || as_str.starts_with("//") {
+    if is_unc_or_network_path(&absolute.to_string_lossy()) {
         return Err(RejectionReason::NotAFile { path: absolute });
     }
 
@@ -2139,6 +2138,33 @@ fn show_server_error_dialog(
         });
 }
 
+/// True when `path` is a UNC / network path, in either separator flavour.
+///
+/// Pure string test with no syscall, for the reason `windows-path-safety.ts`
+/// documents once for the whole codebase: on Windows the syscall IS the threat.
+/// Callers must run this *before* touching the filesystem, never on the result
+/// of resolving it (#1417).
+///
+/// Deliberately stricter than `cowork_workspace_scan::is_unc_path`, which
+/// permits `\\?\C:\…` because containment under %LOCALAPPDATA% confines it.
+/// Here there is no containment to lean on, and `strip_win_prefix()` is
+/// supposed to have removed the extended-length prefix upstream anyway, so the
+/// blunt form is correct: a false reject costs a failed "reveal in Explorer",
+/// a false accept costs a credential hash.
+///
+/// Matches on "two leading separators, either flavour" rather than on the two
+/// homogeneous pairs. Windows treats `/` and `\` as interchangeable, so
+/// `/\host\share` and `\/host/share` are UNC too — enumerating `\\` and `//`
+/// alone was a two-character bypass of this and of both TypeScript predicates
+/// (#1417).
+fn is_unc_or_network_path(path: &str) -> bool {
+    let mut chars = path.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('\\' | '/'), Some('\\' | '/'))
+    )
+}
+
 /// Build the `(program, args)` tuple that reveals `path` in the host OS file
 /// manager, parameterized by target OS string so the construction can be unit
 /// tested for every platform without spawning a process.
@@ -2185,6 +2211,14 @@ fn reveal_command_args(path: &str, target_os: &str) -> (&'static str, Vec<String
 /// as a separate argv element, so there is no shell-injection surface.
 #[tauri::command]
 fn show_in_file_manager(path: String) -> Result<(), String> {
+    // #1417: `path` is a raw string from the webview, and `explorer /select,…`
+    // makes EXPLORER perform the SMB handshake on our behalf — the credential
+    // leak happens in a process we do not control and never see fail. Needs
+    // editor XSS or a compromised client to reach, so this is defence in depth,
+    // but it is one string comparison against a hash disclosure.
+    if is_unc_or_network_path(&path) {
+        return Err("Refusing to reveal a network path in the file manager.".to_string());
+    }
     let (program, args) = reveal_command_args(&path, std::env::consts::OS);
     match std::process::Command::new(program).args(&args).spawn() {
         Ok(_) => Ok(()),
@@ -4819,7 +4853,7 @@ fn cowork_apply_token(_token: String) -> Result<String, String> {
 /// Closes the TOCTOU window (issue #433): instead of re-scanning the filesystem
 /// and trusting a caller-supplied string, the token can only name a path that
 /// `cowork_scan_workspaces` already validated this session. The resolved path is
-/// then re-run through the four-layer guard (`revalidate_resolved_path`) to
+/// then re-run through the five-step guard (`revalidate_resolved_path`) to
 /// catch a directory swapped *after* the scan. An unknown token — forged, or
 /// from a superseded scan — is rejected with no file I/O. The re-validation's
 /// specific rejection reason is preserved (single informative message, not
@@ -4833,7 +4867,7 @@ fn cowork_resolve_validated_handle(handle: &str, op: &str) -> Result<std::path::
         return Err("Unknown or expired workspace handle — re-scan and try again".to_string());
     };
 
-    // Defense-in-depth: re-run the four-layer guard against the stored path to
+    // Defense-in-depth: re-run the five-step guard against the stored path to
     // catch a post-scan swap (directory replaced with a junction, moved, etc.).
     cowork_workspace_scan::revalidate_resolved_path(&resolved).map_err(|reason| {
         log::warn!("[cowork] {op}: resolved handle failed re-validation — rejected: {reason}");
@@ -5742,6 +5776,39 @@ mod reveal_command_tests {
         let nasty = "/Users/me/$(rm -rf ~) file.md";
         let (_program, args) = reveal_command_args(nasty, "macos");
         assert_eq!(args, vec!["-R".to_string(), nasty.to_string()]);
+    }
+
+    /// #1417. `show_in_file_manager` builds `explorer /select,<path>` from a raw
+    /// webview string, so a UNC path makes EXPLORER perform the SMB handshake —
+    /// the credential leak happens in a process we do not control and never see
+    /// fail. The check is a pure string test with no syscall, because on Windows
+    /// the syscall IS the threat.
+    #[test]
+    fn unc_and_network_paths_are_recognized_in_both_separator_flavours() {
+        assert!(is_unc_or_network_path(r"\\attacker\share\x"));
+        assert!(is_unc_or_network_path("//attacker/share/x"));
+        assert!(is_unc_or_network_path(r"\\?\UNC\attacker\share"));
+        assert!(is_unc_or_network_path("//?/UNC/attacker/share"));
+        // Stricter than cowork_workspace_scan::is_unc_path on purpose: there is
+        // no containment check here to confine an extended-length local path,
+        // and strip_win_prefix() should have removed it upstream anyway.
+        assert!(is_unc_or_network_path(r"\\?\C:\Windows"));
+        // Mixed separators. Windows treats `/` and `\` as interchangeable, so
+        // two leading separators of ANY flavour are UNC. Enumerating the two
+        // homogeneous pairs — which is what this used to do, and what both TS
+        // predicates did — was a two-character bypass.
+        assert!(is_unc_or_network_path(r"/\attacker\share\x"));
+        assert!(is_unc_or_network_path(r"\/attacker/share/x"));
+    }
+
+    #[test]
+    fn ordinary_local_paths_are_not_mistaken_for_network_paths() {
+        assert!(!is_unc_or_network_path(r"C:\Users\me\notes.md"));
+        assert!(!is_unc_or_network_path("/home/me/notes.md"));
+        assert!(!is_unc_or_network_path("/Users/me/notes.md"));
+        assert!(!is_unc_or_network_path("notes.md"));
+        // A single leading slash is a normal posix absolute path, not UNC.
+        assert!(!is_unc_or_network_path("/notes.md"));
     }
 }
 

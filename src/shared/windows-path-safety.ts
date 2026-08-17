@@ -14,16 +14,31 @@
  * `//`, so as a boolean this is equivalent to a bare
  * `startsWith("\\\\") || startsWith("//")` on every input. A test that asserts
  * only "rejected" therefore does not pin the extended-length branch; assert on
- * the message. Four hand-rolled copies survive, and their gaps differ — do not
- * assume they are all "the weak one":
+ * the message.
  *
- *  - `server/file-io/docx-export.ts` and its spike twin — bare `\\` only, so
- *    they genuinely miss the forward-slash forms.
- *  - `server/launcher/supervisor.ts` — names `\\?\` and `\\.\` explicitly; its
- *    gap is `//`, which `path.isAbsolute` accepts on Windows.
- *  - `cli/win-path-guard.ts` — handles both flavours of extended UNC and is
- *    deliberately LOOSER on `\\?\C:\…`, which it allows on purpose before
- *    applying realpath'd containment. It is not a defect; do not "fix" it.
+ * **The inventory of surviving hand-rolled copies is not here.** It is the
+ * `ALLOWED` map in `tests/shared/unc-check-duplication.test.ts`, which `npm
+ * test` and the pre-push hook enforce in both directions: a `startsWith`-shaped
+ * copy with no entry fails, and an entry whose file no longer holds one fails
+ * too. A prose list beside it would be the same drift #1417 is about, one level
+ * up — the previous version of this paragraph already disagreed with the map on
+ * both the count and which files were in it.
+ *
+ * **That map is not a proof that no other copy exists**, and neither is this
+ * pointer. The detector matches a spelling, so a copy written as a regex walks
+ * straight past it — `WIN_EXTENDED_DRIVE_RE` in `server/integrations/node-binary.ts`
+ * is exactly that, and is unlisted for that reason rather than by decision. So
+ * is `is_unc_or_network_path` in `src-tauri/src/lib.rs`, which *was* listed
+ * until it was rewritten from a `starts_with` into a two-char `matches!` and
+ * fell out of the detector's sight without anything failing. What is worth
+ * stating here, because no test can:
+ *
+ *  - The loose variants are **deliberate, not defects.** `cli/win-path-guard.ts`
+ *    and its Rust twin `is_unc_path` allow `\\?\C:\…` on purpose and confine it
+ *    by realpath'd containment instead. Do not "fix" them into calling this.
+ *  - Both are written as an **allowlist** of that one permitted shape rather
+ *    than an enumeration of bad ones. The enumeration they replaced let
+ *    `\\?\unc\…` and `\\?\GLOBALROOT\…` through. An allowlist has no such tail.
  *
  * See #1417, which also covers the ordering defect where a filesystem call runs
  * *before* the check — a class this string test cannot detect.
@@ -35,27 +50,35 @@
  *                     `\\server\share`.
  *  - `\\?\UNC\…`    — extended UNC; SMB auth on Windows leaks NTLM hashes.
  *  - `\\…` / `//…`  — bare UNC paths.
- *  - Forward-slash variants `//?/…` since Node normalises some forms.
+ *  - Every separator spelling of the above, including the MIXED ones
+ *    (`/\host\share`, `\/host/share`). Windows treats `/` and `\` as
+ *    interchangeable and Node hands all four spellings to the SMB redirector.
  *
  * Returns null on success, an error string on rejection.
  */
 export function rejectUnsafeWindowsPrefix(p: string): string | null {
-  // Normalise just enough to catch mixed separators without resolving.
-  const lower = p.toLowerCase();
+  // **Separators are normalised, not enumerated.** Windows treats `/` and `\`
+  // as interchangeable, so `/\host\share` and `\/host/share` are UNC exactly
+  // like `\\host\share`: `path.toNamespacedPath` turns all four into
+  // `\\?\UNC\host\share`, and `existsSync` on any of them reaches the
+  // redirector — verified on Windows, not reasoned about. Testing only the
+  // homogeneous pairs made the two mixed spellings a two-character bypass of
+  // this entire guard. Enumerating pairs is the trap; normalising first is what
+  // makes the set closed.
+  //
+  // Bounded to the first 8 characters — the length of the longest prefix that
+  // matters, `\\?\UNC\` — so this stays allocation-cheap where it sits in front
+  // of a syscall.
+  const head = p.slice(0, 8).toLowerCase().replace(/\//g, "\\");
 
-  // Extended-length / extended-UNC prefixes. These must be tested before the
-  // bare UNC check because `\\?\` also starts with `\\`.
-  if (
-    lower.startsWith("\\\\?\\") ||
-    lower.startsWith("//?/") ||
-    lower.startsWith("\\\\.\\") ||
-    lower.startsWith("//./")
-  ) {
+  // Extended-length / device-namespace prefixes. Tested before the bare UNC
+  // check because `\\?\` also starts with `\\`.
+  if (head.startsWith("\\\\?\\") || head.startsWith("\\\\.\\")) {
     return "Extended-length / device-namespace paths (\\\\?\\, \\\\.\\) are not supported for security reasons.";
   }
 
   // Bare UNC.
-  if (lower.startsWith("\\\\") || lower.startsWith("//")) {
+  if (head.startsWith("\\\\")) {
     return "UNC paths are not supported for security reasons.";
   }
 
