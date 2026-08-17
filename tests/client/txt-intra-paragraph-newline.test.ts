@@ -25,7 +25,7 @@
  */
 
 import { Editor } from "@tiptap/core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import { normalizePastedHtmlWhitespace } from "../../src/client/editor/utils/paste-whitespace";
 import { buildPlainTextSlice } from "../../src/client/editor/utils/plain-paste";
@@ -37,8 +37,25 @@ function paragraphTexts(editor: Editor): string[] {
   );
 }
 
+/**
+ * Editors must be destroyed, and the failure if they are not is misleading.
+ *
+ * A live `EditorView` leaves a `DOMObserver` flush pending on a timer. Once the
+ * suite finishes, happy-dom tears down `document` and that timer fires into the
+ * void: vitest reports `ReferenceError: document is not defined` as an UNHANDLED
+ * ERROR attributed to this file, with every test green and a non-zero exit. It
+ * is timing-dependent — this passed locally and failed in CI.
+ */
+const live: Editor[] = [];
+
+afterEach(() => {
+  while (live.length > 0) live.pop()?.destroy();
+});
+
 function blankEditor(): Editor {
-  return new Editor({ extensions: buildSchemaExtensions(), content: "<p></p>" });
+  const editor = new Editor({ extensions: buildSchemaExtensions(), content: "<p></p>" });
+  live.push(editor);
+  return editor;
 }
 
 describe("#1460: paste cannot put a newline inside a paragraph", () => {

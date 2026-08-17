@@ -24,13 +24,26 @@
 
 import { render } from "@testing-library/svelte";
 import { Editor } from "@tiptap/core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import { useAnnotationReview } from "../../src/client/panels/useAnnotationReview.svelte";
 import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants";
 import type { Annotation } from "../../src/shared/types";
+
+/**
+ * A live `EditorView` leaves a `DOMObserver` flush pending on a timer. Left
+ * undestroyed it fires after happy-dom tears down `document`, and vitest reports
+ * `ReferenceError: document is not defined` as an UNHANDLED ERROR against this
+ * file — every test green, exit code 1, and a stack naming only
+ * `prosemirror-view`. Timing-dependent, so it passes locally and fails in CI.
+ */
+const live: Editor[] = [];
+
+afterEach(() => {
+  while (live.length > 0) live.pop()?.destroy();
+});
 
 function acceptedAnnotation(over: Partial<Annotation>): Annotation {
   return {
@@ -50,6 +63,7 @@ function setup(html: string, ann: Annotation) {
   const ydoc = new Y.Doc();
   ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(ann.id, ann);
   const editor = new Editor({ extensions: buildSchemaExtensions(), content: html });
+  live.push(editor);
   const declined: Array<{ id: string; reason: string }> = [];
   let api: ReturnType<typeof useAnnotationReview> | undefined;
   render(UseAnnotationReviewHarness, {
