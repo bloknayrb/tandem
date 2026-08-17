@@ -31,6 +31,20 @@ describe("sessionModelIsStale", () => {
     expect(sessionModelIsStale(session({ modelRevision: DOCUMENT_MODEL_REVISION }))).toBe(false);
   });
 
+  it("treats a revision-2 session as stale, so the lone-CR fix reaches it", () => {
+    // A literal 2, not `DOCUMENT_MODEL_REVISION - 1`: the claim is about a
+    // specific population of session files on disk — the ones written before
+    // `detectLineEnding` could name a bare `\r`. Those hold `lineEnding: "\n"`
+    // for a classic-Mac file and would restore as clean forever, saving every
+    // line back as LF with the fix installed and inert.
+    //
+    // What made this easy to miss: the revision comment says to bump when an
+    // already-parsed Y.Doc would DIFFER from a fresh parse. Here the model is
+    // identical either way — only an off-fragment `documentMeta` value changed.
+    // Nothing about the restored document looks stale.
+    expect(sessionModelIsStale(session({ modelRevision: 2 }))).toBe(true);
+  });
+
   it("treats a session from a FUTURE revision as current, not stale", () => {
     // A downgrade must not silently throw away the newer session; the
     // comparison is one-directional on purpose.

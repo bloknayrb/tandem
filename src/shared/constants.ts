@@ -174,8 +174,14 @@ export const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
  *   1 — pre-#1448 (implicit; absent field reads as 0, which is also stale)
  *   2 — #1448: whitespace/hardBreak, frontmatter, table alignment, list spread,
  *       code-span fences, line endings
+ *   3 — lone-CR (classic Mac) line endings. `detectLineEnding` could not name
+ *       that form, so a session captured before the fix recorded `"\n"` for such
+ *       a file and restores as clean — never re-parsing, and still rewriting
+ *       every line to LF on save. The recorded VALUE changed, not the shape of
+ *       the model, which is why this is easy to miss: nothing about the restored
+ *       Y.Doc looks stale.
  */
-export const DOCUMENT_MODEL_REVISION = 2;
+export const DOCUMENT_MODEL_REVISION = 3;
 export const TYPING_DEBOUNCE = 3000; // 3 seconds
 export const DISCONNECT_DEBOUNCE_MS = 3000; // 3 seconds before showing "server not reachable"
 export const PROLONGED_DISCONNECT_MS = 30_000; // 30 seconds before showing App-level disconnect banner
