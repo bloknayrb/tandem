@@ -290,17 +290,24 @@ describe("findCoworkWorkspaces reparse-point handling", () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("reparse point"));
   });
 
+  // **`path.join`, not a hardcoded separator**, and this is a correctness
+  // requirement rather than tidiness. `plantJunction` matches by string
+  // equality against the path `descendNoFollow` builds — with `path.join`. A
+  // backslash literal here matches on win32 and matches NOTHING on posix, so
+  // the junction is never planted, the descent runs clean, and the test asserts
+  // the guard works while never having exercised it. The first version of these
+  // four rows was written that way; it passed on Windows and CI caught it.
   it.each([
-    ["a Claude_* package root", `${PACKAGES}\\Claude_abc`],
-    ["LocalCache", `${PACKAGES}\\Claude_abc\\LocalCache`],
-    ["Roaming", `${PACKAGES}\\Claude_abc\\LocalCache\\Roaming`],
-    ["Claude", `${PACKAGES}\\Claude_abc\\LocalCache\\Roaming\\Claude`],
+    ["a Claude_* package root", path.join(PACKAGES, "Claude_abc")],
+    ["LocalCache", path.join(PACKAGES, "Claude_abc", "LocalCache")],
+    ["Roaming", path.join(PACKAGES, "Claude_abc", "LocalCache", "Roaming")],
+    ["Claude", path.join(PACKAGES, "Claude_abc", "LocalCache", "Roaming", "Claude")],
   ])("refuses to traverse a junction at %s, mid-join", async (_label, planted) => {
     // `lstat` declines to follow only the FINAL component, so screening the
     // assembled six-segment `sessionsRoot` checked one level and traversed
     // these four. All are user-writable and all sit inside the tree the
     // reachable instance of #1417 lived in.
-    plantJunction(planted.replace(/\//g, "\\"));
+    plantJunction(planted);
     const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
 
     expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
