@@ -2260,7 +2260,7 @@ const review = useAnnotationReview({
       dedupKey: `suggestion-apply-failed:${ann.id}`,
       timestamp: Date.now(),
     }),
-  onUndoFailed: (ann) =>
+  onUndoFailed: (ann, reason) =>
     notifications.push({
       id: `suggestion-undo-failed-${ann.id}`,
       type: "annotation-error",
@@ -2271,8 +2271,13 @@ const review = useAnnotationReview({
       // end up with the original wording on screen and a record still marked
       // accepted, which is the mismatch leaving the status alone was meant to
       // avoid. Better to state the outcome than to suggest a half-fix (#1486).
+      //
+      // Two reasons, two messages, because they are not the same problem: one
+      // is missing text, the other is text with nowhere correct to go.
       message:
-        "Couldn't undo this suggestion — only part of the original text was saved, so restoring it would delete the rest. The suggestion stays applied.",
+        reason === "truncated-snapshot"
+          ? "Couldn't undo this suggestion — only part of the original text was saved, so restoring it would delete the rest. The suggestion stays applied."
+          : "Couldn't undo this suggestion — the original spanned a paragraph break that can't be put back without reshaping the surrounding structure. The suggestion stays applied.",
       dedupKey: `suggestion-undo-failed:${ann.id}`,
       timestamp: Date.now(),
     }),

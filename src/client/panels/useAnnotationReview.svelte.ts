@@ -1,4 +1,5 @@
 import type { JSONContent, Editor as TiptapEditor } from "@tiptap/core";
+import { Fragment, Slice } from "@tiptap/pm/model";
 import { onDestroy } from "svelte";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
@@ -8,8 +9,11 @@ import { isSnapshotTruncated } from "../../shared/snapshot";
 import type { Annotation } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship";
-import { literalInlineContent } from "../editor/utils/literal-content";
+import { literalInlineContent, literalRestoreContent } from "../editor/utils/literal-content";
 import { annotationToPmRange } from "../positions";
+
+/** Why undo refused, permanently. See `onUndoFailed`. */
+export type UndoDeclineReason = "truncated-snapshot" | "block-structure";
 
 /**
  * Is this position inside a node that stores newlines literally?
@@ -53,6 +57,40 @@ function isCodeContext(editor: TiptapEditor, pos: number): boolean {
  */
 export function rangeText(editor: TiptapEditor, from: number, to: number): string {
   return editor.state.doc.textBetween(from, to, "\n", "\n");
+}
+
+/**
+ * Can a recorded block boundary be restored HERE without inventing structure?
+ *
+ * Only when the receiving textblock is a direct child of the doc (#1486). The
+ * restore works by splitting that textblock, which produces siblings of its own
+ * type — right at the top level, wrong anywhere else, and measurably so:
+ *
+ *   inside a list item, splitting yields ONE item holding two paragraphs
+ *   where two list items were; inside a table cell it is worse still.
+ *
+ * The recorded `"block"` kind means "a gap between container children" and does
+ * not say which container, so nothing in the record can distinguish those cases
+ * — which is exactly why this asks the DOCUMENT instead of the record. Where
+ * the answer is no, undo declines. Refusing is recoverable; silently rewriting
+ * a list into a loose paragraph pair is not.
+ *
+ * Deliberately conservative, and a blockquote is the known cost: splitting a
+ * paragraph inside one yields two paragraphs inside the same blockquote, which
+ * IS the right answer, and this still declines. Widening the predicate needs a
+ * per-container argument about what the recorded break could have meant, and a
+ * false decline loses an undo while a false accept rewrites the document.
+ */
+function canRestoreBlockBoundary(editor: TiptapEditor, pos: number): boolean {
+  try {
+    const resolvedPos = editor.state.doc.resolve(pos);
+    // depth 1 ⇒ parent is a textblock whose own parent is the doc. depth 0 is
+    // the document end, where `insertContentAt` appends a fresh top-level
+    // paragraph — also fine, and reached by the same reasoning as `isCodeContext`.
+    return resolvedPos.depth <= 1;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -174,8 +212,13 @@ export interface UseAnnotationReviewParams {
    * Ctrl+Z is the remaining route back.
    *
    * ADR-027 applies as above: never echo annotation content into the message.
+   *
+   * `reason` exists because the two permanent declines fail for unrelated
+   * reasons and a single message would be wrong for one of them: a truncated
+   * snapshot is missing text, while a block boundary inside a container has
+   * every character and nowhere correct to put the split.
    */
-  onUndoFailed?: (ann: Annotation) => void;
+  onUndoFailed?: (ann: Annotation, reason: UndoDeclineReason) => void;
 }
 
 export interface UseAnnotationReviewReturn {
@@ -304,7 +347,7 @@ export function useAnnotationReview({
             console.warn(
               `[undo] Snapshot for annotation ${id} was truncated at capture; refusing to restore a partial revert`,
             );
-            onUndoFailed?.(ann);
+            onUndoFailed?.(ann, "truncated-snapshot");
             // `removeFromResolved`, not `scheduleRemoval` like the transient
             // declines below. Those reschedule the 3s window because a retry
             // might succeed; this one never will, and rescheduling would keep
@@ -338,19 +381,82 @@ export function useAnnotationReview({
           // a hard break as "\n", so undo could not restore what accept took
           // away even when the range was right.
           //
-          // KNOWN LIMIT (#1486): `textSnapshot` uses ONE "\n" for both a hard
-          // break and a block boundary, so undoing an accept that spanned two
-          // blocks restores a single block with a hard break rather than the two
-          // blocks that were there. The string cannot distinguish them; the fix
-          // is a structural snapshot, not a smarter parse of this one.
-          const restored = literalInlineContent(
+          // What accept and undo need differs, though, and `literalRestoreContent`
+          // is where they part (#1486). Accept reads a suggestion string, where
+          // every "\n" can only mean a hard break. Undo restores what was
+          // ACTUALLY there, and a flat "\n" could have been a block boundary, a
+          // hard break or a soft wrap — three things that serialize three
+          // different ways. `textSnapshotBreaks` carries the distinction the
+          // string threw away; absent (a record written before this, or the
+          // common single-block annotation) means "all literal", which is what
+          // the code here did before.
+          const inCode = isCodeContext(editor, resolved.from);
+          const restored = literalRestoreContent(
             oldText,
-            isCodeContext(editor, resolved.from),
+            // A code block's content expression does not admit `hardBreak`, and
+            // inside one a newline is genuinely a newline — so the recorded
+            // structure is deliberately ignored rather than used to build
+            // schema-invalid content. Mirrors `asCodeText` on the accept path.
+            inCode ? [] : ann.textSnapshotBreaks,
             marksAcrossRange(editor, resolved.from, resolved.to),
           );
-          let chain = editor.chain().focus().deleteRange({ from: resolved.from, to: resolved.to });
-          if (restored.length > 0) chain = chain.insertContentAt(resolved.from, restored);
-          chain.run();
+          // Checked BEFORE `restored.blocks`, because an opaque boundary produces
+          // no `"block"` entries and would otherwise fall through to the inline
+          // path — restoring a literal newline where a heading boundary was,
+          // which the serializer writes as a setext underline. The server marks
+          // a boundary opaque when the two blocks were not both plain paragraphs;
+          // this builder can only emit paragraphs, so there is nothing correct to
+          // build. Same permanent-decline treatment as the guards below.
+          if (restored.opaque) {
+            console.warn(
+              `[undo] Annotation ${id} spans a boundary between unlike blocks; refusing to restore`,
+            );
+            onUndoFailed?.(ann, "block-structure");
+            removeFromResolved(id);
+            return false;
+          }
+          if (restored.blocks) {
+            // A recorded block boundary can only be honoured where splitting the
+            // receiving textblock yields the right siblings — at the top level.
+            // Anywhere else the split invents structure (a list item gains a
+            // second paragraph instead of a second item), so decline. Same
+            // permanent-decline treatment as the truncation guard above.
+            if (!canRestoreBlockBoundary(editor, resolved.from)) {
+              console.warn(
+                `[undo] Annotation ${id} spans a block boundary inside a container; refusing to restore`,
+              );
+              onUndoFailed?.(ann, "block-structure");
+              removeFromResolved(id);
+              return false;
+            }
+            // NOT `insertContentAt`. Given closed block nodes at an inline
+            // position it routes to `tr.replaceWith` → `new Slice(frag, 0, 0)`,
+            // which SPLITS the host block around the insertion instead of
+            // merging into it: "pre|MERGED|post" came back as four paragraphs
+            // where it should be two. An open slice (openStart/openEnd = 1)
+            // says "these ends are cut, join them to what they land beside",
+            // which is exactly what accept's deletion did in reverse.
+            const { schema } = editor.state;
+            const nodes = restored.content.map((json) => schema.nodeFromJSON(json));
+            const slice = new Slice(Fragment.from(nodes), 1, 1);
+            editor
+              .chain()
+              .focus()
+              .command(({ tr }) => {
+                tr.replace(resolved.from, resolved.to, slice);
+                return true;
+              })
+              .run();
+          } else {
+            let chain = editor
+              .chain()
+              .focus()
+              .deleteRange({ from: resolved.from, to: resolved.to });
+            if (restored.content.length > 0) {
+              chain = chain.insertContentAt(resolved.from, restored.content);
+            }
+            chain.run();
+          }
         }
       } catch (err) {
         console.warn(`[undo] Failed to revert text for annotation ${id}:`, err);
