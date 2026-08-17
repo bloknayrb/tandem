@@ -42,6 +42,7 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
+import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
@@ -173,6 +174,49 @@ describe("MCP tool integration — annotation tools", () => {
     const parsed = parseResult(result);
     expect(parsed.error).toBe(false);
     expect(parsed.data.annotationId).toMatch(/^ann_/);
+  });
+
+  it("tandem_comment records textSnapshotTruncated when the range exceeds the cap (#1486)", async () => {
+    // The call site, not the helper. `captureSnapshot` returns `{text, truncated}`
+    // and the handler has to spread the second half onto the annotation — a
+    // one-line deletion there reverts the entire fix while every unit test of
+    // `captureSnapshot` and `isSnapshotTruncated` stays green, because neither
+    // of them can see whether the flag reaches the stored record.
+    const body = Array.from(
+      { length: 30 },
+      (_, i) => `clause ${i} with wording that does not repeat.`,
+    ).join(" ");
+    const ydoc = setupDoc("mcp-ann-trunc", body);
+    const map = ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
+
+    const result = await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: body.length, text: "on the whole thing" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+
+    const stored = map.get(parsed.data.annotationId);
+    expect(stored?.textSnapshot).toHaveLength(SNAPSHOT_CAP);
+    expect(stored?.textSnapshotTruncated).toBe(true);
+    // And the marker is out of band: the three characters that used to be
+    // written into the user's document on undo are gone from the text itself.
+    expect(stored?.textSnapshot?.endsWith("...")).toBe(false);
+  });
+
+  it("tandem_comment leaves the flag off a short range (#1486)", async () => {
+    // The positive control. A handler that set the flag unconditionally would
+    // satisfy the test above and refuse every undo in the product.
+    const ydoc = setupDoc("mcp-ann-short", "Hello world test content");
+    const map = ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
+
+    const result = await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 11, text: "on the greeting" },
+    });
+    const stored = map.get(parseResult(result).data.annotationId);
+    expect(stored?.textSnapshot).toBe("Hello world");
+    expect(stored?.textSnapshotTruncated).toBeUndefined();
   });
 
   it("tandem_comment rejects invalid arguments (missing required field)", async () => {

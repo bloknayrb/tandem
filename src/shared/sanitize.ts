@@ -96,6 +96,14 @@ export function sanitizeAnnotation(
     timestamp: ann.timestamp,
     ...(ann.relRange !== undefined ? { relRange: ann.relRange } : {}),
     ...(ann.textSnapshot !== undefined ? { textSnapshot: ann.textSnapshot } : {}),
+    // #1486: must be listed, for the same reason as `rev` and `heldInSolo` —
+    // this is a strict allowlist, and the undo path reads the flag off the
+    // SANITIZED record. Stripped here, the guard reads `undefined`, decides the
+    // snapshot is complete, and restores a 200-char prefix over the full text:
+    // the exact corruption the flag exists to prevent, with the fix in place.
+    ...(typeof ann.textSnapshotTruncated === "boolean"
+      ? { textSnapshotTruncated: ann.textSnapshotTruncated }
+      : {}),
     ...(ann.editedAt !== undefined ? { editedAt: ann.editedAt } : {}),
     ...(typeof ann.rev === "number" ? { rev: ann.rev } : {}),
     // WS-A2: preserve the Solo-hold marker through sanitize. Like `rev`, this

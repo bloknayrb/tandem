@@ -112,6 +112,10 @@ export const AnnotationRecordSchemaV1 = z
     status: AnnotationStatusSchema,
     timestamp: z.number(),
     textSnapshot: z.string().optional(),
+    // #1486: `textSnapshot` is a PREFIX, not the whole annotated text. Undo
+    // reads this to decline rather than restore a truncated snapshot over the
+    // full text.
+    textSnapshotTruncated: z.boolean().optional(),
     editedAt: z.number().optional(),
     // Type-specific optional fields. Not cross-validated against `type` — the
     // TS discriminated union enforces that invariant at construction time

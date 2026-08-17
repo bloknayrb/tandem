@@ -4,6 +4,7 @@ import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import type { SanitizationEvent } from "../../shared/sanitize";
 import { sanitizeAnnotation } from "../../shared/sanitize";
+import { isSnapshotTruncated } from "../../shared/snapshot";
 import type { Annotation } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship";
@@ -159,6 +160,22 @@ export interface UseAnnotationReviewParams {
    * generic per ADR-027 (never echo annotation content here).
    */
   onApplyFailed?: (ann: Annotation) => void;
+  /**
+   * Called when undoing an accepted suggestion is refused because the stored
+   * `textSnapshot` is a truncated prefix (#1486) — restoring it would delete
+   * everything past the 200-character cap.
+   *
+   * Separate from `onApplyFailed` because the two failures differ in kind, and
+   * the difference is what the user needs told. An apply failure is transient:
+   * the text moved, and retrying after a scroll or an edit can succeed. This
+   * one is a property of the stored record, so it will refuse identically
+   * forever — a message promising a retry would be a lie. The annotation stays
+   * `accepted` and the document keeps the suggested text; the editor's own
+   * Ctrl+Z is the remaining route back.
+   *
+   * ADR-027 applies as above: never echo annotation content into the message.
+   */
+  onUndoFailed?: (ann: Annotation) => void;
 }
 
 export interface UseAnnotationReviewReturn {
@@ -180,6 +197,7 @@ export function useAnnotationReview({
   getScrollBehavior,
   getActiveAnnotationId,
   onApplyFailed,
+  onUndoFailed,
 }: UseAnnotationReviewParams): UseAnnotationReviewReturn {
   // Reactive state
   let reviewIndex = $state(0);
@@ -270,6 +288,31 @@ export function useAnnotationReview({
         const newText = ann.suggestedText;
         const oldText = ann.textSnapshot;
         if (typeof newText === "string" && typeof oldText === "string") {
+          // A truncated snapshot is a PREFIX of what was there (#1486).
+          // Restoring it would delete everything past the 200-char cap, which
+          // is the opposite of what undo is for — decline instead.
+          //
+          // `isSnapshotTruncated` also catches records written BEFORE this
+          // change, which carry no flag and are marked only by the old trailing
+          // ellipsis. Without that arm the fix would protect new annotations
+          // while leaving every existing one corrupting on undo.
+          //
+          // Unlike the two declines below this one is DETERMINISTIC and
+          // permanent — no later click will ever undo this annotation — so it
+          // reports through `onUndoFailed` rather than only `console.warn`.
+          if (isSnapshotTruncated(ann)) {
+            console.warn(
+              `[undo] Snapshot for annotation ${id} was truncated at capture; refusing to restore a partial revert`,
+            );
+            onUndoFailed?.(ann);
+            // `removeFromResolved`, not `scheduleRemoval` like the transient
+            // declines below. Those reschedule the 3s window because a retry
+            // might succeed; this one never will, and rescheduling would keep
+            // a dead Undo button on screen for another three seconds after
+            // every click. Retiring it immediately matches the toast.
+            removeFromResolved(id);
+            return false;
+          }
           const resolved = annotationToPmRange(ann, editor.state.doc, y);
           if (!resolved) {
             console.warn(`[undo] Cannot resolve range for annotation ${id}, skipping`);

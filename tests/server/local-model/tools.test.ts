@@ -3,6 +3,7 @@ import type * as Y from "yjs";
 import { dispatch, MUTATING_TOOLS, TOOLS } from "../../../src/server/local-model/tools.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_AUTHORSHIP } from "../../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../../src/shared/origins.js";
+import { SNAPSHOT_CAP } from "../../../src/shared/snapshot.js";
 import type { Annotation } from "../../../src/shared/types.js";
 import { getAnnotationsMap, makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
 
@@ -338,6 +339,39 @@ describe("dispatch — agent identity stamping (#1123 M3)", () => {
     const ann = getAnnotationsMap(doc).get(id) as Annotation;
     expect(ann.agentIdentity).toEqual(identity);
     expect(ann.suggestedText).toBe("phase one");
+  });
+
+  it("captures a textSnapshot, like the MCP path (#1486)", () => {
+    // This path used to store none at all. Undo is gated on the snapshot being
+    // a string, so with it absent the whole revert block was skipped, the
+    // annotation flipped to `pending`, and Undo reported SUCCESS while the
+    // replacement text stayed in the document. A decline is a designed
+    // outcome; a silent no-op that claims to have worked is not.
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch(
+      "propose_replacement",
+      { quoted_text: "the first phase", suggested_text: "phase one", rationale: "shorter" },
+      { ydoc: doc },
+    );
+    const id = (out.result as { annotation_id: string }).annotation_id;
+    const ann = getAnnotationsMap(doc).get(id) as Annotation;
+    expect(ann.textSnapshot).toBe("the first phase");
+    // Short range — the cut flag stays off, so undo still works normally.
+    expect(ann.textSnapshotTruncated).toBeUndefined();
+  });
+
+  it("flags the snapshot when the quoted range exceeds the cap (#1486)", () => {
+    const long = Array.from({ length: 30 }, (_, i) => `clause ${i} distinct.`).join(" ");
+    doc = makeMarkdownDoc(`${long}\n`);
+    const out = dispatch(
+      "propose_replacement",
+      { quoted_text: long, suggested_text: "shorter", rationale: "trim" },
+      { ydoc: doc },
+    );
+    const id = (out.result as { annotation_id: string }).annotation_id;
+    const ann = getAnnotationsMap(doc).get(id) as Annotation;
+    expect(ann.textSnapshot).toHaveLength(SNAPSHOT_CAP);
+    expect(ann.textSnapshotTruncated).toBe(true);
   });
 
   it("stamps agentIdentity on a reply", () => {

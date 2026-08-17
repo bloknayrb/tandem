@@ -173,6 +173,17 @@ interface AnnotationBase {
   timestamp: number;
   /** Snapshot of the annotated document text at creation time. Truncated to 200 chars. */
   textSnapshot?: string;
+  /**
+   * Set when `textSnapshot` was cut short by the 200-char cap, so it is a
+   * PREFIX of the annotated text rather than all of it (#1486).
+   *
+   * Undo restores `textSnapshot` verbatim into the document, so a truncated one
+   * would delete everything past the cap. The flag is what lets undo decline
+   * instead. It has to be an explicit field: the old marker was a trailing
+   * `"..."`, which real prose can end with, so a truncated snapshot was
+   * indistinguishable from an honest one.
+   */
+  textSnapshotTruncated?: boolean;
   /** Timestamp of last edit to the annotation content. */
   editedAt?: number;
   /**

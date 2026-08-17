@@ -5,6 +5,7 @@ import { API_SCRATCHPAD } from "../shared/api-paths";
 import { BYO_MODELS_ENABLED, DEFAULT_MCP_PORT } from "../shared/constants";
 import { isScratchpadPath, isUploadPath, scratchpadUuidFromPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
+import { SNAPSHOT_CAP } from "../shared/snapshot";
 import type { Annotation, CapturedAnchor, ChatMessage, TandemNotification } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
@@ -1557,7 +1558,16 @@ function captureSelectionForChat() {
   const text = editor.state.doc.textBetween(from, to, "\n");
   capturedAnchor = {
     ...range,
-    textSnapshot: text.length > 200 ? text.slice(0, 197) + "..." : text,
+    // Keeps the in-band ellipsis that annotations shed in #1486, deliberately.
+    // Not because it stays on this machine — it is rendered in the message
+    // history and travels to the AI in the `tandem_checkInbox` payload — but
+    // because nothing ever writes it BACK into the document. That is the whole
+    // of why the ellipsis was dangerous on annotations: undo restored it as
+    // three literal characters. With no restore path there is no such hazard,
+    // and a visible "there's more" is worth more to a reader than a flag.
+    // `SnapshotBearing` requires an `id` specifically so this cannot be handed
+    // to `isSnapshotTruncated` by mistake — see `shared/snapshot.ts`.
+    textSnapshot: text.length > SNAPSHOT_CAP ? `${text.slice(0, SNAPSHOT_CAP - 3)}...` : text,
   };
 }
 
@@ -2248,6 +2258,22 @@ const review = useAnnotationReview({
       message:
         "Couldn't apply the suggestion — the text has changed. The annotation was left pending.",
       dedupKey: `suggestion-apply-failed:${ann.id}`,
+      timestamp: Date.now(),
+    }),
+  onUndoFailed: (ann) =>
+    notifications.push({
+      id: `suggestion-undo-failed-${ann.id}`,
+      type: "annotation-error",
+      severity: "warning",
+      // Deliberately does NOT recommend Ctrl+Z. It would restore the text —
+      // the editor history entry is still live inside the same window the
+      // Undo button is — but nothing resets the annotation, so the user would
+      // end up with the original wording on screen and a record still marked
+      // accepted, which is the mismatch leaving the status alone was meant to
+      // avoid. Better to state the outcome than to suggest a half-fix (#1486).
+      message:
+        "Couldn't undo this suggestion — only part of the original text was saved, so restoring it would delete the rest. The suggestion stays applied.",
+      dedupKey: `suggestion-undo-failed:${ann.id}`,
       timestamp: Date.now(),
     }),
 });
