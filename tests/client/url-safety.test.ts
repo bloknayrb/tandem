@@ -225,6 +225,38 @@ describe("sanitizeImageSrcForPaste", () => {
     expect(sanitizeImageSrcForPaste("mailto:foo@bar.com")).toBeNull();
   });
 
+  // **Every row here was accepted before #1420, and only the first was closed
+  // by removing `//` from the allowlist.** The rest carry no colon, so
+  // `hasSchemePrefix` returned false and the trailing scheme-less
+  // pass-through handed them back as safe. Browsers map `\` to `/` inside a
+  // URL, so each resolves cross-host.
+  //
+  // The table is the point: a fix that only drops `//` from
+  // SAFE_IMAGE_PREFIXES passes row 1 and fails rows 2-5, while reading in a
+  // diff as though it closed the class.
+  it.each([
+    ["protocol-relative", "//evil.com/x.png"],
+    ["mixed separator, slash first", "/\\evil.com/x.png"],
+    ["mixed separator, backslash first", "\\/evil.com/x.png"],
+    ["double backslash", "\\\\evil.com\\x.png"],
+    // Built with `ch()`, per this file's no-raw-control-bytes rule. NUL and
+    // U+001F survive `trim()` (neither is JS whitespace), so they defeat the
+    // `startsWith("//")` guard and leave URL_HOSTILE_CHARS as the only thing
+    // that can reject them. A space-prefixed row would prove nothing --
+    // `trim()` strips it before either guard runs.
+    ["NUL prefix", `${NUL}//evil.com/x.png`],
+    ["U+001F prefix", `${US}//evil.com/x.png`],
+  ])("rejects a cross-host image src (%s)", (_label, hostile) => {
+    expect(sanitizeImageSrcForPaste(hostile)).toBeNull();
+  });
+
+  it("still rejects protocol-relative now that it left the allowlist", () => {
+    // Pinned separately from the table because it is the one row whose
+    // rejection depends on the SAFE_IMAGE_PREFIXES edit rather than on the
+    // two guards — re-adding "//" to that list must fail a test.
+    expect(SAFE_IMAGE_PREFIXES).not.toContain("//");
+  });
+
   it("accepts in-page fragments and relative/root-relative paths", () => {
     expect(sanitizeImageSrcForPaste("#section")).toBe("#section");
     expect(sanitizeImageSrcForPaste("./img.png")).toBe("./img.png");

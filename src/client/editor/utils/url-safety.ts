@@ -77,19 +77,29 @@ function hasSchemePrefix(trimmed: string): boolean {
  * browsers map it to `/` inside a URL, so it reinterprets structure just as
  * badly.
  *
- * Deliberately NOT applied to {@link sanitizeHrefForPaste} or
- * {@link sanitizeImageSrcForPaste}, and NOT because those are already covered.
- * Both end in a bare `if (!hasSchemePrefix(trimmed)) return trimmed` — their
- * allowlists gate only SCHEME-BEARING strings, so for exactly the class this
- * set exists to catch they are pass-throughs. Measured: both return
+ * Applied by {@link isSchemelessPathHref} and, since #1420, by
+ * {@link sanitizeImageSrcForPaste}. Still deliberately NOT applied to
+ * {@link sanitizeHrefForPaste}, and NOT because that one is already covered:
+ * it ends in a bare `if (!hasSchemePrefix(trimmed)) return trimmed`, and its
+ * allowlist gates only SCHEME-BEARING strings, so for exactly the class this
+ * set exists to catch it is a pass-through. Measured: it returns
  * `<NUL>//evil.com/x.png` unchanged.
  *
- * For links that is covered downstream — `openHref` re-gates every href through
- * `isSafeExternalHref` or `resolveRelativeLink`'s fail-closed walk. For IMAGES
- * there is no equivalent gate: a pasted `src` reaches the DOM as written and
- * the browser resolves it cross-host. That gap is pre-existing and tracked
- * separately; it is not something this set's absence here creates, but it is
- * also not something an allowlist prevents.
+ * That remains acceptable for links **only because of a downstream gate that
+ * has no image equivalent** — `openHref` re-runs every href through
+ * `isSafeExternalHref` or `resolveRelativeLink`'s fail-closed segment walk
+ * before anything is opened. An image has no such second chance: its `src`
+ * reaches the DOM as written and the browser fetches it on render, with no
+ * click. That asymmetry is why this set now applies to the image sanitizer and
+ * still does not apply to the href one.
+ *
+ * The image `src` sink has a second, independent control since #1420: the
+ * `img-src 'self' data: blob:` CSP in `index.html`, mirroring the one
+ * `src-tauri/tauri.conf.json` already shipped. The CSP is the control that
+ * stops the fetch; this set stops a hostile string being stored as though it
+ * had been vetted. Neither makes the other redundant — the CSP does not apply
+ * to what gets written into the document, and an allowlist does not stop a
+ * plain `https://` tracking pixel.
  */
 const URL_HOSTILE_CHARS = /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000\\]/;
 
@@ -184,7 +194,12 @@ export function sanitizeHrefForPaste(raw: string | null | undefined): string | n
  * Image-src prefixes safe to paste directly. Mirrors {@link SAFE_EXTERNAL_PREFIXES}
  * minus `mailto:` — a valid link target, but never a valid image source.
  */
-export const SAFE_IMAGE_PREFIXES = ["http://", "https://", "ftp://", "//"] as const;
+// `//` was removed in #1420: protocol-relative is an external fetch with no
+// authoring use in a local document, and allowlisting it made the one hostile
+// spelling a *permitted* one. Its removal is necessary and not sufficient —
+// the colon-free backslash forms never reached this list at all. See the
+// guards at the top of `sanitizeImageSrcForPaste`.
+export const SAFE_IMAGE_PREFIXES = ["http://", "https://", "ftp://"] as const;
 
 /**
  * `data:` image subtypes allowed as pasted image sources: boundable raster
@@ -231,6 +246,25 @@ export function sanitizeImageSrcForPaste(raw: string | null | undefined): string
   if (!raw) return null;
   const trimmed = raw.trim();
   if (!trimmed) return null;
+
+  // **The final `return trimmed` below is a scheme-less pass-through, and on its
+  // own it was the hole (#1420).** `hasSchemePrefix` is a colon test, so every
+  // cross-host spelling that carries no colon walked straight out of it as
+  // "safe": `/\evil.com/x.png`, `\\evil.com\x.png`, `\/evil.com/x.png` and a
+  // control-character-prefixed `//evil.com/x.png`. Browsers map `\` to `/`
+  // inside a URL, so all of them resolve cross-host.
+  //
+  // Removing `//` from SAFE_IMAGE_PREFIXES alone does NOT close that class — it
+  // only closes the one spelling that was explicitly allowlisted. These two
+  // guards are what closes it, and they are deliberately the same pair
+  // `isSchemelessPathHref` applies, in the same order, so the render-time href
+  // boundary and the paste-time image boundary cannot drift apart. The file
+  // header's warning about `URL_HOSTILE_CHARS` NOT being applied here described
+  // exactly this gap; it is applied now, and the header says so.
+  if (URL_HOSTILE_CHARS.test(trimmed)) return null;
+  // Protocol-relative is an EXTERNAL fetch, not a path — same reasoning as
+  // hrefs, and nobody hand-writes `//host/x.png` in a local document.
+  if (trimmed.startsWith("//")) return null;
 
   if (SAFE_IMAGE_DATA_URI.test(trimmed)) {
     return trimmed.length <= MAX_DATA_URI_LENGTH ? trimmed : null;

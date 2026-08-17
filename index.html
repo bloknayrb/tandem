@@ -3,6 +3,40 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      **`img-src` only, and that narrowness is the point (#1420).**
+
+      A document is untrusted content — people open `.md` and `.docx` files they
+      were sent — and until this line an image in one could name any host. The
+      browser fetched it on render, with no click and no paste: a tracking pixel
+      confirming the file was opened and from which IP, or a GET at a LAN device
+      (`http://192.168.1.1/admin?…`). For a local-first, no-telemetry editor,
+      "opening a file phones home" is the contradiction worth closing.
+
+      **The packaged desktop app was never exposed; this brings the other two
+      builds to parity.** `src-tauri/tauri.conf.json` already ships this exact
+      `img-src` list. It does NOT cover `cargo tauri dev`, because `devUrl`
+      points at Vite and Tauri injects its CSP only for `frontendDist` — so dev
+      ran unprotected too. Keep the two lists identical; they are one policy
+      written twice, and the Tauri copy is the one with the wider directive set.
+
+      Deliberately ONE directive. A `default-src`/`script-src` here would have to
+      re-derive what Vite's dev server, the inline `<style>` below and the app
+      bundle each need, and getting that wrong breaks the app in ways this change
+      has no business risking. Absent directives stay unrestricted precisely
+      because narrowing them is a separate decision with a separate blast radius.
+
+      `data:` is required — `.docx` embeds arrive as base64 rasters (see
+      `safeImageEmbed` in `server/file-io/docx-export.ts`), and dropping it would
+      blank every imported Word image. `blob:` matches the Tauri list.
+
+      NOT closed by this: `'self'` still permits `http://127.0.0.1:<port>/…`, so
+      a document can still make the app GET its own origin. Reads there are
+      scrubbed and non-GET is refused by `enforceLoopbackMutation`, so it buys an
+      attacker nothing today — but it is the residue to look at first if that
+      ever stops being true.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="img-src 'self' data: blob:" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="theme-color" content="#fafaf9" />
     <title>Tandem - Collaborative Editor</title>
