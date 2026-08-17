@@ -680,6 +680,70 @@ describe("saveDocumentAsToDisk", () => {
     expect(result.errorCode).toBe("EXTENSION_MISMATCH");
   });
 
+  /**
+   * Promoting to a plaintext format flattens the LIVE document, not just the
+   * bytes (#1460).
+   *
+   * Save-As promotes in place — same docId, same Y.Doc, same provider — so a
+   * scratchpad holding a hard break becomes a live `.txt` document still holding
+   * one. From then on the bytes say two lines while the model says one block, and
+   * the next open believes the bytes. Neither client guard covers it: nothing was
+   * typed or pasted.
+   *
+   * The assertions deliberately check the Y.Doc AND the written bytes. Bytes
+   * alone cannot see this defect at all — a hard break and a block boundary both
+   * render as `"\n"`, so the file was always correct. Only the surviving model was
+   * wrong, which is why it stayed invisible until a reopen.
+   */
+  describe("plaintext promotion (#1460)", () => {
+    /** An upload-source doc whose single paragraph holds a hard break. */
+    function scratchpadWithBreak(id: string): Y.Doc {
+      addDoc(id, {
+        id,
+        filePath: `upload://scratchpad/${id}/Scratchpad.md`,
+        format: "md",
+        readOnly: false,
+        source: "upload",
+      });
+      const doc = getOrCreateDocument(id);
+      const fragment = doc.getXmlFragment("default");
+      const p = new Y.XmlElement("paragraph");
+      fragment.insert(0, [p]);
+      p.insert(0, [new Y.XmlText("alpha")]);
+      p.insert(1, [new Y.XmlElement("hardBreak")]);
+      p.insert(2, [new Y.XmlText("bravo")]);
+      return doc;
+    }
+
+    it("flattens the surviving Y.Doc when promoting .md → .txt", async () => {
+      const { atomicWrite } = await import("../../src/server/file-io/index.js");
+      vi.mocked(atomicWrite).mockClear();
+      const doc = scratchpadWithBreak("promote-txt");
+
+      const result = await saveDocumentAsToDisk("promote-txt", "/tmp/promoted-1460.txt", "txt");
+      expect(result.status).toBe("saved");
+
+      // The load-bearing half: the live model now agrees with the file.
+      expect(doc.getXmlFragment("default").length, "one block became two").toBe(2);
+      // And the bytes did not move — which is what makes it safe to do this to a
+      // document that may already carry flat-anchored annotations.
+      // Asserted on the content argument alone: `path.resolve` rewrites
+      // "/tmp/x" to "C:\tmp\x" on win32, and the path is not the claim here.
+      expect(vi.mocked(atomicWrite).mock.calls[0]?.[1]).toBe("alpha\nbravo");
+    });
+
+    it("leaves the model alone when promoting .md → .md — the negative control", async () => {
+      // Markdown CAN represent an intra-paragraph break, and the serializer
+      // writes it as a trailing `\`. Flattening here would delete a real hard
+      // break the user asked for, so this must stay one block.
+      const doc = scratchpadWithBreak("promote-md");
+
+      const result = await saveDocumentAsToDisk("promote-md", "/tmp/promoted-1460.md", "md");
+      expect(result.status).toBe("saved");
+      expect(doc.getXmlFragment("default").length, "still one paragraph").toBe(1);
+    });
+  });
+
   it("rejects unknown document IDs", async () => {
     const result = await saveDocumentAsToDisk("ghost-doc", "/tmp/anywhere.md", "md");
     expect(result.status).toBe("error");

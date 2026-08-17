@@ -3,6 +3,7 @@ import { Fragment, Slice } from "@tiptap/pm/model";
 import { onDestroy } from "svelte";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import { isPlaintextFormat } from "../../shared/plaintext-format";
 import type { SanitizationEvent } from "../../shared/sanitize";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import { isSnapshotTruncated } from "../../shared/snapshot";
@@ -120,6 +121,55 @@ const devSanitizeWarn = (event: SanitizationEvent): void => {
   console.warn("[sanitize]", event);
 };
 
+/** Matches a line ending in any of the three conventions. Mirrors `literal-content.ts`. */
+const LINE_ENDING_TEST = /\r\n|[\r\n]/;
+
+/**
+ * Accept a multi-line suggestion into a plaintext document as separate blocks.
+ *
+ * Uses an OPEN slice for the same reason the undo path does: `insertContentAt`
+ * given closed block nodes at an inline position routes to `tr.replaceWith` →
+ * `new Slice(frag, 0, 0)`, which splits the host block *around* the insertion
+ * instead of merging into it — so replacing the middle of `pre|X|post` yields
+ * four paragraphs where two belong. `openStart`/`openEnd` of 1 says "these ends
+ * are cut, join them to whatever they land beside".
+ *
+ * Marks are stamped explicitly, matching `literalInlineContent`: `tr.replace`
+ * does not inherit `marksAcross` the way `tr.insertText` does, so leaving them
+ * off would make the same suggestion keep its bold on one line and lose it on
+ * two.
+ */
+function applyAsBlocks(
+  editor: TiptapEditor,
+  from: number,
+  to: number,
+  newText: string,
+  marks: JSONContent["marks"],
+): boolean {
+  const { schema } = editor.state;
+  const nodes = newText.split(LINE_ENDING_TEST).map((line) =>
+    schema.nodeFromJSON({
+      type: "paragraph",
+      // A zero-length text node is invalid in ProseMirror, so an empty line is
+      // an empty paragraph — which is what an empty line in the file is.
+      content: line.length > 0 ? [{ type: "text", text: line, ...(marks ? { marks } : {}) }] : [],
+    }),
+  );
+  return (
+    editor
+      .chain()
+      .focus()
+      // Claude wrote this text; without the tag `Authorship.onTransaction` stamps
+      // it as the user's (#1388). Inside the chain so it tags the same transaction.
+      .setMeta(AUTHORSHIP_ORIGIN_META, "claude")
+      .command(({ tr }) => {
+        tr.replace(from, to, new Slice(Fragment.from(nodes), 1, 1));
+        return true;
+      })
+      .run()
+  );
+}
+
 /**
  * Apply an annotation's replacement text in the editor.
  *
@@ -133,6 +183,7 @@ export function applySuggestion(
   ann: Annotation,
   editor: TiptapEditor,
   ydoc: Y.Doc | null,
+  format?: string,
 ): boolean {
   if (ann.suggestedText === undefined) return false;
 
@@ -144,14 +195,30 @@ export function applySuggestion(
   }
 
   try {
+    const inCode = isCodeContext(editor, resolved.from);
+    const marks = marksAcrossRange(editor, resolved.from, resolved.to);
+
+    // #1460: in a plaintext document a multi-line suggestion has to become
+    // BLOCKS, not hard breaks.
+    //
+    // `literalInlineContent` renders every newline as a `hardBreak`, which is
+    // right for markdown — that is what a suggestion string means, and the
+    // serializer writes it as a trailing `\`. A plaintext file has no way to
+    // spell it: save joins blocks with `\n`, so a hardBreak and a block boundary
+    // produce identical bytes, and the next open reads the bytes. Accepting a
+    // two-line suggestion would leave a document whose model disagrees with its
+    // own file.
+    //
+    // A code block is exempt on both counts — it stores newlines literally and
+    // its content expression admits no hardBreak, so there is nothing to convert.
+    if (isPlaintextFormat(format) && !inCode && LINE_ENDING_TEST.test(newText)) {
+      return applyAsBlocks(editor, resolved.from, resolved.to, newText, marks);
+    }
+
     // Inline JSON, never the raw string: `insertContentAt` HTML-parses a string
     // argument, which downgraded every hard break to a soft wrap and let markup
     // in a suggestion restructure the document (#1477).
-    const content = literalInlineContent(
-      newText,
-      isCodeContext(editor, resolved.from),
-      marksAcrossRange(editor, resolved.from, resolved.to),
-    );
+    const content = literalInlineContent(newText, inCode, marks);
     let chain = editor
       .chain()
       .focus()
@@ -190,6 +257,17 @@ export interface UseAnnotationReviewParams {
    * `targets[reviewIndex]`.
    */
   getActiveAnnotationId?: () => string | null;
+  /**
+   * The ACTIVE document's format, re-read on use (#1460). A plaintext document
+   * cannot hold a newline inside a block, so a multi-line suggestion has to be
+   * accepted as separate blocks rather than as hard breaks.
+   *
+   * A getter, not a value, for the same reason the editor extensions take one:
+   * Save-As promotes a document in place, so a format captured once outlives its
+   * own truth. Omitted ⇒ `undefined` ⇒ treated as not plaintext, leaving accept
+   * exactly as it was.
+   */
+  getFormat?: () => string | undefined;
   /**
    * Called when accepting a suggestion fails because its range could not be
    * resolved (e.g. the underlying text changed since the suggestion was
@@ -241,6 +319,7 @@ export function useAnnotationReview({
   getActiveAnnotationId,
   onApplyFailed,
   onUndoFailed,
+  getFormat,
 }: UseAnnotationReviewParams): UseAnnotationReviewReturn {
   // Reactive state
   let reviewIndex = $state(0);
@@ -275,7 +354,7 @@ export function useAnnotationReview({
     if (status === "accepted" && ann.suggestedText !== undefined) {
       const editor = getEditor();
       if (editor) {
-        const applied = applySuggestion(ann, editor, y);
+        const applied = applySuggestion(ann, editor, y, getFormat?.());
         if (!applied) {
           // Revert annotation status — text replacement failed
           map.set(id, { ...ann, status: "pending" });

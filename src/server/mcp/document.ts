@@ -14,6 +14,7 @@ import {
 } from "../../shared/constants.js";
 import { headingPrefix } from "../../shared/offsets.js";
 import { withMcp } from "../../shared/origins.js";
+import { isPlaintextFormat } from "../../shared/plaintext-format.js";
 import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
@@ -470,6 +471,32 @@ export function registerDocumentTools(server: McpServer): void {
             return mcpError(
               "FORMAT_ERROR",
               "Document is read-only (.docx). Use annotations instead.",
+            );
+          }
+
+          // #1460: enforce what this tool's own description has always claimed.
+          //
+          // "newlines in newText are inserted as literal text" is accurate, and
+          // in a markdown document it is also harmless — a literal `\n` is a soft
+          // wrap the serializer can spell, which is what `whitespace: "pre"`
+          // (#1448) exists to preserve. In a PLAINTEXT document it is a shape the
+          // file cannot store: save joins blocks with `\n`, so the bytes say two
+          // lines while the model says one block, and the next open believes the
+          // bytes. The AI's one-paragraph edit reopens as two.
+          //
+          // Refusing rather than splitting, deliberately. This tool is documented
+          // and shaped as a single-paragraph replacement — every offset it
+          // returns, and `RANGE_MOVED`'s retry contract, assume the edit stays
+          // inside one textblock. Silently promoting it to a multi-block insert
+          // would change that contract for every caller to fix a case the caller
+          // can trivially avoid, and the error names the fix.
+          if (isPlaintextFormat(docState?.format) && /[\r\n]/.test(newText)) {
+            return mcpError(
+              "INVALID_ARGUMENT",
+              `Cannot insert a newline into a '${docState?.format}' document: plaintext formats ` +
+                "cannot represent a line break inside a paragraph, so it would reopen as " +
+                "separate paragraphs. Issue one tandem_edit per line, or use " +
+                "tandem_appendContent for multi-block content.",
             );
           }
 

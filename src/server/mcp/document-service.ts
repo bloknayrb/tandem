@@ -16,6 +16,7 @@ import {
   Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
+import { isPlaintextFormat } from "../../shared/plaintext-format.js";
 import type { ExternalConflictState, FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
@@ -46,6 +47,7 @@ import {
 } from "../file-io/docx-verify.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
+import { flattenPlaintextBreaks } from "../file-io/plaintext-flatten.js";
 import { recordSelfWrite, suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
@@ -740,6 +742,27 @@ export async function saveDocumentAsToDisk(
   savingDocs.add(docId);
   try {
     const doc = getOrCreateDocument(docId);
+
+    // #1460: this promotion can hand a document a format it cannot represent.
+    //
+    // The promotion below is IN PLACE — same docId, same Y.Doc, same provider —
+    // so a `.md` scratchpad or an uploaded `.docx` holding a hard break becomes a
+    // live plaintext document still holding one. Plaintext saves by joining
+    // blocks with `\n`, so from here on the bytes say two lines while the model
+    // says one block, every autosave writes that disagreement, and the next open
+    // believes the bytes. Neither client guard covers it: nothing was typed or
+    // pasted, and the content was legitimate until the destination changed.
+    //
+    // Byte-neutral by construction (a hard break and a block boundary both
+    // render as `"\n"`), so it cannot alter `output` below — it aligns the model
+    // with the bytes rather than the reverse. `withFileSync` per ADR-031: this is
+    // save-path bookkeeping, not user intent and not setup, and it must not
+    // generate channel events. Runs BEFORE `adapter.save` so the write and the
+    // model describe the same document.
+    if (isPlaintextFormat(format)) {
+      withFileSync(doc, () => flattenPlaintextBreaks(doc));
+    }
+
     const output = adapter.save(doc);
 
     // The file shouldn't exist yet (we're saving as new), but if it does,
