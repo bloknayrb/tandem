@@ -386,7 +386,15 @@ export async function listSessionFilePaths(): Promise<
         // callers validate too, so this is defence in depth — but keeping an
         // unsafe path out of the restore list entirely is cheaper than relying
         // on every future consumer of this list to re-check.
-        if (rejectUnsafeWindowsPrefix(data.filePath) !== null) continue;
+        const unsafe = rejectUnsafeWindowsPrefix(data.filePath);
+        if (unsafe !== null) {
+          // Logged, not silently dropped: this list is what the restore UI
+          // shows, so a session vanishing from it with no explanation looks
+          // like data loss to the user and like nothing at all to whoever is
+          // debugging it.
+          console.error(`[Tandem] Omitting session ${file} from restore list: ${unsafe}`);
+          continue;
+        }
         results.push({ filePath: data.filePath, lastAccessed: data.lastAccessed ?? 0 });
       } catch (err) {
         console.error(`[Tandem] Skipping unreadable session file ${file}:`, err);

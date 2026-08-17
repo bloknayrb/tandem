@@ -9,6 +9,7 @@
 import { homedir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NETWORK_PATHS } from "../helpers/unc-fixtures.js";
 
 // ── Top-level stubs (referenced by vi.mock factories) ────────────────────────
 
@@ -251,6 +252,23 @@ describe("findCoworkWorkspaces reparse-point handling", () => {
     _lstatSpy.mockImplementation(async (p: string) => (p === plantedAt ? junction() : dir()));
   }
 
+  it.each(
+    NETWORK_PATHS,
+  )("refuses a UNC %%LOCALAPPDATA%% (%s) without reading anything", async (_label, hostile) => {
+    // The screen the file's own docblock calls the consequential one: every
+    // path here is a `path.join` off this value, and the scrub runs during an
+    // MSIX uninstall that can be elevated. Nothing covered it, and deleting
+    // `usableLocalAppData`'s `assertPathSafe` left the whole suite green.
+    plantJunction(null);
+    vi.stubEnv("LOCALAPPDATA", hostile);
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+    expect(_readdirSpy).not.toHaveBeenCalled();
+    expect(_lstatSpy).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("LOCALAPPDATA"));
+  });
+
   it("descends a clean chain and returns the validated workspace", async () => {
     plantJunction(null);
     const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
@@ -269,6 +287,24 @@ describe("findCoworkWorkspaces reparse-point handling", () => {
     expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
     // The load-bearing assertion: the following call never happened.
     expect(_readdirSpy).not.toHaveBeenCalledWith(planted);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("reparse point"));
+  });
+
+  it.each([
+    ["a Claude_* package root", `${PACKAGES}\\Claude_abc`],
+    ["LocalCache", `${PACKAGES}\\Claude_abc\\LocalCache`],
+    ["Roaming", `${PACKAGES}\\Claude_abc\\LocalCache\\Roaming`],
+    ["Claude", `${PACKAGES}\\Claude_abc\\LocalCache\\Roaming\\Claude`],
+  ])("refuses to traverse a junction at %s, mid-join", async (_label, planted) => {
+    // `lstat` declines to follow only the FINAL component, so screening the
+    // assembled six-segment `sessionsRoot` checked one level and traversed
+    // these four. All are user-writable and all sit inside the tree the
+    // reachable instance of #1417 lived in.
+    plantJunction(planted.replace(/\//g, "\\"));
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+    expect(_readdirSpy).not.toHaveBeenCalledWith(SESSIONS);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("reparse point"));
   });
 

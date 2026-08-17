@@ -1,5 +1,8 @@
 /**
- * Windows workspace path guard — mirrors the Rust §3 invariant for TypeScript callers.
+ * Windows workspace path guard — mirrors the Rust §3 invariant for TypeScript
+ * callers. The twin is `check_path_safe` / `is_unc_path` in
+ * `src-tauri/src/cowork_workspace_scan.rs`; the two are kept in step by hand, so
+ * each names the other deliberately.
  *
  * Five steps (in order):
  *   a0. Reject UNC on the RAW candidate string, before any syscall.
@@ -93,11 +96,13 @@ export async function assertSafeWorkspacePath(
  * before that.
  *
  * **This ordering does nothing for UNC, and step (a0) is the only thing that
- * does.** The `dirname` chain bottoms out at `\\server\share`, so the
+ * does.** On win32 the `dirname` chain bottoms out at `\\server\share`, so the
  * shallowest entry reached for a UNC candidate is the share root — and
  * `lstat` on that performs the SMB handshake the guard exists to prevent.
- * (a0) is load-bearing, not defence in depth; do not delete it on the
- * strength of this walk.
+ * (On posix the chain runs to `/` instead, but only Windows performs the
+ * handshake, so the conclusion is unchanged; this module is not `cfg`-gated the
+ * way its Rust twin is, hence the qualifier.) (a0) is load-bearing, not defence
+ * in depth; do not delete it on the strength of this walk.
  */
 async function hasSymlinkInChain(p: string, warn: (m: string) => void): Promise<boolean> {
   // Collect ancestors by walking up, then check them in reverse (root first).
@@ -145,8 +150,14 @@ async function hasSymlinkInChain(p: string, warn: (m: string) => void): Promise<
  * tail of undiscovered forms.
  */
 function isUncPath(p: string): boolean {
-  if (!p.startsWith("\\\\") && !p.startsWith("//")) return false;
-  return !/^[\\/]{2}\?[\\/][a-z]:[\\/]/i.test(p);
+  // Separators normalised before the test, never enumerated — see
+  // `rejectUnsafeWindowsPrefix`. `/\host\share` is UNC to Windows just as much
+  // as `\\host\share`, and testing the homogeneous pairs alone let both mixed
+  // spellings through. 7 characters is the longest prefix that matters
+  // (`\\?\C:\`).
+  const head = p.slice(0, 7).replace(/\//g, "\\");
+  if (!head.startsWith("\\\\")) return false;
+  return !/^\\\\\?\\[a-z]:\\/i.test(head);
 }
 
 /**

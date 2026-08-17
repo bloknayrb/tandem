@@ -46,7 +46,7 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 //
 // To close that window we hand the UI an *opaque handle* for each validated
 // workspace instead of a bare path. The handle maps — inside this process — to
-// the exact canonical `PathBuf` that passed the four-layer guard during the
+// the exact canonical `PathBuf` that passed the five-step guard during the
 // scan. Install/uninstall resolve the handle back to that stored path rather
 // than trusting (and re-scanning around) a caller-supplied string. A handle
 // therefore can only ever name a path that the scan already validated; an
@@ -130,7 +130,7 @@ pub fn resolve_handle(token: &str) -> Option<PathBuf> {
     guard.as_ref().and_then(|m| m.get(token).cloned())
 }
 
-/// Re-run the four-layer guard against a path resolved from a snapshot handle,
+/// Re-run the five-step guard against a path resolved from a snapshot handle,
 /// catching a directory swapped *after* the scan that produced the handle.
 ///
 /// Recomputes the canonical scan root for `candidate` (so the containment check
@@ -183,7 +183,7 @@ pub(crate) fn clear_snapshot_for_test() {
 /// Aggregate counters from a single workspace scan.
 ///
 /// `rejected_by_guard` counts candidates that passed the shape filter but
-/// failed the four-layer security guard (reparse point / UNC / canonicalize /
+/// failed the five-step security guard (reparse point / UNC / canonicalize /
 /// containment). Surfaced to the UI as `workspacesBlocked` so redirected or
 /// cloud-synced AppData setups get honest messaging ("found but can't safely
 /// configure") instead of a perpetual "no workspace yet".
@@ -1010,6 +1010,13 @@ mod tests {
             // Other routes to SMB under the same `\\?\` namespace.
             r"\\?\GLOBALROOT\Device\Mup\server\share",
             r"\\.\UNC\server\share",
+            "//./unc/server/share",
+            // Mixed separators. Windows treats `/` and `\` as interchangeable,
+            // so these are UNC too — the normalization above handles them, and
+            // these rows are what pin the claim its docblock makes. Both TS
+            // predicates were missing this and it was a two-character bypass.
+            r"/\server\share",
+            r"\/server/share",
         ] {
             assert!(
                 is_unc_path(Path::new(unsafe_path)),
@@ -1022,6 +1029,9 @@ mod tests {
         for safe_path in [
             r"\\?\C:\Users\foo",
             r"\\?\c:\Users\foo",
+            // A non-C drive, so narrowing the drive test to a literal `c`
+            // would not pass this table.
+            r"\\?\D:\Data\x",
             "//?/C:/Users/foo",
             r"C:\Users\foo",
             "/home/foo",

@@ -40,7 +40,7 @@ const ALLOWED = new Map<string, string>([
   [
     "src/server/file-io/docx-export.ts",
     "Redundant pre-filter inside a URL validator that already refuses every non-http(s)/mailto " +
-      "scheme two lines later, so the `\\\\` test cannot be the only thing standing between a " +
+      "scheme four lines later, so the `\\\\` test cannot be the only thing standing between a " +
       "hostile input and a syscall — it performs none. Left alone deliberately: converting it " +
       "would imply it was load-bearing.",
   ],
@@ -53,13 +53,26 @@ const ALLOWED = new Map<string, string>([
       "allowlist for the same reason. Kept in step by hand; the two files cross-reference " +
       "each other.",
   ],
-  [
-    "src-tauri/src/lib.rs",
-    "`is_unc_or_network_path` — the Rust side's own definition, shared between " +
-      "`validate_open_candidate` and `show_in_file_manager`. Stricter than the scan module's " +
-      "(rejects `\\\\?\\C:\\…`) because neither caller has a containment check to lean on.",
-  ],
 ]);
+
+/**
+ * `src-tauri/src/lib.rs` is NOT in that map, and its absence is a finding
+ * rather than an oversight.
+ *
+ * `is_unc_or_network_path` there is a real third definition — stricter than the
+ * scan module's (it rejects `\\?\C:\…` too, because neither
+ * `validate_open_candidate` nor `show_in_file_manager` has a containment check
+ * to lean on). It used to appear in the map because it was written as
+ * `starts_with(r"\\")`. Rewriting it to match either separator turned it into a
+ * `matches!` over two chars, and the detector below — which matches a
+ * *spelling* — stopped seeing it.
+ *
+ * So it left the allowlist not because the copy went away but because the copy
+ * became invisible, which is the exact blind spot the detector's own docblock
+ * warns about. Listing it here would fail the staleness check next door; the
+ * honest record is this comment plus the pointer in
+ * `src/shared/windows-path-safety.ts`.
+ */
 
 /**
  * A `startsWith` against a literal UNC / device-namespace prefix, in TS or Rust

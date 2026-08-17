@@ -43,6 +43,7 @@ import {
 import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
 import { resolveManyOnPath } from "../shared/integrations/path-lookup.js";
+import { rejectUnsafeWindowsPrefix } from "../shared/windows-path-safety.js";
 
 // Injected by tsup into dist/cli. Absent in tsx dev / vitest (typeof-guarded at
 // use). This is the version the `npx` bridge entries are pinned to.
@@ -786,6 +787,22 @@ function checkUserMcpConfig(r: Recorder): void {
   // writes rather than a second hand-maintained copy of the same rule.
   const claudeCodePath = claudeCodeConfigPath({ homeOverride: home || undefined });
 
+  // (#1417) `existsSync`/`readFileSync` connect: on Windows a UNC path performs
+  // the SMB handshake that leaks an NTLM hash. `%USERPROFILE%` can be redirected
+  // to a share by enterprise folder redirection, and doctor is the one command
+  // whose whole job is to read this file — so it must screen before doing so.
+  // It also has to *say* why, because doctor is where the user comes to find out
+  // why the wizard found nothing (`detectTargets` refuses the same path).
+  const claudeCodeRejection = rejectUnsafeWindowsPrefix(claudeCodePath);
+  if (claudeCodeRejection !== null) {
+    r.warn(
+      `${HOME_CLAUDE_JSON} is on a network or device path Tandem will not read`,
+      "Tandem refuses network paths because reading one leaks a Windows credential hash. " +
+        "Redirect your profile to a local drive, or configure Claude Code by hand.",
+    );
+    return;
+  }
+
   if (!existsSync(claudeCodePath)) {
     r.warn(
       "~/.claude.json not found",
@@ -894,6 +911,20 @@ function reportEntryCommand(
 
 function checkDesktopMcpConfig(r: Recorder): void {
   const desktopPath = claudeDesktopConfigPath();
+
+  // (#1417), same reason as `checkUserMcpConfig`. Warned rather than silent —
+  // the surrounding convention is to stay quiet when Claude Desktop is simply
+  // absent, but "I refused to look" is not the same fact as "not installed",
+  // and this is the surface that explains the wizard's silence.
+  const desktopRejection = rejectUnsafeWindowsPrefix(desktopPath);
+  if (desktopRejection !== null) {
+    r.warn(
+      "The Claude Desktop config is on a network or device path Tandem will not read",
+      "Tandem refuses network paths because reading one leaks a Windows credential hash. " +
+        "Redirect your profile to a local drive, or configure Claude Desktop by hand.",
+    );
+    return;
+  }
 
   let config: { mcpServers?: Record<string, unknown> };
   try {
@@ -1089,10 +1120,16 @@ function reportSpawnedCommand(
     r.warn(
       // NOT "broken link". A dangling symlink resolves to ENOENT, which
       // `probeNodeBinary` reports as `false` (definitely gone) — it lands in
-      // the branch below, never here. `null` is the narrower set that actually
-      // throws: permission denied, a symlink LOOP, an unreachable share.
-      `${label} ${entryName} command path could not be checked (permission denied, symlink loop, or unreachable share): ${command}`,
-      "Verify the path is readable — Tandem deliberately will not rewrite it on an unreadable probe.",
+      // the branch below, never here. `null` is the narrower set: permission
+      // denied, a symlink LOOP, an unreachable share — and, since #1417, a
+      // network path refused *without looking*. That last one is why the
+      // remedy cannot just say "verify the path is readable": a perfectly
+      // readable `\\fileserver\tools\node.exe` lands here too, and re-checking
+      // its permissions would tell the user nothing.
+      `${label} ${entryName} command path could not be checked (permission denied, symlink loop, unreachable share, or a network path Tandem refuses to probe): ${command}`,
+      "If it is a network path, move the Node binary to a local drive — Tandem will not touch one, " +
+        "because doing so leaks a Windows credential hash. Otherwise verify the path is readable; " +
+        "Tandem deliberately will not rewrite it on an unreadable probe.",
     );
     return;
   }

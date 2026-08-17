@@ -2,7 +2,11 @@ import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertPathSafe, detectTargets } from "../../src/server/integrations/apply.js";
+import {
+  assertPathSafe,
+  detectionRefusal,
+  detectTargets,
+} from "../../src/server/integrations/apply.js";
 import { sourceFileChanged } from "../../src/server/session/manager.js";
 import type { SessionData } from "../../src/shared/types.js";
 import { LOCAL_EXTENDED_PATHS, NETWORK_PATHS } from "../helpers/unc-fixtures.js";
@@ -28,14 +32,19 @@ vi.mock("node:fs", async (importOriginal) => {
 
 describe("assertPathSafe rejects UNC before any filesystem call (#1417)", () => {
   it.each([...NETWORK_PATHS, ...LOCAL_EXTENDED_PATHS])("%s", (_label, target) => {
-    // The reason code is the observable. Before the fix this function had NO
-    // UNC check at all: the path fell through `existsSync` / `lstatSync` on the
-    // raw string — the calls that leak the hash — and was eventually refused as
-    // "outside-home" by the allowed-roots test. Same rejection, but only after
-    // the damage, so asserting merely "it throws" passes against the old code.
+    _existsSyncSpy.mockClear();
+
+    // Two assertions, and the second is the one that matters. The reason code
+    // pins that a UNC check EXISTS; it survives the check being moved back
+    // below the `existsSync`/`lstatSync` ancestor walk, which is precisely the
+    // regression this file is named for. That was not hypothetical — this test
+    // was written with the first assertion alone, and a mutant that moved the
+    // check after the walk passed it. The suite runtime tripled from the SMB
+    // timeouts and nothing failed.
     expect(() => assertPathSafe(target)).toThrow(
       expect.objectContaining({ name: "PathRejectedError", reason: "unc" }),
     );
+    expect(_existsSyncSpy).not.toHaveBeenCalled();
   });
 
   it("still accepts an ordinary local path under an allowed root", () => {
@@ -59,6 +68,28 @@ describe("detectTargets screens the Claude Desktop path before existsSync (#1417
 
     expect(targets.some((t) => t.kind === "claude-desktop")).toBe(false);
     expect(_existsSyncSpy).not.toHaveBeenCalledWith(expect.stringContaining("attacker"));
+  });
+});
+
+describe("detectTargets screens the home root before existsSync (#1417)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(NETWORK_PATHS)("refuses a UNC home (%s) without calling existsSync", (_label, home) => {
+    // `%USERPROFILE%` feeds `~/.claude.json`, `~/.claude` and the Claude
+    // Desktop path, so screening it is what covers all four `existsSync` calls
+    // rather than the one that happened to get reviewed.
+    _existsSyncSpy.mockClear();
+
+    expect(detectTargets({ homeOverride: home })).toEqual([]);
+    expect(_existsSyncSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports the refusal as distinct from 'nothing installed'", () => {
+    // The two produce the same empty list and want opposite advice: the
+    // standard remedy is `--force`, which cannot help because the refusal
+    // happens before any force branch is reached.
+    expect(detectionRefusal({ homeOverride: "\\\\attacker\\share" })).not.toBeNull();
+    expect(detectionRefusal({ homeOverride: tmpdir() })).toBeNull();
   });
 });
 

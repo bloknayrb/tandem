@@ -291,12 +291,18 @@ export class PathRejectedError extends Error {
  *
  * Lives beside {@link PathRejectedError} because it narrows it: every
  * `assertPathSafe` call site wants the same one-liner, and there were five
- * hand-written copies before this existed. The reason is the whole point of
+ * hand-written copies of it before this existed (three, plus two the same
+ * change added). The reason is the whole point of
  * logging these at all — a rejected path and an absent one produce the same
  * "not detected" outcome, so without it the log cannot tell them apart.
  */
 export function pathRejectionReason(err: unknown): string {
-  return err instanceof PathRejectedError ? err.reason : (err as Error).message;
+  if (err instanceof PathRejectedError) return err.reason;
+  // Not `(err as Error).message`: every caller interpolates this straight into
+  // a log line, and a non-Error throw (a bare string, a rejected promise) made
+  // that line read `path rejected (undefined)` — which is worse than no line,
+  // because it looks like the reason was computed and came back empty.
+  return err instanceof Error ? err.message : String(err);
 }
 
 export interface BuildMcpEntriesOptions {
@@ -513,11 +519,17 @@ function realpathCached(p: string): string {
  * **Known trade-off: enterprise folder redirection.** A machine whose
  * `%APPDATA%` / `%USERPROFILE%` is redirected to a UNC share now has its
  * Claude Desktop config refused here, where before it was written. That is
- * deliberate and consistent rather than a new policy — Tandem already refuses
- * to *open a document* from a UNC path (`validate_open_candidate` in
- * `src-tauri/src/lib.rs`, before any filesystem call), so such a profile
- * already cannot use the product's primary surface. Config writes were the
- * inconsistent hold-out.
+ * deliberate — Tandem already refuses to *open a document* from a UNC path
+ * (`validate_open_candidate` in `src-tauri/src/lib.rs`, before any filesystem
+ * call), so a profile whose documents live on the share already cannot use the
+ * primary surface, and config writes were the inconsistent hold-out.
+ *
+ * **That argument covers `%USERPROFILE%` redirection and NOT roaming-`%APPDATA%`-
+ * only redirection**, which is the more common enterprise shape: it leaves
+ * documents on a local drive, so such a profile loses Claude Desktop config
+ * writes and nothing else. There the cost is real rather than already-paid.
+ * `detectionRefusal` exists so callers can at least say *why* instead of
+ * reporting it as "no Claude installed".
  *
  * Residual TOCTOU: the lstat-then-write window admits a same-uid attacker
  * who swaps a regular file for a symlink between check and write. Node's
@@ -608,19 +620,57 @@ function isReparsePoint(p: string): boolean {
   }
 }
 
+/**
+ * Walk `root` down through `segments`, refusing at the first reparse point.
+ *
+ * The sync twin of `descendNoFollow` in `src/cli/uninstall-scrub.ts`, and it
+ * exists for the same reason: `lstat` declines to follow only the *last*
+ * component, so screening the leaf of a multi-segment `join` checks one level
+ * and silently traverses the rest (#1417). Returns the assembled path, or null
+ * if any level refused.
+ *
+ * The two cannot share an implementation across the sync/async boundary. They
+ * are deliberately NOT claimed to be behaviourally identical — this one is used
+ * for detection and returns null where the async one also reports a reason to
+ * an uninstall log — but the reparse rule itself must stay the same.
+ */
+function descendNoFollowSync(root: string, segments: readonly string[]): string | null {
+  let current = root;
+  for (const segment of segments) {
+    current = join(current, segment);
+    if (isReparsePoint(current)) return null;
+  }
+  return current;
+}
+
+/**
+ * Why detection will refuse to look at all, or `null` if it will proceed.
+ *
+ * **Exported so callers can distinguish "refused" from "nothing installed",
+ * which `detectTargets` alone cannot express (#1417).** Both produce an empty
+ * target list, and the two want opposite advice: `tandem setup --apply`'s
+ * standard hint is to retry with `--force`, which cannot possibly help here
+ * because the refusal happens before any `force` branch is reached. Callers
+ * that print remedies MUST ask this first, or they send the user in a circle.
+ *
+ * The screen itself is on the ROOTS rather than on a derived path. Every
+ * `existsSync` / `readdirSync` in `detectTargets` hangs off `home` or
+ * `%LOCALAPPDATA%`, and on Windows those calls perform the SMB handshake that
+ * leaks an NTLM hash — so screening one derived path would leave its siblings
+ * open, and would leave the function reading as "that line was reviewed"
+ * rather than "this function is safe". Both roots are redirectable to a share
+ * by enterprise folder redirection: the compatibility trade-off recorded on
+ * {@link assertPathSafe}.
+ */
+export function detectionRefusal(opts: DetectOptions = {}): string | null {
+  return rejectUnsafeWindowsPrefix(opts.homeOverride ?? homedir());
+}
+
 export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   const home = opts.homeOverride ?? homedir();
   const targets: DetectedTarget[] = [];
 
-  // (#1417) Screen the ROOTS, once, before anything derived from them reaches a
-  // syscall. Every `existsSync` / `readdirSync` below hangs off `home` or
-  // `%LOCALAPPDATA%`, and on Windows those calls perform the SMB handshake that
-  // leaks an NTLM hash — so screening a single derived path would leave the
-  // three beside it open, and would leave this function reading as "that line
-  // was reviewed" rather than "this function is safe". Both roots are
-  // redirectable to a share by enterprise folder redirection, which is the
-  // compatibility trade-off recorded on `assertPathSafe`.
-  const homeRejection = rejectUnsafeWindowsPrefix(home);
+  const homeRejection = detectionRefusal(opts);
   if (homeRejection !== null) {
     console.error(`[Tandem] home directory rejected (${homeRejection}); detecting nothing`);
     return targets;
@@ -694,19 +744,41 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
       // so screening each level before reading it is what closes the window;
       // the env-var screen above cannot, because the hostile part of the path is
       // on disk rather than in the variable.
-      if (isReparsePoint(packagesDir)) throw new Error("reparse point");
+      // Logged and returned rather than thrown — the catch below means "no MSIX
+      // install", and routing a security refusal into it would report the
+      // attack this function exists to stop as an ordinary absence. It is also
+      // what keeps this in step with the async twin, which logs.
+      if (isReparsePoint(packagesDir)) {
+        console.error(
+          `[Tandem] Refusing to enumerate ${packagesDir}: reparse point or unreadable. ` +
+            "MSIX Claude Desktop will not be detected.",
+        );
+        return targets;
+      }
       const entries = readdirSync(packagesDir);
       const matching = entries.filter((n) => MSIX_PACKAGE_PATTERN.test(n));
       for (const pkg of matching) {
-        if (isReparsePoint(join(packagesDir, pkg))) continue;
-        const msixConfig = join(
-          packagesDir,
-          pkg,
+        if (isReparsePoint(join(packagesDir, pkg))) {
+          // Named, because with two packages installed one silently vanishing
+          // from the wizard while the other does not is the most confusing
+          // possible presentation.
+          console.error(`[Tandem] Skipping ${pkg}: reparse point or unreadable.`);
+          continue;
+        }
+        // Every component, not the join: `existsSync` on the assembled path
+        // would traverse — and follow — `LocalCache`, `Roaming` and `Claude`,
+        // all user-writable. `lstatSync` declines to follow only the FINAL
+        // component, so screening the leaf alone checks one level of four.
+        const configDir = descendNoFollowSync(join(packagesDir, pkg), [
           "LocalCache",
           "Roaming",
           "Claude",
-          "claude_desktop_config.json",
-        );
+        ]);
+        if (configDir === null) {
+          console.error(`[Tandem] Skipping ${pkg}: reparse point below the package root.`);
+          continue;
+        }
+        const msixConfig = join(configDir, "claude_desktop_config.json");
         if (opts.force || existsSync(msixConfig)) {
           const suffix = matching.length > 1 ? ` (${pkg.slice(0, 12)}…)` : "";
           targets.push({

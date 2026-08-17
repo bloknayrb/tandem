@@ -984,7 +984,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `src/lib.rs` -- The Tauri entry logic (not all of it — thirteen sibling modules are listed below): plugin registration (single-instance **first**), sidecar lifecycle (spawn, health-poll, exponential backoff, kill on exit), `resolve_channel_dist()` (injects `TANDEM_CHANNEL_DIST` into the sidecar so the channel shim registers from the resource dir; replaced `run_setup()`/`/api/setup` in #477 PR 3c-ii-c), system tray build + event handlers (tray "Setup AI Assistant" emits `open-integration-wizard`), window hide-on-close, auto-updater (launch + periodic 8h), `strip_win_prefix()` for Windows `\\?\` paths, `copy_sample_files()` (first-run copy to app-data dir)
 - `src/main.rs` -- Entry point, delegates to `lib::run()`
 - `src/autostart.rs` -- Start-at-login registration (ADR-046, #1236)
-- `src/cowork_installer.rs`, `cowork_workspace_scan.rs`, `cowork_meta.rs`, `cowork_atomic_json.rs` -- Cowork per-workspace plugin registration and the four-step path guard (ADR-044); paired with `src/client/cowork/` on the client
+- `src/cowork_installer.rs`, `cowork_workspace_scan.rs`, `cowork_meta.rs`, `cowork_atomic_json.rs` -- Cowork per-workspace plugin registration and the five-step path guard (ADR-044); paired with `src/client/cowork/` on the client
 - `src/firewall.rs` -- `Tandem Cowork*` firewall rule scoping (Windows)
 - `src/integrations_probe.rs` -- Detects installed AI clients for the wizard
 - `src/keychain.rs`, `src/token_store.rs` -- OS keychain access and auth-token storage

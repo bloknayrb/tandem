@@ -137,11 +137,24 @@ describe("resolveRelativeLink — traversal is fail-closed", () => {
     expect(rejected("\\\\evil.com\\share\\x.md", WIN)).toBe("unsafe-prefix");
   });
 
-  it("does NOT over-reject a backslash form that still resolves same-machine", () => {
-    // Non-regression: `/\evil.com/x.md` is allowed by Tiptap's guard today and
-    // resolves to a same-machine path that `path.resolve` collapses. The
-    // containment check must not turn it into a refusal.
-    expect(resolved("/\\evil.com/x.md", WIN)).toBe("C:\\Users\\b\\docs\\\\\\evil.com\\x.md");
+  it("rejects the MIXED separator forms, which are UNC to Windows", () => {
+    // **This assertion is inverted from what it used to say, and the flip is
+    // the point.** It previously pinned `/\evil.com/x.md` as resolving to a
+    // same-machine path — "non-regression: allowed by Tiptap's guard today".
+    // Both halves of that reasoning were wrong. Windows treats `/` and `\` as
+    // interchangeable, so `path.toNamespacedPath` turns this into
+    // `\\?\UNC\evil.com\…` and a `stat` on it reaches the SMB redirector
+    // (verified on Windows, not reasoned about); and being allowed by the
+    // Tiptap guard is not evidence that it is safe — it is the #1420 finding.
+    //
+    // Pinning the old behaviour made the two mixed spellings a two-character
+    // bypass of the entire prefix guard, so a test asserting they resolve was
+    // pinning the vulnerability. `\/` is the same shape written the other way.
+    expect(rejected("/\\evil.com/x.md", WIN)).toBe("unsafe-prefix");
+    expect(rejected("\\/evil.com/x.md", WIN)).toBe("unsafe-prefix");
+    // Same on posix, because the string is screened before any separator
+    // semantics are applied — the check is cross-platform on purpose.
+    expect(rejected("/\\evil.com/x.md", POSIX)).toBe("unsafe-prefix");
   });
 });
 

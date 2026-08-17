@@ -7,6 +7,7 @@ import {
   buildMcpEntries,
   CHANNEL_DIST,
   type DetectedTarget,
+  detectionRefusal,
   detectTargets,
   installSkill,
   PACKAGE_ROOT,
@@ -97,11 +98,25 @@ async function applySetup(opts: SetupOptions): Promise<void> {
 
   let outcome: WriteOutcome = { failures: 0, shimRegisteredFor: [] };
   if (targets.length === 0) {
-    console.error(
-      "  No matching Claude installations detected.\n" +
-        "  If Claude Code is installed, ensure ~/.claude exists.\n" +
-        "  Force configuration to default paths with: tandem setup --apply --force",
-    );
+    // `detectTargets` returns an empty list for two very different reasons, and
+    // the generic hint is actively wrong for one of them: when the home
+    // directory itself was refused (#1417 — a UNC or device-namespace
+    // `%USERPROFILE%`), `--force` writes to paths derived from that same
+    // rejected root, so it re-runs the refusal rather than working around it.
+    // Say what was refused instead of sending the user down a dead end.
+    const refusal = detectionRefusal({});
+    if (refusal !== null) {
+      console.error(
+        `  Detection refused: your home directory is not a supported path.\n  ${refusal}\n` +
+          "  --force will not help — it derives the same paths from the same root.",
+      );
+    } else {
+      console.error(
+        "  No matching Claude installations detected.\n" +
+          "  If Claude Code is installed, ensure ~/.claude exists.\n" +
+          "  Force configuration to default paths with: tandem setup --apply --force",
+      );
+    }
   } else {
     for (const t of targets) {
       console.error(`  Found: ${t.label} (${t.configPath})`);

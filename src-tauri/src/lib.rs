@@ -2151,8 +2151,18 @@ fn show_server_error_dialog(
 /// supposed to have removed the extended-length prefix upstream anyway, so the
 /// blunt form is correct: a false reject costs a failed "reveal in Explorer",
 /// a false accept costs a credential hash.
+///
+/// Matches on "two leading separators, either flavour" rather than on the two
+/// homogeneous pairs. Windows treats `/` and `\` as interchangeable, so
+/// `/\host\share` and `\/host/share` are UNC too — enumerating `\\` and `//`
+/// alone was a two-character bypass of this and of both TypeScript predicates
+/// (#1417).
 fn is_unc_or_network_path(path: &str) -> bool {
-    path.starts_with(r"\\") || path.starts_with("//")
+    let mut chars = path.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('\\' | '/'), Some('\\' | '/'))
+    )
 }
 
 /// Build the `(program, args)` tuple that reveals `path` in the host OS file
@@ -4843,7 +4853,7 @@ fn cowork_apply_token(_token: String) -> Result<String, String> {
 /// Closes the TOCTOU window (issue #433): instead of re-scanning the filesystem
 /// and trusting a caller-supplied string, the token can only name a path that
 /// `cowork_scan_workspaces` already validated this session. The resolved path is
-/// then re-run through the four-layer guard (`revalidate_resolved_path`) to
+/// then re-run through the five-step guard (`revalidate_resolved_path`) to
 /// catch a directory swapped *after* the scan. An unknown token — forged, or
 /// from a superseded scan — is rejected with no file I/O. The re-validation's
 /// specific rejection reason is preserved (single informative message, not
@@ -4857,7 +4867,7 @@ fn cowork_resolve_validated_handle(handle: &str, op: &str) -> Result<std::path::
         return Err("Unknown or expired workspace handle — re-scan and try again".to_string());
     };
 
-    // Defense-in-depth: re-run the four-layer guard against the stored path to
+    // Defense-in-depth: re-run the five-step guard against the stored path to
     // catch a post-scan swap (directory replaced with a junction, moved, etc.).
     cowork_workspace_scan::revalidate_resolved_path(&resolved).map_err(|reason| {
         log::warn!("[cowork] {op}: resolved handle failed re-validation — rejected: {reason}");
@@ -5783,6 +5793,12 @@ mod reveal_command_tests {
         // no containment check here to confine an extended-length local path,
         // and strip_win_prefix() should have removed it upstream anyway.
         assert!(is_unc_or_network_path(r"\\?\C:\Windows"));
+        // Mixed separators. Windows treats `/` and `\` as interchangeable, so
+        // two leading separators of ANY flavour are UNC. Enumerating the two
+        // homogeneous pairs — which is what this used to do, and what both TS
+        // predicates did — was a two-character bypass.
+        assert!(is_unc_or_network_path(r"/\attacker\share\x"));
+        assert!(is_unc_or_network_path(r"\/attacker/share/x"));
     }
 
     #[test]

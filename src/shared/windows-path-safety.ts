@@ -17,12 +17,21 @@
  * the message.
  *
  * **The inventory of surviving hand-rolled copies is not here.** It is the
- * `ALLOWED` map in `tests/shared/unc-check-duplication.test.ts`, which is
- * *enforced* — a copy that appears without an entry fails the build, and an
- * entry whose file no longer holds a copy fails too. A prose list beside it
- * would be the same drift #1417 is about, one level up: the previous version of
- * this paragraph already disagreed with the map on both the count and which
- * files were in it. What is worth stating here, because no test can:
+ * `ALLOWED` map in `tests/shared/unc-check-duplication.test.ts`, which `npm
+ * test` and the pre-push hook enforce in both directions: a `startsWith`-shaped
+ * copy with no entry fails, and an entry whose file no longer holds one fails
+ * too. A prose list beside it would be the same drift #1417 is about, one level
+ * up — the previous version of this paragraph already disagreed with the map on
+ * both the count and which files were in it.
+ *
+ * **That map is not a proof that no other copy exists**, and neither is this
+ * pointer. The detector matches a spelling, so a copy written as a regex walks
+ * straight past it — `WIN_EXTENDED_DRIVE_RE` in `server/integrations/node-binary.ts`
+ * is exactly that, and is unlisted for that reason rather than by decision. So
+ * is `is_unc_or_network_path` in `src-tauri/src/lib.rs`, which *was* listed
+ * until it was rewritten from a `starts_with` into a two-char `matches!` and
+ * fell out of the detector's sight without anything failing. What is worth
+ * stating here, because no test can:
  *
  *  - The loose variants are **deliberate, not defects.** `cli/win-path-guard.ts`
  *    and its Rust twin `is_unc_path` allow `\\?\C:\…` on purpose and confine it
@@ -41,27 +50,35 @@
  *                     `\\server\share`.
  *  - `\\?\UNC\…`    — extended UNC; SMB auth on Windows leaks NTLM hashes.
  *  - `\\…` / `//…`  — bare UNC paths.
- *  - Forward-slash variants `//?/…` since Node normalises some forms.
+ *  - Every separator spelling of the above, including the MIXED ones
+ *    (`/\host\share`, `\/host/share`). Windows treats `/` and `\` as
+ *    interchangeable and Node hands all four spellings to the SMB redirector.
  *
  * Returns null on success, an error string on rejection.
  */
 export function rejectUnsafeWindowsPrefix(p: string): string | null {
-  // Normalise just enough to catch mixed separators without resolving.
-  const lower = p.toLowerCase();
+  // **Separators are normalised, not enumerated.** Windows treats `/` and `\`
+  // as interchangeable, so `/\host\share` and `\/host/share` are UNC exactly
+  // like `\\host\share`: `path.toNamespacedPath` turns all four into
+  // `\\?\UNC\host\share`, and `existsSync` on any of them reaches the
+  // redirector — verified on Windows, not reasoned about. Testing only the
+  // homogeneous pairs made the two mixed spellings a two-character bypass of
+  // this entire guard. Enumerating pairs is the trap; normalising first is what
+  // makes the set closed.
+  //
+  // Bounded to the first 8 characters — the length of the longest prefix that
+  // matters, `\\?\UNC\` — so this stays allocation-cheap where it sits in front
+  // of a syscall.
+  const head = p.slice(0, 8).toLowerCase().replace(/\//g, "\\");
 
-  // Extended-length / extended-UNC prefixes. These must be tested before the
-  // bare UNC check because `\\?\` also starts with `\\`.
-  if (
-    lower.startsWith("\\\\?\\") ||
-    lower.startsWith("//?/") ||
-    lower.startsWith("\\\\.\\") ||
-    lower.startsWith("//./")
-  ) {
+  // Extended-length / device-namespace prefixes. Tested before the bare UNC
+  // check because `\\?\` also starts with `\\`.
+  if (head.startsWith("\\\\?\\") || head.startsWith("\\\\.\\")) {
     return "Extended-length / device-namespace paths (\\\\?\\, \\\\.\\) are not supported for security reasons.";
   }
 
   // Bare UNC.
-  if (lower.startsWith("\\\\") || lower.startsWith("//")) {
+  if (head.startsWith("\\\\")) {
     return "UNC paths are not supported for security reasons.";
   }
 

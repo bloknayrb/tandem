@@ -62,14 +62,21 @@ type ScrubLogger = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
   error: (msg: string) => void;
+  /** How many `warn` lines have been emitted. The summary line reports this
+   *  because a scrub that refused every path it was asked to clean otherwise
+   *  prints `0 failure(s)` and reads as a clean run — the refusals are
+   *  deliberate skips, not I/O failures, so they must not touch the exit code
+   *  (NSIS records it) but they must not be invisible either. */
+  warnings: () => number;
   close: () => Promise<void>;
 };
 
 /**
  * `%LOCALAPPDATA%`, or `undefined` if it is unset or not a safe local path.
  *
- * **Screened at the source, because every path in this file is a `path.join`
- * off this value (#1417).** `logDir`, `packagesDir`, `sessionsRoot`, the
+ * **Screened at the source, because every path in this file that touches
+ * `%LOCALAPPDATA%` is a `path.join` off this value (#1417).** (`removeSkillDir`
+ * and `removeAutostartEntry` build home-derived paths that never touch it.) `logDir`, `packagesDir`, `sessionsRoot`, the
  * workspace dirs and the VM dirs all inherit whatever it holds, and the first
  * thing each does is `mkdir` / `readdir` / `stat`. A UNC value therefore leaks
  * a credential hash from every one of them — and this runs during MSIX
@@ -103,20 +110,37 @@ function usableLocalAppData(logger?: ScrubLogger): string | undefined {
   }
 }
 
+/** Wrap a line-writer as a {@link ScrubLogger}, counting `warn` lines. */
+function makeScrubLogger(
+  write: (level: string, msg: string) => void,
+  close: () => Promise<void>,
+): ScrubLogger {
+  let warnCount = 0;
+  return {
+    info: (m) => write("info", m),
+    warn: (m) => {
+      warnCount++;
+      write("warn", m);
+    },
+    error: (m) => write("error", m),
+    warnings: () => warnCount,
+    close,
+  };
+}
+
 async function openLogger(): Promise<ScrubLogger> {
-  const localAppData = usableLocalAppData();
-  if (!localAppData) {
-    // No log file — just use stderr.
-    const write = (level: string, msg: string): void => {
-      process.stderr.write(`[tandem uninstall-scrub ${level}] ${msg}\n`);
-    };
-    return {
-      info: (m) => write("info", m),
-      warn: (m) => write("warn", m),
-      error: (m) => write("error", m),
-      close: async () => {},
-    };
-  }
+  // Stderr sink first, so it can carry the reason `%LOCALAPPDATA%` was refused.
+  // Passing no logger here dropped that reason entirely — and this is the one
+  // branch where it matters most: NSIS runs the scrub detached, so if the
+  // rejection is what stopped the log file from existing, stderr is the only
+  // surface left and "no log, no reason" is the whole failure report.
+  const stderrWrite = (level: string, msg: string): void => {
+    process.stderr.write(`[tandem uninstall-scrub ${level}] ${msg}\n`);
+  };
+  const stderrLogger = makeScrubLogger(stderrWrite, async () => {});
+
+  const localAppData = usableLocalAppData(stderrLogger);
+  if (!localAppData) return stderrLogger;
 
   const logDir = path.join(localAppData, "tandem", "Logs");
   await fsPromises.mkdir(logDir, { recursive: true }).catch(() => {});
@@ -131,32 +155,32 @@ async function openLogger(): Promise<ScrubLogger> {
     }
   };
 
-  return {
-    info: (m) => write("info", m),
-    warn: (m) => write("warn", m),
-    error: (m) => write("error", m),
-    close: async () => {
-      if (stream) await stream.close().catch(() => {});
-    },
-  };
+  return makeScrubLogger(write, async () => {
+    if (stream) await stream.close().catch(() => {});
+  });
 }
 
 /**
  * Is this a real directory we may descend into — i.e. not a reparse point?
  *
- * The scan walks four levels down from `%LOCALAPPDATA%` before
+ * The scan walks six levels down from `%LOCALAPPDATA%` before
  * {@link assertSafeWorkspacePath} gets a say, and `readdir`/`stat` **follow**
  * junctions. A junction planted at any of those levels pointing at
  * `\\attacker\share` therefore made the syscall — and leaked an NTLM
  * handshake — before the guard at the bottom ever ran (#1417). `lstat` does
- * not follow, so checking each level *before* reading it is what closes the
- * window; the string screens in `usableLocalAppData` cannot, because the
+ * not follow, so checking a level *before* reading it is what shuts that
+ * level. The string screens in `usableLocalAppData` cannot help, because the
  * hostile part of the path is on disk rather than in the env var.
  *
- * Fail-closed, and logs its own reason. `detectTargets` in
- * `server/integrations/apply.ts` applies the same rule to the same tree with a
- * sync twin — the two cannot share an implementation across that boundary, but
- * they must not diverge in behaviour.
+ * **`lstat` declines to follow only the FINAL component** — measured on
+ * Windows, not assumed. So callers must screen every level rather than the leaf
+ * of a multi-component join: an `lstat` of
+ * `Packages/Claude_x/LocalCache/Roaming/Claude/sessions` happily traverses, and
+ * therefore follows, the four middle components. {@link descendNoFollow}
+ * applies this per component; do not call this directly on a path built from
+ * more than one `path.join` segment.
+ *
+ * Fail-closed, and logs its own reason.
  */
 async function isSafeDirectory(dir: string, logger: ScrubLogger): Promise<boolean> {
   try {
@@ -165,11 +189,40 @@ async function isSafeDirectory(dir: string, logger: ScrubLogger): Promise<boolea
       logger.warn(`refusing to descend into reparse point: ${dir}`);
       return false;
     }
-    return stat.isDirectory();
+    if (!stat.isDirectory()) {
+      // Not a refusal and not an error — but returning a bare `false` for it
+      // made "there is a file where a directory should be" indistinguishable
+      // from "a junction was refused" in the uninstall log, which is the log a
+      // human reads when the scrub left something behind.
+      logger.info(`not a directory, skipping: ${dir}`);
+      return false;
+    }
+    return true;
   } catch (err) {
     logger.info(`cannot read ${dir}: ${(err as Error).message}`);
     return false;
   }
+}
+
+/**
+ * Walk `root` down through `segments`, refusing at the first reparse point.
+ *
+ * Exists because `lstat` declines to follow only the *last* component: building
+ * the whole path with `path.join` and screening the result checks one level and
+ * silently traverses the rest (#1417). Returns the assembled path, or null when
+ * some level refused (already logged).
+ */
+async function descendNoFollow(
+  root: string,
+  segments: readonly string[],
+  logger: ScrubLogger,
+): Promise<string | null> {
+  let current = root;
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    if (!(await isSafeDirectory(current, logger))) return null;
+  }
+  return current;
 }
 
 /**
@@ -225,14 +278,16 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
 
   const workspaces: string[] = [];
   for (const pkg of claudePackages) {
-    const sessionsRoot = path.join(
+    // Every component, not the join. `Claude_*`, `LocalCache`, `Roaming` and
+    // `Claude` are all user-writable, all inside the tree the reachable
+    // instance of #1417 lived in, and one `lstat` of the assembled path would
+    // follow a junction at any of them.
+    const sessionsRoot = await descendNoFollow(
       packagesDir,
-      pkg,
-      "LocalCache",
-      "Roaming",
-      "Claude",
-      "local-agent-mode-sessions",
+      [pkg, "LocalCache", "Roaming", "Claude", "local-agent-mode-sessions"],
+      logger,
     );
+    if (sessionsRoot === null) continue;
 
     for (const ws of await readdirNoFollow(sessionsRoot, logger)) {
       const wsPath = path.join(sessionsRoot, ws);
@@ -607,7 +662,16 @@ export async function runUninstallScrub(): Promise<number> {
       await deleteFirewallRule(FIREWALL_DENY_RULE, logger);
     }
 
-    logger.info(`scrub complete: ${failures} failure(s)`);
+    // Warnings are reported alongside failures and deliberately do NOT affect
+    // the exit code: a refused reparse point or a config file left untouched is
+    // a correct outcome, not an unrecoverable error, and NSIS must never be
+    // handed a non-zero code for one. But `0 failure(s)` on its own is what a
+    // scrub that refused everything printed, and that reads as a clean run.
+    const warnings = logger.warnings();
+    logger.info(
+      `scrub complete: ${failures} failure(s), ${warnings} warning(s)` +
+        (warnings > 0 ? " — see the lines above for what was skipped" : ""),
+    );
   } catch (err) {
     logger.error(`scrub fatal error: ${(err as Error).message}`);
     failures++;

@@ -37,6 +37,13 @@
 export const NETWORK_PATHS: ReadonlyArray<readonly [label: string, path: string]> = [
   ["classic UNC", "\\\\attacker\\share\\x"],
   ["forward-slash UNC", "//attacker/share/x"],
+  // Windows treats `/` and `\` as interchangeable, so the MIXED pairs are UNC
+  // too. `path.toNamespacedPath` turns both into `\\?\UNC\attacker\share\x` and
+  // `existsSync` on either reaches the redirector — verified, not reasoned
+  // about. Guards that enumerated the two homogeneous pairs let these through,
+  // which was a two-character bypass of the entire screen.
+  ["mixed separator, slash first", "/\\attacker\\share\\x"],
+  ["mixed separator, backslash first", "\\/attacker/share/x"],
   ["extended UNC", "\\\\?\\UNC\\attacker\\share\\x"],
   ["forward-slash extended UNC", "//?/UNC/attacker/share/x"],
   // Windows prefixes are case-insensitive; a literal `UNC` comparison was a
