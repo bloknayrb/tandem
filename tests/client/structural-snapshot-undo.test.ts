@@ -24,11 +24,16 @@
 
 import { render } from "@testing-library/svelte";
 import { Editor } from "@tiptap/core";
+import Collaboration from "@tiptap/extension-collaboration";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { annotationToPmRange } from "../../src/client/positions";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import { useAnnotationReview } from "../../src/client/panels/useAnnotationReview.svelte";
 import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
+import { extractText } from "../../src/server/mcp/document.js";
+import { loadMarkdown } from "../../src/server/file-io/markdown.js";
+import { anchoredRange } from "../../src/server/positions.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants";
 import type { Annotation } from "../../src/shared/types";
 
@@ -361,5 +366,98 @@ describe("#1486: block restore geometry", () => {
     expect(review.undoResolveAnnotation("a1")).toBe(true);
     expect(hardBreaks(editor)).toBe(1);
     expect(declined).toEqual([]);
+  });
+});
+
+/**
+ * Every test above runs `buildSchemaExtensions()` with NO `Collaboration`
+ * extension bound to `ydoc` — the editor's ProseMirror doc is built from
+ * `content: html` directly, and `ydoc` only backs the `Y_MAP_ANNOTATIONS`
+ * map. That's enough to pin the offset-classification and content-rebuild
+ * logic under test above, but it means undo's `tr.replace` (the block-split
+ * path) never actually syncs through y-prosemirror, so nothing here proves a
+ * DIFFERENT annotation's CRDT-anchored `relRange` survives the block split
+ * unharmed. This block closes that gap with a REAL Collaboration-bound
+ * editor, so the split undo goes through y-prosemirror exactly like
+ * production.
+ */
+describe("#1486 follow-up: a neighboring annotation's relRange survives a structural undo", () => {
+  it("stays anchored to its own text after an earlier block-boundary undo splits an adjacent paragraph", () => {
+    const ydoc = new Y.Doc();
+    // Post-accept shape: the merged paragraph, plus an unrelated second
+    // paragraph the undo must not disturb.
+    loadMarkdown(ydoc, "MERGED\n\nSTABLE anchor text");
+
+    const mergedAnn = acceptedAnnotation({
+      suggestedText: "MERGED",
+      textSnapshot: "alpha\nbravo",
+      textSnapshotBreaks: [{ at: 5, kind: "block" }],
+    });
+
+    // Anchor the second annotation the way the server actually does —
+    // `anchoredRange` mints a real Yjs RelativePosition pair, not a
+    // hand-rolled stub.
+    const flat = extractText(ydoc);
+    const stableFrom = flat.indexOf("STABLE");
+    expect(stableFrom, "fixture text must contain the anchor target").toBeGreaterThanOrEqual(0);
+    const stableTo = stableFrom + "STABLE".length;
+    const anchored = anchoredRange(ydoc, stableFrom, stableTo);
+    if (!anchored.ok || !anchored.relRange) {
+      throw new Error("failed to anchor the neighbor annotation");
+    }
+    const stableAnn: Annotation = {
+      id: "a2",
+      type: "comment",
+      author: "claude",
+      status: "pending",
+      content: "unrelated",
+      timestamp: 0,
+      range: anchored.range,
+      relRange: anchored.relRange,
+    } as Annotation;
+
+    const map = ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
+    map.set(mergedAnn.id, mergedAnn);
+    map.set(stableAnn.id, stableAnn);
+
+    const editor = new Editor({
+      extensions: [...buildSchemaExtensions(), Collaboration.configure({ document: ydoc })],
+    });
+    live.push(editor);
+
+    let api: ReturnType<typeof useAnnotationReview> | undefined;
+    render(UseAnnotationReviewHarness, {
+      props: {
+        params: {
+          getYdoc: () => ydoc,
+          getEditor: () => editor,
+          getAnnotations: () => [mergedAnn, stableAnn],
+          onActiveAnnotationChange: () => {},
+          onUndoFailed: () => {},
+          getScrollBehavior: () => "auto" as ScrollBehavior,
+        },
+        onReady: (returned: ReturnType<typeof useAnnotationReview>) => (api = returned),
+      },
+    });
+    if (!api) throw new Error("useAnnotationReview did not report ready");
+
+    // This is the block-split path: the accept merged "alpha"+"bravo" into one
+    // paragraph "MERGED"; undo splits it back into two, inserting a fresh
+    // paragraph boundary BEFORE the "STABLE anchor text" paragraph. Every flat
+    // offset after the split point shifts by one — exactly the shift a
+    // RelativePosition is supposed to absorb automatically.
+    expect(api.undoResolveAnnotation("a1")).toBe(true);
+    expect(editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n", "\n")).toBe(
+      "alpha\nbravo\nSTABLE anchor text",
+    );
+
+    const resolved = annotationToPmRange(stableAnn, editor.state.doc, ydoc);
+    expect(resolved, "neighbor annotation's relRange must still resolve").not.toBeNull();
+    // Must still resolve via the CRDT anchor, not a stale flat-offset fallback
+    // that happens to land on the right text by coincidence.
+    expect(resolved?.method).toBe("rel");
+    if (resolved) {
+      expect(editor.state.doc.textBetween(resolved.from, resolved.to, "\n", "\n")).toBe("STABLE");
+    }
   });
 });
