@@ -99,6 +99,30 @@ describe("htmlToYDoc — block elements", () => {
     expect(el.getAttribute("alt")).toBe("A test");
     expect(el.getAttribute("title")).toBe("Test Image");
   });
+
+  // An imported .html file is untrusted content exactly like a pasted one
+  // (#1420) — a hostile src must not reach the Y.Doc, even though this path
+  // never went through the client's paste-time sanitizer.
+  it("image with an unsafe (protocol-relative) src downgrades to alt text", () => {
+    loadHtml('<img src="//evil.com/x.png" alt="A test" title="Test Image">');
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    expect(el.nodeName).toBe("paragraph");
+    expect(getElementText(el)).toBe("A test");
+  });
+
+  it("image with an unsafe (javascript:) src downgrades to alt text", () => {
+    loadHtml('<img src="javascript:alert(1)" alt="A test">');
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    expect(el.nodeName).toBe("paragraph");
+    expect(getElementText(el)).toBe("A test");
+  });
+
+  it("image with an unsafe src and no alt falls back to the title", () => {
+    loadHtml('<img src="//evil.com/x.png" title="Test Image">');
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    expect(el.nodeName).toBe("paragraph");
+    expect(getElementText(el)).toBe("Test Image");
+  });
 });
 
 // -- Table elements --

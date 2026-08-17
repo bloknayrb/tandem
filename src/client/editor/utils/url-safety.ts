@@ -5,6 +5,24 @@
 // Design: ALLOWLIST, not blocklist. A new attacker-friendly scheme appearing
 // in the wild (e.g. `filesystem:`, `view-source:`) is rejected by default.
 // Blocklists are the recurring source of url-sanitization CVEs.
+//
+// Image-`src` sanitization (`SAFE_IMAGE_PREFIXES`, `sanitizeImageSrcForPaste`,
+// and the `hasSchemePrefix`/`URL_HOSTILE_CHARS` primitives this file and that
+// one both need) lives in `src/shared/image-src-safety.ts` and is imported
+// below rather than redefined here. File-IMPORT (`mdast-ydoc.ts`,
+// `docx-html.ts`) needs the identical allowlist server-side — a copy living
+// only in this client-only file would leave that surface covered solely by
+// the `img-src` CSP in `index.html`, instead of by both layers the way paste
+// is (#1420).
+
+import {
+  hasSchemePrefix,
+  SAFE_IMAGE_PREFIXES,
+  sanitizeImageSrc,
+  URL_HOSTILE_CHARS,
+} from "../../../shared/image-src-safety";
+
+export { SAFE_IMAGE_PREFIXES };
 
 /**
  * External hrefs we'll hand off to the system browser via `window.open`.
@@ -35,73 +53,6 @@ export function isSafeExternalHref(href: string): boolean {
   const lower = href.toLowerCase();
   return SAFE_EXTERNAL_PREFIXES.some((p) => lower.startsWith(p));
 }
-
-/**
- * True when `trimmed` has a URI scheme prefix — a `:` appearing before any of
- * `/`, `#`, or `?` (a colon appearing only after one of those, e.g. inside a
- * filename or query string, is path-like, not a scheme). Shared detection
- * mechanic for `sanitizeHrefForPaste`, `sanitizeImageSrcForPaste` and
- * {@link isSchemelessPathHref}.
- *
- * The first two pair this helper with their own separate allowlist
- * (`SAFE_EXTERNAL_PREFIXES` / `SAFE_IMAGE_PREFIXES`), so for THEM a change here
- * can only ever affect what counts as "has a scheme", never which schemes are
- * safe. That warranty does NOT extend to the third consumer:
- * {@link isSchemelessPathHref} is `!hasSchemePrefix(...)` and nothing else,
- * with no allowlist of its own, so a change here now also moves the
- * RENDER-TIME boundary — which hrefs the editor will emit as an `href`
- * attribute at all.
- *
- * Consequence: separator-set changes belong in the CALLER, never here. Adding
- * `\` to the separator list below to make backslash forms path-like would
- * silently move `sanitizeHrefForPaste` and `sanitizeImageSrcForPaste` too —
- * exactly the drift this file's header warns about. {@link isSchemelessPathHref}
- * handles backslash itself, by rejecting it outright.
- */
-const SCHEME_STOP_CHARS = /[/#?]/;
-
-function hasSchemePrefix(trimmed: string): boolean {
-  const firstColon = trimmed.indexOf(":");
-  if (firstColon === -1) return false;
-  const firstPathSep = trimmed.search(SCHEME_STOP_CHARS);
-  return firstPathSep === -1 || firstPathSep > firstColon;
-}
-
-/**
- * Characters that make an href unsafe to reason about as a plain string.
- *
- * The leading run mirrors DOMPurify's URL-whitespace set, copied verbatim from
- * `@tiptap/extension-link/dist/index.js:7` — that module strips these before
- * matching its scheme regex, and browsers strip a subset of them before
- * parsing. The trailing `\\` is ours: a backslash is not whitespace, but
- * browsers map it to `/` inside a URL, so it reinterprets structure just as
- * badly.
- *
- * Applied by {@link isSchemelessPathHref} and, since #1420, by
- * {@link sanitizeImageSrcForPaste}. Still deliberately NOT applied to
- * {@link sanitizeHrefForPaste}, and NOT because that one is already covered:
- * it ends in a bare `if (!hasSchemePrefix(trimmed)) return trimmed`, and its
- * allowlist gates only SCHEME-BEARING strings, so for exactly the class this
- * set exists to catch it is a pass-through. Measured: it returns
- * `<NUL>//evil.com/x.png` unchanged.
- *
- * That remains acceptable for links **only because of a downstream gate that
- * has no image equivalent** — `openHref` re-runs every href through
- * `isSafeExternalHref` or `resolveRelativeLink`'s fail-closed segment walk
- * before anything is opened. An image has no such second chance: its `src`
- * reaches the DOM as written and the browser fetches it on render, with no
- * click. That asymmetry is why this set now applies to the image sanitizer and
- * still does not apply to the href one.
- *
- * The image `src` sink has a second, independent control since #1420: the
- * `img-src 'self' data: blob:` CSP in `index.html`, mirroring the one
- * `src-tauri/tauri.conf.json` already shipped. The CSP is the control that
- * stops the fetch; this set stops a hostile string being stored as though it
- * had been vetted. Neither makes the other redundant — the CSP does not apply
- * to what gets written into the document, and an allowlist does not stop a
- * plain `https://` tracking pixel.
- */
-const URL_HOSTILE_CHARS = /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000\\]/;
 
 /**
  * True when `raw` is a scheme-less path reference — something the editor may
@@ -167,9 +118,19 @@ export function isSchemelessPathHref(raw: string | null | undefined): boolean {
  * Unsafe inputs (returns null):
  *   - any unknown scheme: `javascript:`, `data:`, `vbscript:`, `file:`, etc.
  *
- * Detection rule for "has a scheme": see {@link hasSchemePrefix}. A leading
- * `:` (degenerate) is also unsafe. Whitespace is trimmed before evaluation so
- * `   javascript:alert(1)` is recognized.
+ * Detection rule for "has a scheme": see {@link hasSchemePrefix} (in
+ * `src/shared/image-src-safety.ts`). A leading `:` (degenerate) is also
+ * unsafe. Whitespace is trimmed before evaluation so `   javascript:alert(1)`
+ * is recognized.
+ *
+ * Deliberately does NOT apply {@link URL_HOSTILE_CHARS} — this function ends
+ * in a bare `if (!hasSchemePrefix(trimmed)) return trimmed`, so for a
+ * scheme-less hostile spelling it's a pass-through regardless. That remains
+ * acceptable for links only because of a downstream gate images don't have:
+ * `openHref` re-runs every href through `isSafeExternalHref` or
+ * `resolveRelativeLink`'s fail-closed segment walk before anything is opened.
+ * See {@link sanitizeImageSrcForPaste}'s doc comment for why images can't
+ * rely on that same second chance.
  */
 export function sanitizeHrefForPaste(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -191,95 +152,17 @@ export function sanitizeHrefForPaste(raw: string | null | undefined): string | n
 }
 
 /**
- * Image-src prefixes safe to paste directly. Mirrors {@link SAFE_EXTERNAL_PREFIXES}
- * minus `mailto:` — a valid link target, but never a valid image source.
- */
-// `//` was removed in #1420: protocol-relative is an external fetch with no
-// authoring use in a local document, and allowlisting it made the one hostile
-// spelling a *permitted* one. Its removal is necessary and not sufficient —
-// the colon-free backslash forms never reached this list at all. See the
-// guards at the top of `sanitizeImageSrcForPaste`.
-export const SAFE_IMAGE_PREFIXES = ["http://", "https://", "ftp://"] as const;
-
-/**
- * `data:` image subtypes allowed as pasted image sources: boundable raster
- * formats commonly emitted by `.docx` image embeds and web copy/paste.
- * `svg+xml` is deliberately excluded — inline SVG can carry a `<script>` tag
- * or an event-handler attribute (`onload=`, etc.) that executes in the
- * editor's DOM, unlike the raster formats below, which are inert pixel data.
- */
-const SAFE_IMAGE_DATA_URI = /^data:image\/(?:png|jpeg|jpg|gif|webp);base64,/i;
-
-/**
- * Max length of a pasted `data:` image URI (base64 text, not decoded bytes).
- * ~5MB of decoded image data, base64's ~4/3 expansion. Defense-in-depth
- * against a single paste bloating the shared Y.Doc for every collaborator on
- * next sync — mirrors the size-cap convention used elsewhere for paste-time
- * inputs (see `word-diff.ts`'s `MAX_COMBINED_LENGTH`, `fuzzy-match.ts`'s
- * `MAX_TARGET_LENGTH`).
- */
-const MAX_DATA_URI_LENGTH = 7_000_000;
-
-/**
  * Sanitize an image `src` encountered at MARKDOWN PASTE time. Returns the
  * trimmed src when safe, or `null` when it should be dropped (caller
  * downgrades the image to plain alt text rather than rendering it — see
  * markdown-paste.ts's `normalizeImagesForPaste`).
  *
- * Safe inputs (returns trimmed src):
- *   - any {@link SAFE_IMAGE_PREFIXES} match (case-insensitive)
- *   - in-page fragments: `#section`
- *   - relative / root-relative paths: `./img.png`, `../img.png`, `/img.png`
- *   - `data:image/(png|jpeg|jpg|gif|webp);base64,...` up to {@link MAX_DATA_URI_LENGTH}
- *
- * Unsafe inputs (returns null):
- *   - `data:image/svg+xml...` and any other `data:` subtype
- *   - a `data:image/...;base64,` URI longer than {@link MAX_DATA_URI_LENGTH}
- *   - any other unknown scheme: `javascript:`, `vbscript:`, `file:`, etc.
- *
- * Scheme detection shares {@link hasSchemePrefix} with `sanitizeHrefForPaste`;
- * the link and image ALLOWLISTS stay fully separate policy, so a scheme
- * newly accepted (or rejected) for links never silently changes what's
- * accepted for images, or vice versa.
+ * Re-exported from `src/shared/image-src-safety.ts`'s `sanitizeImageSrc` —
+ * see that file for the full safe/unsafe input contract and the `#1420`
+ * rationale for applying {@link URL_HOSTILE_CHARS} here (an image `src` has
+ * no click-time second chance the way a link href does via `openHref`, so
+ * this function can't rely on a downstream gate the way
+ * {@link sanitizeHrefForPaste} does). Aliased rather than redefined so
+ * paste-time and file-import-time sanitization can never drift apart.
  */
-export function sanitizeImageSrcForPaste(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-
-  // **The final `return trimmed` below is a scheme-less pass-through, and on its
-  // own it was the hole (#1420).** `hasSchemePrefix` is a colon test, so every
-  // cross-host spelling that carries no colon walked straight out of it as
-  // "safe": `/\evil.com/x.png`, `\\evil.com\x.png`, `\/evil.com/x.png` and a
-  // control-character-prefixed `//evil.com/x.png`. Browsers map `\` to `/`
-  // inside a URL, so all of them resolve cross-host.
-  //
-  // Removing `//` from SAFE_IMAGE_PREFIXES alone does NOT close that class — it
-  // only closes the one spelling that was explicitly allowlisted. These two
-  // guards are what closes it, and they are deliberately the same pair
-  // `isSchemelessPathHref` applies, in the same order, so the render-time href
-  // boundary and the paste-time image boundary cannot drift apart. The file
-  // header's warning about `URL_HOSTILE_CHARS` NOT being applied here described
-  // exactly this gap; it is applied now, and the header says so.
-  if (URL_HOSTILE_CHARS.test(trimmed)) return null;
-  // Protocol-relative is an EXTERNAL fetch, not a path — same reasoning as
-  // hrefs, and nobody hand-writes `//host/x.png` in a local document.
-  if (trimmed.startsWith("//")) return null;
-
-  if (SAFE_IMAGE_DATA_URI.test(trimmed)) {
-    return trimmed.length <= MAX_DATA_URI_LENGTH ? trimmed : null;
-  }
-  // Any other `data:` URI (including `data:image/svg+xml`) falls through to
-  // the "unknown scheme" branch below and is rejected.
-
-  const lower = trimmed.toLowerCase();
-  if (SAFE_IMAGE_PREFIXES.some((p) => lower.startsWith(p))) return trimmed;
-
-  if (trimmed.startsWith("#")) return trimmed;
-
-  if (!hasSchemePrefix(trimmed)) return trimmed;
-
-  // Has a scheme prefix that isn't allowlisted (or is `data:` with a
-  // non-allowlisted subtype) → drop.
-  return null;
-}
+export const sanitizeImageSrcForPaste = sanitizeImageSrc;

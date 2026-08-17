@@ -4,6 +4,7 @@ import type { ChildNode, Element, Text } from "domhandler";
 import * as htmlparser2 from "htmlparser2";
 import * as Y from "yjs";
 import { DOCX_INLINE_MARKS } from "../../shared/constants.js";
+import { sanitizeImageSrc } from "../../shared/image-src-safety.js";
 import type { FootnoteBody } from "../../shared/types.js";
 import { normalizeHardBreaks } from "./hardbreak-normalize.js";
 
@@ -382,8 +383,20 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
     }
 
     case "img": {
+      // `node.attribs.src` is untrusted content — `.docx` embeds arrive as
+      // `data:` rasters (`safeImageEmbed`, docx-export.ts) which pass
+      // through, but an imported `.html` file can name any host, exactly the
+      // paste-time gap #1420 closed. Sanitize through the same allowlist; an
+      // unsafe src downgrades to a plain-text paragraph carrying the
+      // alt/title rather than reaching the Y.Doc unvetted.
+      const src = sanitizeImageSrc(node.attribs.src);
+      if (!src) {
+        const el = new Y.XmlElement("paragraph");
+        el.insert(0, [new Y.XmlText(node.attribs.alt || node.attribs.title || "")]);
+        return [el];
+      }
       const el = new Y.XmlElement("image");
-      el.setAttribute("src", node.attribs.src || "");
+      el.setAttribute("src", src);
       if (node.attribs.alt) el.setAttribute("alt", node.attribs.alt);
       if (node.attribs.title) el.setAttribute("title", node.attribs.title);
       return [el];
