@@ -675,19 +675,20 @@ pub(crate) fn check_path_safe(candidate: &Path, canonical_root: &Path) -> Result
 /// *match* `\\?\<drive>:\` rather than fail to match a bypass — a distinction
 /// with no tail of undiscovered forms.
 fn is_unc_path(path: &Path) -> bool {
-    let s = path.to_string_lossy().to_lowercase();
-    if !s.starts_with(r"\\") && !s.starts_with("//") {
+    // Normalising separators first means the mixed spellings (`\/server\share`)
+    // fall out uniformly instead of depending on which prefix arm matched, and
+    // it removes the byte indices a reader would otherwise have to count.
+    let s = path.to_string_lossy().to_ascii_lowercase().replace('/', "\\");
+    if !s.starts_with(r"\\") {
         return false;
     }
-    let b = s.as_bytes();
-    let sep = |c: u8| c == b'\\' || c == b'/';
-    let is_local_extended = b.len() >= 7
-        && b[2] == b'?'
-        && sep(b[3])
-        && b[4].is_ascii_lowercase()
-        && b[5] == b':'
-        && sep(b[6]);
-    !is_local_extended
+    !s.strip_prefix(r"\\?\").is_some_and(|rest| {
+        let mut c = rest.chars();
+        matches!(
+            (c.next(), c.next(), c.next()),
+            (Some(drive), Some(':'), Some('\\')) if drive.is_ascii_lowercase()
+        )
+    })
 }
 
 /// Returns true if any component in the path chain (from root to candidate)
@@ -709,7 +710,9 @@ fn is_unc_path(path: &Path) -> bool {
 /// delete it on the strength of this walk.
 fn has_reparse_point_in_chain(path: &Path) -> bool {
     // `ancestors()` yields the path itself, then each parent up to the root.
-    for entry in path.ancestors().collect::<Vec<_>>().iter().rev() {
+    // `Ancestors` is not a DoubleEndedIterator, so collecting is what buys the
+    // root-first order.
+    for entry in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
         match std::fs::symlink_metadata(entry) {
             Ok(metadata) => {
                 if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {

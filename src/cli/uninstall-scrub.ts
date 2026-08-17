@@ -46,7 +46,7 @@ import {
   assertPathSafe,
   type DetectedTarget,
   detectTargets,
-  PathRejectedError,
+  pathRejectionReason,
   removeConfigEntries,
 } from "../server/integrations/apply.js";
 import { assertSafeWorkspacePath } from "./win-path-guard.js";
@@ -93,9 +93,11 @@ function usableLocalAppData(logger?: ScrubLogger): string | undefined {
     assertPathSafe(value, { allowedRoots: [homedir()] });
     return value;
   } catch (err) {
-    // Never silent: this returns the same `undefined` as "unset", and the two
-    // mean very different things to whoever is reading an uninstall log.
-    const reason = err instanceof PathRejectedError ? err.reason : (err as Error).message;
+    // Never silent once a logger exists — and `openLogger` is the one caller
+    // without one, because it is what *builds* the logger. This returns the same
+    // `undefined` as "unset", and the two mean very different things to whoever
+    // is reading an uninstall log.
+    const reason = pathRejectionReason(err);
     logger?.warn(`%LOCALAPPDATA% rejected (${reason}) — skipping`);
     return undefined;
   }
@@ -140,32 +142,50 @@ async function openLogger(): Promise<ScrubLogger> {
 }
 
 /**
- * `readdir`, but refuses to descend through a reparse point (#1417).
+ * Is this a real directory we may descend into — i.e. not a reparse point?
  *
  * The scan walks four levels down from `%LOCALAPPDATA%` before
  * {@link assertSafeWorkspacePath} gets a say, and `readdir`/`stat` **follow**
  * junctions. A junction planted at any of those levels pointing at
  * `\\attacker\share` therefore made the syscall — and leaked an NTLM
- * handshake — before the guard at the bottom ever ran. `lstat` does not
- * follow, so checking each directory *before* reading it is what closes the
+ * handshake — before the guard at the bottom ever ran (#1417). `lstat` does
+ * not follow, so checking each level *before* reading it is what closes the
  * window; the string screens in `usableLocalAppData` cannot, because the
  * hostile part of the path is on disk rather than in the env var.
  *
- * Returns null (already logged) when the directory is unreadable, is not a
- * directory, or is a reparse point.
+ * Fail-closed, and logs its own reason. `detectTargets` in
+ * `server/integrations/apply.ts` applies the same rule to the same tree with a
+ * sync twin — the two cannot share an implementation across that boundary, but
+ * they must not diverge in behaviour.
  */
-async function readdirNoFollow(dir: string, logger: ScrubLogger): Promise<string[] | null> {
+async function isSafeDirectory(dir: string, logger: ScrubLogger): Promise<boolean> {
   try {
     const stat = await fsPromises.lstat(dir);
     if (stat.isSymbolicLink()) {
       logger.warn(`refusing to descend into reparse point: ${dir}`);
-      return null;
+      return false;
     }
-    if (!stat.isDirectory()) return null;
+    return stat.isDirectory();
+  } catch (err) {
+    logger.info(`cannot read ${dir}: ${(err as Error).message}`);
+    return false;
+  }
+}
+
+/**
+ * `readdir`, but refuses to descend through a reparse point (#1417).
+ *
+ * Returns an empty array on refusal — every caller treats "cannot descend" and
+ * "nothing here" identically (the loop simply does not run), and the reason has
+ * already been logged by {@link isSafeDirectory}.
+ */
+async function readdirNoFollow(dir: string, logger: ScrubLogger): Promise<string[]> {
+  if (!(await isSafeDirectory(dir, logger))) return [];
+  try {
     return await fsPromises.readdir(dir);
   } catch (err) {
     logger.info(`cannot read ${dir}: ${(err as Error).message}`);
-    return null;
+    return [];
   }
 }
 
@@ -175,7 +195,7 @@ async function readdirNoFollow(dir: string, logger: ScrubLogger): Promise<string
  * Matches `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\
  * local-agent-mode-sessions\<ws-id>\<vm-id>\`.
  *
- * Each candidate vm-path is validated by the 4-step Windows path guard before
+ * Each candidate vm-path is validated by the 5-step Windows path guard before
  * being included — callers receive only safe, realpath'd paths.
  *
  * Returns an empty array on any error (e.g. Cowork not installed).
@@ -197,8 +217,6 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
 
   const packagesDir = path.join(localAppData, "Packages");
   const packageEntries = await readdirNoFollow(packagesDir, logger);
-  if (packageEntries === null) return [];
-
   const claudePackages = packageEntries.filter((name) => name.startsWith("Claude_"));
   if (claudePackages.length === 0) {
     logger.info("no Claude_* package directories found");
@@ -216,28 +234,19 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
       "local-agent-mode-sessions",
     );
 
-    const wsEntries = await readdirNoFollow(sessionsRoot, logger);
-    if (wsEntries === null) continue;
-
-    for (const ws of wsEntries) {
+    for (const ws of await readdirNoFollow(sessionsRoot, logger)) {
       const wsPath = path.join(sessionsRoot, ws);
-      const vmEntries = await readdirNoFollow(wsPath, logger);
-      if (vmEntries === null) continue;
 
-      for (const vm of vmEntries) {
+      for (const vm of await readdirNoFollow(wsPath, logger)) {
         const vmPath = path.join(wsPath, vm);
-        try {
-          // lstat, not stat (#1417) — see readdirNoFollow.
-          const stat = await fsPromises.lstat(vmPath);
-          if (!stat.isDirectory()) continue;
+        // Same no-follow rule as the descent above, one level deeper: `stat`
+        // here would follow a junction planted as the vm dir itself.
+        if (!(await isSafeDirectory(vmPath, logger))) continue;
 
-          // 4-step path guard — only include validated, realpath'd paths.
-          const safePath = await assertSafeWorkspacePath(vmPath, realLad, logger);
-          if (safePath !== null) {
-            workspaces.push(safePath);
-          }
-        } catch (err) {
-          logger.warn(`cannot stat ${vmPath}: ${(err as Error).message}`);
+        // 5-step path guard — only include validated, realpath'd paths.
+        const safePath = await assertSafeWorkspacePath(vmPath, realLad, logger);
+        if (safePath !== null) {
+          workspaces.push(safePath);
         }
       }
     }
@@ -399,8 +408,7 @@ export async function scrubMcpConfigs(
           break;
       }
     } catch (err) {
-      const detail =
-        err instanceof PathRejectedError ? `path rejected (${err.reason})` : (err as Error).message;
+      const detail = `path rejected (${pathRejectionReason(err)})`;
       logger.error(`MCP scrub failed for ${target.configPath}: ${detail}`);
       failures++;
     }
@@ -429,7 +437,7 @@ export async function removeSkillDir(logger: ScrubLogger, homeOverride?: string)
   try {
     assertPathSafe(skillDir, { allowedRoots: homeOverride ? [homeOverride] : undefined });
   } catch (err) {
-    const reason = err instanceof PathRejectedError ? err.reason : (err as Error).message;
+    const reason = pathRejectionReason(err);
     logger.warn(`leaving ${skillDir} — path rejected (${reason})`);
     return 0;
   }
@@ -534,7 +542,7 @@ export async function removeAutostartEntry(
   try {
     assertPathSafe(entry, { allowedRoots: homeOverride ? [homeOverride] : undefined });
   } catch (err) {
-    const reason = err instanceof PathRejectedError ? err.reason : (err as Error).message;
+    const reason = pathRejectionReason(err);
     logger.warn(`leaving ${entry} — path rejected (${reason})`);
     return 0;
   }

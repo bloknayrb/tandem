@@ -203,11 +203,9 @@ describe("rewriteJson", () => {
  *
  * The bug being pinned is that `readdir`/`stat` **follow** reparse points, so a
  * junction planted anywhere on the four-level descent leaked an SMB handshake
- * before `assertSafeWorkspacePath` at the bottom got a say. Asserting only that
- * the result is `[]` does not pin it — a junction pointing at an unreadable
- * share yields `[]` either way, so that assertion passes against the vulnerable
- * code. What distinguishes fixed from broken is whether the following call was
- * ever made.
+ * before `assertSafeWorkspacePath` at the bottom got a say. Here the result is
+ * `[]` either way — see `tests/helpers/unc-fixtures.ts` for why that makes the
+ * return value worthless as an observable.
  */
 describe("findCoworkWorkspaces reparse-point handling", () => {
   // Anchored under the real homedir because `usableLocalAppData` runs the real

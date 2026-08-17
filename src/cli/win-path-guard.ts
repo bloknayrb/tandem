@@ -145,9 +145,8 @@ async function hasSymlinkInChain(p: string, warn: (m: string) => void): Promise<
  * tail of undiscovered forms.
  */
 function isUncPath(p: string): boolean {
-  const lower = p.toLowerCase();
-  if (!lower.startsWith("\\\\") && !lower.startsWith("//")) return false;
-  return !/^[\\/]{2}\?[\\/][a-z]:[\\/]/.test(lower);
+  if (!p.startsWith("\\\\") && !p.startsWith("//")) return false;
+  return !/^[\\/]{2}\?[\\/][a-z]:[\\/]/i.test(p);
 }
 
 /**

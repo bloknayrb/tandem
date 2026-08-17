@@ -286,6 +286,19 @@ export class PathRejectedError extends Error {
   }
 }
 
+/**
+ * A short, loggable reason for a path rejection.
+ *
+ * Lives beside {@link PathRejectedError} because it narrows it: every
+ * `assertPathSafe` call site wants the same one-liner, and there were five
+ * hand-written copies before this existed. The reason is the whole point of
+ * logging these at all — a rejected path and an absent one produce the same
+ * "not detected" outcome, so without it the log cannot tell them apart.
+ */
+export function pathRejectionReason(err: unknown): string {
+  return err instanceof PathRejectedError ? err.reason : (err as Error).message;
+}
+
 export interface BuildMcpEntriesOptions {
   /** Include the stdio channel shim. Defaults to false, and since Track E
    *  (2026-08-07) `shouldRegisterChannelShim` no longer turns it on by default
@@ -578,9 +591,40 @@ export interface DetectOptions {
   force?: boolean;
 }
 
+/**
+ * Is `p` a reparse point (junction / symlink)? Fail-closed: an unreadable path
+ * counts as one, because "I could not tell" must not license a descent.
+ *
+ * `lstatSync` deliberately, never `statSync` — `stat` follows, which is the
+ * whole bug (#1417). The async twin of this rule is `readdirNoFollow` in
+ * `src/cli/uninstall-scrub.ts`; the two cannot share an implementation because
+ * `detectTargets` is synchronous, but they must not diverge in behaviour.
+ */
+function isReparsePoint(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink();
+  } catch {
+    return true;
+  }
+}
+
 export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   const home = opts.homeOverride ?? homedir();
   const targets: DetectedTarget[] = [];
+
+  // (#1417) Screen the ROOTS, once, before anything derived from them reaches a
+  // syscall. Every `existsSync` / `readdirSync` below hangs off `home` or
+  // `%LOCALAPPDATA%`, and on Windows those calls perform the SMB handshake that
+  // leaks an NTLM hash — so screening a single derived path would leave the
+  // three beside it open, and would leave this function reading as "that line
+  // was reviewed" rather than "this function is safe". Both roots are
+  // redirectable to a share by enterprise folder redirection, which is the
+  // compatibility trade-off recorded on `assertPathSafe`.
+  const homeRejection = rejectUnsafeWindowsPrefix(home);
+  if (homeRejection !== null) {
+    console.error(`[Tandem] home directory rejected (${homeRejection}); detecting nothing`);
+    return targets;
+  }
 
   // Claude Code — cross-platform.
   // MCP servers are configured in ~/.claude.json under the "mcpServers" key.
@@ -604,11 +648,10 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
     appDataOverride: opts.appDataOverride,
   });
 
-  // (#1417) Screen before `existsSync`, which follows and connects — on Windows
-  // it performs the SMB handshake for a UNC path. `%APPDATA%` and `%USERPROFILE%`
-  // both feed this path and both can be redirected to a share by enterprise
-  // folder redirection, so `assertPathSafe` downstream is one syscall too late.
-  // The compatibility trade-off is recorded on `assertPathSafe`.
+  // The second root: `%APPDATA%` is its own env var, so the `home` screen above
+  // does not cover this branch. Screened on the derived path rather than the raw
+  // variable because the platform switch lives behind `claudeDesktopConfigPath`
+  // and only some platforms consult `%APPDATA%` at all.
   const desktopPrefixRejection = rejectUnsafeWindowsPrefix(desktopConfig);
   if (desktopPrefixRejection !== null) {
     console.error(`[Tandem] Claude Desktop config path rejected: ${desktopPrefixRejection}`);
@@ -637,15 +680,25 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
       // now stops here — and the symptom is "MSIX Claude Desktop was not
       // detected", which is indistinguishable from "not installed" unless the
       // reason is written down.
-      const reason = err instanceof PathRejectedError ? err.reason : (err as Error).message;
+      const reason = pathRejectionReason(err);
       console.error(`[Tandem] %LOCALAPPDATA% rejected (${reason}); skipping MSIX detection`);
       return targets;
     }
     const packagesDir = join(localAppData, "Packages");
     try {
+      // (#1417) `readdirSync` and `existsSync` FOLLOW reparse points, and this
+      // walks the same `%LOCALAPPDATA%\Packages\Claude_*` tree that
+      // `findCoworkWorkspaces` walks — the tree the reachable instance of #1417
+      // was found in. A junction planted at either level by any process running
+      // as the user redirects the call to a share. `lstatSync` does not follow,
+      // so screening each level before reading it is what closes the window;
+      // the env-var screen above cannot, because the hostile part of the path is
+      // on disk rather than in the variable.
+      if (isReparsePoint(packagesDir)) throw new Error("reparse point");
       const entries = readdirSync(packagesDir);
       const matching = entries.filter((n) => MSIX_PACKAGE_PATTERN.test(n));
       for (const pkg of matching) {
+        if (isReparsePoint(join(packagesDir, pkg))) continue;
         const msixConfig = join(
           packagesDir,
           pkg,

@@ -22,10 +22,15 @@ const ALLOWED = new Map<string, string>([
   ],
   [
     "src/cli/win-path-guard.ts",
-    "Deliberate second variant: permits `\\\\?\\C:\\…` (extended-length LOCAL) while " +
-      "rejecting `\\\\?\\UNC\\…`, because containment under %LOCALAPPDATA% confines it and " +
-      "Tauri's path APIs hand back that prefix. Sharing the stricter shared predicate would " +
-      "reject legitimate local paths. CLAUDE.md names this as intentional — do not 'fix' it.",
+    "Deliberate second variant: permits `\\\\?\\C:\\…` (extended-length LOCAL) and rejects " +
+      "every other `\\\\`-rooted form, because containment under %LOCALAPPDATA% confines the " +
+      "one it admits and Tauri's path APIs hand back that prefix. Sharing the stricter shared " +
+      "predicate would reject legitimate local paths. `windows-path-safety.ts`'s own docblock " +
+      "names this as intentional — do not 'fix' it. Written as an ALLOWLIST of that one shape " +
+      "rather than an enumeration of " +
+      "bad forms: the enumeration it replaced let `\\\\?\\unc\\…` and `\\\\?\\GLOBALROOT\\…` " +
+      "through, because it treated the whole `\\\\?\\` namespace as fine once a literal-cased " +
+      "`UNC\\` did not follow.",
   ],
   [
     "src/client/editor/utils/url-safety.ts",
@@ -44,8 +49,9 @@ const ALLOWED = new Map<string, string>([
     "src-tauri/src/cowork_workspace_scan.rs",
     "Rust cannot import the TypeScript definition, so the §3 guard's twin is a genuine " +
       "second implementation. Permits `\\\\?\\C:\\…` for the same reason win-path-guard.ts " +
-      "does — containment under the canonical root confines it. Kept in step by hand; the " +
-      "two files cross-reference each other.",
+      "does — containment under the canonical root confines it — and is written as the same " +
+      "allowlist for the same reason. Kept in step by hand; the two files cross-reference " +
+      "each other.",
   ],
   [
     "src-tauri/src/lib.rs",
@@ -122,6 +128,7 @@ describe("UNC prefix checks are not duplicated (#1417, invariant §3)", () => {
       "src/server/launcher/supervisor.ts",
       "src/server/session/manager.ts",
       "src/server/integrations/apply.ts",
+      "src/server/integrations/node-binary.ts",
     ]) {
       const body = readFileSync(path.join(ROOT, file), "utf8");
       expect(body, `${file} should CALL the shared guard`).toMatch(/rejectUnsafeWindowsPrefix\(/);

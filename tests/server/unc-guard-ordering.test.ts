@@ -1,8 +1,11 @@
 import fsp from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertPathSafe, detectTargets } from "../../src/server/integrations/apply.js";
 import { sourceFileChanged } from "../../src/server/session/manager.js";
 import type { SessionData } from "../../src/shared/types.js";
+import { LOCAL_EXTENDED_PATHS, NETWORK_PATHS } from "../helpers/unc-fixtures.js";
 
 /**
  * `existsSync`, observable. It delegates to the real implementation, so nothing
@@ -24,12 +27,7 @@ vi.mock("node:fs", async (importOriginal) => {
  */
 
 describe("assertPathSafe rejects UNC before any filesystem call (#1417)", () => {
-  it.each([
-    ["classic UNC", "\\\\attacker\\share\\.claude.json"],
-    ["forward-slash UNC", "//attacker/share/.claude.json"],
-    ["device namespace", "\\\\.\\PhysicalDrive0"],
-    ["extended-length", "\\\\?\\C:\\Windows\\System32\\config"],
-  ])("%s", (_label, target) => {
+  it.each([...NETWORK_PATHS, ...LOCAL_EXTENDED_PATHS])("%s", (_label, target) => {
     // The reason code is the observable. Before the fix this function had NO
     // UNC check at all: the path fell through `existsSync` / `lstatSync` on the
     // raw string — the calls that leak the hash — and was eventually refused as
@@ -64,16 +62,53 @@ describe("detectTargets screens the Claude Desktop path before existsSync (#1417
   });
 });
 
+describe("loadSession discards the stored filePath (#1417)", () => {
+  /**
+   * The deepest fix in #1417, and the one most at risk of being deleted: its
+   * own comment argues the two spellings are "equivalent by construction",
+   * which is exactly the reasoning a future reader would use to remove the
+   * line. Removing it puts a `JSON.parse`d, attacker-controlled string back
+   * into `session.filePath` — and `sourceFileChanged`'s screen would stay
+   * green, because that one only refuses UNC, while this kills the whole class
+   * (traversal and cross-document redirection included).
+   */
+  it("returns the caller's path, not the one in the file", async () => {
+    const dir = await fsp.mkdtemp(join(tmpdir(), "tandem-session-"));
+    const realPath = join(dir, "real-document.md");
+
+    const { SESSION_DIR } = await import("../../src/server/platform.js");
+    const { sessionKey, loadSession } = await import("../../src/server/session/manager.js");
+    await fsp.mkdir(SESSION_DIR, { recursive: true });
+    const sessionPath = join(SESSION_DIR, `${sessionKey(realPath)}.json`);
+
+    // A tampered session record: found under the real document's key, but
+    // naming somewhere else entirely.
+    await fsp.writeFile(
+      sessionPath,
+      JSON.stringify({
+        filePath: "\\\\attacker\\share\\doc.md",
+        ydocState: "",
+        sourceFileMtime: 1,
+      }),
+    );
+
+    try {
+      const loaded = await loadSession(realPath);
+      expect(loaded?.filePath).toBe(realPath);
+    } finally {
+      await fsp.rm(sessionPath, { force: true });
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("sourceFileChanged screens the session's own filePath (#1417)", () => {
   afterEach(() => vi.restoreAllMocks());
 
   const session = (filePath: string): SessionData =>
     ({ filePath, sourceFileMtime: 1, ydocState: "" }) as unknown as SessionData;
 
-  it.each([
-    "\\\\attacker\\share\\doc.md",
-    "//attacker/share/doc.md",
-  ])("refuses %s without calling stat", async (filePath) => {
+  it.each(NETWORK_PATHS)("refuses %s (%s) without calling stat", async (_label, filePath) => {
     // `session.filePath` is parsed out of session JSON, not the caller's
     // already-validated path, and this `stat` was the first thing to touch
     // it — on every open-with-restore. Reported as "changed", which routes

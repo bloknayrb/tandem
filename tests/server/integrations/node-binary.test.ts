@@ -9,6 +9,7 @@ import {
   resolveNodeBinary,
 } from "../../../src/server/integrations/node-binary.js";
 import { isValidNodeBinary } from "../../../src/shared/integrations/node-binary-name.js";
+import { LOCAL_EXTENDED_PATHS, NETWORK_PATHS } from "../../helpers/unc-fixtures.js";
 
 /**
  * `statSync`, observable. It delegates to the real implementation, so every
@@ -202,16 +203,17 @@ describe("probeNodeBinary", () => {
    * file this process does not own — `mcpServers.*.command` in `~/.claude.json`
    * — reachable at server start and via `/api/diagnostics`.
    *
-   * **Asserts the syscall, not the return value.** A UNC path to a host that
-   * does not answer already produced `null` via the catch, so `toBeNull()`
-   * alone passes against the vulnerable code and proves nothing. The fix is
-   * that `statSync` is never reached.
+   * Asserts the syscall, not the return value — see `tests/helpers/unc-fixtures.ts`.
+   * Here `null` came out either way, via the catch.
+   *
+   * The extended-length LOCAL paths are included deliberately: this site uses
+   * the STRICT shared predicate, which refuses `\\?\C:\…` too. `win-path-guard`
+   * permits exactly those, which is why the corpus keeps the two lists apart
+   * rather than exporting one "all bad paths" array.
    */
   it.each([
-    ["classic UNC", "\\\\attacker\\share\\node.exe"],
-    ["forward-slash UNC", "//attacker/share/node.exe"],
-    ["extended UNC", "\\\\?\\UNC\\attacker\\share\\node.exe"],
-    ["device namespace", "\\\\.\\C:\\node.exe"],
+    ...NETWORK_PATHS,
+    ...LOCAL_EXTENDED_PATHS,
   ])("refuses %s without calling statSync", (_label, candidate) => {
     _statSyncSpy.mockClear();
 

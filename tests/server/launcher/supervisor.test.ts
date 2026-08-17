@@ -26,6 +26,7 @@ import {
   SUPERVISOR_INITIAL_PROMPT,
   serializeUserTurn,
 } from "../../../src/shared/launcher/contract.js";
+import { NETWORK_PATHS } from "../../helpers/unc-fixtures.js";
 
 let tmpDir: string;
 
@@ -287,18 +288,12 @@ describe("resolveSafeCwd — path normalization (security I2)", () => {
   // later. The check is now cross-platform, so the test is too — and on posix
   // `//attacker/share` really does clear `isAbsolute`, making this the branch
   // that has to catch it.
-  // **The observable is the SYSCALL, not the return value.** Both the fixed and
-  // the broken screen return null for `//attacker/share`, because `realpath`
-  // throws on a host that does not answer — but reaching `realpath` at all is
-  // the whole vulnerability: on Windows that call performs the SMB handshake
-  // and the hash is gone before the throw. Asserting `toBeNull()` here passes
-  // against the unfixed code and proves nothing.
-  it.each([
-    "//attacker/share/folder",
-    "//attacker/share",
-    "//?/UNC/attacker/share",
-    "//./C:/",
-  ])("rejects %s WITHOUT touching the filesystem, on every platform", (candidate) => {
+  // Asserts the syscall, not the return value — see `tests/helpers/unc-fixtures.ts`.
+  // Here `null` came out either way, because `realpath` throws on a host that
+  // does not answer; the hash is gone before the throw.
+  it.each(
+    NETWORK_PATHS,
+  )("rejects %s (%s) WITHOUT touching the filesystem, on every platform", (_label, candidate) => {
     const realpathSync = vi.spyOn(fs, "realpathSync");
     const statSync = vi.spyOn(fs, "statSync");
     try {

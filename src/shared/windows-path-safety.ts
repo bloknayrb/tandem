@@ -14,20 +14,22 @@
  * `//`, so as a boolean this is equivalent to a bare
  * `startsWith("\\\\") || startsWith("//")` on every input. A test that asserts
  * only "rejected" therefore does not pin the extended-length branch; assert on
- * the message. Four hand-rolled copies survive, and their gaps differ — do not
- * assume they are all "the weak one":
+ * the message.
  *
- *  - `server/file-io/docx-export.ts` and its spike twin — bare `\\` only, so
- *    they genuinely miss the forward-slash forms.
- *  - `server/launcher/supervisor.ts` — names `\\?\` and `\\.\` explicitly, and
- *    its `//` gap is now covered because `rejectedSyntactically` calls this
- *    function first; the local check survives only as the shape filter.
- *  - `cli/win-path-guard.ts` and its Rust twin `is_unc_path` in
- *    `src-tauri/src/cowork_workspace_scan.rs` — deliberately LOOSER, because
- *    they allow `\\?\C:\…` on purpose and confine it by realpath'd
- *    containment instead. They are not defects; do not "fix" them. They are
- *    written as an allowlist of that one shape rather than a blacklist of the
- *    bad ones, which is the only form that has no bypass tail.
+ * **The inventory of surviving hand-rolled copies is not here.** It is the
+ * `ALLOWED` map in `tests/shared/unc-check-duplication.test.ts`, which is
+ * *enforced* — a copy that appears without an entry fails the build, and an
+ * entry whose file no longer holds a copy fails too. A prose list beside it
+ * would be the same drift #1417 is about, one level up: the previous version of
+ * this paragraph already disagreed with the map on both the count and which
+ * files were in it. What is worth stating here, because no test can:
+ *
+ *  - The loose variants are **deliberate, not defects.** `cli/win-path-guard.ts`
+ *    and its Rust twin `is_unc_path` allow `\\?\C:\…` on purpose and confine it
+ *    by realpath'd containment instead. Do not "fix" them into calling this.
+ *  - Both are written as an **allowlist** of that one permitted shape rather
+ *    than an enumeration of bad ones. The enumeration they replaced let
+ *    `\\?\unc\…` and `\\?\GLOBALROOT\…` through. An allowlist has no such tail.
  *
  * See #1417, which also covers the ordering defect where a filesystem call runs
  * *before* the check — a class this string test cannot detect.
