@@ -22,11 +22,18 @@
  * unconditionally — which would be a second, wider corruption.
  */
 
+import { render } from "@testing-library/svelte";
 import { Editor } from "@tiptap/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
-import { applySuggestion, rangeText } from "../../src/client/panels/useAnnotationReview.svelte";
+import {
+  applySuggestion,
+  rangeText,
+  useAnnotationReview,
+} from "../../src/client/panels/useAnnotationReview.svelte";
+import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants";
 import type { Annotation } from "../../src/shared/types";
 
 function suggestion(from: number, to: number, suggestedText: string): Annotation {
@@ -168,6 +175,45 @@ describe("#1460: a multi-line suggestion in a plaintext document", () => {
     expect(rangeText(editor, 0, editor.state.doc.content.size)).toBe(text);
   });
 
+  it("keeps the host block's TYPE and attributes", () => {
+    // Not a hardcoded paragraph. A heading rebuilt as a paragraph loses its `#`
+    // run on save — the same defect the server's flatten had when it built bare
+    // elements, and the same class as #1448's table-alignment loss.
+    //
+    // A heading also COLLAPSES rather than splitting, matching the server:
+    // `extractText` maps a heading's newlines to spaces, so a two-line heading
+    // serializes as `## one two` and splitting would invent a heading and a line
+    // the file will not contain.
+    const h = new Editor({
+      extensions: buildSchemaExtensions(),
+      content: "<h2>hello world</h2>",
+    });
+    // Flat offsets INCLUDE the heading prefix, so the text spans 3..14, not 0..11.
+    applySuggestion(suggestion(3, 14, "one\ntwo"), h, ydoc, "txt");
+    expect(shape(h)).toBe('heading("one two")');
+    expect(h.getJSON().content?.[0]?.attrs?.level, "still an h2").toBe(2);
+    h.destroy();
+  });
+
+  it("DECLINES to split inside a list item, falling back to a hard break", () => {
+    // Splitting is only correct where the receiving textblock is a direct child of
+    // the doc — the same predicate and the same measured reason as the undo path's
+    // `canRestoreBlockBoundary`: inside a list item a split yields ONE item holding
+    // two paragraphs where two items belong. The undo path has refused this since
+    // #1486 while accept did not, so two halves of one feature disagreed about the
+    // same document shape. Found in review.
+    //
+    // A hardBreak there is no NEW loss: a plaintext file cannot represent the list
+    // at all, so the structure goes on the next reload regardless.
+    const list = new Editor({
+      extensions: buildSchemaExtensions(),
+      content: "<ul><li><p>hello world</p></li></ul>",
+    });
+    applySuggestion(suggestion(0, 11, "one\ntwo"), list, ydoc, "txt");
+    expect(list.getHTML()).toBe("<ul><li><p>one<br>two</p></li></ul>");
+    list.destroy();
+  });
+
   it("is byte-identical to the hard-break version — which is the whole defect", () => {
     // The discriminating case. Both editors serialize to the same flat text, so
     // no assertion about characters could ever have caught this; only the
@@ -191,6 +237,105 @@ describe("#1460: a multi-line suggestion in a plaintext document", () => {
     expect(shape(asBlocks)).not.toBe(shape(asBreaks));
     asBlocks.destroy();
     asBreaks.destroy();
+  });
+});
+
+describe("#1460: undo still recognises what accept wrote", () => {
+  /**
+   * Undo gates on `rangeText(from,to) === suggestedText` and declines when they
+   * differ. The heading branch means accept no longer writes `suggestedText`
+   * verbatim — it writes the lines joined with spaces — so the `"\n"` the guard
+   * looks for is gone from the document forever and the decline is PERMANENT while
+   * taking the transient path: a live-looking Undo button that silently does
+   * nothing, and no toast. Found in review, and it was a regression this fix caused
+   * rather than one it inherited.
+   *
+   * Driven through the real hook rather than through `applySuggestion`, because the
+   * defect lives in the relationship between the two halves.
+   */
+  function setup(html: string, ann: Annotation, format: string) {
+    const ydoc = new Y.Doc();
+    ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(ann.id, ann);
+    const editor = new Editor({ extensions: buildSchemaExtensions(), content: html });
+    let api: ReturnType<typeof useAnnotationReview> | undefined;
+    render(UseAnnotationReviewHarness, {
+      props: {
+        params: {
+          getYdoc: () => ydoc,
+          getEditor: () => editor,
+          getAnnotations: () => [ann],
+          onActiveAnnotationChange: () => {},
+          getScrollBehavior: () => "auto" as ScrollBehavior,
+          getFormat: () => format,
+        },
+        onReady: (returned: ReturnType<typeof useAnnotationReview>) => (api = returned),
+      },
+    });
+    if (!api) throw new Error("useAnnotationReview did not report ready");
+    return { editor, review: api };
+  }
+
+  it("undoes a COLLAPSED heading accept", () => {
+    const ann = {
+      id: "a1",
+      type: "comment",
+      author: "claude",
+      status: "accepted",
+      text: "why",
+      suggestedText: "one\ntwo",
+      textSnapshot: "hello world",
+      createdAt: 0,
+      // Flat offsets include the `## ` prefix; the accepted text is `one two`.
+      range: { from: 3, to: 10 },
+    } as unknown as Annotation;
+    const { editor, review } = setup("<h2>one two</h2>", ann, "txt");
+
+    expect(review.undoResolveAnnotation("a1"), "undo succeeded").toBe(true);
+    expect(editor.getHTML()).toBe("<h2>hello world</h2>");
+    editor.destroy();
+  });
+
+  it("undoes a CRLF suggestion, whose accepted text is normalized too", () => {
+    // The same class, and wrong before the heading branch existed: the flat
+    // projection spells every line ending `"\n"`, so a suggestion carrying
+    // `"\r\n"` never matched its own accepted text either.
+    const ann = {
+      id: "a1",
+      type: "comment",
+      author: "claude",
+      status: "accepted",
+      text: "why",
+      suggestedText: "one\r\ntwo",
+      textSnapshot: "hello world",
+      createdAt: 0,
+      range: { from: 0, to: 7 },
+    } as unknown as Annotation;
+    const { editor, review } = setup("<p>one</p><p>two</p>", ann, "txt");
+
+    expect(review.undoResolveAnnotation("a1"), "undo succeeded").toBe(true);
+    expect(editor.getHTML()).toBe("<p>hello world</p>");
+    editor.destroy();
+  });
+
+  it("still refuses when the text really did change — the control", () => {
+    // Without this, the two above could pass with the guard deleted outright,
+    // which would make undo destructive rather than declining.
+    const ann = {
+      id: "a1",
+      type: "comment",
+      author: "claude",
+      status: "accepted",
+      text: "why",
+      suggestedText: "one\ntwo",
+      textSnapshot: "hello world",
+      createdAt: 0,
+      range: { from: 3, to: 10 },
+    } as unknown as Annotation;
+    const { editor, review } = setup("<h2>edited since</h2>", ann, "txt");
+
+    expect(review.undoResolveAnnotation("a1")).toBe(false);
+    expect(editor.getHTML(), "document untouched").toBe("<h2>edited since</h2>");
+    editor.destroy();
   });
 });
 

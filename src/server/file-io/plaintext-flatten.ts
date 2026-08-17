@@ -1,8 +1,29 @@
 import * as Y from "yjs";
 import { insertDeltaSegments, isHardBreakElement, TEXTBLOCK_NODES } from "../mcp/document-model.js";
+import { FRONTMATTER_ATTR, MARKDOWN_HTML_ATTR, MARKDOWN_RAW_ATTR } from "./mdast-ydoc.js";
 
 /** One delta op, matching `insertDeltaSegments`' input shape. */
 type Segment = { insert: string | object; attributes?: Record<string, unknown> };
+
+/**
+ * Attributes deliberately NOT carried onto the blocks a flatten produces.
+ *
+ * All three mark a paragraph as a verbatim markdown carrier (raw HTML block,
+ * footnote/reference definition, YAML frontmatter — #981, #1457). A flatten only
+ * runs when the document has just become plaintext, where none of those
+ * constructs exists: the txt adapter ignores attributes entirely, so keeping
+ * them would change nothing on disk but WOULD duplicate the marker across every
+ * block the split produced — N frontmatter blocks in the editor's styling where
+ * there was one. The construct is gone; its marker should go with it.
+ */
+const DROPPED_ON_FLATTEN = new Set([MARKDOWN_RAW_ATTR, MARKDOWN_HTML_ATTR, FRONTMATTER_ATTR]);
+
+/**
+ * A line ending in any of its three spellings. Matches `document.ts`'s
+ * `tandem_edit` guard and `useAnnotationReview`'s — a lone `\r` is collapsed by
+ * `toLf` on the way to disk, so it is a break there too.
+ */
+const LINE_BREAK = /\r\n|[\r\n]/;
 
 /**
  * Flatten newlines out of a plaintext document's textblocks (#1460).
@@ -47,17 +68,38 @@ export function flattenPlaintextBreaks(doc: Y.Doc): boolean {
 
   // Collect first, mutate second: splitting during the walk would shift indices
   // out from under it.
-  const work: Array<{ index: number; name: string; lines: Segment[][] }> = [];
+  const work: Array<{
+    index: number;
+    name: string;
+    attrs: Record<string, unknown>;
+    lines: Segment[][];
+  }> = [];
+  const unfixable: string[] = [];
   for (let i = 0; i < fragment.length; i += 1) {
     const node = fragment.get(i);
     if (!(node instanceof Y.XmlElement)) continue;
     const lines = textblockLines(node);
-    if (lines) work.push({ index: i, name: node.nodeName, lines });
+    if (lines) {
+      work.push({ index: i, name: node.nodeName, attrs: node.getAttributes(), lines });
+      continue;
+    }
+    // Skipped AND holding a break: a nested container. Reported rather than
+    // passed over silently, because the boolean return and the call-site comment
+    // otherwise read as "the invariant now holds" — and for this document it does
+    // not. Nothing here can make it hold: `populateYDoc` cannot rebuild a list or
+    // a table from flat text, so the structure is lost on the next reload anyway.
+    if (holdsBreak(node)) unfixable.push(node.nodeName);
+  }
+  if (unfixable.length > 0) {
+    console.warn(
+      `[plaintext-flatten] left a break inside ${unfixable.join(", ")} — a plaintext file ` +
+        "cannot represent these containers at all, so their structure will not survive the next reload",
+    );
   }
   if (work.length === 0) return false;
 
   // Descending, so an earlier replacement cannot invalidate a later index.
-  for (const { index, name, lines } of work.reverse()) {
+  for (const { index, name, attrs, lines } of work.reverse()) {
     fragment.delete(index, 1);
 
     // A heading COLLAPSES to one block; everything else splits into one per line.
@@ -80,7 +122,23 @@ export function flattenPlaintextBreaks(doc: Y.Doc): boolean {
     // a node is filled by more than one call, which is why the split branch
     // appeared to work while the collapse branch did not.
     const created: Y.XmlElement[] = [];
-    for (let b = 0; b < blocks; b += 1) created.push(new Y.XmlElement(name));
+    for (let b = 0; b < blocks; b += 1) {
+      const el = new Y.XmlElement(name);
+      // Attributes must be CARRIED, and this is not a nicety: a fresh
+      // `Y.XmlElement("heading")` has no `level`, and `collectElementFlat` reads
+      // `level` to choose the `#` run — so a flattened `## Title` serialized as
+      // `# Title`. Dropping one heading level is a visible byte change, i.e.
+      // exactly the corruption class this function exists to remove, and it was
+      // found by a throwaway probe rather than by the suite, which is why the
+      // heading-attribute case is now a test.
+      for (const [key, value] of Object.entries(attrs)) {
+        if (DROPPED_ON_FLATTEN.has(key)) continue;
+        // `as never`: Y.js types the value as string, but the real store holds
+        // numbers (`heading.level`) — the same cast `mdast-ydoc.ts` uses.
+        el.setAttribute(key, value as never);
+      }
+      created.push(el);
+    }
     fragment.insert(index, created);
 
     for (const [b, el] of created.entries()) {
@@ -123,18 +181,44 @@ export function flattenPlaintextBreaks(doc: Y.Doc): boolean {
  * routes are the markdown importer and the `.docx` importer respectively, which
  * are exactly what Save-As promotes from.
  *
- * A `codeBlock` is excluded: it declares `code: true`, a newline inside it is
- * genuinely a newline, and it is already stored as one `Y.XmlText` full of them.
- * Splitting one would shred it into unrelated paragraphs. Plaintext cannot
- * represent a code block either, but that is a loss the loader already takes;
- * manufacturing N paragraphs would be a larger one.
+ * **A `codeBlock` is INCLUDED**, and an earlier cut of this excluded it on the
+ * argument that "a newline in a code block is genuinely a newline, splitting would
+ * shred it". That argument is right for markdown and irrelevant here: this runs
+ * only for a document that has just become plaintext, and `collectElementFlat`
+ * emits a code block's text with **no fences**, so the bytes of a three-line code
+ * block are three lines. The reopen parses them as three paragraphs whatever we do
+ * — the fences are already gone from the file — so splitting is byte-neutral and
+ * makes the model's block count match the file's line count, while excluding it
+ * left the divergence in place for exactly the content most likely to be
+ * multi-line. It splits into N blocks of the SAME type, so the monospace display
+ * survives until the next reload.
  *
- * A nested container (list, table) returns `null` — out of scope. `populateYDoc`
- * cannot reconstruct either from flat text, so such a document already loses that
- * structure on reload; splitting inside one would neither fix that nor worsen it.
+ * A nested container (list, table, blockquote) still returns `null`. Not a
+ * judgement call: `populateYDoc` cannot rebuild any of them from flat text, so the
+ * structure is lost on the next reload no matter what happens here, and there is no
+ * achievable invariant to align to. The caller reports these rather than implying
+ * it fixed them.
  */
+/** Does this subtree hold a break in any of its three spellings, at any depth? */
+function holdsBreak(node: Y.XmlElement): boolean {
+  for (let i = 0; i < node.length; i += 1) {
+    const child = node.get(i);
+    if (isHardBreakElement(child)) return true;
+    if (child instanceof Y.XmlElement && holdsBreak(child)) return true;
+    if (!(child instanceof Y.XmlText)) continue;
+    for (const op of child.toDelta() as Segment[]) {
+      if (typeof op.insert === "string") {
+        if (LINE_BREAK.test(op.insert)) return true;
+      } else if (op.insert instanceof Y.XmlElement && isHardBreakElement(op.insert)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function textblockLines(node: Y.XmlElement): Segment[][] | null {
-  if (!TEXTBLOCK_NODES.has(node.nodeName) || node.nodeName === "codeBlock") return null;
+  if (!TEXTBLOCK_NODES.has(node.nodeName)) return null;
 
   const lines: Segment[][] = [[]];
   let sawBreak = false;
@@ -161,8 +245,13 @@ function textblockLines(node: Y.XmlElement): Segment[][] | null {
         continue;
       }
       // A literal newline inside the text — a markdown soft wrap, representable
-      // since #1448 and unrepresentable here.
-      const pieces = op.insert.split("\n");
+      // since #1448 and unrepresentable here. Split on all THREE spellings, not
+      // just `\n`: `restoreLineEndings` runs `toLf` first, so a lone `\r` reaches
+      // the file as a break exactly like `\n`, and the other four guards in this
+      // fix already match `[\r\n]`. One commit should not hold three notions of
+      // "line break". Found in review — latent rather than demonstrated, because
+      // both loaders normalize, but `docx` HTML text nodes are not normalized.
+      const pieces = op.insert.split(LINE_BREAK);
       for (const [p, piece] of pieces.entries()) {
         if (p > 0) startLine();
         if (piece.length > 0) {

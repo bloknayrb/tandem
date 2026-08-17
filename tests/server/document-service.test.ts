@@ -32,6 +32,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_STORE_READ_ONLY,
 } from "../../src/shared/constants.js";
+import { BROWSER_ORIGIN, INTERNAL_ORIGIN } from "../../src/shared/origins.js";
 
 // Mock session manager to avoid filesystem side effects
 vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
@@ -730,6 +731,40 @@ describe("saveDocumentAsToDisk", () => {
       // Asserted on the content argument alone: `path.resolve` rewrites
       // "/tmp/x" to "C:\tmp\x" on win32, and the path is not the claim here.
       expect(vi.mocked(atomicWrite).mock.calls[0]?.[1]).toBe("alpha\nbravo");
+    });
+
+    it("tags the flatten transaction so it generates no channel event", async () => {
+      // Critical Rule 2: the helper choice IS the contract, and swapping
+      // `withInternal` for `withBrowser` — the one origin that DOES emit channel
+      // events — passed every other assertion here. A save-path restructure
+      // surfacing as a user edit is exactly the silent bug the rule exists for.
+      const doc = scratchpadWithBreak("promote-origin");
+      const origins: unknown[] = [];
+      doc.on("afterTransaction", (tr: Y.Transaction) => origins.push(tr.origin));
+
+      await saveDocumentAsToDisk("promote-origin", "/tmp/promoted-1460-origin.txt", "txt");
+
+      expect(origins, "internal, and never browser").toContain(INTERNAL_ORIGIN);
+      expect(origins).not.toContain(BROWSER_ORIGIN);
+    });
+
+    it("does NOT restructure the document when the write fails", async () => {
+      // Y.js transactions do not roll back. Flattening before `atomicWrite` meant a
+      // failed save (permissions, ENOSPC, vanished path) returned an error having
+      // already split the user's scratchpad and re-anchored its annotations — with
+      // the document still `.md` and still unsaved. Byte-neutrality is what makes
+      // the later position free: `output` is identical either way. Found in review.
+      const { atomicWrite } = await import("../../src/server/file-io/index.js");
+      const doc = scratchpadWithBreak("promote-fails");
+      vi.mocked(atomicWrite).mockRejectedValueOnce(new Error("EACCES"));
+
+      const result = await saveDocumentAsToDisk(
+        "promote-fails",
+        "/tmp/promoted-1460-fail.txt",
+        "txt",
+      );
+      expect(result.status).toBe("error");
+      expect(doc.getXmlFragment("default").length, "untouched after a failed save").toBe(1);
     });
 
     it("leaves the model alone when promoting .md → .md — the negative control", async () => {

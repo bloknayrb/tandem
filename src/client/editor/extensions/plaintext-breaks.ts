@@ -58,11 +58,27 @@ export const PlaintextBreaksExtension = Extension.create<PlaintextBreaksOptions>
   addKeyboardShortcuts() {
     const splitInsteadOfBreak = () => {
       if (!isPlaintextFormat(this.options.getFormat())) return false;
+      // A code block is exempt, matching the other four surfaces
+      // (`plaintext-flatten.ts` excludes `codeBlock`; `applySuggestion` checks
+      // `inCode`): a newline in there is genuinely a newline and the node stores
+      // it literally, so there is nothing to convert. Without this the override
+      // was actively harmful rather than merely redundant — `splitBlock` has no
+      // `code` guard, so it SUCCEEDED and cut the code block in two, claiming the
+      // keystroke and killing `Mod-Enter`'s exit-the-code-block affordance. Found
+      // in review.
+      if (this.editor.state.selection.$from.parent.type.spec.code) return false;
       // `false` would fall through to HardBreak's own binding; returning the
       // result of splitBlock claims the keystroke. Inside a list item or table
       // cell `splitBlock` splits that container, which is the same thing Enter
       // does there and still leaves no newline inside a textblock.
-      return this.editor.commands.splitBlock();
+      this.editor.commands.splitBlock();
+      // Claimed unconditionally, INCLUDING when `splitBlock` declines. Returning
+      // its result reads more honestly but falls through to HardBreak's binding at
+      // exactly the positions where the split was impossible — so the one case the
+      // override could not handle would be the one case that inserts the shape it
+      // exists to prevent. A keystroke that does nothing is recoverable; a file
+      // that comes back a different shape is not.
+      return true;
     };
     return {
       "Shift-Enter": splitInsteadOfBreak,

@@ -3,7 +3,7 @@ import * as Y from "yjs";
 import { normalizeHardBreaks } from "./hardbreak-normalize.js";
 import { serializeMdastBlock, serializeMdastInline } from "./markdown.js";
 
-const MARKDOWN_HTML_ATTR = "markdownHtml";
+export const MARKDOWN_HTML_ATTR = "markdownHtml";
 /**
  * Marks a `paragraph` whose Y.XmlText holds the verbatim markdown source of a
  * construct Tandem has no first-class editor node for (footnote/reference
@@ -11,7 +11,7 @@ const MARKDOWN_HTML_ATTR = "markdownHtml";
  * it round-trips byte-exact, and surfaced to the editor as `data-markdown-raw`
  * for the show/hide toggle. Sibling to MARKDOWN_HTML_ATTR. See #981 / ADR-042.
  */
-const MARKDOWN_RAW_ATTR = "markdownRaw";
+export const MARKDOWN_RAW_ATTR = "markdownRaw";
 /**
  * Marks a `markdownRaw` paragraph that is specifically YAML/TOML frontmatter
  * (#1457), so the client can present it as a metadata block rather than prose.
@@ -22,7 +22,7 @@ const MARKDOWN_RAW_ATTR = "markdownRaw";
  * it as an editable paragraph in the body would put `---` and `title:` at the
  * top of every Obsidian note.
  */
-const FRONTMATTER_ATTR = "markdownFrontmatter";
+export const FRONTMATTER_ATTR = "markdownFrontmatter";
 /**
  * Delta-attribute key for an inline run holding verbatim markdown source
  * (footnoteReference, linkReference, imageReference, inline image, inline html).

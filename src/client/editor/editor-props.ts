@@ -8,7 +8,7 @@ import { TextSelection } from "@tiptap/pm/state";
 import type { EditorProps } from "@tiptap/pm/view";
 import { isPlaintextFormat } from "../../shared/plaintext-format";
 import { markdownToSlice } from "./utils/markdown-paste";
-import { splitPastedHardBreaks } from "./utils/paste-breaks";
+import { splitPastedHardBreaks, splitSliceHardBreaks } from "./utils/paste-breaks";
 import { normalizePastedHtmlWhitespace } from "./utils/paste-whitespace";
 import { buildPlainTextSlice } from "./utils/plain-paste";
 import { isSafeExternalHref } from "./utils/url-safety";
@@ -72,7 +72,19 @@ export function makeEditorProps(
     clipboardTextParser: (text, $context, plain, view) => {
       if (!plain) {
         const slice = markdownToSlice(text, view.state.schema);
-        if (slice) return slice;
+        // A markdown soft/hard break becomes a `hardBreak` node
+        // (`markdown-paste.ts`'s token spec), which a plaintext document cannot
+        // store (#1460) — so this is a SIXTH producer, and the one reached by an
+        // ordinary Ctrl+V of `text/plain` alone. `transformPastedHTML` never runs
+        // for a clipboard with no `text/html` flavour: a terminal, a code editor,
+        // `less`, an OS text field. Found in review.
+        //
+        // Rewritten rather than discarded: `splitSliceHardBreaks` turns the breaks
+        // into block boundaries and leaves the rest of the markdown parse intact.
+        // Falling back to `buildPlainTextSlice` instead would paste `**bold**` as
+        // four literal characters whenever the text also held a break, and as real
+        // bold when it did not — one paste behaving two ways.
+        if (slice) return isPlaintextFormat(getFormat()) ? splitSliceHardBreaks(slice) : slice;
       }
       // Fall back to plain-text behavior: split on blank-line groups into
       // paragraphs, carrying the context's active marks. Shared with the
