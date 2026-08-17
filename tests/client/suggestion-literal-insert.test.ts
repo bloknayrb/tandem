@@ -232,11 +232,43 @@ describe("#1477: undoing an accept restores the breaks it recorded", () => {
     return { ydoc, editor, review };
   }
 
-  it("puts back a multi-line snapshot as hard breaks, not a soft wrap", () => {
+  it("puts back a RECORDED hard break as a hard break, not a soft wrap", () => {
     // The round trip that matters: accept replaced a break-bearing paragraph,
     // undo has to restore one. Through a raw string the restore produced a
     // literal newline — a soft wrap — so the `\` never came back to the file
     // even though the characters did.
+    //
+    // AMENDED by #1486, deliberately rather than as a fix-up. This test used to
+    // pass no `textSnapshotBreaks` and expect a hard break anyway, encoding
+    // #1477's model: a "\n" in a snapshot means a hard break. That model is
+    // wrong for a SNAPSHOT — the flat projection spells a block boundary, a
+    // hard break and a soft wrap all as "\n", so assuming "hard" restored a
+    // trailing `\` into every soft-wrapped paragraph undo touched. The
+    // behaviour this test protects is intact; what changed is that it now has
+    // to be recorded rather than guessed. The sibling below is the other half.
+    const ann = {
+      id: "u1",
+      type: "comment",
+      author: "claude",
+      status: "accepted",
+      text: "why",
+      suggestedText: "one\ntwo",
+      textSnapshot: "alpha\nbravo",
+      textSnapshotBreaks: [{ at: 5, kind: "hard" as const }],
+      createdAt: 0,
+      range: { from: 0, to: 7 },
+    } as Annotation;
+    const { editor, review } = setup("<p>one<br>two</p>", ann);
+
+    expect(review.undoResolveAnnotation("u1")).toBe(true);
+    expect(inlineShape(editor)).toBe('paragraph("alpha"+<hardBreak>+"bravo")');
+  });
+
+  it("puts back an UNRECORDED newline as a soft wrap", () => {
+    // The other half of the amendment above, and the case that made it
+    // necessary. Identical annotation minus the record: the newline was a
+    // markdown soft wrap, and restoring it as a hard break would write a `\`
+    // into a file that never had one (#1486).
     const ann = {
       id: "u1",
       type: "comment",
@@ -251,7 +283,10 @@ describe("#1477: undoing an accept restores the breaks it recorded", () => {
     const { editor, review } = setup("<p>one<br>two</p>", ann);
 
     expect(review.undoResolveAnnotation("u1")).toBe(true);
-    expect(inlineShape(editor)).toBe('paragraph("alpha"+<hardBreak>+"bravo")');
+    // Escaped, not a real newline: `inlineShape` runs the text through
+    // `JSON.stringify`, so a literal newline in the document renders as \n.
+    // One text node, one break node — the shape is the assertion.
+    expect(inlineShape(editor)).toBe('paragraph("alpha\\nbravo")');
   });
 
   it("declines when the text changed since accept", () => {

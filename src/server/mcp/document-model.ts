@@ -141,21 +141,101 @@ export function isHardBreakElement(node: unknown): boolean {
  * between-element gap.
  */
 export function getElementText(element: Y.XmlElement): string {
-  const parts: string[] = [];
+  const acc = newFlatAcc();
+  collectElementFlat(element, acc);
+  return acc.parts.join("");
+}
+
+/**
+ * What a `"\n"` in the flat projection actually WAS in the document.
+ *
+ * The flat text spells three different structures the same way, and undo has to
+ * put back the one that was there (#1486). Restoring the wrong one is a real
+ * edit to the file: a hard break serializes as a trailing `\`, a block boundary
+ * as a blank line, and a literal newline as a soft wrap.
+ *
+ * `"literal"` is not in the union deliberately — it is the DEFAULT, recorded by
+ * absence. Soft-wrapped prose is the common case (paragraphs are
+ * `whitespace: "pre"` since #1448), so listing those would make the record
+ * large for the shape that needs no help.
+ */
+export type FlatBreakKind = "block" | "block-opaque" | "hard";
+
+/**
+ * The only node type a restore can rebuild, so the only one `"block"` covers.
+ *
+ * Undo puts a block boundary back by SPLITTING the receiving block, which yields
+ * two blocks of the same type. That is right for a paragraph pair and wrong for
+ * every mixed pair, and the mixed pairs are reachable: `validateRange` checks a
+ * heading prefix only at the two range ENDPOINTS, so a range may legally run
+ * from one block through the next block's `"## "` and out the far side. Accepting
+ * it merges the two, and PM's join keeps the FIRST block's type — so a
+ * paragraph+heading pair merges to a paragraph and the receiving type tells you
+ * nothing about what was consumed. `"block-opaque"` records "there was a
+ * boundary here and I cannot rebuild it", and the client declines rather than
+ * inventing a paragraph where a heading was (#1486).
+ */
+const RESTORABLE_BLOCK = "paragraph";
+
+/** A non-literal `"\n"` at flat offset `at`. */
+export interface FlatBreak {
+  at: number;
+  kind: FlatBreakKind;
+}
+
+interface FlatAcc {
+  parts: string[];
+  /** Running flat offset — the index the NEXT pushed character will occupy. */
+  len: number;
+  breaks: FlatBreak[];
+}
+
+function newFlatAcc(): FlatAcc {
+  return { parts: [], len: 0, breaks: [] };
+}
+
+function pushFlatText(acc: FlatAcc, text: string): void {
+  acc.parts.push(text);
+  acc.len += text.length;
+}
+
+function pushFlatBreak(acc: FlatAcc, kind: FlatBreakKind): void {
+  acc.breaks.push({ at: acc.len, kind });
+  acc.parts.push(FLAT_SEPARATOR);
+  acc.len += FLAT_SEPARATOR.length;
+}
+
+/**
+ * The single traversal behind `getElementText`, `extractText` and
+ * `extractTextWithBreaks`.
+ *
+ * One function rather than a text walker plus a parallel break walker, because
+ * a parallel walker is a copy of the separator contract and the two would drift
+ * — and a break list that disagrees with the text it describes points undo at
+ * the wrong offsets, which is worse than having no break list at all.
+ */
+function collectElementFlat(element: Y.XmlElement, acc: FlatAcc): void {
   let hasPriorContent = false;
+  // What preceded the next boundary, for the `"block"` vs `"block-opaque"` call.
+  // `null` covers both "inline text came first" (mixed content, unrebuildable)
+  // and "nothing yet".
+  let priorBlockName: string | null = null;
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
     if (child instanceof Y.XmlText) {
       for (const op of child.toDelta()) {
         if (typeof op.insert === "string") {
-          parts.push(op.insert);
+          // May itself contain "\n" — a LITERAL newline, e.g. a markdown soft
+          // wrap. Deliberately unrecorded: absence from `breaks` means literal.
+          pushFlatText(acc, op.insert);
         } else {
           // Embed (hardBreak, etc.) — emit \n to keep flat offset aligned
           // with Y.XmlText internal index (embeds count as 1 in xmlText.length)
-          parts.push("\n");
+          pushFlatBreak(acc, "hard");
         }
       }
       hasPriorContent = true;
+      priorBlockName = null;
     } else if (child instanceof Y.XmlElement) {
       if (isHardBreakElement(child)) {
         // Inline-leaf break: always contributes exactly one "\n" and REPLACES the
@@ -163,15 +243,20 @@ export function getElementText(element: Y.XmlElement): string {
         // every hardBreak as 1 unconditionally (client/positions.ts) — so a
         // paragraph-leading break counts 1 here too, even if a browser write-back
         // later strips the empty leading Y.XmlText normalizeHardBreaks preserves.
-        parts.push("\n");
+        pushFlatBreak(acc, "hard");
+        priorBlockName = null;
       } else {
-        if (hasPriorContent) parts.push(FLAT_SEPARATOR);
-        parts.push(getElementText(child));
+        if (hasPriorContent) {
+          const rebuildable =
+            priorBlockName === RESTORABLE_BLOCK && child.nodeName === RESTORABLE_BLOCK;
+          pushFlatBreak(acc, rebuildable ? "block" : "block-opaque");
+        }
+        collectElementFlat(child, acc);
+        priorBlockName = child.nodeName;
       }
       hasPriorContent = true;
     }
   }
-  return parts.join("");
 }
 
 /**
@@ -295,23 +380,47 @@ export function collectXmlTexts(
 
 /** Extract plain text from a Y.Doc's XmlFragment */
 export function extractText(doc: Y.Doc): string {
+  return extractTextWithBreaks(doc).text;
+}
+
+/**
+ * `extractText`, plus the structure the flat string throws away.
+ *
+ * `breaks` lists every `"\n"` in `text` that is a block boundary or a hard
+ * break; any other `"\n"` is a literal newline inside one textblock. Callers
+ * that only need the string use `extractText` — this exists for `captureSnapshot`,
+ * whose consumer (undo) has to rebuild the structure rather than the characters.
+ */
+export function extractTextWithBreaks(doc: Y.Doc): { text: string; breaks: FlatBreak[] } {
   const fragment = doc.getXmlFragment("default");
-  const lines: string[] = [];
+  const acc = newFlatAcc();
+  let emitted = 0;
+  let priorBlockName: string | null = null;
 
   for (let i = 0; i < fragment.length; i++) {
     const node = fragment.get(i);
-    if (node instanceof Y.XmlElement) {
-      const text = getElementText(node);
-      if (node.nodeName === "heading") {
-        const level = Number(node.getAttribute("level") ?? 1);
-        lines.push(headingPrefix(level) + flattenHeadingText(text));
-      } else {
-        lines.push(text);
-      }
+    if (!(node instanceof Y.XmlElement)) continue;
+    // Counted separately from `i`: a non-element child must not consume a
+    // separator, or every offset after it shifts. This mirrors the old
+    // `lines.push(...)` + `join` exactly — `lines` only ever held elements.
+    if (emitted > 0) {
+      const rebuildable = priorBlockName === RESTORABLE_BLOCK && node.nodeName === RESTORABLE_BLOCK;
+      pushFlatBreak(acc, rebuildable ? "block" : "block-opaque");
     }
+    if (node.nodeName === "heading") {
+      const level = Number(node.getAttribute("level") ?? 1);
+      // Pushed as flat TEXT, not traversed: `flattenHeadingText` rewrites every
+      // newline to a space, so a heading contributes no breaks at all. It is
+      // length-preserving (character class, not `/\r?\n/`), so offsets hold.
+      pushFlatText(acc, headingPrefix(level) + flattenHeadingText(getElementText(node)));
+    } else {
+      collectElementFlat(node, acc);
+    }
+    priorBlockName = node.nodeName;
+    emitted++;
   }
 
-  return lines.join(FLAT_SEPARATOR);
+  return { text: acc.parts.join(""), breaks: acc.breaks };
 }
 
 /**

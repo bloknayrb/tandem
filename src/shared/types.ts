@@ -184,6 +184,40 @@ interface AnnotationBase {
    * indistinguishable from an honest one.
    */
   textSnapshotTruncated?: boolean;
+  /**
+   * Which `"\n"` characters in `textSnapshot` were STRUCTURE rather than text
+   * (#1486). Offsets are snapshot-relative. A `"\n"` not listed here is a
+   * literal newline inside one textblock. Three kinds:
+   *
+   *   `"hard"`          a hard break
+   *   `"block"`         a boundary between two PLAIN PARAGRAPHS — rebuildable
+   *   `"block-opaque"`  a boundary between anything else — NOT rebuildable
+   *
+   * The third exists because a restore rebuilds a boundary by splitting the
+   * receiving block, which can only yield two blocks of one type. Paragraph
+   * pairs are safe; a paragraph/heading or list-item pair is not, and the
+   * merged block's own type cannot tell you which it was (ProseMirror's join
+   * keeps the FIRST type). Undo declines on `"block-opaque"` rather than
+   * restoring a heading as body text.
+   *
+   * Undo needs this because the flat projection spells all three identically
+   * and each one serializes differently — a hard break writes a trailing `\`, a
+   * block boundary a blank line, a literal newline a soft wrap. Restoring the
+   * wrong one is an edit to the file the user never made, which is why undo
+   * cannot simply guess from the string.
+   *
+   * Absent on records written before this existed, and on the overwhelmingly
+   * common single-block annotation. Absent means "treat every newline as
+   * literal", which is what the pre-#1486 code did.
+   *
+   * NOT re-anchored. These offsets are captured with `textSnapshot` and never
+   * updated, while `range` IS relocated on reload — so a record can carry breaks
+   * that no longer describe the text at its range. That is deliberate rather
+   * than an omission: the snapshot they index is itself frozen at capture, and
+   * the consumer (`literalRestoreContent`) drops any entry not pointing at a
+   * `"\n"`, degrading to the absent case rather than eating a character.
+   */
+  textSnapshotBreaks?: Array<{ at: number; kind: "block" | "block-opaque" | "hard" }>;
   /** Timestamp of last edit to the annotation content. */
   editedAt?: number;
   /**

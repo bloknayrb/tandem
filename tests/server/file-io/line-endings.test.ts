@@ -39,6 +39,19 @@ describe("detectLineEnding", () => {
     // file reads as a tie and loses.
     expect(detectLineEnding("a\r\nb\r\n")).toBe("\r\n");
   });
+
+  it("reads a pure lone-CR file (classic Mac) as CR", () => {
+    // The form `LineEnding` could not express before. `toLf` collapses `\r` like
+    // any other ending, so a file that could not be NAMED could not be restored
+    // — it came back with every line ending rewritten to LF, silently.
+    expect(detectLineEnding("a\rb\rc\r")).toBe("\r");
+  });
+
+  it("does not count a CRLF as a lone CR either", () => {
+    // The symmetric mistake to the one above: `\r\n` matches `/\r/` too, so an
+    // uncorrected CR count ties with CRLF on a pure-CRLF file.
+    expect(detectLineEnding("a\r\nb\r\nc\r\n")).toBe("\r\n");
+  });
 });
 
 describe("toLf", () => {
@@ -129,5 +142,24 @@ describe("plaintext documents keep the endings they arrived with", () => {
 
   it("LF in, LF out", async () => {
     expect(await roundTrip("one\ntwo\nthree")).toBe("one\ntwo\nthree");
+  });
+
+  it("lone CR in, lone CR out", async () => {
+    expect(await roundTrip("one\rtwo\rthree")).toBe("one\rtwo\rthree");
+  });
+});
+
+describe("markdown documents keep a lone-CR ending too", () => {
+  it("CR in, CR out", () => {
+    // Both adapters route through the same pair, but they are wired separately,
+    // so a fix applied to one is not evidence about the other.
+    const doc = new Y.Doc();
+    try {
+      const cr = "# Title\r\rBody text.\r";
+      loadMarkdown(doc, cr);
+      expect(saveMarkdown(doc)).toBe(cr);
+    } finally {
+      doc.destroy();
+    }
   });
 });

@@ -15,18 +15,28 @@ import { Y_MAP_DOCUMENT_META, Y_MAP_LINE_ENDING } from "../../shared/constants.j
  * file — the exact harm this whole effort is about.
  */
 
-export type LineEnding = "\n" | "\r\n";
+export type LineEnding = "\n" | "\r\n" | "\r";
 
 /**
- * The dominant line ending in `text`. CRLF only wins on a strict majority, so a
- * mixed file (or one with no newlines at all) resolves to LF — the safer
- * default, since LF is what the model and every downstream consumer already use.
+ * The dominant line ending in `text`. A non-LF form only wins on a strict
+ * majority, so a mixed file (or one with no newlines at all) resolves to LF —
+ * the safer default, since LF is what the model and every downstream consumer
+ * already use.
+ *
+ * Lone `\r` (classic Mac) is a member of this union because `toLf` collapses it
+ * like any other ending. While the union held only two members there was no way
+ * to record such a file, so it round-tripped as LF: every line ending in the
+ * file silently rewritten, with no path back. Detection has to name a form for
+ * restoration to have anything to restore.
  */
 export function detectLineEnding(text: string): LineEnding {
   const crlf = (text.match(/\r\n/g) ?? []).length;
-  // Subtracting `crlf` counts LONE newlines: every `\r\n` also matches `\n`.
+  // Subtracting `crlf` counts LONE occurrences: every `\r\n` also matches each.
   const lf = (text.match(/\n/g) ?? []).length - crlf;
-  return crlf > lf ? "\r\n" : "\n";
+  const cr = (text.match(/\r/g) ?? []).length - crlf;
+  if (crlf >= cr && crlf > lf) return "\r\n";
+  if (cr > crlf && cr > lf) return "\r";
+  return "\n";
 }
 
 /** Collapse every line ending to LF. Handles lone `\r` (classic Mac) too. */
@@ -53,6 +63,6 @@ export function normalizeAndRecordLineEnding(doc: Y.Doc, text: string): string {
  */
 export function restoreLineEndings(doc: Y.Doc, text: string): string {
   const stored = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_LINE_ENDING);
-  if (stored !== "\r\n") return text;
-  return toLf(text).replace(/\n/g, "\r\n");
+  if (stored !== "\r\n" && stored !== "\r") return text;
+  return toLf(text).replace(/\n/g, stored);
 }

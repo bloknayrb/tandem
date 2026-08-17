@@ -104,6 +104,29 @@ export function sanitizeAnnotation(
     ...(typeof ann.textSnapshotTruncated === "boolean"
       ? { textSnapshotTruncated: ann.textSnapshotTruncated }
       : {}),
+    // #1486, same allowlist reasoning as the flag above — and the same failure
+    // mode: stripped here, undo sees no structure, treats every newline as
+    // literal, and silently rewrites block boundaries into soft wraps.
+    //
+    // Element-level, not just `Array.isArray`, because the rest of this
+    // allowlist checks shapes rather than containers. Not load-bearing on its
+    // own — `literalRestoreContent` re-validates every entry and degrades a bad
+    // one to "literal", and the durable path is already gated by zod. What this
+    // buys is that a malformed entry cannot reach the client at all, so the
+    // client-side filter stays a backstop rather than the only check.
+    ...(Array.isArray(ann.textSnapshotBreaks)
+      ? {
+          textSnapshotBreaks: ann.textSnapshotBreaks.filter(
+            (b): b is { at: number; kind: "block" | "block-opaque" | "hard" } =>
+              typeof b === "object" &&
+              b !== null &&
+              Number.isInteger((b as { at?: unknown }).at) &&
+              ((b as { kind?: unknown }).kind === "block" ||
+                (b as { kind?: unknown }).kind === "block-opaque" ||
+                (b as { kind?: unknown }).kind === "hard"),
+          ),
+        }
+      : {}),
     ...(ann.editedAt !== undefined ? { editedAt: ann.editedAt } : {}),
     ...(typeof ann.rev === "number" ? { rev: ann.rev } : {}),
     // WS-A2: preserve the Solo-hold marker through sanitize. Like `rev`, this

@@ -38,6 +38,8 @@ import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
 import { anchoredRange } from "../positions.js";
 import { extractText, getCurrentDoc } from "./document.js";
+import type { FlatBreak } from "./document-model.js";
+import { extractTextWithBreaks } from "./document-model.js";
 import { getDocumentStore } from "./document-store.js";
 import { gatedTool } from "./license-gate.js";
 import { getAnnotationsOutputShape } from "./output-schemas.js";
@@ -335,16 +337,30 @@ function notifyDeprecatedTool(toolName: string): void {
  * The cap itself stays. It bounds annotation record size against pathological
  * ranges (#1000 security review R2); the fix is for the consumers that need the
  * text lossless to know when it isn't.
+ *
+ * `breaks` is the other half of the same problem. The flat string spells a
+ * block boundary, a hard break and a literal newline all as `"\n"`, so undo
+ * cannot tell which to put back — and each one serializes differently, so
+ * guessing writes a change the user never made. Only the non-literal ones are
+ * listed, rebased to snapshot-relative offsets; an empty list is the common
+ * case and is dropped by the caller rather than stored.
  */
 export function captureSnapshot(
   ydoc: Y.Doc,
   from: number,
   to: number,
-): { text: string; truncated: boolean } {
-  const text = extractText(ydoc).slice(from, to);
-  return text.length > SNAPSHOT_CAP
-    ? { text: text.slice(0, SNAPSHOT_CAP), truncated: true }
-    : { text, truncated: false };
+): { text: string; truncated: boolean; breaks: FlatBreak[] } {
+  const { text: fullText, breaks: allBreaks } = extractTextWithBreaks(ydoc);
+  const text = fullText.slice(from, to);
+  const capped = text.length > SNAPSHOT_CAP;
+  const kept = capped ? text.slice(0, SNAPSHOT_CAP) : text;
+  // `at < from + kept.length`, not `<= to`: a break AT the range's end is the
+  // separator to whatever comes NEXT and is not part of this range. Bounding on
+  // the kept text also drops anything past the cap in one step.
+  const breaks = allBreaks
+    .filter((b) => b.at >= from && b.at < from + kept.length)
+    .map((b) => ({ at: b.at - from, kind: b.kind }));
+  return { text: kept, truncated: capped, breaks };
 }
 
 /** Create an annotation from an anchored range result and store it in the Y.Map.
@@ -508,6 +524,10 @@ export function registerAnnotationTools(server: McpServer): void {
           const id = store.createAnnotation("comment", result, text, {
             textSnapshot: snap.text,
             ...(snap.truncated ? { textSnapshotTruncated: true } : {}),
+            // Dropped when empty rather than stored as `[]`: the single-block
+            // annotation is the overwhelming majority, and an empty array on
+            // every record is bytes on disk that say nothing.
+            ...(snap.breaks.length > 0 ? { textSnapshotBreaks: snap.breaks } : {}),
             ...(suggestedText !== undefined ? { suggestedText } : {}),
           });
           return mcpSuccess({ annotationId: id });

@@ -250,6 +250,7 @@ function annotateFromQuote(
     ...extra,
     textSnapshot: snap.text,
     ...(snap.truncated ? { textSnapshotTruncated: true } : {}),
+    ...(snap.breaks.length > 0 ? { textSnapshotBreaks: snap.breaks } : {}),
     // #1123 M3: stamp the authoring agent.
     ...(agentIdentity ? { agentIdentity } : {}),
   };

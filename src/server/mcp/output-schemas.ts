@@ -77,6 +77,15 @@ const annotationBaseShape = {
     .describe(
       "True when textSnapshot is only the first 200 chars of the annotated text. Do not pass a truncated snapshot back as a range guard — it will resolve to a shorter range than the annotation covers.",
     ),
+  // Undo's structural record (#1486). Declared for the same reason as the flag
+  // above — it is part of what a reader gets back, and a caller reasoning about
+  // `textSnapshot` needs to know that some of its newlines are structure.
+  textSnapshotBreaks: z
+    .array(z.object({ at: z.number(), kind: z.enum(["block", "block-opaque", "hard"]) }))
+    .optional()
+    .describe(
+      "Which newlines in textSnapshot were structure: 'block' a boundary between blocks, 'hard' a hard break. A newline not listed is a literal newline (a soft wrap). Offsets are relative to textSnapshot.",
+    ),
   editedAt: z.number().optional(),
   rev: z.number().optional().describe("Durable-store last-writer-wins counter"),
   audience: z.enum(["private", "outbound"]),

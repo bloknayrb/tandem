@@ -175,7 +175,8 @@ things that do change:
 
 Everything else is written back as you left it: YAML and TOML frontmatter (fences and
 all), loose vs tight list spacing, ordered-list start numbers, footnote and reference
-definitions, raw HTML blocks, and your file's line endings — a CRLF file stays CRLF.
+definitions, raw HTML blocks, and your file's line endings — a CRLF file stays CRLF, and a
+classic-Mac file with bare carriage returns stays that way too.
 
 If a save ever looks wrong, the original is recoverable. Tandem copies the file's bytes
 verbatim before its first write to it in a session; see

@@ -116,6 +116,17 @@ export const AnnotationRecordSchemaV1 = z
     // reads this to decline rather than restore a truncated snapshot over the
     // full text.
     textSnapshotTruncated: z.boolean().optional(),
+    // #1486: which newlines in `textSnapshot` were structure, not text. Undo
+    // rebuilds blocks and hard breaks from this; without it every newline is
+    // restored as a literal one and the file gains or loses a blank line.
+    textSnapshotBreaks: z
+      .array(
+        z.object({
+          at: z.number().int().nonnegative(),
+          kind: z.enum(["block", "block-opaque", "hard"]),
+        }),
+      )
+      .optional(),
     editedAt: z.number().optional(),
     // Type-specific optional fields. Not cross-validated against `type` — the
     // TS discriminated union enforces that invariant at construction time
