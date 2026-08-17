@@ -1,4 +1,4 @@
-import type { Editor as TiptapEditor } from "@tiptap/core";
+import type { JSONContent, Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy } from "svelte";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
@@ -7,7 +7,74 @@ import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship";
+import { literalInlineContent } from "../editor/utils/literal-content";
 import { annotationToPmRange } from "../positions";
+
+/**
+ * Is this position inside a node that stores newlines literally?
+ *
+ * `codeBlock` declares `code: true` and does not admit `hardBreak` in its
+ * content expression, so the two contexts need different representations of the
+ * same newline. See `literalInlineContent`.
+ */
+function isCodeContext(editor: TiptapEditor, pos: number): boolean {
+  try {
+    // Not named `$pos` despite the ProseMirror convention: this is a
+    // `.svelte.ts` module and the Svelte compiler reserves the `$` prefix.
+    const resolvedPos = editor.state.doc.resolve(pos);
+    // Depth 0 — parent is the DOC rather than a textblock — is reachable: it is
+    // where `flatOffsetToPmPos` clamps an over-long flat offset, at
+    // `doc.content.size`. `doc.spec.code` is undefined there so this answers
+    // "prose", and that is CORRECT rather than a gap: `insertContentAt` at the
+    // document end appends a NEW PARAGRAPH, so the receiving node is a paragraph
+    // even when the last block is a code block. Reading the preceding node
+    // instead looks more careful and is wrong — it puts a literal newline, i.e.
+    // a soft wrap, into that paragraph. Measured, not reasoned.
+    return resolvedPos.parent.type.spec.code === true;
+  } catch {
+    // A position that will not resolve is about to fail the surrounding
+    // transaction anyway; prose is the safe assumption.
+    return false;
+  }
+}
+
+/**
+ * The flat text a PM range covers, in the SERVER's flat-text projection.
+ *
+ * Both separators are load-bearing, and they are the same argument made twice.
+ * `suggestedText` and `textSnapshot` come from `extractText()`, which spells a
+ * hard break "\n" (`leafText`) AND joins blocks with "\n" (`blockSeparator`).
+ * Drop the first and every multi-line suggestion looks edited-since-accept;
+ * drop the second and a range that has DRIFTED across a block boundary can
+ * concatenate to exactly the snapshot, passing a guard that exists to stop
+ * precisely that — after which undo deletes across the boundary and merges two
+ * blocks.
+ */
+export function rangeText(editor: TiptapEditor, from: number, to: number): string {
+  return editor.state.doc.textBetween(from, to, "\n", "\n");
+}
+
+/**
+ * The marks spanning a range, as JSON, for `literalInlineContent` to stamp.
+ *
+ * `marksAcross` returns null when the endpoints disagree, which is the right
+ * answer: a replacement straddling a bold boundary should not pick a side.
+ */
+function marksAcrossRange(
+  editor: TiptapEditor,
+  from: number,
+  to: number,
+): JSONContent["marks"] | undefined {
+  try {
+    const { doc } = editor.state;
+    return doc
+      .resolve(from)
+      .marksAcross(doc.resolve(to))
+      ?.map((m) => m.toJSON());
+  } catch {
+    return undefined;
+  }
+}
 
 /** Browser DevTools breadcrumb — only forensic trail client-side when sanitize coerces. */
 const devSanitizeWarn = (event: SanitizationEvent): void => {
@@ -38,19 +105,29 @@ export function applySuggestion(
   }
 
   try {
-    return (
-      editor
-        .chain()
-        .focus()
-        // Claude wrote this text; without the tag `Authorship.onTransaction`
-        // stamps it as the user's, which is #1388. The tag must live INSIDE the
-        // chain — a chain batches every step into one transaction, and a
-        // separate dispatch would tag a different one.
-        .setMeta(AUTHORSHIP_ORIGIN_META, "claude")
-        .deleteRange({ from: resolved.from, to: resolved.to })
-        .insertContentAt(resolved.from, newText)
-        .run()
+    // Inline JSON, never the raw string: `insertContentAt` HTML-parses a string
+    // argument, which downgraded every hard break to a soft wrap and let markup
+    // in a suggestion restructure the document (#1477).
+    const content = literalInlineContent(
+      newText,
+      isCodeContext(editor, resolved.from),
+      marksAcrossRange(editor, resolved.from, resolved.to),
     );
+    let chain = editor
+      .chain()
+      .focus()
+      // Claude wrote this text; without the tag `Authorship.onTransaction`
+      // stamps it as the user's, which is #1388. The tag must live INSIDE the
+      // chain — a chain batches every step into one transaction, and a
+      // separate dispatch would tag a different one.
+      .setMeta(AUTHORSHIP_ORIGIN_META, "claude")
+      .deleteRange({ from: resolved.from, to: resolved.to });
+    // An empty suggestion is a deletion. Inserting `[]` would not be a clean
+    // no-op — `createNodeFromContent` gates its array branch on a non-empty
+    // length, so `[]` falls through to `schema.nodeFromJSON([])`, throws, and is
+    // caught into an empty fragment plus a `[tiptap warn]: Invalid content.`
+    if (content.length > 0) chain = chain.insertContentAt(resolved.from, content);
+    return chain.run();
   } catch (err) {
     console.error("[SidePanel] Editor mutation failed for suggestion", ann.id, err);
     return false;
@@ -199,7 +276,7 @@ export function useAnnotationReview({
             scheduleRemoval(id);
             return false;
           }
-          const currentText = editor.state.doc.textBetween(resolved.from, resolved.to);
+          const currentText = rangeText(editor, resolved.from, resolved.to);
           if (currentText !== newText) {
             console.warn(`[undo] Text changed since accept for annotation ${id}, skipping`);
             scheduleRemoval(id);
@@ -213,12 +290,24 @@ export function useAnnotationReview({
           // entry the accept reaped, which needs the durable/`relRange` work in
           // #1471 — until then the common case is right and the rare one is
           // #1388's inversion in miniature. Tracked there, not silently left.
-          editor
-            .chain()
-            .focus()
-            .deleteRange({ from: resolved.from, to: resolved.to })
-            .insertContentAt(resolved.from, oldText)
-            .run();
+          // Same literal-content treatment as accept (#1477): restoring through
+          // a raw string put back a literal newline where the snapshot recorded
+          // a hard break as "\n", so undo could not restore what accept took
+          // away even when the range was right.
+          //
+          // KNOWN LIMIT (#1486): `textSnapshot` uses ONE "\n" for both a hard
+          // break and a block boundary, so undoing an accept that spanned two
+          // blocks restores a single block with a hard break rather than the two
+          // blocks that were there. The string cannot distinguish them; the fix
+          // is a structural snapshot, not a smarter parse of this one.
+          const restored = literalInlineContent(
+            oldText,
+            isCodeContext(editor, resolved.from),
+            marksAcrossRange(editor, resolved.from, resolved.to),
+          );
+          let chain = editor.chain().focus().deleteRange({ from: resolved.from, to: resolved.to });
+          if (restored.length > 0) chain = chain.insertContentAt(resolved.from, restored);
+          chain.run();
         }
       } catch (err) {
         console.warn(`[undo] Failed to revert text for annotation ${id}:`, err);
