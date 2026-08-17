@@ -600,6 +600,23 @@ export interface DetectOptions {
   /** Explicit `%APPDATA%` root; wins over both `homeOverride` and the env var. */
   appDataOverride?: string;
   localAppDataOverride?: string;
+  /**
+   * Override `process.platform` for the platform-branching parts of detection:
+   * the Claude Desktop config path and the Windows-only MSIX walk.
+   *
+   * **This is what makes the Windows path guards testable on Linux CI, and
+   * without it two of them are pinned by tests that cannot fail (#1417).**
+   * `claudeDesktopConfigPath` ignores `appDataOverride` off win32 by design, so
+   * on a Linux runner a UNC `appDataOverride` silently derives
+   * `~/.config/claude/…` — a clean local path. The screen never runs, the
+   * "no claude-desktop target" assertion passes because the posix file merely
+   * does not exist, and `not.toHaveBeenCalledWith(…"attacker")` is vacuous.
+   * Deleting the screen it pins left the suite green.
+   *
+   * Production callers must not pass this. It exists so the guard is exercised
+   * on every runner rather than only on a maintainer's Windows box.
+   */
+  platformOverride?: NodeJS.Platform;
   force?: boolean;
 }
 
@@ -696,6 +713,7 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   const desktopConfig: string = claudeDesktopConfigPath({
     homeOverride: opts.homeOverride,
     appDataOverride: opts.appDataOverride,
+    platformOverride: opts.platformOverride,
   });
 
   // The second root: `%APPDATA%` is its own env var, so the `home` screen above
@@ -717,7 +735,7 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   // smuggle a write target through a hand-crafted package directory like
   // `Claude_../../Windows/System32` (the path constructor would reject such
   // a name on most platforms but we belt-and-suspender).
-  if (process.platform === "win32") {
+  if ((opts.platformOverride ?? process.platform) === "win32") {
     const localAppData =
       opts.localAppDataOverride ?? process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
     // Verify LOCALAPPDATA resolves under home. An attacker who controls env

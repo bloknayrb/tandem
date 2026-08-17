@@ -56,6 +56,17 @@ describe("assertPathSafe rejects UNC before any filesystem call (#1417)", () => 
 describe("detectTargets screens the Claude Desktop path before existsSync (#1417)", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  // **`platformOverride` is what makes this test able to fail.** Without it the
+  // run inherits the host platform, and off win32 `claudeDesktopConfigPath`
+  // ignores `appDataOverride` by design (its own docblock says so) — so on a
+  // Linux runner this derived `~/.config/claude/…`, a clean local path. The
+  // screen never ran; `claude-desktop` was absent only because the posix file
+  // does not exist, and the `not.toHaveBeenCalledWith` was vacuous because
+  // nothing was ever called with that string. Deleting the guard at the
+  // `desktopPrefixRejection` branch left this green on CI.
+  //
+  // Same defect class as #1417 itself, and the same one CI caught in
+  // `uninstall-scrub.test.ts`: a fixture that does not reach the code it names.
   it("refuses a UNC-redirected %APPDATA% without calling existsSync", () => {
     // `%APPDATA%` can be redirected to a share by enterprise folder
     // redirection, and `existsSync` connects. `assertPathSafe` downstream is
@@ -64,10 +75,17 @@ describe("detectTargets screens the Claude Desktop path before existsSync (#1417
     // way, the syscall is the only thing that distinguishes fixed from broken.
     _existsSyncSpy.mockClear();
 
-    const targets = detectTargets({ appDataOverride: "\\\\attacker\\share\\Roaming" });
+    const targets = detectTargets({
+      appDataOverride: "\\\\attacker\\share\\Roaming",
+      platformOverride: "win32",
+    });
 
     expect(targets.some((t) => t.kind === "claude-desktop")).toBe(false);
     expect(_existsSyncSpy).not.toHaveBeenCalledWith(expect.stringContaining("attacker"));
+    // Positive control: without it, a `detectTargets` that threw early or a
+    // mis-wired spy would satisfy the negative assertion for the wrong reason.
+    // Claude Code's probe is platform-independent and must still have run.
+    expect(_existsSyncSpy).toHaveBeenCalledWith(expect.stringContaining(".claude"));
   });
 });
 
