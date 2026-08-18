@@ -21,122 +21,35 @@ import { withMcp } from "../shared/origins.js";
 import type {
   AnchoredRangeResult,
   DocumentRange,
-  ElementPosition,
   FlatOffset,
   RangeValidation,
   RefreshResult,
   RelativeRange,
   SerializedRelPos,
 } from "../shared/positions/index.js";
-import { toFlatOffset, toSerializedRelPos } from "../shared/positions/index.js";
-import type { Annotation } from "../shared/types.js";
+import { toFlatOffset } from "../shared/positions/index.js";
 import {
-  collectXmlTexts,
-  extractText,
-  findXmlTextAtOffset,
+  anchorFlatRange,
+  flatOffsetToRelPos,
   getElementTextLength,
   getHeadingPrefixLength,
-} from "./mcp/document-model.js";
+  resolveToElement,
+} from "../shared/positions/ydoc.js";
+import type { Annotation } from "../shared/types.js";
+import { collectXmlTexts, extractText } from "./mcp/document-model.js";
+
+// Moved to `src/shared/positions/ydoc.ts` — see that file's header for why the
+// move is a leaf extraction rather than a file move. Re-exported so existing
+// importers of `server/positions` keep working untouched.
+export { anchorFlatRange, flatOffsetToRelPos, resolveToElement };
 
 // ---------------------------------------------------------------------------
 // Low-level: element resolution
 // ---------------------------------------------------------------------------
 
-/**
- * Resolve a flat character offset to a Y.Doc element position.
- * Needed by tandem_edit for cross-element deletion logic.
- */
-export function resolveToElement(
-  fragment: Y.XmlFragment,
-  charOffset: FlatOffset,
-): ElementPosition | null {
-  let accumulated = 0;
-
-  for (let i = 0; i < fragment.length; i++) {
-    const node = fragment.get(i);
-    if (!(node instanceof Y.XmlElement)) continue;
-
-    const prefixLen = getHeadingPrefixLength(node);
-    const textLen = getElementTextLength(node);
-    const fullLen = prefixLen + textLen;
-
-    if (accumulated + fullLen > charOffset) {
-      const offsetInFull = charOffset - accumulated;
-      const clampedFromPrefix = offsetInFull < prefixLen && prefixLen > 0;
-      const textOffset = Math.max(0, offsetInFull - prefixLen);
-      return { elementIndex: i, textOffset, clampedFromPrefix };
-    }
-
-    accumulated += fullLen;
-
-    if (i < fragment.length - 1) {
-      accumulated += 1; // \n separator
-      if (accumulated > charOffset) {
-        return { elementIndex: i, textOffset: textLen, clampedFromPrefix: false };
-      }
-    }
-  }
-
-  if (fragment.length > 0) {
-    const lastNode = fragment.get(fragment.length - 1);
-    if (lastNode instanceof Y.XmlElement) {
-      return {
-        elementIndex: fragment.length - 1,
-        textOffset: getElementTextLength(lastNode),
-        clampedFromPrefix: false,
-      };
-    }
-  }
-
-  return null;
-}
-
 // ---------------------------------------------------------------------------
 // Low-level: RelativePosition conversion
 // ---------------------------------------------------------------------------
-
-/**
- * Convert a flat text offset to a JSON-serialized Yjs RelativePosition.
- * Returns null if the offset falls in a heading prefix or can't be resolved.
- *
- * Sole mint of `SerializedRelPos` — no other code path constructs the wire
- * shape. Readers (`relPosToFlatOffset` here + `relRangeToPmPositions` in
- * `src/client/positions.ts`) must tolerate `Y.createRelativePositionFromJSON`
- * throwing on stale items after `reloadFromDisk` replaces the Y.Doc content;
- * see `docs/lessons-learned.md` "Dead CRDT RelativePositions Must Be Stripped,
- * Not Preserved" for why the throw is expected rather than a bug.
- */
-export function flatOffsetToRelPos(
-  doc: Y.Doc,
-  offset: FlatOffset,
-  assoc: 0 | -1,
-): SerializedRelPos | null {
-  const fragment = doc.getXmlFragment("default");
-  const resolved = resolveToElement(fragment, offset);
-  if (!resolved || resolved.clampedFromPrefix) return null;
-
-  const node = fragment.get(resolved.elementIndex);
-  if (!(node instanceof Y.XmlElement)) return null;
-
-  let found = findXmlTextAtOffset(node, resolved.textOffset);
-  // If the offset lands exactly on an intra-element separator (between nested block children),
-  // fall back based on assoc: -1 (stick left) → try offset-1; 0 (stick right) → try offset+1.
-  if (!found && assoc === -1 && resolved.textOffset > 0) {
-    found = findXmlTextAtOffset(node, resolved.textOffset - 1);
-    if (found) {
-      // Advance offsetInXmlText to end of this XmlText to stick to the left boundary
-      found = { xmlText: found.xmlText, offsetInXmlText: found.xmlText.length };
-    }
-  } else if (!found && assoc === 0) {
-    const nodeLen = getElementTextLength(node);
-    if (resolved.textOffset + 1 <= nodeLen) {
-      found = findXmlTextAtOffset(node, resolved.textOffset + 1);
-    }
-  }
-  if (!found) return null;
-  const rpos = Y.createRelativePositionFromTypeIndex(found.xmlText, found.offsetInXmlText, assoc);
-  return toSerializedRelPos(Y.relativePositionToJSON(rpos));
-}
 
 /**
  * Resolve a JSON-serialized Yjs RelativePosition back to a flat text offset.
