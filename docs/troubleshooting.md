@@ -283,16 +283,28 @@ a `node` in it, this is what you are looking at.
 **Entries Tandem manages are fixed.** `tandem setup --apply` (and the desktop app's
 integration wizard) now write an absolute Node binary and an absolute script path, so no
 PATH lookup happens at all. In the desktop app that Node is Tandem's own bundled copy,
-which means the entry works on a machine with no Node installed whatsoever. To pick up the
-change on an existing install:
+which means the entry works on a machine with no Node installed whatsoever.
 
-```bash
-tandem setup --apply
-```
+**An existing entry is not rewritten until something rewrites it**, so an install that was
+already broken stays broken across an upgrade. Pick up the change whichever way suits how
+you installed Tandem:
 
-then **restart Claude Desktop** — it does not reload MCP config while running. Your previous
-config is backed up first. `tandem doctor` reports the state of this entry, including
-whether it has gone stale.
+- **Desktop app** — open **Settings → AI Assistant** and run the integration wizard. This is
+  the only route if you installed the `.dmg`/`.msi`/`.AppImage` and never ran
+  `npm i -g tandem-editor`: the desktop bundle ships no `tandem` command, so the CLI below
+  does not exist on your machine.
+- **npm install** — `tandem setup --apply` from a terminal.
+
+Then **restart Claude Desktop** — it does not reload MCP config while running, so until you
+do, a repaired entry changes nothing you can observe. Your previous config is backed up
+first. `tandem doctor` reports the state of this entry, including whether it has gone stale,
+and phrases its own remedy for whichever of the two installs you have.
+
+**If Tandem is running from `~/Downloads` on macOS, fix that first.** A quarantined `.app`
+launched from outside `/Applications` runs under App Translocation — a randomized read-only
+mount that is gone on the next launch — so Tandem refuses to record a path from it and falls
+back to `npx` every time, no matter how often you re-run the wizard. Move `Tandem.app` to
+your Applications folder and reopen it. `tandem doctor` names this explicitly.
 
 **Entries Tandem does not manage still use `npx`**, and cannot be fixed this way — a static
 manifest cannot carry a path that only makes sense on one machine:

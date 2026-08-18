@@ -2,11 +2,12 @@ import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CWD_DEPENDENT_CHECKS,
   evaluateAbsentChannelEntry,
+  evaluateAppTranslocation,
   evaluateClaudeCli,
   evaluateNodeToolchain,
   evaluateNpmStaleness,
@@ -20,8 +21,13 @@ import {
   probeTandemEditorRepo,
   runDoctor,
   runDoctorCli,
+  setupApplyRemedy,
   summarizeDoctorResults,
 } from "../../src/cli/doctor.js";
+import {
+  claudeCodeConfigPath,
+  claudeDesktopConfigPath,
+} from "../../src/shared/integrations/client-config-paths.js";
 import { allocPort } from "../helpers/alloc-port.js";
 
 /**
@@ -1625,6 +1631,7 @@ describe("evaluateSpawnedEntryCommand", () => {
       { command: "npx", args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"] },
       "tandem",
       "Claude Desktop config",
+      () => true,
     );
     expect(outcome?.status).toBe("warn");
     expect(outcome?.message).toContain("npx");
@@ -1641,6 +1648,7 @@ describe("evaluateSpawnedEntryCommand", () => {
         { command: "/opt/homebrew/bin/node", args: ["/opt/t/dist/stdio-bridge/index.js"] },
         "tandem",
         "Claude Desktop config",
+        () => true,
       ),
     ).toBeNull();
   });
@@ -1651,9 +1659,10 @@ describe("evaluateSpawnedEntryCommand", () => {
         { type: "http", url: "http://127.0.0.1:3479/mcp" },
         "tandem",
         "~/.claude.json",
+        () => true,
       ),
     ).toBeNull();
-    expect(evaluateSpawnedEntryCommand(null, "tandem", "~/.claude.json")).toBeNull();
+    expect(evaluateSpawnedEntryCommand(null, "tandem", "~/.claude.json", () => true)).toBeNull();
   });
 
   it("never echoes the entry's env, which carries the bearer token", () => {
@@ -1665,12 +1674,356 @@ describe("evaluateSpawnedEntryCommand", () => {
       },
       "tandem",
       "Claude Desktop config",
+      () => true,
     );
     // Doctor output reaches /api/diagnostics and the Copy Diagnostics
     // clipboard, i.e. public issues.
     const rendered = `${outcome?.message} ${outcome?.fix}`;
     expect(rendered).not.toContain("supersecrettokenvalue0123456789ab");
     expect(rendered).not.toContain("TANDEM_AUTH_TOKEN");
+  });
+
+  // The field report that prompted this: a Tauri-only macOS install, whose
+  // Claude Desktop entry still named a bare `npx`, was told to run a command
+  // that ships only with the npm package. #1404's doctrine — a remedy that
+  // cannot work is worse than no remedy.
+  it("prescribes the in-app wizard, not the CLI, when tandem is not launchable", () => {
+    const outcome = evaluateSpawnedEntryCommand(
+      { command: "npx", args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"] },
+      "tandem",
+      "Claude Desktop config",
+      () => false,
+    );
+    expect(outcome?.fix).toContain("Settings → AI Assistant");
+    expect(outcome?.fix).not.toContain("tandem setup --apply");
+    // The unmanaged half is identical either way — a plugin/Cowork entry is
+    // beyond both remedies, and dropping that sentence would promise a fix the
+    // wizard cannot deliver.
+    expect(outcome?.fix).toMatch(/plugin|Cowork/);
+  });
+
+  // No default on the parameter: the historical text IS the bug being fixed, so
+  // an unthreaded call site must be a compile error rather than a silent
+  // prescription of an unrunnable command.
+  it("keeps the CLI remedy when tandem IS launchable", () => {
+    const entry = { command: "npx", args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"] };
+    const outcome = evaluateSpawnedEntryCommand(
+      entry,
+      "tandem",
+      "Claude Desktop config",
+      () => true,
+    );
+    expect(outcome?.fix).toContain("tandem setup --apply");
+  });
+
+  // This copy reaches the Copy Diagnostics clipboard and prefilled GitHub issue
+  // bodies, and `redactHomePaths` collapses only home and app-data roots — so an
+  // install path like /Applications/Tandem.app would survive verbatim.
+  it("names a UI location, never a filesystem path", () => {
+    const outcome = evaluateSpawnedEntryCommand(
+      { command: "npx", args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"] },
+      "tandem",
+      "Claude Desktop config",
+      () => false,
+    );
+    expect(outcome?.fix).not.toMatch(/[/\\]/);
+  });
+
+  // An unmanaged call site must be able to REPLACE the remedy, not append a
+  // retraction to it. `.mcp.json` used to lead with "run the wizard / run
+  // `tandem setup --apply`" and withdraw it three sentences later; a reader who
+  // acts on the first sentence — most of them — runs a command that cannot
+  // touch the file.
+  describe("bareCommandFix override", () => {
+    const overridden = (cliAvailable: () => boolean) =>
+      evaluateSpawnedEntryCommand(
+        { command: "node", args: ["src/channel/index.ts"] },
+        "tandem-channel",
+        ".mcp.json",
+        cliAvailable,
+        "Edit .mcp.json by hand.",
+      );
+
+    it("replaces the whole remedy, including the plugin/Cowork half", () => {
+      const outcome = overridden(() => true);
+      expect(outcome?.fix).toBe("Edit .mcp.json by hand.");
+      expect(outcome?.fix).not.toContain("setup --apply");
+      expect(outcome?.fix).not.toMatch(/plugin|Cowork/);
+    });
+
+    it("still names the diagnosis — only the fix is overridable", () => {
+      expect(overridden(() => true)?.message).toContain("bare command");
+    });
+
+    it("does not consult cliAvailable, whose answer it would discard", () => {
+      let calls = 0;
+      overridden(() => {
+        calls++;
+        return true;
+      });
+      // Not a micro-optimisation: `isOnPath` walks every PATH directory, and
+      // this runs inside `/api/diagnostics`, a request path.
+      expect(calls).toBe(0);
+    });
+  });
+});
+
+// The bug this suite exists for, reproduced from a real field report: a
+// Tauri-only macOS install whose Claude Desktop entry named a bare `npx`. The
+// restart caveat was concatenated into the *stale absolute path* remedy at the
+// single call site, so the **bare-command** branch — the most common broken
+// shape, and the one the user actually hit — silently dropped it. They were told
+// to fix a file and not told the fix could not take effect until they restarted
+// the client. Driving the real check against a real file is the only thing that
+// catches a wiring defect like this; a test of the pure composer passed
+// throughout.
+describe("desktop-mcp-config remedies reach both branches", () => {
+  let home: string;
+
+  // Derived from the production helper rather than re-spelling its three-branch
+  // layout. `tests/cli/setup.test.ts` deliberately hand-spells the same switch,
+  // on the grounds that an expectation derived from the code under test cannot
+  // fail — but that exemption is about asserting on PATHS. These tests assert on
+  // remedy TEXT, and doctor reaches the file through this very helper, so a
+  // second copy here could only ever drift away from the code path being tested.
+  const writeDesktopConfig = (tandem: unknown): void => {
+    const configPath = claudeDesktopConfigPath({ homeOverride: home });
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ mcpServers: { tandem } }, null, 2));
+  };
+
+  const desktopResult = async (): Promise<{ status: string; fix?: string } | undefined> => {
+    const report = await runDoctor({ homeOverride: home });
+    return report.results.find((x) => x.check === "desktop-mcp-config" && x.status === "warn");
+  };
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "tandem-doctor-home-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("carries the restart caveat on a BARE-command entry", async () => {
+    writeDesktopConfig({
+      command: "npx",
+      args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"],
+      env: { TANDEM_URL: "http://127.0.0.1:3479" },
+    });
+
+    const warn = await desktopResult();
+    expect(warn?.fix).toContain("Restart Claude Desktop");
+    // Same run, same fixture: the entry's own symptom still gets named...
+    expect(warn?.fix).toMatch(/plugin|Cowork/);
+    // ...and the join does not double the punctuation. Both were found by
+    // reading real `tandem doctor` output, not by an assertion.
+    expect(warn?.fix).not.toContain("..");
+  });
+
+  it("carries the restart caveat on a STALE absolute-path entry", async () => {
+    writeDesktopConfig({
+      command: join(home, "gone", "node"),
+      args: [join(home, "gone", "dist", "stdio-bridge", "index.js")],
+    });
+
+    const warn = await desktopResult();
+    expect(warn?.fix).toContain("Restart Claude Desktop");
+  });
+
+  // The two branches below reach NO entry at all, so they never touch
+  // `reportEntryCommand` — which is exactly how the first version of this fix
+  // missed them. They are not edge cases: "no tandem entry" is the state every
+  // fresh desktop install is in before the wizard has ever run, i.e. the most
+  // common way to arrive at this check.
+  it("carries the restart caveat when there is no tandem entry at all", async () => {
+    const configPath = claudeDesktopConfigPath({ homeOverride: home });
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ mcpServers: {} }, null, 2));
+
+    const warn = await desktopResult();
+    expect(warn?.message).toContain("not registered");
+    expect(warn?.fix).toContain("Restart Claude Desktop");
+    expect(warn?.fix).not.toContain("..");
+  });
+
+  it("carries the restart caveat when the config is unreadable JSON", async () => {
+    const configPath = claudeDesktopConfigPath({ homeOverride: home });
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, "{ not json");
+
+    const warn = await desktopResult();
+    expect(warn?.fix).toContain("Restart Claude Desktop");
+    expect(warn?.fix).not.toContain("..");
+    // The parse detail must stay out: V8 SyntaxErrors quote the source, and
+    // this file holds `env.TANDEM_AUTH_TOKEN`.
+    expect(warn?.message).not.toContain("not json");
+  });
+});
+
+// Three wiring gaps found in review: `checkUserMcpConfig` (~/.claude.json),
+// `checkMcpJson`'s override object, and `brokenFileFix`'s four branches had
+// zero test coverage of the REAL call sites, only of the underlying helpers
+// in isolation — exactly the class of bug `desktop-mcp-config remedies reach
+// both branches` above exists to catch for the desktop-config twin. Reverting
+// each of these three sites to its pre-fix shape (verified by hand during
+// review) left the rest of the suite green, which is what made them worth
+// closing.
+describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "tandem-doctor-usermcp-"));
+    vi.stubEnv("HOME", home);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const userMcpResult = async (): Promise<{ status: string; fix?: string } | undefined> => {
+    const report = await runDoctor();
+    return report.results.find((x) => x.check === "user-mcp-config" && x.status === "warn");
+  };
+
+  it("does not produce a dangling clause when ~/.claude.json is malformed JSON", async () => {
+    writeFileSync(claudeCodeConfigPath({ homeOverride: home }), "{ not json");
+
+    const warn = await userMcpResult();
+    // The bug this closes: `${setupApplyRemedy(false)} — that rewrites it`
+    // renders "...not the desktop app.) — that rewrites it", a dangling
+    // clause after an already-finished sentence.
+    expect(warn?.fix).not.toContain("..");
+    expect(warn?.fix).toContain("Tandem backs the file up before rewriting it.");
+  });
+
+  it("still names a fallback when ~/.claude.json does not exist at all", async () => {
+    // No file written — home is a fresh empty temp dir.
+    const warn = await userMcpResult();
+    expect(warn?.message).toContain("not found");
+    expect(warn?.fix).toContain("project-local .mcp.json");
+    expect(warn?.fix).not.toContain("..");
+  });
+});
+
+describe("checkMcpJson wiring (.mcp.json)", () => {
+  let repoDir: string;
+  let cwdSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  beforeEach(() => {
+    repoDir = mkdtempSync(join(tmpdir(), "tandem-doctor-mcpjson-"));
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(repoDir);
+  });
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+    cwdSpy = undefined;
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  const mcpJsonResult = async (): Promise<{ status: string; fix?: string } | undefined> => {
+    const report = await runDoctor();
+    return report.results.find((x) => x.check === "mcp-json" && x.status === "warn");
+  };
+
+  it("overrides the default remedy for a bare-command tandem-channel entry", async () => {
+    writeFileSync(
+      join(repoDir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+          "tandem-channel": {
+            command: "node",
+            args: ["src/channel/index.ts"],
+            env: { TANDEM_URL: "http://127.0.0.1:3479" },
+          },
+        },
+      }),
+    );
+
+    const warn = await mcpJsonResult();
+    // The override this call site supplies, not the generic bare-command fix
+    // (`setupApplyRemedy(...)`-shaped) that `.claude.json`/desktop-config
+    // entries get — a project-local .mcp.json is outside anything those
+    // remedies can touch.
+    expect(warn?.fix).toContain("Edit .mcp.json and give tandem-channel an absolute path");
+    expect(warn?.fix).toContain("not managed by Tandem's startup repair");
+  });
+
+  it.each([
+    ["unreadable file", () => mkdirSync(join(repoDir, ".mcp.json"))],
+    ["invalid JSON", () => writeFileSync(join(repoDir, ".mcp.json"), "{ not json")],
+    ["missing mcpServers key", () => writeFileSync(join(repoDir, ".mcp.json"), "{}")],
+    [
+      "missing tandem entry",
+      () => writeFileSync(join(repoDir, ".mcp.json"), JSON.stringify({ mcpServers: {} })),
+    ],
+  ])("%s gets brokenFileFix, not a hardcoded CLI-only remedy", async (_label, write) => {
+    write();
+
+    const warn = await mcpJsonResult();
+    expect(warn?.fix).toContain(".mcp.json.example");
+    // brokenFileFix routes through setupApplyRemedy rather than hardcoding
+    // "tandem setup --apply" — a desktop-only reader has no way to run that.
+    expect(warn?.fix).toMatch(/tandem setup --apply|AI Assistant/);
+  });
+});
+
+describe("setupApplyRemedy", () => {
+  it("offers the CLI when it is available", () => {
+    expect(setupApplyRemedy(true)).toContain("tandem setup --apply");
+  });
+
+  it("offers the wizard when the CLI is not, and still mentions the command", () => {
+    const remedy = setupApplyRemedy(false);
+    expect(remedy).toContain("Settings → AI Assistant");
+    // Mentioned, not prescribed. Probing from the sidecar sees the narrow PATH a
+    // GUI launch inherits, so a user who DOES have the npm install can resolve
+    // as "absent" — the copy must not tell them their CLI does not exist.
+    expect(remedy).toContain("npm package");
+  });
+
+  it("never names a filesystem path in either branch", () => {
+    expect(setupApplyRemedy(false)).not.toMatch(/[/\\]/);
+  });
+});
+
+describe("evaluateAppTranslocation", () => {
+  // A quarantined .app opened from ~/Downloads runs from a randomized read-only
+  // mount that is gone next launch, so `resolveBundledDist` refuses to record a
+  // path from it — which is why such an install falls to the bare-npx floor
+  // forever. Until now the only trace was invisible sidecar stderr.
+  it("warns when the running binary is under an AppTranslocation mount", () => {
+    const outcome = evaluateAppTranslocation(
+      "/private/var/folders/xy/AppTranslocation/ABC-123/d/Tandem.app/Contents/MacOS/node-sidecar",
+    );
+    expect(outcome?.status).toBe("warn");
+    expect(outcome?.fix).toContain("Applications");
+    // The restart caveat belongs here too: moving the app does nothing until
+    // Claude Desktop is restarted to re-read the rewritten entry.
+    expect(outcome?.fix).toContain("Restart Claude Desktop");
+  });
+
+  it("stays silent on an ordinary install", () => {
+    expect(
+      evaluateAppTranslocation("/Applications/Tandem.app/Contents/MacOS/node-sidecar"),
+    ).toBeNull();
+    expect(evaluateAppTranslocation("/usr/local/bin/node")).toBeNull();
+    expect(evaluateAppTranslocation("C:\\Program Files\\Tandem\\node-sidecar.exe")).toBeNull();
+  });
+
+  // Separator-agnostic for the same reason `resolveBundledDist` is: a
+  // Windows-shaped fixture is read on Linux in CI.
+  it("matches the producer's rule on either separator", () => {
+    expect(evaluateAppTranslocation("C:\\x\\AppTranslocation\\y\\node.exe")).not.toBeNull();
+  });
+
+  // A directory merely NAMED like the mount is not the mount — the segment match
+  // is what the refusal in `resolveBundledDist` uses, so the diagnosis cannot
+  // drift from the cause.
+  it("does not match a partial segment", () => {
+    expect(evaluateAppTranslocation("/opt/MyAppTranslocationTool/bin/node")).toBeNull();
   });
 });
 

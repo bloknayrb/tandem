@@ -45,6 +45,7 @@ import { fileURLToPath } from "node:url";
 
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
+import { isAppTranslocatedPath } from "../../shared/integrations/app-translocation.js";
 import {
   claudeCodeConfigPath,
   claudeDesktopConfigPath,
@@ -117,7 +118,7 @@ function resolveBundledDist(
     // `/private/var/folders/…` on some releases and `/var/folders/…` on others,
     // and only the literal directory name is stable. Separator-agnostic so a
     // Windows-shaped fixture read on Linux in CI cannot accidentally match.
-    if (/[/\\]AppTranslocation[/\\]/.test(injected)) {
+    if (isAppTranslocatedPath(injected)) {
       console.error(
         `[Tandem] ${envVar} is under macOS App Translocation ("${injected}") — ` +
           `that path disappears on the next launch, so it will not be recorded. ` +
