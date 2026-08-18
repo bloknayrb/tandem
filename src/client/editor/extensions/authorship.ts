@@ -76,16 +76,17 @@ function readAuthorshipOrigin(transaction: Transaction): AuthorshipRange["author
  * Pinned executably in `authorship-stamp.test.ts` so the fix has a test waiting
  * for it rather than a comment.
  *
- * **AND THE OPPOSITE DIRECTION, which matters more now that entries are
- * anchored.** This scan reads only the frozen `range`, never `relRange`. So a
- * coincidental containment between a deleted span and some entry's stale offsets
- * deletes that entry outright — even when its anchor was live and pointing at
- * text nobody touched. Always possible, but previously it only cost a drifted
- * entry that was already mis-painting; now it discards the very durability the
- * anchor was minted for. Deleting is also less recoverable than mis-painting.
- * The fix is to replace this scan with an anchor-aware liveness sweep rather
- * than to patch it, which is the next piece of #1471 and deliberately not
- * bundled here — it changes what drives the sweep, not just its predicate.
+ * **Both limitations above apply only to UNANCHORED entries now.** An entry
+ * carrying a `relRange` is skipped entirely — see the comment at the skip. The
+ * escape direction stops mattering for those (a collapsed anchor paints
+ * nothing), and the opposite direction — deleting an entry whose anchor was
+ * still live, on a coincidental overlap of stale offsets — stops being possible.
+ *
+ * What remains, and is deliberately NOT fixed here: anchored entries are never
+ * removed, so the map still grows without bound. It always did; the real fix is
+ * coalescing consecutive same-author stamps, which is a separate issue. Trading
+ * unbounded growth for correct undo attribution is the right way round —
+ * growth costs memory, and deleting costs attribution permanently.
  */
 function reapableEntryIds(
   authorshipMap: Y.Map<unknown>,
@@ -96,6 +97,24 @@ function reapableEntryIds(
   authorshipMap.forEach((value, key) => {
     const entry = value as AuthorshipRange;
     if (!entry?.range) return;
+    // ANCHORED ENTRIES ARE GOVERNED BY THEIR ANCHOR, NOT BY THIS SCAN.
+    //
+    // Measured (`authorship-undo-redo.test.ts`): a Yjs anchor resolves BACK
+    // after an undo, because resolution runs through `followRedone`. So an
+    // anchored entry whose text is deleted does not need deleting — it collapses,
+    // the resolver paints nothing for it, and if the user undoes, it resolves
+    // again and paints correctly. Deleting it is not merely unnecessary, it is
+    // destructive: nothing restores a Y.Map entry on undo, so the attribution is
+    // gone permanently. That is the whole of #1480's redo symptom.
+    //
+    // It also closes the false-positive direction. This scan compares FROZEN
+    // offsets, so a coincidental containment could delete an entry whose anchor
+    // was live and pointing at text nobody touched — discarding exactly the
+    // durability the anchor was minted for.
+    //
+    // Unanchored entries still reap. They cannot self-heal (a frozen range is
+    // all they have), so leaving them is the drift this scan exists to limit.
+    if (entry.relRange) return;
     const { from, to } = entry.range;
     if (deletedSpans.some((span) => from >= span.from && to <= span.to)) ids.push(key);
   });
