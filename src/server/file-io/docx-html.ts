@@ -385,10 +385,14 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
     case "img": {
       // `node.attribs.src` is untrusted content — `.docx` embeds arrive as
       // `data:` rasters (`safeImageEmbed`, docx-export.ts) which pass
-      // through, but an imported `.html` file can name any host, exactly the
-      // paste-time gap #1420 closed. Sanitize through the same allowlist; an
-      // unsafe src downgrades to a plain-text paragraph carrying the
-      // alt/title rather than reaching the Y.Doc unvetted.
+      // through, but an `<img>` inside a `.docx`'s own HTML body (mammoth's
+      // output, reconciled here via `htmlToYDoc`) can name any host, the
+      // same file-open gap #1420 closed for `.md`. (A raw `.html` file open
+      // never reaches this function — it's routed through the plaintext
+      // adapter instead — so this guard is `.docx`-only, not general HTML.)
+      // Sanitize through the same allowlist; an unsafe src downgrades to a
+      // plain-text paragraph carrying the alt/title rather than reaching the
+      // Y.Doc unvetted.
       const src = sanitizeImageSrc(node.attribs.src);
       if (!src) {
         const el = new Y.XmlElement("paragraph");
