@@ -231,7 +231,7 @@ Replace text at a specific range. Single-paragraph replacements only.
 |-----------|------|----------|-------------|
 | `from` | number | yes | Start position (flat text character offset) |
 | `to` | number | yes | End position (flat text character offset) |
-| `newText` | string | yes | Replacement text (no newlines -- inserted literally) |
+| `newText` | string | yes | Replacement text. Single-block only: a newline is inserted literally in markdown/`.docx` and **refused** in a plaintext document (see Notes) |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 | `textSnapshot` | string | no | The text you expect to find at `[from, to]`. Strongly recommended: on mismatch the edit is refused rather than applied to whatever moved into that range. **Do not pass back a `textSnapshot` read from an annotation whose `textSnapshotTruncated` is `true`** — it is only the first 200 characters, so it relocates to a 200-character range and the edit lands on a shorter span than the annotation covers (#1486). Read the current text instead. |
 
@@ -240,7 +240,7 @@ Replace text at a specific range. Single-paragraph replacements only.
 { "edited": true, "from": 42, "to": 67, "newTextLength": 31 }
 ```
 
-**Errors:** `INVALID_RANGE` (offsets out of bounds, overlaps heading markup), `FORMAT_ERROR` (read-only document), and — only when `textSnapshot` is supplied — `RANGE_MOVED` (the text shifted; the error carries the relocated `resolvedFrom` / `resolvedTo`) or `RANGE_GONE` (the text was deleted)
+**Errors:** `INVALID_RANGE` (offsets out of bounds, overlaps heading markup), `FORMAT_ERROR` (read-only document), `INVALID_ARGUMENT` (`newText` contains a line break in a plaintext document — see below), and — only when `textSnapshot` is supplied — `RANGE_MOVED` (the text shifted; the error carries the relocated `resolvedFrom` / `resolvedTo`) or `RANGE_GONE` (the text was deleted)
 
 **Example:**
 ```
@@ -254,7 +254,7 @@ tandem_edit({ from: 180, to: 193, newText: "$13.1 million" })
 
 **Notes:**
 - Always use `tandem_resolveRange` first to get safe offsets.
-- Newlines in `newText` are inserted as literal characters, not new paragraphs.
+- Newlines in `newText` are inserted as literal characters, not new paragraphs — **in a markdown or `.docx` document. In a plaintext one (`.txt`, `.html`, `.log`, `.csv`, any unknown extension) a newline is REFUSED with `INVALID_ARGUMENT` (#1460).** Those formats spell a paragraph boundary and an intra-paragraph break identically, so a literal newline would save to bytes that reopen as two paragraphs — the document coming back a different shape than the one written. Issue one `tandem_edit` per line instead. (`tandem_appendContent` is not a substitute — it refuses any non-markdown document outright.) The refusal is deliberate rather than a silent split: this tool is a single-paragraph replacement and `RANGE_MOVED`'s retry contract assumes the range stays inside one block.
 - Cross-element edits (spanning multiple paragraphs) are supported but merge into one paragraph.
 - Edits appear instantly in the editor.
 - Read-only documents (uploads, and files opened with `readOnly`) reject edits -- use annotations instead. A disk-opened `.docx` is **not** read-only (#576).

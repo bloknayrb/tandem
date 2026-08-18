@@ -1004,6 +1004,119 @@ describe("MCP tool integration — tandem_edit empty-doc guidance (#979)", () =>
 });
 
 /**
+ * `tandem_edit` refuses a newline in a plaintext document (#1460, surface 3).
+ *
+ * The AI is the fourth producer of an unrepresentable break. `.txt` and every
+ * other format routed through `plaintextAdapter` spell a paragraph boundary and
+ * an intra-paragraph break identically as `"\n"`, so a newline inserted inside a
+ * paragraph reopens as two paragraphs — the model and the bytes disagree and the
+ * bytes win.
+ *
+ * It REFUSES rather than splitting. `tandem_edit` is documented and shaped as a
+ * single-paragraph replacement, and `RANGE_MOVED`'s retry contract assumes the
+ * range stays inside one block; silently turning one call into a structural
+ * split would break that for a caller that cannot see it happened.
+ *
+ * Driven through the real McpServer, not a replica of the handler: the claim is
+ * about where the guard sits relative to the readOnly check and the mutation, and
+ * a hand-rolled copy of the branch would pass with the guard deleted from the
+ * tool.
+ */
+describe("tandem_edit — plaintext newline guard (#1460)", () => {
+  /** Same as `setupDoc` but with the format under test. */
+  function setupPlaintextDoc(id: string, text: string, format: string) {
+    const ydoc = getOrCreateDocument(id);
+    populateYDoc(ydoc, text);
+    addDoc(id, {
+      id,
+      filePath: `/tmp/${id}.${format}`,
+      format,
+      readOnly: false,
+      source: "file",
+    });
+    setActiveDocId(id);
+    return ydoc;
+  }
+
+  it("rejects a newline in a .txt document and leaves the text untouched", async () => {
+    const ydoc = setupPlaintextDoc("edit-txt-nl", "alpha bravo", "txt");
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 0, to: 5, newText: "one\ntwo" },
+      }),
+    );
+
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_ARGUMENT");
+    expect(parsed.message).toContain("txt");
+    // The remedy has to be in the message: the AI cannot see the format.
+    expect(parsed.message).toContain("tandem_edit per line");
+    // tandem_appendContent is not a valid fallback — it refuses non-markdown
+    // documents outright, so suggesting it here is a dead end (#1460 review).
+    expect(parsed.message).not.toContain("tandem_appendContent");
+    expect(extractText(ydoc), "refused, not partially applied").toBe("alpha bravo");
+  });
+
+  it("rejects a bare CR too", async () => {
+    // `\r` alone is a line ending on classic Mac files, and `toLf` collapses it —
+    // so it reaches the file as a break exactly like `\n` would.
+    setupPlaintextDoc("edit-txt-cr", "alpha bravo", "txt");
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 0, to: 5, newText: "one\rtwo" },
+      }),
+    );
+    expect(parsed.code).toBe("INVALID_ARGUMENT");
+  });
+
+  it("covers every plaintext-routed format, not just .txt", async () => {
+    // The defect lives in the LOADER, and `getAdapter` falls back to
+    // `plaintextAdapter` for anything that is not `md` or `docx` — so `html`,
+    // `log`, `csv` and unknown extensions are all exposed. A guard keyed on the
+    // literal string "txt" would have looked correct and covered one of them.
+    for (const format of ["html", "log", "csv", "conf"]) {
+      setupPlaintextDoc(`edit-${format}-nl`, "alpha bravo", format);
+      const parsed = parseResult(
+        await client.callTool({
+          name: "tandem_edit",
+          arguments: { from: 0, to: 5, newText: "one\ntwo" },
+        }),
+      );
+      expect(parsed.code, format).toBe("INVALID_ARGUMENT");
+    }
+  });
+
+  it("ALLOWS a newline in markdown — the negative control", async () => {
+    // Without this the guard could be rejecting every newline everywhere and the
+    // three tests above would all still pass. Markdown can represent an
+    // intra-paragraph break, so this one must go through.
+    const ydoc = setupPlaintextDoc("edit-md-nl", "alpha bravo", "md");
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 0, to: 5, newText: "one\ntwo" },
+      }),
+    );
+    expect(parsed.error).toBeFalsy();
+    expect(extractText(ydoc)).toBe("one\ntwo bravo");
+  });
+
+  it("ALLOWS a newline-free edit in .txt — the other control", async () => {
+    const ydoc = setupPlaintextDoc("edit-txt-plain", "alpha bravo", "txt");
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 0, to: 5, newText: "one" },
+      }),
+    );
+    expect(parsed.error).toBeFalsy();
+    expect(extractText(ydoc)).toBe("one bravo");
+  });
+});
+
+/**
  * The delivery-state join's pull half (Track B-1).
  *
  * Driven through the real McpServer rather than by calling the recorder

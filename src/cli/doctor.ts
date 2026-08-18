@@ -823,7 +823,10 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
   if (!existsSync(claudeCodePath)) {
     r.warn(
       "~/.claude.json not found",
-      `${setupApplyRemedy(cliAvailable())}  (or ignore if using project-local .mcp.json)`,
+      withSuffix(
+        setupApplyRemedy(cliAvailable()),
+        "Or ignore this if you use a project-local .mcp.json instead.",
+      ),
     );
     return;
   }
@@ -836,9 +839,16 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
     // source text, and ~/.claude.json carries bearer tokens / API keys. This
     // check survives the /api/diagnostics filter, so its message reaches the
     // Copy Diagnostics clipboard — destined for public issues.
+    //
+    // `withSuffix`, not raw concatenation: the old `${remedy} — that rewrites
+    // it` phrasing produces a dangling clause after `setupApplyRemedy(false)`'s
+    // closed parenthetical (`"...not the desktop app.)"`) — the exact bug
+    // `checkDesktopMcpConfig`'s sibling branch was fixed for. One `withSuffix`
+    // hop here, not the sibling's two: `DESKTOP_RESTART_NOTE` doesn't apply to
+    // Claude Code's config, only to Claude Desktop's.
     r.warn(
       "~/.claude.json is malformed JSON",
-      `${setupApplyRemedy(cliAvailable())} — that rewrites it`,
+      withSuffix(setupApplyRemedy(cliAvailable()), "Tandem backs the file up before rewriting it."),
     );
     return;
   }
