@@ -30,8 +30,8 @@ These WILL break things if violated:
 - `npm run dev:standalone` -- Vite (:5173) + server watcher (:3478/:3479) + monitor, via `scripts/dev-standalone.mjs`
 - `npm run dev:server` -- Backend only: Hocuspocus on :3478 + MCP HTTP on :3479
 - `npm run dev:client` / `npm run dev` -- Frontend only (Vite on :5173)
-- `npm run build` -- typecheck + vite build + font-asset check + tsup -> `dist/{server,channel,monitor,cli,client}/`
-- `npm run build:server` -- tsup only (all four entries)
+- `npm run build` -- typecheck + vite build + font-asset check + tsup -> `dist/{server,channel,monitor,stdio-bridge,cli,client}/`
+- `npm run build:server` -- tsup only (all five entries)
 - `npm run typecheck` -- tsc server + client + `svelte-check --fail-on-warnings`
 - `npm test` -- vitest. `npm run test:e2e` -- Playwright (auto-starts servers; **refuses to run while Tandem or `dev:server` holds :3479**, and frees :3478/:3479 when it starts its own)
 - `npm run doctor` -- Diagnose setup issues. `npm run check:tokens` -- raw hex/rgba scan (also pre-commit)
