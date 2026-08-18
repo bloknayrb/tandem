@@ -7,6 +7,7 @@ import {
   Y_MAP_CHAT_SEEN,
   Y_MAP_CHAT_SEEN_INITIALIZED,
 } from "../../shared/constants";
+import { withBrowser } from "../../shared/origins";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
 
@@ -89,7 +90,7 @@ export function createChatState(options: {
 
   function acknowledgeIds(doc: Y.Doc, ids: readonly string[], baseline = false): void {
     const seen = doc.getMap(Y_MAP_CHAT_SEEN);
-    doc.transact(() => {
+    withBrowser(doc, () => {
       if (baseline && seen.get(Y_MAP_CHAT_SEEN_INITIALIZED) !== true) {
         seen.set(Y_MAP_CHAT_SEEN_INITIALIZED, true);
       }
@@ -155,7 +156,7 @@ export function createChatState(options: {
     if (!doc || !synced) return;
     const referencedDocumentIds = getReferencedDocumentIds(messages);
     const names = doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES);
-    doc.transact(() => {
+    withBrowser(doc, () => {
       for (const [id, value] of names.entries()) {
         if (!referencedDocumentIds.has(id)) {
           names.delete(id);
@@ -199,7 +200,7 @@ export function createChatState(options: {
         ...(anchor ? { anchor } : {}),
         read: false,
       };
-      doc.transact(() => {
+      withBrowser(doc, () => {
         if (documentId) {
           const open = options.getOpenDocuments().find((candidate) => candidate.id === documentId);
           const fileName = safeFileName(open?.fileName);

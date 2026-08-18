@@ -39,8 +39,46 @@ Who skips what: the durable-annotation sync observer skips `file-sync` and `inte
 channel event queue skips `mcp`, `file-sync`, `internal`, `reload` and `mode-release` — so
 **only `browser` writes generate channel events.**
 
+**Client origins never cross the wire, and two shipped comments got this wrong (#1482).** Two
+independent reasons, either alone sufficient. Yjs never serializes the origin: `yjs.cjs:3389` emits
+`transaction.origin` as a local JS event argument *beside* the encoded update, so it is not in the
+bytes. And Hocuspocus re-tags every incoming client update with the `Connection` anyway —
+`readSyncStep2(..., connection ?? this.defaultTransactionOrigin)` at
+`hocuspocus-server.esm.js:1408`, reaching `Y.applyUpdate(doc, ..., transactionOrigin)` at `:1151`.
+Since `shouldSkipChannel` compares against string constants, a `Connection` instance never matches
+and browser traffic is never skipped — which is what actually makes a user edit channel-eligible.
+So a server observer **cannot** distinguish a `withBrowser` write from an untagged one, and no
+client-side consumer filters on origin either (Tiptap's Collaboration tracks only
+`ySyncPluginKey`). Client-side tagging is hygiene, auditability and one mental model — **it is not
+a privacy or channel-filtering control**, and a PR describing it as closing a leak is wrong. The
+skip-set table above governs writes made *on the server*.
+
+**Never call an editor command inside a `with*` callback.** ProseMirror commands dispatch through
+y-prosemirror's own `doc.transact(..., ySyncPluginKey)`, and a transact opened while an outer one
+is live **inherits the outer origin**. Since `yUndoPlugin` captures only `ySyncPluginKey`
+transactions, wrapping a command in `withBrowser` makes the resulting text **un-undoable** —
+and y-prosemirror's `mux` self-echo guard releases before the deferred observers run, so the
+editor also takes a full-document `replace`. Split such code into separate one-statement
+transactions around the command, never one wrap spanning it. `useAnnotationReview`'s accept path
+is the worked example: three transactions, because `applySuggestion` sits between them.
+
 Enforcement is warn-only: the `check-raw-transact.sh` PostToolUse hook plus the
 `npm run audit:origins` static walk. There is no blocking pre-commit hook and no Biome rule.
+**The hook is PostToolUse-only** — it only ever sees files an agent just edited, which is how
+three raw `.transact(` calls sat in `src/client/hooks/useChatState.svelte.ts` unnoticed: nothing
+swept code nobody happened to touch. Since #1482 the audit walks all of `src` (not just
+`src/server`), covers `.svelte`, and reports a **census of correctly tagged sites** rather than a
+bare `clean`, because post-fix the count of bad things in `src/client` is zero — and so is the
+count an audit that stopped scanning reports. The script still exits 0; the gate is
+`tests/scripts/audit-origins.test.ts`, which fails if the walk is re-narrowed.
+
+**A bare `map.set(...)` is invisible to all of the above**, since there is no `.transact(` to
+match and static detection is not achievable at usable precision (`.set(` collides with native
+`Map`/`Set`, ProseMirror and `$state`; and `withBrowser(doc, () => helper())` is correct code no
+intra-procedural rule can bless). The complement is a DEV-only runtime check —
+`installUntaggedWriteWarning` in `src/client/utils/`, armed on both `new Y.Doc()` sites in
+`yjsSync.svelte.ts` — which warns on any mutating transaction with a null origin. One known benign
+source: `y-prosemirror.cjs:834` merges adjacent Y.Text nodes in an untagged transact of its own.
 
 ### Y.js / CRDT
 - **Y.XmlText must be attached before populating.** Inserting formatted text into a detached Y.XmlText reverses segment order. Always attach to Y.Doc first, then insert (two-pass pattern in `mdast-ydoc.ts`).

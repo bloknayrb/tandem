@@ -7,6 +7,7 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
+import { withBrowser } from "../../shared/origins.js";
 import type { TandemMode } from "../../shared/types.js";
 import { TandemModeSchema } from "../../shared/types.js";
 import { API_BASE } from "../utils/fileUpload.js";
@@ -99,7 +100,7 @@ export function createTandemModeBroadcast(
     if (!bootstrapYdoc) return;
     try {
       const awareness = bootstrapYdoc.getMap(Y_MAP_USER_AWARENESS);
-      awareness.set(Y_MAP_MODE, mode);
+      withBrowser(bootstrapYdoc, () => awareness.set(Y_MAP_MODE, mode));
     } catch (err) {
       console.warn("[tandem] failed to broadcast tandem mode to Y.Map:", err);
     }
@@ -112,7 +113,7 @@ export function createTandemModeBroadcast(
     if (!bootstrapYdoc) return;
     try {
       const awareness = bootstrapYdoc.getMap(Y_MAP_USER_AWARENESS);
-      awareness.set(Y_MAP_DWELL_MS, dwellMs);
+      withBrowser(bootstrapYdoc, () => awareness.set(Y_MAP_DWELL_MS, dwellMs));
     } catch (err) {
       console.warn("[tandem] failed to broadcast dwell ms to Y.Map:", err);
     }

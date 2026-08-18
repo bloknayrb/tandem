@@ -97,10 +97,15 @@ export function sendNoteToClaude(
   if (!raw) return;
   const ann = sanitizeAnnotation(raw, warn);
   if (ann.type !== "note") return;
-  // withBrowser tags the transact as user-originated so the channel queue
-  // emits the note→comment promotion event. A bare map.set produces an
-  // undefined-origin transact that the skip set's evolution could quietly
-  // start dropping.
+  // withBrowser tags the transact as user-originated, per Critical Rule 2.
+  //
+  // NOT because the tag is what makes the channel emit the note→comment
+  // promotion event — it is not. Client origins are local to this process;
+  // Hocuspocus re-tags every incoming update with the `Connection`
+  // (hocuspocus-server.esm.js:1408 -> :1151), so the server's skip set never
+  // sees this value. The reason to tag is auditability and one mental model:
+  // a bare map.set is invisible to `audit:origins` and to any future reader
+  // trying to establish who wrote what. See docs/gotchas.md.
   withBrowser(ydoc, () => {
     map.set(annotationId, promotedAnnotation(ann, tandemMode));
   });

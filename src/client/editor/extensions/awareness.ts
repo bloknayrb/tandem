@@ -11,6 +11,7 @@ import {
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../../shared/constants";
+import { withBrowser } from "../../../shared/origins";
 import { toFlatOffset, toPmPos } from "../../../shared/positions/types";
 import type { ClaudeAwareness } from "../../../shared/types";
 import { flatOffsetToPmPos, pmSelectionToFlat } from "../../positions";
@@ -170,10 +171,12 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                     clearTimeout(selectionDebounceTimeout);
                     selectionDebounceTimeout = null;
                   }
-                  userAwareness.set(Y_MAP_SELECTION, {
-                    ...flat,
-                    timestamp: Date.now(),
-                  });
+                  withBrowser(ydoc, () =>
+                    userAwareness.set(Y_MAP_SELECTION, {
+                      ...flat,
+                      timestamp: Date.now(),
+                    }),
+                  );
                 } else {
                   // Real text selection — debounce to reduce Y.Map churn during drag
                   const selectedText = state.doc.textBetween(
@@ -187,11 +190,13 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                   if (selectionDebounceTimeout) clearTimeout(selectionDebounceTimeout);
                   selectionDebounceTimeout = setTimeout(() => {
                     selectionDebounceTimeout = null;
-                    userAwareness.set(Y_MAP_SELECTION, {
-                      ...flat,
-                      selectedText: truncated,
-                      timestamp: Date.now(),
-                    });
+                    withBrowser(ydoc, () =>
+                      userAwareness.set(Y_MAP_SELECTION, {
+                        ...flat,
+                        selectedText: truncated,
+                        timestamp: Date.now(),
+                      }),
+                    );
                   }, 150);
                 }
               }
@@ -207,11 +212,13 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                   activityWriteTimeout = setTimeout(() => {
                     activityWriteTimeout = null;
                     if (pendingActivity) {
-                      userAwareness.set(Y_MAP_ACTIVITY, {
-                        isTyping: true,
-                        cursor: lastCursor,
-                        lastEdit: Date.now(),
-                      });
+                      withBrowser(ydoc, () =>
+                        userAwareness.set(Y_MAP_ACTIVITY, {
+                          isTyping: true,
+                          cursor: lastCursor,
+                          lastEdit: Date.now(),
+                        }),
+                      );
                     }
                   }, 200);
                 }
@@ -220,11 +227,13 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                 if (typingTimeout) clearTimeout(typingTimeout);
                 typingTimeout = setTimeout(() => {
                   pendingActivity = false;
-                  userAwareness.set(Y_MAP_ACTIVITY, {
-                    isTyping: false,
-                    cursor: view.state.selection.from,
-                    lastEdit: Date.now(),
-                  });
+                  withBrowser(ydoc, () =>
+                    userAwareness.set(Y_MAP_ACTIVITY, {
+                      isTyping: false,
+                      cursor: view.state.selection.from,
+                      lastEdit: Date.now(),
+                    }),
+                  );
                 }, TYPING_DEBOUNCE);
               }
             },
