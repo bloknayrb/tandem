@@ -232,6 +232,86 @@ body, not the registration site.**
 gated, on both halves), save/export, `GET` routes, chat, and `tandem_resolveAnnotation` — a
 status flip, not a content write.
 
+## AI surfaces — the #1346 inventory
+
+> **Discovery step for the ADR-040 amendment (#1346, decision 3).** The amendment asks whether
+> every AI surface shares one enforcement point. It cannot be answered as written, because
+> nothing enumerated the *surfaces*: the gated set above is an inventory of **operations**, which
+> is a different axis, and it is why three of the six rows below appear nowhere in it. This
+> section is that missing axis. It describes **today's code**, not the target design.
+> `tests/docs/ai-surface-inventory-claims.test.ts` derives rows 4-6 from source and fails when a
+> new AI surface appears, so this list cannot silently go short the way an unpinned enumeration
+> does.
+
+An **AI surface** is any path by which a model reads document state, writes it, or learns that it
+changed. Six exist:
+
+| # | Surface | Admission point | Enforcement today |
+|---|---|---|---|
+| 1 | MCP over HTTP (`:3479`) | per-session `McpServer`, `onsessioninitialized` | per-tool: 12 `gatedTool`, 1 conditional in-handler, 16 ungated |
+| 2 | MCP over stdio | `src/cli/mcp-stdio.ts` | **inherits row 1** — pure JSON-RPC proxy, no handlers of its own |
+| 3 | `/api` HTTP twins | Express registrars | per-route: 7 middleware mounts + 1 in-handler |
+| 4 | Chat | `appendClaudeChatMessage()` | **none** |
+| 5 | Event push / wake | `subscribe(cb, "external")` | **none** |
+| 6 | Local-model collaborator | in-process dispatch loop | its own third copy, 3 tools |
+
+Three things follow that the amendment's three-surface framing does not predict.
+
+**Row 2 is free.** `mcp-stdio.ts` registers no handlers and forwards raw messages, so refusing at
+row 1 also refuses Claude Desktop and Cowork. There is no fourth transport to gate.
+
+**Rows 4-6 have no enforcement site at all, and rows 4-5 are not "missed" — they are
+deliberately open.** `connectionShouldBeReadOnly` exempts `CTRL_ROOM` by design so chat survives
+as the read-only escape hatch, and `shouldForwardExternally` passes `chat:message`
+unconditionally for the same reason. Under decision 1 that inverts: chat *is* the AI integration,
+so the thing kept alive on purpose becomes the thing most clearly refused. A grep for
+`licenseGate|LicenseState|resolveLiveLicenseState` across `src/server/events/`, `src/channel/`,
+`src/monitor/` and `src/server/launcher/` returns nothing.
+
+**Row 6 documents its own hole.** `src/server/local-model/tools.ts` states that the loop "bypasses
+both license enforcement surfaces (no Hocuspocus connection; not an MCP tool), so the THREE
+mutating tools consult the gate here." That is accurate, and it is the pattern rather than an
+oversight: each new AI surface discovers it is outside the gate and grows a private copy. Doubly
+inert today (`BYO_MODELS_ENABLED` *and* `LICENSE_GATE_ENABLED` are both false), so it is a
+template for the next mistake, not a live one.
+
+### What is *not* an AI surface
+
+**Surface A is the human's editor.** `applyConnectionGate` clamps Hocuspocus document rooms to
+read-only, which under the amendment is backwards — decision 2 puts annotation accept/reject in
+the editor UI, and a read-only clamp is exactly what would stop the user resolving their own
+annotations. Surface A is deleted by the amendment, not rewritten.
+
+### The choke points already exist
+
+The reason a surface gate is tractable where "make the three agree" is not: the surfaces share no
+call path (a WebSocket connection lifecycle, JSON-RPC dispatch, Express, and an in-process
+function call cannot be routed through one interception), but each already has a single narrow
+admission point, and three of the four are existing functions with all their callers in one place.
+
+- `appendClaudeChatMessage()` — every AI chat write: `tandem_reply`, `POST /api/channel-reply`, the collaborator.
+- `subscribe(cb, "external")` — every push consumer: SSE `/api/events`, WS `/api/wake`, the supervisor's stdin.
+- The MCP session handshake — rows 1 and 2 together.
+- The collaborator's start path — row 6.
+
+That is **four admission checks**, against 20+ per-operation checks today, and it changes the
+per-tool cost of Critical Rule 9 from two edits to zero.
+
+### Two consequences worth deciding before code moves
+
+**The read tools stop being safely ungated.** Sixteen tools are ungated on the rule "reads are
+the escape hatch", and `RESTRICTED_MESSAGE` promises it in so many words: *"Reading, opening and
+exporting still work."* Decision 1 says an unlicensed copy has no AI integration at all, so the
+escape hatch belongs to the **human's editor**, not to Claude — the user keeps opening, reading
+and exporting, and the AI reads nothing. The sixteen are not correctly ungated; they are gated at
+a layer the surface gate removes.
+
+**The refusal copy contradicts decision 5 in three places.** Decision 5 is always "unlicensed",
+never "expired". `RESTRICTED_MESSAGE` opens *"Your Tandem trial has ended"*; the collaborator's
+`LICENSE_REQUIRED` body repeats it; `license-gate.ts`'s own docblock says *"trial expired"*. This
+is copy, not mechanism — the `LicenseStatus` union (`"trial" | "licensed" | "restricted"`) is a
+state name, and the on-device trial clock is a separate question the amendment did not strike.
+
 ## Delivery: why the email looks the way it does
 
 The `.license` attachment's `content` is **`btoa(blob)`** — base64 of the
