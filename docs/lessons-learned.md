@@ -925,3 +925,56 @@ Two independent causes, both about scope. The paragraph splitter used `\n(?=\s*[
 **Key insight:** a guard built from several predicates has a scope per predicate, and they are not the same scope. The instinct is to pick one unit and evaluate everything on it, which quietly couples "is this relevant?" to "is this wrong?" — and the coupling always fails the same direction, toward silence, because a fragment too small to state the offence is also too small to name the subject. The failure is worse than no guard: it fires on some carriers and not others, and partial coverage reads as coverage. When a check is a conjunction, ask what unit each conjunct is a property of before choosing how to split the text.
 
 **Corollary, same PR, same shape:** a test asserting *suppression* must use a vehicle that would otherwise be emitted. The monitor's Solo-mode test pushed a `document:opened` event and asserted stdout stayed empty; once the emit gate started dropping non-wake-worthy types, that assertion held whether or not the Solo gate existed. Silence proves nothing unless something else guarantees noise. See lesson 96.
+
+## 98. A Safety Gate Built From The Wrong Signal Can Be Exactly Inverted
+
+A boot-sweep rule was going to converge a bare-`npx` MCP entry onto an absolute Node path, and it
+carried a version gate: *upgrade only when the package spec is unpinned or equals the current
+`CLI_VERSION`*. The reasoning felt obvious — a user who pinned an old version pinned it on purpose,
+so moving them would override a choice.
+
+The pin is not a user's choice. It is the **writer's** default: `buildStdioTandemEntry` stamps
+`tandem-editor@${CLI_VERSION}` at the moment it writes the entry, to defeat a stale global. So an
+entry written by an older Tandem carries an *old* pin by construction, and one written today
+carries today's.
+
+That inverts the gate completely, and both halves are wrong at once:
+
+- It **refuses** every entry an older Tandem wrote — which is the definition of the broken
+  population, the only reason the rule was being built.
+- It **admits** the shape it most needs to refuse. `.claude-plugin/plugin.json` emits the same
+  tuple, and `tests/plugin/plugin-version-pin.test.ts` keeps its pin equal to `CLI_VERSION`. So a
+  hand-copied plugin entry passes the version gate *by construction*, and Tandem would adopt an
+  entry it never wrote.
+
+The gate would have shipped a feature that fixed nobody and adopted the one case it was written to
+exclude — while looking, in review, like the most conservative choice on the page.
+
+**Key insight:** a gate's safety comes from the signal it reads, not from how restrictive it feels.
+Before trusting a field as evidence of intent, find its writer. A value your own code stamps
+automatically records *when something was written*, never *what the user wanted* — and a gate keyed
+on it partitions the world by age, which may be uncorrelated with, or exactly opposite to, the
+property you meant to test. The tell is available cheaply: ask what the field would be for the
+population you are trying to help and for the population you are trying to exclude. Here those
+answers were "an old version" and "exactly the current version", which is the answer sheet.
+
+**Corollary:** the discriminator that did work was one nobody had written down — *which config file
+is this?* Tandem emits a stdio entry only to Claude Desktop and only an HTTP entry to Claude Code,
+so target kind separates "we wrote this" from "someone else did" perfectly, with no heuristic. Four
+gates keyed on the entry's *contents* were approximating a fact already known by the caller. When a
+gate is hard to get right, check whether the caller already holds the answer.
+
+**Second corollary, same PR, same shape.** The durability gate that replaced the version gate was
+built as a positive allowlist of path shapes — `/node_modules/` or `.app/Contents/` — with a
+comment explaining that an allowlist was chosen *because* a blocklist could never enumerate the
+disposable layouts (`_npx`, `dlx`, `.bun`). The allowlist admitted every one of them: an npx cache
+lives at `~/.npm/_npx/<hash>/node_modules/…`, which matches `/node_modules/`. It simultaneously
+excluded the Windows and Linux desktop installs, whose Tauri `resource_dir` is the Program Files
+directory or `/usr/lib/<app>` and matches neither pattern — so the feature was silently macOS-only.
+Neither error was visible from the gate's own tests, because every convergence test drove the
+`durable` seam and nothing exercised the predicate. The fix was to stop describing durability by
+path shape and recognise it by provenance instead (a sidecar spawn that is not inside a git
+checkout), which covers three platforms without naming a single install directory. **A predicate
+that classifies by string shape is a guess about the world; when the thing you are classifying has
+a knowable provenance, ask that instead — and never let the only tests of a gate run through the
+seam that disables it.**

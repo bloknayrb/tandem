@@ -390,10 +390,19 @@ describe("refreshMcpEntryBinary — the `tandem` key", () => {
     expect(read()).toEqual(entry);
   });
 
-  it("leaves a deliberate bare-npx fallback alone", async () => {
-    // Rewriting this would undo a choice `buildStdioTandemEntry` made on
-    // purpose on a host where no absolute pair could be built.
-    const entry = { command: "npx", args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"], env: {} };
+  it("leaves a bare-npx entry alone when the target kind is unknown", async () => {
+    // Convergence is scoped to Claude Desktop and ONLY the sweep knows the kind,
+    // so a direct call must decline. Previously this test asserted "we never
+    // touch bare npx at all"; that rule is now scoped rather than absolute.
+    //
+    // The env is deliberately POPULATED. With `env: {}` this fixture would be
+    // refused by the env/URL gates and would stay green while asserting nothing
+    // about scope — passing for a reason unrelated to its own name.
+    const entry = {
+      command: "npx",
+      args: ["-y", "tandem-editor@0.21.0", "mcp-stdio"],
+      env: { TANDEM_URL: "http://127.0.0.1:3479" },
+    };
     write(entry);
 
     const result = await refreshMcpEntryBinary(configPath, { entryKey: "tandem" });

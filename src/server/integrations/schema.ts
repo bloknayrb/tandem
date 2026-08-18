@@ -44,7 +44,17 @@ const AbsolutePath = z.string().min(1).refine(path.isAbsolute, {
  * (`url: "http://evil.example/mcp"`) from being preserved into Tandem's
  * `integrations.json` via the wizard's "already configured" path.
  *
- * Accepts `http://127.0.0.1[:port][/path]` or `http://localhost[:port][/path]`.
+ * Accepts `http://127.0.0.1[:port][/path]` ONLY. **Not `localhost`**, and not
+ * `[::1]` — an earlier version of this line claimed `localhost` was accepted
+ * and it never was. Decimal and hex IP forms (`http://2130706433`,
+ * `http://0x7f000001`) DO pass, because `new URL()` normalizes them to
+ * `127.0.0.1` before the hostname check runs; they are genuine loopback, so
+ * this is correct rather than a gap.
+ *
+ * It does NOT pin the port, so it is too weak on its own to decide that a
+ * bearer token may be sent somewhere — any other local listener passes. Callers
+ * that are deciding whether to ARM an entry compare against `MCP_URL` exactly
+ * instead; see `convergeNpxEntry` in `apply.ts`.
  * Rejects: non-`http` schemes, any other hostname, IP-literal forms other
  * than `127.0.0.1` (which would also be loopback but are not used by Tandem
  * and add attack surface — `127.0.0.2` etc. are valid loopback addresses

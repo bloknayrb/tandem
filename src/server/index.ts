@@ -706,8 +706,14 @@ async function main() {
     // would spawn Claude Code against the config we are mid-repair of — which
     // is both halves of the failure at once (the session reads the stale entry,
     // AND our rename lands inside Claude Code's own startup write window). The
-    // cost is bounded: a handful of `stat`s over detected config files, after
-    // the server is already listening.
+    // Cost: normally a handful of `stat`s over detected config files, after the
+    // server is already listening. NOT bounded to that on a boot that actually
+    // repairs something — an `atomicWrite` here was measured at ~524 ms on
+    // Windows, almost all of it a `pwsh Get-Acl` spawn, and the loop is
+    // sequential over targets (a Windows box can have Claude Desktop plus
+    // several MSIX configs). That is a once-per-affected-install cost, since the
+    // repaired entry is a no-op on every later boot — but it is the reason this
+    // `await` is worth re-measuring if the sweep ever grows a routine write.
     if (!isStoreReadOnly()) {
       await import("./integrations/apply.js")
         .then(({ refreshAllMcpEntryBinaries }) => refreshAllMcpEntryBinaries())

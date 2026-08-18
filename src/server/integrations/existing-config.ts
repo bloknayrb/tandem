@@ -10,13 +10,18 @@
  *
  * Each surfaced entry is validated against the canonical shapes
  * `buildMcpEntries` produces:
- * - HTTP `tandem`: `LoopbackUrl.safeParse(url)` rejects credential URLs,
- *   IPv6 loopback, decimal/hex IP obfuscation, NFC/NFD homoglyphs.
+ * - HTTP `tandem`: `LoopbackUrl.safeParse(url)` rejects credential URLs and
+ *   any hostname other than the literal `127.0.0.1`. Note what it does NOT do,
+ *   despite an earlier version of this list saying otherwise: `localhost` and
+ *   `[::1]` are REJECTED (deliberately — this guards a planted config entry,
+ *   not a UX-entered endpoint), and decimal/hex IP forms are ACCEPTED, because
+ *   WHATWG parsing normalizes them to `127.0.0.1` before the check sees them.
  * - stdio `tandem`: EITHER `isValidNodeBinary` command + a single `.js` arg
  *   (the primary shape — an absolute Node running the bundled stdio bridge),
- *   OR `npx -y tandem-editor[@<version>] mcp-stdio` where the command is the
- *   bare `npx` or an absolute path whose basename is `npx` (the fallback
- *   shapes; the middle token may be bare or exact-version-pinned).
+ *   OR the bare `npx` running `-y tandem-editor[@<version>] mcp-stdio`. The
+ *   command must be the BARE name: an absolute path whose basename is `npx` is
+ *   deliberately never written and is not accepted here (`:153` is the code,
+ *   and it has always been bare-only — this list used to claim otherwise).
  * - stdio `tandem-channel`: `isValidNodeBinary` command + `.js` first arg.
  *
  * Invalid entries are still surfaced (so the user sees what's on disk),
@@ -31,6 +36,10 @@
 import { readFile } from "node:fs/promises";
 
 import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
+import {
+  isCanonicalNpxStdioArgs,
+  TANDEM_STDIO_NPX_ARGS,
+} from "../../shared/integrations/npx-entry-spec.js";
 import { type DetectedTarget, type DetectOptions, detectTargets, type McpEntry } from "./apply.js";
 import { LoopbackUrl } from "./schema.js";
 
@@ -81,12 +90,9 @@ export interface ExistingMcpInstall {
  * validator must accept both — otherwise it would flag apply.ts's own freshly
  * written entry as `invalid-args`.
  */
-const TANDEM_STDIO_NPX_HEAD = ["-y"] as const;
-const TANDEM_STDIO_NPX_TAIL = ["mcp-stdio"] as const;
-/** `tandem-editor` bare, or `tandem-editor@<exact semver>` (with optional prerelease). */
-const TANDEM_EDITOR_SPEC_RE = /^tandem-editor(@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)?$/;
-/** Canonical unpinned tuple, retained for the `invalid-args` reason string. */
-const TANDEM_STDIO_NPX_ARGS = [...TANDEM_STDIO_NPX_HEAD, "tandem-editor", ...TANDEM_STDIO_NPX_TAIL];
+// Shape, spec regex and reason-string tuple all come from the shared leaf now —
+// the writer, this validator and the boot sweep must agree token-for-token, and
+// three local copies is how they stop agreeing. See `npx-entry-spec.ts`.
 
 /**
  * Validate an existing `tandem` mcpServers entry against the canonical shapes
@@ -151,13 +157,7 @@ export function validateTandemEntry(entry: McpEntry): EntryValidation {
   // the client's PATH and fails exactly where the bare name does. See
   // `buildStdioTandemEntry`.
   if (entry.command === "npx") {
-    const argsOk =
-      args.length === 3 &&
-      args[0] === TANDEM_STDIO_NPX_HEAD[0] &&
-      typeof args[1] === "string" &&
-      TANDEM_EDITOR_SPEC_RE.test(args[1]) &&
-      args[2] === TANDEM_STDIO_NPX_TAIL[0];
-    if (!argsOk) {
+    if (!isCanonicalNpxStdioArgs(args)) {
       return {
         status: "invalid-args",
         reason: `npx args must be ${JSON.stringify(TANDEM_STDIO_NPX_ARGS)} (the package may be version-pinned as 'tandem-editor@<version>'); got ${JSON.stringify(args)}`,
