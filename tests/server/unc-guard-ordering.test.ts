@@ -1,5 +1,5 @@
 import fsp from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -77,10 +77,26 @@ describe("detectTargets screens the Claude Desktop path before existsSync (#1417
 
     const targets = detectTargets({
       appDataOverride: "\\\\attacker\\share\\Roaming",
+      // **`localAppDataOverride` keeps the host's real install out of the
+      // fixture.** `kind: "claude-desktop"` is pushed by TWO branches — the
+      // plain `%APPDATA%` config this test screens, and the MSIX walk of
+      // `%LOCALAPPDATA%\Packages\Claude_*`, which `appDataOverride` does not
+      // touch. On a machine with Store-installed Claude Desktop the MSIX branch
+      // satisfies the assertion below on its own, so the test failed while the
+      // guard it names was working perfectly. It passed on CI only because a
+      // Linux runner has no such package — the inverse of the vacuous-fixture
+      // trap the comment above this one describes, and the same root cause: the
+      // fixture inherited environment state it was supposed to control.
+      // A path under `home` that does not exist makes the `readdirSync` throw
+      // into the "no MSIX install" catch, which is the state CI already tests in.
+      localAppDataOverride: join(homedir(), "AppData", "Local", "tandem-no-msix-fixture"),
       platformOverride: "win32",
     });
 
     expect(targets.some((t) => t.kind === "claude-desktop")).toBe(false);
+    // Says what the previous assertion only implied: nothing derived from the
+    // hostile root became a write target, whatever its `kind`.
+    expect(targets.some((t) => t.configPath.includes("attacker"))).toBe(false);
     expect(_existsSyncSpy).not.toHaveBeenCalledWith(expect.stringContaining("attacker"));
     // Positive control: without it, a `detectTargets` that threw early or a
     // mis-wired spy would satisfy the negative assertion for the wrong reason.

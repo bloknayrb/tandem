@@ -143,8 +143,28 @@ There are three ways to open a file:
 
 - **Markdown** (`.md`) — Full read-write support. Your content round-trips exactly; some *formatting style* is canonicalized on the first save. See [Markdown formatting](#markdown-formatting) below.
 - **Word** (`.docx`) — Read-write. Saving writes your edits back to the `.docx` body, and pending comments are written back as real Word comments. Existing Word comments (`<w:comment>` elements) are imported as annotations with author "import". External edits (e.g. from Word) are detected: a clean document reloads in place, while a document with unsaved edits shows a keep-vs-reload banner instead of losing anything. A **Convert to Markdown** option is also available if you prefer working in Markdown. See [Word fidelity](#word-fidelity) below.
-- **Plain text** (`.txt`) — Full read-write support.
+- **Plain text** (`.txt`) — Full read-write support. One behaviour differs from Markdown:
+  see [Line breaks in plain text](#line-breaks-in-plain-text) below.
 - **HTML** (`.html`, `.htm`) — Read support.
+
+### Line breaks in plain text
+
+In a Markdown document a line break inside a paragraph and a break *between* paragraphs are
+different things, and the file records which is which. **A plain-text file has only one
+kind of line break.** So in a `.txt` document — or any file Tandem treats as plain text,
+which is everything that is not `.md` or `.docx` — pressing **Shift+Enter** starts a new
+paragraph rather than adding a break inside the current one, and a pasted line break does
+the same.
+
+This is not a limitation working around itself; it is what keeps the document stable.
+The bytes Tandem writes are identical either way, so a break inside a paragraph would come
+back as two paragraphs the next time the file was opened — the document quietly changing
+shape between sessions. Tandem makes the choice up front instead, so what you see now is
+what you get back.
+
+For the same reason, a heading in a plain-text document joins its lines with a space
+rather than splitting, and the AI's `tandem_edit` refuses a line break in a plain-text
+document and is asked to append a block instead.
 
 ### Markdown Formatting
 

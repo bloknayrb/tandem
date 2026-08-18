@@ -2240,6 +2240,9 @@ const review = useAnnotationReview({
     activeAnnotationId = id;
   },
   getScrollBehavior: () => (settingsState.settings.reduceMotion ? "auto" : "smooth"),
+  // Read live, not captured: Save-As promotes a document in place, so the same
+  // tab can be `md` when a suggestion arrives and `txt` when it is accepted.
+  getFormat: () => activeTab?.format,
   // Lets the hook's auto-set effect avoid clobbering externally-set ids
   // (e.g., from Alt+]/Alt+[ keyboard navigation).
   getActiveAnnotationId: () => activeAnnotationId,

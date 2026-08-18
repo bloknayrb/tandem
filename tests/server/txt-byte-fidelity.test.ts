@@ -1,15 +1,18 @@
 /**
  * `.txt` bytes must survive any number of open/save cycles (#1460).
  *
- * This pins the claim a DISPOSITION rests on, which is why it exists as a test
- * rather than as a paragraph in an issue. #1460 is real and open: the plaintext
- * loader makes one paragraph per line while the saver joins blocks with `"\n"`,
- * and since paragraphs became `whitespace: "pre"` (#1448) a paragraph can hold a
- * literal newline — so the two stopped being inverses and one wrapped paragraph
- * reopens as two. It was triaged as *invisible*: the in-editor structure
- * changes, the file does not. Document-don't-fix is only the right call while
- * the second half of that sentence is true, and "we measured it once" is not a
- * mechanism that keeps it true.
+ * The plaintext loader makes one paragraph per line while the saver joins blocks
+ * with `"\n"`, so a block holding its own break saves to bytes that read as two
+ * lines and reopens as two paragraphs. The BYTES were never the defect, and this
+ * file is what keeps that true — "we measured it once" is not a mechanism.
+ *
+ * It originally existed to pin a *disposition*: #1460 was triaged as invisible
+ * (the in-editor structure changes, the file does not) and therefore
+ * document-don't-fix. That disposition was wrong, and this file is not evidence
+ * for it — a document coming back a different shape than the one you left is a
+ * change to the document. The six producers of an intra-block break are now
+ * guarded (`src/shared/plaintext-format.ts` and its callers); a green run here
+ * says the bytes still round-trip, which it always said, and nothing more.
  *
  * Driven through `getAdapter("txt")` rather than through `populateYDoc` /
  * `extractText` directly, and that is the whole point of the file. The adapter

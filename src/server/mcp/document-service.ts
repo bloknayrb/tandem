@@ -16,6 +16,7 @@ import {
   Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
+import { isPlaintextFormat } from "../../shared/plaintext-format.js";
 import type { ExternalConflictState, FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
@@ -46,6 +47,7 @@ import {
 } from "../file-io/docx-verify.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
+import { flattenPlaintextBreaks } from "../file-io/plaintext-flatten.js";
 import { recordSelfWrite, suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
@@ -740,6 +742,7 @@ export async function saveDocumentAsToDisk(
   savingDocs.add(docId);
   try {
     const doc = getOrCreateDocument(docId);
+
     const output = adapter.save(doc);
 
     // The file shouldn't exist yet (we're saving as new), but if it does,
@@ -755,6 +758,35 @@ export async function saveDocumentAsToDisk(
     suppressNextChange(resolved);
     await atomicWrite(resolved, output);
     recordSelfWrite(resolved, output);
+
+    // #1460: this promotion can hand a document a format it cannot represent.
+    //
+    // The promotion below is IN PLACE — same docId, same Y.Doc, same provider —
+    // so a `.md` scratchpad or an uploaded `.docx` holding a hard break becomes a
+    // live plaintext document still holding one. Plaintext saves by joining
+    // blocks with `\n`, so from here on the bytes say two lines while the model
+    // says one block, every autosave writes that disagreement, and the next open
+    // believes the bytes. Neither client guard covers it: nothing was typed or
+    // pasted, and the content was legitimate until the destination changed.
+    //
+    // **Placed AFTER the write, not before it, and byte-neutrality is what makes
+    // the position free.** A hard break and a block boundary both render as `"\n"`,
+    // so `output` is identical either way — while a Y.js transaction does not roll
+    // back. Flattening first meant a failed `atomicWrite` (permissions, ENOSPC,
+    // vanished path) returned an error having already split the user's scratchpad
+    // and re-anchored its annotations, with the document still `.md` and still
+    // unsaved. Found in review. It must still precede `saveSession` below, so the
+    // persisted snapshot matches the bytes on disk.
+    //
+    // `withInternal`, not `withFileSync`. The two have identical skip profiles, so
+    // this is a labelling choice — and per ADR-031 the helper choice IS the
+    // contract, which is why it is worth getting right. `FILE_SYNC_ORIGIN` means
+    // "an echo from the durable-annotation file-writer or the watcher reload path";
+    // this is a server-internal content restructure, which is what
+    // `INTERNAL_ORIGIN` enumerates. Neither generates channel events.
+    if (isPlaintextFormat(format)) {
+      withInternal(doc, () => flattenPlaintextBreaks(doc));
+    }
 
     // Persist a session for the promoted path so a restart restores the
     // newly-saved doc rather than dropping content on the floor.

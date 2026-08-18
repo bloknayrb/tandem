@@ -3,12 +3,14 @@ import { Fragment, Slice } from "@tiptap/pm/model";
 import { onDestroy } from "svelte";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import { isPlaintextFormat } from "../../shared/plaintext-format";
 import type { SanitizationEvent } from "../../shared/sanitize";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import { isSnapshotTruncated } from "../../shared/snapshot";
 import type { Annotation } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship";
+import type { RestoreBreak } from "../editor/utils/literal-content";
 import { literalInlineContent, literalRestoreContent } from "../editor/utils/literal-content";
 import { annotationToPmRange } from "../positions";
 
@@ -120,6 +122,157 @@ const devSanitizeWarn = (event: SanitizationEvent): void => {
   console.warn("[sanitize]", event);
 };
 
+/** Matches a line ending in any of the three conventions. Mirrors `literal-content.ts`. */
+const LINE_ENDING_TEST = /\r\n|[\r\n]/;
+
+/**
+ * How a multi-line suggestion lands in a plaintext document at `pos`: one entry
+ * per block, and whether those entries collapse into a single block.
+ *
+ * Shared by accept and by undo's did-the-text-change guard, and it has to be, for
+ * a reason that cost a real regression. That guard compares the range's current
+ * flat text against `suggestedText` and declines permanently when they differ. The
+ * heading branch means accept no longer writes `suggestedText` verbatim — it
+ * writes the lines joined with spaces — so a heading accept became un-undoable:
+ * the `"\n"` the guard looks for is gone from the document forever, the decline
+ * takes the *transient* path, and the user gets a live-looking Undo button that
+ * silently does nothing. Found in review.
+ *
+ * The same reasoning covers a CRLF suggestion, which was wrong before the heading
+ * branch existed: the flat projection spells every line ending `"\n"`, so a
+ * suggestion carrying `"\r\n"` never matched its own accepted text either.
+ */
+function plaintextBlockPlan(
+  editor: TiptapEditor,
+  pos: number,
+  newText: string,
+): { lines: string[]; collapse: boolean } {
+  const lines = newText.split(LINE_ENDING_TEST);
+  let host: { isTextblock: boolean; type: { name: string } } | null = null;
+  try {
+    host = editor.state.doc.resolve(pos).parent;
+  } catch {
+    host = null;
+  }
+  // A heading COLLAPSES to one block, joined with spaces, exactly as the server's
+  // Save-As flatten does — and for the same measured reason: `extractText` runs
+  // heading text through `flattenHeadingText`, which maps every newline to a
+  // space, so a two-line heading serializes as `# one two`. Splitting would invent
+  // a second heading and a second line that the file will not contain.
+  return { lines, collapse: host?.isTextblock === true && host.type.name === "heading" };
+}
+
+/**
+ * In a plaintext document, every newline in a snapshot is a BLOCK boundary —
+ * `null` when that does not apply.
+ *
+ * Undo's other half of #1460, and the mirror of the accept path. Without this, a
+ * snapshot whose recorded structure is absent (a record written before #1486, or
+ * one whose range was relocated so the offsets no longer land on newlines) falls
+ * to `literalRestoreContent`'s inline branch, which puts the raw `"\n"` back as a
+ * LITERAL newline inside one textblock — the forbidden shape, restored by the
+ * feature meant to put the document back. Found in review.
+ *
+ * Overriding a recorded `"hard"` here is deliberate, not a loss: a hard break is
+ * unrepresentable in this file, so whatever the record says, the bytes said
+ * boundary and the next open will too.
+ */
+function plaintextRestoreBreaks(
+  oldText: string,
+  format: string | undefined,
+): RestoreBreak[] | null {
+  if (!isPlaintextFormat(format) || !oldText.includes("\n")) return null;
+  const breaks: RestoreBreak[] = [];
+  for (let i = oldText.indexOf("\n"); i !== -1; i = oldText.indexOf("\n", i + 1)) {
+    breaks.push({ at: i, kind: "block" });
+  }
+  return breaks;
+}
+
+/** The flat text that accepting `newText` at `pos` actually writes. */
+function appliedProjection(
+  editor: TiptapEditor,
+  pos: number,
+  newText: string,
+  format: string | undefined,
+): string {
+  if (!isPlaintextFormat(format) || !LINE_ENDING_TEST.test(newText)) return newText;
+  if (isCodeContext(editor, pos)) return newText;
+  const { lines, collapse } = plaintextBlockPlan(editor, pos, newText);
+  return lines.join(collapse ? " " : "\n");
+}
+
+/**
+ * Accept a multi-line suggestion into a plaintext document as separate blocks.
+ *
+ * Uses an OPEN slice for the same reason the undo path does: `insertContentAt`
+ * given closed block nodes at an inline position routes to `tr.replaceWith` →
+ * `new Slice(frag, 0, 0)`, which splits the host block *around* the insertion
+ * instead of merging into it — so replacing the middle of `pre|X|post` yields
+ * four paragraphs where two belong. `openStart`/`openEnd` of 1 says "these ends
+ * are cut, join them to whatever they land beside".
+ *
+ * Marks are stamped explicitly, matching `literalInlineContent`: `tr.replace`
+ * does not inherit `marksAcross` the way `tr.insertText` does, so leaving them
+ * off would make the same suggestion keep its bold on one line and lose it on
+ * two.
+ */
+function applyAsBlocks(
+  editor: TiptapEditor,
+  from: number,
+  to: number,
+  newText: string,
+  marks: JSONContent["marks"],
+): boolean | null {
+  const { schema } = editor.state;
+  // The HOST block's type and attributes, not a hardcoded paragraph. Producing
+  // paragraphs inside a heading would drop the `#` run from the file — the same
+  // defect `flattenPlaintextBreaks` had when it built bare elements, and the same
+  // class as the table-alignment loss in #1448: a block rebuilt without its
+  // attributes serializes as a different block.
+  const host = editor.state.doc.resolve(from).parent;
+  const type = host.isTextblock ? host.type.name : "paragraph";
+  const attrs = host.isTextblock ? host.attrs : undefined;
+
+  const { lines, collapse } = plaintextBlockPlan(editor, from, newText);
+  const asBlocks = collapse ? [lines.join(" ")] : lines;
+
+  // Splitting is only correct where the receiving textblock is a direct child of
+  // the doc — the same predicate, and the same measured reason, as the undo path's
+  // `canRestoreBlockBoundary`: inside a list item a split yields ONE item holding
+  // two paragraphs where two items belong, and inside a table cell it is worse.
+  // The undo path has refused this since #1486; accept did not, which made two
+  // halves of one feature disagree about the same document shape. Declining lets
+  // the caller fall back to the hard-break path.
+  //
+  // A heading needs no check: it collapses to a single block, so there is no
+  // boundary to invent.
+  if (asBlocks.length > 1 && !canRestoreBlockBoundary(editor, from)) return null;
+
+  const nodes = asBlocks.map((line) =>
+    schema.nodeFromJSON({
+      type,
+      ...(attrs ? { attrs } : {}),
+      // A zero-length text node is invalid in ProseMirror, so an empty line is
+      // an empty paragraph — which is what an empty line in the file is.
+      content: line.length > 0 ? [{ type: "text", text: line, ...(marks ? { marks } : {}) }] : [],
+    }),
+  );
+  return (
+    editor
+      .chain()
+      .focus()
+      // Claude wrote this text; without the tag `Authorship.onTransaction` stamps
+      // it as the user's (#1388). Inside the chain so it tags the same transaction.
+      .setMeta(AUTHORSHIP_ORIGIN_META, "claude")
+      .command(({ tr }) => {
+        tr.replace(from, to, new Slice(Fragment.from(nodes), 1, 1));
+        return true;
+      })
+      .run()
+  );
+}
+
 /**
  * Apply an annotation's replacement text in the editor.
  *
@@ -133,6 +286,7 @@ export function applySuggestion(
   ann: Annotation,
   editor: TiptapEditor,
   ydoc: Y.Doc | null,
+  format?: string,
 ): boolean {
   if (ann.suggestedText === undefined) return false;
 
@@ -144,14 +298,36 @@ export function applySuggestion(
   }
 
   try {
+    const inCode = isCodeContext(editor, resolved.from);
+    const marks = marksAcrossRange(editor, resolved.from, resolved.to);
+
+    // #1460: in a plaintext document a multi-line suggestion has to become
+    // BLOCKS, not hard breaks.
+    //
+    // `literalInlineContent` renders every newline as a `hardBreak`, which is
+    // right for markdown — that is what a suggestion string means, and the
+    // serializer writes it as a trailing `\`. A plaintext file has no way to
+    // spell it: save joins blocks with `\n`, so a hardBreak and a block boundary
+    // produce identical bytes, and the next open reads the bytes. Accepting a
+    // two-line suggestion would leave a document whose model disagrees with its
+    // own file.
+    //
+    // A code block is exempt on both counts — it stores newlines literally and
+    // its content expression admits no hardBreak, so there is nothing to convert.
+    if (isPlaintextFormat(format) && !inCode && LINE_ENDING_TEST.test(newText)) {
+      const asBlocks = applyAsBlocks(editor, resolved.from, resolved.to, newText, marks);
+      // `null` = declined because splitting there would invent structure. Fall
+      // through to the hard-break path rather than refusing the accept: inside a
+      // list or a table the plaintext file has already lost that structure on the
+      // next reload, so a hardBreak there is no new loss, while a split would
+      // rewrite the container in a way the user did not ask for.
+      if (asBlocks !== null) return asBlocks;
+    }
+
     // Inline JSON, never the raw string: `insertContentAt` HTML-parses a string
     // argument, which downgraded every hard break to a soft wrap and let markup
     // in a suggestion restructure the document (#1477).
-    const content = literalInlineContent(
-      newText,
-      isCodeContext(editor, resolved.from),
-      marksAcrossRange(editor, resolved.from, resolved.to),
-    );
+    const content = literalInlineContent(newText, inCode, marks);
     let chain = editor
       .chain()
       .focus()
@@ -190,6 +366,17 @@ export interface UseAnnotationReviewParams {
    * `targets[reviewIndex]`.
    */
   getActiveAnnotationId?: () => string | null;
+  /**
+   * The ACTIVE document's format, re-read on use (#1460). A plaintext document
+   * cannot hold a newline inside a block, so a multi-line suggestion has to be
+   * accepted as separate blocks rather than as hard breaks.
+   *
+   * A getter, not a value, for the same reason the editor extensions take one:
+   * Save-As promotes a document in place, so a format captured once outlives its
+   * own truth. Omitted ⇒ `undefined` ⇒ treated as not plaintext, leaving accept
+   * exactly as it was.
+   */
+  getFormat?: () => string | undefined;
   /**
    * Called when accepting a suggestion fails because its range could not be
    * resolved (e.g. the underlying text changed since the suggestion was
@@ -241,6 +428,7 @@ export function useAnnotationReview({
   getActiveAnnotationId,
   onApplyFailed,
   onUndoFailed,
+  getFormat,
 }: UseAnnotationReviewParams): UseAnnotationReviewReturn {
   // Reactive state
   let reviewIndex = $state(0);
@@ -275,7 +463,7 @@ export function useAnnotationReview({
     if (status === "accepted" && ann.suggestedText !== undefined) {
       const editor = getEditor();
       if (editor) {
-        const applied = applySuggestion(ann, editor, y);
+        const applied = applySuggestion(ann, editor, y, getFormat?.());
         if (!applied) {
           // Revert annotation status — text replacement failed
           map.set(id, { ...ann, status: "pending" });
@@ -363,7 +551,14 @@ export function useAnnotationReview({
             return false;
           }
           const currentText = rangeText(editor, resolved.from, resolved.to);
-          if (currentText !== newText) {
+          // Compared against what accept ACTUALLY WROTE, not against
+          // `suggestedText` — in a plaintext document those differ (#1460): a
+          // heading's lines are joined with spaces, and every line ending is
+          // normalized to `"\n"`. Comparing the raw suggestion made a heading
+          // accept permanently un-undoable while looking like a transient
+          // "text changed" decline.
+          const expectedText = appliedProjection(editor, resolved.from, newText, getFormat?.());
+          if (currentText !== expectedText) {
             console.warn(`[undo] Text changed since accept for annotation ${id}, skipping`);
             scheduleRemoval(id);
             return false;
@@ -397,7 +592,9 @@ export function useAnnotationReview({
             // inside one a newline is genuinely a newline — so the recorded
             // structure is deliberately ignored rather than used to build
             // schema-invalid content. Mirrors `asCodeText` on the accept path.
-            inCode ? [] : ann.textSnapshotBreaks,
+            inCode
+              ? []
+              : (plaintextRestoreBreaks(oldText, getFormat?.()) ?? ann.textSnapshotBreaks),
             marksAcrossRange(editor, resolved.from, resolved.to),
           );
           // Checked BEFORE `restored.blocks`, because an opaque boundary produces

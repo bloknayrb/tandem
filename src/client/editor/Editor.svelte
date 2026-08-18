@@ -21,6 +21,7 @@ import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
 import { FindReplaceExtension } from "./extensions/find-replace";
 import { HeadingCollapseExtension } from "./extensions/heading-collapse";
+import { PlaintextBreaksExtension } from "./extensions/plaintext-breaks";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./slash-menu";
 import { applyLink, getInitialLinkHref } from "./toolbar/handlers";
@@ -177,8 +178,20 @@ $effect(() => {
       // runtime-param extensions. Default off; conditionally included based
       // on the tracked `smartTypographyOn` above.
       ...(smartTypographyOn ? [Typography] : []),
+      // #1460: a plaintext document cannot store a newline inside a textblock,
+      // so Shift+Enter has to split the block instead of inserting a hardBreak.
+      //
+      // `getFormat` is a live getter, NOT `untrack`ed like `filePath` above, and
+      // the difference is the point: Save-As promotes a document in place (same
+      // docId, same ydoc, same provider), so this editor survives a `.md`
+      // scratchpad becoming a `.txt` file. A captured format would stay "md" and
+      // keep accepting hardBreaks into a document that is now plaintext.
+      PlaintextBreaksExtension.configure({ getFormat: () => format ?? undefined }),
     ],
-    editorProps: makeEditorProps(untrack(() => spellcheckOn)),
+    editorProps: makeEditorProps(
+      untrack(() => spellcheckOn),
+      () => format ?? undefined,
+    ),
     editable: untrack(() => !readOnly),
     autofocus: untrack(() => !readOnly),
   });
@@ -250,7 +263,13 @@ $effect(() => {
 $effect(() => {
   const ed = editor;
   if (!ed) return;
-  ed.setOptions({ editorProps: makeEditorProps(spellcheckOn) });
+  // The format getter has to be re-supplied here too. `setOptions` replaces
+  // `editorProps` wholesale, so omitting it would silently drop the #1460 paste
+  // guard the moment anyone toggles spellcheck — the guard would be present,
+  // correct, and unreachable. Passing a getter rather than a value keeps this
+  // effect from gaining `format` as a dependency: the closure is built here but
+  // only read later, inside a paste handler.
+  ed.setOptions({ editorProps: makeEditorProps(spellcheckOn, () => format ?? undefined) });
 });
 
 // -- Keep CollaborationCursor name synced with stored display name --------
