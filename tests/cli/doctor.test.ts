@@ -24,7 +24,10 @@ import {
   setupApplyRemedy,
   summarizeDoctorResults,
 } from "../../src/cli/doctor.js";
-import { claudeDesktopConfigPath } from "../../src/shared/integrations/client-config-paths.js";
+import {
+  claudeCodeConfigPath,
+  claudeDesktopConfigPath,
+} from "../../src/shared/integrations/client-config-paths.js";
 import { allocPort } from "../helpers/alloc-port.js";
 
 /**
@@ -1855,6 +1858,115 @@ describe("desktop-mcp-config remedies reach both branches", () => {
     // The parse detail must stay out: V8 SyntaxErrors quote the source, and
     // this file holds `env.TANDEM_AUTH_TOKEN`.
     expect(warn?.message).not.toContain("not json");
+  });
+});
+
+// Three wiring gaps found in review: `checkUserMcpConfig` (~/.claude.json),
+// `checkMcpJson`'s override object, and `brokenFileFix`'s four branches had
+// zero test coverage of the REAL call sites, only of the underlying helpers
+// in isolation — exactly the class of bug `desktop-mcp-config remedies reach
+// both branches` above exists to catch for the desktop-config twin. Reverting
+// each of these three sites to its pre-fix shape (verified by hand during
+// review) left the rest of the suite green, which is what made them worth
+// closing.
+describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "tandem-doctor-usermcp-"));
+    vi.stubEnv("HOME", home);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const userMcpResult = async (): Promise<{ status: string; fix?: string } | undefined> => {
+    const report = await runDoctor();
+    return report.results.find((x) => x.check === "user-mcp-config" && x.status === "warn");
+  };
+
+  it("does not produce a dangling clause when ~/.claude.json is malformed JSON", async () => {
+    writeFileSync(claudeCodeConfigPath({ homeOverride: home }), "{ not json");
+
+    const warn = await userMcpResult();
+    // The bug this closes: `${setupApplyRemedy(false)} — that rewrites it`
+    // renders "...not the desktop app.) — that rewrites it", a dangling
+    // clause after an already-finished sentence.
+    expect(warn?.fix).not.toContain("..");
+    expect(warn?.fix).toContain("Tandem backs the file up before rewriting it.");
+  });
+
+  it("still names a fallback when ~/.claude.json does not exist at all", async () => {
+    // No file written — home is a fresh empty temp dir.
+    const warn = await userMcpResult();
+    expect(warn?.message).toContain("not found");
+    expect(warn?.fix).toContain("project-local .mcp.json");
+    expect(warn?.fix).not.toContain("..");
+  });
+});
+
+describe("checkMcpJson wiring (.mcp.json)", () => {
+  let repoDir: string;
+  let cwdSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  beforeEach(() => {
+    repoDir = mkdtempSync(join(tmpdir(), "tandem-doctor-mcpjson-"));
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(repoDir);
+  });
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+    cwdSpy = undefined;
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  const mcpJsonResult = async (): Promise<{ status: string; fix?: string } | undefined> => {
+    const report = await runDoctor();
+    return report.results.find((x) => x.check === "mcp-json" && x.status === "warn");
+  };
+
+  it("overrides the default remedy for a bare-command tandem-channel entry", async () => {
+    writeFileSync(
+      join(repoDir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+          "tandem-channel": {
+            command: "node",
+            args: ["src/channel/index.ts"],
+            env: { TANDEM_URL: "http://127.0.0.1:3479" },
+          },
+        },
+      }),
+    );
+
+    const warn = await mcpJsonResult();
+    // The override this call site supplies, not the generic bare-command fix
+    // (`setupApplyRemedy(...)`-shaped) that `.claude.json`/desktop-config
+    // entries get — a project-local .mcp.json is outside anything those
+    // remedies can touch.
+    expect(warn?.fix).toContain("Edit .mcp.json and give tandem-channel an absolute path");
+    expect(warn?.fix).toContain("not managed by Tandem's startup repair");
+  });
+
+  it.each([
+    ["unreadable file", () => mkdirSync(join(repoDir, ".mcp.json"))],
+    ["invalid JSON", () => writeFileSync(join(repoDir, ".mcp.json"), "{ not json")],
+    ["missing mcpServers key", () => writeFileSync(join(repoDir, ".mcp.json"), "{}")],
+    [
+      "missing tandem entry",
+      () => writeFileSync(join(repoDir, ".mcp.json"), JSON.stringify({ mcpServers: {} })),
+    ],
+  ])("%s gets brokenFileFix, not a hardcoded CLI-only remedy", async (_label, write) => {
+    write();
+
+    const warn = await mcpJsonResult();
+    expect(warn?.fix).toContain(".mcp.json.example");
+    // brokenFileFix routes through setupApplyRemedy rather than hardcoding
+    // "tandem setup --apply" — a desktop-only reader has no way to run that.
+    expect(warn?.fix).toMatch(/tandem setup --apply|AI Assistant/);
   });
 });
 
