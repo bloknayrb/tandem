@@ -12,7 +12,12 @@ import { anchorFlatRange } from "../../../shared/positions/ydoc";
 import type { AuthorshipRange } from "../../../shared/types";
 import { isAuthorshipAuthor } from "../../../shared/types";
 import { generateAuthorshipId } from "../../../shared/utils";
-import { flatOffsetToPmPos, pmSelectionToFlat, relRangeToPmPositions } from "../../positions";
+import {
+  flatOffsetToPmPos,
+  pmPosToFlatOffset,
+  pmSelectionToFlat,
+  relRangeToPmPositions,
+} from "../../positions";
 
 export const authorshipPluginKey = new PluginKey("tandemAuthorship");
 
@@ -313,6 +318,96 @@ function splitCoveringEntries(
   return pieces;
 }
 
+/**
+ * Extend the previous stamp instead of adding a new one, when the new text
+ * carries straight on from it.
+ *
+ * WHY. The map gains one entry per doc-changing transaction and is never
+ * compacted — `reapableEntryIds`'s comment above says five figures in an
+ * afternoon, and since anchored entries stopped being reaped (#1480, because
+ * nothing restores a Y.Map entry on undo) there is no removal path left at all.
+ * It is visible rather than theoretical: `tests/e2e/authorship-attribution.spec.ts`
+ * types 24 characters and gets 24 entries, 24 inline decorations and 24
+ * one-character spans in the DOM.
+ *
+ * Measured, `Y.encodeStateAsUpdate` over 500 writes: 500 distinct keys is
+ * 136,290 bytes, 500 re-sets of ONE key is 310. A 440x reduction in the session
+ * file — but that number is a property of `doc.gc`, not of this function. Every
+ * `new Y.Doc(` in `src/` takes the default (gc on) today; setting `gc: false`
+ * anywhere to preserve history would silently take the saving away, because the
+ * overwritten values stop being collected.
+ *
+ * NOTHING IS RE-MINTED. The merged anchor is the candidate's existing `fromRel`
+ * plus the new stamp's `toRel`; the two interior anchors are dropped. Same
+ * principle as the split's outer anchors, and for the same reason — re-deriving
+ * a known-good CRDT anchor pushes it back through the PM-Y model seam that
+ * drifted silently in #1450/#1459, and `flatOffsetToRelPos`'s assoc-directed
+ * plus-or-minus-one retry means a bad outcome comes back non-null rather than
+ * failing. The two endpoints need not share a `Y.XmlText`:
+ * `createAbsolutePositionFromRelativePosition` derives the type from the
+ * anchored item's own parent, so they resolve independently. Measured across a
+ * hardBreak, where they genuinely differ.
+ *
+ * ADJACENCY IS TESTED IN PM POSITIONS, not flat offsets — equally injective
+ * across block boundaries and two document walks cheaper, the same trade
+ * `splitCoveringEntries` makes. Both are safe against the cases that look
+ * dangerous: every block separator costs exactly one flat character, so two
+ * stamps either side of a paragraph break differ by one and never merge; a
+ * heading prefix is charged identically on both sides of the comparison and
+ * cancels; and a hardBreak breaks the chain on its own, because the break's own
+ * stamp cannot anchor at all.
+ *
+ * The `to` endpoint is `assoc: -1` (sticks left), which is what makes this work:
+ * it does not move when the next character is typed at exactly that boundary.
+ *
+ * THE COST BEING BOUGHT, and it is real. Per-character entries made an insertion
+ * landing strictly inside one almost impossible; long entries make
+ * `splitCoveringEntries` routine. Its all-or-nothing decline leaves the entry
+ * covering the other author's insertion — one character before this, a whole run
+ * after. Runs stay bounded by block boundaries, hardBreaks, author changes,
+ * non-adjacency and multi-stamp transactions, and interior offsets inside one
+ * paragraph mint reliably, so this is accepted rather than mitigated.
+ */
+function coalesceIntoPrevious(
+  ydoc: Y.Doc,
+  authorshipMap: Y.Map<unknown>,
+  pmDoc: PmNode,
+  candidateId: string | null,
+  stamp: AuthorshipRange,
+  insertion: InsertedSpan,
+): AuthorshipRange | null {
+  if (!candidateId || !stamp.relRange) return null;
+  const candidate = authorshipMap.get(candidateId) as AuthorshipRange | undefined;
+  if (!candidate?.relRange || candidate.author !== stamp.author) return null;
+
+  const at = relRangeToPmPositions(ydoc, pmDoc, candidate.relRange);
+  if (!at) return null;
+  // NOTE THE MISSING `at.from >= at.to` GUARD, which `splitCoveringEntries`
+  // does have and which plan review recommended adding here for symmetry. It is
+  // deliberately absent, and the reasoning is measured rather than argued.
+  //
+  // A COLLAPSED candidate is one whose text has been deleted, and the case is
+  // not exotic — it is delete-a-word-and-retype. Merging into it cannot
+  // mis-attribute: the merge already requires the same author, and `from == to`
+  // means there is no live content between the endpoints, so the merged span
+  // covers only the newly typed text. Measured both ways on that scenario, and
+  // on undoing back through it: the render is `user="XY"` and then `user="abc"`
+  // either way. The only difference is the entry count — 2 with the guard, 1
+  // without — because the guard leaves the collapsed entry behind, permanently,
+  // since anchored entries are never reaped. That is precisely the accumulation
+  // this function exists to stop, manufactured by the guard meant to protect it.
+  if (at.to !== insertion.pm.from) return null;
+
+  return {
+    ...candidate,
+    // Both ends are FLAT offsets. `at` is in PM positions and mixing the two
+    // is the drift class of #1450/#1459 — the conversion is why this walk is
+    // paid only for a candidate that has already passed every other test.
+    range: { from: pmPosToFlatOffset(pmDoc, at.from), to: stamp.range.to },
+    relRange: { fromRel: candidate.relRange.fromRel, toRel: stamp.relRange.toRel },
+  };
+}
+
 const GUTTER_NODE_TYPES = new Set(["paragraph", "heading"]);
 
 /**
@@ -505,6 +600,10 @@ interface AuthorshipOptions {
   ydoc: Y.Doc | null;
 }
 
+interface AuthorshipStorage {
+  lastStampId: string | null;
+}
+
 /**
  * Tiptap extension that renders authorship tracking stored in Y.Map('authorship')
  * as ProseMirror inline decorations. Uses the Y.Map overlay strategy (not inline
@@ -515,11 +614,29 @@ interface AuthorshipOptions {
  * {@link AUTHORSHIP_ORIGIN_META}, and drops entries whose text the same
  * transaction deleted.
  */
-export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
+export const AuthorshipExtension = Extension.create<AuthorshipOptions, AuthorshipStorage>({
   name: "tandemAuthorship",
 
   addOptions() {
     return { ydoc: null };
+  },
+
+  /**
+   * Per-editor state for stamp coalescing.
+   *
+   * `lastStampId` names the entry the previous transaction stamped, so a run of
+   * typing can extend one entry instead of adding one per keystroke. Storage
+   * rather than module scope because the app rebuilds the editor per tab and
+   * tests run several in one process — a module-level id would leak a candidate
+   * from one document into another.
+   *
+   * The editor is rebuilt whenever the Y.Doc identity changes (`Editor.svelte`
+   * keys on it), so a tab switch or document swap resets this for free.
+   * `setOptions` does not recreate the extension manager, so the readOnly and
+   * spellcheck effects cannot wipe it.
+   */
+  addStorage() {
+    return { lastStampId: null };
   },
 
   addProseMirrorPlugins() {
@@ -653,7 +770,17 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
     if (!ydoc) return;
 
     // Skip remote syncs — y-prosemirror tags its own applies with this key.
-    if (transaction.getMeta(ySyncPluginKey)) return;
+    if (transaction.getMeta(ySyncPluginKey)) {
+      // But drop the coalescing candidate on the way out, and note that this
+      // has to happen BEFORE the return rather than after it. A remote edit, an
+      // MCP edit or a force-reload arrives here and changes the document under
+      // a candidate the next keystroke would otherwise still extend. Re-resolving
+      // catches a candidate whose OFFSETS moved; it does not catch one that
+      // should no longer be a candidate at all. One line, and it removes the
+      // whole class rather than the instance.
+      if (transaction.docChanged) this.storage.lastStampId = null;
+      return;
+    }
     // Skip our own rebuild/toggle transactions
     if (transaction.getMeta(authorshipPluginKey)) return;
     // Skip if doc didn't change
@@ -785,6 +912,38 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
     // "strictly inside" is a meaningful question — and the scan reads the live
     // ydoc, which already holds every one of this transaction's insertions.
     const splitPieces = splitCoveringEntries(ydoc, authorshipMap, pmDoc, insertedSpans, author);
+
+    // Coalescing, and only for a transaction that produced EXACTLY ONE stamp.
+    // Typing is exactly that; a multi-insertion transaction (find-replace-all)
+    // produces several non-adjacent stamps, is not repeated per keystroke, and
+    // has no single "the stamp" to extend.
+    const merged =
+      additions.length === 1 && insertedSpans.length === 1
+        ? coalesceIntoPrevious(
+            ydoc,
+            authorshipMap,
+            pmDoc,
+            this.storage.lastStampId,
+            additions[0],
+            insertedSpans[0],
+          )
+        : null;
+    if (merged) additions[0] = merged;
+
+    // What the NEXT transaction may extend. Deliberately three-valued:
+    //
+    //  - exactly one stamp   -> that stamp (or the entry it merged into)
+    //  - several stamps      -> null; picking one of them would be arbitrary
+    //  - NO stamp at all     -> left untouched, and this is the case that
+    //    decides how much the change is worth. Backspace is a doc-changing
+    //    transaction that stamps nothing, and backspace-then-retype is the
+    //    commonest editing rhythm there is. Clearing here would start a fresh
+    //    entry every time and gut the saving. It is safe to keep: the deletion
+    //    clips the candidate's `toRel`, so the next typed character is still
+    //    exactly adjacent to it and the adjacency test does the deciding.
+    if (additions.length === 1) this.storage.lastStampId = additions[0].id;
+    else if (additions.length > 1) this.storage.lastStampId = null;
+
     if (additions.length === 0 && removals.length === 0 && splitPieces.length === 0) return;
     // One transaction for both halves, and removals first: the reap compares
     // BEFORE-frame offsets, while an addition's range is in final-frame

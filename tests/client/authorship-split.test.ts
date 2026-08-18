@@ -332,15 +332,17 @@ describe("an insertion inside a stamped range splits it", () => {
     editor.view.dispatch(editor.state.tr.split(mid));
 
     expect(editor.state.doc.childCount, "the paragraph really did split").toBe(2);
-    // `""` is the second, adjacent thing the issue records: the split step
-    // reports `insertedLen > 0` for the block separator, so it mints a stamp
-    // covering no visible text at all. Harmless, pure noise in a map that
-    // already grows without bound, and asserted rather than filtered so that
-    // suppressing it is a visible change rather than a silent one.
+    // This used to be `["", "USER"]`. The `""` was the second, adjacent thing
+    // #1512 records: the split step reports `insertedLen > 0` for the block
+    // separator, so it minted a stamp covering no visible text at all. Stamp
+    // coalescing removed it — the separator stamp is adjacent to the run it
+    // follows and shares its author, so it merges into that entry instead of
+    // becoming an entry of its own. Half of #1512 closed as a side effect,
+    // which is why the expectation moved rather than the code.
     expect(
       decoratedTextByAuthor(ydoc, editor).user,
       "the tail moved into the new block and lost its attribution — the limitation",
-    ).toEqual(["", "USER"]);
+    ).toEqual(["USER"]);
   });
 
   it("an UNANCHORED covering entry degrades rather than splitting", () => {
