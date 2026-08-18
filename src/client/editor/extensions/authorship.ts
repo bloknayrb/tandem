@@ -7,7 +7,7 @@ import { ySyncPluginKey } from "y-prosemirror";
 import * as Y from "yjs";
 import { AUTHORSHIP_TOGGLE_KEY, Y_MAP_AUTHORSHIP } from "../../../shared/constants";
 import { withBrowser } from "../../../shared/origins";
-import { toPmPos } from "../../../shared/positions/types";
+import { type DocumentRange, type PmPos, toPmPos } from "../../../shared/positions/types";
 import { anchorFlatRange } from "../../../shared/positions/ydoc";
 import type { AuthorshipRange } from "../../../shared/types";
 import { isAuthorshipAuthor } from "../../../shared/types";
@@ -121,6 +121,198 @@ function reapableEntryIds(
   return ids;
 }
 
+/**
+ * One insertion from the transaction, in both coordinate systems.
+ *
+ * The PM pair is what containment is tested against, and the flat pair is what
+ * the resulting pieces are cut and anchored with. Both are already computed on
+ * the stamp path, so carrying the pair costs nothing and saves two O(document)
+ * walks per entry examined.
+ */
+interface InsertedSpan {
+  pm: { from: PmPos; to: PmPos };
+  flat: DocumentRange;
+}
+
+/**
+ * Split any entry that an insertion landed *strictly inside* (#1471 gap 3).
+ *
+ * THE DEFECT THIS EXISTS FOR. A range's two endpoints are independent CRDT
+ * anchors, which is what makes a deletion self-healing — clip either side and
+ * the entry resolves to exactly the sub-span it still owns, with no arithmetic.
+ * An insertion in the MIDDLE is the one case that property does not cover:
+ * neither endpoint's item is touched, the new items simply arrive between them,
+ * so a `"user"` entry silently stretches over text it did not author. The
+ * insertion is stamped as `"claude"` at the same time, and
+ * `buildAuthorshipDecorations` then paints two inline decorations with
+ * conflicting `data-tandem-author` over the same characters while the gutter
+ * counts them for both authors, skewing `dominant`. Measured before this
+ * landed: typing `CLAUDE` into the middle of a user-authored `USERTEXT` left
+ * `user="USERCLAUDETEXT"` and `claude="CLAUDE"`. That is #1388's render.
+ *
+ * Note that anchoring made this *worse* in the sense that matters. With frozen
+ * offsets the stretch was unreliable — the entry drifted and half-healed into a
+ * different wrong. Anchored, it is stable, reproducible and permanent, so it
+ * has to be handled rather than tolerated.
+ *
+ * THE SPLIT. The covering entry becomes the sub-spans it still owns: the first
+ * keeps the original id, author and timestamp, the rest inherit author and
+ * timestamp under ids DERIVED from the original (`{id}#1`, `{id}#2`). No
+ * character ends up covered by two different authors, and the new author's own
+ * stamps are written unchanged.
+ *
+ * The derived ids are not cosmetic. `stampClaudeAuthorshipWholeDoc` keys server
+ * entries as `claude-block-{i}` precisely so a re-open, session restore or
+ * `tandem_appendContent` re-`set`s the same key instead of accumulating
+ * duplicates. Freshly generated ids would put every piece but the first beyond
+ * the reach of that mechanism: the re-stamp would rewrite `claude-block-3`,
+ * silently undo the split, AND leave the orphaned right-hand pieces painting
+ * underneath it — durably, since the authorship map is persisted wholesale into
+ * the session file. A derived id keeps the whole family findable by prefix, and
+ * the re-stamp drops the siblings before re-setting the base key.
+ *
+ * DIFFERENT AUTHOR ONLY, and this is a performance gate on the keystroke path
+ * rather than a semantic one. Splitting a same-author entry changes no inline
+ * render — the union of the pieces is the original span, painted the same
+ * colour — so the only thing it ever fixed was the gutter's per-character
+ * counts, and those are now deduplicated at the point they are counted. Two
+ * independent reviews measured what the ungated version costs: it resolves
+ * every anchored entry through two document walks before testing containment,
+ * on every keystroke, against a map whose own comment above says it "reaches
+ * five figures in an afternoon's typing". Measured at 42-51x slower per
+ * keystroke at 1,500 entries — including at the end of the document, where
+ * nothing splits at all. The author check is the one filter that costs nothing
+ * and removes the dominant case: a user typing inside their own text.
+ *
+ * ONE PASS OVER ALL OF THE TRANSACTION'S INSERTIONS, not one pass per
+ * insertion, and that is a correctness requirement rather than a saving. A
+ * per-insertion pass has to skip any entry it already cut — the pieces are not
+ * in the map yet, so a second pass would measure the pre-split span and emit
+ * overlapping ones — and skipping means the second cut degrades to the very
+ * double-coverage this function exists to remove. Find-replace-all is exactly
+ * that shape: several `"claude"` insertions into one `"user"` entry in a single
+ * transaction. Cutting by the whole sorted set at once has no such case.
+ *
+ * WHY DELETING-AND-REPLACING IS SAFE HERE WHEN THE REAP'S DELETE WAS NOT.
+ * Nothing restores a Y.Map entry on undo, which is why the reap stopped
+ * deleting anchored entries. The split does not have that problem: if the user
+ * undoes the insertion, the pieces stay split but their anchors resolve back
+ * ADJACENT — `[a,m)` and `[m,b)` — which renders identically to the single
+ * `[a,b)` it came from, both as inline decorations and in the gutter's
+ * per-character counts. The split is lossy in identity, not in attribution.
+ *
+ * The containment test is STRICT, but be precise about what that buys, because
+ * it is less than it looks and a future reader will otherwise trust it too far.
+ * What keeps a boundary insertion from splitting anything is the ASSOC PAIR
+ * (`from` sticks right, `to` sticks left): text inserted at either edge lands
+ * outside the resolved span, so the entry never covers it and the filter
+ * rejects on the far endpoint regardless. Mutation-tested — relaxing `<` to
+ * `<=` here fails nothing. It stays strict as a guard on an invariant held
+ * elsewhere, not as the mechanism.
+ *
+ * All-or-nothing on the anchors. If any piece declines to mint we leave the
+ * entry alone rather than writing a partly-anchored set — an unanchored piece
+ * would be a frozen range with no way back, which is the exact shape #1471 is
+ * about. Unanchored entries are skipped for the same reason: their stored
+ * offsets are not trustworthy enough to cut on.
+ *
+ * THE TWO OUTER ANCHORS ARE REUSED, NOT RE-MINTED. `spans[0].from` is the
+ * entry's existing `fromRel` and the last span's `to` is its existing `toRel` —
+ * re-deriving them would push two known-good CRDT anchors back through the
+ * PM↔Y model seam (the correspondence that drifted silently in #1450/#1459) for
+ * no gain, and then overwrite the originals with the result. The all-or-nothing
+ * guard would not catch a bad outcome either: `flatOffsetToRelPos` has an
+ * assoc-directed ±1 retry whose whole purpose is to return a NON-null anchor at
+ * a different offset than asked for. Only the interior boundaries are new, so
+ * only they are minted.
+ *
+ * NOT COVERED: a block-splitting insertion (Enter, `splitListItem`). y-prosemirror
+ * implements the split by deleting the tail out of the original `Y.XmlText` and
+ * re-inserting it into a new one, which destroys the covering entry's `toRel`
+ * before this function ever resolves it — the entry has already collapsed to
+ * the split point, so there is nothing left to cut and the tail ends up
+ * unattributed. That is pre-existing rather than introduced here, and fixing it
+ * needs a different mechanism (re-anchor across the split inside the step loop,
+ * where the before-frame still exists). Filed as #1512 and pinned in
+ * `authorship-split.test.ts`; stated here so this does not read as complete
+ * coverage of insertions.
+ */
+function splitCoveringEntries(
+  ydoc: Y.Doc,
+  authorshipMap: Y.Map<unknown>,
+  pmDoc: PmNode,
+  insertions: readonly InsertedSpan[],
+  author: AuthorshipRange["author"],
+): AuthorshipRange[] {
+  if (authorshipMap.size === 0 || insertions.length === 0) return [];
+  // Sorted once for the whole map — the cut set is the same for every entry.
+  const ordered = [...insertions].sort((a, b) => a.flat.from - b.flat.from);
+  const pieces: AuthorshipRange[] = [];
+  authorshipMap.forEach((value) => {
+    const entry = value as AuthorshipRange;
+    // Both gates BEFORE any document walk — see the performance note above.
+    // Every insertion in one transaction shares a single author (it is read
+    // once, from the transaction meta), so this also disposes of the
+    // nested-insertion case: an insertion landing inside another insertion from
+    // the same transaction is always same-author.
+    if (!entry?.relRange || entry.author === author) return;
+    const at = relRangeToPmPositions(ydoc, pmDoc, entry.relRange);
+    if (!at || at.from >= at.to) return;
+
+    // Containment is tested in PM POSITIONS, and the flat conversion happens
+    // only for the entries that survive it. Both coordinate systems are
+    // monotonic in document order so the test is equivalent, but `pmSelectionToFlat`
+    // is two more O(document) walks and almost every entry fails this filter.
+    const inside = ordered.filter((cut) => at.from < cut.pm.from && at.to > cut.pm.to);
+    if (inside.length === 0) return;
+
+    const flat = pmSelectionToFlat(pmDoc, at);
+
+    // The gaps between the cuts, in order. A zero-width gap — two insertions
+    // that ended up adjacent — is dropped rather than stored: a zero-width
+    // entry paints nothing and would only ever be a puzzle in the map.
+    const spans: DocumentRange[] = [];
+    let cursor = flat.from;
+    for (const cut of inside) {
+      if (cut.flat.from > cursor) spans.push({ from: cursor, to: cut.flat.from });
+      if (cut.flat.to > cursor) cursor = cut.flat.to;
+    }
+    if (flat.to > cursor) spans.push({ from: cursor, to: flat.to });
+
+    // Built aside and published only once every piece has anchored — the
+    // all-or-nothing rule above.
+    const split: AuthorshipRange[] = [];
+    for (const [index, span] of spans.entries()) {
+      const minted = anchorFlatRange(ydoc, span.from, span.to);
+      if (!minted) {
+        warnOnce(
+          "split-declined",
+          "[authorship] Could not anchor every piece of a split; the entry keeps covering the insertion (#1471)",
+        );
+        return;
+      }
+      // Reuse the endpoints that already exist rather than the re-minted ones.
+      const relRange = {
+        fromRel: index === 0 ? entry.relRange.fromRel : minted.fromRel,
+        toRel: index === spans.length - 1 ? entry.relRange.toRel : minted.toRel,
+      };
+      split.push(
+        index === 0
+          ? { ...entry, range: span, relRange }
+          : {
+              id: `${entry.id}#${index}`,
+              author: entry.author,
+              range: span,
+              relRange,
+              timestamp: entry.timestamp,
+            },
+      );
+    }
+    pieces.push(...split);
+  });
+  return pieces;
+}
+
 const GUTTER_NODE_TYPES = new Set(["paragraph", "heading"]);
 
 /**
@@ -232,6 +424,33 @@ export function buildAuthorshipDecorations(
     resolvedRanges.push({ author: entry.author, from, to });
   });
 
+  // Author per character, resolved ONCE for the whole document.
+  //
+  // This used to sum `overlapTo - overlapFrom` per entry per block, which
+  // counts a character once for every entry covering it. Overlap is normal:
+  // consecutive same-author stamps abut and can overlap, and an entry that an
+  // insertion landed inside deliberately keeps covering it when the insertion
+  // is the same author (splitting it there would change no inline render, and
+  // paying two document walks per entry per keystroke to fix a number nobody
+  // can see is what made the split 42-51x slower than the path it sits on).
+  // Summing turned that harmless overlap into inflated `charCount`s that can
+  // flip `dominant` in a mixed-author block — a real skew, and the second half
+  // of the defect the split's comment describes.
+  //
+  // Last writer wins on a genuine two-author conflict, which after the split
+  // should not occur. Cheaper than the old form too: O(covered chars) once,
+  // rather than O(blocks x entries).
+  const AUTHOR_NONE = 0;
+  const AUTHOR_USER = 1;
+  const AUTHOR_CLAUDE = 2;
+  // Every resolved range was bounds-checked (`from >= 0`, `to <= maxPos`)
+  // before it was pushed, so the fill needs no clamping of its own.
+  const authorAt = new Uint8Array(maxPos + 1);
+  for (const r of resolvedRanges) {
+    const code = r.author === "user" ? AUTHOR_USER : AUTHOR_CLAUDE;
+    for (let at = r.from; at < r.to; at++) authorAt[at] = code;
+  }
+
   // Per-block dominant-author gutter decoration — descendants() visits nested blocks too
   doc.descendants((node, offset) => {
     if (!GUTTER_NODE_TYPES.has(node.type.name)) return;
@@ -242,13 +461,12 @@ export function buildAuthorshipDecorations(
     let userChars = 0;
     let claudeChars = 0;
 
-    for (const r of resolvedRanges) {
-      const overlapFrom = Math.max(r.from, blockFrom);
-      const overlapTo = Math.min(r.to, blockTo);
-      if (overlapTo <= overlapFrom) continue;
-      const chars = overlapTo - overlapFrom;
-      if (r.author === "user") userChars += chars;
-      else claudeChars += chars;
+    const countTo = Math.min(blockTo, authorAt.length);
+    for (let at = blockFrom; at < countTo; at++) {
+      const code = authorAt[at];
+      if (code === AUTHOR_NONE) continue;
+      if (code === AUTHOR_USER) userChars++;
+      else claudeChars++;
     }
 
     if (userChars === 0 && claudeChars === 0) return;
@@ -447,6 +665,8 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
     const beforeDoc = transaction.before;
 
     const additions: AuthorshipRange[] = [];
+    /** This transaction's insertions in the FINAL frame — see {@link splitCoveringEntries}. */
+    const insertedSpans: InsertedSpan[] = [];
     /** Deleted spans as flat offsets in the whole-transaction BEFORE frame. */
     const deletedSpans: { from: number; to: number }[] = [];
 
@@ -504,10 +724,11 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
         // cost the transaction its attribution. These are independent failures.
         if (insertedLen > 0) {
           try {
-            const range = pmSelectionToFlat(pmDoc, {
+            const pm = {
               from: toPmPos(toFinal.map(newStart, 1)),
               to: toPmPos(toFinal.map(newEnd, -1)),
-            });
+            };
+            const range = pmSelectionToFlat(pmDoc, pm);
             if (range.to <= range.from) return;
             // Anchor against the LIVE ydoc, which y-prosemirror has already
             // written: Tiptap's `dispatchTransaction` calls `view.updateState`
@@ -543,6 +764,7 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
                 "[authorship] Could not anchor a stamp; it will drift as before (#1471)",
               );
             }
+            insertedSpans.push({ pm, flat: range });
             additions.push({
               id: generateAuthorshipId(author),
               author,
@@ -558,7 +780,12 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
     });
 
     const removals = reapableEntryIds(authorshipMap, deletedSpans);
-    if (additions.length === 0 && removals.length === 0) return;
+    // Gap 3, and it runs after the whole step loop rather than inside it. Both
+    // operands must be FINAL-frame flat offsets — the only frame in which
+    // "strictly inside" is a meaningful question — and the scan reads the live
+    // ydoc, which already holds every one of this transaction's insertions.
+    const splitPieces = splitCoveringEntries(ydoc, authorshipMap, pmDoc, insertedSpans, author);
+    if (additions.length === 0 && removals.length === 0 && splitPieces.length === 0) return;
     // One transaction for both halves, and removals first: the reap compares
     // BEFORE-frame offsets, while an addition's range is in final-frame
     // offsets, so an addition visible to the scan could be deleted by a
@@ -572,6 +799,10 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
     // behaviour; that is the point of the universal rule.
     withBrowser(ydoc, () => {
       for (const id of removals) authorshipMap.delete(id);
+      // Splits before additions only for readability — the two sets cannot
+      // collide. A split targets an anchored entry already in the map, the reap
+      // targets only unanchored ones, and an addition's id is freshly minted.
+      for (const piece of splitPieces) authorshipMap.set(piece.id, piece);
       for (const entry of additions) authorshipMap.set(entry.id, entry);
     });
   },

@@ -224,6 +224,42 @@ describe("stampClaudeAuthorshipWholeDoc — whole-document authorship (#937)", (
     expect(second).toHaveLength(3);
   });
 
+  it("drops split siblings, so re-stamping after a client split stays idempotent", () => {
+    // THE OTHER HALF OF THE `claude-block-{i}` CONTRACT, and the test above
+    // cannot see it: it re-stamps an UNMODIFIED document, where no split has
+    // happened, so it stays green while the mechanism it names is half broken.
+    //
+    // When an insertion lands inside a stamped block the client splits that
+    // entry into `{id}`, `{id}#1`, ... (#1471 gap 3). Re-setting `claude-block-1`
+    // alone would restore the whole-block range ON TOP of pieces that are
+    // still in the map, painting the same characters twice and silently
+    // undoing the split — durably, since the authorship map is persisted
+    // wholesale into the session file. The derived ids exist precisely so this
+    // pass can find the family it no longer fully owns.
+    const doc = makeMarkdownDoc(MULTI_BLOCK_MD);
+    stampClaudeAuthorshipWholeDoc(doc);
+    const map = doc.getMap(Y_MAP_AUTHORSHIP);
+
+    const base = claudeEntries(doc).find((e) => e.id === "claude-block-1") as AuthorshipRange;
+    expect(base, "the fixture depends on this key existing").toBeDefined();
+
+    // Stand in for the client split: the base entry shrinks and two siblings
+    // appear, one of them itself split again.
+    map.set("claude-block-1#1", { ...base, id: "claude-block-1#1" });
+    map.set("claude-block-1#1#2", { ...base, id: "claude-block-1#1#2" });
+    // A same-prefix key that is NOT a sibling — `claude-block-10` must survive,
+    // which is what forces the `#` in the prefix test rather than a bare
+    // `startsWith(base)`.
+    map.set("claude-block-10", { ...base, id: "claude-block-10" });
+    expect(map.size).toBe(6);
+
+    stampClaudeAuthorshipWholeDoc(doc);
+
+    expect([...map.keys()].sort()).toEqual(
+      ["claude-block-0", "claude-block-1", "claude-block-10", "claude-block-2"].sort(),
+    );
+  });
+
   it("preserves pre-existing user authorship ranges (never bulk-clears the map)", () => {
     const doc = makeMarkdownDoc(MULTI_BLOCK_MD);
     const map = doc.getMap(Y_MAP_AUTHORSHIP);

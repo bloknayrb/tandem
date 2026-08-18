@@ -276,7 +276,23 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void 
 
   if (entries.length === 0) return;
 
+  // Split siblings must go before the base key is re-set, or idempotency is
+  // only half true. The client splits an entry an insertion landed inside
+  // (#1471 gap 3) into `{id}`, `{id}#1`, `{id}#2` — the derived ids exist so
+  // this re-stamp can find the family it no longer fully owns. Re-setting
+  // `claude-block-3` alone would restore the whole-block range on top of
+  // pieces that are still there, painting the same characters twice and
+  // silently undoing the split on every re-open. Durably, since the authorship
+  // map is persisted wholesale into the session file.
+  //
+  // Prefix, not exact `#{n}`: a piece that was itself split again is
+  // `claude-block-3#1#2`, and it belongs to the same family.
+  const staleSiblings = [...authorshipMap.keys()].filter((key) =>
+    entries.some(({ key: base }) => key.startsWith(`${base}#`)),
+  );
+
   withMcp(doc, () => {
+    for (const key of staleSiblings) authorshipMap.delete(key);
     for (const { key, entry } of entries) {
       authorshipMap.set(key, entry);
     }
