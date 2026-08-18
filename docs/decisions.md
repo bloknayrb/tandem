@@ -879,7 +879,7 @@ Both are silent from the user's perspective today; both end when the integration
 
 ## ADR-040: Audience and Monetization (Individuals; Same-Canvas Moat; Free Beta to One-Time License)
 
-**Status:** Accepted (2026-06-12) — Supersedes the institutional-market and undecided-revenue framing in docs/positioning.md. All sections (§1–§6) are now fully accepted following legal counsel draft of the BUSL re-scope.
+**Status:** Accepted (2026-06-12) — Supersedes the institutional-market and undecided-revenue framing in docs/positioning.md. All sections (§1–§6) are now fully accepted following legal counsel draft of the BUSL re-scope. **Amended 2026-08-18 (#1346)** — the §3 gate changes shape from per-tool content-write to a surface gate (unlicensed = plain markdown editor, no AI at all); see the amendment below before reading §3 as current.
 
 **Context:** Tandem shipped without a recorded audience or revenue decision. `docs/positioning.md` frames the market as institutions and (§economics) says paying cases "require either a hosted offering or a support contract… This needs a decision." `README.md` said "Tandem is free to use." `docs/roadmap.md` tracks "#394 Monetization" as "tracked outside engineering roadmap." The product is BUSL-1.1 (source-available): the base grant is non-production use only; the **Additional Use Grant** extends limited production use ("Personal use and individual self-hosting are permitted; commercial hosting or resale of the Licensed Work is not") — so individuals already use it in production for free. It converts to MIT at the earlier of the Change Date (2029-06-10 / v1.0 GA + 2 years) **and** the BUSL per-version 4-year floor. This ADR supersedes the institutional-market and undecided-revenue framing.
 
@@ -911,7 +911,42 @@ Both are silent from the user's perspective today; both end when the integration
 - §1/§2 finalized; revenue ceiling is modest and accepted (full commitment, no kill-criterion).
 - **§6 narrowed to Polar for the issuance seam (2026-07-03, #1176):** the issuance Worker (`infra/license-issuance-worker/`) verifies Polar's Standard-Webhooks (svix) signature scheme specifically — it does not implement Paddle's webhook scheme. §6's "Polar.sh or Paddle" framing is still open at the checkout-provider level, but the built issuance seam is Polar-only in practice; adding Paddle later means a second signature-verification path in the Worker, not a drop-in swap.
 
-**Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), `docs/positioning.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1).
+
+**Amendment (2026-08-18, #1346) — unlicensed is a plain markdown editor: a surface gate, not a per-tool one.**
+
+Five decisions (@bloknayrb). §3's *strictness* is unchanged — it was always a hard gate. What changes is the **shape** of what falls inside it, and one of the five is not a licensing decision at all.
+
+**1. Unlicensed = plain markdown editor, no AI integration at all.** Not a read-only AI. The gate becomes a **surface** gate — refuse the AI surfaces outright — rather than the content-write, per-tool gate that is merged today (twelve `gatedTool()` MCP tools plus their `/api` twins, with reads, chat, `open`, save/export and `tandem_resolveAnnotation` explicitly Allowed). Two reasons beyond the commercial one: a twelve-tool enumeration must be re-audited on every new tool and Critical Rule 9 exists because forgetting one half of a pair is a silent hole, whereas a surface refusal has one thing to get right; and "Tandem without a license is a markdown editor" is a sentence a user can hold, where "Claude can read but not annotate" is not.
+
+**Surface A stops gating document rooms.** Today `applyConnectionGate` marks every non-`CTRL_ROOM` connection read-only when restricted. Under this amendment that is close to the inverse of the intent: unlicensed means *your document is fully editable, there is simply no AI*. The `CTRL_ROOM` carve-out inverts with it — `CTRL_ROOM` is kept writable today so chat survives, and chat is now an AI surface that must not.
+
+**2. Annotation resolution is a user action. This is a feature requirement, not a gating carve-out.** Accept and reject belong to the editor UI; the user can resolve, Claude cannot. It holds at **every** license status, licensed included, so it is not conditional on the gate and does not ship dark with it.
+
+*Verified at master.* The user half is **already native** and needs no work: `useAnnotationReview.svelte.ts` `resolveAnnotation()` writes the status straight into `Y.Map('annotations')` and applies any `suggestedText` client-side through ProseMirror, over Hocuspocus. It touches neither MCP nor `/api` — no route exists and the client calls none. The remaining work is therefore **subtractive, not constructive**: retire `tandem_resolveAnnotation` (`src/server/mcp/annotations.ts`), which is wrapped in `withErrorBoundary` and is deliberately ungated today, along with the `store.acceptAnnotation` / `dismissAnnotation` lifecycle entries where they exist only to serve it.
+
+This also **independently confirms the Surface A change above**. Because the user's accept is a Hocuspocus write, a Surface A read-only clamp would block the user from resolving their own annotations — precisely the action this decision makes theirs alone. The two decisions would contradict each other if Surface A kept gating documents.
+
+**3. One enforcement point across every AI surface — OPEN, flagged not answered.** The requirement is that MCP transport, Surface A and the `/api` routes share a single enforcement point. *Verified at master: they do not.* They share a decision **primitive** — `resolveLiveLicenseState()`, with both consumers branching on `status === "restricted"` — but enforcement is spread across five sites, each deciding independently what to do, and rendering refusal three different ways (an MCP error envelope, an HTTP 403, and a silent read-only connection clamp):
+
+1. `gatedTool()` — registration-site wrapper, twelve MCP tools.
+2. Direct in-handler `licenseGate()` — `src/server/mcp/document.ts` and `routes/open.ts` (the `force: true` sub-path). Not discoverable by grepping the wrapper.
+3. `licenseGateMiddleware` — seven mutating `/api` routes, at the registration site.
+4. `applyConnectionGate` — Surface A, Hocuspocus `onAuthenticate`.
+5. `licenseGate()` inside `src/server/local-model/tools.ts` — **the local-model collaborator loop (ADR-039, #1123), which the issue's inventory does not name.** Its own comment states it "bypasses both license enforcement surfaces (no Hocuspocus connection; not an MCP tool)". It is an AI surface, so under decision 1 the whole loop is refused when unlicensed, not merely its three mutating tools.
+
+`deriveLicenseUi` in the client is a sixth, advisory site; it must not be counted as enforcement.
+
+Two surfaces have no enforcement site at all today because the current shape does not gate them, and acquire one under decision 1: **chat** (`CTRL_ROOM`, `tandem_reply`, `tandem_checkInbox`), and the **AI wake/push paths** (`/api/wake`, the channel shim, the plugin monitor, the supervisor), which exist solely to wake a model. Collapsing all of this to one enforcement point is the actual design work this issue now owns.
+
+**4. No fail-open, no grace period.** Licenses are offline-verified and perpetual: the run gate checks the Ed25519 signature only, enforced at the type level by the `SignatureVerified` brand so that wiring in the stricter expiry-checking verifier is a compile error. There is no expiry to fail open from and nothing to specify — ADR-040 as accepted contains no fail-open or grace-period language, and this amendment introduces none.
+
+One precision, so "no expiry" is not over-read: it is a property of **licenses**, not of the trial. The on-device trial clock does end (`TrialInfo.expiresAt`), and a license's own `expiresAt` governs the **update window** alone — never whether the app runs.
+
+**5. Terminology: always "unlicensed", never "expired" or "lapsed".** There are no lapsed users, only people who never bought. This is copy, and the copy that contradicts it is already written: `RESTRICTED_MESSAGE` in `src/server/mcp/license-gate.ts` opens "Your Tandem trial has ended", and the wall, the trial banner and that module's header comment all frame the state as a trial ending. All of it is rewritten at the flip to name the state as unlicensed and the consequence as AI features disabled. The internal `status: "restricted"` identifier is **not** required to change — `license-types.ts` records that both gates decide on that exact literal, so a fourth status value or a rename fails **open** at every enforcement surface until all of them are updated.
+
+**Constraint — everything stays dark.** `LICENSE_GATE_ENABLED` remains `false` in `tsup.config.ts` and the build stays byte-identical with the flag off. This amendment is a design change to merged-but-inert code; no code moves on it here. The gated-set enumeration in [`docs/licensing-explained.md`](licensing-explained.md#the-gated-set--this-list-is-the-api-halfs-review) is superseded in **shape** by decision 1 but remains an accurate description of the code as merged, so it stands as Critical Rule 9's review surface until the surface gate is implemented.
+
+**Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), ADR-039 (local-model collaborator — the fifth enforcement site named in the 2026-08-18 amendment), `docs/positioning.md`, `docs/licensing-explained.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1), #1116 (engineering tracker), #1346 (the 2026-08-18 amendment).
 
 ## ADR-041: Customizable Keyboard Shortcuts (Override Layer)
 

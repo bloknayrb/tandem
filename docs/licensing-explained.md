@@ -200,6 +200,13 @@ a hole.
 
 ### The gated set — this list IS the `/api` half's review
 
+> **Shape superseded 2026-08-18 (#1346, ADR-040 amendment), still current as code.** The decision
+> is that an unlicensed copy is a plain markdown editor with **no AI integration at all** — a
+> *surface* gate, not the per-tool content-write gate enumerated below. Nothing has moved: this
+> list remains an accurate description of the merged (dark) code and stays Critical Rule 9's review
+> surface until the surface gate is implemented. Read it as "what is gated today", not "what the
+> gate is for".
+
 The MCP half is CI-enforced by `tests/server/license-gate-coverage.test.ts`. **The `/api` half
 has no test: this enumeration is the review**, referenced by Critical Rule 9 in `CLAUDE.md`.
 Adding a mutating MCP tool or `/api` route means adding it here, in both halves.
