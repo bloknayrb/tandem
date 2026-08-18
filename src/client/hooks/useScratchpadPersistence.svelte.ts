@@ -569,15 +569,22 @@ export function createScratchpadPersistence(
     // nothing leaves it empty, which y-prosemirror does not expect — bail
     // instead, leaving whatever is already there.
     if (paragraphs.length === 0) return;
-    // Privacy invariant: BROWSER_ORIGIN is the only origin NOT in CHANNEL_SKIP
-    // (see src/shared/origins.ts and src/server/events/queue.ts). Tagging this
-    // restore as `browser` is safe ONLY because there is no channel observer
-    // over the document's content XmlFragment — existing observers (annotations,
-    // replies, awareness, ctrl-chat, ctrl-meta) don't fire on content inserts,
-    // and ctrl-meta filters document:opened/document:switched by isUploadPath.
-    // If a future change adds a content-XmlFragment channel observer, it MUST
-    // filter on opts.uploadDoc (matching the annotations-observer pattern in
-    // queue.ts) — otherwise scratchpad content would leak via the channel.
+    // Privacy invariant. The RISK here is real and unchanged: there is no
+    // channel observer over the document's content XmlFragment — existing
+    // observers (annotations, replies, awareness, ctrl-chat, ctrl-meta) don't
+    // fire on content inserts, and ctrl-meta filters
+    // document:opened/document:switched by isUploadPath. If a future change
+    // adds a content-XmlFragment channel observer, it MUST filter on
+    // opts.uploadDoc (matching the annotations-observer pattern in queue.ts) —
+    // otherwise scratchpad content would leak via the channel.
+    //
+    // What is NOT true is the causal claim this comment used to make about the
+    // tag. Client-side origins never cross the wire: Yjs updates carry no
+    // origin field, and Hocuspocus re-tags every incoming update with the
+    // `Connection` (hocuspocus-server.esm.js:1408 -> :1151). The server's
+    // CHANNEL_SKIP check therefore never sees BROWSER_ORIGIN from a browser at
+    // all, so `withBrowser` here is neither the danger nor the safeguard — it
+    // is one mental model per Critical Rule 2. See docs/gotchas.md.
     withBrowser(entry.ydoc, () => {
       // Clear any default empty paragraph y-prosemirror may have created.
       if (fragment.length > 0) fragment.delete(0, fragment.length);

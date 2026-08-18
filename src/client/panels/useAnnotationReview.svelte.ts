@@ -3,6 +3,7 @@ import { Fragment, Slice } from "@tiptap/pm/model";
 import { onDestroy } from "svelte";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import { withBrowser } from "../../shared/origins";
 import { isPlaintextFormat } from "../../shared/plaintext-format";
 import type { SanitizationEvent } from "../../shared/sanitize";
 import { sanitizeAnnotation } from "../../shared/sanitize";
@@ -458,7 +459,14 @@ export function useAnnotationReview({
     // the suggested text twice.
     if (raw.status !== "pending") return;
     const ann = sanitizeAnnotation(raw, devSanitizeWarn);
-    map.set(id, { ...ann, status });
+    // THREE SEPARATE ONE-STATEMENT TRANSACTIONS, not one wrap spanning the
+    // block. `applySuggestion` dispatches ProseMirror commands, and nesting
+    // y-prosemirror's own `doc.transact(..., ySyncPluginKey)` inside ours makes
+    // the inner transaction inherit OUR origin — at which point `yUndoPlugin`,
+    // which tracks only `ySyncPluginKey`, stops capturing it and the accepted
+    // text becomes un-undoable. That is precisely the surface
+    // `undoResolveAnnotation` below exists to serve.
+    withBrowser(y, () => map.set(id, { ...ann, status }));
 
     if (status === "accepted" && ann.suggestedText !== undefined) {
       const editor = getEditor();
@@ -466,7 +474,7 @@ export function useAnnotationReview({
         const applied = applySuggestion(ann, editor, y, getFormat?.());
         if (!applied) {
           // Revert annotation status — text replacement failed
-          map.set(id, { ...ann, status: "pending" });
+          withBrowser(y, () => map.set(id, { ...ann, status: "pending" }));
           onApplyFailed?.(ann);
           return;
         }
@@ -662,7 +670,7 @@ export function useAnnotationReview({
       }
     }
 
-    map.set(id, { ...ann, status: "pending" as const });
+    withBrowser(y, () => map.set(id, { ...ann, status: "pending" as const }));
     removeFromResolved(id);
     if (lastResolvedId === id) {
       lastResolvedId = null;

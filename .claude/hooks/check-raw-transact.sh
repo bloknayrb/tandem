@@ -56,6 +56,6 @@ VIOLATIONS=$(grep -nE "\b[A-Za-z_][A-Za-z0-9_.]*\.transact\(" "$FILE_PATH" 2>/de
   || true)
 
 if [[ -n "$VIOLATIONS" ]]; then
-  echo "⚠ Raw .transact() detected (ADR-031: use withMcp / withFileSync / withInternal / withReload / withBrowser from src/shared/origins.ts):"
+  echo "⚠ Raw .transact() detected (ADR-031: use withMcp / withFileSync / withInternal / withReload / withModeRelease / withBrowser from src/shared/origins.ts):"
   echo "$VIOLATIONS"
 fi

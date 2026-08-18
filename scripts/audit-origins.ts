@@ -1,5 +1,20 @@
-// Audit script: every doc.transact(...) call in src/server/** must pass
-// MCP_ORIGIN or FILE_SYNC_ORIGIN as the second argument. Warn-only.
+// Audit script: every doc.transact(...) call in src/** must pass a known origin
+// constant as the second argument. Warn-only.
+//
+// SCOPE IS ALL OF `src`, NOT A LIST OF ROOTS (#1482). It used to be
+// `src/server` only, which is why three raw `.transact(` calls sat in
+// `src/client/hooks/useChatState.svelte.ts` unnoticed for months: the
+// PostToolUse hook that gates on `/src/` only ever sees files an agent just
+// edited, so nothing swept code nobody happened to touch. A single root is
+// deliberate — a list of roots can be silently shortened one entry at a time,
+// `src` cannot.
+//
+// IT ALSO COUNTS THE GOOD SITES, and that is not decoration. Post-fix the count
+// of bad things in `src/client` is zero, which is exactly what an audit that
+// stopped scanning also reports. `taggedSites` is the positive anchor:
+// `tests/scripts/audit-origins.test.ts` asserts it stays non-trivial and that a
+// `.svelte` file is among them, so re-narrowing the root fails a test rather
+// than quietly reporting `clean`.
 //
 // Critical Rule #2 in CLAUDE.md: untagged transactions break channel-event
 // filtering and durable-annotation file-sync.
@@ -27,8 +42,29 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const ROOT = join(import.meta.dirname, "..");
-const SERVER_DIR = join(ROOT, "src/server");
-const ORIGIN_NAMES = new Set(["MCP_ORIGIN", "FILE_SYNC_ORIGIN"]);
+const SRC_DIR = join(ROOT, "src");
+// All six production origins plus the test sentinel. Before #1482 this knew
+// only the first two, so `transactForTest` in `shared/origins.ts` — correctly
+// tagged — landed in the `verify` bucket the moment the walk left `src/server`.
+const ORIGIN_NAMES = new Set([
+  "MCP_ORIGIN",
+  "FILE_SYNC_ORIGIN",
+  "INTERNAL_ORIGIN",
+  "RELOAD_ORIGIN",
+  "BROWSER_ORIGIN",
+  "MODE_RELEASE_ORIGIN",
+  "TEST_ORIGIN",
+]);
+/** The wrapper helpers. A call to one of these is a correctly tagged write. */
+const HELPER_NAMES = new Set([
+  "withMcp",
+  "withFileSync",
+  "withInternal",
+  "withReload",
+  "withModeRelease",
+  "withBrowser",
+  "transactForTest",
+]);
 const PARAM_NAMES = new Set(["origin", "transactionOrigin", "txnOrigin"]);
 const ORIGIN_TYPE_TEXTS = [
   "TransactionOrigin",
@@ -45,8 +81,12 @@ function collectFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile()) continue;
-    if (!/\.ts$/.test(entry.name)) continue;
+    // `.svelte` too: `ts.createSourceFile` emits ~900 parse diagnostics on a
+    // Svelte file and still recovers the call expressions we care about, which
+    // `audit-ymap-keys.ts` has relied on in-repo for some time.
+    if (!/\.(ts|svelte)$/.test(entry.name)) continue;
     if (/\.(test|spec)\.ts$/.test(entry.name)) continue;
+    if (entry.parentPath.includes("node_modules")) continue;
     out.push(join(entry.parentPath, entry.name));
   }
   return out;
@@ -84,13 +124,27 @@ type Finding =
   | { kind: "untagged"; file: string; line: number }
   | { kind: "verify"; file: string; line: number; name: string };
 
-function findFindings(file: string): Finding[] {
+export interface FileScan {
+  findings: Finding[];
+  /** Call sites using one of the wrapper helpers — the positive anchor. */
+  taggedSites: { file: string; line: number; helper: string }[];
+}
+
+function scanFile(file: string): FileScan {
   const rel = relative(ROOT, file).replace(/\\/g, "/");
   const source = readFileSync(file, "utf-8");
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
   const findings: Finding[] = [];
+  const taggedSites: FileScan["taggedSites"] = [];
 
   function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const helper = node.expression.text;
+      if (HELPER_NAMES.has(helper)) {
+        const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
+        taggedSites.push({ file: rel, line: line + 1, helper });
+      }
+    }
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
@@ -119,12 +173,44 @@ function findFindings(file: string): Finding[] {
   }
 
   ts.forEachChild(sourceFile, visit);
-  return findings;
+  return { findings, taggedSites };
+}
+
+export interface AuditResult {
+  filesScanned: string[];
+  taggedSites: FileScan["taggedSites"];
+  findings: Finding[];
+}
+
+/**
+ * Pure entry point, so a test can assert on the census rather than on stderr.
+ */
+export function runAudit(root: string): AuditResult {
+  const files = collectFiles(root);
+  const scans = files.map(scanFile);
+  return {
+    filesScanned: files.map((f) => relative(ROOT, f).replace(/\\/g, "/")),
+    taggedSites: scans.flatMap((scan) => scan.taggedSites),
+    findings: scans.flatMap((scan) => scan.findings),
+  };
 }
 
 export function main(): void {
-  const files = collectFiles(SERVER_DIR);
-  const findings = files.flatMap(findFindings);
+  const { filesScanned, taggedSites, findings } = runAudit(SRC_DIR);
+
+  // Fail loud on an empty universe rather than reporting `clean`, mirroring
+  // `audit-ymap-keys.ts`. A walk that finds no files is the failure mode this
+  // script is least able to notice about itself.
+  //
+  // It still exits 0 — the whole script is warn-only by design, so this message
+  // is advisory and NOT the enforcement. The enforcement is
+  // `tests/scripts/audit-origins.test.ts`, which asserts a floor on
+  // `filesScanned` and on client `taggedSites`. Do not read this branch as a
+  // gate; a message nothing checks is the zero-of-zero shape one level up.
+  if (filesScanned.length === 0) {
+    process.stderr.write("audit-origins: scanned 0 files — aborting\n");
+    process.exit(0);
+  }
 
   const untagged = findings.filter((f) => f.kind === "untagged");
   const verify = findings.filter((f) => f.kind === "verify");
@@ -138,7 +224,9 @@ export function main(): void {
   }
 
   if (findings.length === 0) {
-    process.stderr.write("audit-origins: clean\n");
+    process.stderr.write(
+      `audit-origins: clean (${taggedSites.length} tagged sites across ${filesScanned.length} files)\n`,
+    );
   } else {
     process.stderr.write(
       `\naudit-origins: ${untagged.length} untagged, ${verify.length} pass-through (verify)\n`,

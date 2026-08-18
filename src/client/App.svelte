@@ -296,9 +296,16 @@ const settingsState = createTandemSettings();
 // Models registry is the server-authoritative store singleton since M2 (#1123);
 // the chip reads its `$state` getters, not `settingsState.settings.models`.
 const modelsStore = createModels();
+// `settings` is wholesale-reassigned on every settings write, so passing a
+// getter that reads `settingsState.settings.selectionDwellMs` makes the effect
+// consuming it track the WHOLE object — and rewrite `Y_MAP_DWELL_MS` on every
+// theme change, hue drag, font pick and shortcut remap. This `$derived` memo
+// narrows tracking to the one number, the same load-bearing pattern as
+// `smartTypography` / `spellcheckOn` in `editor/Editor.svelte`.
+const selectionDwellMs = $derived(settingsState.settings.selectionDwellMs);
 const modeState = createTandemModeBroadcast(
   () => yjsSync.bootstrapYdoc,
-  () => settingsState.settings.selectionDwellMs,
+  () => selectionDwellMs,
 );
 const layoutModel = createLayoutModel(settingsState, modeState);
 

@@ -23,6 +23,7 @@ import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, ClaudeAwareness } from "../../shared/types";
 import type { AppInfoData, DocListEntry, OpenTab } from "../types";
 import { installIdFromStoragePath } from "../utils/install-id.js";
+import { installUntaggedWriteWarning } from "../utils/untagged-write-warning.js";
 import { createRebuildScheduler } from "./rebuild-scheduler.js";
 import { resolveActiveTabId } from "./tab-reconcile.js";
 import type { SidecarRetryStrategy } from "./useTandemSettings";
@@ -431,6 +432,7 @@ export function createYjsSync(opts?: {
       pendingIds.add(doc.id);
 
       const ydoc = new Y.Doc();
+      if (import.meta.env.DEV) installUntaggedWriteWarning(ydoc, { label: `doc ${doc.id}` });
       const provider = new HocuspocusProvider(
         withBackoff({
           url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
@@ -551,6 +553,7 @@ export function createYjsSync(opts?: {
     ctrlInitialClaudeMessageIds = [];
     generationId = gen;
     const ydoc = new Y.Doc();
+    if (import.meta.env.DEV) installUntaggedWriteWarning(ydoc, { label: "ctrl room" });
     const provider = new HocuspocusProvider(
       withBackoff({
         url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
