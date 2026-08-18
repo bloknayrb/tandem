@@ -52,6 +52,11 @@ import {
 } from "../../shared/integrations/client-config-paths.js";
 import { targetPushSupport } from "../../shared/integrations/contract.js";
 import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
+import {
+  buildNpxStdioArgs,
+  isCanonicalNpxStdioArgs,
+} from "../../shared/integrations/npx-entry-spec.js";
+import { isFile } from "../../shared/integrations/path-lookup.js";
 import type { SkillRefreshError } from "../../shared/launcher/contract.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { resolveAppDataDir } from "../platform.js";
@@ -418,8 +423,26 @@ function buildStdioTandemEntry(
       ? "Could not resolve an absolute Node binary for the 'tandem' MCP entry."
       : `The bundled stdio bridge is missing (looked at "${bridge}").`,
   );
-  return { command: "npx", args: ["-y", `tandem-editor@${CLI_VERSION}`, "mcp-stdio"], env };
+  return { command: "npx", args: buildNpxStdioArgs(`tandem-editor@${CLI_VERSION}`), env };
 }
+
+/**
+ * The env keys the desktop stdio `tandem` entry carries — the complete set.
+ *
+ * One declaration with two consumers that must not drift: `buildMcpEntries`
+ * below WRITES exactly these, and the boot sweep's convergence gate REFUSES an
+ * entry carrying anything else (an unrecognised key means Tandem did not write
+ * it). Restating the set at the gate would drift in the dangerous direction
+ * silently: add a third key here and the gate would start declining to converge
+ * entries Tandem itself had just written, forever, with no log line.
+ *
+ * `tests/shared/npx-entry-spec.test.ts` pins the writer's output against it,
+ * because sharing a constant only prevents TEXTUAL drift.
+ */
+export const STDIO_ENTRY_ENV_KEYS = { url: "TANDEM_URL", token: "TANDEM_AUTH_TOKEN" } as const;
+
+/** The same set as a lookup, for the convergence gate. */
+const STDIO_ENTRY_ENV_KEY_SET: ReadonlySet<string> = new Set(Object.values(STDIO_ENTRY_ENV_KEYS));
 
 export function buildMcpEntries(
   channelPath: string,
@@ -429,9 +452,9 @@ export function buildMcpEntries(
 
   let tandemEntry: McpEntry;
   if (isDesktop) {
-    const env: Record<string, string> = { TANDEM_URL: MCP_URL };
+    const env: Record<string, string> = { [STDIO_ENTRY_ENV_KEYS.url]: MCP_URL };
     if (opts.token) {
-      env.TANDEM_AUTH_TOKEN = opts.token;
+      env[STDIO_ENTRY_ENV_KEYS.token] = opts.token;
     }
     // Resolution stays INSIDE this branch. Hoisting it above the `if` would
     // start emitting a `command` for Claude Code too, breaking the direct-HTTP
@@ -1269,15 +1292,39 @@ export async function removeConfigEntries(
   return { status: "removed", removed };
 }
 
-export type RefreshNodeBinaryResult =
-  | ConfigReadRefusal
+/**
+ * What {@link repairEntryInPlace} alone can return.
+ *
+ * Declared as the PRIMARY type, with the wide one composed from it below —
+ * rather than the reverse, subtracting {@link ConfigReadRefusal} with `Exclude`.
+ * Subtraction would work only by accident: `{status:"skipped"}` appears on both
+ * sides with different `reason` literals, so the arm survives purely because the
+ * literals do not overlap, and adding `"oversize"` to the refresh side would
+ * silently delete it from the narrowed type — taking the exhaustiveness check
+ * below with it, without a single error.
+ *
+ * The narrowing exists so that check can compile at all: the sweep's log block
+ * used to end at `else if (status === "skipped")` with no `else`, so a status
+ * nobody had handled would have rewritten the user's `~/.claude.json` in
+ * complete silence.
+ */
+type EntryRepairResult =
   | { status: "no-op" }
   /** The recorded binary is gone and we have no better value to put there —
    *  see the `BARE_NODE` refusal in `refreshMcpEntryBinary`. */
   | { status: "skipped"; reason: "no-valid-replacement" }
+  /** A bare-`npx` entry converged onto the absolute pair.
+   *
+   *  Its own status rather than a field on `"rewritten"`. It carries no
+   *  `from`/`to`, because the thing it replaced was a bare name and not a path
+   *  that moved, and a "repair kind" field would have had four values of which
+   *  exactly one was ever read. */
+  | { status: "converged" }
   /** `from`/`to` are null when only the SCRIPT path needed repair — the two are
    *  checked independently, so either can move without the other. */
   | { status: "rewritten"; from: string | null; to: string | null; scriptRefreshed: boolean };
+
+export type RefreshNodeBinaryResult = ConfigReadRefusal | EntryRepairResult;
 
 /**
  * Which entry key a refresh pass is operating on. Both carry an absolute Node
@@ -1317,8 +1364,20 @@ interface RefreshDescriptor {
    *  bundles are module-level consts, and taking them eagerly here would freeze
    *  the table before the test seams can vary them. */
   script: () => string;
-  /** Did Tandem write this entry, i.e. is it ours to rewrite? */
-  isOurs: (command: string, args: unknown) => boolean;
+  /**
+   * What is this entry, from an ownership standpoint?
+   *
+   * Replaces the old boolean `isOurs`. A boolean could only answer "ours to
+   * repair?", so the npx-convergence case had nowhere to live in the table and
+   * would have had to sit *above* the ownership gate — a second ownership rule
+   * jumping over the one place ownership is supposed to be decided, defeating
+   * the property this table's docblock claims for itself.
+   *
+   * REQUIRED, and a union rather than an optional flag: a third key cannot be
+   * added without answering all three arms, which is the same reason `script`
+   * and this column are not `??`-defaulted.
+   */
+  classify: (command: string, args: unknown) => "ours-node" | "npx-convergible" | "foreign";
 }
 
 /**
@@ -1339,17 +1398,30 @@ interface RefreshDescriptor {
 const REFRESHABLE: Record<RefreshableEntryKey, RefreshDescriptor> = {
   tandem: {
     script: () => STDIO_BRIDGE_DIST,
-    isOurs: (command, args) =>
-      isValidNodeBinary(command) &&
-      Array.isArray(args) &&
-      typeof args[0] === "string" &&
-      isOwnStdioBridgeScript(args[0]),
+    classify: (command, args) => {
+      if (
+        isValidNodeBinary(command) &&
+        Array.isArray(args) &&
+        typeof args[0] === "string" &&
+        isOwnStdioBridgeScript(args[0])
+      ) {
+        return "ours-node";
+      }
+      if (command === "npx" && isCanonicalNpxStdioArgs(args)) return "npx-convergible";
+      return "foreign";
+    },
   },
   "tandem-channel": {
     // Tandem is the sole writer of this key, so any stale absolute path in it is
     // ours — the pre-existing rule, now stated rather than assumed.
+    //
+    // Never `"npx-convergible"`: convergence is a `tandem`-key rule, and only
+    // that key's `classify` can return the arm that reaches it. An npx entry
+    // under this key — `.claude-plugin/plugin.json` emits one — stays inert the
+    // way it always has, because `isRecordedPathGone` exempts bare names for
+    // both the command and the script half.
     script: () => CHANNEL_DIST,
-    isOurs: () => true,
+    classify: () => "ours-node",
   },
 };
 
@@ -1372,11 +1444,16 @@ const REFRESHABLE_ENTRY_KEYS = Object.keys(REFRESHABLE) as RefreshableEntryKey[]
  * Three shapes are deliberately left alone, and each would be a regression to
  * touch:
  *   - **HTTP entries** (Claude Code's `tandem`) have no `command` → `no-op`.
- *   - **A deliberate bare-`npx` fallback.** `"npx"` and `"-y"` are bare names,
- *     so `isRecordedPathGone` reports `false` for both the command and the
- *     script half. Rewriting one would undo a fallback that was chosen on
- *     purpose. An *absolute* npx is a different case — it is probed, and if it
- *     is gone the entry is left visibly dead rather than silently downgraded.
+ *   - **A bare-`npx` fallback OUTSIDE the convergence rule's scope.** For the
+ *     `tandem-channel` key, and for any `tandem` entry that fails one of
+ *     {@link convergeNpxEntry}'s gates, the entry is left exactly as found.
+ *     Note the mechanism, because it is easy to state wrongly: for
+ *     `tandem-channel` it is `isRecordedPathGone` reporting `false` for a bare
+ *     name; for `tandem` the entry never reaches that probe at all, because
+ *     `classify` routes it away first. An *absolute* npx is a third case — it
+ *     is probed, and if it is gone the entry is left visibly dead rather than
+ *     silently downgraded, since substituting a Node binary would leave
+ *     `<node> -y tandem-editor@x mcp-stdio`, which spawns nothing.
  *   - **A `tandem` entry that is not ours** — see {@link isOwnStdioBridgeScript}.
  *
  * Read-side rules (never create, never replace malformed JSON, no parse detail
@@ -1405,6 +1482,230 @@ interface RefreshDeps {
    *  takes it from {@link REFRESHABLE}, where the key→script pairing cannot be
    *  got wrong. */
   script?: string;
+  /** Which client config this entry lives in. Convergence is scoped to
+   *  `claude-desktop` — see {@link convergeNpxEntry}. Undefined means "unknown
+   *  target", which declines: only the sweep knows the kind, and only it should
+   *  be able to unlock the branch. */
+  targetKind?: TargetKind;
+  /** Test seam for the durability gate. Production leaves it undefined and
+   *  {@link isDurableScriptPath} decides.
+   *
+   *  Required as a seam, not a convenience: under vitest the real signal is
+   *  computed from a checkout, so every positive-path case would be unwritable
+   *  and the suite would silently test only refusals. */
+  durable?: boolean;
+}
+
+/**
+ * Is `script` in a layout durable enough to record in a file that outlives this
+ * process?
+ *
+ * **Fails CLOSED**, and the cost matrix is why: declining leaves the user exactly
+ * as they are today (a bare-`npx` entry, which `tandem doctor` now explains),
+ * while converging onto an ephemeral path writes the *unrecoverable* failure mode
+ * that `41a893a4` deliberately avoided. A gate whose unknown case takes the risky
+ * branch is not a gate.
+ *
+ * Keyed on the path being WRITTEN, not on `PACKAGE_ROOT`. In the Tauri sidecar
+ * `STDIO_BRIDGE_DIST` comes from the injected `TANDEM_STDIO_BRIDGE_DIST`,
+ * resolved from the app's resource dir and unrelated to `PACKAGE_ROOT` — so
+ * testing the latter would check the durability of a root we do not commit.
+ *
+ * **A positive allowlist of path shapes is not enough on its own, and an earlier
+ * draft of this function proved it.** Matching `/node_modules/` admits
+ * `~/.npm/_npx/<hash>/node_modules/tandem-editor/…`, which npm prunes — the exact
+ * disposable layout the allowlist was chosen to exclude. Matching
+ * `.app/Contents/` covers the macOS bundle and silently excludes the Windows and
+ * Linux desktop installs, whose `resource_dir` is the Program Files directory or
+ * `/usr/lib/<app>`, so the feature would have been dead on two of three
+ * platforms with nothing saying so. Hence: disposable caches are excluded
+ * FIRST, and the desktop case is recognised by provenance rather than by shape.
+ *
+ * The provenance test is `TANDEM_TAURI_SIDECAR` minus a dev checkout. The env var
+ * alone is not sufficient — it is set on every sidecar spawn including
+ * `cargo tauri dev`, where the bridge resolves inside the checkout — so the
+ * `.git` ancestor walk is what separates an installed bundle from a developer
+ * run, on every platform and without naming any install directory.
+ *
+ * The deeper fix, if this ever needs to be more precise: `resolve_stdio_bridge_dist`
+ * in `src-tauri/src/lib.rs` already *knows* whether it returned the `resource_dir`
+ * path or the `current_dir()` fallback, and throws that away. Injecting a
+ * durability flag beside the path would replace this inference with the fact.
+ */
+export function isDurableInstallLayout(
+  script: string,
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (p: string) => boolean = existsSync,
+): boolean {
+  // Translocation is THE durability failure this codebase has already been bitten
+  // by, and it has a shared predicate. A quarantined `.app` runs from a randomized
+  // read-only mount that is gone next launch, so a path recorded there works
+  // exactly once.
+  if (isAppTranslocatedPath(script)) return false;
+  // Disposable one-shot caches, checked BEFORE the `node_modules` branch because
+  // they live underneath one. This is the only blocklist here, and it is scoped
+  // to a question the allowlist below cannot answer.
+  if (/[/\\](_npx|dlx|\.bun)[/\\]/.test(script)) return false;
+  if (/[/\\]node_modules[/\\]/.test(script)) return true;
+  if (env.TANDEM_TAURI_SIDECAR === "1") return !hasGitAncestor(dirname(script), exists);
+  return false;
+}
+
+/**
+ * Does `dir` or any ancestor contain a `.git`?
+ *
+ * `exists`, not `isDirectory`: in a git worktree or submodule `.git` is a FILE
+ * holding a `gitdir:` pointer, and this repo uses worktrees — an `isDirectory`
+ * test would wave a worktree through as an installed bundle.
+ */
+function hasGitAncestor(from: string, exists: (p: string) => boolean): boolean {
+  let dir = from;
+  for (;;) {
+    if (exists(join(dir, ".git"))) return true;
+    const parent = dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+
+/**
+ * Converge a bare-`npx` `tandem` entry onto the absolute Node + bridge pair.
+ *
+ * The entry this repairs never spawns on the machines it exists for: an MCP
+ * `command` with no path separator is resolved through the CLIENT's PATH, and a
+ * GUI-launched macOS client gets roughly `/usr/bin:/bin:/usr/sbin:/sbin` — no
+ * Node. The transport dies before `initialize` with nothing in Tandem's logs.
+ *
+ * **This reverses a deliberate decision (`41a893a4`), so the reasoning matters.**
+ * That commit kept the bare-npx floor "so a degraded resolve never emits
+ * something worse than what shipped", and its real argument — stated three times
+ * across this file and `node-binary.ts` — is that **bare-npx is the *recoverable*
+ * failure mode and an absolute path is the *unrecoverable* one**. That argument
+ * is still correct, and it is why this function is gated the way it is rather
+ * than being a simple shape swap. What makes the reversal safe is NOT
+ * "the sweep owns the entry afterwards and will re-repair it": the entry is
+ * expected to outlive Tandem entirely (macOS and Linux have no uninstaller to
+ * invoke the scrub, and `npm uninstall -g` never runs it), and a dead absolute
+ * path has no process left to fix it. What makes it safe is SCOPE — see the
+ * target-kind gate below.
+ *
+ * `args` becomes exactly ONE element. Two would leave `validateTandemEntry`'s
+ * Node branch and read back as `invalid-args`, so the wizard would pre-select
+ * `apply: "skip"` on our own write; and the same 1-arg shape aimed at
+ * `dist/cli/index.js` would fall through to `runStart()` and spawn a whole
+ * Tandem server onto the MCP wire.
+ *
+ * Not a migration, so it carries no sunset date: `buildStdioTandemEntry` still
+ * emits this exact tuple as its fallback floor today, which makes this a
+ * permanent convergence rule ("if the absolute pair has since become buildable,
+ * converge on it"), symmetric to the staleness repair beside it. That premise
+ * lives in code and `tests/shared/npx-entry-spec.test.ts` fails if it stops
+ * holding — the tracked criterion, in place of a date.
+ */
+function convergeNpxEntry(
+  record: Record<string, unknown>,
+  ctx: {
+    resolveBinary: () => string;
+    script: string;
+    targetKind: TargetKind | undefined;
+    durable: boolean | undefined;
+  },
+): { changed: boolean; result: EntryRepairResult } {
+  const noOp = { changed: false, result: { status: "no-op" } as const };
+
+  // GATE 1 — scope, and it is the one doing the real work.
+  //
+  // `buildMcpEntries` emits the stdio pair ONLY for `claude-desktop`; Claude
+  // Code always gets `{type:"http", url}` with no command at all. So Tandem has
+  // never written a bare-npx `tandem` entry into `~/.claude.json`, and every one
+  // there is foreign by construction — a hand-copy of `.claude-plugin/plugin.json`,
+  // a `claude mcp add`, or a pre-HTTP Tandem. Converting those would make Tandem
+  // permanently adopt an entry it did not write (they satisfy
+  // `isOwnStdioBridgeScript` ever after), and in `~/.claude.json` the bare name
+  // usually WORKS, because a terminal-launched client has a full PATH.
+  //
+  // Version pinning cannot substitute for this. The plugin manifest pins
+  // `tandem-editor@<CLI_VERSION>` and a test keeps it there, while an entry an
+  // older Tandem wrote is pinned to the version current when it was written — so
+  // a "pin must equal CLI_VERSION" rule admits exactly the shape that must never
+  // be adopted and refuses exactly the population this exists for. Scope is the
+  // discriminator; the pin is noise.
+  if (ctx.targetKind !== "claude-desktop") return noOp;
+
+  const env = record.env;
+  if (env === null || typeof env !== "object" || Array.isArray(env)) return noOp;
+  const envRecord = env as Record<string, unknown>;
+
+  // GATE 2 — env allowlist. Refuse, never strip.
+  //
+  // The rewrite turns an entry that NEVER SPAWNS into one that does, so every
+  // field in this block moves from inert to executed. Two consequences, both
+  // verified rather than assumed:
+  //
+  //   1. `resolveTandemUrlCandidate` reads `CLAUDE_PLUGIN_OPTION_SERVER_URL`
+  //      BEFORE `TANDEM_URL` (and the token resolver does the same), so a gate
+  //      that validated `TANDEM_URL` alone would be inspecting the loser of a
+  //      precedence chain.
+  //   2. The MCP SDK spawns with `{...getDefaultEnvironment(), ...entry.env}` —
+  //      the config env spread last, unfiltered, over a default allowlist that
+  //      excludes `NODE_OPTIONS`. So any key here reaches the spawned Node.
+  //
+  // This is not a privilege escalation — anyone who can write this `env` can
+  // write their own `{command:"node", args:["evil.js"]}` entry and get the same
+  // execution without Tandem. The objection is narrower and still sufficient:
+  // Tandem must not take a provably-inert entry and ARM it while carrying env it
+  // never wrote and never inspected.
+  //
+  // Refusing rather than stripping is deliberate. Stripping silently mutates a
+  // user's config; refusing leaves the inert entry inert, which is the same
+  // direction as "bare-npx is the recoverable failure mode".
+  for (const key of Object.keys(envRecord)) {
+    if (!STDIO_ENTRY_ENV_KEY_SET.has(key)) return noOp;
+  }
+
+  // GATE 3 — the URL must be the one we write.
+  //
+  // Exact equality with `MCP_URL`, NOT `LoopbackUrl`. That schema accepts any
+  // port (`http://127.0.0.1:9999` passes), so it would let the bearer token
+  // reach any local listener; it also rejects `localhost` despite its own
+  // docblock claiming otherwise. Exact equality is stricter, needs no `zod` in
+  // the `dist/cli` bundle, and keeps this decision readable.
+  //
+  // A missing `TANDEM_URL` declines. Not because loopback is unprovable — the
+  // runtime defaults to loopback when it is absent — but because we only
+  // converge entries whose env Tandem itself wrote, and the desktop branch
+  // always sets it.
+  if (envRecord.TANDEM_URL !== MCP_URL) return noOp;
+
+  // GATE 4 — a replacement binary must exist.
+  //
+  // Ahead of the durability gate because it is pure (the resolver memoizes) and
+  // durability ends in a syscall: a host whose `execPath` fails the basename
+  // allowlist — the Debian-lineage `nodejs` case `node-binary.ts` documents —
+  // declines here without touching the disk. No `isValidNodeBinary` re-check
+  // follows: `resolveNodeBinary` returns either an allowlist-clean absolute path
+  // or `BARE_NODE`, and the staleness path beside this one trusts that same
+  // postcondition. Re-validating in one of the two writers and not the other
+  // would be a difference someone later has to explain.
+  const nodeBinary = ctx.resolveBinary();
+  // Never "repair" into the bare name: it is the shape that failed in the field,
+  // and `isRecordedPathGone` exempts bare names, so doctor would go permanently
+  // quiet about a still-broken entry.
+  if (nodeBinary === BARE_NODE) return noOp;
+
+  // GATE 5 — durability, fail-closed. See `isDurableInstallLayout`.
+  //
+  // The existence check is deliberately NOT folded into that predicate: the
+  // `durable` seam would then disable it too, and no test would cover "the
+  // bridge is missing" on this path. `isFile`, not `existsSync` — a directory
+  // named `index.js` is not something to record as a script, and `isFile` is
+  // also total against EACCES and disconnected shares.
+  if (!isFile(ctx.script)) return noOp;
+  if (!(ctx.durable ?? isDurableInstallLayout(ctx.script))) return noOp;
+
+  record.command = nodeBinary;
+  record.args = [ctx.script];
+  return { changed: true, result: { status: "converged" } };
 }
 
 /**
@@ -1419,7 +1720,7 @@ interface RefreshDeps {
 function repairEntryInPlace(
   servers: Record<string, unknown>,
   deps: RefreshDeps,
-): { changed: boolean; result: RefreshNodeBinaryResult } {
+): { changed: boolean; result: EntryRepairResult } {
   const noOp = { changed: false, result: { status: "no-op" } as const };
 
   const resolveBinary = deps.resolveBinary ?? resolveNodeBinary;
@@ -1436,9 +1737,28 @@ function repairEntryInPlace(
   // Ownership gate. The `tandem` key is shared ground: it also holds legacy
   // sidecar invocations from older Tauri builds, npx fallbacks, and whatever a
   // user hand-edited — and the legacy shape is arity-identical to ours. Leaving
-  // anything else exactly as found is the whole point for a hand-edit, and for
-  // an npx fallback is what keeps a deliberate choice from being undone.
-  if (!descriptor.isOurs(command, record.args)) return noOp;
+  // anything else exactly as found is the whole point for a hand-edit.
+  const ownership = descriptor.classify(command, record.args);
+  if (ownership === "foreign") return noOp;
+
+  // Convergence sits INSIDE the ownership gate, as its own arm — not above it.
+  // Placing it above would make it a second ownership rule bypassing the table
+  // that exists to hold exactly one.
+  //
+  // It MUST return rather than fall through, and the failure mode is silent: a
+  // fall-through would be re-classified `ours-node`, then find `args[0] ===
+  // script` (no script refresh) and `isRecordedPathGone(process.execPath) ===
+  // false` (no binary rewrite), and exit below as `{changed: false, "no-op"}` —
+  // so the mutation just made to `record` would never be written and the sweep
+  // would report having done nothing.
+  if (ownership === "npx-convergible") {
+    return convergeNpxEntry(record, {
+      resolveBinary,
+      script,
+      targetKind: deps.targetKind,
+      durable: deps.durable,
+    });
+  }
 
   // The script path is checked INDEPENDENTLY of the binary, and first.
   //
@@ -1504,6 +1824,16 @@ function repairEntryInPlace(
  * already total: a missing key, an HTTP entry, a bare-`npx` fallback and a
  * `tandem` entry Tandem did not write all fall out as `no-op`. Leaving it
  * unfiltered also repairs an entry left behind by an older Tandem.
+ *
+ * The npx-convergence branch is the ONE thing here that is scoped by target
+ * kind, and it is scoped for a reason that does not generalize to the rest of
+ * this function. Repair is total — every foreign shape falls out as `no-op` —
+ * so leaving it unfiltered costs nothing. Convergence is not a repair: it
+ * replaces `args` wholesale, and in `~/.claude.json` it would be replacing an
+ * entry Tandem never wrote (that file only ever gets the HTTP shape) which
+ * usually WORKS there, because a terminal-launched client has a full PATH. So
+ * `target.kind` is threaded in and {@link convergeNpxEntry} declines unless it
+ * is `claude-desktop`.
  */
 export async function refreshAllMcpEntryBinaries(
   opts: { homeOverride?: string } = {},
@@ -1555,9 +1885,25 @@ export async function refreshAllMcpEntryBinaries(
 
       let dirty = false;
       for (const entryKey of REFRESHABLE_ENTRY_KEYS) {
-        const { changed, result } = repairEntryInPlace(opened.servers, { entryKey });
+        // `targetKind` is threaded because convergence is scoped to Claude
+        // Desktop and ONLY the sweep knows which config it is looking at. A
+        // default here would unlock the branch for every direct caller.
+        const { changed, result } = repairEntryInPlace(opened.servers, {
+          entryKey,
+          targetKind: target.kind,
+        });
         dirty ||= changed;
-        if (result.status === "rewritten") {
+        if (result.status === "converged") {
+          // A DISTINCT sentence, not the staleness one. Nothing was stale here —
+          // a bare name cannot go stale — and `args` was replaced wholesale
+          // rather than refreshed. This string is what a user pastes into a bug
+          // report, so it has to describe what actually happened, including the
+          // restart they have not been prompted for by anything else.
+          console.error(
+            `[Tandem] Converged the ${entryKey} entry in ${target.label} from 'npx' onto a ` +
+              "bundled Node path — restart the client for it to take effect.",
+          );
+        } else if (result.status === "rewritten") {
           // Name what actually moved. The binary and the script are repaired
           // independently, so `from`/`to` are null on a script-only fix —
           // logging them unconditionally would print "null → null" for a real
@@ -1573,10 +1919,26 @@ export async function refreshAllMcpEntryBinaries(
             `[Tandem] Left the ${entryKey} entry in ${target.label} untouched (${result.reason}). ` +
               "Run 'tandem doctor' for the full check.",
           );
+        } else {
+          // Exhaustiveness. This block used to end at the `skipped` branch with
+          // no `else`, so a status nobody had handled would have rewritten the
+          // user's `~/.claude.json` and said NOTHING — the loudest possible
+          // action with the quietest possible output. `EntryRepairResult` is
+          // narrowed to what `repairEntryInPlace` can actually produce so this
+          // can compile at all.
+          result.status satisfies "no-op";
         }
       }
       if (dirty) {
-        await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", target.configPath);
+        // `requireExistingDest` because this is a REPAIR: the file was read
+        // moments ago and must still be there. Without it a config deleted
+        // mid-sweep would be recreated from our in-memory snapshot, resurrecting
+        // every other vendor's entries the user just removed. That window
+        // matters more now than it did — before convergence this write
+        // essentially never fired.
+        await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", target.configPath, {
+          requireExistingDest: true,
+        });
       }
     } catch (err) {
       // Include the target — a Windows box can have Claude Code plus several

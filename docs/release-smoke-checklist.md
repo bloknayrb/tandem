@@ -104,9 +104,13 @@ one changes how a future run should be done:
 - **Open and inspect the signed installer.** This is the only check that covers
   `dist/stdio-bridge/` — new in v0.22.1, and its absence degrades silently to bare
   `npx` behind a `log::warn!`, which is the exact bug that release fixed.
-- **An upgrade does not repair an already-broken Claude Desktop entry.** The boot
-  sweep repairs stale *absolute* paths and deliberately skips bare `npx`, because
-  Tandem emits that as a considered fallback. Affected users must re-run
-  `tandem setup --apply`; do not expect the release to fix them.
+- **An upgrade does not repair an already-broken Claude Desktop entry — true as of
+  v0.22.1, since superseded.** The boot sweep repaired stale *absolute* paths and
+  deliberately skipped bare `npx`, because Tandem emits that as a considered
+  fallback; affected users had to re-run `tandem setup --apply`. The sweep now
+  converges a bare-`npx` **Claude Desktop** entry onto the absolute pair, gated on
+  a recognised `env` and a durable bridge path, so from the next release this
+  finding no longer holds for that target. It still holds everywhere else — the
+  entry in `~/.claude.json`, and any entry whose `env` Tandem did not write.
 - **A Windows matrix leg failing inside Azure Trusted Signing is a re-run, not a
   burned tag.** The discriminator is whether the *same commit* passes on retry.

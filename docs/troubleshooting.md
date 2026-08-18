@@ -285,7 +285,17 @@ integration wizard) now write an absolute Node binary and an absolute script pat
 PATH lookup happens at all. In the desktop app that Node is Tandem's own bundled copy,
 which means the entry works on a machine with no Node installed whatsoever.
 
-**An existing entry is not rewritten until something rewrites it**, so an install that was
+**A Claude Desktop entry now repairs itself on the next start.** If your `tandem` entry
+still runs the bare `npx`, Tandem converges it onto the absolute pair the next time it
+starts — no wizard run, no CLI, nothing to type. Three things have to hold, and Tandem
+stays silent and changes nothing if any of them does not: it must be the **Claude Desktop**
+entry (the one in `~/.claude.json` is left alone, because Tandem never wrote it and there a
+bare `npx` usually works), its `env` must contain only the two keys Tandem writes, and the
+bundled bridge must live somewhere durable. **You still have to restart Claude Desktop
+afterwards** — and because nothing you did triggered the repair, that step is easy to miss.
+`tandem doctor` says whether it happened.
+
+**Everything else is not rewritten until something rewrites it**, so an install that was
 already broken stays broken across an upgrade. Pick up the change whichever way suits how
 you installed Tandem:
 

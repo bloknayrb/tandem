@@ -181,8 +181,10 @@ export type TargetPushSupport = "none" | "possible";
  * the UI could not see — which is why a Claude Desktop user was told nothing
  * and discovered it by being ignored (#1299).
  *
- * Claude Desktop is the stdio path: `buildMcpEntries` emits an `npx … mcp-stdio`
- * bridge and `shouldRegisterChannelShim` hard-refuses the `tandem-channel`
+ * Claude Desktop is the stdio path: `buildMcpEntries` emits an absolute Node
+ * binary running the bundled stdio bridge (falling back to `npx … mcp-stdio`
+ * only when no absolute pair can be built) and `shouldRegisterChannelShim`
+ * hard-refuses the `tandem-channel`
  * entry, so there is no shim; the supervisor's stdin wake needs a Claude Code
  * child it spawned; and the plugin monitor rides Claude Code's plugin host.
  *

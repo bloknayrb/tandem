@@ -6,8 +6,10 @@ import { delimiter, join } from "node:path";
  *
  * Extracted from `detect-claude-cli.ts` when a second question needed the same
  * machinery: "can this machine resolve `npx`/`node` at all?", asked by
- * `tandem doctor` and by `buildMcpEntries` when it needs an absolute `npx` to
- * embed. The pieces shared are the two rules that are genuinely universal — how
+ * `tandem doctor`. (It was also once asked by `buildMcpEntries`, to embed an
+ * absolute `npx` — that caller is gone: an absolute `npx` still resolves `node`
+ * through the client's PATH, so it fails exactly where the bare name does.)
+ * The pieces shared are the two rules that are genuinely universal — how
  * to decide a candidate is a real file, and what filenames a program can be
  * installed under on Windows.
  *
