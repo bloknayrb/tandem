@@ -214,6 +214,26 @@ describe("#1460: a multi-line suggestion in a plaintext document", () => {
     list.destroy();
   });
 
+  it("succeeds — not a decline — when the range spans two EXISTING top-level paragraphs", () => {
+    // Distinct from every other case in this file: those all start from ONE
+    // existing paragraph and split IT into two. Here the suggestion's range
+    // already crosses a pre-existing block boundary before accept even runs.
+    // `canRestoreBlockBoundary` only inspects `from`'s depth — `from` here is
+    // depth 1 (a direct child of the doc), so this does NOT decline the way
+    // the list-item case above does; it merges two ProseMirror `replace` calls
+    // across the boundary. Found and verified empirically in plan review —
+    // do not "fix" this test to assert a decline, that is not what happens.
+    const twoBlocks = new Editor({
+      extensions: buildSchemaExtensions(),
+      content: "<p>AAAA</p><p>BBBB</p>",
+    });
+    // Flat text is "AAAA\nBBBB" (the block join renders as "\n", same as
+    // extractText server-side). Range [2,7) = "AA\nBB".
+    expect(applySuggestion(suggestion(2, 7, "one\ntwo"), twoBlocks, ydoc, "txt")).toBe(true);
+    expect(shape(twoBlocks)).toBe('paragraph("AAone") paragraph("twoBB")');
+    twoBlocks.destroy();
+  });
+
   it("is byte-identical to the hard-break version — which is the whole defect", () => {
     // The discriminating case. Both editors serialize to the same flat text, so
     // no assertion about characters could ever have caught this; only the
@@ -404,10 +424,13 @@ describe("#1460: a code block in a plaintext document is exempt", () => {
   });
 
   it("still stores newlines literally rather than splitting into paragraphs", () => {
-    // Exempt on both counts: a code block stores newlines literally, so there is
-    // no representation mismatch to fix, and splitting one would shred it into
-    // unrelated paragraphs. `flattenPlaintextBreaks` excludes `codeBlock` for the
-    // same reason — the two halves of the fix agree.
+    // Exempt here: a code block stores a typed/accepted newline literally, so
+    // there is no representation mismatch to fix at this point, and splitting
+    // one would shred it into unrelated paragraphs. This is NOT the same
+    // decision `flattenPlaintextBreaks` makes at Save-As promotion — that path
+    // DOES split an existing code block's literal newlines into paragraphs,
+    // because by then those newlines are already N lines on disk. Both are
+    // correct; they answer different questions (see plaintext-breaks.ts).
     applySuggestion(suggestion(0, 3, "line1\nline2"), editor, ydoc, "txt");
     expect(shape(editor)).toBe('codeBlock("line1\\nline2")');
   });

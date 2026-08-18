@@ -58,10 +58,13 @@ export const PlaintextBreaksExtension = Extension.create<PlaintextBreaksOptions>
   addKeyboardShortcuts() {
     const splitInsteadOfBreak = () => {
       if (!isPlaintextFormat(this.options.getFormat())) return false;
-      // A code block is exempt, matching the other four surfaces
-      // (`plaintext-flatten.ts` excludes `codeBlock`; `applySuggestion` checks
-      // `inCode`): a newline in there is genuinely a newline and the node stores
-      // it literally, so there is nothing to convert. Without this the override
+      // A code block is exempt here for the same reason `applySuggestion` checks
+      // `inCode`: a newline typed inside one is genuinely a newline and the node
+      // stores it literally, so there is nothing to convert at keystroke time.
+      // (`plaintext-flatten.ts`'s Save-As promotion is a DIFFERENT decision — it
+      // splits an existing `codeBlock`'s literal newlines into paragraphs,
+      // because by then those newlines are already N lines on disk. Both are
+      // correct; they answer different questions.) Without this exemption the override
       // was actively harmful rather than merely redundant — `splitBlock` has no
       // `code` guard, so it SUCCEEDED and cut the code block in two, claiming the
       // keystroke and killing `Mod-Enter`'s exit-the-code-block affordance. Found

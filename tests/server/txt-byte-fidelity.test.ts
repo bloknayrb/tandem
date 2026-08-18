@@ -10,7 +10,7 @@
  * (the in-editor structure changes, the file does not) and therefore
  * document-don't-fix. That disposition was wrong, and this file is not evidence
  * for it — a document coming back a different shape than the one you left is a
- * change to the document. The five producers of an intra-block break are now
+ * change to the document. The six producers of an intra-block break are now
  * guarded (`src/shared/plaintext-format.ts` and its callers); a green run here
  * says the bytes still round-trip, which it always said, and nothing more.
  *

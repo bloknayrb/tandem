@@ -495,8 +495,7 @@ export function registerDocumentTools(server: McpServer): void {
               "INVALID_ARGUMENT",
               `Cannot insert a newline into a '${docState?.format}' document: plaintext formats ` +
                 "cannot represent a line break inside a paragraph, so it would reopen as " +
-                "separate paragraphs. Issue one tandem_edit per line, or use " +
-                "tandem_appendContent for multi-block content.",
+                "separate paragraphs. Issue one tandem_edit per line instead.",
             );
           }
 

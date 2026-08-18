@@ -1051,7 +1051,10 @@ describe("tandem_edit — plaintext newline guard (#1460)", () => {
     expect(parsed.code).toBe("INVALID_ARGUMENT");
     expect(parsed.message).toContain("txt");
     // The remedy has to be in the message: the AI cannot see the format.
-    expect(parsed.message).toContain("tandem_appendContent");
+    expect(parsed.message).toContain("tandem_edit per line");
+    // tandem_appendContent is not a valid fallback — it refuses non-markdown
+    // documents outright, so suggesting it here is a dead end (#1460 review).
+    expect(parsed.message).not.toContain("tandem_appendContent");
     expect(extractText(ydoc), "refused, not partially applied").toBe("alpha bravo");
   });
 
