@@ -1,0 +1,284 @@
+/**
+ * Y.Doc position primitives shared by the server and the client.
+ *
+ * FIRST RUNTIME Y.DOC LOGIC IN `src/shared/`. Everything else here is types or
+ * pure string math, so this file establishes a precedent and needs its boundary
+ * stated rather than assumed.
+ *
+ * THREE-IMPORT CEILING — `yjs`, `./types.js`, `../offsets.js`, and nothing else,
+ * ever. That ceiling is the only thing keeping `node:path` and the remark
+ * pipeline out of the browser bundle. These six functions have a pure-Yjs
+ * dependency closure, but four of them used to live in
+ * `src/server/mcp/document-model.ts`, a 700-line module that imports `node:path`
+ * and `saveMarkdown` at module level. Neither import is in the closure, but a
+ * client bundle cannot reach past them — which is why this is a leaf extraction
+ * rather than the file move it looks like.
+ * `tests/shared/ydoc-import-ceiling.test.ts` enforces the ceiling, because
+ * `biome.json` disables the linter entirely and there is no `no-restricted-imports`
+ * rule to lean on. A ceiling kept by convention is not kept.
+ *
+ * The server keeps everything needing more than that: `relPosToFlatOffset`,
+ * `collectXmlTexts`, `extractText`, `validateRange`, `anchoredRange`,
+ * `refreshRange`, and every mutation helper. The client needs neither Y-to-flat
+ * (it goes Y-to-PM via `relRangeToPmPositions`) nor any mutation.
+ *
+ * NOT re-exported from `./index.js`, deliberately: that barrel is `yjs`-free
+ * today and imported for types by both sides, so routing runtime Y logic through
+ * it would make every consumer pull `yjs` in invisibly.
+ */
+
+import * as Y from "yjs";
+import { headingPrefixLength as sharedHeadingPrefixLength } from "../offsets.js";
+import type { ElementPosition, FlatOffset, RelativeRange, SerializedRelPos } from "./types.js";
+import { toSerializedRelPos } from "./types.js";
+
+/**
+ * True when a node is a sibling `hardBreak` inline-leaf element — the only inline
+ * leaf a textblock holds. It occupies exactly 1 flat char and REPLACES the
+ * between-block separator (matches the client, which counts every hardBreak as 1;
+ * `src/client/positions.ts`). Container children (list items, table cells) instead
+ * get a FLAT_SEPARATOR between siblings.
+ */
+export function isHardBreakElement(node: unknown): boolean {
+  return node instanceof Y.XmlElement && node.nodeName === "hardBreak";
+}
+
+/**
+ * Compute the flat text length of a Y.XmlElement without building the string.
+ * Uses the same one-character separator invariant as getElementText().
+ */
+export function getElementTextLength(element: Y.XmlElement): number {
+  let len = 0;
+  let hasPriorContent = false;
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      len += child.length;
+      hasPriorContent = true;
+    } else if (child instanceof Y.XmlElement) {
+      if (isHardBreakElement(child)) {
+        len += 1; // inline-leaf: exactly 1, replaces the separator (see getElementText)
+      } else {
+        if (hasPriorContent) len += 1;
+        len += getElementTextLength(child);
+      }
+      hasPriorContent = true;
+    }
+  }
+  return len;
+}
+
+/**
+ * Find the Y.XmlText that contains a given flat text offset within a Y.XmlElement.
+ * Returns the XmlText and the offset within it, or null if the offset falls on a
+ * separator character or cannot be resolved.
+ */
+export function findXmlTextAtOffset(
+  element: Y.XmlElement,
+  textOffset: number,
+): { xmlText: Y.XmlText; offsetInXmlText: number } | null {
+  let accumulated = 0;
+  let hasPriorContent = false;
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      const len = child.length;
+      if (accumulated + len > textOffset) {
+        return { xmlText: child, offsetInXmlText: textOffset - accumulated };
+      }
+      accumulated += len;
+      hasPriorContent = true;
+    } else if (child instanceof Y.XmlElement) {
+      if (isHardBreakElement(child)) {
+        // Inline-leaf break: 1 flat char, unaddressable like a separator. An offset
+        // landing ON it returns null so the caller's assoc fallback re-anchors.
+        if (textOffset === accumulated) return null;
+        accumulated += 1;
+        hasPriorContent = true;
+      } else {
+        if (hasPriorContent) {
+          if (textOffset === accumulated) {
+            // Offset lands ON the separator — return null (between-element gap)
+            return null;
+          }
+          accumulated += 1;
+        }
+        const childTextLen = getElementTextLength(child);
+        if (accumulated + childTextLen > textOffset) {
+          return findXmlTextAtOffset(child, textOffset - accumulated);
+        }
+        accumulated += childTextLen;
+        hasPriorContent = true;
+      }
+    }
+  }
+  // Handle end-of-element: offset equals total length
+  if (textOffset === accumulated) {
+    // Walk backwards to find the last XmlText
+    for (let i = element.length - 1; i >= 0; i--) {
+      const child = element.get(i);
+      if (child instanceof Y.XmlText) {
+        return { xmlText: child, offsetInXmlText: child.length };
+      } else if (child instanceof Y.XmlElement) {
+        return findXmlTextAtOffset(child, getElementTextLength(child));
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Get the heading prefix length for a Y.XmlElement.
+ * Delegates to shared headingPrefixLength for the actual math.
+ */
+export function getHeadingPrefixLength(node: Y.XmlElement): number {
+  if (node.nodeName === "heading") {
+    const level = Number(node.getAttribute("level") ?? 1);
+    return sharedHeadingPrefixLength(level);
+  }
+  return 0;
+}
+
+/**
+ * Resolve a flat character offset to a Y.Doc element position.
+ * Needed by tandem_edit for cross-element deletion logic.
+ */
+export function resolveToElement(
+  fragment: Y.XmlFragment,
+  charOffset: FlatOffset,
+): ElementPosition | null {
+  let accumulated = 0;
+
+  for (let i = 0; i < fragment.length; i++) {
+    const node = fragment.get(i);
+    if (!(node instanceof Y.XmlElement)) continue;
+
+    const prefixLen = getHeadingPrefixLength(node);
+    const textLen = getElementTextLength(node);
+    const fullLen = prefixLen + textLen;
+
+    if (accumulated + fullLen > charOffset) {
+      const offsetInFull = charOffset - accumulated;
+      const clampedFromPrefix = offsetInFull < prefixLen && prefixLen > 0;
+      const textOffset = Math.max(0, offsetInFull - prefixLen);
+      return { elementIndex: i, textOffset, clampedFromPrefix };
+    }
+
+    accumulated += fullLen;
+
+    if (i < fragment.length - 1) {
+      accumulated += 1; // \n separator
+      if (accumulated > charOffset) {
+        return { elementIndex: i, textOffset: textLen, clampedFromPrefix: false };
+      }
+    }
+  }
+
+  if (fragment.length > 0) {
+    const lastNode = fragment.get(fragment.length - 1);
+    if (lastNode instanceof Y.XmlElement) {
+      return {
+        elementIndex: fragment.length - 1,
+        textOffset: getElementTextLength(lastNode),
+        clampedFromPrefix: false,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Convert a flat text offset to a JSON-serialized Yjs RelativePosition.
+ * Returns null if the offset falls in a heading prefix or can't be resolved.
+ *
+ * Sole mint of `SerializedRelPos` — no other code path constructs the wire
+ * shape. Readers (`relPosToFlatOffset` here + `relRangeToPmPositions` in
+ * `src/client/positions.ts`) must tolerate `Y.createRelativePositionFromJSON`
+ * throwing on stale items after `reloadFromDisk` replaces the Y.Doc content;
+ * see `docs/lessons-learned.md` "Dead CRDT RelativePositions Must Be Stripped,
+ * Not Preserved" for why the throw is expected rather than a bug.
+ */
+export function flatOffsetToRelPos(
+  doc: Y.Doc,
+  offset: FlatOffset,
+  assoc: 0 | -1,
+): SerializedRelPos | null {
+  const fragment = doc.getXmlFragment("default");
+  const resolved = resolveToElement(fragment, offset);
+  if (!resolved || resolved.clampedFromPrefix) return null;
+
+  const node = fragment.get(resolved.elementIndex);
+  if (!(node instanceof Y.XmlElement)) return null;
+
+  let found = findXmlTextAtOffset(node, resolved.textOffset);
+  // If the offset lands exactly on an intra-element separator (between nested block children),
+  // fall back based on assoc: -1 (stick left) → try offset-1; 0 (stick right) → try offset+1.
+  if (!found && assoc === -1 && resolved.textOffset > 0) {
+    found = findXmlTextAtOffset(node, resolved.textOffset - 1);
+    if (found) {
+      // Advance offsetInXmlText to end of this XmlText to stick to the left boundary
+      found = { xmlText: found.xmlText, offsetInXmlText: found.xmlText.length };
+    }
+  } else if (!found && assoc === 0) {
+    const nodeLen = getElementTextLength(node);
+    if (resolved.textOffset + 1 <= nodeLen) {
+      found = findXmlTextAtOffset(node, resolved.textOffset + 1);
+    }
+  }
+  if (!found) return null;
+  const rpos = Y.createRelativePositionFromTypeIndex(found.xmlText, found.offsetInXmlText, assoc);
+  return toSerializedRelPos(Y.relativePositionToJSON(rpos));
+}
+
+// ---------------------------------------------------------------------------
+// Range minting
+// ---------------------------------------------------------------------------
+
+/**
+ * Mint both endpoints of a CRDT-anchored range from flat offsets.
+ *
+ * `from` sticks right (assoc 0) so text inserted at the start stays outside;
+ * `to` sticks left (assoc -1) so text appended at the end stays outside.
+ *
+ * INTENDED to become the sole assembler of a `RelativeRange` — it is not one
+ * yet, and saying so plainly matters more than the aspiration. The three
+ * existing sites (`anchoredRange` and both `refreshRange` re-assembly branches
+ * in `src/server/positions.ts`) still spell the pair out by hand; collapsing
+ * them is deliberately a separate change, because it touches the riskiest
+ * server path and because `anchoredRange` cannot be collapsed mechanically: it
+ * re-resolves both endpoints on failure and logs only when NEITHER was clamped
+ * by a heading prefix, distinguishing "should have anchored and didn't" from
+ * "correctly declined". A helper that just returns null erases that, so porting
+ * the diagnostic is a precondition, not a detail. Verified consistent: all three
+ * sites do use this same assoc pair today.
+ *
+ * The first consumer is the client-side mint in #1471.
+ *
+ * All-or-nothing, and that is a real constraint rather than tidiness: the two
+ * assocs refuse to mint in DIFFERENT places around an empty block — assoc 0 on
+ * the leading separator, assoc -1 on the trailing one, each retrying into the
+ * void. A range touching either offset therefore has to degrade as a whole; a
+ * caller must never end up holding one anchored endpoint and one raw offset.
+ * `tests/client/flat-offset-correspondence.test.ts` pins both refusal sets.
+ *
+ * Never throws — a null return means the caller falls back to flat offsets.
+ * The catch is defensive rather than load-bearing: `flatOffsetToRelPos` returns
+ * null for every failure it currently has, and the throw-prone Yjs call
+ * (`createRelativePositionFromJSON`, which is documented as throwing on stale
+ * items after `reloadFromDisk`) is on the READ path, not this one. Kept because
+ * a keystroke handler must not be the place that discovers otherwise.
+ */
+export function anchorFlatRange(
+  doc: Y.Doc,
+  from: FlatOffset,
+  to: FlatOffset,
+): RelativeRange | null {
+  try {
+    const fromRel = flatOffsetToRelPos(doc, from, 0);
+    const toRel = flatOffsetToRelPos(doc, to, -1);
+    return fromRel && toRel ? { fromRel, toRel } : null;
+  } catch {
+    return null;
+  }
+}

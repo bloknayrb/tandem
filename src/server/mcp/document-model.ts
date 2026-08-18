@@ -1,11 +1,21 @@
 import path from "path";
 import * as Y from "yjs";
+import { FLAT_SEPARATOR, headingPrefix } from "../../shared/offsets.js";
 import {
-  FLAT_SEPARATOR,
-  headingPrefix,
-  headingPrefixLength as sharedHeadingPrefixLength,
-} from "../../shared/offsets.js";
+  findXmlTextAtOffset,
+  getElementTextLength,
+  getHeadingPrefixLength,
+  isHardBreakElement,
+} from "../../shared/positions/ydoc.js";
 import { saveMarkdown } from "../file-io/markdown.js";
+
+// These four moved to `src/shared/positions/ydoc.ts` so the client can reach
+// them without pulling this module's `node:path` and `saveMarkdown` imports —
+// and with them the whole remark pipeline — into the browser bundle. Re-exported
+// from here because ~20 call sites and a dozen test files import them from this
+// path, and a refactor that forces test edits cannot demonstrate it was
+// behaviour-preserving.
+export { findXmlTextAtOffset, getElementTextLength, getHeadingPrefixLength, isHardBreakElement };
 
 /**
  * Detect file format from extension.
@@ -116,17 +126,6 @@ export function populateYDoc(doc: Y.Doc, text: string): void {
 
     fragment.insert(fragment.length, [element]);
   }
-}
-
-/**
- * True when a node is a sibling `hardBreak` inline-leaf element — the only inline
- * leaf a textblock holds. It occupies exactly 1 flat char and REPLACES the
- * between-block separator (matches the client, which counts every hardBreak as 1;
- * `src/client/positions.ts`). Container children (list items, table cells) instead
- * get a FLAT_SEPARATOR between siblings.
- */
-export function isHardBreakElement(node: unknown): boolean {
-  return node instanceof Y.XmlElement && node.nodeName === "hardBreak";
 }
 
 /**
@@ -260,90 +259,6 @@ function collectElementFlat(element: Y.XmlElement, acc: FlatAcc): void {
 }
 
 /**
- * Compute the flat text length of a Y.XmlElement without building the string.
- * Uses the same one-character separator invariant as getElementText().
- */
-export function getElementTextLength(element: Y.XmlElement): number {
-  let len = 0;
-  let hasPriorContent = false;
-  for (let i = 0; i < element.length; i++) {
-    const child = element.get(i);
-    if (child instanceof Y.XmlText) {
-      len += child.length;
-      hasPriorContent = true;
-    } else if (child instanceof Y.XmlElement) {
-      if (isHardBreakElement(child)) {
-        len += 1; // inline-leaf: exactly 1, replaces the separator (see getElementText)
-      } else {
-        if (hasPriorContent) len += 1;
-        len += getElementTextLength(child);
-      }
-      hasPriorContent = true;
-    }
-  }
-  return len;
-}
-
-/**
- * Find the Y.XmlText that contains a given flat text offset within a Y.XmlElement.
- * Returns the XmlText and the offset within it, or null if the offset falls on a
- * separator character or cannot be resolved.
- */
-export function findXmlTextAtOffset(
-  element: Y.XmlElement,
-  textOffset: number,
-): { xmlText: Y.XmlText; offsetInXmlText: number } | null {
-  let accumulated = 0;
-  let hasPriorContent = false;
-  for (let i = 0; i < element.length; i++) {
-    const child = element.get(i);
-    if (child instanceof Y.XmlText) {
-      const len = child.length;
-      if (accumulated + len > textOffset) {
-        return { xmlText: child, offsetInXmlText: textOffset - accumulated };
-      }
-      accumulated += len;
-      hasPriorContent = true;
-    } else if (child instanceof Y.XmlElement) {
-      if (isHardBreakElement(child)) {
-        // Inline-leaf break: 1 flat char, unaddressable like a separator. An offset
-        // landing ON it returns null so the caller's assoc fallback re-anchors.
-        if (textOffset === accumulated) return null;
-        accumulated += 1;
-        hasPriorContent = true;
-      } else {
-        if (hasPriorContent) {
-          if (textOffset === accumulated) {
-            // Offset lands ON the separator — return null (between-element gap)
-            return null;
-          }
-          accumulated += 1;
-        }
-        const childTextLen = getElementTextLength(child);
-        if (accumulated + childTextLen > textOffset) {
-          return findXmlTextAtOffset(child, textOffset - accumulated);
-        }
-        accumulated += childTextLen;
-        hasPriorContent = true;
-      }
-    }
-  }
-  // Handle end-of-element: offset equals total length
-  if (textOffset === accumulated) {
-    // Walk backwards to find the last XmlText
-    for (let i = element.length - 1; i >= 0; i--) {
-      const child = element.get(i);
-      if (child instanceof Y.XmlText) {
-        return { xmlText: child, offsetInXmlText: child.length };
-      } else if (child instanceof Y.XmlElement) {
-        return findXmlTextAtOffset(child, getElementTextLength(child));
-      }
-    }
-  }
-  return null;
-}
-
-/**
  * Collect all Y.XmlText nodes in a Y.XmlElement with their flat offsets from the
  * element's start. Uses the same one-character separator invariant as getElementText().
  */
@@ -429,18 +344,6 @@ export function extractTextWithBreaks(doc: Y.Doc): { text: string; breaks: FlatB
  */
 export function extractMarkdown(doc: Y.Doc): string {
   return saveMarkdown(doc).trimEnd();
-}
-
-/**
- * Get the heading prefix length for a Y.XmlElement.
- * Delegates to shared headingPrefixLength for the actual math.
- */
-export function getHeadingPrefixLength(node: Y.XmlElement): number {
-  if (node.nodeName === "heading") {
-    const level = Number(node.getAttribute("level") ?? 1);
-    return sharedHeadingPrefixLength(level);
-  }
-  return 0;
 }
 
 // -- Range staleness detection ------------------------------------------------
