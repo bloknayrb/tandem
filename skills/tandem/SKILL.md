@@ -122,25 +122,39 @@ Tandem snapshots the file's bytes before its first write each run, so a save is 
 
 ## When the tandem_* Tools Are Absent
 
-**If this session has no `tandem_*` tools at all, Tandem is not running.** Claude Code resolves
-`mcpServers.tandem` once at session start over direct HTTP; if the server was down then, the
-connection never happened and the whole toolset is missing. There is no failing tool call to read,
-because there is no tool — which is why this needs saying rather than being obvious (#1463).
+**If this session has no `tandem_*` tools at all, do not work around it — read this.** Claude Code
+resolves `mcpServers.tandem` once at session start over direct HTTP, so the whole toolset is
+missing whenever that resolution did not produce a live connection. There is no failing tool call
+to read, because there is no tool — which is why this needs saying rather than being obvious
+(#1463).
+
+**Two causes, and they take different fixes** — step 2 is almost always the right one, and step 3
+tells you when it was not, without guessing.
 
 **1. Do not edit the target file by any other means.** Not `Edit`, not `Write`, not "I'll just make
 the change directly," and do not offer to. The user asked for their document in Tandem: an edit
 made outside it is invisible in the editor, unreviewable, and looks like success. **Absence of the
 toolset means stop.** This holds even when the file is right there and the change is trivial.
 
-**2. Tell the user, in these terms:**
+**2. Tandem is not running (the common cause). Tell the user, in these terms:**
 
 > Tandem server not running. Start the Tauri app or run `tandem start`, then run `/mcp` to
 > reconnect this session.
 
 Say all three parts. Naming Tandem without naming the remedy leaves the user guessing, and the
 remedy has a second half people miss: **launching Tandem does not repair a session already
-running.** Connection state is fixed at session start, so `/mcp` is required. Do not invent other
-remedies — there is no per-chat connector toggle to enable and no MCP setting to change.
+running.** Connection state is fixed at session start, so `/mcp` is required.
+
+**3. If the tools are still absent after that, Tandem was never configured for this client.** The
+skill installs on any `tandem setup --apply`, including runs that wrote no MCP config at all, so it
+can be loaded in a session whose `~/.claude.json` has no `mcpServers.tandem` entry to resolve. Step
+2 cannot fix that — there is nothing to reconnect to. Say:
+
+> Tandem isn't set up for Claude Code on this machine. Run `tandem setup --apply`, or open Tandem
+> and use **Settings → AI Assistant**, then restart Claude Code.
+
+Those two are the whole set. Do not invent a third — there is no per-chat connector toggle to
+enable and no MCP setting to hand-edit.
 
 **Do not go looking for the tools first.** No amount of `ToolSearch`, connector listing, or plugin
 listing will surface a server that never connected; it only adds latency before the user hears

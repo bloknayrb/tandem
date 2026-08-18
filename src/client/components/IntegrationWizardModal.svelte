@@ -40,7 +40,12 @@ import {
   undetectedDetail,
 } from "../cowork/cowork-helpers.js";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke.js";
-import { createAutostart, readAutostartDecided } from "../hooks/useAutostart.svelte.js";
+import {
+  autostartWizardDefault,
+  createAutostart,
+  readAutostartDecided,
+  writeAutostartDecided,
+} from "../hooks/useAutostart.svelte.js";
 import { createClaudeCliStatus } from "../hooks/useClaudeCliStatus.svelte.js";
 import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte.js";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte.js";
@@ -54,6 +59,7 @@ import {
   type ReachabilityStatus,
   type ReachabilityTarget,
 } from "../hooks/useReachabilityCheck.svelte.js";
+import { resyncCheckbox } from "../utils/checkbox-sync.js";
 import IntegrationTargetCard from "./IntegrationTargetCard.svelte";
 import {
   computeDoneHeaderState,
@@ -124,13 +130,31 @@ const wizardAutostartBlocked = $derived(
 let autostartDefaultApplied = $state(false);
 $effect(() => {
   if (!open || wizard.step !== "done") return;
-  const st = wizardAutostartStatus;
-  if (st === null || !st.trayAvailable || st.enabled) return;
-  if (readAutostartDecided()) return;
+  const decision = autostartWizardDefault(wizardAutostartStatus, readAutostartDecided());
+  if (!decision.enable && !decision.record) return;
   if (untrack(() => autostartDefaultApplied)) return;
   autostartDefaultApplied = true;
-  void wizardAutostart.toggle(true);
+  // `toggle()` records the decision itself, so `record` is only ever set on the
+  // arm that does not enable.
+  if (decision.record) writeAutostartDecided();
+  if (decision.enable) void wizardAutostart.toggle(true);
 });
+
+/**
+ * `resyncCheckbox` because `checked={wizardAutostartStatus.enabled}` cannot
+ * repair itself, exactly as in `NetworkSettings.svelte` — see that helper for
+ * the mechanism. It is not optional here just because this is a setup screen:
+ * `autostart_set_enabled` returns `io-error` / `readback-mismatch` WITHOUT
+ * rejecting, so `toggle()`'s catch never fires, `status.enabled` is unchanged,
+ * the expression re-computes to the value Svelte last wrote, the DOM write is
+ * skipped, and the box latches where the user clicked over a setting that never
+ * moved. Resyncing from the status THIS call returned, so there is no stale-read
+ * hazard.
+ */
+async function toggleWizardAutostart(box: HTMLInputElement): Promise<void> {
+  await wizardAutostart.toggle(box.checked);
+  resyncCheckbox(box, wizardAutostart.status?.enabled ?? false);
+}
 // Render subscriptions (NOT effect reads) — safe.
 const coworkVariant = $derived(coworkSettingsVariant(coworkStatus.status));
 
@@ -1144,7 +1168,7 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                   data-testid="integration-wizard-autostart-toggle"
                   checked={wizardAutostartStatus.enabled}
                   disabled={wizardAutostart.loading}
-                  onchange={(e) => void wizardAutostart.toggle(e.currentTarget.checked)}
+                  onchange={(e) => void toggleWizardAutostart(e.currentTarget)}
                 />
                 <span>
                   <span class="iw-autostart-title">Start Tandem when my computer starts</span>
