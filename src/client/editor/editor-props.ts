@@ -6,7 +6,9 @@
 
 import { TextSelection } from "@tiptap/pm/state";
 import type { EditorProps } from "@tiptap/pm/view";
+import { isPlaintextFormat } from "../../shared/plaintext-format";
 import { markdownToSlice } from "./utils/markdown-paste";
+import { splitPastedHardBreaks, splitSliceHardBreaks } from "./utils/paste-breaks";
 import { normalizePastedHtmlWhitespace } from "./utils/paste-whitespace";
 import { buildPlainTextSlice } from "./utils/plain-paste";
 import { isSafeExternalHref } from "./utils/url-safety";
@@ -16,7 +18,17 @@ import { isSafeExternalHref } from "./utils/url-safety";
 // toggling spellcheck without recreating the editor requires re-supplying
 // every existing prop (attributes, clipboardTextParser, clipboardTextSerializer,
 // handlePaste) plus the new `spellcheck` attribute, not just the changed piece.
-export function makeEditorProps(spellcheckOnValue: boolean): EditorProps {
+// `getFormat` is a GETTER, not a value, and that is the whole point. Save-As
+// promotes a document in place — same docId, same Y.Doc, same provider — so this
+// props object outlives a `.md` scratchpad becoming a `.txt` file on disk. A
+// format read once at call time would keep letting `<br>` through for the rest
+// of that editor's life, which is the guard failing in the exact case it exists
+// for. Defaults to `undefined`, which `isPlaintextFormat` reads as "not
+// plaintext", leaving the transform inert for every existing caller.
+export function makeEditorProps(
+  spellcheckOnValue: boolean,
+  getFormat: () => string | undefined = () => undefined,
+): EditorProps {
   return {
     attributes: {
       class: "tandem-editor",
@@ -34,7 +46,24 @@ export function makeEditorProps(spellcheckOnValue: boolean): EditorProps {
     // overrides the paste-level `preserveWhitespace: false` once parsing enters
     // a `<p>` — so without this, pretty-printed markup imports its own source
     // indentation as content. See utils/paste-whitespace.ts for the mechanism.
-    transformPastedHTML: normalizePastedHtmlWhitespace,
+    //
+    // Two transforms now, and SPLITTING RUNS FIRST. The order is not arbitrary
+    // and the intuitive one is wrong — a test caught it.
+    //
+    // `normalizePastedHtmlWhitespace` trims leading/trailing space at each
+    // BLOCK's edges. Collapsing first turns `<p>\n  a<br>\n  b\n</p>` into
+    // `<p>a<br> b</p>`: the newline after the `<br>` is interior to the
+    // paragraph, so nothing trims it, and after the split the second half is
+    // `" b"` — a leading space the user never pasted, which then saves to disk.
+    // Splitting first makes each half a real block, so the trim applies to both.
+    //
+    // Splitting is gated on the document's format: in a plaintext document a
+    // `<br>` is a shape the file cannot store (#1460), while in markdown it is a
+    // hard break the serializer writes as a trailing `\`.
+    transformPastedHTML: (html) => {
+      const split = isPlaintextFormat(getFormat()) ? splitPastedHardBreaks(html) : html;
+      return normalizePastedHtmlWhitespace(split);
+    },
     // Paste raw markdown as formatted rich text (#788). We return a parsed
     // ProseMirror Slice so y-prosemirror's sync plugin captures it via the
     // normal paste transaction — we never touch the Y.Doc directly. When the
@@ -43,7 +72,19 @@ export function makeEditorProps(spellcheckOnValue: boolean): EditorProps {
     clipboardTextParser: (text, $context, plain, view) => {
       if (!plain) {
         const slice = markdownToSlice(text, view.state.schema);
-        if (slice) return slice;
+        // A markdown soft/hard break becomes a `hardBreak` node
+        // (`markdown-paste.ts`'s token spec), which a plaintext document cannot
+        // store (#1460) — so this is a SIXTH producer, and the one reached by an
+        // ordinary Ctrl+V of `text/plain` alone. `transformPastedHTML` never runs
+        // for a clipboard with no `text/html` flavour: a terminal, a code editor,
+        // `less`, an OS text field. Found in review.
+        //
+        // Rewritten rather than discarded: `splitSliceHardBreaks` turns the breaks
+        // into block boundaries and leaves the rest of the markdown parse intact.
+        // Falling back to `buildPlainTextSlice` instead would paste `**bold**` as
+        // four literal characters whenever the text also held a break, and as real
+        // bold when it did not — one paste behaving two ways.
+        if (slice) return isPlaintextFormat(getFormat()) ? splitSliceHardBreaks(slice) : slice;
       }
       // Fall back to plain-text behavior: split on blank-line groups into
       // paragraphs, carrying the context's active marks. Shared with the

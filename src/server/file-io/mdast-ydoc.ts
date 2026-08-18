@@ -1,9 +1,10 @@
 import type { AlignType, PhrasingContent, Root, RootContent, Table } from "mdast";
 import * as Y from "yjs";
+import { sanitizeImageSrc } from "../../shared/image-src-safety.js";
 import { normalizeHardBreaks } from "./hardbreak-normalize.js";
 import { serializeMdastBlock, serializeMdastInline } from "./markdown.js";
 
-const MARKDOWN_HTML_ATTR = "markdownHtml";
+export const MARKDOWN_HTML_ATTR = "markdownHtml";
 /**
  * Marks a `paragraph` whose Y.XmlText holds the verbatim markdown source of a
  * construct Tandem has no first-class editor node for (footnote/reference
@@ -11,7 +12,7 @@ const MARKDOWN_HTML_ATTR = "markdownHtml";
  * it round-trips byte-exact, and surfaced to the editor as `data-markdown-raw`
  * for the show/hide toggle. Sibling to MARKDOWN_HTML_ATTR. See #981 / ADR-042.
  */
-const MARKDOWN_RAW_ATTR = "markdownRaw";
+export const MARKDOWN_RAW_ATTR = "markdownRaw";
 /**
  * Marks a `markdownRaw` paragraph that is specifically YAML/TOML frontmatter
  * (#1457), so the client can present it as a metadata block rather than prose.
@@ -22,7 +23,7 @@ const MARKDOWN_RAW_ATTR = "markdownRaw";
  * it as an editable paragraph in the body would put `---` and `title:` at the
  * top of every Obsidian note.
  */
-const FRONTMATTER_ATTR = "markdownFrontmatter";
+export const FRONTMATTER_ATTR = "markdownFrontmatter";
 /**
  * Delta-attribute key for an inline run holding verbatim markdown source
  * (footnoteReference, linkReference, imageReference, inline image, inline html).
@@ -309,10 +310,28 @@ function rawBlockParagraph(
   return el;
 }
 
-/** Build a block-level `image` Y.XmlElement from an MDAST image node. */
+/**
+ * Build a block-level `image` Y.XmlElement from an MDAST image node.
+ *
+ * `node.url` comes straight from the opened `.md` file — untrusted content,
+ * same as a pasted image src (#1420). Sanitized through the same allowlist
+ * `sanitizeImageSrcForPaste` applies at paste time; a rejected src downgrades
+ * to a plain-text paragraph carrying the alt/title text (mirroring the
+ * paste-time fallback in `markdown-paste.ts`'s `imageFallbackToken`) rather
+ * than reaching the Y.Doc unvetted. `new Y.XmlText(text)` bakes content in at
+ * construction — same pattern the `<br>` case below uses — so this stays safe
+ * under the "attach Y.XmlText before populating" rule without needing the
+ * two-pass `deferred` mechanism.
+ */
 function imageToYxml(node: Extract<PhrasingContent, { type: "image" }>): Y.XmlElement {
+  const src = sanitizeImageSrc(node.url);
+  if (!src) {
+    const el = new Y.XmlElement("paragraph");
+    el.insert(0, [new Y.XmlText(node.alt || node.title || "")]);
+    return el;
+  }
   const el = new Y.XmlElement("image");
-  el.setAttribute("src", node.url);
+  el.setAttribute("src", src);
   if (node.alt) el.setAttribute("alt", node.alt);
   if (node.title) el.setAttribute("title", node.title);
   return el;

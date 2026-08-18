@@ -218,10 +218,25 @@ describe("#1477: undoing an accept restores the breaks it recorded", () => {
     return api;
   }
 
+  /**
+   * **Every editor this describe creates has to be destroyed, and an
+   * `afterEach` is the only way that survives a failing assertion.** An
+   * undestroyed Tiptap `Editor` leaves a `DOMObserver` timer armed; it fires
+   * after happy-dom has torn `document` down, and vitest reports
+   * `ReferenceError: document is not defined` as an *unhandled error* — every
+   * test passing, exit code 1. It is timing-dependent, so it stayed green
+   * locally for several runs and failed on CI.
+   */
+  const created: Editor[] = [];
+  afterEach(() => {
+    while (created.length > 0) created.pop()?.destroy();
+  });
+
   function setup(html: string, ann: Annotation) {
     const ydoc = new Y.Doc();
     ydoc.getMap(Y_MAP_ANNOTATIONS).set(ann.id, ann);
     const editor = new Editor({ extensions: buildSchemaExtensions(), content: html });
+    created.push(editor);
     const review = mountReview({
       getYdoc: () => ydoc,
       getEditor: () => editor,
