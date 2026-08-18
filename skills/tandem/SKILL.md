@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 11
+version: 12
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -119,6 +119,35 @@ Then pick an ending, and say which one you're doing:
 - **`tandem_convertToMarkdown`** — still the right call if the user wants a Markdown copy rather than a Word file.
 
 Tandem snapshots the file's bytes before its first write each run, so a save is reversible: `tandem_restoreBackup` with no `backup` lists snapshots, and with `backup` set restores one in place (annotations preserved and re-anchored). If something else changed the file on disk meanwhile, the save is refused and a conflict banner asks the user to keep or reload — `tandem_save` reports that instead of claiming a save that didn't happen.
+
+## When the tandem_* Tools Are Absent
+
+**If this session has no `tandem_*` tools at all, Tandem is not running.** Claude Code resolves
+`mcpServers.tandem` once at session start over direct HTTP; if the server was down then, the
+connection never happened and the whole toolset is missing. There is no failing tool call to read,
+because there is no tool — which is why this needs saying rather than being obvious (#1463).
+
+**1. Do not edit the target file by any other means.** Not `Edit`, not `Write`, not "I'll just make
+the change directly," and do not offer to. The user asked for their document in Tandem: an edit
+made outside it is invisible in the editor, unreviewable, and looks like success. **Absence of the
+toolset means stop.** This holds even when the file is right there and the change is trivial.
+
+**2. Tell the user, in these terms:**
+
+> Tandem server not running. Start the Tauri app or run `tandem start`, then run `/mcp` to
+> reconnect this session.
+
+Say all three parts. Naming Tandem without naming the remedy leaves the user guessing, and the
+remedy has a second half people miss: **launching Tandem does not repair a session already
+running.** Connection state is fixed at session start, so `/mcp` is required. Do not invent other
+remedies — there is no per-chat connector toggle to enable and no MCP setting to change.
+
+**Do not go looking for the tools first.** No amount of `ToolSearch`, connector listing, or plugin
+listing will surface a server that never connected; it only adds latency before the user hears
+anything. One check is enough, and the answer is conclusive.
+
+The wording above matches what the stdio bridge (`src/cli/mcp-stdio.ts`) already returns as JSON-RPC
+`-32000` for Claude Desktop and Cowork, so every integration says the same thing.
 
 ## Error Recovery
 

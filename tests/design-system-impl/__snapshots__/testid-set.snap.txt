@@ -202,6 +202,9 @@ high-contrast-toggle
 integration-wizard
 integration-wizard-advanced
 integration-wizard-apply-result-{*}
+integration-wizard-autostart
+integration-wizard-autostart-error
+integration-wizard-autostart-toggle
 integration-wizard-card-{*}
 integration-wizard-check-again
 integration-wizard-close

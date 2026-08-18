@@ -57,6 +57,42 @@ If you restart the server while Claude Code is open, run `/mcp` inside Claude Co
 
 `tandem doctor` (or **Settings → About → Copy Diagnostics**) distinguishes 1 from 2–4: if the health checks pass but tool calls still fail, the problem is on the config side.
 
+## Claude doesn't seem to know what Tandem is
+
+Symptom: you ask Claude Code to open a document in Tandem and it says it can't, or that it has no
+such tool — **or, worse, it edits the file directly and tells you it's done.** You never see a
+connection error, because there wasn't one.
+
+**Cause: Tandem was not running when the Claude Code session started.** Claude Code resolves
+`mcpServers.tandem` once, at session start, over direct HTTP. If nothing answered then, the server
+never connected and the entire `tandem_*` toolset is simply absent from the session. There is no
+failing tool call to see, because there is no tool.
+
+This is why neither entry above fires. You are not told the connection failed, and `/mcp` is not
+somewhere you would think to look — the symptom reads as Claude not knowing what Tandem is.
+
+**Fix, and both halves are required:**
+
+1. Start Tandem — launch the desktop app, or run `tandem start`.
+2. Run `/mcp` inside Claude Code.
+
+**Launching Tandem does not repair a session that is already running.** Connection state is fixed
+at session start, so the natural recovery — open Tandem, ask again — still fails without step 2.
+That second failure is the part most likely to read as "Tandem is broken".
+
+To stop hitting this, turn on **Start Tandem when my computer starts** (Settings → Network, or the
+checkbox on the setup wizard's final screen, where it is on by default). It is desktop-only and
+won't cover a crash or a deliberate quit, so it reduces how often this happens rather than
+preventing it.
+
+**If Claude offers to edit the file directly, say no.** An edit made outside Tandem is invisible in
+the editor and unreviewable. Current Tandem skill versions instruct Claude to refuse this and to
+tell you the server isn't running instead; if you see it offer anyway, the installed skill is stale
+— run `tandem setup --apply` to refresh it.
+
+Claude Desktop and Cowork do not have this failure mode: they run Tandem through a stdio subprocess
+that pre-flights the server and returns a real error, so Claude can relay it.
+
 ## Tandem can't start Claude on Windows, but `claude` works in a terminal
 
 Symptom: the "Restart Claude" / "Set up Claude Code" prompt keeps coming back, or the AI

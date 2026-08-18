@@ -40,6 +40,7 @@ import {
   undetectedDetail,
 } from "../cowork/cowork-helpers.js";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke.js";
+import { createAutostart } from "../hooks/useAutostart.svelte.js";
 import { createClaudeCliStatus } from "../hooks/useClaudeCliStatus.svelte.js";
 import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte.js";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte.js";
@@ -86,6 +87,41 @@ const wizard = createIntegrationWizard({ baseUrl: `http://127.0.0.1:${DEFAULT_MC
 // getActive() is false → the hook's effect early-returns, no interval ever
 // starts; on Tauri the poller lives only while this component is mounted.
 const coworkStatus = createCoworkStatus(() => isTauriRuntime());
+
+/* Start at login (#1463 step 3). A MITIGATION, not a fix: it reduces how often
+   a user reaches Claude Code with Tandem down, and closes nothing — it is
+   desktop-only, and covers neither a crash, a deliberate quit, nor anyone who
+   already finished the wizard. The real fix is the skill's absent-tools rule.
+
+   Same hook as Settings → Network, so the OS stays the single source of truth
+   and no `tandem:settings` field appears (see `useAutostart.svelte.ts` — do not
+   add one). Gated on the `done` step rather than `open`, so a user who never
+   finishes setup is never registered. */
+const wizardAutostart = createAutostart(() => open && isTauriRuntime() && wizard.step === "done");
+const wizardAutostartStatus = $derived(wizardAutostart.status);
+const wizardAutostartBlocked = $derived(
+  wizardAutostartStatus !== null && !wizardAutostartStatus.trayAvailable,
+);
+
+/* "Checked by default" is implemented as an actual enable on first render, not
+   a pre-ticked box that does nothing until the wizard closes. A box reading
+   checked while the OS registration is absent is a lie, and the honest
+   alternative is worse: applying inside `close()` would swallow the failure at
+   exactly the moment the surface that would report it is unmounting.
+
+   Latched so it fires once per wizard open, and skipped when the OS already has
+   it. Accepted trade: someone who turned this off in Settings and later re-runs
+   the wizard gets it back on. The box is right there, checked and visibly
+   reversible, so the state is never hidden from them. */
+let autostartDefaultApplied = $state(false);
+$effect(() => {
+  if (!open || wizard.step !== "done") return;
+  const st = wizardAutostartStatus;
+  if (st === null || !st.trayAvailable || st.enabled) return;
+  if (untrack(() => autostartDefaultApplied)) return;
+  autostartDefaultApplied = true;
+  void wizardAutostart.toggle(true);
+});
 // Render subscriptions (NOT effect reads) — safe.
 const coworkVariant = $derived(coworkSettingsVariant(coworkStatus.status));
 
@@ -1092,6 +1128,30 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 {/if}
               </span>
             </div>
+            {#if isTauriRuntime() && wizardAutostartStatus !== null && !wizardAutostartBlocked}
+              <label class="iw-autostart" data-testid="integration-wizard-autostart">
+                <input
+                  type="checkbox"
+                  data-testid="integration-wizard-autostart-toggle"
+                  checked={wizardAutostartStatus.enabled}
+                  disabled={wizardAutostart.loading}
+                  onchange={(e) => void wizardAutostart.toggle(e.currentTarget.checked)}
+                />
+                <span>
+                  <span class="iw-autostart-title">Start Tandem when my computer starts</span>
+                  <span class="iw-autostart-sub">
+                    So Tandem is already running when you ask Claude to open a document — if it
+                    isn't, Claude starts with no Tandem tools at all. Starts minimized to the
+                    tray; your AI assistant isn't launched until you open the window.
+                  </span>
+                </span>
+              </label>
+              {#if wizardAutostart.error}
+                <div class="iw-autostart-error" data-testid="integration-wizard-autostart-error">
+                  {wizardAutostart.error}
+                </div>
+              {/if}
+            {/if}
             {#if wizard.channelRegistered !== null && whatsNext !== "stdio-only"}
               <div
                 class="iw-push-mode"
@@ -1395,6 +1455,36 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
     flex-direction: column;
   }
 
+  .iw-autostart {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--tandem-space-2);
+    padding: var(--tandem-space-3);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-2);
+    background: var(--tandem-surface-sunk);
+    cursor: pointer;
+  }
+  .iw-autostart input {
+    accent-color: var(--tandem-accent);
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+  .iw-autostart-title {
+    display: block;
+    font-size: var(--tandem-text-sm);
+    color: var(--tandem-fg);
+  }
+  .iw-autostart-sub {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+  }
+  .iw-autostart-error {
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-error-fg);
+  }
   .iw-step {
     display: flex;
     flex-direction: column;
