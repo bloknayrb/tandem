@@ -5,6 +5,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  openAnnotatePopup,
 } from "./helpers";
 
 /**
@@ -248,4 +249,90 @@ test("visible icons do not paint themselves a fixed colour", async ({ page }) =>
     offenders,
     "SVG attributes with a hardcoded colour — use currentColor or a --tandem-* token",
   ).toEqual([]);
+});
+
+/**
+ * #1444's destination markers, which are the one thing in this file that
+ * deliberately does NOT rely on colour surviving.
+ *
+ * `--tandem-author-user` and `--tandem-author-claude` are the two authorship
+ * colours, and `index.html`'s forced-colors block maps BOTH onto `CanvasText`.
+ * So the markers cannot be a cobalt dot and a coral dot: under this mode they
+ * would be the same dot. They are a filled disc (the agent) and a ring (you),
+ * and the shape is what has to survive.
+ *
+ * The aggregate "state-by-fill indicators" test above cannot cover this — its
+ * `boot()` renders neither a selection popup nor an annotation, and its
+ * non-empty guard is aggregate, so appending these selectors to it would add
+ * zero coverage and could never fail. Hence a separate test that actually
+ * renders both markers.
+ *
+ * `outlined || bordered` is deliberately NOT the assertion: both markers are
+ * bordered, so that check passes for either and distinguishes nothing. The
+ * assertion is that their BACKGROUNDS differ — one filled, one transparent.
+ */
+test("destination markers stay distinguishable by shape, not colour", async ({ page }) => {
+  await boot(page);
+
+  const editor = page.locator(".tiptap");
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  await openAnnotatePopup(page);
+
+  // Both composer markers are present, and this is the only surface where the
+  // pair is co-present — the card and batch bar render a lone disc, where the
+  // marker reinforces the label rather than being the signal.
+  const sendMarker = page.locator("[data-testid='popup-comment-submit'] > span");
+  const noteMarker = page.locator("[data-testid='popup-note-submit'] > span");
+  await expect(sendMarker).toHaveCount(1);
+  await expect(noteMarker).toHaveCount(1);
+
+  // The toHaveCount assertions above are the retrying wait, so by here both
+  // spans exist and `read` can throw rather than widening every field to null.
+  const shapes = await page.evaluate(() => {
+    const read = (testid: string) => {
+      const span = document.querySelector(`[data-testid='${testid}'] > span`);
+      if (!span) throw new Error(`${testid} marker did not render`);
+      const cs = getComputedStyle(span);
+      return {
+        background: cs.backgroundColor,
+        borderWidth: cs.borderTopWidth,
+        width: cs.width,
+      };
+    };
+    return { send: read("popup-comment-submit"), note: read("popup-note-submit") };
+  });
+
+  // Both are rings-or-discs of the same size with a real border...
+  for (const [name, s] of Object.entries(shapes)) {
+    expect(parseFloat(s.width), `${name} marker has no width`).toBeGreaterThan(0);
+    expect(parseFloat(s.borderWidth), `${name} marker lost its border`).toBeGreaterThan(0);
+  }
+
+  // ...and the fill is what tells them apart. `transparent` is forcing-exempt,
+  // so the ring stays a ring; a regression to colour-only keying would make
+  // these two equal.
+  expect(
+    shapes.note.background,
+    "the private marker must stay unfilled — with both authorship colours mapped to CanvasText, fill is the only thing distinguishing it",
+  ).not.toBe(shapes.send.background);
+  expect(shapes.note.background).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+
+  // The card's Send carries the same disc, and has no other E2E coverage at
+  // all. It renders only for a USER-authored pending note — an imported one
+  // takes the Accept/Reject branch instead and has no marker.
+  await page.locator("[data-testid='popup-annotation-input']").fill("marker check");
+  await page.locator("[data-testid='popup-note-submit']").click();
+
+  const cardSend = page.locator("[data-testid^='send-to-claude-btn-']").first();
+  await expect(cardSend).toBeVisible({ timeout: 10_000 });
+  const cardMarker = await cardSend.locator("> span").evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { background: cs.backgroundColor, borderWidth: cs.borderTopWidth, width: cs.width };
+  });
+  expect(parseFloat(cardMarker.width)).toBeGreaterThan(0);
+  expect(parseFloat(cardMarker.borderWidth)).toBeGreaterThan(0);
+  expect(cardMarker.background, "the card's Send marker must stay filled").toBe(
+    shapes.send.background,
+  );
 });

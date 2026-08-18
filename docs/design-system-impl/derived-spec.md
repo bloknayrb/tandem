@@ -298,7 +298,7 @@ map to production's five-component split.
 
 | audience  | author   | suggestedText | Production variant | Bundle `cardType` | Background tint | Header (dot + name + badge) | Actions row |
 | --------- | -------- | ------------- | ------------------ | ----------------- | --------------- | --------------------------- | ----------- |
-| `private` | `user`   | —             | `NoteCard`         | `note`            | default surface (no tint) | cobalt dot · "You" · no badge | Send to Claude (cobalt) · Resolve (ghost) |
+| `private` | `user`   | —             | `NoteCard`         | `note`            | default surface (no tint) | cobalt dot · "You" · no badge | Send to Claude (neutral + coral disc) · Archive (ghost) |
 | `claude`  | `user`   | —             | `CommentCard`      | `comment-user`    | cobalt tint (`oklch(0.987 0.005 250)` / `oklch(0.24 0.03 250)`) | cobalt dot · "You" · "Comment" badge (cobalt) | Resolve (primary) · Edit (ghost) · Delete (ghost) |
 | `claude`  | `claude` | —             | `CommentCard`      | (`comment`, no tint variant) | default surface | coral dot · "Claude" · "Comment" badge (cobalt) | Resolve (primary) · Edit (ghost) · Delete (ghost) |
 | `claude`  | `claude` | present       | `SuggestionCard`   | `suggest`         | violet tint (`oklch(0.985 0.008 295)` / `oklch(0.24 0.04 295)`) | coral dot · "Claude" · "Suggestion" badge (violet) | Accept (primary) · Dismiss (ghost) · Edit (ghost) |
@@ -339,7 +339,7 @@ from the user-picked highlight color in `HIGHLIGHT_COLOR_VARS`
   byline replaces the dot.
 - Do NOT add an `Accept` action to non-suggestion cards. The bundle's
   `card-actions` row is type-specific:
-  - `note` → Send to Claude (cobalt `.send`), Resolve (ghost)
+  - `note` → Send to Claude (neutral `.aca-btn--send` + coral destination disc), Archive (ghost)
   - `comment` → Resolve (primary), Edit (ghost), Delete (ghost)
   - `suggest` → Accept (primary), Dismiss (ghost), Edit (ghost)
   - `imported` → Promote (primary), Dismiss (ghost) (production-only)

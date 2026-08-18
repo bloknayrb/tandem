@@ -29,7 +29,9 @@ apply-changes-btn
 archive-btn-{*}
 banner-stack
 batch-promote-bar
+batch-promote-cancel
 batch-promote-clear
+batch-promote-commit
 batch-promote-confirm
 batch-promote-count
 brand-menu-settings

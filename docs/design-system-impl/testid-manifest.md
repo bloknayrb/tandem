@@ -128,8 +128,12 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `margin-leaders-{*}`, `margin-pin-btn-{*}` (pin a crowd-minimized card open;
   lives on the bubble wrapper, not in the card header, so it never appears in
   the side rail)
-- Batch + bulk: `batch-promote-{bar,count,clear,confirm}`,
-  `bulk-{confirm,cancel,accept,dismiss}-btn`
+- Batch + bulk: `batch-promote-{bar,count,clear,confirm,commit,cancel}`,
+  `bulk-{confirm,cancel,accept,dismiss}-btn`. Since #1444 the batch promote is
+  two-step, and `batch-promote-confirm` names the button that **requests** the
+  confirm while `batch-promote-commit` is the one that performs it — the name
+  drifted from the meaning, and it was kept anyway because this set may gain a
+  selector but never lose one.
 - Sort: `annotation-sort-toggle` (position ↔ chronological, #1056)
 - Filters: `filter-bar-toggle`, `clear-filters-btn`; chip groups (#798 A15,
   `ChipGroup`) — roots `filter-{type,author,status}`; per-chip
