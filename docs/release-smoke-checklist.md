@@ -91,6 +91,41 @@ Note the outcome (platforms covered, anything skipped, anything found) in a
 comment on the release's tracking issue or the release PR. A skipped platform
 is fine when stated; an unstated skip reads as "verified" and isn't.
 
+## What the v0.23.0 run settled
+
+v0.23.0 (2026-08-18). §1 and §4 executed on Windows 11 Pro (26200); §0 and §3 are
+automated and were green; **§2 macOS was skipped — no Apple Silicon hardware.** What
+that skip leaves unverified is narrow and worth naming, because CI now covers most of
+it: codesign, the notarization ticket and the arm64 sidecar boot smoke all passed in
+`tauri-release.yml`, so what nobody checked is the Gatekeeper UX, the GUI window
+itself, the updater from the previous version, and the keychain round-trip.
+
+§1 passed on every item except two that were not run and are recorded as deliberate
+skips: the **fresh NSIS install from the release page** (the machine updated in place
+instead) and **uninstall → reinstall** (destructive to a working install). The updater
+was exercised the way the v0.22.1 run established — a real v0.22.1 baseline already
+installed, updated via the in-app prompt. SmartScreen did not appear at all. File
+association passed cold and warm.
+
+Three things this run established:
+
+- **`tandem doctor` from a global install now exits 0 outside the checkout**, and that
+  is the new baseline rather than a change to note once. `node-modules` and `mcp-json`
+  report as skip-shaped **passes**; a `[FAIL]` on either is a regression. The instruction that stood
+  here before #1470 told the operator to expect two failing rows and tick the box, which
+  would now train them straight past a real fault. Measured here: 16 PASS, 6 WARN, 0 FAIL, exit 0.
+- **§4 cannot run while the desktop app is running, and the failure is quiet.** Both
+  bind 3478/3479 and contend on the annotation-store lock; the npm server retries for
+  30s and gives up rather than displacing the app. Correct behaviour, but it means §4
+  has to be run with Tandem quit — and killing the `tandem` wrapper does **not** kill
+  the node child it spawned, which will then take the ports the moment the app releases
+  them. Confirm with `Get-Process node-sidecar` and `Get-NetTCPConnection -LocalPort
+  3478,3479 -State Listen` before and after.
+- **The orphan check has a positive identity, not just a name.** The sidecar is
+  `node-sidecar` (Tauri `externalBin`), distinct from the several `node.exe` under
+  `C:\Program Files\nodejs` that Claude Code and MCP servers keep alive regardless.
+  Checking the two commands above is more reliable than reading the Task Manager list.
+
 ## What the v0.22.1 run settled
 
 v0.22.1 (2026-08-13) was the first cut with §1 executed end to end; results are on
