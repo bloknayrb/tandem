@@ -1054,7 +1054,7 @@ Everything above renders identically. Recovering any of it needs a per-node sour
 >
 > **Corrected reading of the decisions.** They do not die; they become the **legacy branch of a dual-era server**, and live at least as long as the revision's new minimum twelve-month deprecation window:
 >
-> - **Decisions 1, 3, 4 (registry, `onsessioninitialized`, reaper, LRU cap) — survive, scoped to legacy.** A dual-era server picks behavior from how the client opens, and an `initialize` request selects legacy semantics *scoped to the session* — which is exactly what the registry serves. Two legacy clients still contend, so the bug this ADR fixes stays live on that branch. What is **undetermined** is the modern branch's shape: "one `McpServer`, no registry" is not available on the evidence, because Decision 2's `Protocol.connect()` throw is a property of the SDK's `Protocol` class and SEP-2567 does not touch it — one server still cannot hold two concurrent transports. The SDK's stateless transport mode constructs a server per request instead, and ADR-012 asserted ~~*"the SDK crashes in stateless mode after the first `server.connect()`"*~~ — a 2024 claim **refuted by the #1253 probe in 2026 (#1332)**, see the ADR-012 note above. Whether to adopt stateless mode here is a separate question and still depends on #1252/#1249.
+> - **Decisions 1, 3, 4 (registry, `onsessioninitialized`, reaper, LRU cap) — survive, scoped to legacy.** A dual-era server picks behavior from how the client opens, and an `initialize` request selects legacy semantics *scoped to the session* — which is exactly what the registry serves. Two legacy clients still contend, so the bug this ADR fixes stays live on that branch. What is **undetermined** is the modern branch's shape: "one `McpServer`, no registry" is not available on the evidence, because Decision 2's `Protocol.connect()` throw is a property of the SDK's `Protocol` class and SEP-2567 does not touch it — one server still cannot hold two concurrent transports. The SDK's stateless transport mode constructs a server per request instead, and ADR-012 asserted ~~*"the SDK crashes in stateless mode after the first `server.connect()`"*~~ — a 2024 claim **refuted by the #1253 probe in 2026 (#1332)**, see the ADR-012 note above. Whether to adopt stateless mode here is a separate question and still depends on #1505/#1249.
 > - **Decision 5 (`AsyncLocalStorage`) — survives.** It binds per request, which is the case a stateless protocol presents. Two refinements: `mcpSessionId` goes empty, and `claudeSessionId`'s *lookup path* changes — today it is captured at `initialize` and replayed from the registry entry on later requests, so with no registry it must be read from the header per request.
 > - **Decision 6 (`X-Claude-Session-Id`) — survives, and gains importance rather than losing it.** It is a Tandem header, not a protocol one. Do **not** expect `io.modelcontextprotocol/clientInfo` to replace it: the spec marks that field optional, says it is *"self-reported… not verified by the protocol"* and that implementations **SHOULD NOT** *"use them to change the behavior of the client or server"*, and its type carries only `{name, version}` — so two concurrent Claude Code instances send byte-identical values. For telling one Claude session from another it is strictly worse than the session id it replaces.
 > - **`hasSession` — becomes partial, not meaningless.** The Consequences below redefine it as "≥1 live session." On a dual-era server that stays sound *for legacy attachments* and goes silent about modern ones, so the job is to **supplement** it, not replace it. It still needs care: the natural supplement is a recency signal, which answers a different question and inverts the failure mode. Tracked in **#1249**; see `docs/spikes/ai-readiness-mcp-session.md`.
@@ -1063,7 +1063,45 @@ Everything above renders identically. Recovering any of it needs a per-node sour
 >
 > **Consequence for #438:** §3.3/§3.4/§3.5 must not be keyed on `Mcp-Session-Id`, and the modern branch **MUST NOT** vary `tools/list` per connection (SEP-2567), which forecloses per-client tool lists outright. See the amendments in `docs/spikes/per-client-identity-spec.md` and `docs/spikes/session-identity-transport-probe.md`.
 >
-> **The decision this amendment does not make:** when Tandem becomes dual-era, and when — if ever — it drops the legacy branch. The matrix says that day breaks every client that has not moved, with no fall-forward. **Tracked in #1252**, which also owns the watch item above (Claude Code's own era is an external dependency with no signal that would surface a change before users hit it).
+> **The decision this amendment does not make:** when Tandem becomes dual-era. (The companion question — whether Tandem ever *drops* the legacy branch — **is** now decided; see the 2026-08-18 amendment immediately below.) Dual-era adoption is tracked in **#1505**, and the watch item above — Claude Code's own era, an external dependency with no signal that would surface a change before users hit it — in **#1506**. #1252, which previously owned all three, is closed.
+>
+> **Amendment (2026-08-18, #1252) — the legacy branch is permanent. Tandem never drops it.**
+>
+> One of the two questions the paragraph above deferred is now answered, and the answer is that it
+> was never really a scheduling question. **Tandem keeps the legacy branch indefinitely.**
+>
+> **This was already decided once and did not reach the record.** The 2026-08-06 backlog triage put
+> it as D-8 — *"commit to 'dual-era, legacy retained indefinitely'?"* — and answered **"Yes to
+> both"** ([`docs/triage/2026-08-06/backlog-triage-2026-08-06.md`](triage/2026-08-06/backlog-triage-2026-08-06.md),
+> [`brief-438.md`](triage/2026-08-06/brief-438.md)). The ADR amendment that answer called for was
+> never written, so the question stayed open in #1252 for another twelve days and was re-litigated
+> from scratch. A decision whose only home is a dated triage table is a decision that will be made
+> again; this amendment is that missing home.
+>
+> The reason is the matrix row, not a preference: *legacy client + modern server = Fails*, and
+> *"legacy clients have no fall-forward mechanism."* Removal is therefore **unrecoverable
+> client-side** — every un-upgraded Claude Code and Cowork install breaks hard on the same day, with
+> no negotiation, no degraded mode, and nothing the user can do from their end. There is no version
+> of Tandem that works without the legacy branch, so there is nothing to schedule.
+>
+> **The spec's twelve-month feature-lifecycle window is not an inherited obligation here.** #1252
+> cited it as a reference point for what a deprecation window would have to look like *if* one were
+> ever planned. None is, so the clock never starts. Do not read the citation as a commitment Tandem
+> has taken on.
+>
+> This makes the legacy branch a permanent half of a dual-era server rather than a transitional one,
+> which sharpens the "survive, scoped to legacy" reading above: Decisions 1, 3 and 4 are not living
+> on borrowed time pending a removal date. They are the legacy branch, and the legacy branch stays.
+>
+> **What #1252 deferred that is still open**, now tracked separately because the two halves have very
+> different urgency and one of them is not blocked on anything:
+>
+> - **Dual-era adoption** — serving `2026-07-28` concurrently on the same endpoint. Additive, and
+>   **blocked** on the TypeScript SDK shipping support: SDK 1.30.0, the version `package-lock.json`
+>   pins, still exports `LATEST_PROTOCOL_VERSION = '2025-11-25'`. Tracked in **#1505**.
+> - **The watch item** — whether Claude Code itself goes modern-only, which is the only live failure
+>   mode in this whole area and must not sit behind the blocked work. Tracked in **#1506**, on a
+>   monthly cadence deliberately *not* gated on the SDK.
 
 **Context:** Tandem's HTTP MCP server held a single module-level transport. Every `initialize` called `connectFreshTransport()`, which closed the previous transport before attaching a new one. The MCP SDK 404s any request whose `Mcp-Session-Id` it doesn't recognize, so the *second* Claude client to connect silently evicted the first one's tool channel; the evicted client's next `tandem_*` call failed until it re-handshook, which then evicted the second. Two Claude Code sessions — or Claude Code plus Cowork — could not coexist. The SDK was already minting a per-session id on every handshake and we were discarding it.
 

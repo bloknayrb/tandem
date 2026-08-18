@@ -4,7 +4,7 @@
 server: every fact below is a source read of shipped code, so it is
 reproducible from a checkout with `npm ci` and needs no live MCP client.
 
-The question came from ADR-012, which asserted as fact that ~~the SDK crashes in stateless mode after the first `server.connect()`~~ — **refuted here (#1253/#1332)**, a 2024-era finding that had never been re-tested. It mattered because MCP `2026-07-28` is stateless, so the claim sat directly on the migration path (ADR-045's 2026-07-30 amendment, #1249, #1252).
+The question came from ADR-012, which asserted as fact that ~~the SDK crashes in stateless mode after the first `server.connect()`~~ — **refuted here (#1253/#1332)**, a 2024-era finding that had never been re-tested. It mattered because MCP `2026-07-28` is stateless, so the claim sat directly on the migration path (ADR-045's 2026-07-30 amendment, #1249, #1505).
 
 **Verdict: refuted.** There is no crash, `server.connect()` is not involved,
 and stateless mode is usable. The SDK forbids one specific thing — *reusing*
@@ -69,11 +69,11 @@ false statement and damage the ADR-045 story, which is correct as written.
   versions it speaks.
 - ADR-045's 2026-07-30 amendment still quotes the old wording and still asks
   for the probe that this file records. Rewriting it is a decision, not an
-  edit — it depends on #1252 (era strategy) and #1249 — and is tracked in
+  edit — it depends on #1505 (dual-era adoption) and #1249 — and is tracked in
   **#1332**.
 
 ## Not measured
 
 No live stateless server was stood up, and no SDK v2 (`createMcpHandler`) was
-exercised. Those belong with #1252's era decision. This file answers only the
+exercised. Those belong with #1505's dual-era work. This file answers only the
 narrow ADR-012 claim.
