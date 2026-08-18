@@ -182,17 +182,22 @@ describe("authorship stamp path", () => {
       expect(entries().map((e) => e.id)).not.toContain(claudeEntry.id);
     });
 
-    it("KNOWN LIMITATION (#1471): a drifted entry escapes the reap", () => {
-      // Not a wish — measured. Stored client ranges are frozen flat offsets
-      // that nothing remaps, so one unrelated keystroke ABOVE a stamped span
-      // is enough to move its text out from under its recorded range. The reap
-      // then compares a current-frame deleted span against a stale entry, the
-      // containment test fails, and the stale \"user\" range survives underneath
-      // the new \"claude\" one — #1388's render, reached from the other side.
+    it("without a Collaboration binding, a drifted entry still escapes the reap", () => {
+      // THE GRACEFUL-DEGRADATION CONTRACT, and it did not change when #1471
+      // landed. This editor has no `Collaboration` extension, so
+      // `ydoc.getXmlFragment("default")` is empty, the anchor mint declines, and
+      // the entry keeps exactly the frozen-flat-offset behaviour described
+      // below: one unrelated keystroke ABOVE a stamped span moves its text out
+      // from under its recorded range, the reap compares a current-frame deleted
+      // span against a stale entry, containment fails, and the entry survives.
       //
-      // Pinned deliberately, so the durable-relRange fix has a red test to
-      // turn green rather than a comment to notice. When #1471 lands, the
-      // second assertion inverts.
+      // It was titled "KNOWN LIMITATION (#1471)" and expected to invert when the
+      // fix landed. It cannot invert HERE — with no binding there is nothing to
+      // anchor into, so the limitation remains real in this context. The
+      // inverted case lives in `authorship-anchor.test.ts` against a genuinely
+      // bound editor; what is pinned here is that declining to anchor still
+      // costs nothing beyond the drift, which this change needs asserted
+      // somewhere and would otherwise not have.
       editor.commands.insertContentAt(6, "brave ");
       editor.view.dispatch(editor.state.tr.insertText("X", 1));
 

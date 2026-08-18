@@ -8,6 +8,7 @@ import * as Y from "yjs";
 import { AUTHORSHIP_TOGGLE_KEY, Y_MAP_AUTHORSHIP } from "../../../shared/constants";
 import { withBrowser } from "../../../shared/origins";
 import { toPmPos } from "../../../shared/positions/types";
+import { anchorFlatRange } from "../../../shared/positions/ydoc";
 import type { AuthorshipRange } from "../../../shared/types";
 import { isAuthorshipAuthor } from "../../../shared/types";
 import { generateAuthorshipId } from "../../../shared/utils";
@@ -74,6 +75,17 @@ function readAuthorshipOrigin(transaction: Transaction): AuthorshipRange["author
  * text, and escapes the reap. One unrelated keystroke above the span is enough.
  * Pinned executably in `authorship-stamp.test.ts` so the fix has a test waiting
  * for it rather than a comment.
+ *
+ * **AND THE OPPOSITE DIRECTION, which matters more now that entries are
+ * anchored.** This scan reads only the frozen `range`, never `relRange`. So a
+ * coincidental containment between a deleted span and some entry's stale offsets
+ * deletes that entry outright — even when its anchor was live and pointing at
+ * text nobody touched. Always possible, but previously it only cost a drifted
+ * entry that was already mis-painting; now it discards the very durability the
+ * anchor was minted for. Deleting is also less recoverable than mis-painting.
+ * The fix is to replace this scan with an anchor-aware liveness sweep rather
+ * than to patch it, which is the next piece of #1471 and deliberately not
+ * bundled here — it changes what drives the sweep, not just its predicate.
  */
 function reapableEntryIds(
   authorshipMap: Y.Map<unknown>,
@@ -93,8 +105,57 @@ function reapableEntryIds(
 const GUTTER_NODE_TYPES = new Set(["paragraph", "heading"]);
 
 /**
+ * Warn once per key per session.
+ *
+ * Both call sites below sit on hot paths — one runs per fallback entry per
+ * decoration rebuild, the other inside a keystroke handler. An unlatched
+ * `console.warn` there is not a diagnostic, it is a way of making the console
+ * useless and getting the warning deleted. This change also INCREASES the
+ * fallback count (entries that used to paint stale offsets now decline), so the
+ * latch is a precondition for the resolver fix rather than a tidy-up.
+ */
+const warnedKeys = new Set<string>();
+function warnOnce(key: string, ...args: unknown[]): void {
+  if (warnedKeys.has(key)) return;
+  warnedKeys.add(key);
+  console.warn(...args);
+}
+
+/** Test seam — the latch is module state and would leak between test cases. */
+export function _resetAuthorshipWarnLatch(): void {
+  warnedKeys.clear();
+}
+
+/**
  * Resolve an AuthorshipRange to ProseMirror positions.
- * Prefers relRange (CRDT-anchored) with flat-offset fallback.
+ *
+ * THE FALLBACK ORDERING IS THE WHOLE POINT, and it used to be wrong. An entry
+ * that HAS a `relRange` never falls back to flat offsets — if its anchor
+ * resolves collapsed or dead, the entry has no live text and the answer is
+ * `null`, not "try the frozen numbers instead".
+ *
+ * Previously the anchored result was accepted only when `from < to`, so a
+ * COLLAPSED anchor — the normal state of an entry whose text was deleted or
+ * replaced — fell straight through to `entry.range`. That is the orphan-paint
+ * symptom itself, and it is worse than it sounds: `flatOffsetToPmPos` CLAMPS
+ * rather than failing (`client/positions.ts`, which returns the end of the last
+ * block for any out-of-range offset), so a stale flat range never degrades to
+ * "no decoration". It degrades to a confident decoration on the wrong text —
+ * precisely what the authorship overlay exists to prevent (#1388).
+ *
+ * The flat branch is correct only for an entry that never had an anchor at all:
+ * a legacy in-session stamp, a server entry with `fullyAnchored: false`, or a
+ * mint that declined (heading prefix, empty block, no Collaboration binding).
+ *
+ * DO NOT MIRROR THIS INTO `annotationToPmRange` — it would break annotations,
+ * and the asymmetry is deliberate. That function accepts `from <= to`, so a
+ * collapsed annotation anchor returns as `method: "rel"` and never reaches its
+ * flat branch; the flat branch fires only on null-or-inverted, which is the
+ * lazy re-attachment recovery path CLAUDE.md warns about breaking. Annotations
+ * survive the shape because the SERVER refreshes their flat range on every read.
+ * Authorship has no `refreshRange` analogue, so nothing ever repairs a stale
+ * flat offset here — which is exactly why the same shape is safe there and
+ * unsafe here.
  */
 function resolveAuthorshipRange(
   entry: AuthorshipRange,
@@ -103,10 +164,10 @@ function resolveAuthorshipRange(
 ): { from: number; to: number } | null {
   if (entry.relRange) {
     const resolved = relRangeToPmPositions(ydoc, pmDoc, entry.relRange);
-    if (resolved && resolved.from < resolved.to) return resolved;
+    return resolved && resolved.from < resolved.to ? resolved : null;
   }
   if (entry.range) {
-    console.warn("[authorship] Falling back to flat offsets for range", entry.id);
+    warnOnce("flat-fallback", "[authorship] Falling back to flat offsets for range", entry.id);
     const from = flatOffsetToPmPos(pmDoc, entry.range.from);
     const to = flatOffsetToPmPos(pmDoc, entry.range.to);
     if (from < to) return { from, to };
@@ -429,10 +490,45 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions>({
               to: toPmPos(toFinal.map(newEnd, -1)),
             });
             if (range.to <= range.from) return;
+            // Anchor against the LIVE ydoc, which y-prosemirror has already
+            // written: Tiptap's `dispatchTransaction` calls `view.updateState`
+            // and emits `transaction` on the very next line, both synchronously,
+            // and the sync plugin's `update()` writes to Y inside that — no
+            // debounce, no microtask. So the Y.Doc is current when we stamp.
+            //
+            // Anchored from `range` — the FINAL-frame offsets out of
+            // `toFinal.map(...)` — and never from raw `newStart`/`newEnd`. Y
+            // holds only the transaction's final state, never a per-step
+            // intermediate, so anchoring the raw positions would mint a
+            // confidently wrong anchor on any multi-step transaction. That is
+            // the same failure `toFinal` was added to prevent on the flat side.
+            //
+            // Declining is safe and expected: no Collaboration extension, an
+            // offset inside a heading prefix, or either endpoint adjacent to an
+            // empty block. The entry then behaves exactly as it does today.
+            //
+            // UNSTATED INVARIANT, now stated: no `appendTransaction` plugin may
+            // insert or delete TEXT. `EditorState.apply` folds appended steps
+            // into the state handed to `updateState`, and y-prosemirror writes
+            // from `view.state.doc` — but the transaction Tiptap emits is the
+            // ROOT one, so `transaction.doc` does not include them. A text-moving
+            // append would therefore put `range` and the Y.Doc in different
+            // frames. This binds the flat `range` exactly as much as the anchor,
+            // so it is a property of the whole handler rather than of the mint.
+            // True today: `@tiptap/extension-link` is the only extension in the
+            // stack defining `appendTransaction` and it only adds/removes marks.
+            const relRange = anchorFlatRange(ydoc, range.from, range.to) ?? undefined;
+            if (!relRange) {
+              warnOnce(
+                "mint-declined",
+                "[authorship] Could not anchor a stamp; it will drift as before (#1471)",
+              );
+            }
             additions.push({
               id: generateAuthorshipId(author),
               author,
               range,
+              ...(relRange ? { relRange } : {}),
               timestamp: Date.now(),
             });
           } catch (err) {
