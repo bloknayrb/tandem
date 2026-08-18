@@ -6,6 +6,44 @@ import {
   loadInvoke,
 } from "../tauri/autostart-invoke.js";
 
+const AUTOSTART_DECIDED_KEY = "tandem:autostart-decided";
+
+/**
+ * Has the user already expressed a preference about start-at-login?
+ *
+ * Needed because the OS cannot answer it. `autostartGetStatus` reports
+ * `enabled: false` identically for "never set up" and "deliberately turned
+ * off", and the wizard's default-on behaviour (#1463) must act on the first
+ * but never on the second — re-enabling something the user switched off is
+ * exactly the override this flag exists to prevent.
+ *
+ * This is NOT the mirrored boolean the module comment below forbids. It never
+ * says whether autostart is on; it records only that Tandem has asked or been
+ * told once, which is monotonic and cannot drift when the registration is
+ * changed outside Tandem. The OS remains the sole authority on the state
+ * itself.
+ *
+ * localStorage, matching `cowork-helpers.ts`'s skip flag, with try/catch
+ * because a storage-disabled context throws. Failure is read as "not decided",
+ * so the worst case is one extra default-on — the pre-v1 behaviour — rather
+ * than a crash or a silently skipped setup step.
+ */
+export function readAutostartDecided(): boolean {
+  try {
+    return localStorage.getItem(AUTOSTART_DECIDED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function writeAutostartDecided(): void {
+  try {
+    localStorage.setItem(AUTOSTART_DECIDED_KEY, "true");
+  } catch {
+    // Storage unavailable — the wizard may default it on once more next time.
+  }
+}
+
 export interface AutostartState {
   /** Live OS state. `null` until the first load resolves. */
   readonly status: AutostartStatus | null;
@@ -72,6 +110,10 @@ export function createAutostart(getActive: () => boolean): AutostartState {
   const toggle = async (next: boolean): Promise<void> => {
     loading = true;
     error = null;
+    // Recorded before the write, and regardless of whether it succeeds: the
+    // user has expressed a preference either way, and a failed write is not a
+    // licence for the wizard to come back and decide for them later.
+    writeAutostartDecided();
     try {
       // The result carries the OS's read-back value, not `next` — so a write
       // that was virtualized away or blocked reports `readback-mismatch`

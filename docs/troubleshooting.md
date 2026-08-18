@@ -81,9 +81,10 @@ at session start, so the natural recovery — open Tandem, ask again — still f
 That second failure is the part most likely to read as "Tandem is broken".
 
 To stop hitting this, turn on **Start Tandem when my computer starts** (Settings → Network, or the
-checkbox on the setup wizard's final screen, where it is on by default). It is desktop-only and
-won't cover a crash or a deliberate quit, so it reduces how often this happens rather than
-preventing it.
+checkbox on the setup wizard's final screen). The wizard turns it on for you the first time, but
+only if you have never chosen either way — if you have switched it off before, re-running setup
+leaves it off. It is desktop-only and won't cover a crash or a deliberate quit, so it reduces how
+often this happens rather than preventing it.
 
 **If Claude offers to edit the file directly, say no.** An edit made outside Tandem is invisible in
 the editor and unreviewable. Current Tandem skill versions instruct Claude to refuse this and to

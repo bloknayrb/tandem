@@ -40,7 +40,7 @@ import {
   undetectedDetail,
 } from "../cowork/cowork-helpers.js";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke.js";
-import { createAutostart } from "../hooks/useAutostart.svelte.js";
+import { createAutostart, readAutostartDecided } from "../hooks/useAutostart.svelte.js";
 import { createClaudeCliStatus } from "../hooks/useClaudeCliStatus.svelte.js";
 import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte.js";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte.js";
@@ -109,15 +109,24 @@ const wizardAutostartBlocked = $derived(
    alternative is worse: applying inside `close()` would swallow the failure at
    exactly the moment the surface that would report it is unmounting.
 
-   Latched so it fires once per wizard open, and skipped when the OS already has
-   it. Accepted trade: someone who turned this off in Settings and later re-runs
-   the wizard gets it back on. The box is right there, checked and visibly
-   reversible, so the state is never hidden from them. */
+   **It defaults on only for someone who has never chosen.** `readAutostartDecided()`
+   is the whole reason that sentence can be written: the OS reports `enabled:
+   false` identically for "never set up" and "deliberately turned off", so
+   without it the wizard cannot tell a default from an override, and re-running
+   setup would silently switch start-at-login back on for someone who had
+   turned it off. Any toggle on either surface records the decision, so this
+   fires at most once in an install's life.
+
+   Three further guards, each load-bearing: the latch keeps a re-render from
+   re-firing it, `trayAvailable` keeps it from registering a hidden startup with
+   no way to reach the app, and `st.enabled` keeps it from writing a value the
+   OS already holds. */
 let autostartDefaultApplied = $state(false);
 $effect(() => {
   if (!open || wizard.step !== "done") return;
   const st = wizardAutostartStatus;
   if (st === null || !st.trayAvailable || st.enabled) return;
+  if (readAutostartDecided()) return;
   if (untrack(() => autostartDefaultApplied)) return;
   autostartDefaultApplied = true;
   void wizardAutostart.toggle(true);
