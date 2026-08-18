@@ -197,6 +197,32 @@ describe("mdastToYDoc — block nodes", () => {
     expect(el.getAttribute("title")).toBe("My photo");
   });
 
+  // An opened .md file is untrusted content exactly like a pasted one
+  // (#1420) — a hostile image src must not reach the Y.Doc, even though this
+  // path never goes through the client's paste-time sanitizer.
+  it("image with an unsafe (protocol-relative) src downgrades to alt text", () => {
+    loadTree(
+      makeMdast([{ type: "image", url: "//evil.com/x.png", alt: "photo", title: "My photo" }]),
+    );
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    expect(el.nodeName).toBe("paragraph");
+    expect(getElementText(el)).toBe("photo");
+  });
+
+  it("image with an unsafe (backslash cross-host) src downgrades to alt text", () => {
+    loadTree(makeMdast([{ type: "image", url: "/\\evil.com/x.png", alt: "photo", title: null }]));
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    expect(el.nodeName).toBe("paragraph");
+    expect(getElementText(el)).toBe("photo");
+  });
+
+  it("image with an unsafe src and no alt falls back to the title", () => {
+    loadTree(makeMdast([{ type: "image", url: "//evil.com/x.png", alt: null, title: "My photo" }]));
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    expect(el.nodeName).toBe("paragraph");
+    expect(getElementText(el)).toBe("My photo");
+  });
+
   it("raw html block preserves markdown html metadata", () => {
     loadTree(makeMdast([{ type: "html", value: '<p align="center">' }]));
     const el = getFragment(doc).get(0) as Y.XmlElement;
