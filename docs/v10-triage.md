@@ -143,11 +143,14 @@ Per your redesign-complete rule: every shipped feature must have the new design.
 > does not govern the thing deferred survives review, because the reason reads
 > as settled.
 >
-> The deprecation question the premise leaned on is real but separate, and now
-> has its own tracked home with a criterion: **#1467**. Short version: the npm
-> *package* is load-bearing for Claude Desktop and Cowork and is not a
-> candidate; only the browser UI is; and nothing has actually been announced to
-> users yet.
+> The deprecation question the premise leaned on is real but separate, and had
+> its own tracked home with a criterion: **#1467**. **Answered 2026-08-18: the
+> browser UI is kept.** The npm *package* was never a candidate — it is
+> load-bearing for Claude Desktop and Cowork *on the desktop app* — only the
+> browser UI ever was, nothing was announced to users, and the decision is to
+> keep it rather than start a clock. See the decision note in
+> [roadmap.md](roadmap.md) under #477. So the premise is now doubly void: it did
+> not govern the OKLCH row, and the deprecation it assumed is not happening.
 
 ## 1I. Speculative HANDOFF items explicitly NOT in scope
 
