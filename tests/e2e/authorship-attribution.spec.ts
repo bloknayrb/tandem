@@ -41,6 +41,8 @@ let tmpDir: string;
 const TITLE_FROM = 2;
 const TITLE_TO = 15;
 const TITLE_TEXT = "Test Document";
+/** What the user types, asserted by TEXT — see the comment at its use site. */
+const USER_TYPED = " and the user typed this";
 
 test.beforeEach(async ({ page }) => {
   mcp = new McpTestClient();
@@ -85,6 +87,22 @@ test("accepting a suggestion attributes the replacement to Claude", async ({ pag
   const editor = page.locator(".tandem-editor");
   await expect(editor).toContainText(TITLE_TEXT, { timeout: 10_000 });
 
+  // Type as the user BEFORE the accept, and the order is the point of the test.
+  //
+  // This used to be the other way round, with a comment explaining that typing
+  // first would make the accept shift the user entry's frozen flat range and
+  // land the assertion in the #1471 drift. That workaround dodged the only
+  // scenario worth running end to end: the accept rewrites the TITLE, which
+  // sits before this text, so every offset under the user's entry moves. With
+  // client stamps CRDT-anchored (#1471 gap 1) the entry follows its own
+  // characters instead, and this is the only place a server-minted and a
+  // client-minted anchor coexist in one real document.
+  await editor.locator("p").last().click();
+  await page.keyboard.type(USER_TYPED);
+
+  const userSpan = page.locator(`.tandem-editor [data-tandem-author='user']`);
+  await expect(userSpan.first()).toBeVisible({ timeout: 10_000 });
+
   await switchToAnnotationsTab(page);
   const acceptBtn = page.locator("[data-testid^='accept-btn-']");
   // Pin the cardinality: `accept-btn-` is a prefix match, so `.first()` would
@@ -94,25 +112,37 @@ test("accepting a suggestion attributes the replacement to Claude", async ({ pag
 
   await expect(editor).toContainText("Rewritten Heading", { timeout: 10_000 });
 
+  // The document now holds BOTH authors at once — the state #1388 was actually
+  // reported in, and the only one that can tell that fix apart from an
+  // over-correction stamping everything `"claude"`.
   const claudeSpan = page.locator(".tandem-editor [data-tandem-author='claude']");
   await expect(claudeSpan.first()).toBeVisible({ timeout: 10_000 });
   await expect(claudeSpan.first()).toContainText("Rewritten Heading");
 
-  // Now type as the user, so the document holds BOTH authors at once — the
-  // state #1388 was actually reported in, and the only one that can tell this
-  // fix apart from an over-correction that stamps everything `"claude"`.
-  //
-  // Order is load-bearing: type AFTER the accept. Typing first would make the
-  // accept shift the user entry's frozen flat range, and the assertion would
-  // land in the #1471 drift that `authorship-stamp.test.ts` already pins as a
-  // known limitation. Assert on attribute values only, never on span text, for
-  // the same reason.
-  await editor.locator("p").last().click();
-  await page.keyboard.type(" and the user typed this");
-
   const authors = await decoratedAuthors(page);
   expect(authors).toContain("claude");
   expect(authors).toContain("user");
+
+  // ASSERTING ON SPAN TEXT, which the workaround also forbade. Attribute values
+  // alone would still pass if the user's decoration had slid onto Claude's new
+  // heading — which is exactly what #1471 did, and exactly what #1388 is about.
+  // The text is what makes this a regression test rather than a smoke test.
+  //
+  // Over the CONCATENATION of the user spans, not any single one. The stamp
+  // path writes one authorship entry per doc-changing transaction, so typing
+  // this string produces one entry — and one `Decoration.inline`, and one
+  // `<span>` — PER KEYSTROKE. A `.last()` assertion here fails against the
+  // final character alone, which is how this was first written and is worth
+  // recording rather than quietly working around: it is the unbounded map
+  // growth the code comments describe, visible in the DOM. Concatenating is
+  // also the form that keeps holding if consecutive same-author stamps are
+  // ever coalesced.
+  const userText = (
+    await page
+      .locator(`.tandem-editor [data-tandem-author='user']`)
+      .evaluateAll((els) => els.map((el) => el.textContent ?? ""))
+  ).join("");
+  expect(userText).toContain(USER_TYPED.trim());
 });
 
 test("inserting a Claude chat message attributes it to Claude", async ({ page }) => {
