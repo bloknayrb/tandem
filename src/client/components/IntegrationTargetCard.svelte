@@ -11,6 +11,7 @@
  */
 import type { ExistingMcpInstall } from "../../shared/integrations/contract.js";
 import { isSelectable, tandemEntryValidationFailed } from "../hooks/useIntegrationWizard.svelte.js";
+import { renderValidationReason, sanitizeReason } from "./integration-target-card-reason.js";
 
 interface Props {
   install: ExistingMcpInstall;
@@ -38,23 +39,53 @@ interface StatusLine {
   text: string;
   /** Maps to a `--tandem-{family}-fg-strong` color class; null = muted neutral. */
   family: "success" | "warning" | "error" | null;
+  /** True when `text` is a diagnostic (a producer's `EntryValidation.reason`,
+   *  a reduced form rebuilt from the entry, or a sanitized `errorMessage`)
+   *  rather than hand-written copy — drives the monospace/wrap treatment so
+   *  it reads as a diagnostic, not as body prose. */
+  diagnostic?: boolean;
 }
 
 const statusLine = $derived.by((): StatusLine => {
   if (install.status === "error") {
+    // #1422: `errorMessage` is a raw `readFile` failure and Node embeds the
+    // path it was reading, so it is unbounded, path-bearing and never behind
+    // any policy — run it through the same `sanitizeReason` floor (strip
+    // control/bidi chars, clamp length) as a rendered reason, and mark it
+    // `diagnostic` so it gets the same monospace/wrap treatment. It is the
+    // longest string this card can render.
+    const message = install.errorMessage ? sanitizeReason(install.errorMessage) : undefined;
     return {
-      text: install.errorMessage
-        ? `Couldn't check this one — ${install.errorMessage}`
-        : "Couldn't check this one",
+      text: message ? `Couldn't check this one — ${message}` : "Couldn't check this one",
       family: "error",
+      diagnostic: message !== undefined,
     };
   }
   if (install.status === "malformed") {
     return { text: "Settings file couldn't be read — we'll leave it alone", family: "warning" };
   }
   if (install.tandemEntry !== undefined) {
-    if (tandemEntryValidationFailed(install)) {
-      return { text: "Has a custom setup — we won't touch it", family: "warning" };
+    if (tandemEntryValidationFailed(install) && install.tandemValidation !== undefined) {
+      // #1422: surface the specific diagnostic instead of one fixed generic
+      // line, so a malformed or hand-edited entry tells the user WHAT is
+      // wrong instead of reading as "you configured something on purpose."
+      // How much of each producer's string is safe to show is a per-status
+      // policy — see `integration-target-card-reason.ts`.
+      //
+      // ONLY `tandemValidation` is rendered here, deliberately.
+      // `channelValidation` also reaches the client on this same object, but
+      // the tandem entry is what `isSelectable`/`save()` gate on, so it is
+      // the one whose failure explains why this card is locked. A broken
+      // `tandem-channel` entry is reported instead by the Done step's
+      // aggregate push line (`refreshChannelRegistered`). Giving it a second
+      // status line here is a UI question this fix did not answer — the
+      // policy module itself is producer-agnostic, so the surface can be
+      // added without changing it.
+      const { text, diagnostic } = renderValidationReason(
+        install.tandemValidation,
+        install.tandemEntry,
+      );
+      return { text, family: "warning", diagnostic };
     }
     return { text: "Already connected — we'll refresh it", family: "success" };
   }
@@ -97,7 +128,11 @@ const statusLine = $derived.by((): StatusLine => {
   </span>
   <span class="itc-text">
     <span class="itc-name">{install.target.label}</span>
-    <span class="itc-status itc-status-{statusLine.family ?? 'neutral'}">{statusLine.text}</span>
+    <span
+      class="itc-status itc-status-{statusLine.family ?? 'neutral'}"
+      class:itc-status-diagnostic={statusLine.diagnostic}
+      >{statusLine.text}</span
+    >
     <span class="itc-path">{install.target.configPath}</span>
   </span>
   <span class="itc-check" aria-hidden="true">
@@ -196,6 +231,27 @@ const statusLine = $derived.by((): StatusLine => {
   }
   .itc-status-error {
     color: var(--tandem-error-fg-strong);
+  }
+  /* #1422: a rendered diagnostic (an EntryValidation.reason, or a sanitized
+     errorMessage) gets mono + wrap, and deliberately NO font-size change.
+     It inherits .itc-status's --tandem-text-sm because this line is the most
+     important thing on the card when it appears -- it is the only place the
+     user is told why Tandem refused their config. Shrinking it to
+     --tandem-text-2xs (the de-emphasis size .itc-path uses for a path nobody
+     needs to read) would render the explanation smaller than every generic
+     status line beside it.
+     overflow-wrap: anywhere, not .itc-path's word-break: break-all: these
+     strings are prose plus a token (a command path, an expected arg tuple),
+     so wrap at normal word boundaries first and force a mid-word break only
+     as a last resort. break-all breaks at any character even when a normal
+     wrap would have fit, which is right for one unbreakable path token and
+     visibly wrong for a sentence. Both inputs can be long -- an
+     invalid-command reason carries a full command path, and errorMessage is
+     clamped only at 300 code points -- so the wrap is load-bearing on both
+     branches that set this flag. */
+  .itc-status-diagnostic {
+    font-family: var(--tandem-font-mono);
+    overflow-wrap: anywhere;
   }
   .itc-path {
     font-family: var(--tandem-font-mono);

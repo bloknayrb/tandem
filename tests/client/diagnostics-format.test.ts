@@ -3,6 +3,7 @@ import type { DiagnosticsPayload } from "../../src/client/utils/diagnostics";
 import {
   formatDiagnostics,
   formatMemoryMb,
+  stripControlChars,
   summarizeUserAgent,
 } from "../../src/client/utils/diagnostics";
 
@@ -257,5 +258,31 @@ describe("summarizeUserAgent", () => {
   it("returns an empty string for an unrecognized agent, which drops the line", () => {
     expect(summarizeUserAgent("")).toBe("");
     expect(summarizeUserAgent("SomeCrawler/1.0")).toBe("");
+  });
+});
+
+describe("stripControlChars", () => {
+  // #1422 widened this from ASCII control chars only to also strip Unicode
+  // bidi/format-override characters (U+200E/F, U+202A-E, U+2066-9, U+061C —
+  // "Trojan Source"-style characters that visually reorder text without
+  // being `<`/`>`/`&`), since `IntegrationTargetCard.svelte` reuses this
+  // function on config-file-derived text where that threat is real. The
+  // module's other tests (above) only ever exercised the pre-existing
+  // ASCII-control-char half — this pins the widened half directly, so a
+  // regression there can't hide behind the doctor-report tests still
+  // passing.
+  it("strips every character in the added bidi/format range", () => {
+    const dirty = "a‎b‏c‪‫‬‭‮d⁦⁧⁨⁩e؜f";
+    expect(stripControlChars(dirty)).toBe("abcdef");
+  });
+
+  it("strips a real bidi-override + ANSI OSC payload, keeping ordinary text", () => {
+    const dirty = "got '‮js.exe‬\x1b]0;pwn\x07'";
+    expect(stripControlChars(dirty)).toBe("got 'js.exe]0;pwn'");
+  });
+
+  it("leaves ordinary Unicode text (accents, CJK, emoji) untouched", () => {
+    const clean = "café 日本語 🎉";
+    expect(stripControlChars(clean)).toBe(clean);
   });
 });
