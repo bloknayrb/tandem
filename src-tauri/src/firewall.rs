@@ -1,7 +1,9 @@
 //! Windows Firewall management for the Cowork VM subnet allow/deny rules.
 //!
 //! All `netsh` invocations use `Command::new("netsh").args([...])` — never
-//! `cmd.exe`, never string concatenation, never `--%` wrappers (security §4).
+//! `cmd.exe`, never string concatenation, never `--%` wrappers: no shell is
+//! interposed, so nothing in an argument value — including the detected CIDR
+//! in `remoteip={cidr}` — can be re-read as a second command.
 //!
 //! Every invocation is logged at DEBUG with: argv, exit code, stdout+stderr tail,
 //! and wall-clock duration.
@@ -18,8 +20,15 @@ use std::time::Instant;
 
 /// Errors that can arise from Windows Firewall operations.
 ///
-/// Variants are designed to give the PR-f Settings UI distinct recovery hints
-/// (security invariant §13).
+/// Each variant must drive its own distinct recovery hint in the Settings UI,
+/// not share a generic one — see `FirewallErrorVariant` in
+/// `src/client/types.ts` and the `firewallErrorHint` switch in
+/// `src/client/cowork/cowork-helpers.ts`. That switch ends in a runtime
+/// `default` arm (TypeScript can't prove exhaustiveness across the Rust/TS
+/// boundary), so a variant added here with no arm there would otherwise
+/// degrade silently to the generic fallback — which is why
+/// `tests/build/firewall-invariant-citations.test.ts` pins the two variant
+/// lists together.
 ///
 /// `Serialize`/`Deserialize` enable structured JSON errors over the Tauri IPC:
 /// `{"kind": "adminDeclined"}` etc., matching the TypeScript discriminant in
@@ -67,7 +76,9 @@ pub enum SubnetDetectionReason {
     /// Adapters matched, but none carried an IPv4 address.
     NoIpv4,
     /// At least one candidate line was present and none survived
-    /// `parse_cidr_from_line` — in practice the `/20` floor (invariant §5).
+    /// `parse_cidr_from_line` — in practice the `/20` floor: prefixes wider
+    /// than /20 are rejected so the firewall rule can never span more of the
+    /// network than Cowork's VM subnet needs.
     PrefixTooBroad,
     /// PowerShell ran but exited non-zero, or its output was not in the shape
     /// we asked for. The least-blaming bucket, and deliberately the fallback.
@@ -320,12 +331,16 @@ fn looks_like_ipv4_cidr(line: &str) -> bool {
 
 /// Parse an `IPAddress/PrefixLength` string into a proper CIDR network address.
 ///
-/// Rejects prefix length < 20 per security invariant §5.
+/// Rejects prefix length < 20: a wider prefix (e.g. `/12`) would let the
+/// firewall rule span far more of the network than Cowork's VM subnet
+/// needs, so it's refused rather than silently widening the allowlisted
+/// range.
 fn parse_cidr_from_line(line: &str) -> Option<String> {
     let (ip_str, prefix_str) = line.split_once('/')?;
     let prefix: u8 = prefix_str.trim().parse().ok()?;
 
-    // Security invariant §5: reject too-broad prefixes.
+    // Reject prefixes wider than /20 so the firewall rule can never span more
+    // than Cowork's VM subnet actually needs.
     if prefix < 20 {
         log::warn!(
             "[firewall] detected vEthernet subnet has prefix /{prefix} — too broad (< /20); rejected"
@@ -469,8 +484,12 @@ pub fn remove_cowork_rules() -> Result<(), FirewallError> {
 
 /// Scan for orphan "Tandem Cowork*" firewall rules and return their names.
 ///
-/// Used by install-time orphan reconciliation (security invariant §12) to detect
-/// stale rules from a previous failed uninstall.
+/// Used by install-time orphan reconciliation, which — per the ordering
+/// contract on `reconcile_orphan_firewall_rules` in `cowork_installer.rs`
+/// (#1163) — MUST run *before* `add_cowork_allow_rule`: this scan matches by
+/// the name prefix `"Tandem Cowork"`, identical to the allow rule's own name,
+/// so scanning after the add would see the just-added rule as an orphan and
+/// delete it, leaving the enable with no allow rule.
 ///
 /// Returns `Err` on spawn failure or unexpected netsh errors so that
 /// `reconcile_orphan_firewall_rules` can distinguish "no orphans" from "scan failed".
