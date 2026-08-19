@@ -309,22 +309,20 @@ describe("an insertion inside a stamped range splits it", () => {
     expect(entries().filter((entry) => entry.author === "user")).toHaveLength(1);
   });
 
-  it("KNOWN LIMITATION: splitting the BLOCK loses the tail's attribution", () => {
-    // NOT FIXED, and pinned so it is a known quantity rather than a surprise.
-    // Filed as #1512; the doc-comment on `splitCoveringEntries` names it so
-    // that function does not read as complete coverage of insertions.
-    //
-    // y-prosemirror implements a block split by DELETING the tail out of the
-    // original `Y.XmlText` and re-inserting it into a new one, which destroys
-    // the covering entry's `toRel` before anything can react. By the time the
-    // split scan resolves the entry it has already collapsed to the split
+  it("splitting the BLOCK carries the tail's attribution with it", () => {
+    // This was pinned as a KNOWN LIMITATION until the repair landed, and the
+    // reason it could not be fixed HERE is worth keeping: y-prosemirror
+    // implements a block split by DELETING the tail out of the original
+    // `Y.XmlText` and re-inserting it into a new one, which destroys the
+    // covering entry's `toRel` before `splitCoveringEntries` ever runs. By the
+    // time the split scan resolves the entry it has collapsed to the split
     // point, so the strictly-inside test fails and there is nothing to cut.
-    // The reap cannot help either — it skips anchored entries by design
-    // (#1480), because deleting one destroys attribution permanently.
     //
-    // This predates the gap-3 work and is unchanged by it. Fixing it needs a
-    // different mechanism: re-anchor across the split inside the step loop,
-    // where the before-frame still exists.
+    // The fix is a different mechanism, not a better scan: capture each
+    // entry's position while the pre-change Y.Doc is still readable, then
+    // re-anchor from the ProseMirror mapping, which is the only witness to
+    // where the tail went. `authorship-block-structure.test.ts` owns it and
+    // covers the other doors it reaches through.
     const { ydoc, editor } = boundEditor("seed\n");
     const { mid } = seedUserText(editor);
     expect(decoratedTextByAuthor(ydoc, editor).user).toEqual(["USERTEXT"]);
@@ -332,20 +330,19 @@ describe("an insertion inside a stamped range splits it", () => {
     editor.view.dispatch(editor.state.tr.split(mid));
 
     expect(editor.state.doc.childCount, "the paragraph really did split").toBe(2);
-    // This used to be `["", "USER"]`. The `""` was the second, adjacent thing
-    // #1512 records: the split step reports `insertedLen > 0` for the block
-    // separator, so it minted a stamp covering no visible text at all.
+    // One decoration reading `USERTEXT`, not two: the repaired entry spans the
+    // boundary, and `textBetween` renders a block separator as nothing.
     //
-    // Coalescing hid it HERE and was once credited with closing it. That credit
-    // was wrong in two shapes it cannot reach — a split whose author differs
-    // from the run it follows has nothing to merge into, and a split at the end
-    // of a block mints an offset that declines to anchor and then paints
-    // through the flat fallback. The separator is now suppressed at the source;
-    // `authorship-separator-stamp.test.ts` covers all three shapes.
+    // The value used to be `["", "USER"]`. The `""` was the second, adjacent
+    // thing #1512 records — the split step reports `insertedLen > 0` for the
+    // separator, so it minted a stamp covering no visible text. Coalescing hid
+    // it HERE and was once credited with closing it; that credit was wrong in
+    // two shapes it cannot reach, and the stamp is now suppressed at the
+    // source (`authorship-separator-stamp.test.ts`).
     expect(
       decoratedTextByAuthor(ydoc, editor).user,
-      "the tail moved into the new block and lost its attribution — the limitation",
-    ).toEqual(["USER"]);
+      "the tail moved into the new block and kept its attribution",
+    ).toEqual(["USERTEXT"]);
   });
 
   it("an UNANCHORED covering entry degrades rather than splitting", () => {
