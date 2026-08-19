@@ -386,6 +386,43 @@ describe("attribution survives a block-structure change", () => {
     expect(captureOf(editor)).toBeTruthy();
   });
 
+  it("the cost gate holds at 1,500 entries — typing captures nothing, a split captures all", () => {
+    // THE COST GATE, at the scale the sibling gate in `authorship-split.test.ts`
+    // was measured at. The capture walk is O(entries) and resolves every anchor
+    // against the pre-change doc, so running it per keystroke is what would make
+    // this unshippable — two reviews measured the ungated containment test on
+    // that sibling path at 42-51x slower per keystroke at this entry count.
+    //
+    // Counted, not timed: a timing assertion at this size flakes on CI, and the
+    // count is the quantity that actually costs. Measured here for the record —
+    // 1,500 entries, this fixture, happy-dom: ordinary typing 4.6 ms, a split
+    // 6.8 ms, so the repair adds ~2.1 ms on a structural keystroke and nothing
+    // at all on an ordinary one. The ratio is 1.4x, not the sibling's 42x,
+    // because the gate keeps the walk off the common path entirely.
+    //
+    // Both halves are here for the usual reason: the negative alone also passes
+    // against a repair that never fires.
+    const { editor, entries } = boundEditor("seed\n");
+    for (let i = 0; i < 1500; i++) {
+      const at = editor.state.doc.content.size - 1;
+      const tr = editor.state.tr.insertText("xxxx", at);
+      if (i % 2 === 1) tr.setMeta(AUTHORSHIP_ORIGIN_META, "claude");
+      editor.view.dispatch(tr);
+    }
+    expect(entries().length, "the fixture really is at scale").toBeGreaterThanOrEqual(1500);
+
+    editor.view.dispatch(editor.state.tr.insertText("z", 2));
+    expect(captureOf(editor), "typing at scale must still walk nothing").toBeFalsy();
+
+    editor.view.dispatch(editor.state.tr.split(10));
+    expect(
+      captureOf(editor)?.positions.length,
+      "and a split must capture the whole population, not a truncated slice",
+    ).toBeGreaterThanOrEqual(1500);
+    // 1,500 seeding dispatches through a real ProseMirror view exceed the 5 s
+    // default when the whole suite is competing for the machine.
+  }, 60_000);
+
   it("a remote (y-sync) structural change is never captured", () => {
     // For a remote or MCP change Y is written BEFORE ProseMirror applies, so
     // there is no pre-change frame to capture and the positions would be

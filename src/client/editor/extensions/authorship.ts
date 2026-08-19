@@ -231,16 +231,17 @@ interface InsertedSpan {
  * a different offset than asked for. Only the interior boundaries are new, so
  * only they are minted.
  *
- * NOT COVERED: a block-splitting insertion (Enter, `splitListItem`). y-prosemirror
- * implements the split by deleting the tail out of the original `Y.XmlText` and
- * re-inserting it into a new one, which destroys the covering entry's `toRel`
- * before this function ever resolves it — the entry has already collapsed to
- * the split point, so there is nothing left to cut and the tail ends up
- * unattributed. That is pre-existing rather than introduced here, and fixing it
- * needs a different mechanism (re-anchor across the split inside the step loop,
- * where the before-frame still exists). Filed as #1512 and pinned in
- * `authorship-split.test.ts`; stated here so this does not read as complete
- * coverage of insertions.
+ * NOT THIS FUNCTION'S JOB, and it took a different mechanism: a block-structure
+ * change (Enter, `splitListItem`, a backspace join, a heading toggle, a list or
+ * blockquote wrap). y-prosemirror implements those by deleting the affected text
+ * out of its `Y.XmlText` and re-inserting it, or rebuilding the `Y.XmlElement`
+ * outright, which destroys the covering entry's anchor before this function ever
+ * resolves it — the entry has already collapsed, so there is nothing left to cut.
+ * `reanchorCaptured` handles it instead, from a position snapshot taken while the
+ * pre-change Y.Doc was still readable (#1512). Stated here because the two run in
+ * the same handler and the division between them is not obvious from either one:
+ * this function cuts an entry a same-frame insertion widened, that one rebuilds an
+ * entry a structural step destroyed.
  */
 function splitCoveringEntries(
   ydoc: Y.Doc,
@@ -1176,16 +1177,29 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
             // offset inside a heading prefix, or either endpoint adjacent to an
             // empty block. The entry then behaves exactly as it does today.
             //
-            // UNSTATED INVARIANT, now stated: no `appendTransaction` plugin may
-            // insert or delete TEXT. `EditorState.apply` folds appended steps
-            // into the state handed to `updateState`, and y-prosemirror writes
-            // from `view.state.doc` — but the transaction Tiptap emits is the
-            // ROOT one, so `transaction.doc` does not include them. A text-moving
-            // append would therefore put `range` and the Y.Doc in different
-            // frames. This binds the flat `range` exactly as much as the anchor,
-            // so it is a property of the whole handler rather than of the mint.
-            // True today: `@tiptap/extension-link` is the only extension in the
-            // stack defining `appendTransaction` and it only adds/removes marks.
+            // A LIVE ASSUMPTION, not an invariant — an earlier version of this
+            // comment claimed the latter and was wrong about both halves.
+            //
+            // The assumption: no `appendTransaction` plugin moves TEXT.
+            // `EditorState.apply` folds appended steps into the state handed to
+            // `updateState`, and y-prosemirror writes from `view.state.doc` — but
+            // the transaction Tiptap emits is the ROOT one, so `transaction.doc`
+            // does not include them. A text-moving append puts `range` and the
+            // Y.Doc in different frames, which binds the flat `range` exactly as
+            // much as the anchor: it is a property of the whole handler.
+            //
+            // Four plugins in this stack define `appendTransaction`, not one.
+            // `clearDocument` and `prosemirror-tables`' `tableEditing` do not
+            // move text, and `@tiptap/extension-link`'s autolink only adds and
+            // removes marks. `@tiptap/core`'s PasteRules DOES move text, so the
+            // assumption is already false on a rule-matching paste — it fires
+            // only on a `uiEvent` of paste or drop, so ordinary typing is not
+            // exposed. Filed rather than smuggled in here.
+            //
+            // The exposure is this mint, NOT the structural repair below: that
+            // one invalidates its capture whenever an appended transaction
+            // changes the doc, so it declines instead of repairing from a
+            // mapping it cannot trust.
             const relRange = anchorFlatRange(ydoc, range.from, range.to) ?? undefined;
             if (!relRange) {
               warnOnce(
