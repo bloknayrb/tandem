@@ -1143,6 +1143,50 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
             // EVERY step, not of none — which silently collapsed every reap
             // range to zero width and made the reap a no-op that nothing threw
             // over.
+            //
+            // THE `mirror` ARRAY GOES WITH IT, DELIBERATELY (#1481). The fix
+            // suggested there — `new Mapping(maps, mirror?.filter(...))` — is
+            // wrong twice over, quite apart from being unreachable.
+            //
+            // 1. `mirror` is a FLAT ARRAY OF PAIRS read by parity:
+            //    `this.mirror[i + (i % 2 ? -1 : 1)]` (prosemirror-transform,
+            //    `getMirror`). Filtering it element-wise desynchronises every
+            //    pair after the first drop — keep index n, drop its partner m,
+            //    and `getMirror` starts answering with a neighbouring pair's
+            //    map index. That is a confidently WRONG answer, not a missing
+            //    one, which is worse than the approximation it set out to fix.
+            // 2. `mirror` is `@internal`. The published typings declare it as a
+            //    constructor parameter only, never as a property, so reading it
+            //    back needs a cast — and a cast is exactly what turns a later
+            //    rename of the field into a silent `undefined` here.
+            //
+            // Neither matters today, because nothing in this stack has a mirror
+            // to lose. `Transform.addStep` is the only writer to a
+            // transaction's mapping and calls `appendMap(step.getMap())` with
+            // no `mirrors` argument, so EVERY editor command — list wrap,
+            // `liftListItem`, `sinkListItem`, blockquote, heading toggle —
+            // appends mirror-free. Measured over all of those plus history
+            // undo: `mapping.mirror` is `undefined` in every case, and the
+            // before-frame span this recovers is exact.
+            //
+            // The two packages that do pass `mirrors` never reach a dispatched
+            // transaction's mapping. `prosemirror-history` mirrors only its own
+            // local `remap` (in `popEvent`, `remapping` and `compress`) and
+            // dispatches through `transform.maybeStep` → `addStep`.
+            // `prosemirror-collab`'s `rebaseSteps` is the one real producer,
+            // and it is INSTALLED but unimported — it ships as a dependency of
+            // `@tiptap/pm`, so it is one import away, not one `npm install`
+            // away. Tandem syncs through y-prosemirror, which never constructs
+            // a `Mapping` at all.
+            //
+            // So adding a collab plugin is the single change that would
+            // invalidate this, and it would do so silently. The static import
+            // walk in `tests/client/authorship-stamp.test.ts` is what catches
+            // that; the two reap tests beside it pin the behaviour this
+            // recovers. Note the asymmetry with `toFinal` above, which DOES
+            // carry a mirror through (`Mapping.slice` preserves it): that
+            // difference is invisible only for as long as the field stays
+            // empty, which is what those tests are for.
             toBefore ??= new Mapping(transaction.mapping.maps.slice(0, i)).invert();
             const span = pmSelectionToFlat(beforeDoc, {
               from: toPmPos(toBefore.map(oldStart, 1)),

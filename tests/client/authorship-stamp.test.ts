@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 
-import { Editor } from "@tiptap/core";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { Editor, Extension } from "@tiptap/core";
+import type { Transaction } from "@tiptap/pm/state";
+import { findWrapping } from "@tiptap/pm/transform";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ySyncPluginKey } from "y-prosemirror";
 import * as Y from "yjs";
@@ -228,6 +233,137 @@ describe("authorship stamp path", () => {
     });
   });
 
+  describe("a structural step and a deletion in the SAME transaction (#1481)", () => {
+    /**
+     * #1481 asked whether the reap's before-frame mapping —
+     * `new Mapping(transaction.mapping.maps.slice(0, i)).invert()` — loses
+     * accuracy by dropping `transaction.mapping`'s `mirror` array, since
+     * ProseMirror uses mirrored step pairs for exact position recovery across
+     * a replace-around. It does not, because nothing in this stack ever sets
+     * a mirror; the long comment at that line records the survey.
+     *
+     * WHAT THESE TESTS ARE FOR, PRECISELY. They do not test mirror handling —
+     * they cannot, because no transaction here carries a mirror, so a wrong
+     * filter of `undefined` is still `undefined` and would stay green. Their
+     * value is that they are the first tests to drive `toBefore` with `i > 0`
+     * THROUGH A STRUCTURAL STEP and then assert a REAP outcome. The multi-step
+     * test above reaches `i = 1` but asserts only on insertion spans, and
+     * "does not reap on a formatting change that deletes no text" dispatches
+     * its wrap and its delete as separate transactions, so neither one covers
+     * this path. Verified by mutation: swapping the construction for the
+     * known-broken `transaction.mapping.slice(0, i).invert()` idiom reds the
+     * wrap-first case below — alongside the two single-step reap tests above,
+     * which that idiom already broke. So the mutation proves PATH COVERAGE
+     * (the deletion's `old*` positions really do travel back through the
+     * structural step), not mirror coverage. The delete-first case survives
+     * that mutation, which is exactly why it is written down: it is the shape
+     * a bounds bug leaves working.
+     */
+    function wrapInBulletList(tr: Transaction, pos: number, schema: Editor["schema"]) {
+      const $pos = tr.doc.resolve(pos);
+      const range = $pos.blockRange($pos);
+      expect(range, "premise: the paragraph must form a block range").not.toBeNull();
+      const wrapping = range && findWrapping(range, schema.nodes.bulletList);
+      expect(wrapping, "premise: the block range must be wrappable in a bullet list").toBeTruthy();
+      if (range && wrapping) tr.wrap(range, wrapping);
+    }
+
+    it("reaps an entry deleted by a transaction that also wraps the block in a list", () => {
+      editor.commands.insertContentAt(6, "brave ");
+      const stamped = entries();
+      expect(stamped).toHaveLength(1);
+      // THE PREMISE, asserted rather than assumed. `reapableEntryIds` returns
+      // early for any entry carrying a `relRange` (#1480), so against a
+      // Collaboration-bound editor this test would pass without the reap
+      // running at all. This editor has no binding, so the mint declines and
+      // the entry is unanchored — the only kind the scan looks at.
+      expect(stamped[0].relRange).toBeUndefined();
+
+      const tr = editor.state.tr;
+      // Wrap FIRST, so the deletion is step 1 and its `old*` positions have to
+      // travel back through the ReplaceAroundStep to reach the before frame.
+      // That is the `i > 0` case; getting it wrong shifts the recovered span
+      // off the stamped text and the containment check silently misses.
+      wrapInBulletList(tr, 6, editor.schema);
+      tr.delete(tr.mapping.map(6, 1), tr.mapping.map(12, -1));
+      expect(tr.mapping.maps.length, "premise: two steps, structural then text").toBe(2);
+      editor.view.dispatch(tr);
+
+      expect(editor.state.doc.textBetween(0, editor.state.doc.content.size)).not.toContain("brave");
+      expect(entries().map((e) => e.id)).not.toContain(stamped[0].id);
+    });
+
+    it("reaps it with the deletion first too — the step order must not matter", () => {
+      editor.commands.insertContentAt(6, "brave ");
+      const stamped = entries();
+      expect(stamped).toHaveLength(1);
+      expect(stamped[0].relRange).toBeUndefined();
+
+      const tr = editor.state.tr;
+      tr.delete(6, 12);
+      // Now `i = 0` for the deletion, so `toBefore` is the inverse of NOTHING.
+      // Pinned as the other half of the pair: it is the case that a bounds bug
+      // in the slice would leave working, which is how such a bug hides.
+      wrapInBulletList(tr, 3, editor.schema);
+      expect(tr.mapping.maps.length).toBe(2);
+      editor.view.dispatch(tr);
+
+      expect(entries().map((e) => e.id)).not.toContain(stamped[0].id);
+    });
+
+    it("observes no mirror on the transaction the reap maps through", () => {
+      // The runtime half of the assumption. It asserts POSITIVELY before it
+      // asserts an absence: an assertion of the form "the field is undefined"
+      // also passes when the capture never fired, when the transaction was not
+      // the one meant, and — since `mirror` is `@internal` and absent from the
+      // published typings — when a dependency bump renames the field out from
+      // under a cast. So: the probe must have seen THIS transaction object, it
+      // must have changed the doc, it must carry the two step maps, and only
+      // then is the mirror read — through `getMirror`, which IS public and
+      // would fail loudly rather than read `undefined` if it were removed.
+      //
+      // This is the runtime half only. It cannot see a collab plugin added to
+      // `src/client/editor/`, because this editor will never configure one;
+      // the static walk at the bottom of this file is what covers that.
+      const seen: Transaction[] = [];
+      const probeYdoc = new Y.Doc();
+      const probeEditor = new Editor({
+        extensions: [
+          ...buildSchemaExtensions(),
+          AuthorshipExtension.configure({ ydoc: probeYdoc }),
+          Extension.create({
+            name: "mirrorProbe",
+            onTransaction({ transaction }) {
+              seen.push(transaction);
+            },
+          }),
+        ],
+        content: "<p>hello world</p>",
+      });
+      try {
+        probeEditor.commands.insertContentAt(6, "brave ");
+        seen.length = 0;
+
+        const tr = probeEditor.state.tr;
+        wrapInBulletList(tr, 6, probeEditor.schema);
+        tr.delete(tr.mapping.map(6, 1), tr.mapping.map(12, -1));
+        probeEditor.view.dispatch(tr);
+
+        const observed = seen.find((candidate) => candidate === tr);
+        expect(observed, "the probe must have observed the dispatched transaction").toBeDefined();
+        if (!observed) return;
+        expect(observed.docChanged).toBe(true);
+        expect(observed.mapping.maps.length).toBeGreaterThanOrEqual(2);
+        for (let i = 0; i < observed.mapping.maps.length; i++) {
+          expect(observed.mapping.getMirror(i)).toBeUndefined();
+        }
+      } finally {
+        probeEditor.destroy();
+        probeYdoc.destroy();
+      }
+    });
+  });
+
   it("applySuggestion attributes an accepted suggestion to Claude", () => {
     // The real function, not a reconstruction of its shape. `applySuggestion`
     // is exported solely for this: the hook's own suite drives it through a
@@ -284,5 +420,52 @@ describe("authorship stamp path", () => {
     // becomes a silent no-op instead of a bug report.
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+/**
+ * The static half of #1481's assumption, and the only half that can catch the
+ * trigger the source comment actually names.
+ *
+ * The reap's before-frame mapping is built without a `mirror` array, which is
+ * safe because no transaction in this stack carries one. `prosemirror-collab`'s
+ * `rebaseSteps` is the sole producer in the whole dependency tree — and it is
+ * INSTALLED, not absent: it ships as a dependency of `@tiptap/pm` and is one
+ * `@tiptap/pm/collab` import away. Importing it is therefore a one-line change
+ * that would invalidate the reasoning at `authorship.ts` silently, and no
+ * runtime test in this file could see it, because the editors here will never
+ * configure a collab plugin.
+ */
+describe("the mirror-free assumption's static half (#1481)", () => {
+  const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../src");
+  const COLLAB = /["'](?:prosemirror-collab|@tiptap\/pm\/collab)["']/;
+  const SCANNED = new Set([".ts", ".tsx", ".js", ".mjs", ".svelte"]);
+
+  function walk(dir: string): string[] {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...walk(full));
+      else if (SCANNED.has(path.extname(entry.name))) out.push(full);
+    }
+    return out;
+  }
+
+  it("no file under src/ imports prosemirror-collab", () => {
+    const files = walk(SRC);
+    // The zero-of-zero guard. A walk that silently stopped scanning reports
+    // exactly the same "no offenders" as a clean tree — this repo has shipped
+    // that shape before (see `tests/scripts/audit-origins.test.ts`).
+    expect(files.length).toBeGreaterThan(300);
+
+    const offenders = files
+      .filter((file) => COLLAB.test(readFileSync(file, "utf-8")))
+      .map((file) => path.relative(SRC, file));
+    // If this fails, the mirror survey in `authorship.ts`'s reap comment no
+    // longer holds: a collab plugin rebases steps through `setMirror`, so
+    // `transaction.mapping.mirror` becomes populated and dropping it when
+    // building `toBefore` starts costing exact position recovery. Re-open
+    // #1481 rather than deleting this test.
+    expect(offenders).toEqual([]);
   });
 });
