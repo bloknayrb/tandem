@@ -588,9 +588,17 @@ export async function startMcpServerHttp(
   // follow-up; do not re-add a payment-processor endpoint to a server that binds
   // to loopback.
 
-  // Auth middleware for /mcp and /api/* — AFTER apiMiddleware (DNS-rebinding)
-  // but BEFORE route handlers. Loopback is always exempt (Claude Code zero-config).
-  // /health and /.well-known/* are intentionally omitted — they're public/diagnostic.
+  // Auth middleware for /mcp and /api/* — mounted BEFORE the per-route DNS-rebinding
+  // check (lanAwareApiMiddleware for /api/*, the SDK's own hostHeaderValidation inside
+  // mcpApp for /mcp — see the comment at mcpApp's construction above) and, for /api,
+  // BEFORE enforceLoopbackMutation too. A request that fails both checks gets 401 from
+  // auth, not 403 from the Host check. Loopback is always exempt (Claude Code
+  // zero-config), so this ordering has no security effect either way — the Host check
+  // still runs unconditionally for a loopback-bypassing caller, just after auth instead
+  // of before.
+  // /health and /.well-known/* never reach authMiddleware at all: they're registered
+  // directly on `app`, outside both the /api and /mcp prefixes this middleware is
+  // mounted on.
   // Note: all channel routes use /api/channel-* paths (covered by /api below).
   app.use("/mcp", authMiddleware);
   app.use("/api", authMiddleware);

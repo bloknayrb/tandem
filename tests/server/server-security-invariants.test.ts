@@ -13,7 +13,9 @@
  * so the Express routing and middleware are tested exactly as deployed.
  */
 
+import { readFileSync } from "node:fs";
 import type { Server } from "node:http";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isLoopback } from "../../src/server/auth/middleware.js";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
@@ -255,5 +257,153 @@ describe("Invariant 7 — /health non-loopback branch omits hasSession (unit)", 
       body.hasSession = currentTransport !== null;
     }
     expect("hasSession" in body).toBe(false);
+  });
+});
+
+// ── #1488 item 2: auth-ordering comment matches the real registration order ──
+//
+// The block comment sitting directly above `app.use("/mcp", authMiddleware)` /
+// `app.use("/api", authMiddleware)` used to assert authMiddleware ran "AFTER
+// apiMiddleware (DNS-rebinding)" — the opposite of the real order: auth is
+// mounted first here, and the per-route DNS-rebinding check (lanAwareApiMiddleware
+// for /api, the SDK's hostHeaderValidation for /mcp) is attached later, inside
+// registrars called further down this same function.
+//
+// (a) below is a source-text guard against the exact wrong phrase reappearing —
+// weak alone, since a differently-worded wrong claim would sail through it
+// uncaught. (b) is the behavioral counterpart: it exercises the real running
+// Express app and goes red if the registration order itself ever regresses,
+// independent of whatever the comment says.
+
+describe('#1488 item 2 — comment above app.use("/mcp", authMiddleware) matches reality', () => {
+  const serverSrc = readFileSync(
+    fileURLToPath(new URL("../../src/server/mcp/server.ts", import.meta.url)),
+    "utf-8",
+  );
+
+  it("(a) does not claim auth runs AFTER apiMiddleware", () => {
+    const marker = 'app.use("/mcp", authMiddleware);';
+    const idx = serverSrc.indexOf(marker);
+    expect(idx, 'app.use("/mcp", authMiddleware) not found in server.ts').toBeGreaterThan(-1);
+    // The comment block sits directly above the app.use call; 800 chars comfortably
+    // covers it without reaching into unrelated code further up the file.
+    const preceding = serverSrc.slice(Math.max(0, idx - 800), idx);
+    expect(preceding).not.toMatch(/AFTER\s+apiMiddleware/i);
+  });
+});
+
+// (b) Behavioral order test — the app itself, not its comments.
+//
+// isLoopback() (src/server/auth/middleware.ts) does an exact-string compare
+// against "127.0.0.1", so binding the *client's* outbound socket to 127.0.0.2 via
+// Node's `localAddress` option produces a request whose `req.socket.remoteAddress`
+// is "127.0.0.2" server-side — genuinely non-loopback to authMiddleware — while
+// the connection never leaves the machine. That lets one request trip two
+// different checks for two different reasons: authMiddleware rejects it with 401
+// (no/bad Authorization), and the Host-header DNS-rebinding check would reject it
+// with 403 (Host: evil.com is in neither allowlist). Whichever check runs first
+// determines the status code actually observed, so this is a live assertion about
+// registration order, not source text.
+//
+// IMPORTANT — this trick depends on isLoopback() matching "127.0.0.1" by exact
+// string, not by CIDR range (see src/server/auth/middleware.ts). If isLoopback()
+// is ever widened to treat the whole 127.0.0.0/8 block as loopback, 127.0.0.2
+// becomes loopback too: authMiddleware will bypass it, and cases 1 and 3 below
+// will reach the Host check instead of being rejected by auth — they will fail
+// LOUDLY with 403 instead of the expected 401. That failure is NOT an
+// auth-ordering regression; it means the loopback definition moved, and this test
+// needs a different non-loopback source address. Do not "fix" it by reordering
+// middleware.
+describe("#1488 item 2 — auth runs before the DNS-rebinding Host check (behavioral)", () => {
+  const AUTH_TOKEN = "test-token-1488-auth-ordering";
+  let orderPort: number;
+  let orderHttpServer: Server;
+
+  beforeEach(async () => {
+    orderPort = await allocPort();
+    // Both a known token (so we can construct a request auth actually accepts)
+    // and a resolvedLanIP (so the /mcp SDK host check is active, matching the
+    // "Fix 1 regression" block above) are required to exercise both prefixes.
+    orderHttpServer = await startMcpServerHttp(orderPort, "127.0.0.1", AUTH_TOKEN, "192.168.1.50");
+  });
+
+  afterEach(() => {
+    return new Promise<void>((resolve, reject) => {
+      orderHttpServer.close((err) => (err ? reject(err) : resolve()));
+    });
+  });
+
+  function rawRequest(
+    path: string,
+    opts: { method?: string; hostHeader: string; authorization?: string; body?: string },
+  ): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+      const bodyBuf = opts.body !== undefined ? Buffer.from(opts.body, "utf8") : undefined;
+      const headers: Record<string, string | number> = { Host: opts.hostHeader };
+      if (opts.authorization !== undefined) headers.Authorization = opts.authorization;
+      if (bodyBuf !== undefined) {
+        headers["Content-Type"] = "application/json";
+        headers["Content-Length"] = bodyBuf.length;
+      }
+      const req = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: orderPort,
+          path,
+          method: opts.method ?? "GET",
+          // Binds the client's outbound socket to a non-loopback address while
+          // still connecting to the server on 127.0.0.1 — see the block comment
+          // above for why this makes authMiddleware treat the request as
+          // genuinely non-loopback without any real network traffic leaving the
+          // machine.
+          localAddress: "127.0.0.2",
+          headers,
+        },
+        (res) => {
+          let data = "";
+          res.on("data", (chunk: Buffer) => {
+            data += chunk.toString();
+          });
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body: data }));
+        },
+      );
+      req.on("error", reject);
+      if (bodyBuf !== undefined) req.write(bodyBuf);
+      req.end();
+    });
+  }
+
+  it("1) GET /api/info, non-loopback + bad Host + no Authorization -> 401 (auth runs first)", async () => {
+    const { status } = await rawRequest("/api/info", { hostHeader: "evil.com" });
+    expect(status).toBe(401);
+  });
+
+  it("2) control: same request WITH valid Authorization -> 403 (Host check is reachable and fires once auth passes)", async () => {
+    const { status } = await rawRequest("/api/info", {
+      hostHeader: "evil.com",
+      authorization: `Bearer ${AUTH_TOKEN}`,
+    });
+    expect(status).toBe(403);
+  });
+
+  it("3) POST /mcp, non-loopback + bad Host + no Authorization -> 401 (auth runs first)", async () => {
+    const payload = JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 1 });
+    const { status } = await rawRequest("/mcp", {
+      method: "POST",
+      hostHeader: "evil.com",
+      body: payload,
+    });
+    expect(status).toBe(401);
+  });
+
+  it("4) control: same request WITH valid Authorization -> 403 (SDK host check still fires after auth passes)", async () => {
+    const payload = JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 1 });
+    const { status } = await rawRequest("/mcp", {
+      method: "POST",
+      hostHeader: "evil.com",
+      authorization: `Bearer ${AUTH_TOKEN}`,
+      body: payload,
+    });
+    expect(status).toBe(403);
   });
 });
