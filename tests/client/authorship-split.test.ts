@@ -334,11 +334,14 @@ describe("an insertion inside a stamped range splits it", () => {
     expect(editor.state.doc.childCount, "the paragraph really did split").toBe(2);
     // This used to be `["", "USER"]`. The `""` was the second, adjacent thing
     // #1512 records: the split step reports `insertedLen > 0` for the block
-    // separator, so it minted a stamp covering no visible text at all. Stamp
-    // coalescing removed it — the separator stamp is adjacent to the run it
-    // follows and shares its author, so it merges into that entry instead of
-    // becoming an entry of its own. Half of #1512 closed as a side effect,
-    // which is why the expectation moved rather than the code.
+    // separator, so it minted a stamp covering no visible text at all.
+    //
+    // Coalescing hid it HERE and was once credited with closing it. That credit
+    // was wrong in two shapes it cannot reach — a split whose author differs
+    // from the run it follows has nothing to merge into, and a split at the end
+    // of a block mints an offset that declines to anchor and then paints
+    // through the flat fallback. The separator is now suppressed at the source;
+    // `authorship-separator-stamp.test.ts` covers all three shapes.
     expect(
       decoratedTextByAuthor(ydoc, editor).user,
       "the tail moved into the new block and lost its attribution — the limitation",

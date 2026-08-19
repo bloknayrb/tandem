@@ -311,13 +311,12 @@ describe("consecutive same-author stamps coalesce", () => {
     typeChars(editor, "bb", editor.state.doc.content.size - 1);
 
     expect(editor.state.doc.childCount).toBe(2);
-    const texts = decoratedTextByAuthor(ydoc, editor).user ?? [];
-    expect(texts).toContain("aa");
-    expect(texts).toContain("bb");
-    expect(
-      entries().length,
-      "at least the two runs stay separate (plus the split's own separator stamp)",
-    ).toBeGreaterThanOrEqual(2);
+    // Exactly two entries and exactly two runs. The count used to be written as
+    // `>= 2` to leave room for the split's own separator stamp; that stamp is
+    // no longer minted, so the loose bound has nothing left to tolerate — and a
+    // bound that tolerates an unknown extra entry cannot see one appear.
+    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({ user: ["aa", "bb"] });
+    expect(entries().length, "the two runs stay separate").toBe(2);
   });
 
   it("the map does not grow per keystroke over a burst", () => {
