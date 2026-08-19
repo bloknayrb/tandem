@@ -249,7 +249,8 @@ When the Tauri desktop app is launched via the OS file-association handler (doub
 
 ```
 Cold start, Windows / Linux:
-  OS double-click  ──▶  tandem.exe <path>  ──▶  lib.rs:extract_file_arg
+  OS double-click  ──▶  tandem.exe <path>  ──▶  open_candidate.rs:
+                                                    extract_file_arg
                                               ──▶  spawn sidecar with
                                                     TANDEM_OPEN_FILE=<path>
                                               ──▶  Node startup-file.ts:
@@ -295,7 +296,7 @@ File associations are declared in `src-tauri/tauri.conf.json#bundle.fileAssociat
 
 Known limitation: macOS cold-start may briefly show `welcome.md` before the requested file becomes active, because Apple Events arrive after `setup()` schedules the sidecar spawn. This window is typically 100–300 ms.
 
-Both OS entry points share one path validator, `validate_open_candidate` (extension against `SUPPORTED_FILE_ASSOC_EXTS` + `is_file()`), so the extension and regular-file checks cannot diverge per platform (#1344). Until that fix those two checks existed only inline in `extract_file_arg`, so the macOS `RunEvent::Opened` surface performed neither: a double-clicked `.pdf`, a folder, or a stale path reached `/api/open`, was refused server-side, and produced nothing but a `log::warn!` while the user sat on `welcome.md`.
+Both OS entry points share one path validator, `validate_open_candidate` (extension against `SUPPORTED_FILE_ASSOC_EXTS` + `is_file()`), so the extension and regular-file checks cannot diverge per platform (#1344). Since #1415 it and the rest of that cluster live in `src-tauri/src/open_candidate.rs` rather than `lib.rs`, and return a **`ScreenedOpenPath`** newtype whose tuple field is private to that module — so `PendingOpens`, `promote_healthy_and_drain`, `try_queue_or_post`, `post_drained_paths` and `cold_start_file` carry a type only the screener can mint. The module boundary *is* the mechanism: `lib.rs` is ~6,900 lines in one module, so a newtype declared there would be constructible on every one of them. Until that fix those two checks existed only inline in `extract_file_arg`, so the macOS `RunEvent::Opened` surface performed neither: a double-clicked `.pdf`, a folder, or a stale path reached `/api/open`, was refused server-side, and produced nothing but a `log::warn!` while the user sat on `welcome.md`.
 
 `validate_open_candidate` owns **every** path-shaped check — the Windows NTFS alternate-data-stream colon scan, UNC rejection, the extension allowlist, and `is_file()` — and the first two run *before* `is_file()` deliberately: `is_file()` on `\\host\share\…` performs the SMB handshake, so a gate placed after it would leak an NTLM hash from the shell process on a path the server was always going to refuse. The ADS scan lives in the validator rather than in `extract_file_arg` for the same reason the extension check does: `classify_opened_url` is unconditionally compiled, so a future Windows or Linux Opened / deep-link handler would otherwise inherit the extension and `is_file()` checks with no ADS scan.
 
@@ -843,7 +844,7 @@ Tauri v2 uses a capabilities model to grant permissions:
 - `capabilities/default.json` -- core window permissions, shell (sidecar), fs, dialog
 - `capabilities/desktop.json` -- desktop-only plugins: single-instance, window-state, updater
 
-`single-instance` must be the **first** plugin registered in `lib.rs` — later registration breaks instance detection. When a second instance is launched, it brings the existing window to the front **and opens any file path passed on its command line** — `extract_file_arg` in `lib.rs` feeds the shared `validate_open_candidate` (#1344, the same validator the cold-start path uses), then POSTs `/api/open` against the running sidecar.
+`single-instance` must be the **first** plugin registered in `lib.rs` — later registration breaks instance detection. When a second instance is launched, it brings the existing window to the front **and opens any file path passed on its command line** — `extract_file_arg` in `open_candidate.rs` feeds the shared `validate_open_candidate` (#1344, the same validator the cold-start path uses), then POSTs `/api/open` against the running sidecar.
 
 ## Design Decisions
 

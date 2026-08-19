@@ -8,8 +8,23 @@
 use std::fs::File;
 use std::path::PathBuf;
 
-use app_lib::{extract_file_arg, RejectionReason};
+use app_lib::{extract_file_arg, RejectionReason, ScreenedOpenPath};
 use tempfile::TempDir;
+
+/// Unwrap the [`ScreenedOpenPath`] `extract_file_arg` has returned since #1415
+/// so the `Ok(Some(..))` assertions can keep comparing against a plain
+/// `PathBuf`.
+///
+/// Note what this integration test can and cannot do, because it is the point
+/// of the newtype: it can read a screened path back OUT (`into_inner`), and it
+/// cannot construct one — `ScreenedOpenPath`'s tuple field is private to
+/// `open_candidate`, and this file is a separate crate. `Ok(None)` and `Err(..)`
+/// assertions do not need this and are left alone.
+fn inner(
+    result: Result<Option<ScreenedOpenPath>, RejectionReason>,
+) -> Result<Option<PathBuf>, RejectionReason> {
+    result.map(|opt| opt.map(ScreenedOpenPath::into_inner))
+}
 
 /// Build a [exe, ...rest] arg list, mimicking the OS shape.
 fn args(rest: &[&str]) -> Vec<String> {
@@ -105,7 +120,7 @@ fn absolute_md_path_returns_ok_some() {
     let p = touch(&dir, "doc.md");
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
-    assert_eq!(result, Ok(Some(p)));
+    assert_eq!(inner(result), Ok(Some(p)));
 }
 
 #[test]
@@ -114,7 +129,7 @@ fn relative_path_resolves_against_cwd() {
     touch(&dir, "notes.md");
     // Pretend the OS launched us with cwd=dir and a bare filename on argv.
     let result = extract_file_arg(&args(&["notes.md"]), dir.path());
-    assert_eq!(result, Ok(Some(dir.path().join("notes.md"))));
+    assert_eq!(inner(result), Ok(Some(dir.path().join("notes.md"))));
 }
 
 #[test]
@@ -126,7 +141,7 @@ fn leading_flags_then_file_takes_file() {
         &args(&["--debug", "-v", p.to_str().unwrap()]),
         &cwd,
     );
-    assert_eq!(result, Ok(Some(p)));
+    assert_eq!(inner(result), Ok(Some(p)));
 }
 
 #[test]
@@ -135,7 +150,7 @@ fn double_dash_separator_is_skipped() {
     let p = touch(&dir, "y.md");
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&["--", p.to_str().unwrap()]), &cwd);
-    assert_eq!(result, Ok(Some(p)));
+    assert_eq!(inner(result), Ok(Some(p)));
 }
 
 #[test]
@@ -148,7 +163,7 @@ fn multiple_paths_takes_first() {
         &args(&[first.to_str().unwrap(), second.to_str().unwrap()]),
         &cwd,
     );
-    assert_eq!(result, Ok(Some(first)));
+    assert_eq!(inner(result), Ok(Some(first)));
     let _ = second; // suppress unused warning
 }
 
@@ -181,7 +196,7 @@ fn each_supported_extension_is_accepted() {
         let p = touch(&dir, &format!("doc.{ext}"));
         let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
         assert_eq!(
-            result,
+            inner(result),
             Ok(Some(p.clone())),
             "extension '.{ext}' should be accepted"
         );
@@ -194,7 +209,7 @@ fn extension_check_is_case_insensitive() {
     let p = touch(&dir, "DOC.MD");
     let cwd = std::env::current_dir().unwrap();
     let result = extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd);
-    assert_eq!(result, Ok(Some(p)));
+    assert_eq!(inner(result), Ok(Some(p)));
 }
 
 #[cfg(target_os = "windows")]
@@ -335,7 +350,7 @@ fn warm_start_single_instance_args_shape() {
 
     let result = extract_file_arg(&warm_args, &cwd);
     assert_eq!(
-        result,
+        inner(result),
         Ok(Some(target)),
         "warm-start arg shape must resolve the file path"
     );

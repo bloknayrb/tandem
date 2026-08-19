@@ -9,7 +9,7 @@
  *
  *   1. `bundle.fileAssociations[].ext` in `src-tauri/tauri.conf.json` — what the
  *      OS is told Tandem handles.
- *   2. `SUPPORTED_FILE_ASSOC_EXTS` in `src-tauri/src/lib.rs` — the desktop
+ *   2. `SUPPORTED_FILE_ASSOC_EXTS` in `src-tauri/src/open_candidate.rs` — the desktop
  *      shell's open-candidate filter (`validate_open_candidate`), applied to
  *      argv on Windows/Linux and to macOS `RunEvent::Opened` URLs alike. The
  *      argv branch gates `TANDEM_OPEN_FILE`; the Opened branch POSTs
@@ -55,9 +55,13 @@ function registeredAssociationExts(): string[] {
 }
 
 function rustAssocExts(): string[] {
-  const src = readFileSync(path.join(repoRoot, "src-tauri/src/lib.rs"), "utf-8");
+  // Moved out of `lib.rs` by #1415 along with the rest of the open-candidate
+  // cluster, so `ScreenedOpenPath`'s tuple field has a module boundary to be
+  // private to. The move failed both assertions below rather than silently
+  // stopping the check, which is exactly what this docblock promises.
+  const src = readFileSync(path.join(repoRoot, "src-tauri/src/open_candidate.rs"), "utf-8");
   const m = src.match(/SUPPORTED_FILE_ASSOC_EXTS:\s*&\[&str\]\s*=\s*&\[([^\]]*)\]/);
-  expect(m, "SUPPORTED_FILE_ASSOC_EXTS literal not found in lib.rs").toBeTruthy();
+  expect(m, "SUPPORTED_FILE_ASSOC_EXTS literal not found in open_candidate.rs").toBeTruthy();
   return [...(m as RegExpMatchArray)[1].matchAll(/"([^"]+)"/g)].map((x) => x[1].toLowerCase());
 }
 

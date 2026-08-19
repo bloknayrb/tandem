@@ -36,6 +36,38 @@ mod sidecar_job;
 #[cfg(test)]
 mod integrations_probe;
 
+/// OS open-candidate screening (#1415): `SUPPORTED_FILE_ASSOC_EXTS`, the two
+/// rejection enums and their reason-code mappers, `validate_open_candidate`,
+/// `extract_file_arg`, `classify_opened_url` — and `ScreenedOpenPath`, whose
+/// private tuple field is the whole reason this is a separate module rather
+/// than more of `lib.rs`. See that file's module docs for why the boundary,
+/// not the struct, is the mechanism.
+pub mod open_candidate;
+
+// Re-exported at the crate root: `src-tauri/tests/file_association.rs` imports
+// these as `app_lib::…`, and this file's `#[cfg(test)]` submodules reach them
+// through `use super::*`.
+pub use open_candidate::{
+    extract_file_arg, RejectionReason, ScreenedOpenPath, SUPPORTED_FILE_ASSOC_EXTS,
+};
+
+// `rejection_reason_code` has unconditional call sites here (the
+// `single-instance` callback and cold start). The other two are reached only
+// from the macOS-gated `handle_opened_urls`, so their import carries the same
+// cfg as the caller rather than an `allow(unused_imports)` — `test` is in the
+// set because `startup_rejection_tests` exercises them on every CI leg.
+pub(crate) use open_candidate::rejection_reason_code;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) use open_candidate::{classify_opened_url, opened_url_reason_code, OpenedUrlRejection};
+#[cfg(test)]
+pub(crate) use open_candidate::validate_open_candidate;
+
+// Bare `PathBuf` survives only in `cfg`-gated regions of this file — the
+// Windows Cowork self-heal pass and the `#[cfg(test)]` modules. Every
+// unconditionally-compiled use went to `open_candidate.rs` with the
+// open-candidate cluster (#1415), so an ungated import warns on the Linux and
+// macOS release builds.
+#[cfg(any(test, target_os = "windows"))]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -150,38 +182,6 @@ const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
 #[cfg(target_os = "windows")]
 const COWORK_HEAL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
-/// File extensions Tandem can open via OS file association. Keep aligned with
-/// `SUPPORTED_EXTENSIONS` in `src/shared/constants.ts` (re-exported through
-/// `src/server/mcp/file-opener.ts`) — server-side is the authority; this list is
-/// defense-in-depth, rejecting an obviously-wrong open candidate before an HTTP
-/// request is issued. Since #1344 that means BOTH surfaces: argv on
-/// Windows/Linux, and macOS `RunEvent::Opened` URLs.
-///
-/// "Keep aligned" was the whole instruction and it still drifted (#1306):
-/// `markdown` sat in this list and in `tauri.conf.json` while the server
-/// rejected it, and the failure is silent — `maybeOpenStartupFile` swallows the
-/// open error and falls through to `welcome.md`. The alignment is now pinned by
-/// `tests/build/file-association-alignment.test.ts`, which parses this literal
-/// out of the source, so renaming or reshaping the constant fails that test
-/// rather than silently stopping the check.
-///
-/// It must EQUAL the server's list, not merely be a subset of it. `htm` used to
-/// be omitted, on the reasoning that `.htm` is not OS-registered (`.html` alone
-/// is the association) so a double-click could never put one on argv. That was
-/// true of argv and false everywhere else: #1344 routed the macOS Apple Event
-/// through this same filter, and "Open With" and a Dock-icon drop deliver ANY
-/// file regardless of registration. Omitting `htm` therefore stopped being a
-/// no-op the moment the filter was shared, and refused a file the server
-/// accepts — while the same file dropped on the window still opened, because
-/// `useTauriFileDrop.svelte.ts` checks the server's list. Equality costs no
-/// defense (the server rejects everything else regardless) and deletes the
-/// drift axis instead of testing it.
-///
-/// `pub` rather than `pub(crate)` so `tests/file_association.rs` can iterate it
-/// instead of keeping a hand-copied duplicate.
-pub const SUPPORTED_FILE_ASSOC_EXTS: &[&str] =
-    &["md", "markdown", "txt", "html", "htm", "docx"];
-
 /// Set to `true` once the sidecar's /health endpoint has responded 200 AND the
 /// pending-opens queue has been drained. Read by the `RunEvent::Opened` handler
 /// to decide between posting immediately vs queueing. Static (process-wide):
@@ -273,18 +273,6 @@ fn with_rejection<R>(what: &str, f: impl FnOnce(&mut Option<String>) -> R) -> R 
 /// the payload is what makes the buffer the single source of truth, so a nudge
 /// with no listener costs nothing.
 const EVENT_STARTUP_FILE_REJECTED: &str = "startup-file-rejected";
-
-/// Map a typed [`RejectionReason`] to a stable, path-free reason code for the
-/// WebView toast bus. The code travels to the client through
-/// `get_startup_rejection`, never through the event payload; `App.svelte`'s
-/// reason-code→message map turns it into user-facing text.
-fn rejection_reason_code(reason: &RejectionReason) -> &'static str {
-    match reason {
-        RejectionReason::SuspiciousColon { .. } => "suspicious-path",
-        RejectionReason::UnsupportedExtension { .. } => "unsupported-extension",
-        RejectionReason::NotAFile { .. } => "not-a-file",
-    }
-}
 
 /// Record an already-mapped, path-free reason CODE in the buffer. The single
 /// writer — every entry point funnels through [`surface_startup_rejection`],
@@ -539,307 +527,7 @@ struct SidecarState(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 /// HTTP server was ready to accept `POST /api/open`. Drained once
 /// `wait_for_health()` returns Ok, then `SIDECAR_HEALTHY` is flipped so future
 /// events post directly.
-struct PendingOpens(Mutex<Vec<std::path::PathBuf>>);
-
-/// Why `extract_file_arg` rejected a candidate path. Carried in the `Err`
-/// variant of its return so callers can log a typed reason (and, in the
-/// future, surface a typed event to the WebView). See issue #630 — this is
-/// sub-task #1 of the broader rejection-surfacing work; downstream sub-tasks
-/// (Tauri event emission, buffered drain summaries, etc.) are tracked in a
-/// follow-up issue.
-///
-/// `Ok(None)` is used for the "no candidate arg" case (the user did not pass
-/// a file at all — e.g. cold-start with only flags). Only paths that were
-/// supplied but failed validation produce an `Err`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum RejectionReason {
-    /// On Windows, the resolved absolute path contains a `:` outside the
-    /// drive-letter slot (index 1). Catches NTFS Alternate Data Stream
-    /// syntax like `file.md:Zone.Identifier`. Carries the resolved absolute
-    /// `path` and the byte `index` of the offending colon — both are
-    /// security-relevant (ADS detection) and were logged inline before the
-    /// typed-reason refactor.
-    SuspiciousColon { path: std::path::PathBuf, index: usize },
-    /// The candidate's extension (lowercased) is not in
-    /// `SUPPORTED_FILE_ASSOC_EXTS`. `ext` is the offending extension (empty
-    /// when the path had no extension at all); `path` is the resolved
-    /// absolute path.
-    UnsupportedExtension { ext: String, path: std::path::PathBuf },
-    /// The resolved `path` does not exist as a regular file (missing, a
-    /// directory, or some other non-file inode).
-    NotAFile { path: std::path::PathBuf },
-}
-
-impl std::fmt::Display for RejectionReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RejectionReason::SuspiciousColon { path, index } => write!(
-                f,
-                "suspicious colon at byte index {index} in resolved path {}",
-                path.display()
-            ),
-            RejectionReason::UnsupportedExtension { ext, path } => {
-                if ext.is_empty() {
-                    write!(f, "missing/empty extension on path {}", path.display())
-                } else {
-                    write!(
-                        f,
-                        "unsupported extension '.{ext}' on path {}",
-                        path.display()
-                    )
-                }
-            }
-            RejectionReason::NotAFile { path } => {
-                write!(f, "not a regular file: {}", path.display())
-            }
-        }
-    }
-}
-
-/// Why `classify_opened_url` rejected a `file://`-style URL delivered via the
-/// macOS `RunEvent::Opened` Apple Event (`kAEOpenDocuments`). Distinct from
-/// `RejectionReason` (which classifies argv candidates): this enum classifies
-/// already-parsed `tauri::Url` values from the Opened-event surface. See issue
-/// #630, sub-task #3 (`classify_opened_url` extraction).
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum OpenedUrlRejection {
-    /// The URL's scheme is not `file` (e.g. `https://…`). Tandem only opens
-    /// local files from Opened events.
-    NonFileScheme,
-    /// The URL carries a non-empty host (e.g. `file://localhost/x` or the
-    /// SMB-style `file://smb-host/share`). RFC-8089 permits `localhost`, but
-    /// Tandem flags any host conservatively — an SMB host is a real security
-    /// concern and a `localhost` host is surprising for a desktop open.
-    NonEmptyHost,
-    /// `url.to_file_path()` failed to produce a filesystem path (e.g. a
-    /// `cannot-be-a-base` `file:` URL with no path component).
-    ConversionFailed,
-    /// The URL converted to a filesystem path, but that path failed the shared
-    /// [`validate_open_candidate`] checks (extension / regular-file). Wraps the
-    /// argv path's [`RejectionReason`] rather than mirroring its variants so the
-    /// reason-code strings have exactly one definition —
-    /// `opened_url_reason_code` delegates to `rejection_reason_code`, and a
-    /// third copy of `"unsupported-extension"` / `"not-a-file"` is precisely the
-    /// drift #1344 was.
-    ///
-    /// Every `RejectionReason` variant is reachable through here on the platform
-    /// that produces it — `SuspiciousColon` only where the ADS scan compiles
-    /// (Windows), which is why the wrapping is exact rather than aspirational.
-    /// Its production caller is macOS-only today, so that arm is currently
-    /// unreached; it is deliberately not *unreachable*, because a future
-    /// Windows Opened / deep-link handler must inherit the scan rather than
-    /// silently skip it. See [`validate_open_candidate`].
-    PathRejected(RejectionReason),
-}
-
-impl std::fmt::Display for OpenedUrlRejection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            OpenedUrlRejection::NonFileScheme => {
-                write!(f, "non-file URL from Opened event")
-            }
-            OpenedUrlRejection::NonEmptyHost => {
-                write!(f, "file URL with host from Opened event")
-            }
-            OpenedUrlRejection::ConversionFailed => {
-                write!(f, "failed to convert URL to file path")
-            }
-            // Delegate so the log line keeps the resolved path + detail the
-            // inner reason carries. Wire payloads stay path-free because they go
-            // through `opened_url_reason_code`, never through `Display`.
-            OpenedUrlRejection::PathRejected(reason) => {
-                write!(f, "rejected path from Opened event: {reason}")
-            }
-        }
-    }
-}
-
-/// Map an [`OpenedUrlRejection`] to a stable, path-free reason code for the
-/// WebView toast bus. Mirrors `rejection_reason_code` for the argv path; both
-/// codes are handled by the `startup-file-rejected` listener in `App.svelte`.
-///
-/// The `dead_code` allowance is because its only production caller is the
-/// macOS-gated `handle_opened_urls`; it stays compiled everywhere so the
-/// code-stability test runs on every CI leg.
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
-fn opened_url_reason_code(reason: &OpenedUrlRejection) -> &'static str {
-    match reason {
-        OpenedUrlRejection::NonFileScheme => "non-file-url",
-        OpenedUrlRejection::NonEmptyHost => "suspicious-path",
-        OpenedUrlRejection::ConversionFailed => "not-a-file",
-        // Pure delegation — no new code strings on this surface.
-        OpenedUrlRejection::PathRejected(reason) => rejection_reason_code(reason),
-    }
-}
-
-/// Classify a `file://`-style URL from the macOS Opened event into either an
-/// openable filesystem path or a typed rejection.
-///
-/// Rules (in order):
-/// - Reject any non-`file` scheme (`NonFileScheme`).
-/// - Reject any non-empty host (`NonEmptyHost`). `file://host/share/...`
-///   SMB-style URLs would surprise the user; require an empty/missing host.
-/// - Convert via `Url::to_file_path()`; a failure is `ConversionFailed`.
-/// - Validate the resulting path with the shared [`validate_open_candidate`]
-///   (extension + regular file); a failure is `PathRejected(..)`. This step was
-///   APPENDED, not interleaved — the first three gates are unchanged.
-///
-/// Unconditionally compiled and free of Tauri / Apple-Event plumbing (it reads
-/// only the filesystem), so it can be unit-tested cross-platform with tempfiles
-/// (the macOS Apple-Event delivery plumbing in `handle_opened_urls` is not
-/// unit-testable from Windows). Its only production caller is the macOS-gated
-/// `handle_opened_urls`. See issues #630 (sub-task #3) and #1344.
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
-pub(crate) fn classify_opened_url(url: &Url) -> Result<PathBuf, OpenedUrlRejection> {
-    if url.scheme() != "file" {
-        return Err(OpenedUrlRejection::NonFileScheme);
-    }
-    if url.host_str().map(|h| !h.is_empty()).unwrap_or(false) {
-        return Err(OpenedUrlRejection::NonEmptyHost);
-    }
-    let path =
-        url.to_file_path().map_err(|_| OpenedUrlRejection::ConversionFailed)?;
-    validate_open_candidate(path).map_err(OpenedUrlRejection::PathRejected)
-}
-
-/// ALL of the path-shaped open-candidate validation the desktop shell performs,
-/// in one place: the NTFS alternate-data-stream scan (Windows), UNC rejection,
-/// the extension allowlist, and the regular-file check. Shared by the argv path
-/// (`extract_file_arg`, used by Windows / Linux cold start and the
-/// `single-instance` warm-start callback) and the macOS `RunEvent::Opened` path
-/// (`classify_opened_url`).
-///
-/// One definition so the OS entry points cannot drift again: before #1344 these
-/// checks existed only inline inside `extract_file_arg`, so a macOS Finder
-/// double-click of a `.pdf` or a deleted path sailed through to `/api/open` and
-/// was refused server-side with nothing but a `log::warn!`.
-///
-/// The ADS scan lives HERE rather than in `extract_file_arg`, and that placement
-/// is the point. Guarding it with a `#[cfg]` on the *caller* was the same shape
-/// of bug as #1344 itself: this function is unconditionally compiled and
-/// `classify_opened_url` is too, so a future Windows or Linux Opened / deep-link
-/// handler would have inherited the extension and `is_file()` checks with no ADS
-/// scan — and `C:\x\notes:stream.md` has `extension() == "md"` and reports
-/// `is_file() == true` (Windows returns the base file's attributes for a stream
-/// path). A check whose safety depends on who happens to call it is not a check.
-///
-/// ORDER IS LOAD-BEARING. The ADS and UNC scans run before `is_file()`, because
-/// `is_file()` on a UNC path performs the SMB handshake — leaking an NTLM hash
-/// from the shell process on a path Tandem was never going to open (the server's
-/// `resolveAndValidatePath` refuses `\\` and `//` prefixes). A gate that runs
-/// after the syscall it is protecting against is decoration.
-///
-/// Takes and returns the `PathBuf` by value so neither caller has to clone it.
-///
-/// `SUPPORTED_FILE_ASSOC_EXTS` must MATCH the server's `SUPPORTED_EXTENSIONS`
-/// exactly — asserted as set equality by
-/// `tests/build/file-association-alignment.test.ts`. Making this the shared
-/// validator is what turned that list into a contract: an extension the server
-/// opens but this list omits becomes unopenable via "Open With" or a Dock drop
-/// while still opening when dropped on the *window* (`useTauriFileDrop.svelte.ts`
-/// validates against the server list). `.htm` was exactly that, briefly, and a
-/// per-surface difference in what counts as an openable file is not a policy
-/// anyone chose.
-fn validate_open_candidate(
-    absolute: std::path::PathBuf,
-) -> Result<std::path::PathBuf, RejectionReason> {
-    #[cfg(target_os = "windows")]
-    {
-        // Reject any colon outside the drive-letter position (index 1) on the
-        // resolved absolute path. Catches NTFS Alternate Data Stream syntax
-        // (`file.md:Zone.Identifier`) both when the colon lands at an absolute
-        // index >1 (e.g. `C:\tmp\file.md:ADS`) and when a relative candidate
-        // joined against `cwd` produces an absolute path with the suspicious
-        // colon. An earlier version scanned the un-joined candidate string,
-        // which let a relative `f:ADS.md` through (colon at index 1 of the
-        // *candidate*). Scanning the resolved absolute closes that gap, which
-        // is also why this must run on the already-joined path.
-        let absolute_str = absolute.to_string_lossy();
-        for (i, b) in absolute_str.as_bytes().iter().enumerate() {
-            if *b == b':' && i != 1 {
-                let index = i;
-                return Err(RejectionReason::SuspiciousColon { path: absolute, index });
-            }
-        }
-    }
-
-    // UNC / network paths, refused before any filesystem call touches them.
-    // Matches the server's `resolveAndValidatePath`, which rejects both
-    // prefixes — but the server refusing it is one HTTP hop too late to stop
-    // `is_file()` from having already performed the SMB handshake here.
-    if is_unc_or_network_path(&absolute.to_string_lossy()) {
-        return Err(RejectionReason::NotAFile { path: absolute });
-    }
-
-    let ext = absolute
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    if !SUPPORTED_FILE_ASSOC_EXTS.contains(&ext.as_str()) {
-        return Err(RejectionReason::UnsupportedExtension { ext, path: absolute });
-    }
-
-    // is_file() follows symlinks intentionally — the final read goes through
-    // server-side openFileByPath which is the authority for path validation
-    // (extension, size, UNC rejection, etc.). Resolving symlinks here would
-    // duplicate that check without adding defense in depth, since a symlink
-    // pointing at a disallowed target would be rejected on the server hop.
-    if !absolute.is_file() {
-        return Err(RejectionReason::NotAFile { path: absolute });
-    }
-
-    Ok(absolute)
-}
-
-/// Extract a file path to open from a process's command-line args.
-///
-/// Rules:
-/// - Skip the executable (args\[0\]).
-/// - Skip any arg whose first byte is `-` (covers both `-x` and `--long`).
-///   We do **not** parse `--key=value` style flags — the value is treated as
-///   part of the flag.
-/// - Skip a literal `--` separator.
-/// - Take the FIRST remaining arg.
-/// - Resolve relative to `cwd`.
-/// - Hand the resolved absolute path to the shared [`validate_open_candidate`],
-///   which owns EVERY path-shaped check: the Windows NTFS alternate-data-stream
-///   colon scan, UNC rejection, the `SUPPORTED_FILE_ASSOC_EXTS` allowlist
-///   (case-insensitive), and the regular-file check. The macOS
-///   `RunEvent::Opened` path runs the same helper (#1344). This function's own
-///   job is argv shape only — it deliberately performs no path validation of
-///   its own, because a check that lives at one entry point is a check the
-///   other entry point does not have.
-///
-/// Returns:
-/// - `Ok(Some(path))` — a validated, openable file path.
-/// - `Ok(None)` — no candidate file arg was supplied (cold-start without a
-///   file, all args were flags, etc.). Not a rejection.
-/// - `Err(RejectionReason::...)` — a candidate was supplied but failed
-///   validation. Each variant carries the resolved absolute path (and, for
-///   `SuspiciousColon`, the offending byte index) so callers can log a
-///   human-readable, diagnostic reason via the `Display` impl (`{reason}`,
-///   not `{reason:?}`) — matching the path + index detail logged inline
-///   before the typed-reason refactor.
-///
-/// This is `pub` so the integration test in `tests/file_association.rs` can
-/// exercise it.
-pub fn extract_file_arg(
-    args: &[String],
-    cwd: &std::path::Path,
-) -> Result<Option<std::path::PathBuf>, RejectionReason> {
-    let Some(candidate) =
-        args.iter().skip(1).find(|a| !a.starts_with('-') && a.as_str() != "--")
-    else {
-        return Ok(None);
-    };
-
-    let p = std::path::Path::new(candidate);
-    let absolute: std::path::PathBuf =
-        if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
-
-    validate_open_candidate(absolute).map(Some)
-}
+struct PendingOpens(Mutex<Vec<ScreenedOpenPath>>);
 
 /// POST `{ filePath }` to the sidecar's `/api/open` endpoint with the auth
 /// token as a Bearer header. Loopback currently bypasses Bearer enforcement
@@ -878,7 +566,7 @@ async fn request_open_file(
 /// flag access through it and closes every TOCTOU window where a producer's
 /// load-before-push could orphan a path. See the doc comment on
 /// `try_queue_or_post` for the full ordering argument.
-pub(crate) fn promote_healthy_and_drain(state: &PendingOpens) -> Vec<std::path::PathBuf> {
+pub(crate) fn promote_healthy_and_drain(state: &PendingOpens) -> Vec<ScreenedOpenPath> {
     let mut guard = match state.0.lock() {
         Ok(g) => g,
         Err(poisoned) => {
@@ -927,8 +615,8 @@ pub(crate) fn clear_healthy_under_lock(state: &PendingOpens) {
 #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
 pub(crate) fn try_queue_or_post(
     state: &PendingOpens,
-    path: std::path::PathBuf,
-) -> Result<(), std::path::PathBuf> {
+    path: ScreenedOpenPath,
+) -> Result<(), ScreenedOpenPath> {
     let mut guard = match state.0.lock() {
         Ok(g) => g,
         Err(poisoned) => {
@@ -948,7 +636,7 @@ pub(crate) fn try_queue_or_post(
 /// POST every queued path to `/api/open`. The flag flip + drain has already
 /// happened atomically in `promote_healthy_and_drain`; this just runs the I/O.
 async fn post_drained_paths(
-    paths: Vec<std::path::PathBuf>,
+    paths: Vec<ScreenedOpenPath>,
     client: &reqwest::Client,
 ) {
     if paths.is_empty() {
@@ -1474,7 +1162,7 @@ pub fn run() {
             // any later `restart_sidecar` (which passes `None`) never re-opens
             // the file. This is the only argv read for file-association — no
             // global statics, no env-var side effects.
-            let cold_start_file: Option<std::path::PathBuf> = {
+            let cold_start_file: Option<ScreenedOpenPath> = {
                 let args: Vec<String> = std::env::args().collect();
                 let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 match extract_file_arg(&args, &cwd) {
@@ -2018,7 +1706,7 @@ fn show_server_error_dialog(
     app: &tauri::AppHandle,
     error: &str,
     holder: Option<PortHolder>,
-    cold_start_file: Option<std::path::PathBuf>,
+    cold_start_file: Option<ScreenedOpenPath>,
     allow_retry: bool,
 ) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -2157,7 +1845,7 @@ fn show_server_error_dialog(
 /// `/\host\share` and `\/host/share` are UNC too — enumerating `\\` and `//`
 /// alone was a two-character bypass of this and of both TypeScript predicates
 /// (#1417).
-fn is_unc_or_network_path(path: &str) -> bool {
+pub(crate) fn is_unc_or_network_path(path: &str) -> bool {
     let mut chars = path.chars();
     matches!(
         (chars.next(), chars.next()),
@@ -5361,7 +5049,6 @@ async fn perform_install(
 #[cfg(test)]
 mod pending_opens_tests {
     use super::*;
-    use std::path::PathBuf;
     use std::sync::Mutex;
 
     // Serialize tests that mutate SIDECAR_HEALTHY (a process-wide static).
@@ -5371,20 +5058,42 @@ mod pending_opens_tests {
         PendingOpens(Mutex::new(Vec::new()))
     }
 
+    /// The only way this module can produce a queue element since #1415:
+    /// create a real supported file and run it through the screener.
+    ///
+    /// Before the newtype these tests wrote `PathBuf::from("a")` straight into
+    /// `state.0` and handed `PathBuf::from("queued")` to `try_queue_or_post`.
+    /// Both are now `error[E0308]: mismatched types` — that compiler refusal,
+    /// not any assertion below, is the guarantee the issue asked for. What the
+    /// assertions still cover is unchanged: FIFO drain order, the
+    /// queue-vs-direct-POST branch, and the two lock-ordering proofs.
+    ///
+    /// Note this module is a SIBLING of `open_candidate`, not a descendant, so
+    /// it cannot reach the private tuple field either — a `#[cfg(test)] mod`
+    /// living inside `open_candidate.rs` could, which is why none does.
+    fn screened(dir: &tempfile::TempDir, stem: &str) -> ScreenedOpenPath {
+        let path = dir.path().join(format!("{stem}.md"));
+        std::fs::write(&path, b"x").expect("write fixture");
+        validate_open_candidate(path).expect("fixture must pass the screener")
+    }
+
     #[test]
     fn promote_healthy_and_drain_returns_fifo_and_clears_queue() {
         let _g = FLAG_LOCK.lock().unwrap();
         SIDECAR_HEALTHY.store(false, Ordering::Release);
 
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let (a, b, c) = (screened(&dir, "a"), screened(&dir, "b"), screened(&dir, "c"));
+
         let state = fresh_state();
-        state.0.lock().unwrap().push(PathBuf::from("a"));
-        state.0.lock().unwrap().push(PathBuf::from("b"));
-        state.0.lock().unwrap().push(PathBuf::from("c"));
+        state.0.lock().unwrap().push(a.clone());
+        state.0.lock().unwrap().push(b.clone());
+        state.0.lock().unwrap().push(c.clone());
 
         let drained = promote_healthy_and_drain(&state);
         assert_eq!(
             drained,
-            vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")],
+            vec![a, b, c],
             "drain order should match push order"
         );
         assert!(state.0.lock().unwrap().is_empty(), "queue should be cleared");
@@ -5415,12 +5124,15 @@ mod pending_opens_tests {
         let _g = FLAG_LOCK.lock().unwrap();
         SIDECAR_HEALTHY.store(false, Ordering::Release);
 
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let queued = screened(&dir, "queued");
+
         let state = fresh_state();
-        let result = try_queue_or_post(&state, PathBuf::from("queued"));
+        let result = try_queue_or_post(&state, queued.clone());
         assert!(result.is_ok());
         assert_eq!(
             *state.0.lock().unwrap(),
-            vec![PathBuf::from("queued")],
+            vec![queued],
             "path should be in queue"
         );
     }
@@ -5430,11 +5142,14 @@ mod pending_opens_tests {
         let _g = FLAG_LOCK.lock().unwrap();
         SIDECAR_HEALTHY.store(true, Ordering::Release);
 
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let direct = screened(&dir, "direct");
+
         let state = fresh_state();
-        let result = try_queue_or_post(&state, PathBuf::from("direct"));
+        let result = try_queue_or_post(&state, direct.clone());
         assert_eq!(
             result,
-            Err(PathBuf::from("direct")),
+            Err(direct),
             "caller should be handed back the path to POST directly"
         );
         assert!(state.0.lock().unwrap().is_empty(), "no queue side effect");
@@ -5461,12 +5176,11 @@ mod pending_opens_tests {
 
         // Late producer arriving after the clear observes flag=false and
         // queues the path instead of POSTing.
-        let result = try_queue_or_post(&state, PathBuf::from("after-restart"));
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let late = screened(&dir, "after-restart");
+        let result = try_queue_or_post(&state, late.clone());
         assert_eq!(result, Ok(()));
-        assert_eq!(
-            *state.0.lock().unwrap(),
-            vec![PathBuf::from("after-restart")]
-        );
+        assert_eq!(*state.0.lock().unwrap(), vec![late]);
 
         SIDECAR_HEALTHY.store(false, Ordering::Release);
     }
@@ -5480,19 +5194,23 @@ mod pending_opens_tests {
         let _g = FLAG_LOCK.lock().unwrap();
         SIDECAR_HEALTHY.store(false, Ordering::Release);
 
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let early = screened(&dir, "early");
+        let late = screened(&dir, "late");
+
         let state = fresh_state();
-        state.0.lock().unwrap().push(PathBuf::from("early"));
+        state.0.lock().unwrap().push(early.clone());
 
         // Consumer side.
         let drained = promote_healthy_and_drain(&state);
-        assert_eq!(drained, vec![PathBuf::from("early")]);
+        assert_eq!(drained, vec![early]);
 
         // Late producer that read flag=false BEFORE the consumer ran can only
         // mutate the queue while holding the lock; once it does, it sees
         // flag=true (set inside the same lock) and the helper hands the path
         // back instead of queuing it.
-        let result = try_queue_or_post(&state, PathBuf::from("late"));
-        assert_eq!(result, Err(PathBuf::from("late")));
+        let result = try_queue_or_post(&state, late.clone());
+        assert_eq!(result, Err(late));
         assert!(state.0.lock().unwrap().is_empty());
 
         SIDECAR_HEALTHY.store(false, Ordering::Release);
@@ -6733,7 +6451,7 @@ mod classify_opened_url_tests {
         std::os::unix::fs::symlink(&target, &link).expect("symlink");
 
         assert_eq!(
-            validate_open_candidate(link.clone()),
+            validate_open_candidate(link.clone()).map(ScreenedOpenPath::into_inner),
             Ok(link),
             "a symlink to a supported regular file must be accepted, not resolved away"
         );
@@ -6753,7 +6471,7 @@ mod classify_opened_url_tests {
         std::fs::write(&path, b"x").expect("write fixture");
         let url = Url::from_file_path(&path).expect("absolute path -> file URL");
         assert_eq!(
-            classify_opened_url(&url),
+            classify_opened_url(&url).map(ScreenedOpenPath::into_inner),
             Ok(path),
             "the extension match must be case-insensitive on the Opened path"
         );
