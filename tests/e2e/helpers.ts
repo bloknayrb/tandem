@@ -172,14 +172,6 @@ export async function switchToAnnotationsTab(page: Page): Promise<void> {
 }
 
 /**
- * Open the selection popup's annotate mode. Wave M (PR #776) split the popup
- * into two surfaces — selection shows the action surface (formatting +
- * highlight swatches + Annotate button); clicking Annotate reveals the
- * textarea-bearing annotate mode (`popup-annotation-input`,
- * `popup-comment-submit`, `popup-note-submit`). Tests that interact with the
- * textarea or submit buttons must call this helper after selecting text.
- */
-/**
  * Select a locator's text and wait until the selection actually took.
  *
  * `locator.selectText()` is a one-shot `createRange()` + `addRange()`.
@@ -199,16 +191,39 @@ export async function switchToAnnotationsTab(page: Page): Promise<void> {
  * contenteditable, correct paragraph count and text — the selection simply is not
  * there.
  *
- * Re-issuing it is enough, so poll until the DOM reports a non-empty selection.
+ * Re-issuing it is enough, so poll until the selection is really there. Two
+ * details of that check are load-bearing, because the obvious version of it
+ * reports success in cases where nothing was selected:
+ *
+ * - **It asserts the range is inside `target`, not merely that the document has
+ *   one.** The clobber path restores ProseMirror's own `state.selection`, which
+ *   is collapsed only when the last real interaction was a click. Called with a
+ *   non-empty selection already standing, a document-wide emptiness check would
+ *   read the *previous* range and pass without ever selecting `target`.
+ * - **It re-reads after a settle rather than immediately.** On the selection
+ *   path `DOMObserver.onSelectionChange` flushes synchronously, but a flush
+ *   queued by a *content* mutation is deferred 20ms by `flushSoon()`, and
+ *   `flush()` ends by restoring `currentSelection` via `selectionToDOM`. An
+ *   immediate read can therefore observe a selection that is already doomed —
+ *   the poll passes, the helper returns, and the caller fails exactly as it did
+ *   before this helper existed.
+ *
  * Prefer this over a bare `selectText()` anywhere the test then expects the
  * selection popup.
  */
-export async function selectTextStable(page: Page, target: Locator): Promise<void> {
+export async function selectTextStable(target: Locator): Promise<void> {
   await expect
     .poll(
       async () => {
         await target.selectText();
-        return page.evaluate(() => (window.getSelection()?.toString() ?? "").length);
+        return target.evaluate(async (el) => {
+          // Outlast a mutation-triggered `flushSoon()` (20ms) so the value read
+          // below is the selection that survives, not one about to be undone.
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          const sel = window.getSelection();
+          if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+          return el.contains(sel.getRangeAt(0).commonAncestorContainer);
+        });
       },
       {
         timeout: 5_000,
@@ -216,9 +231,17 @@ export async function selectTextStable(page: Page, target: Locator): Promise<voi
           "programmatic selection never took — ProseMirror clobbered every attempt (see selectTextStable)",
       },
     )
-    .toBeGreaterThan(0);
+    .toBe(true);
 }
 
+/**
+ * Open the selection popup's annotate mode. Wave M (PR #776) split the popup
+ * into two surfaces — selection shows the action surface (formatting +
+ * highlight swatches + Annotate button); clicking Annotate reveals the
+ * textarea-bearing annotate mode (`popup-annotation-input`,
+ * `popup-comment-submit`, `popup-note-submit`). Tests that interact with the
+ * textarea or submit buttons must call this helper after selecting text.
+ */
 export async function openAnnotatePopup(page: Page): Promise<void> {
   const annotateBtn = page.locator("[data-testid='popup-annotate-btn']");
   await expect(annotateBtn).toBeVisible({ timeout: 3_000 });

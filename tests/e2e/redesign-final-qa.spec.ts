@@ -237,7 +237,7 @@ test.describe("forced colors / high contrast", () => {
 
     const editor = page.locator(".tiptap");
     await editor.click();
-    await selectTextStable(page, editor.locator("p").first());
+    await selectTextStable(editor.locator("p").first());
 
     await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeEnabled({
       timeout: 3_000,
@@ -319,7 +319,7 @@ test.describe("toolbar re-theming", () => {
     // Select text so the floating toolbar mounts.
     const editor = page.locator(".tiptap");
     await editor.click();
-    await selectTextStable(page, editor.locator("p").first());
+    await selectTextStable(editor.locator("p").first());
     await expect(page.locator("[data-testid='toolbar-highlight-color-toggle']")).toBeVisible({
       timeout: 5_000,
     });

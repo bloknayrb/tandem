@@ -88,7 +88,7 @@ test("#768 Bug 1: highlight applies without lingering browser selection overlay"
     timeout: 10_000,
   });
   await editor.click();
-  await selectTextStable(page, editor.locator("p").first());
+  await selectTextStable(editor.locator("p").first());
 
   // The highlight swatch is part of the (default, non-annotate-mode) selection
   // popup; it appears as soon as the selection is non-empty and the popup
@@ -148,7 +148,7 @@ test("#768 Bug 2 (click): clicking a highlight overlapping a Claude comment focu
   // selection popup. The new highlight covers the same range as the Claude
   // comment, so the two decorations coalesce into one span.
   const heading = editor.locator("h1").first();
-  await selectTextStable(page, heading);
+  await selectTextStable(heading);
 
   const yellowSwatch = page.locator("[data-testid='popup-highlight-yellow']");
   await expect(yellowSwatch).toBeVisible({ timeout: 5_000 });
@@ -201,7 +201,7 @@ test("#768 Bug 2 (no steal): a new Claude comment on the same range must not ste
 
   // 1) Create and focus the highlight.
   const heading = editor.locator("h1").first();
-  await selectTextStable(page, heading);
+  await selectTextStable(heading);
   const yellowSwatch = page.locator("[data-testid='popup-highlight-yellow']");
   await expect(yellowSwatch).toBeVisible({ timeout: 5_000 });
   await yellowSwatch.click();

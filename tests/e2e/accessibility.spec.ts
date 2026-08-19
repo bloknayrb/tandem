@@ -193,7 +193,7 @@ async function bootWithContent(page: Page) {
 async function selectFirstParagraph(page: Page) {
   const editor = page.locator(".tiptap");
   await editor.click();
-  await selectTextStable(page, editor.locator("p").first());
+  await selectTextStable(editor.locator("p").first());
 }
 
 type Surface = {
