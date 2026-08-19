@@ -123,8 +123,40 @@ test("docx reviewer comments import as private notes, then batch-promote to Clau
   // (e.g. "Assistant" fallback), not a hardcoded "Claude".
   await expect(confirm).toContainText("Send 2 to");
 
-  // --- Promote.
+  // --- Promote. Two steps since #1444: this action rewrites the author of
+  // imported comments to the user and has no undo, so it is gated like the
+  // reversible bulk actions next to it. Assert the warning copy, not just the
+  // button — the sentence naming the consequence IS the gate, and a refactor
+  // that dropped it would otherwise still pass.
   await confirm.click();
+  await expect(bar).toContainText("This cannot be undone");
+  // The confirm replaces the whole row rather than appending to it — the count
+  // and Clear are gone while it is up, which is what keeps the row inside a
+  // 200px rail. Cancel is the exit back to them.
+  await expect(page.locator("[data-testid='batch-promote-clear']")).toHaveCount(0);
+  await expect(page.locator("[data-testid='batch-promote-count']")).toHaveCount(0);
+
+  // --- The confirm must not outlive the selection that requested it.
+  // Regression: the confirm flag was gated only by a `$derived` term on the
+  // selection size, which MASKS a stale `true` while the bar is unmounted
+  // rather than clearing it. So emptying the selection and then re-checking a
+  // single import re-mounted the bar directly into the confirm branch — warning
+  // copy shown and focus stolen to the commit button — with nothing requested.
+  // Unchecking is the reachable path to that state now that Clear is hidden
+  // here; it drives the same invariant through `toggleImportSelection`.
+  for (let i = 0; i < 2; i++) await checkboxes.nth(i).uncheck();
+  await expect(bar).toHaveCount(0);
+  await checkboxes.first().check();
+  await expect(bar).toBeVisible();
+  await expect(page.locator("[data-testid='batch-promote-commit']")).toHaveCount(0);
+  await expect(confirm).toBeVisible();
+
+  // Re-request on the full selection and commit for real.
+  await checkboxes.nth(1).check();
+  await expect(confirm).toContainText("Send 2 to");
+  await confirm.click();
+  await expect(bar).toContainText("This cannot be undone");
+  await page.locator("[data-testid='batch-promote-commit']").click();
 
   // The bar clears once the selection is promoted.
   await expect(bar).toHaveCount(0, { timeout: 5_000 });

@@ -262,10 +262,10 @@ const primaryAnnotationIntent = $derived(defaultAnnotationIntent(annotationInten
 // click-away path at the `showPopup` effect deliberately KEEPS the text while
 // the textarea has focus, for recovery. So "draft" would overstate durability
 // in one direction and understate it in the other.)
-// Labelling the AUDIENCE instead is honest and more useful — it is the only
-// *resting* surface stating ADR-027's primary axis (private vs outbound), which
-// is otherwise inferable only from the placeholder or from which button carries
-// `.is-primary`.
+// Labelling the AUDIENCE instead is honest and more useful — it is one of only
+// three resting surfaces stating ADR-027's primary axis (private vs outbound).
+// The other two are the placeholder and whether the Send button renders a key
+// hint (#1444 removed the primary/secondary treatment that used to be a fourth).
 const composerAudience = $derived(
   primaryAnnotationIntent === "note" ? "Private note" : `To ${agentLabel.family}`,
 );
@@ -1023,8 +1023,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
         <div class="composer-actions">
           <button
             type="button"
-            class="composer-btn composer-btn-note"
-            class:is-primary={primaryAnnotationIntent === "note"}
+            class="composer-btn"
             data-testid="popup-note-submit"
             aria-label={primaryAnnotationIntent === "note"
               ? "Note to self (Ctrl+Enter)"
@@ -1035,6 +1034,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
             disabled={!annotationTextTrimmed}
             onclick={submitAsNote}
           >
+            <span class="composer-dest composer-dest-user" aria-hidden="true"></span>
             Note to self
             <kbd class="composer-kbd"
               >{primaryAnnotationIntent === "note" ? sendHintKbd : noteHintKbd}</kbd
@@ -1042,8 +1042,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
           </button>
           <button
             type="button"
-            class="composer-btn composer-btn-send"
-            class:is-primary={primaryAnnotationIntent === "comment"}
+            class="composer-btn"
             data-testid="popup-comment-submit"
             aria-label={primaryAnnotationIntent === "comment"
               ? `Send to ${agentLabel.family} (Ctrl+Enter)`
@@ -1054,7 +1053,16 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
             disabled={!annotationTextTrimmed}
             onclick={submitAsComment}
           >
+            <span class="composer-dest" aria-hidden="true"></span>
             Send to {agentLabel.family}
+            <!-- The guard is truthful, not a leftover of the old primary/
+                 secondary styling, and #1444 makes it load-bearing. In note
+                 intent NO keystroke submits a comment — resolveAnnotationSubmission
+                 returns "note" for Alt+Enter and defaultAnnotationIntent passes
+                 "note" through for Ctrl/Cmd+Enter — so printing a key here would
+                 either duplicate Note's or claim Alt+Enter sends. With the
+                 primary treatment gone, the presence or absence of this hint is
+                 the resting intent signal, alongside the eyebrow. -->
             {#if primaryAnnotationIntent === "comment"}
               <kbd class="composer-kbd">{sendHintKbd}</kbd>
             {/if}
@@ -1197,20 +1205,42 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
      (pill body --tandem-surface, hairline --tandem-border, --c7-pill-shadow)
      is already applied by .selection-popup.is-annotate above; these rules
      cover the composer internals. Controls follow A8's format-button sizing
-     (28px height, --tandem-r-3 radius). The Send button adopts A8's coral
-     comment treatment — tinted coral keyed to the annotation action, NOT a
-     filled brand-color CTA ("tinted, not shouting") — via the author-claude
-     family tokens, whose WCAG ratios are documented at their definitions in
-     index.html. Note to self stays ghost/monochrome per A8's "bubble menus
-     stay monochrome" principle. ADR-027 structure (Note = private, Send =
-     outbound) and keybindings are unchanged. */
+     (28px height).
+
+     #1444 superseded #1006's colour and shape decisions here. #1006 gave Send a
+     tinted-coral treatment and left Note ghost/monochrome; the annotation card
+     independently gave its Send an accent treatment, so the same action shipped
+     in two colour families with two written rationales. Neither family wins:
+     both buttons are colour-neutral and CO-EQUAL (there is no primary — the
+     audience choice is a fork, not a recommendation), and a destination marker
+     carries what the fill used to. Radius is --tandem-r-pill, not the A8
+     --tandem-r-3, so the shape matches the card and batch-bar Sends.
+     ADR-027 structure (Note = private, Send = outbound) and keybindings are
+     unchanged. See docs/design-system-impl/conflicts-resolved.md. */
   .composer-card {
     display: flex;
     flex-direction: column;
     gap: var(--tandem-space-2);
     padding: var(--tandem-space-2);
     min-width: 260px;
-    max-width: 360px;
+    /* 420px, raised from 360px by #1444. The destination markers cost 10px +
+       gap each, which consumed the entire margin the old cap had: measured in
+       the browser at spacious density with Windows key hints (longer than the
+       mac glyphs), the actions row needs 374px for "Claude" and 385px for
+       "Assistant" — both over 360, so `Note to self` clipped on its LEFT.
+       (Overflow in a `justify-content: flex-end` row with no `flex-wrap` spills
+       off the start side, and `.morph-block` is `overflow: clip`, so the symptom
+       is a silently truncated label, not a wrapped row.)
+
+       Sized for headroom rather than to the current worst case, because the
+       label is an agent family name and #1123 brings longer ones: 420 also
+       clears "Local model" (403) and "GPT-5 Codex" (408).
+
+       Safe against the position clamp: computeSelectionToolbarPosition derives
+       maxLeft from the MEASURED toolbarWidth, so a wider card is pinned into
+       the viewport rather than overflowing it. Height is untouched at 28px, so
+       SELECTION_POPUP_HEIGHT_RESERVE is not back in scope. */
+    max-width: 420px;
   }
   /* Sized off --tandem-text-2xs with tracking so the eyebrow reads as a label
      rather than as the first line of the user's own text. */
@@ -1323,26 +1353,28 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     padding: var(--tandem-space-2) var(--tandem-space-2) 0;
     border-top: 1px solid var(--tandem-border);
   }
-  /* #1385: no `flex: 1` (equal-width twins read as equal weight — sizing each
-     to its content is where most of the new hierarchy comes from, and unlike a
-     filled-accent pill it contradicts no recorded decision), and the ghost
-     treatment is the BASE rule here rather than a Note-specific one. That is
-     what keeps the hierarchy intent-responsive: openRequestedComposer("note")
-     makes Note primary, and the `.is-primary` variants below win on
-     specificity, so whichever button is secondary is the ghost. `transparent`
-     borders rather than none, so the row does not reflow when intent flips. */
+  /* #1444: one rule, both buttons — there is no primary variant to override it.
+     #1385's `flex: 1` removal stands (content-sized, so the row's width is the
+     sum of two labels). The border is unconditional now: #1385 made it
+     `transparent` so the row would not reflow when a `.is-primary` variant
+     swapped in an opaque one, and with no variants left there is nothing to
+     reflow against.
+
+     muted -> sunk on hover darkens in every theme and always AWAY from the
+     --tandem-surface card behind it, which is why rest is `muted` rather than
+     the `sunk` an earlier draft used. */
   .composer-btn {
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--tandem-fg-muted);
+    border: 1px solid var(--tandem-border-strong);
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg);
     font-weight: 500;
-    /* Content-sized now that `flex: 1` is gone, so the row's width is the sum
-       of two labels. Fits today with room to spare, but `nowrap` keeps a long
-       agent family name from wrapping text out of the fixed 28px height. */
+    /* `nowrap` keeps a long agent family name from wrapping text out of the
+       fixed 28px height; the destination markers cost another 10px + gap each,
+       which is why .composer-card's cap moved to 420px. */
     white-space: nowrap;
     height: 28px;
     padding: 0 var(--tandem-space-3);
-    border-radius: var(--tandem-r-3);
+    border-radius: var(--tandem-r-pill);
     font-size: var(--tandem-text-sm);
     font-family: inherit;
     cursor: pointer;
@@ -1362,53 +1394,50 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     outline: 2px solid var(--tandem-accent);
     outline-offset: 1px;
   }
-  /* `:not(.is-primary)` is required, not decorative. `:not(:disabled)` weighs
-     as a pseudo-class, so a bare `.composer-btn:hover:not(:disabled)` scores
-     (0,3,0) and outranks `.composer-btn-send.is-primary` at (0,2,0) — hovering
-     the primary button would drop its authorship colour for `--tandem-fg`,
-     which is what the pre-#1385 selectors did too and is why the hover comment
-     below could claim a contrast pairing that never actually rendered. */
-  .composer-btn:not(.is-primary):hover:not(:disabled) {
+  .composer-btn:hover:not(:disabled) {
     background: var(--tandem-surface-sunk);
-    color: var(--tandem-fg);
   }
-  .composer-btn-send.is-primary {
-    border: 1px solid var(--tandem-author-claude-border);
-    background: var(--tandem-author-claude-bg);
-    color: var(--tandem-author-claude-fg-strong);
-    font-weight: 600;
+  /* #1444 destination marker. Filled disc = the agent, ring = yourself.
+     SHAPE, not just colour: --tandem-author-user and --tandem-author-claude
+     BOTH map to CanvasText under forced colors (index.html), so a colour-only
+     marker collapses to two identical dots. The filled one carries a border in
+     its own colour so that under forcing the border resolves to CanvasText on
+     both while the background stays filled on one and `transparent` — which is
+     forcing-exempt — on the other. No forced-colors rule needed.
+
+     10px/2px, not 8px/2px: an 8px box leaves a 4px aperture that reads as a
+     filled dot at 100% zoom, which would defeat the whole shape argument.
+
+     The colours are LITERAL rather than agentColor(): the destination is known,
+     but agentColor keys on a per-record AgentIdentity no prospective control
+     has, and the per-agent palette is inert while BYO_MODELS_ENABLED is false.
+     "Send to GPT" would therefore get a coral disc — unreachable today, #1123
+     M4's problem.
+
+     Declared per component on purpose. Svelte scopes and prunes per compound
+     selector, so grouping this with .aca-dest across files would emit
+     css_unused_selector and fail `svelte-check --fail-on-warnings`. The twin
+     copies live in AnnotationCardActions.svelte and BatchPromoteBar.svelte —
+     nothing enforces the sync, so change all three together. */
+  .composer-dest {
+    box-sizing: border-box;
+    width: 10px;
+    height: 10px;
+    border-radius: var(--tandem-r-circle);
+    border: 2px solid var(--tandem-author-claude);
+    background: var(--tandem-author-claude);
+    flex-shrink: 0;
   }
-  /* Hover deepens the tint from the same seed in both themes (light: 12%
-     more coral over the near-white tint; dark: a warmer lift of #4d2419).
-     fg-strong holds ≥4.5:1 against both hover composites. */
-  .composer-btn-send.is-primary:hover:not(:disabled) {
-    background: color-mix(
-      in srgb,
-      var(--tandem-author-claude) 12%,
-      var(--tandem-author-claude-bg)
-    );
-  }
-  .composer-btn-note.is-primary {
+  .composer-dest-user {
     border-color: var(--tandem-author-user);
-    background: var(--tandem-author-user-bg);
-    color: var(--tandem-fg);
-    font-weight: 600;
-  }
-  .composer-btn-note.is-primary:hover:not(:disabled) {
-    background: color-mix(
-      in srgb,
-      var(--tandem-author-user) 12%,
-      var(--tandem-author-user-bg)
-    );
+    background: transparent;
   }
   .composer-kbd {
     font-family: var(--tandem-font-mono);
     font-size: var(--tandem-text-2xs);
-  }
-  .composer-btn:not(.is-primary) .composer-kbd {
-    color: var(--tandem-fg-subtle);
-  }
-  .composer-btn.is-primary .composer-kbd {
-    color: inherit;
+    /* -muted, not -subtle. With the primary treatment gone this hint is the
+       only element stating which key commits which action, so it takes the
+       louder of the two quiet tokens. */
+    color: var(--tandem-fg-muted);
   }
 </style>

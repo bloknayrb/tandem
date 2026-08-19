@@ -190,8 +190,25 @@ let scrollContainerEl: HTMLDivElement | undefined = $state();
 
 // Confirm button element (from BulkActions)
 let confirmBtnEl: HTMLButtonElement | null = $state(null);
+// ...and the separate one from BatchPromoteBar (#1444). Deliberately NOT the
+// same variable: both bars can be on screen at once, so a single `bind:this`
+// target would be won by whichever mounts last (BulkActions) and BulkActions'
+// bind sits inside its own {#if}, so its teardown writes null over the other.
+let promoteConfirmBtnEl: HTMLButtonElement | null = $state(null);
 
-// Focus confirm button when bulk confirmation appears
+// Focus each confirm button when its own confirmation appears. Read-only —
+// .focus() writes no reactive state, so there is no effect-depth hazard.
+//
+// Deliberately TWO effects rather than one if/else. Both bars can be on screen
+// at once, so a single effect would depend on all four values and re-run when
+// either bar changed — and the `else` branch would then fire on the *other*
+// bar's state. Concretely: cancel a promote confirm while a bulk confirm is
+// pending and focus jumps to the bulk Confirm button, parking the keyboard on
+// "reject every pending annotation" one Enter away from an action the user
+// never asked for. Split, neither effect observes the other's dependencies.
+$effect(() => {
+  if (promoteConfirm) promoteConfirmBtnEl?.focus();
+});
 $effect(() => {
   if (bulkConfirm) confirmBtnEl?.focus();
 });
@@ -490,6 +507,30 @@ function handleBulk(status: "accepted" | "dismissed") {
 // inline so prune isn't a render-time side effect.
 let selectedImportIds = $state(new Set<string>());
 
+// #1444: batch promote is the one bulk action with no undo — promotedAnnotation
+// rewrites author "import" -> "user", so the user is attributed as the author of
+// text they did not write, in bulk. It used to lean on a solid accent fill as
+// its only "this is consequential" signal; that fill is gone, so it gets a real
+// gate instead. Kept OFF bulkConfirm on purpose: BulkActions branches on
+// `{#if bulkConfirm}` truthiness, so a third value there would render its row as
+// "Reject N annotations?" wired to the dismiss path.
+//
+// The confirm sentence names a COUNT, so any change to the selection
+// invalidates it — every mutation site therefore resets the flag (there are
+// four: toggle, clear, prune, promote). The derived's `size > 0` term is a
+// structural backstop, NOT the reset: it only masks a stale `true` while the
+// bar is unmounted. Relying on it alone was a bug — Clear left the flag set,
+// and re-checking a single import re-mounted the bar straight into the confirm
+// branch, warning text and stolen focus included, with nothing requested.
+//
+// Clear is no longer rendered during the confirm (the row is swapped whole, for
+// width), so its reset is currently only reachable from the rest state, where
+// the flag is already false. It stays anyway: the four sites are one invariant —
+// a selection change invalidates a pending confirm — and which of them the
+// markup happens to expose is not something this state should depend on.
+let promoteConfirmRequested = $state(false);
+const promoteConfirm = $derived(promoteConfirmRequested && selectedImportIds.size > 0);
+
 $effect(() => {
   // Prune against the FILTERED visible list, not the raw annotations list:
   // if FilterBar hides imports, the BatchPromoteBar must clear too, otherwise
@@ -501,7 +542,10 @@ $effect(() => {
   // write doesn't re-trigger this effect and cause a double-run loop.
   untrack(() => {
     const pruned = new Set([...selectedImportIds].filter((id) => validIds.has(id)));
-    if (pruned.size !== selectedImportIds.size) selectedImportIds = pruned;
+    if (pruned.size !== selectedImportIds.size) {
+      selectedImportIds = pruned;
+      promoteConfirmRequested = false;
+    }
   });
 });
 
@@ -510,16 +554,19 @@ function toggleImportSelection(id: string) {
   if (next.has(id)) next.delete(id);
   else next.add(id);
   selectedImportIds = next;
+  promoteConfirmRequested = false;
 }
 
 function handleBatchPromote() {
   const ids = Array.from(selectedImportIds);
   promoteNotesToComments(ydoc, ids, tandemMode);
   selectedImportIds = new Set();
+  promoteConfirmRequested = false;
 }
 
 function handleClearSelection() {
   selectedImportIds = new Set();
+  promoteConfirmRequested = false;
 }
 
 // Deselect the active annotation when the user clicks empty rail background (not
@@ -676,7 +723,11 @@ function handleRailBackgroundClick(e: MouseEvent) {
   <!-- Batch-promote bar: appears when one or more imported notes are checked. -->
   <BatchPromoteBar
     selectedCount={selectedImportIds.size}
-    onPromote={handleBatchPromote}
+    {promoteConfirm}
+    bind:confirmRef={promoteConfirmBtnEl}
+    onPromote={() => (promoteConfirmRequested = true)}
+    onConfirmPromote={handleBatchPromote}
+    onCancelPromote={() => (promoteConfirmRequested = false)}
     onClear={handleClearSelection}
     {reduceMotion}
   />

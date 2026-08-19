@@ -112,6 +112,7 @@ onDestroy(clearUndoTimer);
           onSendToClaude!(annotationId);
         }}
       >
+        <span class="aca-dest" aria-hidden="true"></span>
         Send to {agentLabel.family}
       </button>
     {/if}
@@ -181,14 +182,47 @@ onDestroy(clearUndoTimer);
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
   }
+  /* #1444: colour-neutral, converging on the ghost treatment next to it — the
+     accent fill contradicted the composer's coral one for the same action, and
+     neither audience is recommended, so neither gets a recommending colour.
+     Deliberately NOT folded into .aca-btn--ghost, which is also the standalone
+     Remove button on four differently-tinted card types.
+
+     The accent `border-color` is DELETED rather than overridden: .aca-btn's
+     :focus-visible below sets that same token as its only signal, so while Send
+     carried it at rest, focusing Send produced no visual change at all.
+
+     The flex properties are scoped here, not on .aca-btn — Accept, Reject,
+     Archive and Remove share that base and none of them needs to become a flex
+     container. `justify-content` is required rather than decorative: <button>'s
+     UA text-align stops applying once the element is a flex container. */
   .aca-btn--send {
-    border-color: var(--tandem-accent-border);
-    background: var(--tandem-accent-bg);
-    color: var(--tandem-accent);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg);
   }
+  /* Background only — unlike --ghost, rest is already --tandem-fg, so hover
+     re-stating the colour would be a no-op. */
   .aca-btn--send:hover {
-    background: var(--tandem-accent);
-    color: var(--tandem-accent-fg);
+    background: var(--tandem-surface-sunk);
+  }
+  /* Twin of .composer-dest in Toolbar.svelte — see the long comment there for
+     why the shape (not the colour) is what survives forced colors, why 10px,
+     and why the colour is a literal rather than agentColor(). Declared here
+     rather than shared because Svelte prunes scoped selectors per component.
+     This card renders a lone disc, so the shape reinforces the label rather
+     than distinguishing two markers; the composer is where the pair reads. */
+  .aca-dest {
+    box-sizing: border-box;
+    width: 10px;
+    height: 10px;
+    border-radius: var(--tandem-r-circle);
+    border: 2px solid var(--tandem-author-claude);
+    background: var(--tandem-author-claude);
+    flex-shrink: 0;
   }
   .aca-btn:focus-visible {
     outline: none;
