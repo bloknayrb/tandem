@@ -22,6 +22,7 @@
  * the fatal-error path — never document content or annotation bodies.
  */
 
+import { redactPaths, redactSecrets } from "../shared/scrub-text.js";
 import { APP_VERSION } from "./mcp/server.js";
 
 const SENTRY_DSN_ENV = "TANDEM_SENTRY_DSN";
@@ -31,13 +32,6 @@ const SENTRY_DSN_ENV = "TANDEM_SENTRY_DSN";
 type SentryNode = typeof import("@sentry/node");
 let sentry: SentryNode | null = null;
 
-function redactSecrets(input: string): string {
-  return input
-    .replace(/sk-ant-[A-Za-z0-9_-]{8,}/g, "sk-ant-[redacted]")
-    .replace(/sk-[A-Za-z0-9_-]{16,}/g, "sk-[redacted]")
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{12,}=*/gi, "Bearer [redacted]");
-}
-
 function redactHome(input: string): string {
   const home = process.env.HOME || process.env.USERPROFILE;
   let out = input;
@@ -46,14 +40,29 @@ function redactHome(input: string): string {
   if (home && home.length > 1) {
     out = out.split(home).join("~");
   }
-  // Also collapse user segments not under $HOME (e.g. another account's path).
-  return out
-    .replace(/(\/Users\/)[^/\\]+/g, "$1[user]")
-    .replace(/(\/home\/)[^/\\]+/g, "$1[user]")
-    .replace(/([A-Za-z]:\\Users\\)[^\\]+/g, "$1[user]");
+  // Then the shared generic pass, for user segments not under $HOME — another
+  // account's path, or the absolute path inside a raw `fs` error. Shared rather
+  // than a local copy of the same three regexes: the local copy had already
+  // drifted (it was case-SENSITIVE on `\Users\`, so a lowercase Windows path
+  // leaked the account name here after the shared module was fixed), and the
+  // `$HOME` swap above is case-sensitive too, so it does not cover for that.
+  // Only the literal-root swap is genuinely server-only — the sidecar can read
+  // the environment and the WebView cannot.
+  return redactPaths(out);
 }
 
-/** Exposed for unit tests — scrubbing is the privacy-load-bearing part. */
+/**
+ * Exposed for unit tests — scrubbing is the privacy-load-bearing part.
+ *
+ * The secrets half is `shared/scrub-text.ts`, shared with the WebView reporter
+ * and the client log. It used to be a private copy here carrying only the
+ * original three patterns, which meant the sidecar — the half most likely to
+ * hold a credential, since MCP server configs carry `env`/`headers` full of API
+ * keys (`GET /api/integrations/existing` exists because of that) — was the LEAST
+ * redacted of the three. The path half is shared too; `redactHome` stays local
+ * only for its `$HOME` literal swap, which genuinely is server-only because the
+ * sidecar can read the environment and the WebView cannot.
+ */
 export function scrub(input: string): string {
   return redactHome(redactSecrets(input));
 }
