@@ -879,7 +879,7 @@ Both are silent from the user's perspective today; both end when the integration
 
 ## ADR-040: Audience and Monetization (Individuals; Same-Canvas Moat; Free Beta to One-Time License)
 
-**Status:** Accepted (2026-06-12) — Supersedes the institutional-market and undecided-revenue framing in docs/positioning.md. All sections (§1–§6) are now fully accepted following legal counsel draft of the BUSL re-scope. **Amended 2026-08-18 (#1346)** — the §3 gate changes shape from per-tool content-write to a surface gate (unlicensed = plain markdown editor, no AI at all); see the amendment below before reading §3 as current.
+**Status:** Accepted (2026-06-12) — Supersedes the institutional-market and undecided-revenue framing in docs/positioning.md. All sections (§1–§6) are now fully accepted following legal counsel draft of the BUSL re-scope. **Amended 2026-08-18 and 2026-08-19 (#1346)** — the §3 gate changes shape from per-tool content-write to a surface gate (unlicensed = plain markdown editor, no AI at all, reads included); the 14-day trial is unchanged. Read both amendments below before reading §3 as current.
 
 **Context:** Tandem shipped without a recorded audience or revenue decision. `docs/positioning.md` frames the market as institutions and (§economics) says paying cases "require either a hosted offering or a support contract… This needs a decision." `README.md` said "Tandem is free to use." `docs/roadmap.md` tracks "#394 Monetization" as "tracked outside engineering roadmap." The product is BUSL-1.1 (source-available): the base grant is non-production use only; the **Additional Use Grant** extends limited production use ("Personal use and individual self-hosting are permitted; commercial hosting or resale of the Licensed Work is not") — so individuals already use it in production for free. It converts to MIT at the earlier of the Change Date (2029-06-10 / v1.0 GA + 2 years) **and** the BUSL per-version 4-year floor. This ADR supersedes the institutional-market and undecided-revenue framing.
 
@@ -946,7 +946,7 @@ Two surfaces have no enforcement site at all today because the current shape doe
 
 **Four admission points, not one interception.** Each surface has one narrow admission point, and three are existing functions with every caller in one place: `appendClaudeChatMessage()` (every AI chat write), `subscribe(cb, "external")` (every push consumer), the MCP session handshake (both transports), and the collaborator's start path. Four checks against the 20+ per-operation checks today, taking Critical Rule 9's per-tool cost from two edits to zero — the strongest *technical* argument for decision 1, independent of the commercial one.
 
-**One consequence to settle before code moves:** the sixteen ungated read tools stop being safely ungated. They are ungated on the rule that reads are the escape hatch, and `RESTRICTED_MESSAGE` promises it verbatim — but under decision 1 the escape hatch belongs to the **human's editor**: the user keeps opening, reading and exporting, and the AI reads nothing. Open question 1 in #1346 settles what happens to existing annotations but not whether Claude may still *read* them.
+**One consequence, settled by decision 7 below:** the sixteen ungated read tools stop being safely ungated. They are ungated on the rule that reads are the escape hatch, and `RESTRICTED_MESSAGE` promises it verbatim — but under decision 1 the escape hatch belongs to the **human's editor**: the user keeps opening, reading and exporting, and the AI reads nothing. Open question 1 in #1346 settled what happens to existing annotations but not whether Claude may still *read* them; the second amendment answers that it may not.
 
 **4. No fail-open, no grace period.** Licenses are offline-verified and perpetual: the run gate checks the Ed25519 signature only, enforced at the type level by the `SignatureVerified` brand so that wiring in the stricter expiry-checking verifier is a compile error. There is no expiry to fail open from and nothing to specify — ADR-040 as accepted contains no fail-open or grace-period language, and this amendment introduces none.
 
@@ -954,9 +954,39 @@ One precision, so "no expiry" is not over-read: it is a property of **licenses**
 
 **5. Terminology: always "unlicensed", never "expired" or "lapsed".** There are no lapsed users, only people who never bought. This is copy, and the copy that contradicts it is already written: `RESTRICTED_MESSAGE` in `src/server/mcp/license-gate.ts` opens "Your Tandem trial has ended", and the wall, the trial banner and that module's header comment all frame the state as a trial ending. All of it is rewritten at the flip to name the state as unlicensed and the consequence as AI features disabled. The internal `status: "restricted"` identifier is **not** required to change — `license-types.ts` records that both gates decide on that exact literal, so a fourth status value or a rename fails **open** at every enforcement surface until all of them are updated.
 
+**Second amendment (2026-08-19, #1346) — the trial, the toolset, and what unlicensed looks like.** Three answers (@bloknayrb) settling the open questions the first amendment flagged. Still dark; still no code moves here.
+
+**6. The trial survives, and it is not in tension with decision 5.** Fourteen days of **full** functionality with no purchase, after which a license key is required to continue with full functionality. `TrialInfo` and the on-device clock stay exactly as built. The apparent conflict with "there are no lapsed users" dissolves on inspection: **a trial ending is not a license expiring.** Someone whose fourteen days ran out never bought a license, so nothing of theirs lapsed and nothing was taken — "unlicensed" describes them accurately. Decision 5 governs how the state is *named*, not whether a clock exists. So the clock is mechanism and stays; "expired" is vocabulary and goes.
+
+**7. Unlicensed means Claude holds no `tandem_*` tools at all — reads included.** This closes the half of open question 1 the issue did not ask. The issue settled that existing annotations stay visible and resolvable *by the user*; it left open whether Claude may still read them. It may not. There is no partial toolset and no read-only AI mode: the surface gate refuses the MCP handshake, so the tools are absent rather than present-and-failing.
+
+Two consequences worth stating because they are easy to get backwards:
+
+- **The escape hatch belongs to the editor, not to Claude.** "You can always open, read and export your work" remains true and is the point — but it is the *user* doing it. The sixteen ungated read tools are not a carve-out to preserve; they disappear with the surface.
+- **`mcp-stdio.ts` needs no gate of its own.** It registers no handlers and forwards raw JSON-RPC, so refusing the HTTP transport also refuses Claude Desktop and Cowork. Verified during the discovery step; do not add a second refusal there.
+
+**8. The unlicensed UI: frozen transcript, with a persistent notice.** The chat/annotation rail keeps its footprint and its **history stays full-colour and readable**; only the live surfaces — the composer and the annotation actions — grey out, alongside a persistent notice naming the state. Rationale: the failure this design most needs to avoid is a user believing their work was taken, and keeping the transcript at full fidelity makes "we did not take anything" a visible fact rather than a claim in a support document. The notice exists because a greyed composer alone is too subtle a boundary — a user discovers the state by trying to type.
+
+Two rejected alternatives, recorded because both are reasonable and will be re-proposed:
+
+- **Collapsing the rail to a spine** is correct as a collapse the **user chooses**, and wrong as the default. Someone who has decided not to buy should be able to reclaim the width permanently; deciding it for them on day 15 both hides the state and removes their choice.
+- **Turning the rail into a permanent activation panel** is rejected as a *standing* state. Activation belongs in Settings and in the in-trial notice, not pinned beside every document indefinitely — that is the version of this that reads as nagging on day 400.
+
+**9. Refusal copy.** Decision 5 applied. The refusal must carry both the reason and the purchase URL: the #1463 measurements caught a model inventing a remedy that does not exist when given neither.
+
+| Surface | Replaces | With |
+|---|---|---|
+| MCP + `/api` | "Your Tandem trial has ended, so Tandem's editing and annotation tools are unavailable." | "Tandem is unlicensed. AI features are disabled. Your document is unaffected and stays fully editable." |
+| Local-model loop | "Editing is unavailable — the Tandem trial has ended." | "Tandem is unlicensed. AI features are disabled." |
+| Status pill | "Trial ended" | "Unlicensed" |
+| Rail notice | *(none today)* | "AI features are off. Activate a license to bring Claude back." |
+| In-trial, day 12 | "Trial expires in 2 days" | "2 days left. Purchase a license to keep Claude." |
+
+The internal `status: "restricted"` literal is **not** renamed — `license-types.ts` records that both gates decide on that exact string, so a rename fails **open** at every enforcement surface until all of them move together.
+
 **Constraint — everything stays dark.** `LICENSE_GATE_ENABLED` remains `false` in `tsup.config.ts` and the build stays byte-identical with the flag off. This amendment is a design change to merged-but-inert code; no code moves on it here. The gated-set enumeration in [`docs/licensing-explained.md`](licensing-explained.md#the-gated-set--this-list-is-the-api-halfs-review) is superseded in **shape** by decision 1 but remains an accurate description of the code as merged, so it stands as Critical Rule 9's review surface until the surface gate is implemented.
 
-**Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), ADR-039 (local-model collaborator — the fifth enforcement site named in the 2026-08-18 amendment), `docs/positioning.md`, `docs/licensing-explained.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1), #1116 (engineering tracker), #1346 (the 2026-08-18 amendment).
+**Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), ADR-039 (local-model collaborator — the fifth enforcement site named in the 2026-08-18 amendment), `docs/positioning.md`, `docs/licensing-explained.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1), #1116 (engineering tracker), #1346 (the 2026-08-18 amendment and the 2026-08-19 second amendment).
 
 ## ADR-041: Customizable Keyboard Shortcuts (Override Layer)
 

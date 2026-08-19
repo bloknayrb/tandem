@@ -299,7 +299,7 @@ per-tool cost of Critical Rule 9 from two edits to zero.
 
 ### Two consequences worth deciding before code moves
 
-**The read tools stop being safely ungated.** Sixteen tools are ungated on the rule "reads are
+**The read tools stop being safely ungated — settled 2026-08-19 (ADR-040 second amendment, decision 7).** Sixteen tools are ungated on the rule "reads are
 the escape hatch", and `RESTRICTED_MESSAGE` promises it in so many words: *"Reading, opening and
 exporting still work."* Decision 1 says an unlicensed copy has no AI integration at all, so the
 escape hatch belongs to the **human's editor**, not to Claude — the user keeps opening, reading
@@ -310,7 +310,9 @@ a layer the surface gate removes.
 never "expired". `RESTRICTED_MESSAGE` opens *"Your Tandem trial has ended"*; the collaborator's
 `LICENSE_REQUIRED` body repeats it; `license-gate.ts`'s own docblock says *"trial expired"*. This
 is copy, not mechanism — the `LicenseStatus` union (`"trial" | "licensed" | "restricted"`) is a
-state name, and the on-device trial clock is a separate question the amendment did not strike.
+state name, and the 14-day trial clock is confirmed unchanged. The replacement strings are now
+decided — see the copy table in ADR-040's second amendment (2026-08-19). This paragraph stands
+until the code carries them, and the test below pins it to that fact rather than to the intent.
 
 ## Delivery: why the email looks the way it does
 
