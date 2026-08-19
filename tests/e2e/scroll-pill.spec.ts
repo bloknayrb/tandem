@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
+import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -24,7 +25,7 @@ import {
 let mcp: McpTestClient;
 let tmpDir: string;
 
-const APP_URL = "http://127.0.0.1:5173";
+const APP_URL = "/";
 
 test.beforeEach(async () => {
   mcp = new McpTestClient();
@@ -73,14 +74,22 @@ async function openReadOnly(page: import("@playwright/test").Page, fixture: stri
   await page.goto(APP_URL);
   await expect(scrollerOf(page)).toBeVisible();
   const filePath = path.join(tmpDir, fixture);
-  const status = await page.evaluate(async (fp) => {
-    const res = await fetch("http://127.0.0.1:3479/api/open", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: fp, readOnly: true, force: false }),
-    });
-    return res.status;
-  }, filePath);
+  // The URL is built HERE, from the harness constant — a raw ":3479" literal
+  // in this in-page fetch once aimed the open at the developer's real desktop
+  // Tandem (loopback + LOCALHOST_ORIGIN_RE admit any 127.0.0.1 origin, so it
+  // SUCCEEDED there and failed confusingly here). Pinned by the
+  // no-product-port-literals test in tests/scripts/e2e-guard-wiring.test.ts.
+  const status = await page.evaluate(
+    async ([fp, apiOpenUrl]) => {
+      const res = await fetch(apiOpenUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: fp, readOnly: true, force: false }),
+      });
+      return res.status;
+    },
+    [filePath, `http://127.0.0.1:${E2E_MCP_PORT}/api/open`] as const,
+  );
   expect(status).toBe(200);
 }
 

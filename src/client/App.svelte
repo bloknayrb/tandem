@@ -2,7 +2,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, tick, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
-import { BYO_MODELS_ENABLED, DEFAULT_MCP_PORT } from "../shared/constants";
+import { BYO_MODELS_ENABLED } from "../shared/constants";
 import { isScratchpadPath, isUploadPath, scratchpadUuidFromPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import { SNAPSHOT_CAP } from "../shared/snapshot";
@@ -136,6 +136,7 @@ import {
 } from "./tabs/tab-context-menu.js";
 import { saveExactTarget } from "./tabs/target-save.js";
 import { isRenamable, type OpenTab } from "./types.js";
+import { MCP_BASE_URL } from "./utils/backend-ports";
 import { openFileForRuntime } from "./utils/browse-file";
 import { resolveDefaultModelChip } from "./utils/model-chip";
 import { resolveModelFirstRunNeeded } from "./utils/model-first-run";
@@ -2070,7 +2071,7 @@ async function exportChatToScratchpad(): Promise<void> {
     chatState.messages,
     Array.from(chatState.documentFileNames, ([id, fileName]) => ({ id, fileName })),
   );
-  const response = await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_SCRATCHPAD}`, {
+  const response = await fetch(`${MCP_BASE_URL}${API_SCRATCHPAD}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content }),

@@ -1,10 +1,10 @@
-import { DEFAULT_MCP_PORT } from "../../shared/constants";
+import { MCP_BASE_URL } from "./backend-ports";
 
 /**
  * Origin of the Tandem server for client-side fetches. Path constants live in
  * `src/shared/api-paths.ts`; clients build URLs as `${API_BASE}${API_FOO}`.
  */
-export const API_BASE = `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
+export const API_BASE = MCP_BASE_URL;
 
 /** Encode an ArrayBuffer as base64 (safe for large files). */
 export function arrayBufferToBase64(buf: ArrayBuffer): string {
