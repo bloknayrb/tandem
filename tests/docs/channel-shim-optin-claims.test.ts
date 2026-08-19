@@ -102,9 +102,18 @@ const DENIES =
  * and the noun below, so a ±1-line window that plainly contains "There is no
  * wizard checkbox" scores as unexcused. Measured on `apply.ts` while writing
  * the fix: the corrected docblock reported as an offender until this landed.
+ *
+ * The `--!?>` alternations are not decoration. `--!>` is a comment terminator
+ * the HTML parser accepts (its "comment end bang" state), so a pattern that
+ * knows `-->` and not `--!>` is an incomplete HTML-comment matcher — which is
+ * what CodeQL's `js/bad-tag-filter` flagged here on the first push. Nothing
+ * untrusted reaches this function (it reads tracked files in this repo), but
+ * the rule is right about the pattern, and the widening cannot change a score:
+ * it only strips more furniture, and every scanned surface is 0 offenders
+ * either way (measured before and after).
  */
 function decomment(line: string): string {
-  return line.replace(/^\s*(\*|\/\/|<!--|-->)\s?/, "").replace(/-->\s*$/, "");
+  return line.replace(/^\s*(\*|\/\/|<!--|--!?>)\s?/, "").replace(/--!?>\s*$/, "");
 }
 
 interface Fragment {
