@@ -179,6 +179,46 @@ export async function switchToAnnotationsTab(page: Page): Promise<void> {
  * `popup-comment-submit`, `popup-note-submit`). Tests that interact with the
  * textarea or submit buttons must call this helper after selecting text.
  */
+/**
+ * Select a locator's text and wait until the selection actually took.
+ *
+ * `locator.selectText()` is a one-shot `createRange()` + `addRange()`.
+ * ProseMirror runs its own DOM-selection observer and re-asserts its internal
+ * selection onto the DOM, so a programmatic range that lands in the wrong moment
+ * is silently clobbered: the selection comes back COLLAPSED, no `selectionUpdate`
+ * fires, and the selection popup therefore never appears — and never will, because
+ * nothing in the client retries. It does not need to: a real pointer drag or
+ * shift+arrow selection emits genuine selectionchange events, so only a
+ * programmatic one can lose this race.
+ *
+ * Measured on master before this helper existed: roughly one failure per 28-test
+ * run of `toolbar-redesign.spec.ts`, roaming across whichever test happened to
+ * lose. Diagnosis: on a passing run the selectionchange log reads
+ * `COLLAPSED(click), range:N, range:N`; on a failing one the same slot reads
+ * `COLLAPSED(click), COLLAPSED`. The editor is healthy at that point — focused,
+ * contenteditable, correct paragraph count and text — the selection simply is not
+ * there.
+ *
+ * Re-issuing it is enough, so poll until the DOM reports a non-empty selection.
+ * Prefer this over a bare `selectText()` anywhere the test then expects the
+ * selection popup.
+ */
+export async function selectTextStable(page: Page, target: Locator): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await target.selectText();
+        return page.evaluate(() => (window.getSelection()?.toString() ?? "").length);
+      },
+      {
+        timeout: 5_000,
+        message:
+          "programmatic selection never took — ProseMirror clobbered every attempt (see selectTextStable)",
+      },
+    )
+    .toBeGreaterThan(0);
+}
+
 export async function openAnnotatePopup(page: Page): Promise<void> {
   const annotateBtn = page.locator("[data-testid='popup-annotate-btn']");
   await expect(annotateBtn).toBeVisible({ timeout: 3_000 });

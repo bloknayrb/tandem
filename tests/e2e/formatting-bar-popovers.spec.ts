@@ -5,6 +5,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  selectTextStable,
 } from "./helpers";
 
 /**
@@ -166,7 +167,7 @@ test("highlight color picker in the persistent bar is visible and clickable", as
   // `editor.state.selection` stays empty and the selection-gated controls never
   // enable. Same pairing as accessibility.spec.ts and six other specs.
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(page, editor.locator("p").first());
 
   const toggle = bar.locator("[data-testid='toolbar-highlight-color-toggle']");
   await expect(toggle).toBeEnabled();
@@ -214,7 +215,7 @@ test("link editor in the persistent bar is not clipped by the format track", asy
   const editor = page.locator(".tandem-editor");
 
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(page, editor.locator("p").first());
   // Dispatched for the same reason as the color toggle above. Precedent:
   // accessibility.spec.ts drives this exact button the same way.
   await bar
@@ -339,7 +340,7 @@ test("Escape on a mouse-opened popup menu closes the menu first, the popup secon
   await openFixture(page);
 
   const editor = page.locator(".tandem-editor");
-  await editor.locator("p").first().selectText();
+  await selectTextStable(page, editor.locator("p").first());
 
   const popup = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(popup).toBeVisible();

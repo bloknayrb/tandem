@@ -6,6 +6,7 @@ import {
   createFixtureDir,
   McpTestClient,
   openAnnotatePopup,
+  selectTextStable,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -81,7 +82,7 @@ test("A13 + #1000: note cards surface reply-toggle (private from Claude, shown t
   });
 
   // Create a note via the selection popup (the only way — no tandem_note MCP tool).
-  await editor.locator("p").first().selectText();
+  await selectTextStable(page, editor.locator("p").first());
   await openAnnotatePopup(page);
   await page.locator("[data-testid='popup-annotation-input']").fill("private note");
   await page.locator("[data-testid='popup-note-submit']").click();
