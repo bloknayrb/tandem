@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,9 +33,11 @@ vi.mock("../../../src/server/integrations/acl-win.js", () => ({
   setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
 }));
 
+import { setRestrictiveAcl } from "../../../src/server/integrations/acl-win.js";
 import { pushNotification } from "../../../src/server/notifications.js";
 
 const pushNotificationMock = vi.mocked(pushNotification);
+const setRestrictiveAclMock = vi.mocked(setRestrictiveAcl);
 
 describe("doc-backup", () => {
   let root: string;
@@ -41,6 +52,14 @@ describe("doc-backup", () => {
     mkdirSync(join(root, "docs"), { recursive: true });
     _resetDocBackupGateForTests();
     pushNotificationMock.mockClear();
+    // The ACL mock is module-scope and this config sets neither `clearMocks`
+    // nor `restoreMocks`, so its call history would otherwise accumulate across
+    // tests. Invisible until a test fakes win32 (on linux the helper returns
+    // before calling), which the #1299 sweep tests below do — and their whole
+    // point is a call COUNT. Reset, then restore the resolved value that
+    // `vi.restoreAllMocks()` strips.
+    setRestrictiveAclMock.mockReset();
+    setRestrictiveAclMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -290,6 +309,277 @@ describe("doc-backup", () => {
 
     it("is silent and safe when the backup root does not exist", async () => {
       await expect(sweepDocBackups(appDataDir)).resolves.toEqual({ cleaned: 0, failed: 0 });
+    });
+  });
+
+  /**
+   * #1433 — the boot sweep must ATTEMPT the #1299 ACL repair, not log and give up.
+   *
+   * The repair itself shipped in v0.21.0 but hangs off `snapshotBeforeFirstWrite`
+   * only, so an install that runs without saving a document never reaches it —
+   * which on an UPGRADE is guaranteed, because Tandem auto-opens `CHANGELOG.md`
+   * read-only precisely so autosave cannot round-trip it.
+   *
+   * `setRestrictiveAcl` is mocked at module scope, so nothing here spawns icacls;
+   * the real-icacls proof lives in `doc-backup-acl-repair.test.ts` (Windows-only).
+   * EPERM is INJECTED rather than produced with `chmod 0o000`: CI and the dev
+   * container run as uid 0, where an unreadable directory is still readable and
+   * the test would silently prove nothing.
+   */
+  describe("sweepDocBackups — #1299 ACL self-repair", () => {
+    let prevPlatform: PropertyDescriptor | undefined;
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+
+    /** EPERM is what Windows reports for a #1299 empty-DACL directory. */
+    const permError = (code: "EPERM" | "EACCES") =>
+      Object.assign(new Error(`${code}: operation not permitted, scandir`), { code });
+
+    /** Run the module's Windows-only branches on a POSIX host. Restored in afterEach. */
+    function fakeWindows(): void {
+      prevPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    }
+
+    /**
+     * Fail `readdir` for exactly one directory, delegating everything else to the
+     * real implementation.
+     *
+     * Path-predicate, NOT call-order (`mockRejectedValueOnce`): `sweepDocBackups`
+     * reads the ROOT before any subdir, so an order-based mock aims at the wrong
+     * branch — and with no base implementation its second call returns
+     * `undefined`, which flows into the `for (const sub of subdirs)` loop
+     * OUTSIDE the try/catch and makes the sweep reject, violating its own
+     * never-throws contract.
+     *
+     * `real` is captured BEFORE spying, and the options argument is forwarded:
+     * `readdir` is called both with `{ withFileTypes: true }` and bare, and
+     * dropping the options returns strings whose `.isDirectory()` is undefined.
+     * (Delegation pattern: the `unlink` test in `tests/server/reaper.test.ts`.)
+     */
+    function poisonReaddir(
+      targets: string | string[],
+      opts: { persistent?: boolean; code?: "EPERM" | "EACCES" } = {},
+    ): () => number {
+      const set = new Set(Array.isArray(targets) ? targets : [targets]);
+      const alreadyFailed = new Set<string>();
+      const real = fs.readdir.bind(fs);
+      let hits = 0;
+      vi.spyOn(fs, "readdir").mockImplementation((async (p: string, o: unknown) => {
+        const key = String(p);
+        if (set.has(key) && (opts.persistent || !alreadyFailed.has(key))) {
+          alreadyFailed.add(key);
+          hits++;
+          throw permError(opts.code ?? "EPERM");
+        }
+        return real(p as never, o as never);
+      }) as unknown as typeof fs.readdir);
+      return () => hits;
+    }
+
+    /** A per-path subdir holding one expired snapshot + its `source.txt`. */
+    function makeExpiredSubdir(name: string): string {
+      const sub = join(docBackupsRoot(appDataDir), name);
+      mkdirSync(sub, { recursive: true });
+      const snapshot = join(sub, "old-20250101-000000-aabbccdd.md");
+      writeFileSync(snapshot, "ancient\n");
+      writeFileSync(join(sub, "source.txt"), "/gone/old.md\n");
+      const longAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+      utimesSync(snapshot, longAgo, longAgo);
+      return sub;
+    }
+
+    beforeEach(() => {
+      // Keep the suite output readable; the repair path logs by design.
+      errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      if (prevPlatform) Object.defineProperty(process, "platform", prevPlatform);
+      prevPlatform = undefined;
+      // Releases the `readdir` and `console.error` spies. Also strips the ACL
+      // mock's resolved value, which the outer `beforeEach` re-applies.
+      vi.restoreAllMocks();
+    });
+
+    it("A: an ACL failure stays invisible to snapshotBeforeFirstWrite (best-effort contract)", async () => {
+      fakeWindows();
+      setRestrictiveAclMock.mockRejectedValue(new Error("icacls: access is denied"));
+      writeFileSync(docPath, "original content\n");
+
+      // The snapshot must succeed and stay silent: an ACL failure is hygiene,
+      // not a reason to fail the backup or toast the user. If the repair's
+      // promise is ever memoised WITHOUT the try/catch inside the memoised
+      // wrapper, this rejection reaches `snapshotBeforeFirstWrite`'s outer
+      // catch — which returns "failed", toasts, and leaves the gate unset so
+      // every 60s autosave retries and re-fails. (It does NOT escape to
+      // `unhandledRejection`: every `aclPromise ??=` is followed by `await
+      // aclPromise` in the same synchronous run, so a handler is always
+      // attached, and `index.ts` puts a `.catch()` on the sweep besides.)
+      await expect(snapshotBeforeFirstWrite(docPath, { appDataDir })).resolves.toBe("written");
+      expect(pushNotificationMock).not.toHaveBeenCalled();
+      expect(allSnapshots()).toHaveLength(1);
+
+      // The per-run gate must be SET despite the ACL failure: this counted as a
+      // success, so the next save must not redo it.
+      await expect(snapshotBeforeFirstWrite(docPath, { appDataDir })).resolves.toBe(
+        "skipped-already-this-run",
+      );
+
+      // Assert the CONTENT, not merely that console.error ran: the snapshot
+      // logs its own success through console.error, so a bare
+      // `toHaveBeenCalled()` here passes even if the ACL failure is swallowed
+      // silently.
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Restrictive ACL on backup root failed"),
+        expect.anything(),
+      );
+    });
+
+    it("A2: an ACL repair that itself fails leaves the sweep best-effort, and says so", async () => {
+      fakeWindows();
+      setRestrictiveAclMock.mockRejectedValue(new Error("icacls: access is denied"));
+      const poisoned = makeExpiredSubdir("deadbeef");
+      poisonReaddir(poisoned, { persistent: true });
+
+      // Both halves fail — the folder is unreadable AND the repair cannot fix
+      // it. This is the combination the reporter's install may actually be in,
+      // and the sweep must still complete rather than throw.
+      await expect(sweepDocBackups(appDataDir)).resolves.toEqual({ cleaned: 0, failed: 0 });
+
+      // ...and must NOT claim a repair happened.
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("could not be repaired"));
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("after repairing folder permissions"),
+      );
+      expect(existsSync(poisoned)).toBe(true);
+    });
+
+    it("B1: repairs a poisoned per-path SUBDIR and re-reads it", async () => {
+      fakeWindows();
+      const poisoned = makeExpiredSubdir("deadbeef");
+      const hits = poisonReaddir(poisoned);
+
+      const result = await sweepDocBackups(appDataDir);
+
+      expect(setRestrictiveAclMock).toHaveBeenCalledWith(docBackupsRoot(appDataDir), {
+        inheritable: true,
+      });
+      expect(hits()).toBe(1);
+      // `cleaned: 1` is what proves the RETRY rather than merely the repair
+      // call: an implementation that re-applies the ACL and then `continue`s
+      // yields `cleaned: 0` with the ACL mock called just the same.
+      expect(result).toEqual({ cleaned: 1, failed: 0 });
+      // Emptied of live snapshots, so the sweep also removed the subdir.
+      expect(existsSync(poisoned)).toBe(false);
+    });
+
+    it("B2: repairs a poisoned backup ROOT and re-reads it", async () => {
+      fakeWindows();
+      const backupRoot = docBackupsRoot(appDataDir);
+      const poisoned = makeExpiredSubdir("deadbeef");
+      const hits = poisonReaddir(backupRoot);
+
+      const result = await sweepDocBackups(appDataDir);
+
+      expect(setRestrictiveAclMock).toHaveBeenCalledWith(backupRoot, { inheritable: true });
+      expect(hits()).toBe(1);
+      expect(result).toEqual({ cleaned: 1, failed: 0 });
+      expect(existsSync(poisoned)).toBe(false);
+    });
+
+    it("B3: a ROOT still unreadable after the repair resolves rather than throwing", async () => {
+      fakeWindows();
+      makeExpiredSubdir("deadbeef");
+      poisonReaddir(docBackupsRoot(appDataDir), { persistent: true });
+
+      // `sweepDocBackups` is fired un-awaited, so an unwrapped retry would
+      // reject past its "never throws" contract into the caller's `.catch()`.
+      await expect(sweepDocBackups(appDataDir)).resolves.toEqual({ cleaned: 0, failed: 0 });
+      expect(setRestrictiveAclMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("C: a SUBDIR still unreadable after the repair is skipped, siblings still swept", async () => {
+      fakeWindows();
+      const poisoned = makeExpiredSubdir("deadbeef");
+      const healthy = makeExpiredSubdir("cafebabe");
+      poisonReaddir(poisoned, { persistent: true });
+
+      await expect(sweepDocBackups(appDataDir)).resolves.toEqual({ cleaned: 1, failed: 0 });
+      expect(existsSync(healthy)).toBe(false);
+      expect(existsSync(poisoned)).toBe(true);
+
+      // The log must name what happened. Without this the whole three-branch
+      // `logUnreadable` can be replaced by the noisy pre-fix line — the half of
+      // #1433 about the per-boot stack trace — with every test still green.
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("still unreadable after repairing folder permissions"),
+      );
+    });
+
+    it("C2: a second poisoned subdir reports the ONE repair, not a repair of its own", async () => {
+      fakeWindows();
+      writeFileSync(docPath, "original content\n");
+      // The snapshot applies the ACL first, so the sweep's own call finds the
+      // memo already settled.
+      await snapshotBeforeFirstWrite(docPath, { appDataDir });
+      const poisoned = makeExpiredSubdir("deadbeef");
+      poisonReaddir(poisoned, { persistent: true });
+
+      await expect(sweepDocBackups(appDataDir)).resolves.toEqual({ cleaned: 0, failed: 0 });
+
+      expect(setRestrictiveAclMock).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("already repaired once this run"),
+      );
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("still unreadable after repairing folder permissions"),
+      );
+    });
+
+    it("D: spawns the ACL repair at most once per run", async () => {
+      fakeWindows();
+      const first = makeExpiredSubdir("deadbeef");
+      const second = makeExpiredSubdir("cafebabe");
+      poisonReaddir([first, second]);
+      writeFileSync(docPath, "original content\n");
+
+      await sweepDocBackups(appDataDir);
+
+      // One application covers BOTH poisoned subdirs: the grant lands on the
+      // root and Windows propagates it down. (Zero on unfixed code.)
+      expect(setRestrictiveAclMock).toHaveBeenCalledTimes(1);
+      expect(existsSync(first)).toBe(false);
+      expect(existsSync(second)).toBe(false);
+
+      // ...and the snapshot path awaits that same settled application instead
+      // of spawning icacls again. This half is what pins the latch.
+      await expect(snapshotBeforeFirstWrite(docPath, { appDataDir })).resolves.toBe("written");
+      expect(setRestrictiveAclMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("E: attempts no ACL repair on non-Windows", async () => {
+      // Deliberately NOT fakeWindows(): there is no DACL to re-apply on POSIX,
+      // `icacls` does not exist there, and EACCES is the POSIX spelling.
+      const poisoned = makeExpiredSubdir("deadbeef");
+      poisonReaddir(poisoned, { persistent: true, code: "EACCES" });
+
+      await expect(sweepDocBackups(appDataDir)).resolves.toEqual({ cleaned: 0, failed: 0 });
+      expect(setRestrictiveAclMock).not.toHaveBeenCalled();
+      expect(existsSync(poisoned)).toBe(true);
+    });
+
+    it("F: a missing backup root is still a silent early return — no repair, no mkdir", async () => {
+      fakeWindows();
+      const backupRoot = docBackupsRoot(appDataDir);
+      expect(existsSync(backupRoot)).toBe(false);
+
+      await expect(sweepDocBackups(appDataDir)).resolves.toEqual({ cleaned: 0, failed: 0 });
+
+      expect(setRestrictiveAclMock).not.toHaveBeenCalled();
+      // Hardening unconditionally at the top of the sweep — the tempting
+      // simplification — would mkdir the root on every boot of every install,
+      // including ones that never back anything up.
+      expect(existsSync(backupRoot)).toBe(false);
     });
   });
 });
