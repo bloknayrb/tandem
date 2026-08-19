@@ -954,33 +954,43 @@ One precision, so "no expiry" is not over-read: it is a property of **licenses**
 
 **5. Terminology: always "unlicensed", never "expired" or "lapsed".** There are no lapsed users, only people who never bought. This is copy, and the copy that contradicts it is already written: `RESTRICTED_MESSAGE` in `src/server/mcp/license-gate.ts` opens "Your Tandem trial has ended", and the wall, the trial banner and that module's header comment all frame the state as a trial ending. All of it is rewritten at the flip to name the state as unlicensed and the consequence as AI features disabled. The internal `status: "restricted"` identifier is **not** required to change — `license-types.ts` records that both gates decide on that exact literal, so a fourth status value or a rename fails **open** at every enforcement surface until all of them are updated.
 
-**Second amendment (2026-08-19, #1346) — the trial, the toolset, and what unlicensed looks like.** Three answers (@bloknayrb) settling the open questions the first amendment flagged. Still dark; still no code moves here.
+**Second amendment (2026-08-19, #1346) — the trial, the toolset, and what unlicensed looks like.** Bryan's answers to the three questions the first amendment left open, recorded as four decisions (6–9: the fourth is the copy the other three imply). Still dark; still no code moves here.
 
 **6. The trial survives, and it is not in tension with decision 5.** Fourteen days of **full** functionality with no purchase, after which a license key is required to continue with full functionality. `TrialInfo` and the on-device clock stay exactly as built. The apparent conflict with "there are no lapsed users" dissolves on inspection: **a trial ending is not a license expiring.** Someone whose fourteen days ran out never bought a license, so nothing of theirs lapsed and nothing was taken — "unlicensed" describes them accurately. Decision 5 governs how the state is *named*, not whether a clock exists. So the clock is mechanism and stays; "expired" is vocabulary and goes.
 
 **7. Unlicensed means Claude holds no `tandem_*` tools at all — reads included.** This closes the half of open question 1 the issue did not ask. The issue settled that existing annotations stay visible and resolvable *by the user*; it left open whether Claude may still read them. It may not. There is no partial toolset and no read-only AI mode: the surface gate refuses the MCP handshake, so the tools are absent rather than present-and-failing.
+
+**Absent tools move the refusal, and the refusal must move with them.** `RESTRICTED_MESSAGE` reaches a model today only as a `gatedTool` `mcpError` or an HTTP 403 body — both of which require a tool to call. Refusing at the handshake deletes every one of those delivery paths, so the string has to be carried by the **transport-level refusal itself** (the stdio bridge's JSON-RPC `-32000`, and the HTTP transport's equivalent). This is not a detail: #1463 measured that a session with no `tandem_*` tools and no explanation is exactly the condition under which the model edits the file directly, and the bundled skill's absent-tools section is written against a refusal that says why.
 
 Two consequences worth stating because they are easy to get backwards:
 
 - **The escape hatch belongs to the editor, not to Claude.** "You can always open, read and export your work" remains true and is the point — but it is the *user* doing it. The sixteen ungated read tools are not a carve-out to preserve; they disappear with the surface.
 - **`mcp-stdio.ts` needs no gate of its own.** It registers no handlers and forwards raw JSON-RPC, so refusing the HTTP transport also refuses Claude Desktop and Cowork. Verified during the discovery step; do not add a second refusal there.
 
-**8. The unlicensed UI: frozen transcript, with a persistent notice.** The chat/annotation rail keeps its footprint and its **history stays full-colour and readable**; only the live surfaces — the composer and the annotation actions — grey out, alongside a persistent notice naming the state. Rationale: the failure this design most needs to avoid is a user believing their work was taken, and keeping the transcript at full fidelity makes "we did not take anything" a visible fact rather than a claim in a support document. The notice exists because a greyed composer alone is too subtle a boundary — a user discovers the state by trying to type.
+**8. The unlicensed UI: frozen transcript, with a persistent notice.** The chat/annotation rail keeps its footprint and its **history stays full-colour and readable**; only the surfaces that would *reach Claude* — the chat composer and the annotation-creation affordances — grey out, alongside a persistent notice naming the state.
+
+**Accept and reject stay live.** Decision 2 holds them at every license status, licensed included, and it is not overridden here: they are the user's own action on their own document, they are a Hocuspocus write rather than an AI call, and greying them would strand annotations the user already has with no way to clear them. Only *creating* new AI work is refused, never resolving existing work. Rationale: the failure this design most needs to avoid is a user believing their work was taken, and keeping the transcript at full fidelity makes "we did not take anything" a visible fact rather than a claim in a support document. The notice exists because a greyed composer alone is too subtle a boundary — a user discovers the state by trying to type.
 
 Two rejected alternatives, recorded because both are reasonable and will be re-proposed:
 
 - **Collapsing the rail to a spine** is correct as a collapse the **user chooses**, and wrong as the default. Someone who has decided not to buy should be able to reclaim the width permanently; deciding it for them on day 15 both hides the state and removes their choice.
 - **Turning the rail into a permanent activation panel** is rejected as a *standing* state. Activation belongs in Settings and in the in-trial notice, not pinned beside every document indefinitely — that is the version of this that reads as nagging on day 400.
 
-**9. Refusal copy.** Decision 5 applied. The refusal must carry both the reason and the purchase URL: the #1463 measurements caught a model inventing a remedy that does not exist when given neither.
+**The full-screen wall goes, and `deriveLicenseUi` inverts.** As merged, `restricted` returns `editable: false, showWall: true` (`src/client/utils/license-ui.ts`), which is the *old* shape: a read-only document behind a blocking wall. Under decision 1 that is backwards twice over — the document stays editable, and the wall's own copy ("continue in read-only mode, where your documents stay open for reading, exporting, and chatting with Claude") promises exactly the read-only-AI product decision 7 refuses. So `restricted` becomes `editable: true, showWall: false`, `LicenseWall.svelte` is retired rather than reworded, and its job is taken by the rail notice plus Settings. This is the single largest client-side consequence of the amendment and the easiest to miss, because nothing in the per-tool gate's own surface area points at it.
+
+**9. Refusal copy.** Decision 5 applied. **Every refusal carries the reason *and* `TANDEM_PURCHASE_URL`** — #1463 measured a model inventing a remedy that does not exist when given neither, and today's `RESTRICTED_MESSAGE` already interpolates the URL, so dropping it would be a regression rather than a simplification. `constants.ts` enumerates the five surfaces that reference it; all five are in the table, and the enumeration is the checklist.
 
 | Surface | Replaces | With |
 |---|---|---|
-| MCP + `/api` | "Your Tandem trial has ended, so Tandem's editing and annotation tools are unavailable." | "Tandem is unlicensed. AI features are disabled. Your document is unaffected and stays fully editable." |
-| Local-model loop | "Editing is unavailable — the Tandem trial has ended." | "Tandem is unlicensed. AI features are disabled." |
-| Status pill | "Trial ended" | "Unlicensed" |
+| MCP transport refusal + HTTP 403 (`RESTRICTED_MESSAGE`) | "Your Tandem trial has ended, so Tandem's editing and annotation tools are unavailable. Reading, opening and exporting still work, and the document itself is untouched. Activate a license to re-enable editing: {url}" | "Tandem is unlicensed, so its AI features are turned off. Your document is unaffected and stays fully editable. Activate a license to turn them back on: {url}" |
+| Local-model loop (`tools.ts`) | "Editing is unavailable — the Tandem trial has ended; activate a license to keep editing." | "Tandem is unlicensed, so its AI features are turned off. Activate a license to turn them back on: {url}" |
+| `tandem license` (`src/cli/license.ts`) | "Status: restricted — trial ended; activate a license to keep editing" | "Status: unlicensed — AI features off; the editor is unaffected. Activate: {url}" |
+| Full-screen wall (`LicenseWall.svelte`) | "Your 14-day trial is over. Activate a license to keep editing — or continue in read-only mode, where your documents stay open for reading, exporting, and chatting with Claude." | *(retired — see decision 8; the wall does not survive the reshape)* |
+| Settings status pill (`deriveLicenseUi` `statusLabel`) | "Trial ended" | "Unlicensed" |
 | Rail notice | *(none today)* | "AI features are off. Activate a license to bring Claude back." |
-| In-trial, day 12 | "Trial expires in 2 days" | "2 days left. Purchase a license to keep Claude." |
+| Trial banner (`LicenseBanner.svelte`) | "{n} of 14 days left in your Tandem trial." | Unchanged in shape — it is already neither "expired" nor "lapsed". Only the end-state copy moves. |
+
+The second column quotes the **current** strings so the diff is checkable; `{url}` is `TANDEM_PURCHASE_URL`, never a literal.
 
 The internal `status: "restricted"` literal is **not** renamed — `license-types.ts` records that both gates decide on that exact string, so a rename fails **open** at every enforcement surface until all of them move together.
 

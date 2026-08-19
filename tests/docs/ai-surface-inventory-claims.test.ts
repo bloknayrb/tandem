@@ -191,7 +191,7 @@ describe("AI surface inventory (#1346 discovery)", () => {
     for (const row of [
       "MCP over HTTP",
       "MCP over stdio",
-      "`/api` HTTP twins",
+      "`/api` mutating twins",
       "Chat",
       "Event push / wake",
       "Local-model collaborator",
@@ -200,5 +200,13 @@ describe("AI surface inventory (#1346 discovery)", () => {
     }
     // Surface A is explicitly excluded rather than forgotten.
     expect(section).toMatch(/not\* an AI surface/i);
+
+    // Row 3 was originally listed as an AI surface. It is not: all seven gated
+    // routes are called from src/client/ only, so under decision 1 they are the
+    // user's own writes and get ungated rather than re-gated. Losing this
+    // correction would resurrect a "seven ungated mutating routes" alarm that
+    // reads as a security hole and is not one.
+    expect(section).toMatch(/Row 3 is misnamed/);
+    expect(section).toMatch(/ungated\s*\n?\s*outright/);
   });
 });
