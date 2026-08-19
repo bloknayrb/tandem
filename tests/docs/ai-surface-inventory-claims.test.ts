@@ -183,6 +183,59 @@ describe("AI surface inventory (#1346 discovery)", () => {
     ).toBe(documented);
   });
 
+  /**
+   * Row 3's correction, derived rather than asserted.
+   *
+   * The doc claims the gated `/api` routes are the BROWSER's write path, which
+   * is why the reshape ungates them instead of giving them an admission point.
+   * That claim is load-bearing and counter-intuitive — read the other way it
+   * says "an unlicensed install serves POST /api/apply-changes ungated", which
+   * looks like a security hole — so it cannot rest on prose agreeing with
+   * itself. The first cut of this guard did exactly that (two `toMatch` calls
+   * against the doc's own sentences) and would have passed unchanged after a
+   * server-side caller appeared, which is the one event that falsifies it.
+   *
+   * A "caller" is a file that both names the path constant and calls `fetch` —
+   * the route modules name the constant for `assertOriginAllowlisted` without
+   * ever fetching it, and this separates the two without a path allowlist.
+   */
+  it("the gated /api routes are called only from the browser client", () => {
+    const ROUTE_CONSTS = [
+      "API_ANNOTATION_REPLY",
+      "API_REMOVE_ANNOTATION",
+      "API_APPLY_CHANGES",
+      "API_SCRATCHPAD",
+      "API_DOCUMENT_RELOAD",
+      "API_BACKUPS_RESTORE",
+      "API_EXTERNAL_CONFLICT_RESOLVE",
+      // Row 3's "+1 in-handler": gated via a direct licenseGate() call on the
+      // force:true sub-path, not by middleware, so a middleware grep misses it.
+      "API_OPEN",
+    ];
+
+    const nonClientCallers = sourcesUnder("src")
+      .filter(({ path }) => !path.startsWith("src/client/"))
+      .filter(({ src }) => {
+        const clean = stripComments(src);
+        return (
+          /\bfetch\s*\(/.test(clean) &&
+          ROUTE_CONSTS.some((c) => new RegExp(`\\b${c}\\b`).test(clean))
+        );
+      })
+      .map(({ path }) => path)
+      .sort();
+
+    expect(
+      nonClientCallers,
+      [
+        "A non-client caller of a gated /api route appeared. The reshape ungates these",
+        "routes on the grounds that only the browser calls them — if that is no longer",
+        "true, the route is an AI surface and needs an admission point. Fix the code or",
+        "the 'Row 3 is misnamed' paragraph in docs/licensing-explained.md, not this list.",
+      ].join(" "),
+    ).toEqual([]);
+  });
+
   it("the doc enumerates all six surfaces", () => {
     const doc = readFileSync(DOC, "utf-8");
     const section = /## AI surfaces — the #1346 inventory([\s\S]*?)\n## Delivery/.exec(doc)?.[1];
@@ -191,7 +244,7 @@ describe("AI surface inventory (#1346 discovery)", () => {
     for (const row of [
       "MCP over HTTP",
       "MCP over stdio",
-      "`/api` HTTP twins",
+      "`/api` mutating twins",
       "Chat",
       "Event push / wake",
       "Local-model collaborator",
@@ -200,5 +253,7 @@ describe("AI surface inventory (#1346 discovery)", () => {
     }
     // Surface A is explicitly excluded rather than forgotten.
     expect(section).toMatch(/not\* an AI surface/i);
+
+    expect(section).toMatch(/Row 3 is misnamed/);
   });
 });

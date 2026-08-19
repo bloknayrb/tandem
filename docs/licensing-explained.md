@@ -250,7 +250,7 @@ changed. Six exist:
 |---|---|---|---|
 | 1 | MCP over HTTP (`:3479`) | per-session `McpServer`, `onsessioninitialized` | per-tool: 12 `gatedTool`, 1 conditional in-handler, 16 ungated |
 | 2 | MCP over stdio | `src/cli/mcp-stdio.ts` | **inherits row 1** — pure JSON-RPC proxy, no handlers of its own |
-| 3 | `/api` HTTP twins | Express registrars | per-route: 7 middleware mounts + 1 in-handler |
+| 3 | `/api` mutating twins | Express registrars | per-route: 7 middleware mounts + 1 in-handler — **but see below: these are the *user's* surfaces** |
 | 4 | Chat | `appendClaudeChatMessage()` | **none** |
 | 5 | Event push / wake | `subscribe(cb, "external")` | **none** |
 | 6 | Local-model collaborator | in-process dispatch loop | its own third copy, 3 tools |
@@ -259,6 +259,34 @@ Three things follow that the amendment's three-surface framing does not predict.
 
 **Row 2 is free.** `mcp-stdio.ts` registers no handlers and forwards raw messages, so refusing at
 row 1 also refuses Claude Desktop and Cowork. There is no fourth transport to gate.
+
+**Row 3 is misnamed, and correcting it removes work rather than adding it.** Every one of the seven
+`licenseGateMiddleware`-gated routes is called from `src/client/` and nowhere else —
+`annotation-reply` and `remove-annotation` from `panels/annotation-actions.ts`, `apply-changes` from
+`ApplyChangesButton.svelte`, `scratchpad` and `backups/restore` from `actions/builtin.svelte.ts`,
+`document/reload` from `editor/SourceView.svelte`, `external-conflict/resolve` from
+`ExternalConflictBanner.svelte`. They are the **browser's** write path, twins of an MCP tool only in
+that both end at the same Y.Doc. Under decision 1 the user keeps writing, so these are **ungated
+outright**: they need no admission point. Deleting their middleware is *most* of the change, not
+all of it — row 3's "+1 in-handler" is `POST /api/open` with `force: true`, which calls
+`licenseGate()` directly in `src/server/mcp/routes/open.ts` and is also client-only
+(`client/utils/server-paths.ts`). That call goes too, and it is exactly the kind of gate the
+middleware grep does not find. The genuinely AI-facing `/api` surface is the `/api/channel-*`
+family plus `/api/events` and `/api/wake` — rows 4 and 5.
+
+Worth stating plainly, because the opposite reading is available and alarming: *"the reshape deletes
+seven middleware mounts and Surface A, so an unlicensed install serves `POST /api/apply-changes`
+ungated."* It does, and that is correct — but for a narrower reason than "the caller owns the
+document", which these routes do not establish. `apply-changes`, `annotation-reply` and
+`remove-annotation` are three of the **nine** routes that call neither `assertLoopbackForMutation`
+nor `assertOriginAllowlisted` (the inventory in `CLAUDE.md`); what stands behind them is the
+**path-wide loopback invariant** and nothing else. So the accurate claim is *any loopback-local
+process*, which is the same trust boundary they have today — the licence gate was never what kept
+them safe, and removing it takes nothing away. Critical Rule 9 pairs an MCP tool with its `/api`
+twin to stop a **content write** slipping past a content-write gate; once the gate is about
+surfaces, that premise is gone, which is why the rule is rewritten rather than re-applied. Their
+authorization posture is a separate question, unchanged here and tracked in
+[security.md](security.md#open-findings).
 
 **Rows 4-6 have no enforcement site at all, and rows 4-5 are not "missed" — they are
 deliberately open.** `connectionShouldBeReadOnly` exempts `CTRL_ROOM` by design so chat survives
@@ -297,9 +325,9 @@ admission point, and three of the four are existing functions with all their cal
 That is **four admission checks**, against 20+ per-operation checks today, and it changes the
 per-tool cost of Critical Rule 9 from two edits to zero.
 
-### Two consequences worth deciding before code moves
+### Two consequences, both settled 2026-08-19
 
-**The read tools stop being safely ungated.** Sixteen tools are ungated on the rule "reads are
+**The read tools stop being safely ungated — settled 2026-08-19 (ADR-040 second amendment, decision 7).** Sixteen tools are ungated on the rule "reads are
 the escape hatch", and `RESTRICTED_MESSAGE` promises it in so many words: *"Reading, opening and
 exporting still work."* Decision 1 says an unlicensed copy has no AI integration at all, so the
 escape hatch belongs to the **human's editor**, not to Claude — the user keeps opening, reading
@@ -310,7 +338,10 @@ a layer the surface gate removes.
 never "expired". `RESTRICTED_MESSAGE` opens *"Your Tandem trial has ended"*; the collaborator's
 `LICENSE_REQUIRED` body repeats it; `license-gate.ts`'s own docblock says *"trial expired"*. This
 is copy, not mechanism — the `LicenseStatus` union (`"trial" | "licensed" | "restricted"`) is a
-state name, and the on-device trial clock is a separate question the amendment did not strike.
+state name, and the 14-day trial clock is confirmed unchanged. The replacement strings are now
+decided — see the copy table in ADR-040's second amendment (2026-08-19). This paragraph stands
+until the code carries them, and `tests/docs/ai-surface-inventory-claims.test.ts` pins it to that
+fact rather than to the intent.
 
 ## Delivery: why the email looks the way it does
 
