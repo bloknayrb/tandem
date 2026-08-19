@@ -420,6 +420,30 @@ const GUTTER_NODE_TYPES = new Set(["paragraph", "heading"]);
  * fallback count (entries that used to paint stale offsets now decline), so the
  * latch is a precondition for the resolver fix rather than a tidy-up.
  */
+/**
+ * Does an inserted span carry anything a reader would call authored content?
+ *
+ * A block-structure change (Enter, `splitListItem`) inserts a boundary, and the
+ * flat coordinate system charges that boundary one character — so the insertion
+ * branch below mints an entry covering a separator and no text at all.
+ *
+ * `textBetween` alone would be the wrong test: an inline atom renders as no
+ * text, so a hardBreak or an image insertion would stop being attributed. The
+ * atom scan is deliberately conservative — `nodesBetween` visits nodes merely
+ * OVERLAPPING the range, so a false positive keeps a stamp rather than dropping
+ * one, which is the safe direction for an attribution feature.
+ */
+function spanCarriesContent(doc: PmNode, from: PmPos, to: PmPos): boolean {
+  if (doc.textBetween(from, to).length > 0) return true;
+  let atom = false;
+  doc.nodesBetween(from, to, (node) => {
+    if (atom) return false;
+    if (node.isInline && node.isAtom) atom = true;
+    return !atom;
+  });
+  return atom;
+}
+
 const warnedKeys = new Set<string>();
 function warnOnce(key: string, ...args: unknown[]): void {
   if (warnedKeys.has(key)) return;
@@ -867,6 +891,18 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
             };
             const range = pmSelectionToFlat(pmDoc, pm);
             if (range.to <= range.from) return;
+            // An Enter inserts a block boundary and nothing else, and the flat
+            // system charges that boundary one character — so this branch used
+            // to mint an entry covering a separator and no text.
+            //
+            // Usually coalescing swallowed it, which is why #1512 calls it
+            // harmless. It is not harmless when the split lands at the END of a
+            // block: the separator offset sits between two texts, so
+            // `flatOffsetToRelPos` declines, the entry is stored with frozen
+            // flat offsets and no anchor, and it paints through the flat
+            // fallback — "a confident decoration on the wrong text", on an
+            // authorship-tagged split. Measured via `splitListItem`.
+            if (!spanCarriesContent(pmDoc, pm.from, pm.to)) return;
             // Anchor against the LIVE ydoc, which y-prosemirror has already
             // written: Tiptap's `dispatchTransaction` calls `view.updateState`
             // and emits `transaction` on the very next line, both synchronously,
