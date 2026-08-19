@@ -67,13 +67,95 @@ false statement and damage the ADR-045 story, which is correct as written.
   mode is what lets one long-lived transport per session serve many requests,
   which is what Tandem does today and remains correct for the protocol
   versions it speaks.
-- ADR-045's 2026-07-30 amendment still quotes the old wording and still asks
-  for the probe that this file records. Rewriting it is a decision, not an
-  edit — it depends on #1505 (dual-era adoption) and #1249 — and is tracked in
-  **#1332**.
 
 ## Not measured
 
 No live stateless server was stood up, and no SDK v2 (`createMcpHandler`) was
 exercised. Those belong with #1505's dual-era work. This file answers only the
 narrow ADR-012 claim.
+
+## Addendum (#1332): v2's legacy composition — GA, not unreleased
+
+**v2 shipped.** `@modelcontextprotocol/server@2.0.0` (with `/core`, `/client`,
+`/server-legacy`) published to npm **2026-07-27** — confirmed via
+`curl https://registry.npmjs.org/@modelcontextprotocol/server` (`time`
+field: `2026-07-27T23:55:22Z`) and via `npm pack
+@modelcontextprotocol/server@2.0.0` / `@modelcontextprotocol/core@2.0.0`,
+inspected locally. `@modelcontextprotocol/sdk` — the name Tandem's
+`package.json` pins at `^1.12.1`, resolved by `package-lock.json` to
+`1.30.0` (published the same day, `2026-07-27T17:56:01Z`, six hours
+earlier) — is the **retired umbrella package**, not a missing release: its
+monorepo root `package.json` is `"private": true` at a placeholder
+`"2.0.0-alpha.0"` that was never published (`npm view
+@modelcontextprotocol/sdk dist-tags` still reads `{"latest":"1.30.0"}`;
+none of its 79 published versions start with `2.`).
+
+Every mechanism claim below cites the **published tarball**
+(`npm pack`, inspected locally) rather than the `typescript-sdk` monorepo's
+`main` branch, which by the time it was read (commit `3924de99`,
+2026-08-18) was already ~3 weeks past the `2.0.0` tag — post-release main,
+not the released package. The one exception is noted inline.
+
+- `@modelcontextprotocol/server@2.0.0`'s published type declarations
+  (`dist/createMcpHandler-dBHMsxwf.d.cts:3854`) declare
+  `legacy?: 'stateless' | 'reject'` — no stateful legacy option on the type
+  itself. The published runtime (`dist/index.mjs`) throws
+  `TypeError("The 'legacy' option only accepts 'stateless' or 'reject', not
+  a handler function...")` for a function-valued option (message text
+  grepped verbatim from that file; the construction-time guard's line
+  numbers — `packages/server/src/server/createMcpHandler.ts:622-633` — are
+  the one post-release-`main` citation in this list, since the tarball's
+  bundled runtime has no source line numbers of its own).
+- The default, `'stateless'` (same `.d.cts`, `CreateMcpHandlerOptions.legacy`
+  doc comment): each legacy request is served "by a fresh instance from the
+  same factory over a streamable HTTP transport constructed with only
+  `sessionIdGenerator: undefined`"; GET/DELETE answered `405` /
+  `Method not allowed.`.
+- `'reject'`: legacy-classified requests are rejected with the
+  unsupported-protocol-version error naming the endpoint's supported
+  revisions (notifications acknowledged `202` and dropped) — there is no
+  2025 serving in that mode.
+- The published `.d.cts` documents and exports a composition seam for
+  keeping a *stateful* legacy branch anyway: `isLegacyRequest`
+  (`dist/createMcpHandler-dBHMsxwf.d.cts:3997`), routed in user land in
+  front of a `legacy: 'reject'` handler — the doc comment's own example,
+  "an existing legacy deployment (for example a sessionful streamable HTTP
+  wiring)," is preserved verbatim in the published bundle (:3849, :3956),
+  not just monorepo narrative. So Decisions 1/3/4 stay buildable, just no
+  longer an SDK-provided posture of `createMcpHandler` itself.
+- `WebStandardStreamableHTTPServerTransport` — the stateful transport class
+  — is still exported (`dist/index.d.cts:605` declares it, `:738`'s export
+  statement lists it alongside `createMcpHandler`, `isLegacyRequest`,
+  `legacyStatelessFallback`, `CLIENT_INFO_META_KEY`, and `Implementation`,
+  all six in one statement). v2 did not remove stateful transports; only
+  `createMcpHandler`'s own built-in posture is limited to
+  `'stateless' | 'reject'`.
+- `CLIENT_INFO_META_KEY` is `'io.modelcontextprotocol/clientInfo'` — found
+  directly in the published `@modelcontextprotocol/core@2.0.0` runtime
+  bundle (`dist/auth-CUe6YdwF.mjs:32`), unchanged from the value ADR-045
+  Decision 6 already cites.
+- `ImplementationSchema` (same package, `dist/auth-CUe6YdwF.mjs:260-265`)
+  extends `BaseMetadataSchema` (`name`, optional `title`) with
+  `IconsSchema` (optional `icons`), `version` (required), and optional
+  `websiteUrl` / `description` — six fields, matching what `decisions.md`'s
+  Decision 6 correction now states.
+
+One item is settled from the SDK Tandem actually runs, not the v2 read
+above: **the stateless legacy path emits no `Mcp-Session-Id` header at
+all.** Issue #1332's own v2 bullet reports "legacy `initialize` returns 200
+with `Mcp-Session-Id: null`"; that `null` is `Headers.get()` on an absent
+header, not a sent value — the same rendering appears in the #1253 probe
+table's *content-type* slot for the `500` rows (issue #1332's body uses
+`status content-type :: body`, and rows 2-4 read `500 null ::`). Confirmed
+two ways: the **installed 1.30.0**
+(`node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js`)
+sets `this.sessionId = this.sessionIdGenerator?.()` on init (:530), and
+every response path that writes the header guards it with
+`if (this.sessionId !== undefined)` (:278-279, :331-332, :624-625,
+:924-925) — with no `sessionIdGenerator`, the header is never written. The
+**published `@modelcontextprotocol/server@2.0.0`** runtime carries the
+identical pattern: `dist/index.mjs` sets `this.sessionId =
+this.sessionIdGenerator?.()` at :666, guarded at :490, :533, :718, :890.
+
+Still not measured: no live v2 server was exercised, only source/tarball
+reads; adoption timing is unchanged and still belongs with #1505.
