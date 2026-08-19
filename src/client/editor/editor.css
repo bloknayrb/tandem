@@ -158,6 +158,31 @@
 .tandem-editor th {
   background: var(--tandem-surface-muted);
   font-weight: 600;
+  /* Deliberate visual change (#995). The UA stylesheet centres `th`, and nothing
+     here overrode it, so every header cell was centred. Once GFM column
+     alignment renders (see below), leaving that in place would make
+     `| :- | --- | -: |` show header 0 left, header 1 CENTRED and header 2 right
+     — the centred one being the column with no alignment declared at all. A row
+     whose only centred column is the unaligned one reads as broken. Left matches
+     the body cells, and matches how GitHub and every reset-using GFM renderer
+     display an unaligned header. */
+  text-align: left;
+}
+/* GFM column alignment (#995). Applied per cell by
+   `extensions/table-column-align.ts`, which resolves each cell's column through
+   prosemirror-tables' TableMap — the table-level `align` array cannot be
+   expressed as a selector, because a column's cells are not siblings and
+   colspan/rowspan break `:nth-child`. Specificity (0,2,0) clears the
+   `.tandem-editor td` / `.tandem-editor th` rules above; `text-align` inherits
+   into the cell's child paragraph, so no descendant rule is needed. */
+.tandem-editor .tandem-cell-align-left {
+  text-align: left;
+}
+.tandem-editor .tandem-cell-align-center {
+  text-align: center;
+}
+.tandem-editor .tandem-cell-align-right {
+  text-align: right;
 }
 .tandem-editor blockquote {
   border-left: 2px solid var(--tandem-border-strong);

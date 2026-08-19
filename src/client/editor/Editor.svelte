@@ -173,10 +173,13 @@ $effect(() => {
       FindReplaceExtension,
       SelectionDecorationExtension,
       // A4: opt-in smart typography (smart quotes/dashes/ellipsis as you
-      // type). Input-rules-only — no new nodes/marks — so it stays out of
-      // buildSchemaExtensions() and is appended here like the other
-      // runtime-param extensions. Default off; conditionally included based
-      // on the tracked `smartTypographyOn` above.
+      // type). Default off; conditionally included based on the tracked
+      // `smartTypographyOn` above — and that CONDITIONAL INCLUSION is why it
+      // is assembled here rather than in buildSchemaExtensions(), which takes
+      // no params and cannot see a setting. Adding no nodes or marks is not by
+      // itself the test: TableColumnAlignExtension (#995) adds neither and does
+      // live in that builder, deliberately, so the client tests exercise its
+      // real registration.
       ...(smartTypographyOn ? [Typography] : []),
       // #1460: a plaintext document cannot store a newline inside a textblock,
       // so Shift+Enter has to split the block instead of inserting a hardBreak.

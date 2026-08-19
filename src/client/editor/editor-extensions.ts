@@ -17,6 +17,7 @@ import { ListItemCheckbox } from "./extensions/list-item-checkbox";
 import { ListSpreadExtension } from "./extensions/list-spread";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { RawMarkdownMark } from "./extensions/raw-markdown";
+import { TableColumnAlignExtension } from "./extensions/table-column-align";
 import { isSafeExternalHref, isSchemelessPathHref } from "./utils/url-safety";
 
 // Link mark that surfaces the destination URL on hover via a native `title`
@@ -279,6 +280,22 @@ export function buildSchemaExtensions(): AnyExtension[] {
     TableRow,
     TableCell,
     TableHeader,
+    // Renders the `align` array above as `text-align` on each cell (#995).
+    // Decoration-only — it adds no node, mark or attribute — so it contributes
+    // nothing to `getSchema()`. It lives in this builder anyway, deliberately:
+    // this is what the client tests build editors from, so registering here is
+    // what makes "the extension is actually wired into production" a thing the
+    // unit suite can fail on. Appending it in Editor.svelte instead would let
+    // every test pass with the feature unwired.
+    //
+    // Being here places it BEFORE annotation/authorship/heading-collapse in
+    // decoration order (see Editor.svelte, #650). Inert today: no other
+    // Decoration.node in src/client emits `text-align`. Note prosemirror-view
+    // concatenates `class` AND `style` alike — the reason to keep this a `class`
+    // is that concatenated styles apply via `cssText +=`, so two decorations
+    // setting `text-align` would resolve by registration order. See the
+    // extension's header comment.
+    TableColumnAlignExtension,
     MarkdownHtmlExtension,
     // Inline mark for verbatim markdown source (footnote/reference refs, inline
     // image/html). Name must match the server `rawMarkdown` delta key so it
