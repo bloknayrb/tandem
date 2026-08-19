@@ -262,9 +262,88 @@ describe("attribution survives a block-structure change", () => {
     );
 
     const rendered = decoratedTextByAuthor(ydoc, editor);
+    // THE POSITIVE ANCHOR, and it is the whole reason this test can fail.
+    // Review found the original version passing with the repair disabled:
+    // without it the user entry does not render AT ALL, so `rendered.user` is
+    // undefined and every assertion below is satisfied by an empty universe —
+    // `claude` is right, nothing contains `CC`, and no character is covered
+    // twice because barely anything is covered at all.
+    expect(rendered.user?.join(""), "the user's own text must still be attributed").toContain(
+      "TEXT",
+    );
     expect(rendered.claude).toEqual(["CC"]);
     expect(rendered.user?.join("")).not.toContain("CC");
     expect(Math.max(...coverageCounts(ydoc, editor)), "no character has two authors").toBe(1);
+  });
+
+  it("a SAME-author insertion in the same transaction as a split keeps the tail", () => {
+    // The sibling of the case above, and the one that was silently broken on
+    // master too — measured byte-identical there, so this is a gap the repair
+    // closes rather than a regression it introduced.
+    //
+    // A split destroys the entry's `toRel`, and Yjs resolves the destroyed
+    // anchor to the LEFT EDGE of the deletion, which for a mid-run split is
+    // exactly where the new text was typed. `coalesceIntoPrevious`'s adjacency
+    // test therefore passes on a coincidence, merges into the dead entry, and
+    // rewrites its `toRel` to the split boundary — losing everything past it
+    // forever, since anchored entries are never reaped. The merge also keeps
+    // the candidate's id, which made `reanchorCaptured` skip the very entry it
+    // exists to rebuild. Coalescing is now refused outright on a structural
+    // transaction.
+    const { ydoc, editor } = boundEditor("seed\n");
+    const { start, mid } = seedUserText(editor);
+
+    // Same author on both halves — no `AUTHORSHIP_ORIGIN_META`.
+    editor.view.dispatch(editor.state.tr.insertText("CC", mid).split(start + 6));
+
+    expect(editor.state.doc.childCount, "the paragraph really did split").toBe(2);
+    const rendered = decoratedTextByAuthor(ydoc, editor);
+    expect(rendered.user?.join("|"), "the tail past the split must still be attributed").toContain(
+      "TEXT",
+    );
+    // Two entries describing overlapping characters, both `user`. That is the
+    // tolerated shape, not a defect: `splitCoveringEntries` cuts only when the
+    // authors differ, and the gutter resolves an author PER CHARACTER, so a
+    // same-author overlap cannot skew `dominant` (#1513). The assertion that
+    // matters is that no character ends up with two DIFFERENT authors.
+    expect(new Set(Object.keys(rendered)), "nothing is attributed to claude").toEqual(
+      new Set(["user"]),
+    );
+  });
+
+  it("a repaired sibling never overwrites an id already in the map", () => {
+    // Review found no uniqueness guard on the sibling id and could not force a
+    // natural collision, so this plants one rather than arguing about
+    // reachability. The overwrite is a silent `Y.Map.set` over a live entry
+    // covering unrelated text — nothing warns — so the guard is worth having
+    // whether or not the natural path is reachable today.
+    const { ydoc, editor, entries } = boundEditor("seed\n");
+    const { start, mid } = seedUserText(editor);
+    const base = entries()[0].id;
+
+    // A decoy sitting exactly where the repair wants to mint. Unanchored on
+    // purpose: `capturePositions` skips entries without a `relRange`, so it is
+    // never captured and can only be destroyed by a blind overwrite.
+    const decoy = {
+      id: base + "#r1",
+      author: "claude" as const,
+      range: { from: 0, to: 4 },
+      timestamp: 1,
+    };
+    ydoc.getMap(Y_MAP_AUTHORSHIP).set(decoy.id, decoy);
+
+    // A split plus another author's insertion inside the entry — the shape that
+    // makes the repair emit more than one span, and so mint a sibling.
+    editor.view.dispatch(
+      editor.state.tr
+        .insertText("CC", mid)
+        .split(start + 6)
+        .setMeta(AUTHORSHIP_ORIGIN_META, "claude"),
+    );
+
+    const survivor = entries().find((entry) => entry.id === decoy.id);
+    expect(survivor, "the decoy must still be in the map").toBeDefined();
+    expect(survivor?.range, "and must not have been overwritten").toEqual({ from: 0, to: 4 });
   });
 
   it("an entry the change did not touch is left byte-identical", () => {

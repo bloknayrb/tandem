@@ -611,7 +611,7 @@ function reanchorCaptured(
         index === 0
           ? { ...entry, range: span, relRange }
           : {
-              id: `${entry.id}#r${index}`,
+              id: freshSiblingId(authorshipMap, entry.id, index),
               author: entry.author,
               range: span,
               relRange,
@@ -633,6 +633,30 @@ function reanchorCaptured(
   }
 
   return repaired;
+}
+
+/**
+ * A sibling id that is unique in the map, and still a `${base}#…` sibling.
+ *
+ * Both halves are load-bearing. The PREFIX cannot be dropped for a fresh random
+ * id: `stampClaudeAuthorshipWholeDoc` sweeps stale siblings by scanning for
+ * `key.startsWith(`${base}#`)` (`src/server/mcp/document.ts`), so a repaired
+ * piece of `claude-block-3` that did not carry the prefix would survive a
+ * re-open as an orphan under the restored whole-block range.
+ *
+ * The UNIQUENESS cannot be assumed from the loop index, which is what an
+ * earlier version did. `capturePositions` walks every anchored entry including
+ * siblings an earlier repair created, so a second multi-span repair of the same
+ * base regenerates `#r1` and `Y.Map.set` silently overwrites a live entry
+ * covering unrelated text. Nothing warns on that path — `warnOnce` fires only
+ * on a decline — so the guard is cheap next to a loss no one would ever see.
+ */
+function freshSiblingId(authorshipMap: Y.Map<unknown>, baseId: string, index: number): string {
+  let candidate = `${baseId}#r${index}`;
+  for (let bump = 2; authorshipMap.has(candidate); bump++) {
+    candidate = `${baseId}#r${index}_${bump}`;
+  }
+  return candidate;
 }
 
 /**
@@ -1229,12 +1253,43 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
     // ydoc, which already holds every one of this transaction's insertions.
     const splitPieces = splitCoveringEntries(ydoc, authorshipMap, pmDoc, insertedSpans, author);
 
+    // #1512: put back what a block-structure change destroyed. The capture was
+    // taken during `apply`, the last point at which the pre-change Y.Doc was
+    // readable, and it is valid for THIS transaction only — an appended
+    // transaction invalidates the round, so a mismatch means "do not map".
+    //
+    // Read before the map write below, never after: that write drives an
+    // observer which dispatches a ProseMirror rebuild. Read before COALESCING
+    // too, for the reason in the next comment.
+    const pluginCapture = (
+      authorshipPluginKey.getState(editor.state) as AuthorshipPluginState | undefined
+    )?.capture;
+    const structuralCapture = pluginCapture?.transaction === transaction ? pluginCapture : null;
+
     // Coalescing, and only for a transaction that produced EXACTLY ONE stamp.
     // Typing is exactly that; a multi-insertion transaction (find-replace-all)
     // produces several non-adjacent stamps, is not repeated per keystroke, and
     // has no single "the stamp" to extend.
+    // NEVER COALESCE ON A STRUCTURAL TRANSACTION (#1512). Measured, because the
+    // failure is silent and survives every other guard in this file: one
+    // transaction that both types same-author text and splits the block ends
+    // up attributing `USERCC` and losing `TEXT` entirely.
+    //
+    // The mechanism is a coincidence, not a bug in the adjacency test. A split
+    // destroys the candidate's `toRel`, and Yjs resolves the destroyed anchor
+    // to the LEFT EDGE of the deletion — which for a mid-run split is exactly
+    // the insertion's start. So `at.to === insertion.pm.from` passes, the merge
+    // looks legitimate, and it rewrites the candidate's `toRel` to the split
+    // boundary. Everything past the split is then unreachable forever, since
+    // anchored entries are never reaped.
+    //
+    // Worse, the merge keeps the candidate's id, which puts it in
+    // `alreadyWritten` and makes `reanchorCaptured` skip the very entry it
+    // exists to rebuild. This predates the repair — measured identical on
+    // master — but the repair cannot land without it, because the repair is
+    // what claims this case is fixed.
     const merged =
-      additions.length === 1 && insertedSpans.length === 1
+      !structuralCapture && additions.length === 1 && insertedSpans.length === 1
         ? coalesceIntoPrevious(
             ydoc,
             authorshipMap,
@@ -1260,32 +1315,21 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
     if (additions.length === 1) this.storage.lastStampId = additions[0].id;
     else if (additions.length > 1) this.storage.lastStampId = null;
 
-    // #1512: put back what a block-structure change destroyed. The capture was
-    // taken during `apply`, the last point at which the pre-change Y.Doc was
-    // readable, and it is valid for THIS transaction only — an appended
-    // transaction invalidates the round, so a mismatch means "do not map".
-    //
-    // Read before the write below, never after: the map write drives an
-    // observer that dispatches a ProseMirror rebuild.
-    const capture = (
-      authorshipPluginKey.getState(editor.state) as AuthorshipPluginState | undefined
-    )?.capture;
-    const repairs =
-      capture?.transaction === transaction
-        ? reanchorCaptured(
-            ydoc,
-            authorshipMap,
-            pmDoc,
-            transaction.mapping,
-            capture.positions,
-            insertedSpans,
-            author,
-            // Ids this transaction has already rewritten. Both sets target
-            // anchored entries by id, so without this the two passes could
-            // write the same id and loop order would decide the winner.
-            new Set([...splitPieces.map((p) => p.id), ...additions.map((a) => a.id)]),
-          )
-        : [];
+    const repairs = structuralCapture
+      ? reanchorCaptured(
+          ydoc,
+          authorshipMap,
+          pmDoc,
+          transaction.mapping,
+          structuralCapture.positions,
+          insertedSpans,
+          author,
+          // Ids this transaction has already rewritten. Both sets target
+          // anchored entries by id, so without this the two passes could
+          // write the same id and loop order would decide the winner.
+          new Set([...splitPieces.map((p) => p.id), ...additions.map((a) => a.id)]),
+        )
+      : [];
 
     if (
       additions.length === 0 &&
