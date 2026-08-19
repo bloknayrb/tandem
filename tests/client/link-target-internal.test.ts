@@ -27,6 +27,7 @@ import { Editor } from "@tiptap/core";
 import { isAllowedUri as tiptapDefaultIsAllowedUri } from "@tiptap/extension-link";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
+import { isSafeExternalHref } from "../../src/client/editor/utils/url-safety";
 
 let open: { editor: Editor; container: HTMLDivElement } | null = null;
 
@@ -236,6 +237,192 @@ describe("render-time scheme guard (the configured isAllowedUri)", () => {
     // the same bug wearing a different hat.
     const { anchor } = renderLinkFromHtml("docs/spec.md");
     expect(anchor?.getAttribute("href")).toBe("docs/spec.md");
+  });
+});
+
+/**
+ * The app's own origin, as the editor sees it. Any base URL works — what the
+ * property below cares about is only whether an href resolves AWAY from it.
+ */
+const APP_BASE = "http://127.0.0.1:5173/docs/x.html";
+const APP_ORIGIN = new URL(APP_BASE).origin;
+
+/** Where a browser would actually go for this href. `"THROWS"` for unparseable. */
+function resolvedOrigin(href: string): string {
+  try {
+    return new URL(href, APP_BASE).origin;
+  } catch {
+    return "THROWS";
+  }
+}
+
+/**
+ * Cross-host href spellings, generated as PREFIX × AUTHORITY rather than
+ * hand-listed (#1420).
+ *
+ * A hand-written list of the spellings the implementation was written against
+ * proves only self-consistency: the first cut of the render veto ran
+ * `rejectUnsafeWindowsPrefix` — which is anchored at index 0 — against the raw
+ * string, so a single leading SPACE walked past it while Tiptap's
+ * `defaultValidate` still returned true, and a four-row list of the unprefixed
+ * spellings went green with the bypass wide open. The cross product is what
+ * catches a prefix nobody thought of.
+ *
+ * The delivery path is file IMPORT, not just paste: remark preserves the space
+ * inside a pointy-bracket destination (`[x](< /\evil.com/x.md>)`) and
+ * `mdast-ydoc.ts` writes `href: node.url` with no sanitization.
+ */
+const HOSTILE_PREFIXES = ["", " ", "  ", "\t", "\n", "\r", "\u0000", "\u000B", "\u001F"];
+const HOSTILE_AUTHORITIES = [
+  "//evil.com/x.md",
+  "/\\evil.com/x.md",
+  "\\/evil.com/x.md",
+  "\\\\evil.com\\share\\x.md",
+  // A Word hyperlink to a file share — the shape enterprise `.docx` files
+  // actually contain, and Tandem's named NTLM-hash-leak vector.
+  "\\\\fileserver\\docs\\spec.docx",
+  "\\\\?\\C:\\x.md",
+];
+
+/**
+ * The corpus is FILTERED BY THE PROPERTY, not by hand: a generated spelling
+ * qualifies only if a browser really resolves it off-origin AND the click gate
+ * does not sanction it as an external link. That drops the bare `//evil.com/…`
+ * row (sanctioned — see the carve-out test below) without a hand-maintained
+ * exception list, and it keeps the corpus honest if `new URL` semantics move.
+ * `CORPUS_MUST_CONTAIN` below pins it against silently filtering itself empty.
+ */
+const CROSS_HOST_CANDIDATES: string[] = HOSTILE_PREFIXES.flatMap((prefix) =>
+  HOSTILE_AUTHORITIES.map((authority) => prefix + authority),
+)
+  .concat([
+    // Leading whitespace in front of an otherwise-allowlisted external URL.
+    // `isSafeExternalHref` does not trim, so the click gate treats this as a
+    // relative path while the browser treats it as an external navigation.
+    " https://evil.com/x.md",
+    "\thttps://evil.com/x.md",
+    // A SCHEME moves the authority past index 0, where
+    // `rejectUnsafeWindowsPrefix` is anchored — it slices [0,8) and sees
+    // `"http:\\e"`, which passes. Special schemes are parsed
+    // authority-leniently, so all of these resolve cross-host while
+    // `isSafeExternalHref` (a literal `"http://"` test) says false — which
+    // strips `target="_blank"` and makes an escaped middle click navigate the
+    // EDITOR FRAME rather than open a second tab.
+    "http:/\\evil.com/x",
+    "https:/evil.com/x",
+    "https:/\\evil.com/x",
+    "http:\\\\evil.com\\x",
+    "http:\\/evil.com/x",
+    "HTTP:/\\evil.com/x",
+    "ftp:/\\evil.com/x",
+  ])
+  .filter((href) => resolvedOrigin(href) !== APP_ORIGIN && !isSafeExternalHref(href));
+
+/**
+ * Spellings the corpus must still contain. Without this, a filter that stopped
+ * matching would empty the corpus and `it.each` would report zero failures —
+ * the classic green-because-it-ran-nothing outcome. The second row is the one
+ * the first cut of the veto missed: `rejectUnsafeWindowsPrefix` is anchored at
+ * index 0, so one leading space walked past it.
+ */
+const CORPUS_MUST_CONTAIN = [
+  "/\\evil.com/x.md",
+  " /\\evil.com/x.md",
+  "  //evil.com/x.md",
+  "\u0000//evil.com/x.md",
+  " \\\\evil.com\\share\\x.md",
+  "\\\\fileserver\\docs\\spec.docx",
+  " https://evil.com/x.md",
+  "http:/\\evil.com/x",
+  "https:/evil.com/x",
+];
+
+/**
+ * Hrefs that must KEEP rendering live. These are the rows that catch an
+ * over-broad narrowing — reusing `URL_HOSTILE_CHARS` (which contains U+0020)
+ * blanks the `a b.md` rows, and "reject any backslash" blanks `docs\spec.md`,
+ * which Windows-authored markdown produces and `relative-link.ts` resolves
+ * correctly.
+ */
+const MUST_STAY_LIVE = [
+  "docs/spec.md",
+  "docs\\spec.md",
+  "./spec.md",
+  "../docs/spec.md",
+  "/abs/spec.md",
+  "notes.md",
+  "docs/spec.md?x=1",
+  "//example.com/x",
+  "https://example.com",
+  "HTTPS://example.com",
+  "https://example.com/a b.md",
+  "mailto:a@b.c",
+  "ftp://example.com/x",
+  // `isSafeExternalHref` accepts this (it starts with `https://`), so `openHref`
+  // opens it via `window.open` with `_blank` and `noopener` intact — an ordinary
+  // declared external link, not a render/click disagreement. It resolves to
+  // `https://evil.com/x`, and that is the SANCTIONED behaviour for an external
+  // href; the clause must not over-reach into it.
+  "https:///evil.com/x",
+];
+
+describe("render-time cross-host veto (#1420)", () => {
+  it.each(CORPUS_MUST_CONTAIN)("the generated corpus still contains %j", (href) => {
+    expect(CROSS_HOST_CANDIDATES).toContain(href);
+  });
+
+  // THE INVARIANT, stated as an observable property rather than as a list:
+  // nothing that resolves off the app's origin may render as a live link,
+  // unless it is one of the external forms the click gate itself would hand to
+  // `window.open`. Derived from `new URL()` + `isSafeExternalHref`, neither of
+  // which is the code under test.
+  it.each(CROSS_HOST_CANDIDATES)("%j resolves off-origin, so it must not render live", (href) => {
+    const anchor = renderLink(href);
+    expect(anchor, "no anchor rendered").toBeTruthy();
+    expect(anchor?.getAttribute("href")).toBe("");
+    expect(anchor?.hasAttribute("title")).toBe(false);
+    expect(anchor?.hasAttribute("target")).toBe(false);
+  });
+
+  it.each(CROSS_HOST_CANDIDATES)("%j is refused on the parseHTML path too", (href) => {
+    const { anchor } = renderLinkFromHtml(href);
+    expect(anchor === null || anchor.getAttribute("href") === "").toBe(true);
+  });
+
+  it.each(MUST_STAY_LIVE)("%j still renders live", (href) => {
+    const anchor = renderLink(href);
+    expect(anchor?.getAttribute("href")).toBe(href);
+  });
+
+  it("the `//` carve-out is deliberate: it is a FOURTH cross-host spelling", () => {
+    // Stated explicitly because the veto's safety argument ("it blanks exactly
+    // the prefixes `resolveRelativeLink` refuses") is true only because this
+    // one was carved out. It stays live because `openHref` routes it to
+    // `window.open` as a declared external link, exactly like `https://`.
+    expect(resolvedOrigin("//example.com/x")).not.toBe(APP_ORIGIN);
+    expect(isSafeExternalHref("//example.com/x")).toBe(true);
+    expect(renderLink("//example.com/x")?.getAttribute("href")).toBe("//example.com/x");
+  });
+
+  it("blanks a same-origin NBSP-prefixed authority too (over-rejection is deliberate)", () => {
+    // U+00A0 is not stripped by the URL parser, so this resolves SAME-origin and
+    // is not part of the cross-host corpus. The veto blanks it anyway, because
+    // `trimStart` treats it as leading whitespace. Monotonic toward rejection,
+    // and no legitimate href begins with a non-breaking space — pinned so the
+    // over-rejection is a decision on the record rather than an accident.
+    const href = "\u00A0//evil.com/x.md";
+    expect(resolvedOrigin(href)).toBe(APP_ORIGIN);
+    expect(renderLink(href)?.getAttribute("href")).toBe("");
+  });
+
+  it("does NOT cover bidi overrides — tooltip spoofing is tracked residue, not fixed", () => {
+    // U+202E sits outside both char sets. Navigation is safe (it resolves
+    // same-origin, percent-encoded), but `LinkWithHoverTitle` mirrors the raw
+    // href into `title`, so the tooltip can read as a different host. Pinned so
+    // the residue in docs/security.md stays honest rather than drifting.
+    const href = "\u202E//evil.com/x.md";
+    expect(resolvedOrigin(href)).toBe(APP_ORIGIN);
+    expect(renderLink(href)?.getAttribute("href")).toBe(href);
   });
 });
 

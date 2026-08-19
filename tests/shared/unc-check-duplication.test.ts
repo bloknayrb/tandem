@@ -34,8 +34,15 @@ const ALLOWED = new Map<string, string>([
   ],
   [
     "src/client/editor/utils/url-safety.ts",
-    "Not a UNC check at all: `//host/x` is a protocol-relative URL, rejected because it is an " +
-      "EXTERNAL navigation rather than a document-relative path. Same spelling, different domain.",
+    "Not a UNC check at all, and the file now carries TWO occurrences of the spelling with " +
+      "OPPOSITE polarity — both deliberate. In `isSchemelessPathHref`, `//host/x` is REJECTED " +
+      "because a protocol-relative URL is an EXTERNAL navigation rather than a document-relative " +
+      "path. In `isRenderableLinkHref` (the render-time veto added in #1420) the same test " +
+      "ACCEPTS, and is the one carve-out in a predicate that otherwise refuses every " +
+      "cross-host prefix: `//` is in `SAFE_EXTERNAL_PREFIXES`, so `openHref` hands it to " +
+      "`window.open` exactly like an `https://` URL — a declared external link, not a " +
+      "relative-looking disguise. Neither occurrence is standing in for a UNC check; the actual " +
+      "UNC rule in that file is delegated to `rejectUnsafeWindowsPrefix`.",
   ],
   [
     "src/shared/image-src-safety.ts",
