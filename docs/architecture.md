@@ -214,6 +214,8 @@ Chat is **session-scoped**, stored on the `__tandem_ctrl__` Y.Doc (not per-docum
 
 `Y.Map('chat')` on the `__tandem_ctrl__` Y.Doc holds all chat messages keyed by message ID. Each message has `id`, `author` (user/claude), `text`, `timestamp`, and optionally `documentId` and `replyTo`.
 
+**Streaming sidecar (#1340):** while a Claude reply is being token-streamed, its full text-so-far lives in one `Y.Text` per message in `Y.Map('chatStream')` (`Y_MAP_CHAT_STREAM`), keyed by message id — `updateClaudeChatMessage` diff-splices O(delta) appends into it instead of re-`set`ting the whole message value per flush (which was O(n²) on the wire). While the sidecar entry exists it is authoritative over the row's `text` (the client composes in `useChatState.refresh`); `finalizeClaudeChatMessage` folds the text back into the plain chat row and deletes the entry. Durable snapshots never carry a live sidecar entry: `persistCtrlSnapshot` folds on the snapshot clone, and `restoreCtrlDoc` sweeps (fold-or-delete) anything a restored snapshot carried. Both folds drop an entry that is not a non-empty `Y.Text` with a live chat row rather than writing it over the row. Nothing structural forces the terminal `finalize` call, so `foldChatStream` — the one path that enumerates live entries regardless of producer activity — reconciles the `chat-stream-staleness.ts` ledger on every persist and restore and warns once (stderr) for an entry still live after 10 minutes.
+
 ### User → Claude
 
 ```
@@ -577,6 +579,7 @@ Each Y.Map has observers attached by different subsystems. Understanding who own
 | `awareness` | Client Svelte hook | `yjsSync.svelte.ts` → `setupTabObservers()` | Drive "Claude -- typing" status indicator |
 | `userAwareness` | Server event queue | `events/observers/awareness.ts`, via `observers/factory.ts` | Buffer selection for chat messages |
 | `chat` (CTRL_ROOM) | Server event queue | `events/observers/ctrl-chat.ts`, attached via `attachCtrlObservers()` | Emit `chat:message` |
+| `chatStream` (CTRL_ROOM) | Client Svelte hook | `useChatState.svelte.ts` `$effect` — **deep** observe (`observeDeep`), since nested `Y.Text` edits don't fire a plain `observe` | Live-compose in-flight streamed reply text (#1340). **No server-side observer** — server write-only. |
 | `documentMeta` (CTRL_ROOM) | Server event queue | `events/observers/ctrl-meta.ts`, via `attachCtrlObservers()` | Emit `document:opened` / `closed` / `switched` (the latter from `activeDocumentId`) |
 | `annotationReplies` | Server event queue | `events/observers/replies.ts`, via `observers/factory.ts` | Emit reply events |
 | `documentMeta` (CTRL_ROOM) | Client Svelte hook | `yjsSync.svelte.ts` → `handleDocumentListRef` | Sync tab list from server broadcasts (CTRL_ROOM) |
@@ -874,6 +877,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer + subscriber-gated payload tracking), `sse.ts` (SSE endpoint handler), `push-liveness.ts` (consumer heartbeat counters — diagnostics only, never Claude's presence), `observers/` (per-map event derivation), `file-sync-registry.ts` (durable-annotation file-watcher binding), `wake-socket.ts` (the self-armed `ws://…/api/wake` transport — ADR-049), `delivery-state.ts` (per-item surfaced/pushed bookkeeping)
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `mode.ts` -- Solo/Tandem authority (CTRL_ROOM `Y_MAP_MODE`), read by `shouldForwardExternally`
+- `chat-stream-staleness.ts` -- Abandoned-`chatStream`-entry tripwire (#1340): the ledger + warn-once sweep shared by `mcp/awareness.ts` (seeds) and `session/manager.ts`'s `foldChatStream` (checks). A leaf module with no project imports — `session/manager.ts` cannot import `mcp/awareness.ts` without a cycle
 - `startup-file.ts` -- `maybeOpenStartupFile()`; consumes `TANDEM_OPEN_FILE` before HTTP bind
 - `bind-check.ts` -- Bind-host policy: `TANDEM_BIND_HOST`, `TANDEM_LAN_IP`, wildcard handling, the token-provisioned refusal
 - `documents/` -- Per-document state helpers
