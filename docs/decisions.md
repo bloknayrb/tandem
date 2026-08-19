@@ -879,7 +879,7 @@ Both are silent from the user's perspective today; both end when the integration
 
 ## ADR-040: Audience and Monetization (Individuals; Same-Canvas Moat; Free Beta to One-Time License)
 
-**Status:** Accepted (2026-06-12) — Supersedes the institutional-market and undecided-revenue framing in docs/positioning.md. All sections (§1–§6) are now fully accepted following legal counsel draft of the BUSL re-scope.
+**Status:** Accepted (2026-06-12) — Supersedes the institutional-market and undecided-revenue framing in docs/positioning.md. All sections (§1–§6) are now fully accepted following legal counsel draft of the BUSL re-scope. **Amended 2026-08-18 (#1346)** — the §3 gate changes shape from per-tool content-write to a surface gate (unlicensed = plain markdown editor, no AI at all); see the amendment below before reading §3 as current.
 
 **Context:** Tandem shipped without a recorded audience or revenue decision. `docs/positioning.md` frames the market as institutions and (§economics) says paying cases "require either a hosted offering or a support contract… This needs a decision." `README.md` said "Tandem is free to use." `docs/roadmap.md` tracks "#394 Monetization" as "tracked outside engineering roadmap." The product is BUSL-1.1 (source-available): the base grant is non-production use only; the **Additional Use Grant** extends limited production use ("Personal use and individual self-hosting are permitted; commercial hosting or resale of the Licensed Work is not") — so individuals already use it in production for free. It converts to MIT at the earlier of the Change Date (2029-06-10 / v1.0 GA + 2 years) **and** the BUSL per-version 4-year floor. This ADR supersedes the institutional-market and undecided-revenue framing.
 
@@ -911,7 +911,52 @@ Both are silent from the user's perspective today; both end when the integration
 - §1/§2 finalized; revenue ceiling is modest and accepted (full commitment, no kill-criterion).
 - **§6 narrowed to Polar for the issuance seam (2026-07-03, #1176):** the issuance Worker (`infra/license-issuance-worker/`) verifies Polar's Standard-Webhooks (svix) signature scheme specifically — it does not implement Paddle's webhook scheme. §6's "Polar.sh or Paddle" framing is still open at the checkout-provider level, but the built issuance seam is Polar-only in practice; adding Paddle later means a second signature-verification path in the Worker, not a drop-in swap.
 
-**Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), `docs/positioning.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1).
+
+**Amendment (2026-08-18, #1346) — unlicensed is a plain markdown editor: a surface gate, not a per-tool one.**
+
+Five decisions (@bloknayrb). §3's *strictness* is unchanged — it was always a hard gate. What changes is the **shape** of what falls inside it, and one of the five is not a licensing decision at all.
+
+**1. Unlicensed = plain markdown editor, no AI integration at all.** Not a read-only AI. The gate becomes a **surface** gate — refuse the AI surfaces outright — rather than the content-write, per-tool gate that is merged today (twelve `gatedTool()` MCP tools plus their `/api` twins, with reads, chat, `open`, save/export and `tandem_resolveAnnotation` explicitly Allowed). Two reasons beyond the commercial one: a twelve-tool enumeration must be re-audited on every new tool and Critical Rule 9 exists because forgetting one half of a pair is a silent hole, whereas a surface refusal has one thing to get right; and "Tandem without a license is a markdown editor" is a sentence a user can hold, where "Claude can read but not annotate" is not.
+
+**Surface A stops gating document rooms.** Today `applyConnectionGate` marks every non-`CTRL_ROOM` connection read-only when restricted. Under this amendment that is close to the inverse of the intent: unlicensed means *your document is fully editable, there is simply no AI*. The `CTRL_ROOM` carve-out inverts with it — `CTRL_ROOM` is kept writable today so chat survives, and chat is now an AI surface that must not.
+
+**2. Annotation resolution is a user action. This is a feature requirement, not a gating carve-out.** Accept and reject belong to the editor UI; the user can resolve, Claude cannot. It holds at **every** license status, licensed included, so it is not conditional on the gate and does not ship dark with it.
+
+*Verified at master.* The user half is **already native** and needs no work: `useAnnotationReview.svelte.ts` `resolveAnnotation()` writes the status straight into `Y.Map('annotations')` and applies any `suggestedText` client-side through ProseMirror, over Hocuspocus. It touches neither MCP nor `/api` — no route exists and the client calls none. The remaining work is therefore **subtractive, not constructive**: retire `tandem_resolveAnnotation` (`src/server/mcp/annotations.ts`), which is wrapped in `withErrorBoundary` and is deliberately ungated today, along with the `store.acceptAnnotation` / `dismissAnnotation` lifecycle entries where they exist only to serve it.
+
+This also **independently confirms the Surface A change above**. Because the user's accept is a Hocuspocus write, a Surface A read-only clamp would block the user from resolving their own annotations — precisely the action this decision makes theirs alone. The two decisions would contradict each other if Surface A kept gating documents.
+
+**3. One enforcement point across every AI surface — OPEN; discovery completed 2026-08-18, design pending.** The requirement is that MCP transport, Surface A and the `/api` routes share a single enforcement point. *Verified at master: they do not.* The requirement is also **ambiguous**, and the two readings have opposite answers: one decision *function* already exists, while one *interception* is not reachable by refactor, because the surfaces share no call path — a WebSocket connection lifecycle, JSON-RPC dispatch, Express middleware and an in-process call cannot be routed through one frame. They share a decision **primitive** — `resolveLiveLicenseState()`, with both consumers branching on `status === "restricted"` — but enforcement is spread across five sites — *mechanisms*, not surfaces; see the surface count below — each deciding independently what to do, and rendering refusal three different ways (an MCP error envelope, an HTTP 403, and a silent read-only connection clamp):
+
+1. `gatedTool()` — registration-site wrapper, twelve MCP tools.
+2. Direct in-handler `licenseGate()` — `src/server/mcp/document.ts` and `routes/open.ts` (the `force: true` sub-path). Not discoverable by grepping the wrapper.
+3. `licenseGateMiddleware` — seven mutating `/api` routes, at the registration site.
+4. `applyConnectionGate` — Surface A, Hocuspocus `onAuthenticate`.
+5. `licenseGate()` inside `src/server/local-model/tools.ts` — **the local-model collaborator loop (ADR-039, #1123), which the issue's inventory does not name.** Its own comment states it "bypasses both license enforcement surfaces (no Hocuspocus connection; not an MCP tool)". It is an AI surface, so under decision 1 the whole loop is refused when unlicensed, not merely its three mutating tools.
+
+`deriveLicenseUi` in the client is a sixth, advisory site; it must not be counted as enforcement.
+
+Two surfaces have no enforcement site at all today because the current shape does not gate them, and acquire one under decision 1: **chat** (`CTRL_ROOM`, `tandem_reply`, `tandem_checkInbox`), and the **AI wake/push paths** (`/api/wake`, the channel shim, the plugin monitor, the supervisor), which exist solely to wake a model. Collapsing all of this is the actual design work this issue now owns.
+
+**The surface inventory (discovery, 2026-08-18).** Counting by *surface* rather than by mechanism gives **six**, and that is the axis this decision asks about — which is why the question could not be answered as posed: nothing enumerated the surfaces, the gated-set list being an inventory of *operations*. It is now enumerated in [`docs/licensing-explained.md`](licensing-explained.md#ai-surfaces--the-1346-inventory) and pinned by `tests/docs/ai-surface-inventory-claims.test.ts`, which derives its sets from source so a new AI surface fails the build rather than going unlisted. Three results change the work:
+
+- **MCP over stdio is free.** `src/cli/mcp-stdio.ts` registers no handlers and forwards raw JSON-RPC, so refusing at the HTTP transport also refuses Claude Desktop and Cowork. There is no fourth transport to gate.
+- **Chat and the push paths are deliberately open, not overlooked.** `connectionShouldBeReadOnly` exempts `CTRL_ROOM` and `shouldForwardExternally` passes `chat:message` unconditionally, both so chat survives as the read-only escape hatch. Decision 1 inverts that: chat *is* the AI integration.
+- **Surface A is not an AI surface at all.** It clamps the human's editor — the same conclusion decision 2 reaches by the annotation-resolution route, so two independent paths arrive at deleting it.
+
+**Four admission points, not one interception.** Each surface has one narrow admission point, and three are existing functions with every caller in one place: `appendClaudeChatMessage()` (every AI chat write), `subscribe(cb, "external")` (every push consumer), the MCP session handshake (both transports), and the collaborator's start path. Four checks against the 20+ per-operation checks today, taking Critical Rule 9's per-tool cost from two edits to zero — the strongest *technical* argument for decision 1, independent of the commercial one.
+
+**One consequence to settle before code moves:** the sixteen ungated read tools stop being safely ungated. They are ungated on the rule that reads are the escape hatch, and `RESTRICTED_MESSAGE` promises it verbatim — but under decision 1 the escape hatch belongs to the **human's editor**: the user keeps opening, reading and exporting, and the AI reads nothing. Open question 1 in #1346 settles what happens to existing annotations but not whether Claude may still *read* them.
+
+**4. No fail-open, no grace period.** Licenses are offline-verified and perpetual: the run gate checks the Ed25519 signature only, enforced at the type level by the `SignatureVerified` brand so that wiring in the stricter expiry-checking verifier is a compile error. There is no expiry to fail open from and nothing to specify — ADR-040 as accepted contains no fail-open or grace-period language, and this amendment introduces none.
+
+One precision, so "no expiry" is not over-read: it is a property of **licenses**, not of the trial. The on-device trial clock does end (`TrialInfo.expiresAt`), and a license's own `expiresAt` governs the **update window** alone — never whether the app runs.
+
+**5. Terminology: always "unlicensed", never "expired" or "lapsed".** There are no lapsed users, only people who never bought. This is copy, and the copy that contradicts it is already written: `RESTRICTED_MESSAGE` in `src/server/mcp/license-gate.ts` opens "Your Tandem trial has ended", and the wall, the trial banner and that module's header comment all frame the state as a trial ending. All of it is rewritten at the flip to name the state as unlicensed and the consequence as AI features disabled. The internal `status: "restricted"` identifier is **not** required to change — `license-types.ts` records that both gates decide on that exact literal, so a fourth status value or a rename fails **open** at every enforcement surface until all of them are updated.
+
+**Constraint — everything stays dark.** `LICENSE_GATE_ENABLED` remains `false` in `tsup.config.ts` and the build stays byte-identical with the flag off. This amendment is a design change to merged-but-inert code; no code moves on it here. The gated-set enumeration in [`docs/licensing-explained.md`](licensing-explained.md#the-gated-set--this-list-is-the-api-halfs-review) is superseded in **shape** by decision 1 but remains an accurate description of the code as merged, so it stands as Critical Rule 9's review surface until the surface gate is implemented.
+
+**Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), ADR-039 (local-model collaborator — the fifth enforcement site named in the 2026-08-18 amendment), `docs/positioning.md`, `docs/licensing-explained.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1), #1116 (engineering tracker), #1346 (the 2026-08-18 amendment).
 
 ## ADR-041: Customizable Keyboard Shortcuts (Override Layer)
 
@@ -1019,7 +1064,7 @@ Everything above renders identically. Recovering any of it needs a per-node sour
 >
 > **Corrected reading of the decisions.** They do not die; they become the **legacy branch of a dual-era server**, and live at least as long as the revision's new minimum twelve-month deprecation window:
 >
-> - **Decisions 1, 3, 4 (registry, `onsessioninitialized`, reaper, LRU cap) — survive, scoped to legacy.** A dual-era server picks behavior from how the client opens, and an `initialize` request selects legacy semantics *scoped to the session* — which is exactly what the registry serves. Two legacy clients still contend, so the bug this ADR fixes stays live on that branch. What is **undetermined** is the modern branch's shape: "one `McpServer`, no registry" is not available on the evidence, because Decision 2's `Protocol.connect()` throw is a property of the SDK's `Protocol` class and SEP-2567 does not touch it — one server still cannot hold two concurrent transports. The SDK's stateless transport mode constructs a server per request instead, and ADR-012 asserted ~~*"the SDK crashes in stateless mode after the first `server.connect()`"*~~ — a 2024 claim **refuted by the #1253 probe in 2026 (#1332)**, see the ADR-012 note above. Whether to adopt stateless mode here is a separate question and still depends on #1252/#1249.
+> - **Decisions 1, 3, 4 (registry, `onsessioninitialized`, reaper, LRU cap) — survive, scoped to legacy.** A dual-era server picks behavior from how the client opens, and an `initialize` request selects legacy semantics *scoped to the session* — which is exactly what the registry serves. Two legacy clients still contend, so the bug this ADR fixes stays live on that branch. What is **undetermined** is the modern branch's shape: "one `McpServer`, no registry" is not available on the evidence, because Decision 2's `Protocol.connect()` throw is a property of the SDK's `Protocol` class and SEP-2567 does not touch it — one server still cannot hold two concurrent transports. The SDK's stateless transport mode constructs a server per request instead, and ADR-012 asserted ~~*"the SDK crashes in stateless mode after the first `server.connect()`"*~~ — a 2024 claim **refuted by the #1253 probe in 2026 (#1332)**, see the ADR-012 note above. Whether to adopt stateless mode here is a separate question and still depends on #1505/#1249.
 > - **Decision 5 (`AsyncLocalStorage`) — survives.** It binds per request, which is the case a stateless protocol presents. Two refinements: `mcpSessionId` goes empty, and `claudeSessionId`'s *lookup path* changes — today it is captured at `initialize` and replayed from the registry entry on later requests, so with no registry it must be read from the header per request.
 > - **Decision 6 (`X-Claude-Session-Id`) — survives, and gains importance rather than losing it.** It is a Tandem header, not a protocol one. Do **not** expect `io.modelcontextprotocol/clientInfo` to replace it: the spec marks that field optional, says it is *"self-reported… not verified by the protocol"* and that implementations **SHOULD NOT** *"use them to change the behavior of the client or server"*, and its type carries only `{name, version}` — so two concurrent Claude Code instances send byte-identical values. For telling one Claude session from another it is strictly worse than the session id it replaces.
 > - **`hasSession` — becomes partial, not meaningless.** The Consequences below redefine it as "≥1 live session." On a dual-era server that stays sound *for legacy attachments* and goes silent about modern ones, so the job is to **supplement** it, not replace it. It still needs care: the natural supplement is a recency signal, which answers a different question and inverts the failure mode. Tracked in **#1249**; see `docs/spikes/ai-readiness-mcp-session.md`.
@@ -1028,7 +1073,45 @@ Everything above renders identically. Recovering any of it needs a per-node sour
 >
 > **Consequence for #438:** §3.3/§3.4/§3.5 must not be keyed on `Mcp-Session-Id`, and the modern branch **MUST NOT** vary `tools/list` per connection (SEP-2567), which forecloses per-client tool lists outright. See the amendments in `docs/spikes/per-client-identity-spec.md` and `docs/spikes/session-identity-transport-probe.md`.
 >
-> **The decision this amendment does not make:** when Tandem becomes dual-era, and when — if ever — it drops the legacy branch. The matrix says that day breaks every client that has not moved, with no fall-forward. **Tracked in #1252**, which also owns the watch item above (Claude Code's own era is an external dependency with no signal that would surface a change before users hit it).
+> **The decision this amendment does not make:** when Tandem becomes dual-era. (The companion question — whether Tandem ever *drops* the legacy branch — **is** now decided; see the 2026-08-18 amendment immediately below.) Dual-era adoption is tracked in **#1505**, and the watch item above — Claude Code's own era, an external dependency with no signal that would surface a change before users hit it — in **#1506**. #1252, which previously owned all three, is closed.
+>
+> **Amendment (2026-08-18, #1252) — the legacy branch is permanent. Tandem never drops it.**
+>
+> One of the two questions the paragraph above deferred is now answered, and the answer is that it
+> was never really a scheduling question. **Tandem keeps the legacy branch indefinitely.**
+>
+> **This was already decided once and did not reach the record.** The 2026-08-06 backlog triage put
+> it as D-8 — *"commit to 'dual-era, legacy retained indefinitely'?"* — and answered **"Yes to
+> both"** ([`docs/triage/2026-08-06/backlog-triage-2026-08-06.md`](triage/2026-08-06/backlog-triage-2026-08-06.md),
+> [`brief-438.md`](triage/2026-08-06/brief-438.md)). The ADR amendment that answer called for was
+> never written, so the question stayed open in #1252 for another twelve days and was re-litigated
+> from scratch. A decision whose only home is a dated triage table is a decision that will be made
+> again; this amendment is that missing home.
+>
+> The reason is the matrix row, not a preference: *legacy client + modern server = Fails*, and
+> *"legacy clients have no fall-forward mechanism."* Removal is therefore **unrecoverable
+> client-side** — every un-upgraded Claude Code and Cowork install breaks hard on the same day, with
+> no negotiation, no degraded mode, and nothing the user can do from their end. There is no version
+> of Tandem that works without the legacy branch, so there is nothing to schedule.
+>
+> **The spec's twelve-month feature-lifecycle window is not an inherited obligation here.** #1252
+> cited it as a reference point for what a deprecation window would have to look like *if* one were
+> ever planned. None is, so the clock never starts. Do not read the citation as a commitment Tandem
+> has taken on.
+>
+> This makes the legacy branch a permanent half of a dual-era server rather than a transitional one,
+> which sharpens the "survive, scoped to legacy" reading above: Decisions 1, 3 and 4 are not living
+> on borrowed time pending a removal date. They are the legacy branch, and the legacy branch stays.
+>
+> **What #1252 deferred that is still open**, now tracked separately because the two halves have very
+> different urgency and one of them is not blocked on anything:
+>
+> - **Dual-era adoption** — serving `2026-07-28` concurrently on the same endpoint. Additive, and
+>   **blocked** on the TypeScript SDK shipping support: SDK 1.30.0, the version `package-lock.json`
+>   pins, still exports `LATEST_PROTOCOL_VERSION = '2025-11-25'`. Tracked in **#1505**.
+> - **The watch item** — whether Claude Code itself goes modern-only, which is the only live failure
+>   mode in this whole area and must not sit behind the blocked work. Tracked in **#1506**, on a
+>   monthly cadence deliberately *not* gated on the SDK.
 
 **Context:** Tandem's HTTP MCP server held a single module-level transport. Every `initialize` called `connectFreshTransport()`, which closed the previous transport before attaching a new one. The MCP SDK 404s any request whose `Mcp-Session-Id` it doesn't recognize, so the *second* Claude client to connect silently evicted the first one's tool channel; the evicted client's next `tandem_*` call failed until it re-handshook, which then evicted the second. Two Claude Code sessions — or Claude Code plus Cowork — could not coexist. The SDK was already minting a per-session id on every handshake and we were discarding it.
 

@@ -40,6 +40,12 @@ import {
   undetectedDetail,
 } from "../cowork/cowork-helpers.js";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke.js";
+import {
+  autostartWizardDefault,
+  createAutostart,
+  readAutostartDecided,
+  writeAutostartDecided,
+} from "../hooks/useAutostart.svelte.js";
 import { createClaudeCliStatus } from "../hooks/useClaudeCliStatus.svelte.js";
 import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte.js";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte.js";
@@ -53,6 +59,7 @@ import {
   type ReachabilityStatus,
   type ReachabilityTarget,
 } from "../hooks/useReachabilityCheck.svelte.js";
+import { resyncCheckbox } from "../utils/checkbox-sync.js";
 import IntegrationTargetCard from "./IntegrationTargetCard.svelte";
 import {
   computeDoneHeaderState,
@@ -86,6 +93,68 @@ const wizard = createIntegrationWizard({ baseUrl: `http://127.0.0.1:${DEFAULT_MC
 // getActive() is false → the hook's effect early-returns, no interval ever
 // starts; on Tauri the poller lives only while this component is mounted.
 const coworkStatus = createCoworkStatus(() => isTauriRuntime());
+
+/* Start at login (#1463 step 3). A MITIGATION, not a fix: it reduces how often
+   a user reaches Claude Code with Tandem down, and closes nothing — it is
+   desktop-only, and covers neither a crash, a deliberate quit, nor anyone who
+   already finished the wizard. The real fix is the skill's absent-tools rule.
+
+   Same hook as Settings → Network, so the OS stays the single source of truth
+   and no `tandem:settings` field appears (see `useAutostart.svelte.ts` — do not
+   add one). Gated on the `done` step rather than `open`, so a user who never
+   finishes setup is never registered. */
+const wizardAutostart = createAutostart(() => open && isTauriRuntime() && wizard.step === "done");
+const wizardAutostartStatus = $derived(wizardAutostart.status);
+const wizardAutostartBlocked = $derived(
+  wizardAutostartStatus !== null && !wizardAutostartStatus.trayAvailable,
+);
+
+/* "Checked by default" is implemented as an actual enable on first render, not
+   a pre-ticked box that does nothing until the wizard closes. A box reading
+   checked while the OS registration is absent is a lie, and the honest
+   alternative is worse: applying inside `close()` would swallow the failure at
+   exactly the moment the surface that would report it is unmounting.
+
+   **It defaults on only for someone who has never chosen.** `readAutostartDecided()`
+   is the whole reason that sentence can be written: the OS reports `enabled:
+   false` identically for "never set up" and "deliberately turned off", so
+   without it the wizard cannot tell a default from an override, and re-running
+   setup would silently switch start-at-login back on for someone who had
+   turned it off. Any toggle on either surface records the decision, so this
+   fires at most once in an install's life.
+
+   Three further guards, each load-bearing: the latch keeps a re-render from
+   re-firing it, `trayAvailable` keeps it from registering a hidden startup with
+   no way to reach the app, and `st.enabled` keeps it from writing a value the
+   OS already holds. */
+let autostartDefaultApplied = $state(false);
+$effect(() => {
+  if (!open || wizard.step !== "done") return;
+  const decision = autostartWizardDefault(wizardAutostartStatus, readAutostartDecided());
+  if (!decision.enable && !decision.record) return;
+  if (untrack(() => autostartDefaultApplied)) return;
+  autostartDefaultApplied = true;
+  // `toggle()` records the decision itself, so `record` is only ever set on the
+  // arm that does not enable.
+  if (decision.record) writeAutostartDecided();
+  if (decision.enable) void wizardAutostart.toggle(true);
+});
+
+/**
+ * `resyncCheckbox` because `checked={wizardAutostartStatus.enabled}` cannot
+ * repair itself, exactly as in `NetworkSettings.svelte` — see that helper for
+ * the mechanism. It is not optional here just because this is a setup screen:
+ * `autostart_set_enabled` returns `io-error` / `readback-mismatch` WITHOUT
+ * rejecting, so `toggle()`'s catch never fires, `status.enabled` is unchanged,
+ * the expression re-computes to the value Svelte last wrote, the DOM write is
+ * skipped, and the box latches where the user clicked over a setting that never
+ * moved. Resyncing from the status THIS call returned, so there is no stale-read
+ * hazard.
+ */
+async function toggleWizardAutostart(box: HTMLInputElement): Promise<void> {
+  await wizardAutostart.toggle(box.checked);
+  resyncCheckbox(box, wizardAutostart.status?.enabled ?? false);
+}
 // Render subscriptions (NOT effect reads) — safe.
 const coworkVariant = $derived(coworkSettingsVariant(coworkStatus.status));
 
@@ -1092,6 +1161,30 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 {/if}
               </span>
             </div>
+            {#if isTauriRuntime() && wizardAutostartStatus !== null && !wizardAutostartBlocked}
+              <label class="iw-autostart" data-testid="integration-wizard-autostart">
+                <input
+                  type="checkbox"
+                  data-testid="integration-wizard-autostart-toggle"
+                  checked={wizardAutostartStatus.enabled}
+                  disabled={wizardAutostart.loading}
+                  onchange={(e) => void toggleWizardAutostart(e.currentTarget)}
+                />
+                <span>
+                  <span class="iw-autostart-title">Start Tandem when my computer starts</span>
+                  <span class="iw-autostart-sub">
+                    So Tandem is already running when you ask Claude to open a document — if it
+                    isn't, Claude starts with no Tandem tools at all. Starts minimized to the
+                    tray; your AI assistant isn't launched until you open the window.
+                  </span>
+                </span>
+              </label>
+              {#if wizardAutostart.error}
+                <div class="iw-autostart-error" data-testid="integration-wizard-autostart-error">
+                  {wizardAutostart.error}
+                </div>
+              {/if}
+            {/if}
             {#if wizard.channelRegistered !== null && whatsNext !== "stdio-only"}
               <div
                 class="iw-push-mode"
@@ -1395,6 +1488,36 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
     flex-direction: column;
   }
 
+  .iw-autostart {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--tandem-space-2);
+    padding: var(--tandem-space-3);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-2);
+    background: var(--tandem-surface-sunk);
+    cursor: pointer;
+  }
+  .iw-autostart input {
+    accent-color: var(--tandem-accent);
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+  .iw-autostart-title {
+    display: block;
+    font-size: var(--tandem-text-sm);
+    color: var(--tandem-fg);
+  }
+  .iw-autostart-sub {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+  }
+  .iw-autostart-error {
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-error-fg);
+  }
   .iw-step {
     display: flex;
     flex-direction: column;

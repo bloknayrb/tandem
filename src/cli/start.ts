@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_MCP_PORT } from "../shared/constants.js";
+import { DEFAULT_MCP_PORT, TANDEM_SITE_URL } from "../shared/constants.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_DIST = resolve(__dirname, "../server/index.js");
@@ -19,13 +19,19 @@ export function runStart(): void {
   // server but opens no window, so a new user needs to be told where the editor
   // lives. The desktop-app recommendation follows as context, not as an alarming
   // "deprecated" banner ahead of any instruction (#new-user-friction audit).
+  //
+  // It is a recommendation because the browser UI is KEPT (#1467, decided
+  // 2026-08-18) — there is no deprecation to soften. The link deliberately does
+  // NOT point at #477, whose title reads "Browser Deprecation": a user following
+  // it would land on an issue that contradicts this sentence. #477 removed
+  // browser *auto-open*, never the browser UI.
   const editorUrl =
     process.env.TANDEM_URL ?? `http://127.0.0.1:${process.env.TANDEM_MCP_PORT ?? DEFAULT_MCP_PORT}`;
   console.error("[Tandem] Starting server...");
   console.error(`[Tandem] When it's ready, open the editor in your browser at ${editorUrl}`);
   console.error(
     "[Tandem] The desktop app is the primary way to run Tandem — running in a browser " +
-      "works but isn't the recommended experience (https://github.com/bloknayrb/tandem/issues/477).",
+      `works but isn't the recommended experience (${TANDEM_SITE_URL}).`,
   );
 
   // `process.execPath`, not a bare `"node"`. The bare name is resolved through

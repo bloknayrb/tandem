@@ -244,6 +244,8 @@ shipped and were removed:
   `integration-wizard-apply-result-{*}`
 - Post-apply reachability (#1174): `integration-wizard-reachability-{*}`,
   `integration-wizard-whats-next`
+- Start at login (#1463): `integration-wizard-autostart{,-toggle,-error}` — desktop only, and
+  hidden entirely when the OS reports no tray, so absence is not a regression signal on its own.
 - Per-target delivery honesty (#1299): `integration-wizard-push-support-{*}` —
   renders ONLY on a client Tandem structurally cannot notify (today Claude
   Desktop), so its ABSENCE is the assertion for every other row. Carries

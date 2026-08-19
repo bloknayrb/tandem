@@ -425,9 +425,30 @@ Remaining Cowork work (#316, #317, #322) is polish — making the installer turn
 
 ## Integration Picker + Browser Deprecation (#477) — v1.0 Wave 6
 
-First-run wizard that lets users choose their AI integration, plus dropping the browser distribution path entirely (Tauri-only going forward). The integration choice drives startup behavior, auto-launch strategy, and default layout. Triaged **Core** for v1.0 on 2026-05-14.
+First-run wizard that lets users choose their AI integration, plus retiring the browser *auto-open* path. The integration choice drives startup behavior, auto-launch strategy, and default layout. Triaged **Core** for v1.0 on 2026-05-14.
 
-**Motivation:** The integration picker materializes [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) — Tandem speaks MCP; Claude is the default. **The default integration's depth is a flagship feature**, not a constraint to route around: Claude's continuity features (CLAUDE.md, hooks, skills, memory) ride on top of the same `--session-id` + `--resume` spawn primitive Spike A validated, and the wizard's one-click Claude setup is what makes them accessible to non-developers. The wizard also exposes additional integration slots (Claude Desktop, local LLM, OpenAI, Gemini) per D4. The browser distribution path also added ongoing maintenance overhead (CORS, Host-header allowlist, `TANDEM_OPEN_BROWSER` branches, npm global install) without serving the primary Tauri user base.
+> **Decision 2026-08-18 (#1467): the browser UI is KEPT. "Tauri-only going forward" is withdrawn.**
+> This section's original framing — "dropping the browser distribution path entirely" — overstated
+> what PR 2 did and what was ever agreed. Three corrections, so the scope of the shipped work is not
+> re-read as a plan:
+>
+> - **PR 2 removed browser *auto-open***, not the browser UI: `TANDEM_OPEN_BROWSER`, `open-browser.ts`,
+>   and the CORS `localhost` wildcard. Serving the editor at `http://127.0.0.1:3479` was never removed
+>   and is not scheduled to be.
+> - **The npm package was never a candidate** and must not become one. `buildMcpEntries` emits
+>   `npx -y tandem-editor@ mcp-stdio` for Claude Desktop and Cowork, and the plugin monitor runs as
+>   `npx -y tandem-editor@ monitor` — so retiring it would break integrations *on the desktop app*.
+> - **Nothing was ever announced to users.** `tandem start` prints a recommendation, deliberately not
+>   a deprecation notice (`src/cli/start.ts` records why). There is no clock to run out.
+>
+> The cost of keeping it is low: the browser path serves the same client bundle over HTTP rather than
+> through the WebView, so almost nothing is browser-specific except the CORS allowlist and the
+> `null`-origin hazard (Critical Rule 8, #1291) — real, small, and well tested. Reopening removal
+> needs a fresh decision, and per #1467 it would need the cross-platform install matrix verified on
+> all three platforms first, plus an actual announcement, since there is no telemetry and any removal
+> would otherwise be blind.
+
+**Motivation:** The integration picker materializes [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) — Tandem speaks MCP; Claude is the default. **The default integration's depth is a flagship feature**, not a constraint to route around: Claude's continuity features (CLAUDE.md, hooks, skills, memory) ride on top of the same `--session-id` + `--resume` spawn primitive Spike A validated, and the wizard's one-click Claude setup is what makes them accessible to non-developers. The wizard also exposes additional integration slots (Claude Desktop, local LLM, OpenAI, Gemini) per D4. The browser *auto-open* path added ongoing maintenance overhead (CORS, Host-header allowlist, `TANDEM_OPEN_BROWSER` branches) without serving the primary Tauri user base — which is what PR 2 removed. The browser UI and the npm global install stay (see the decision note above).
 
 ### Phase 0: Required Spikes
 
@@ -442,7 +463,7 @@ All three Phase 0 spikes shipped. The two CLI integration spikes resolved 2026-0
 | PR | Concern | Prerequisite | Status |
 |----|---------|--------------|--------|
 | 1 | Schema + storage + migration framework (`IntegrationConfig` discriminated union, zod validator, atomic writes) | — | **SHIPPED** PR #728 (2026-05-17). Scaffolding only (no production consumer); subsequent PR 3 sub-PRs wire it up. Two integration kinds (`claude-code`, `claude-desktop`); LM Studio / Ollama / `other-mcp` and `tokenSecretRef` deferred to PR 3 migrations per adversarial review. |
-| 2 | **Browser deprecation** — remove `TANDEM_OPEN_BROWSER`, `open-browser.ts`, npm CLI start path, CORS localhost wildcard | — (independent) | **SHIPPED** PR #637 |
+| 2 | **Browser auto-open removal** — remove `TANDEM_OPEN_BROWSER`, `open-browser.ts`, the CLI auto-open branch, CORS localhost wildcard. **Not** removal of the browser UI or the npm package, both of which are kept (#1467). | — (independent) | **SHIPPED** PR #637 |
 | 3 | First-run wizard UI — integration picker (D4 picked **option a, full-screen modal**), existing-user detection via `last-seen-version`, pre-selection from existing MCP config. **Replaces auto-configuration of Claude** per ADR-038 §2b — every integration (Claude included) is configured via the wizard, never silently. `tandem setup` CLI becomes a TTY-mode wrapper around the wizard; auto-configuration code in `src-tauri/src/lib.rs` and `src/cli/setup.ts` is removed in the final sub-PR. **Broken into sub-PRs for review tractability** — each ships independently. | PR 1 | v1.0 wave 6 |
 | 3a | Existing-MCP-config introspection (`readExistingTandemEntries` — reads `~/.claude.json` + Claude Desktop config without mutating them). Foundation for the wizard's pre-population + migration UX. **SHIPPED** PR #729 (2026-05-17). | PR 1 | v1.0 wave 6 |
 | 3b | v1→v2 schema migration: re-adds `tokenSecretRef` to integration kinds + `other-mcp` kind (cut from PR 1 per adversarial review). Keychain backend: `@napi-rs/keyring` (lazy-loaded via `createRequire` so headless CI does not crash on import; dependency-injectable for tests). **SHIPPED** PR #730 (2026-05-17). | PR 3a | v1.0 wave 6 |
