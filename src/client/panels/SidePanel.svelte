@@ -196,11 +196,21 @@ let confirmBtnEl: HTMLButtonElement | null = $state(null);
 // bind sits inside its own {#if}, so its teardown writes null over the other.
 let promoteConfirmBtnEl: HTMLButtonElement | null = $state(null);
 
-// Focus the confirm button when either confirmation appears. Read-only —
+// Focus each confirm button when its own confirmation appears. Read-only —
 // .focus() writes no reactive state, so there is no effect-depth hazard.
+//
+// Deliberately TWO effects rather than one if/else. Both bars can be on screen
+// at once, so a single effect would depend on all four values and re-run when
+// either bar changed — and the `else` branch would then fire on the *other*
+// bar's state. Concretely: cancel a promote confirm while a bulk confirm is
+// pending and focus jumps to the bulk Confirm button, parking the keyboard on
+// "reject every pending annotation" one Enter away from an action the user
+// never asked for. Split, neither effect observes the other's dependencies.
 $effect(() => {
   if (promoteConfirm) promoteConfirmBtnEl?.focus();
-  else if (bulkConfirm) confirmBtnEl?.focus();
+});
+$effect(() => {
+  if (bulkConfirm) confirmBtnEl?.focus();
 });
 
 // Reset bulk confirm when filters change
@@ -512,6 +522,12 @@ let selectedImportIds = $state(new Set<string>());
 // bar is unmounted. Relying on it alone was a bug — Clear left the flag set,
 // and re-checking a single import re-mounted the bar straight into the confirm
 // branch, warning text and stolen focus included, with nothing requested.
+//
+// Clear is no longer rendered during the confirm (the row is swapped whole, for
+// width), so its reset is currently only reachable from the rest state, where
+// the flag is already false. It stays anyway: the four sites are one invariant —
+// a selection change invalidates a pending confirm — and which of them the
+// markup happens to expose is not something this state should depend on.
 let promoteConfirmRequested = $state(false);
 const promoteConfirm = $derived(promoteConfirmRequested && selectedImportIds.size > 0);
 
