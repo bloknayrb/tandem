@@ -3,6 +3,7 @@ import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { loadInvoke } from "../../cowork/cowork-invoke";
 import { createAppInfo } from "../../hooks/useAppInfo.svelte";
 import { isCrashReportingEnabled } from "../../sentry";
+import { readClientLog } from "../../utils/client-log";
 import { formatDiagnostics, summarizeUserAgent } from "../../utils/diagnostics";
 import { fetchDiagnostics } from "../../utils/diagnostics-fetch";
 import { openServerPath } from "../../utils/server-paths";
@@ -41,6 +42,9 @@ async function handleCopyDiagnostics(): Promise<void> {
     // misreported as a clipboard-permission problem.
     text = formatDiagnostics(result.payload, {
       browser: summarizeUserAgent(navigator.userAgent),
+      // Client-side warnings the server cannot see (#1439). Read, not drained:
+      // the Report-a-bug link is a second consumer of the same buffer.
+      clientLog: readClientLog(),
     });
   } catch {
     ctx.notify("error", "Diagnostics failed on the server — try `tandem doctor` in a terminal");

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { ClientLogEntry } from "../../src/client/utils/client-log";
 import type { DiagnosticsPayload } from "../../src/client/utils/diagnostics";
 import {
+  CLIENT_LOG_HEADING,
   formatDiagnostics,
   formatMemoryMb,
+  MAX_CLIENT_LOG_CHARS,
+  MAX_CLIENT_LOG_LINES,
   summarizeUserAgent,
 } from "../../src/client/utils/diagnostics";
 
@@ -257,5 +261,123 @@ describe("summarizeUserAgent", () => {
   it("returns an empty string for an unrecognized agent, which drops the line", () => {
     expect(summarizeUserAgent("")).toBe("");
     expect(summarizeUserAgent("SomeCrawler/1.0")).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Client-log section (#1439)
+// ---------------------------------------------------------------------------
+
+function entry(overrides: Partial<ClientLogEntry> = {}): ClientLogEntry {
+  return {
+    at: 1.5,
+    firstAt: 1.5,
+    level: "warn",
+    scope: "wizard",
+    event: "clipboard write failed",
+    detail: "NotAllowedError: Write permission denied",
+    count: 1,
+    ...overrides,
+  };
+}
+
+describe("formatDiagnostics — client log", () => {
+  it("renders nothing at all when there is no client log", () => {
+    // The degradation contract: a report with no client warnings is
+    // byte-identical to one produced before this section existed.
+    const baseline = formatDiagnostics(makePayload());
+    expect(formatDiagnostics(makePayload(), {})).toBe(baseline);
+    expect(formatDiagnostics(makePayload(), { clientLog: [] })).toBe(baseline);
+    expect(baseline).not.toContain("Recent client warnings");
+  });
+
+  it("sits between the host block and the checks, with its own separator", () => {
+    // `hostLines()` above slices to the FIRST blank line and asserts with
+    // toEqual, so the host block must still end there.
+    const payload = makePayload();
+    payload.report.results = [{ check: "ports", status: "pass", message: "3478/3479 free" }];
+    const lines = formatDiagnostics(payload, {
+      browser: "Chrome 141",
+      clientLog: [entry()],
+    }).split("\n");
+
+    expect(lines[2]).toBe("Browser: Chrome 141");
+    expect(lines[3]).toBe("");
+    expect(lines[4]).toBe(CLIENT_LOG_HEADING);
+    expect(lines[5]).toBe(
+      "[warn] +1.5s wizard: clipboard write failed — NotAllowedError: Write permission denied",
+    );
+    expect(lines[6]).toBe("");
+    expect(lines[7]).toBe("[ok]   ports — 3478/3479 free");
+  });
+
+  it("renders newest first, so tail truncation drops the oldest", () => {
+    const text = formatDiagnostics(makePayload(), {
+      clientLog: [
+        entry({ event: "oldest", at: 1 }),
+        entry({ event: "middle", at: 2 }),
+        entry({ event: "newest", at: 3, firstAt: 0.4, level: "error", count: 3 }),
+      ],
+    });
+    const rendered = text
+      .split("\n")
+      .filter((l) => l.startsWith("[warn] +") || l.startsWith("[error] +"));
+    expect(rendered[0]).toContain("newest");
+    // The first-seen stamp rides with the count: `at` is the newest occurrence,
+    // so `(x3)` alone cannot say whether they were a burst or spread out.
+    expect(rendered[0]).toContain("(x3, first +0.4s)");
+    expect(rendered[0].startsWith("[error]")).toBe(true);
+    expect(rendered[2]).toContain("oldest");
+  });
+
+  it("omits the detail separator when there is no cause", () => {
+    const text = formatDiagnostics(makePayload(), { clientLog: [entry({ detail: "" })] });
+    expect(text).toContain("[warn] +1.5s wizard: clipboard write failed\n");
+  });
+
+  it("budgets the section so a full buffer cannot evict the doctor report", () => {
+    // Truncation drops from the tail and this section sits above the checks, so
+    // an unbudgeted section eats the entire check list before losing one entry.
+    const clientLog = Array.from({ length: 19 }, (_, i) =>
+      entry({ event: `event ${i}`, at: i, detail: "D".repeat(160) }),
+    );
+    const lines = formatDiagnostics(makePayload(), { clientLog }).split("\n");
+    const section = lines.slice(lines.indexOf(CLIENT_LOG_HEADING) + 1, lines.indexOf("", 4));
+    const body = section.filter((l) => !l.startsWith("(showing"));
+
+    expect(body.length).toBeLessThanOrEqual(MAX_CLIENT_LOG_LINES);
+    expect(body.join("\n").length).toBeLessThanOrEqual(MAX_CLIENT_LOG_CHARS);
+    expect(section.at(-1)).toBe(`(showing ${body.length} of 19)`);
+    // Newest survive the budget; the oldest are the ones withheld.
+    expect(body[0]).toContain("event 18");
+    expect(lines.join("\n")).not.toContain("event 0 ");
+  });
+
+  it("honours per-call budget overrides", () => {
+    const clientLog = [entry({ event: "a" }), entry({ event: "b" }), entry({ event: "c" })];
+    const text = formatDiagnostics(makePayload(), { clientLog }, { maxClientLogLines: 1 });
+    expect(text).toContain("(showing 1 of 3)");
+    expect(text).not.toContain(": a ");
+  });
+
+  it("emits at least one entry even when a single line blows the char budget", () => {
+    const text = formatDiagnostics(
+      makePayload(),
+      { clientLog: [entry({ detail: "D".repeat(160) })] },
+      { maxClientLogChars: 10 },
+    );
+    expect(text).toContain("[warn] +1.5s wizard: clipboard write failed — DDD");
+  });
+
+  it("strips control characters from a rendered entry", () => {
+    // Defense in depth: `detail` is already scrubbed on the way into the ring
+    // buffer, but every other line of this report goes through the same strip
+    // that the check lines do.
+    const esc = String.fromCharCode(27);
+    const text = formatDiagnostics(makePayload(), {
+      clientLog: [entry({ detail: `Error: ${esc}[31mred${esc}[0m` })],
+    });
+    expect(text).toContain("Error: [31mred[0m");
+    expect(text).not.toContain(esc);
   });
 });
