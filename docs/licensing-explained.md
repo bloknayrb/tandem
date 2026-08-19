@@ -267,16 +267,26 @@ row 1 also refuses Claude Desktop and Cowork. There is no fourth transport to ga
 `document/reload` from `editor/SourceView.svelte`, `external-conflict/resolve` from
 `ExternalConflictBanner.svelte`. They are the **browser's** write path, twins of an MCP tool only in
 that both end at the same Y.Doc. Under decision 1 the user keeps writing, so these are **ungated
-outright**: they need no admission point, and deleting their middleware is the whole change. The
-genuinely AI-facing `/api` surface is the `/api/channel-*` family plus `/api/events` and
-`/api/wake` — rows 4 and 5.
+outright**: they need no admission point. Deleting their middleware is *most* of the change, not
+all of it — row 3's "+1 in-handler" is `POST /api/open` with `force: true`, which calls
+`licenseGate()` directly in `src/server/mcp/routes/open.ts` and is also client-only
+(`client/utils/server-paths.ts`). That call goes too, and it is exactly the kind of gate the
+middleware grep does not find. The genuinely AI-facing `/api` surface is the `/api/channel-*`
+family plus `/api/events` and `/api/wake` — rows 4 and 5.
 
 Worth stating plainly, because the opposite reading is available and alarming: *"the reshape deletes
 seven middleware mounts and Surface A, so an unlicensed install serves `POST /api/apply-changes`
-ungated."* It does — and that is correct, because the caller is the person who owns the document.
-Critical Rule 9 pairs an MCP tool with its `/api` twin to stop a **content write** slipping past a
-content-write gate; once the gate is about surfaces, the rule's premise is gone. That is why the
-rule is rewritten rather than re-applied.
+ungated."* It does, and that is correct — but for a narrower reason than "the caller owns the
+document", which these routes do not establish. `apply-changes`, `annotation-reply` and
+`remove-annotation` are three of the **nine** routes that call neither `assertLoopbackForMutation`
+nor `assertOriginAllowlisted` (the inventory in `CLAUDE.md`); what stands behind them is the
+**path-wide loopback invariant** and nothing else. So the accurate claim is *any loopback-local
+process*, which is the same trust boundary they have today — the licence gate was never what kept
+them safe, and removing it takes nothing away. Critical Rule 9 pairs an MCP tool with its `/api`
+twin to stop a **content write** slipping past a content-write gate; once the gate is about
+surfaces, that premise is gone, which is why the rule is rewritten rather than re-applied. Their
+authorization posture is a separate question, unchanged here and tracked in
+[security.md](security.md#open-findings).
 
 **Rows 4-6 have no enforcement site at all, and rows 4-5 are not "missed" — they are
 deliberately open.** `connectionShouldBeReadOnly` exempts `CTRL_ROOM` by design so chat survives
