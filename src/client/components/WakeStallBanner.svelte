@@ -1,4 +1,5 @@
 <script lang="ts">
+import LiveRegion from "./LiveRegion.svelte";
 import "./tandem-banner.css";
 
 /**
@@ -49,16 +50,20 @@ const waited = $derived.by(() => {
 });
 </script>
 
-{#if waited !== null}
-  <div
-    class="tandem-banner tandem-banner--info"
-    role="status"
-    aria-live="polite"
-    data-testid="wake-stall-banner"
-  >
-    <span class="tandem-banner__message">
-      Claude hasn't picked this up for {waited}. Your message is queued — it'll be seen the next
-      time Claude checks in.
-    </span>
-  </div>
-{/if}
+<!-- #1431: the host outlives the banner. `stalledMs` is null at mount and only
+     crosses the stall threshold later, so the sentence arriving is a mutation of
+     a region already in the accessibility tree — which is the only thing an AT
+     announces. The banner div carries no live attributes of its own. -->
+<LiveRegion data-testid="wake-stall-live">
+  {#if waited !== null}
+    <div
+      class="tandem-banner tandem-banner--info"
+      data-testid="wake-stall-banner"
+    >
+      <span class="tandem-banner__message">
+        Claude hasn't picked this up for {waited}. Your message is queued — it'll be seen the next
+        time Claude checks in.
+      </span>
+    </div>
+  {/if}
+</LiveRegion>

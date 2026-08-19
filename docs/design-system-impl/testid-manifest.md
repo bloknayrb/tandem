@@ -272,6 +272,29 @@ shipped and were removed:
   a snippet ABOVE the registered/unregistered split rather than twice inside it
   — both branches carry it because neither one can omit it.
 
+### Live regions (#1431)
+Eleven regions that used to be written on the node their own `{#if}` created —
+inserted together with their text, and so announced by nothing. Each selector
+below names a region that is now mounted BEFORE its content and outlives it, so
+the content's arrival is a mutation an AT can read. They are asserted in
+`tests/client/live-regions*.test.ts`, which pins *empty first, then filled, same
+node* — an assertion that the attribute merely exists proves nothing here.
+
+- Host shape (wraps the `{#if}`, parent has no `gap`): `connection-banner-live`,
+  `updater-banner-live`, `license-banner-live`, `wake-stall-live`,
+  `review-only-live`, `find-replace-live`.
+- Announcer shape (out-of-flow sr-only sibling, paired with `aria-hidden` on the
+  visible message node): `external-conflict-live`, `source-view-live`,
+  `integration-wizard-progress-live` (one region covering all three
+  `loadingDots` call sites), and `fidelity-report-live-polite` /
+  `fidelity-report-live-assertive` — two fixed-politeness regions replacing one
+  node whose `role` was computed from state.
+
+Deliberately NOT swept, with reasons in the #1431 PR: `panels/AnnotationCard`
+and `status/StatusBar` (chattiness), `panels/SidePanel` (a `display: none`
+ancestor takes any region there out of the a11y tree), and every `role="alert"`
+site.
+
 ### Cowork modals & settings
 - `cowork-onboarding-{step,confirm,error,enable-btn,enable-confirm-btn,enable-cancel-btn,skip-btn,learn-more-btn,learn-more-link}`
 - Subnet pre-flight (#1298), on both surfaces that have a confirm step:
@@ -287,7 +310,11 @@ shipped and were removed:
   is why they still come and go; the wrapper never does. The wizard's carries
   `display: contents` — its parent is a gapped flex column, so an empty box
   there would be a permanent gap; the other two parents are plain blocks.
-  Thirteen more live regions app-wide still have the pre-#1376 shape (#1431).
+  The remaining live regions that still had the pre-#1376 shape were swept in
+  #1431 — see "Live regions (#1431)" below, which lists both the regions added
+  and the sites deliberately left alone. Counts are deliberately not repeated
+  here: sites and regions are not 1:1 (the wizard's three collapse to one,
+  FidelityReportBanner's one expands to two), so a number in two places drifts.
 - `cowork-admin-declined-{backdrop,modal,confirm-disable,error,status-error,disable-btn,disable-confirm-btn,disable-cancel-btn,retry-btn,learn-more-link}`
 - `cowork-settings{,-loading,-unsupported,-undetected,-error}`,
   `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`, `cowork-explainer`,

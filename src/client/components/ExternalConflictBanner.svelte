@@ -8,6 +8,7 @@ import {
 } from "../../shared/constants";
 import type { ExternalConflictState } from "../../shared/types";
 import { API_BASE } from "../utils/fileUpload";
+import LiveRegion from "./LiveRegion.svelte";
 import "./tandem-banner.css";
 
 /**
@@ -113,6 +114,14 @@ const message = $derived.by(() => {
     : `Unsaved edits for ${fileName} were restored from your last session. Keep them, or reload fresh from the file on disk (discards them)?`;
 });
 
+/**
+ * Everything the banner currently says, as one string, for the sr-only
+ * announcer (#1431). `role="status"` is implicitly atomic, so this region is
+ * presented whole each time it changes — which is what we want: the failure
+ * text alone would be meaningless without the conflict it belongs to.
+ */
+const announcement = $derived([message, error].filter(Boolean).join(" "));
+
 async function resolve(choice: "keep" | "reload") {
   if (pending) return;
   // Pin the document AND the conflict episode this request belongs to. The
@@ -155,16 +164,30 @@ async function resolve(choice: "keep" | "reload") {
 }
 </script>
 
+<!-- #1431. Announcer rather than a host wrapper, because this banner is
+     `position: sticky` and a shrink-wrapped parent would leave it zero scroll
+     travel — it would silently stop sticking. An out-of-flow sr-only sibling
+     costs no layout at all.
+
+     It carries the resolve failure as well as the conflict sentence. The banner
+     div used to be the live region, and while that never announced the conflict
+     itself (region and text arrived together), an `error` landing in an
+     already-mounted banner DID announce — so dropping the banner's `role`
+     without carrying `error` here would trade one silent region for another.
+     Both message nodes are `aria-hidden`; the buttons are not, and must never
+     be — `aria-hidden` on the banner div would take "Keep my edits" and
+     "Reload from file" out of the accessibility tree entirely. -->
+<LiveRegion srOnly message={announcement} data-testid="external-conflict-live" />
+
 {#if conflict}
   <div
     class="tandem-banner tandem-banner--warning tandem-banner--sticky"
-    role="status"
-    aria-live="polite"
     data-testid="external-conflict-banner"
   >
-    <span class="tandem-banner__message">{message}</span>
+    <span class="tandem-banner__message" aria-hidden="true">{message}</span>
     {#if error}
       <span
+        aria-hidden="true"
         style="color: var(--tandem-error-fg-strong); font-size: var(--tandem-text-xs); max-width: 200px;"
       >
         {error}

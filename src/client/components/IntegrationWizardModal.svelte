@@ -66,6 +66,7 @@ import {
   type PushSupportNote,
   pushSupportNote,
 } from "./integration-wizard-helpers.js";
+import LiveRegion from "./LiveRegion.svelte";
 
 interface Props {
   open: boolean;
@@ -218,6 +219,36 @@ const whatsNext = $derived.by((): "connected" | "unreachable" | "stdio-only" | "
 
 // MAIN ↔ COWORK sub-view toggle. Reset to "main" on (re)open below.
 let view = $state<"main" | "cowork">("main");
+
+/**
+ * The one live region for all three `loadingDots` progress lines (#1431).
+ *
+ * Mounted with the dialog, so it predates every message it carries; the
+ * conditions mirror the three `{@render loadingDots(...)}` call sites exactly,
+ * and the strings are duplicated deliberately rather than lifted into shared
+ * constants — the visible copy is `aria-hidden`, so a drift between the two
+ * would be invisible rather than wrong, and one grep-able pair per line is the
+ * cheaper failure.
+ *
+ * Honest limit, recorded rather than hacked around: `wizard.detecting` is
+ * `$state(true)` at construction and the wizard is a fresh instance per open,
+ * so the FIRST "Looking for Claude…" is still present in the region's opening
+ * commit and cannot announce. Every later occurrence can — `begin()` sets
+ * `detecting = true` again on "Check again" — and buying that one first string
+ * would take a frame-crossing timer in a shared primitive that no test here
+ * could verify.
+ */
+const progressAnnouncement = $derived.by(() => {
+  if (view === "cowork") return "";
+  if (wizard.step === "connect") {
+    return wizard.detecting ? "Looking for Claude on your computer…" : "";
+  }
+  if (wizard.step === "applying") return "Connecting Claude…";
+  if (wizard.step === "done" && reachability.phase === "verifying") {
+    return "Verifying Claude can reach Tandem…";
+  }
+  return "";
+});
 // Per-mount Cowork enable state — component-local $state so unmount clears it
 // and reopen is clean (explicitly NOT a module-level singleton).
 let coworkBusy = $state(false);
@@ -632,8 +663,14 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
   </svg>
 {/snippet}
 
+<!-- #1431: no `aria-live` here. This snippet's node is created BY the `{#if}`
+     that supplies its label at all three call sites, so the region and its text
+     always arrived together and were announced by nothing. The dialog-level
+     `integration-wizard-progress-live` announcer below owns these three
+     sentences instead; this div is now purely visual, and `aria-hidden` so the
+     sentence is not also read a second time. It holds no controls. -->
 {#snippet loadingDots(label: string)}
-  <div class="iw-loading" aria-live="polite">
+  <div class="iw-loading" aria-hidden="true">
     <span class="iw-dots" aria-hidden="true">
       <span class="iw-dot"></span><span class="iw-dot"></span><span class="iw-dot"></span>
     </span>
@@ -782,6 +819,15 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
           ×
         </button>
       </header>
+
+      <!-- Out of flow (`srOnly`), so it is not a flex item of `.iw-dialog` and
+           costs none of its `gap`. Sibling of the body rather than inside it,
+           so the `{#if view}` swap below can never unmount it. -->
+      <LiveRegion
+        srOnly
+        message={progressAnnouncement}
+        data-testid="integration-wizard-progress-live"
+      />
 
       <div class="iw-body">
         <!-- The {#if view} swap nests INSIDE the stable .iw-dialog shell (the
