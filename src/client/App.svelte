@@ -3018,7 +3018,7 @@ const shouldShowModelPicker = $derived(
       use:scrollFade={"y"}
       role="main"
       aria-label="Document editor"
-      style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
+      style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; border-radius: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
       ondragover={fileDrop.handleEditorDragOver}
       ondragleave={fileDrop.handleEditorDragLeave}
       ondrop={fileDrop.handleEditorDrop}
@@ -3703,6 +3703,26 @@ const shouldShowModelPicker = $derived(
     justify-content: center;
     font-weight: 700;
   }
+  /* Reduce motion (#1425): a colour-only crossfade, same shape as `.acb-btn`
+     (ApplyChangesButton.svelte) — but this one shipped without the guard pair
+     `.rail-shell`/`.rail-resize-handle` above already carry. The `@media`
+     guard has the SAME specificity as `.rail-tab` (one class each), so it
+     wins only by being declared AFTER it — the general hazard
+     `.rail-shell.dragging`'s note above documents. `.rail-tab.on` and
+     `.rail-tab:hover:not(.on)` are higher-specificity but declare no
+     `transition` of their own today, so neither is racing this guard; if
+     either ever gains one, it would need to join both halves below. No
+     `!important`: that's reserved for an `animation` guard racing a
+     higher-specificity or inline rule (ActivityTray.svelte, StatusBar.svelte)
+     — not the case here. */
+  @media (prefers-reduced-motion: reduce) {
+    .rail-tab {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .rail-tab {
+    transition: none;
+  }
 
   /* Only reachable when `editorScrollTabIndex` is 0 (a read-only document, see
      its doc comment). `:focus-visible` rather than `:focus` so a mouse click
@@ -3712,6 +3732,29 @@ const shouldShowModelPicker = $derived(
   .editor-scroll:focus-visible {
     outline: 2px solid var(--tandem-accent);
     outline-offset: -2px;
+  }
+  /* File-drop chrome crossfade (#1425). Was an inline `style={...}` declaration
+     on the element below — structurally unreachable by any stylesheet rule,
+     including this reduce-motion pair, the same shape #1396 fixed for the rail
+     drag strip (see tests/design-system-impl/rail-clearance-contract.test.ts).
+     Moved here as its own static rule; the `border`/`background` VALUES stay
+     inline since they're conditional on `fileDrop.fileDragOver` /
+     `tauriFileDrop.fileDragOver` — only the always-the-same `transition`
+     moved. Selector matches the element's literal `class="editor-scroll ..."`
+     (App.svelte, the `<div bind:this={editorScrollEl} ...>`), so this rule
+     targets the exact node the inline style used to animate. */
+  .editor-scroll {
+    transition:
+      border-color 0.15s,
+      background 0.15s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .editor-scroll {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .editor-scroll {
+    transition: none;
   }
 
   .editor-column-wrap {
@@ -3825,5 +3868,25 @@ const shouldShowModelPicker = $derived(
      :hover background still signals the zone on pointer interaction. */
   .panel-edge-collapse:focus-visible {
     outline: none;
+  }
+  /* Reduce motion (#1425): both `.panel-edge-collapse` and its `::before` bar
+     were unguarded. `::before`'s `height` change is real motion, not a colour
+     crossfade — the stronger obligation of the two (it's why the issue named
+     it specifically). Grouped in one block, matching this file's own
+     `.rail-shell, .rail-resize-handle` pairing above and
+     ScrollPill.svelte's `.scroll-pill-thumb::before` (base + `::before`
+     guarded together). Same specificity-vs-source-order shape as `.rail-tab`
+     above: `.panel-edge-collapse:hover::before` (above) is higher-specificity
+     but declares no `transition` of its own today, so it isn't racing this
+     guard — it would need to join both halves below if that ever changes. */
+  @media (prefers-reduced-motion: reduce) {
+    .panel-edge-collapse,
+    .panel-edge-collapse::before {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .panel-edge-collapse,
+  :global(body.tandem-reduce-motion) .panel-edge-collapse::before {
+    transition: none;
   }
 </style>

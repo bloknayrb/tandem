@@ -83,12 +83,19 @@ not clobber:
   state machine replaces these** (see canon decision 4).
 - `CommandPalette.svelte` ships only an ~80 ms row-background transition. **A11
   adds** scale-in + cascade on top (no conflict).
-- The 10 client files with existing `prefers-reduced-motion` blocks
-  (`ApplyChangesButton`, `CollapsibleSection`, `tandem-banner.css`,
-  `editor/editor.css`, `AnnotationCard`, `AnnotationCardActions`, `PeekStrip`,
-  `SidePanel`, `StatusBar`, plus the `reduceMotion` setting in
-  `hooks/useTandemSettings.ts`) already honor reduced motion for what they animate.
-  New per-surface motion must extend these, not introduce an unguarded animation.
+- **The file count below was "10" and had gone stale silently** (#1425) — the
+  fix is to stop hardcoding a list that can only ever go short, not to correct
+  the number once more: run `git grep -l prefers-reduced-motion -- 'src/client/*.svelte'
+  'src/client/**/*.svelte' 'src/client/**/*.css'` for the current set (26 files as of
+  #1425's branch point). Existing coverage in that set is **uneven, not uniform** —
+  some files carry only the OS-query half with no `:global(body.tandem-reduce-motion)`
+  half (so the in-app `reduceMotion` setting does nothing for them), and some guard
+  a subset of their own motion rules while a sibling rule in the same file is
+  unguarded. #1425 pinned `App.svelte`'s gap with a source-derived test
+  (`tests/design-system-impl/app-shell-reduce-motion-guards.test.ts`); the rest of
+  the set is NOT similarly pinned and its known gaps are tracked in #1530. Don't read
+  "the file mentions `prefers-reduced-motion`" as "every motion rule in it is
+  guarded" — that conflation is exactly how #1425 happened.
 
 **The inert-and-shared core of foundations** is the two easing tokens + the
 dual-mechanism reduced-motion scaffold. Both are genuinely global, theme-composing,
@@ -298,6 +305,52 @@ media query **and** the in-app `reduceMotion` setting (`body.tandem-reduce-motio
 | **State feedback** (A2 save tick, A9 connect bloom) | Shorten to `0.001ms` — the state change still registers visually |
 | **Entry/exit** (A4 arrival, A10 dismiss, A8 rail reveal, A11/A28/A29 entrances) | Jump to the final state; avoid `display:none` flicker — set end values (`opacity:1` / final `max-height`) directly |
 | **Tab close** (s3) | Collapse immediately, no slide |
+
+**Two mechanisms satisfy the dual-mechanism requirement above, and which one to
+use is a call, not a free choice (#1425 — this post-dates the table above and
+wasn't previously written down):**
+
+- **Re-declare the property as `none`** (`transition: none` / `animation: none`)
+  on the exact selector, once in a `@media (prefers-reduced-motion: reduce)`
+  block and once under `:global(body.tandem-reduce-motion)`. This is the default
+  — use it whenever the surface's timing is authored as literal values on a
+  normal scoped selector (the shape every non-morph component in
+  `src/client/` uses).
+- **A surface with a STATIC inline-style `transition`/`animation` is not a
+  token-zeroing case — move the declaration into a stylesheet rule and guard
+  THAT with the re-declare mechanism above.** #1396 did this for the rail
+  drag strip; #1425 did it for `.editor-scroll` (App.svelte) — the duration
+  itself never changed, only *where* it lives, so a stylesheet rule reaches it
+  exactly as well as it reaches any other selector. Try this first; it keeps
+  the guard local to the one selector instead of introducing a global token
+  for what is, underneath, a constant.
+- **Zero the timing TOKEN instead** (`morphTiming.css`, `tabDragMotion.css`):
+  when a surface's `transition`/`animation` reads its duration from an
+  *inherited* CSS custom property (`var(--morph-p1)`, `var(--a30-lift)`, …),
+  zero the property on `:root` and on `body.tandem-reduce-motion` once, and
+  every scoped consumer inherits it — no per-selector guard needed. **Required**,
+  not just preferred, in two cases: (1) a Svelte-scoped `body.x .y` selector
+  gets the component's hash appended and can silently fail to match, which
+  setting an inherited custom property on `<body>` does not; (2) a surface
+  whose inline-style duration is genuinely **DYNAMIC** — computed in JS and
+  interpolated per render, not a literal that only *happens* to live inline
+  (`DocumentTabs.svelte`'s drag-flip wrappers read `var(--a30-shift)` etc.
+  because the wrapper's own geometry is JS-computed per drag frame) — has no
+  fixed selector-and-value pair a re-declared guard could target at all;
+  token-zeroing is the only mechanism that reaches it, because inheritance
+  doesn't care where the `var()` is read. A STATIC inline duration is the
+  bullet above, not this one.
+  **Trap:** token-zeroing only reaches the declarations that actually use the
+  token. A `transition` shorthand mixing a token-driven property with
+  literal-duration ones (e.g. `opacity var(--morph-cascade)…, color 0.15s,
+  background 0.15s`) is only PARTLY covered — the literal properties still need
+  their own re-declared guard. `DocumentTabs.svelte`'s `.tab-add-pill` rules
+  have exactly this shape and are, as of #1425's audit, unguarded for their
+  literal half — see the backlog in #1530.
+
+Known-open gaps in both mechanisms, found while fixing #1425 and not fixed by
+it, are tracked as backlog in #1530 — read it before assuming a file with a
+`prefers-reduced-motion` block guards everything it animates.
 
 ---
 
