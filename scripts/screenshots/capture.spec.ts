@@ -489,6 +489,9 @@ test("01-editor-overview", async ({ page }) => {
   });
   await expect(page.getByTestId("mode-toggle")).toBeVisible();
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(screenshotsDir, "01-editor-overview.png"),
     fullPage: false,
@@ -538,6 +541,9 @@ test("02-chat-sidebar", async ({ page }) => {
   await chatInput.fill("Makes sense. Accept the suggestion and let's move on.");
   await page.waitForTimeout(300);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await chatPanel.screenshot({ path: path.join(screenshotsDir, "02-chat-sidebar.png") });
 });
 
@@ -597,6 +603,9 @@ test("03-side-panel", async ({ page }) => {
   expect(cardBox.y).toBeGreaterThanOrEqual(listBox.y - 1);
   expect(cardBox.y + cardBox.height).toBeLessThanOrEqual(listBox.y + listBox.height + 1);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await list.screenshot({ path: path.join(screenshotsDir, "03-side-panel.png") });
 });
 
@@ -661,6 +670,9 @@ test("04-toolbar-actions", async ({ page }) => {
   if (!barBox) throw new Error("formatting-bar has no bounding box");
   const viewport = page.viewportSize();
   if (!viewport) throw new Error("No viewport");
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(screenshotsDir, "04-toolbar-actions.png"),
     clip: {
@@ -706,6 +718,9 @@ test("06-claude-presence", async ({ page }) => {
   // Element screenshot. The old `{x:0, y:860, w:1400, h:40}` clip was coupled to
   // one viewport height and to the pre-floating-chrome in-flow status bar; the
   // pill is now `position: fixed` bottom-left and a fixed clip misses it.
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await pill.screenshot({ path: path.join(screenshotsDir, "06-claude-presence.png") });
 });
 
@@ -761,6 +776,9 @@ test("07-toast-notification", async ({ page }) => {
   await expect(toast).toContainText("Working directory saved.");
   await expect(page.locator("[data-testid^='toast-dismiss-']").first()).toBeVisible();
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await toast.screenshot({ path: path.join(screenshotsDir, "07-toast-notification.png") });
 });
 
@@ -783,6 +801,9 @@ test("08-onboarding-tutorial", async ({ page }) => {
   await expect(card).toBeVisible({ timeout: 10_000 });
   await page.waitForTimeout(400);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await card.screenshot({ path: path.join(screenshotsDir, "08-onboarding-tutorial.png") });
 });
 
@@ -794,6 +815,9 @@ test("09-settings-modal", async ({ page }) => {
   const modal = await openSettingsClaudeCodeTab(page);
   await expect(modal).toBeVisible({ timeout: 3_000 });
   await page.waitForTimeout(300);
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(screenshotsDir, "09-settings-modal.png"),
     fullPage: false,
@@ -813,6 +837,9 @@ test("10-solo-tandem-toggle", async ({ page }) => {
   await toggle.hover();
   await page.waitForTimeout(300);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await toggle.screenshot({ path: path.join(screenshotsDir, "10-solo-tandem-toggle.png") });
 });
 
@@ -876,6 +903,9 @@ test("11-margin-annotations", async ({ page }) => {
   expect(inFrame).toBeGreaterThanOrEqual(3);
   await page.waitForTimeout(500);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(screenshotsDir, "11-margin-annotations.png"),
     fullPage: false,
@@ -908,6 +938,9 @@ test("12-outline-rail", async ({ page }) => {
   await expect(page.getByTestId("tutorial-dismiss-btn")).toHaveCount(0);
   await page.waitForTimeout(400);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await rail.screenshot({ path: path.join(screenshotsDir, "12-outline-rail.png") });
 });
 
@@ -947,6 +980,9 @@ test("13-setup-wizard", async ({ page }) => {
   await expect(wizard).not.toContainText(account, { timeout: 5_000 });
   await expect(page.locator(".itc-path").first()).toContainText("you");
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(screenshotsDir, "13-setup-wizard.png"),
     fullPage: false,
