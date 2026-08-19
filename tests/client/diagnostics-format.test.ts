@@ -56,14 +56,14 @@ describe("formatDiagnostics", () => {
   it("renders one tagged line per check, preserving report order", () => {
     const payload = makePayload();
     payload.report.results = [
-      { check: "node-version", status: "pass", message: "Node.js v22.0.0 (>= 22 required)" },
+      { check: "node-version", status: "pass", message: "Node.js v22.13.0 (>= 22.12.0 required)" },
       { check: "ports", status: "warn", message: "Partial: port up/down" },
       { check: "health", status: "fail", message: "Server not responding" },
     ];
     const lines = formatDiagnostics(payload).split("\n");
     const checkLines = lines.filter((l) => /^\[(ok|warn|fail)\]/.test(l));
     expect(checkLines).toEqual([
-      "[ok]   node-version — Node.js v22.0.0 (>= 22 required)",
+      "[ok]   node-version — Node.js v22.13.0 (>= 22.12.0 required)",
       "[warn] ports — Partial: port up/down",
       "[fail] health — Server not responding",
     ]);

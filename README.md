@@ -55,7 +55,7 @@ Windows 10 version 22H2 or Windows 11; macOS 12 (Monterey) or later; Linux with 
 <details>
 <summary><b>Install from npm instead</b></summary>
 
-`npm install -g tandem-editor` (you'll need Node.js 22.12 or newer), then run `tandem`. It starts the server and prints a `http://127.0.0.1:3479` URL that opens the editor in your browser, where the first-run wizard connects Claude. For a scripted setup with no prompts, run `tandem setup --apply` once first. This is mostly useful if you already have Node.js; otherwise I'd just use the desktop app.
+`npm install -g tandem-editor` (you'll need Node.js 22.12.0 or newer), then run `tandem`. It starts the server and prints a `http://127.0.0.1:3479` URL that opens the editor in your browser, where the first-run wizard connects Claude. For a scripted setup with no prompts, run `tandem setup --apply` once first. This is mostly useful if you already have Node.js; otherwise I'd just use the desktop app.
 
 </details>
 

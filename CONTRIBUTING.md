@@ -9,11 +9,12 @@ wrong at runtime. If you are working with Claude Code, [CLAUDE.md](CLAUDE.md) is
 
 ## Prerequisites
 
-- **Node.js 22.12.0 or newer**, and npm. This is the floor in `package.json` `engines`, and it is
-  the real one: the server bundle targets `node22`. Note that `tandem doctor` currently only checks
-  for major version `>= 22`, so it will pass a Node 22.0–22.11 install that npm's own gate refuses —
-  tracked as [#1442](https://github.com/bloknayrb/tandem/issues/1442). Check `node --version`
-  yourself.
+- **Node.js 22.12.0 or newer**, and npm. This is the floor `package.json`'s `engines` field
+  declares. In practice it's a build-toolchain constraint — once you're on Node 22, Vite / rolldown
+  (devDependencies) require 22.12 specifically — not a runtime one; `tandem doctor` checks against
+  this same declared value. See
+  [#1533](https://github.com/bloknayrb/tandem/issues/1533) for whether that's the number this
+  project should keep asserting. Check `node --version` yourself.
 - **Rust and the Tauri toolchain**, if you will touch `src-tauri/` — or if you will push at all.
   The pre-push hook runs `cargo test`. See "Before your first push" below.
 

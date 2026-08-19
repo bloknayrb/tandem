@@ -6,7 +6,7 @@ Common first-launch and runtime issues, with diagnostic steps.
 
 If you're running from a source checkout, `npm run doctor` checks the most common setup issues at once:
 
-- Node.js ≥ 22 installed
+- Node.js ≥ 22.12.0 installed
 - `.mcp.json` valid (both `tandem` and `tandem-channel` entries)
 - `~/.claude.json` MCP registration (when present)
 - Claude Desktop's own config file, and whether the entry Tandem wrote there has gone stale

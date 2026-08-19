@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CWD_DEPENDENT_CHECKS,
@@ -10,6 +11,7 @@ import {
   evaluateAppTranslocation,
   evaluateClaudeCli,
   evaluateNodeToolchain,
+  evaluateNodeVersion,
   evaluateNpmStaleness,
   evaluateOrphanedVite,
   evaluatePushPath,
@@ -17,7 +19,9 @@ import {
   evaluateStaleGlobal,
   evaluateTandemPlugin,
   globalTandemEditorVersion,
+  isNodeVersionSupported,
   isTandemEditorRepo,
+  MIN_NODE_VERSION,
   probeTandemEditorRepo,
   runDoctor,
   runDoctorCli,
@@ -29,6 +33,8 @@ import {
   claudeDesktopConfigPath,
 } from "../../src/shared/integrations/client-config-paths.js";
 import { allocPort } from "../helpers/alloc-port.js";
+
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 /**
  * Stand up a server that answers `/@vite/client` with 200, like a real Vite
@@ -2064,5 +2070,124 @@ describe("evaluateNodeToolchain", () => {
       const outcome = evaluateNodeToolchain(present);
       expect(`${outcome.message} ${outcome.fix ?? ""}`).not.toContain("/usr/bin");
     }
+  });
+});
+
+// ── #1442: doctor's Node-version check must agree with the DECLARED floor,
+// not just the major number ─────────────────────────────────────────────
+describe("evaluateNodeVersion", () => {
+  it("passes at the exact declared floor", () => {
+    const outcome = evaluateNodeVersion("v22.12.0");
+    expect(outcome.status).toBe("pass");
+    expect(outcome.message).toContain("22.12.0");
+  });
+
+  it("fails one patch below the floor — the issue's own headline case", () => {
+    // A Node 22.0-22.11 install is exactly what #1442 says slips past a
+    // major-only `>= 22` check while failing the declared `engines` floor.
+    const outcome = evaluateNodeVersion("v22.11.9");
+    expect(outcome.status).toBe("fail");
+    // Both fields must cite the real floor: a message saying "22.12.0+
+    // required" next to a fix saying "Install Node.js 22+" is the same
+    // wrong-remedy failure the issue reports, one field over.
+    expect(outcome.message).toContain("22.12.0");
+    expect(outcome.fix).toContain("22.12.0");
+  });
+
+  it("fails a lower minor even with a numerically larger patch/string tail (rules out a string-compare comparator)", () => {
+    // Lexicographically "9" > "1", so a comparator that string-compares the
+    // minor component would wrongly pass this against the "12" floor.
+    const outcome = evaluateNodeVersion("v22.9.0");
+    expect(outcome.status).toBe("fail");
+  });
+
+  it("passes a triple-digit minor above the floor (rules out a string-compare comparator, the other direction)", () => {
+    // Lexicographically "100" < "12", so a string-compare comparator would
+    // wrongly fail this even though 100 > 12 numerically.
+    const outcome = evaluateNodeVersion("v22.100.0");
+    expect(outcome.status).toBe("pass");
+  });
+
+  it("passes any x.0.0 on a newer major (rules out a conjunctive major>=22 && minor>=12 comparator)", () => {
+    const outcome = evaluateNodeVersion("v24.0.0");
+    expect(outcome.status).toBe("pass");
+  });
+
+  it.each([
+    "v25.0.0-nightly20250101abcdef",
+    "v23.0.0-rc.1",
+  ])("parses the leading numeric triplet of a nightly/RC build (%s) rather than failing closed on it", (version) => {
+    // The parser is prefix-anchored only (no trailing `$`) precisely so a
+    // build tag suffix doesn't make an otherwise-current Node version
+    // unparseable. Both of these are well above the floor once parsed.
+    const outcome = evaluateNodeVersion(version);
+    expect(outcome.status).toBe("pass");
+  });
+
+  it("fails closed on an unparseable version string (preserves the pre-existing NaN-fails behavior)", () => {
+    const outcome = evaluateNodeVersion("garbage");
+    expect(outcome.status).toBe("fail");
+  });
+});
+
+describe("isNodeVersionSupported / MIN_NODE_VERSION drift guard", () => {
+  it("MIN_NODE_VERSION matches package.json's declared engines.node floor", () => {
+    const pkg = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf8")) as {
+      engines: { node: string };
+    };
+    expect(pkg.engines.node).toBe(`>=${MIN_NODE_VERSION}`);
+  });
+
+  it("MIN_NODE_VERSION is itself judged supported by the comparator", () => {
+    // Catches MIN_NODE_VERSION becoming unparseable (e.g. bumped to a bare
+    // "24" alongside an equally sloppy engines: ">=24", which the string
+    // equality check above would wave through) and any > vs >= off-by-one
+    // exactly at the boundary.
+    expect(isNodeVersionSupported(MIN_NODE_VERSION)).toBe(true);
+  });
+});
+
+describe("checkNodeVersion wiring (via runDoctor(), not the pure evaluator)", () => {
+  // evaluateNodeVersion is directly unit-tested above, but checkNodeVersion
+  // reads process.version itself and is not parameterized — a suite that
+  // only exercised the pure function would go green even if someone added
+  // evaluateNodeVersion and left the old inline `major >= 22` check wired
+  // into checkNodeVersion. Forcing process.version through the real
+  // runDoctor() harness is what actually proves the wiring, not just the
+  // logic.
+  let originalDescriptor: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    originalDescriptor = Object.getOwnPropertyDescriptor(process, "version");
+  });
+
+  afterEach(() => {
+    if (originalDescriptor) {
+      Object.defineProperty(process, "version", originalDescriptor);
+    }
+  });
+
+  function setNodeVersion(value: string): void {
+    Object.defineProperty(process, "version", { ...originalDescriptor, value, configurable: true });
+  }
+
+  it("a version above the floor reports the full declared floor, not just the major", async () => {
+    setNodeVersion("v22.13.0");
+    const report = await runDoctor();
+    const result = report.results.find((r) => r.check === "node-version");
+    expect(result?.status).toBe("pass");
+    expect(result?.message).toContain("22.12.0");
+  });
+
+  it("a version below the declared floor but above the old major-only check FAILS, with both message and fix citing 22.12.0", async () => {
+    // On master this exact version passes (major-only `>= 22`), with a
+    // message that can never contain "22.12.0" — this is the load-bearing
+    // assertion for #1442.
+    setNodeVersion("v22.5.0");
+    const report = await runDoctor();
+    const result = report.results.find((r) => r.check === "node-version");
+    expect(result?.status).toBe("fail");
+    expect(result?.message).toContain("22.12.0");
+    expect(result?.fix).toContain("22.12.0");
   });
 });

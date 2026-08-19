@@ -173,17 +173,101 @@ class Recorder {
 
 // ── Check: Node.js version ──────────────────────────────────────────
 
-function checkNodeVersion(r: Recorder): void {
-  const version = process.version;
-  const major = Number.parseInt(version.slice(1), 10);
-  if (major >= 22) {
-    r.pass(`Node.js ${version} (>= 22 required)`);
-  } else {
-    r.fail(
-      `Node.js ${version} — version 22+ required`,
-      "Install Node.js 22+ from https://nodejs.org",
-    );
+/**
+ * The floor `tandem doctor` checks against — `package.json`'s declared
+ * `engines.node` value, verbatim (a test pins the two together so they can't
+ * drift apart again; see `tests/cli/doctor.test.ts`).
+ *
+ * This is a BUILD-toolchain floor, not a runtime one: every `>=22.12.0`
+ * requirement in `package-lock.json` traces to a devDependency (vite,
+ * rolldown and its platform bindings, `@sveltejs/vite-plugin-svelte`); the
+ * highest floor among real runtime `dependencies` is `>=20.19.0`, and
+ * `tsup.config.ts`'s `target: "node22"` only needs `>=22.0.0`. Whether
+ * `engines.node` itself should come down to `>=22` — with `22.12.0` kept as
+ * a documented contributor/build-only floor elsewhere — is an open product
+ * question (#1442). Until that's resolved, `doctor` reports against
+ * whatever `engines` currently declares, so it never again silently
+ * disagrees with it. `src/cli/node-version.ts`'s CLI startup guard is
+ * deliberately NOT unified with this constant — it gates every `tandem`
+ * invocation (including the plugin's `tandem-channel`/`monitor` entries) on
+ * the real ~22.0.0 runtime floor, and tightening it to 22.12.0 would refuse
+ * to start on Node versions that run Tandem correctly today.
+ */
+export const MIN_NODE_VERSION = "22.12.0";
+
+interface ParsedNodeVersion {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+/**
+ * Prefix-anchored only (no trailing `$`): a nightly/RC `process.version`
+ * looks like `v25.0.0-nightly20250101abcdef` or `v23.0.0-rc.1`, and the
+ * numeric triplet at the front is all a floor comparison needs — the suffix
+ * is noise, not a parse failure. Minor/patch are optional and default to 0,
+ * so a bare `v22` still resolves (not a real `process.version` shape, but
+ * defensive: the predecessor's major-only `Number.parseInt` accepted it, and
+ * this must not narrow what parses without saying so).
+ */
+function parseNodeVersion(version: string): ParsedNodeVersion | null {
+  const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(version);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: match[2] === undefined ? 0 : Number(match[2]),
+    patch: match[3] === undefined ? 0 : Number(match[3]),
+  };
+}
+
+const MIN_NODE_PARSED = parseNodeVersion(MIN_NODE_VERSION) as ParsedNodeVersion;
+
+function isBelowFloor(v: ParsedNodeVersion): boolean {
+  if (v.major !== MIN_NODE_PARSED.major) return v.major < MIN_NODE_PARSED.major;
+  if (v.minor !== MIN_NODE_PARSED.minor) return v.minor < MIN_NODE_PARSED.minor;
+  return v.patch < MIN_NODE_PARSED.patch;
+}
+
+/**
+ * `null` means unparseable — the drift-guard test in `tests/cli/doctor.test.ts`
+ * asserts `isNodeVersionSupported(MIN_NODE_VERSION)` is `true`, which catches
+ * `MIN_NODE_VERSION` itself becoming unparseable (or an off-by-one at the
+ * exact boundary) in the same breath as the `package.json` equality check.
+ */
+export function isNodeVersionSupported(version: string): boolean | null {
+  const parsed = parseNodeVersion(version);
+  return parsed ? !isBelowFloor(parsed) : null;
+}
+
+/**
+ * Pure so the pass/fail wording is directly testable, following
+ * `evaluateNodeToolchain`. `EvalOutcome` (used by most other checks via
+ * `recordEvaluation`) has no `"fail"` member, so this check keeps its own
+ * local result type and wires into `r.pass`/`r.fail` directly, the same way
+ * `checkNodeToolchain` wires `evaluateNodeToolchain`.
+ */
+export function evaluateNodeVersion(version: string): {
+  status: "pass" | "fail";
+  message: string;
+  fix?: string;
+} {
+  if (isNodeVersionSupported(version)) {
+    return { status: "pass", message: `Node.js ${version} (>= ${MIN_NODE_VERSION} required)` };
   }
+  // `null` (unparseable) fails closed here, same as the pre-existing
+  // `Number.parseInt` → `NaN` behavior (`NaN >= 22` was already `false`) —
+  // preserved deliberately, not a new policy.
+  return {
+    status: "fail",
+    message: `Node.js ${version} — version ${MIN_NODE_VERSION}+ required`,
+    fix: `Install Node.js ${MIN_NODE_VERSION}+ from https://nodejs.org`,
+  };
+}
+
+function checkNodeVersion(r: Recorder): void {
+  const result = evaluateNodeVersion(process.version);
+  if (result.status === "pass") r.pass(result.message);
+  else r.fail(result.message, result.fix);
 }
 
 // ── Check: node_modules exists ──────────────────────────────────────
