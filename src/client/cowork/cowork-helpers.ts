@@ -99,6 +99,12 @@ const SUBNET_REASON_HINT: Record<SubnetDetectionReason, string> = {
     "The Hyper-V subnet Tandem found is wider than /20. Tandem won't open the firewall that broadly, so it stopped rather than allow more of the network than Cowork needs.",
   queryFailed:
     "Windows couldn't list Hyper-V network adapters, so Tandem can't tell which subnet to allow. Try again, and if it keeps happening, check that PowerShell runs normally on this machine.",
+  // #1371. Names the wait, deliberately WITHOUT a number: the pre-flight and the
+  // Enable path give the query different budgets (`SUBNET_PROBE_TIMEOUT_ADVISORY`
+  // vs `SUBNET_PROBE_TIMEOUT_ENABLE` in `firewall.rs`), so any numeral here would
+  // be wrong on one of the two paths. The exact seconds go to `tandem.log`.
+  timeout:
+    "Tandem asked Windows to list its Hyper-V network adapters and gave up waiting rather than freeze. That usually means the Windows Management Instrumentation service is stuck — restarting the machine clears it. You can also just try again.",
 };
 
 /**

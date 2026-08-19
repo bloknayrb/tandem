@@ -29,7 +29,9 @@
 
 use std::fmt;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use crate::bounded_command::{output_with_timeout, BoundedOutcome};
 
 use crate::sentry_reporting::{home_dir_string, redact_home};
 
@@ -170,6 +172,20 @@ pub enum SubnetDetectionReason {
     /// PowerShell ran but exited non-zero, or its output was not in the shape
     /// we asked for. The least-blaming bucket, and deliberately the fallback.
     QueryFailed,
+    /// The adapter query outlived its deadline and was killed (#1371).
+    ///
+    /// `Get-NetAdapter` goes through WMI, and a wedged `winmgmt` does not return
+    /// — before this variant existed the call simply never came back, so no
+    /// reason was ever produced at all.
+    ///
+    /// Appended last so the four existing wire spellings are untouched. It stays
+    /// FIELDLESS on purpose: `tests/build/subnet-reason-alignment.test.ts` parses
+    /// this enum with `/^\s{4}([A-Z]\w*),\s*$/gm`, so a variant carrying the
+    /// elapsed seconds would make that alignment test unfixably red. The seconds
+    /// live in the log line instead, which is also why the user-facing copy names
+    /// the wait without quoting a number — the two call sites use different
+    /// budgets, so no single string could be honest about both.
+    Timeout,
 }
 
 /// Marker line the detection script prints before any address lines, carrying
@@ -217,6 +233,10 @@ impl fmt::Display for FirewallError {
                     "Hyper-V adapter query returned an error or unexpected output (exit {}): stderr={stderr_tail:?}",
                     exit_code.map_or_else(|| "?".to_string(), |c| c.to_string())
                 ),
+                SubnetDetectionReason::Timeout => write!(
+                    f,
+                    "Hyper-V adapter query exceeded its deadline and was killed"
+                ),
             },
             FirewallError::AdapterEnumerationFailed { reason } => match reason {
                 AdapterEnumerationReason::NotFound => {
@@ -239,6 +259,54 @@ impl std::error::Error for FirewallError {}
 // ---------------------------------------------------------------------------
 // Firewall rule names
 // ---------------------------------------------------------------------------
+
+/// Advisory pre-flight budget (#1371).
+///
+/// Timing out here is nearly free: the pre-flight is advisory and never replaces
+/// the enable path's own check, so failing fast is strictly better than making
+/// the user watch a spinner. Matches `PORT_HOLDER_LOOKUP_TIMEOUT` in `lib.rs`,
+/// this crate's other bounded external-process lookup.
+pub const SUBNET_PROBE_TIMEOUT_ADVISORY: Duration = Duration::from_secs(5);
+
+/// Enable-path budget (#1371).
+///
+/// Deliberately more generous than the advisory one, because the asymmetry runs
+/// the other way here: a false timeout ABORTS an enable that would have
+/// succeeded. Both numbers are estimates, not measurements — `detect_vethernet_
+/// subnet` logs its real `elapsed` at DEBUG, so `tandem.log` from a real Windows
+/// host is what should settle them.
+pub const SUBNET_PROBE_TIMEOUT_ENABLE: Duration = Duration::from_secs(15);
+
+/// Budget for a single `netsh` invocation (#1371).
+///
+/// `netsh advfirewall` is normally sub-second, but it is still an unbounded
+/// external process on the main thread: `cowork_toggle_integration` reaches
+/// `scan_orphan_rules` once and `run_netsh` three more times AFTER the subnet
+/// probe, so bounding only the probe would leave the reported symptom
+/// reproducible on the same panel.
+///
+/// Much tighter than the subnet budgets, and the asymmetry is deliberate: a
+/// false timeout here is reported honestly as a netsh failure, whereas a
+/// truncated subnet query can be *misclassified* as a fact about the user's
+/// adapters. Cheap to be strict where being wrong is loud.
+///
+/// **Two numbers worth stating rather than deriving**, because this is a fix for
+/// a window freeze:
+///
+/// 1. A single bounded call can overshoot its budget by up to
+///    `3 x KILL_GRACE` (6s). `kill_and_report` runs a bounded reap and then two
+///    sequential `recv_timeout(KILL_GRACE)` drains, which only stack in the
+///    surviving-grandchild case. So the ceiling per call is `budget + 6s`.
+/// 2. `cowork_toggle_integration` is still a SYNC command, so it stacks five
+///    such calls inline on the UI thread: the probe plus `scan_orphan_rules`
+///    plus `run_netsh` three times. Designed ceiling
+///    `15 + 4 x 5 = 35s`; pathological ceiling
+///    `(15 + 6) + 4 x (5 + 6) = 65s`.
+///
+/// That is a strict improvement on the unbounded hang it replaces, and making
+/// Enable async is tracked separately — it needs its own in-flight guard before
+/// its meta, firewall and workspace writes can safely overlap.
+const NETSH_TIMEOUT: Duration = Duration::from_secs(5);
 
 const RULE_NAME_ALLOW: &str = "Tandem Cowork";
 const RULE_NAME_DENY: &str = "Tandem Cowork \u{2014} Deny (elevation refused)";
@@ -264,7 +332,12 @@ const RULE_NAME_PREFIX: &str = "Tandem Cowork";
 ///
 /// # Returns
 /// The detected CIDR string (e.g. `"172.20.0.0/20"`) on success.
-pub fn detect_vethernet_subnet() -> Result<String, FirewallError> {
+///
+/// `budget` bounds the whole PowerShell round-trip; on expiry the process is
+/// killed and `SubnetDetectionReason::Timeout` is returned. The two call sites
+/// pass different budgets on purpose — see `SUBNET_PROBE_TIMEOUT_ADVISORY` and
+/// `SUBNET_PROBE_TIMEOUT_ENABLE`.
+pub fn detect_vethernet_subnet(budget: Duration) -> Result<String, FirewallError> {
     // `@(...)` is load-bearing, not style: it guarantees an array, so `.Count`
     // is the match count for 0, 1 and n alike — without it a zero-match
     // pipeline yields `$null` and a single match yields a bare object. Zero
@@ -282,20 +355,40 @@ foreach ($adapter in $adapters) {
 }
 "#;
 
-    let start = Instant::now();
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            ps_script,
-        ])
-        .output();
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-Command", ps_script]);
 
+    let start = Instant::now();
+    let bounded = output_with_timeout(command, budget);
     let elapsed = start.elapsed();
 
-    let output = match output {
-        Ok(o) => o,
+    let output = match bounded {
+        Ok(BoundedOutcome::Completed(o)) => o,
+        Ok(BoundedOutcome::TimedOut {
+            pid,
+            partial_stdout_len,
+            partial_stderr_len,
+        }) => {
+            // The seconds live here rather than in the user-facing copy: the two
+            // call sites pass different budgets, so the hint names the wait
+            // without quoting a number. The partial lengths separate "process
+            // start hung" (0) from "the CIM query hung after the marker line".
+            log::warn!(
+                "[firewall] vEthernet query exceeded {}s and was killed (pid {pid}, partial \
+                 stdout {partial_stdout_len}B, stderr {partial_stderr_len}B) after {:.2}s",
+                budget.as_secs(),
+                elapsed.as_secs_f64()
+            );
+            // No diagnostics (#1372): a killed process has no exit code we can
+            // report and its stderr is by definition incomplete. The same rule
+            // `with_query_diagnostics` follows — evidence only where there is
+            // evidence — and `skip_serializing_if` keeps both off the wire.
+            return Err(FirewallError::SubnetDetectionFailed {
+                reason: SubnetDetectionReason::Timeout,
+                exit_code: None,
+                stderr_tail: String::new(),
+            });
+        }
         Err(e) => {
             // `{e}` stays in the log and off the wire: a spawn error's message
             // carries the resolved executable path. The wire gets the kind
@@ -715,6 +808,24 @@ pub fn add_cowork_deny_rule(cidr: &str) -> Result<(), FirewallError> {
     ])
 }
 
+/// Is this the benign "there was nothing to delete" outcome?
+///
+/// "No rules match the specified criteria." is written to stdout (not stderr) by
+/// netsh on Windows. Only exit code 1 WITH that confirmation counts — every other
+/// exit-1 failure propagates.
+///
+/// Extracted from the two `or_else` arms below so the contract is unit-testable,
+/// and because #1371 gave `run_netsh` a timeout arm that reports `exit_code: -1`:
+/// a predicate that matched on the message alone, or on any failure, would
+/// silently swallow a wedged netsh as "nothing to remove".
+fn is_no_rules_match(err: &FirewallError) -> bool {
+    matches!(
+        err,
+        FirewallError::NetshFailure { exit_code: 1, stdout_tail, .. }
+            if stdout_tail.contains("No rules match")
+    )
+}
+
 /// Remove all firewall rules whose name starts with `"Tandem Cowork"`.
 /// Covers both the allow rule and the deny-on-decline variant.
 pub fn remove_cowork_rules() -> Result<(), FirewallError> {
@@ -727,17 +838,11 @@ pub fn remove_cowork_rules() -> Result<(), FirewallError> {
         &format!("name={RULE_NAME_PREFIX}"),
     ])
     .or_else(|e| {
-        // "No rules match the specified criteria." is written to stdout (not stderr)
-        // by netsh on Windows. Only treat exit_code==1 as "nothing to do" when
-        // stdout confirms the "no match" case — all other exit-1 failures propagate.
-        match e {
-            FirewallError::NetshFailure { exit_code: 1, ref stdout_tail, .. }
-                if stdout_tail.contains("No rules match") =>
-            {
-                log::debug!("[firewall] no Tandem Cowork rules to remove (allow rule)");
-                Ok(())
-            }
-            other => Err(other),
+        if is_no_rules_match(&e) {
+            log::debug!("[firewall] no Tandem Cowork rules to remove (allow rule)");
+            Ok(())
+        } else {
+            Err(e)
         }
     })?;
 
@@ -749,14 +854,13 @@ pub fn remove_cowork_rules() -> Result<(), FirewallError> {
         "rule",
         &format!("name={RULE_NAME_DENY}"),
     ])
-    .or_else(|e| match e {
-        FirewallError::NetshFailure { exit_code: 1, ref stdout_tail, .. }
-            if stdout_tail.contains("No rules match") =>
-        {
+    .or_else(|e| {
+        if is_no_rules_match(&e) {
             log::debug!("[firewall] no Tandem Cowork rules to remove (deny rule)");
             Ok(())
+        } else {
+            Err(e)
         }
-        other => Err(other),
     })
 }
 
@@ -772,21 +876,28 @@ pub fn remove_cowork_rules() -> Result<(), FirewallError> {
 /// Returns `Err` on spawn failure or unexpected netsh errors so that
 /// `reconcile_orphan_firewall_rules` can distinguish "no orphans" from "scan failed".
 pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
-    let start = Instant::now();
-    let output = Command::new("netsh")
-        .args([
-            "advfirewall",
-            "firewall",
-            "show",
-            "rule",
-            &format!("name={RULE_NAME_PREFIX}"),
-        ])
-        .output();
+    let mut command = Command::new("netsh");
+    command.args([
+        "advfirewall",
+        "firewall",
+        "show",
+        "rule",
+        &format!("name={RULE_NAME_PREFIX}"),
+    ]);
 
+    let start = Instant::now();
+    let outcome = output_with_timeout(command, NETSH_TIMEOUT);
     let elapsed = start.elapsed();
 
-    let output = match output {
-        Ok(o) => o,
+    let output = match outcome {
+        Ok(BoundedOutcome::Completed(o)) => o,
+        Ok(BoundedOutcome::TimedOut { pid, .. }) => {
+            log::warn!(
+                "[firewall] scan_orphan_rules: netsh exceeded {}s and was killed (pid {pid})",
+                NETSH_TIMEOUT.as_secs()
+            );
+            return Err(netsh_timeout_error());
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             log::warn!("[firewall] scan_orphan_rules: netsh.exe not found");
             return Err(FirewallError::NetshNotFound);
@@ -851,12 +962,27 @@ pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
 /// Logs the invocation (argv, exit code, stdout/stderr tail, elapsed time).
 /// Never constructs a command string — each argument is passed separately.
 fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
+    let mut command = Command::new("netsh");
+    command.args(args);
+
     let start = Instant::now();
-    let output = Command::new("netsh").args(args).output();
+    let outcome = output_with_timeout(command, NETSH_TIMEOUT);
     let elapsed = start.elapsed();
 
-    let output = match output {
-        Ok(o) => o,
+    let output = match outcome {
+        Ok(BoundedOutcome::Completed(o)) => o,
+        Ok(BoundedOutcome::TimedOut { pid, .. }) => {
+            log::error!(
+                "[firewall] netsh {args:?} exceeded {}s and was killed (pid {pid})",
+                NETSH_TIMEOUT.as_secs()
+            );
+            // Returning HERE is what keeps the two exit-code heuristics below out
+            // of the picture: both live inside the `!status.success()` block,
+            // which a timeout never reaches. So a wedged netsh can never be
+            // mistaken for a UAC decline (`exit_code == 1` + empty stdout) nor
+            // swallowed by `is_no_rules_match` (`exit_code == 1`).
+            return Err(netsh_timeout_error());
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             log::error!("[firewall] netsh.exe not found after {:.2}s", elapsed.as_secs_f64());
             return Err(FirewallError::NetshNotFound);
@@ -922,6 +1048,20 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
     }
 
     Ok(())
+}
+
+/// The error a killed `netsh` reports (#1371).
+///
+/// `exit_code: -1` is this file's established "the process never completed"
+/// marker — the spawn-failure arms in `run_netsh` and `scan_orphan_rules` already
+/// use it — so this needs no new wire variant and no new client hint. It also
+/// keeps the timeout clear of both exit-code-1 heuristics.
+fn netsh_timeout_error() -> FirewallError {
+    FirewallError::NetshFailure {
+        exit_code: -1,
+        stderr_tail: format!("netsh timed out after {}s", NETSH_TIMEOUT.as_secs()),
+        stdout_tail: String::new(),
+    }
 }
 
 /// Return the first `max_bytes` bytes of a string, cut at a UTF-8 char boundary.
@@ -992,11 +1132,12 @@ mod tests {
     /// built-in enum iteration. A variant added without being listed here is
     /// caught by the length assertion in the wire-shape test, which is the one
     /// place that would otherwise ship an unpinned spelling.
-    const ALL_SUBNET_REASONS: [SubnetDetectionReason; 4] = [
+    const ALL_SUBNET_REASONS: [SubnetDetectionReason; 5] = [
         SubnetDetectionReason::NoAdapter,
         SubnetDetectionReason::NoIpv4,
         SubnetDetectionReason::PrefixTooBroad,
         SubnetDetectionReason::QueryFailed,
+        SubnetDetectionReason::Timeout,
     ];
 
     fn reason_of(exit_ok: bool, stdout: &str) -> SubnetDetectionReason {
@@ -1181,6 +1322,50 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // #1371: a killed netsh must not be mistaken for a benign outcome.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn no_rules_match_is_only_exit_1_with_the_confirming_stdout() {
+        assert!(is_no_rules_match(&FirewallError::NetshFailure {
+            exit_code: 1,
+            stderr_tail: String::new(),
+            stdout_tail: "No rules match the specified criteria.".to_string(),
+        }));
+        // Exit 1 alone is not enough — malformed args and quota errors exit 1 too.
+        assert!(!is_no_rules_match(&FirewallError::NetshFailure {
+            exit_code: 1,
+            stderr_tail: String::new(),
+            stdout_tail: "The parameter is incorrect.".to_string(),
+        }));
+        assert!(!is_no_rules_match(&FirewallError::NetshNotFound));
+    }
+
+    #[test]
+    fn a_killed_netsh_is_not_swallowed_as_nothing_to_remove() {
+        // The regression this guards: laundering the timeout as `exit_code: 1`,
+        // or widening `is_no_rules_match` to any failure, would make a wedged
+        // netsh look like "there were no rules to delete" — so `remove_cowork_
+        // rules` would report success having removed nothing.
+        let timeout = netsh_timeout_error();
+        assert!(
+            matches!(timeout, FirewallError::NetshFailure { exit_code: -1, .. }),
+            "the timeout must use this file's -1 'never completed' marker: {timeout:?}"
+        );
+        assert!(!is_no_rules_match(&timeout));
+        // And it must not read as a UAC decline either: that heuristic needs
+        // exit_code == 1 with empty stdout, and -1 cannot match it.
+        let FirewallError::NetshFailure { exit_code, ref stderr_tail, .. } = timeout else {
+            unreachable!()
+        };
+        assert_ne!(exit_code, 1);
+        assert!(
+            stderr_tail.contains("timed out"),
+            "the tail is rendered to the user; it must say what happened: {stderr_tail:?}"
+        );
+    }
+
     #[test]
     fn subnet_reason_rides_along_as_a_sibling_field_on_the_wire() {
         // The client discriminates on `kind` and reads `reason` off the same
@@ -1206,6 +1391,13 @@ mod tests {
             (
                 SubnetDetectionReason::QueryFailed,
                 r#"{"kind":"subnetDetectionFailed","reason":"queryFailed"}"#,
+            ),
+            // #1371. `timeout` and not `timedOut`: the client's
+            // `SUBNET_REASON_HINT` is keyed by this exact string and a miss there
+            // falls through to the generic hint, silently, in both languages.
+            (
+                SubnetDetectionReason::Timeout,
+                r#"{"kind":"subnetDetectionFailed","reason":"timeout"}"#,
             ),
         ];
         assert_eq!(
