@@ -12,6 +12,7 @@
  */
 import { tick } from "svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { _resetClientLog, readClientLog } from "../../src/client/utils/client-log";
 
 const preflightSubnet = vi.fn();
 
@@ -192,5 +193,37 @@ describe("createSubnetPreflight", () => {
 
     expect(probe.preflight).toEqual({ status: "unknown" });
     expect(probe.probing).toBe(false);
+  });
+
+  it("records the failure where a bug report can reach it (#1439)", async () => {
+    // `unknown` is never rendered, and the release desktop build ships no
+    // devtools, so before #1439 the cause of a pre-flight failure was
+    // unrecoverable from a user's bug report.
+    _resetClientLog();
+    preflightSubnet.mockRejectedValueOnce(new Error("bridge gone"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await createSubnetPreflight().run();
+
+    expect(readClientLog()).toEqual([
+      expect.objectContaining({
+        level: "error",
+        scope: "cowork",
+        event: "subnet pre-flight threw",
+        detail: "Error: bridge gone",
+      }),
+    ]);
+  });
+
+  it("records a STRING rejection, which is the real Tauri shape", async () => {
+    // `invoke` rejects with the Rust error's Display string, not an Error, so
+    // the string branch of `describeCause` is the only thing that carries this.
+    _resetClientLog();
+    preflightSubnet.mockRejectedValueOnce("subnet probe failed: no such command");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await createSubnetPreflight().run();
+
+    expect(readClientLog()[0].detail).toBe("subnet probe failed: no such command");
   });
 });

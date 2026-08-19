@@ -38,42 +38,13 @@
  */
 
 import type * as SentryBrowser from "@sentry/browser";
+import { redactPaths, redactSecrets, scrubText } from "../shared/scrub-text";
 
 let sentry: typeof SentryBrowser | null = null;
 
 /** True inside the Tauri WebView (where the IPC transport is available). */
 function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-/**
- * Crude redaction of anything that looks like a long opaque secret (API keys,
- * bearer tokens) embedded in a string. Anthropic keys start `sk-ant-`; we also
- * catch generic `sk-…` and long base64-ish runs. Conservative: false positives
- * only cost a `[redacted]` in a crash report, never correctness.
- */
-function redactSecrets(input: string): string {
-  return input
-    .replace(/sk-ant-[A-Za-z0-9_-]{8,}/g, "sk-ant-[redacted]")
-    .replace(/sk-[A-Za-z0-9_-]{16,}/g, "sk-[redacted]")
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{12,}=*/gi, "Bearer [redacted]");
-}
-
-/**
- * Replace absolute home-dir prefixes with `~`. The WebView can't read `$HOME`,
- * but file paths surfaced in error messages typically embed a recognizable
- * `/Users/<name>/`, `/home/<name>/`, or `C:\Users\<name>\` segment. Collapse
- * the user segment so a crash report can't fingerprint the OS account.
- */
-function redactPaths(input: string): string {
-  return input
-    .replace(/(\/Users\/)[^/\\]+/g, "$1[user]")
-    .replace(/(\/home\/)[^/\\]+/g, "$1[user]")
-    .replace(/([A-Za-z]:\\Users\\)[^\\]+/g, "$1[user]");
-}
-
-function scrub(input: string): string {
-  return redactPaths(redactSecrets(input));
 }
 
 /**
@@ -108,21 +79,21 @@ export async function initCrashReporting(): Promise<void> {
       // transport — a harmless no-op, matching the opt-in posture.
       sendDefaultPii: false,
       beforeSend: (event) => {
-        if (event.message) event.message = scrub(event.message);
+        if (event.message) event.message = scrubText(event.message);
         for (const exception of event.exception?.values ?? []) {
-          if (exception.value) exception.value = scrub(exception.value);
+          if (exception.value) exception.value = scrubText(exception.value);
         }
         // Drop request bodies / query strings — these can carry doc content.
         if (event.request) {
           event.request.data = undefined;
-          if (event.request.url) event.request.url = scrub(event.request.url);
+          if (event.request.url) event.request.url = scrubText(event.request.url);
         }
         return event;
       },
       beforeBreadcrumb: (breadcrumb) => {
         // `console`/`fetch`/`xhr` breadcrumbs can capture document text or auth
         // headers. Scrub their messages and drop their data payloads.
-        if (breadcrumb.message) breadcrumb.message = scrub(breadcrumb.message);
+        if (breadcrumb.message) breadcrumb.message = scrubText(breadcrumb.message);
         if (breadcrumb.category === "fetch" || breadcrumb.category === "xhr") {
           breadcrumb.data = undefined;
         }
@@ -171,5 +142,10 @@ export function reportError(error: unknown, context?: Record<string, unknown>): 
   }
 }
 
-/** Exposed for unit tests — the scrubbing is the privacy-load-bearing part. */
-export const __test = { scrub, redactSecrets, redactPaths };
+/**
+ * Exposed for unit tests — the scrubbing is the privacy-load-bearing part.
+ * The implementations moved to `shared/scrub-text.ts` when the client log
+ * (#1439) became a second consumer; `scrub` stays named here so the existing
+ * tests keep their entry point.
+ */
+export const __test = { scrub: scrubText, redactSecrets, redactPaths };
