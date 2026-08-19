@@ -984,9 +984,11 @@ Two rejected alternatives, recorded because both are reasonable and will be re-p
 
 The internal `status: "restricted"` literal is **not** renamed — `license-types.ts` records that both gates decide on that exact string, so a rename fails **open** at every enforcement surface until all of them move together.
 
+**Implementation tracker: #1521.** Both amendments are design records; no code moves on either. The reshape — four admission points replacing the per-tool gate, the deletion of Surface A and `tandem_resolveAnnotation`, the UI and the copy — is tracked there, and it lands **dark**. Flipping `LICENSE_GATE_ENABLED` remains a separate v1.0 exit gate.
+
 **Constraint — everything stays dark.** `LICENSE_GATE_ENABLED` remains `false` in `tsup.config.ts` and the build stays byte-identical with the flag off. This amendment is a design change to merged-but-inert code; no code moves on it here. The gated-set enumeration in [`docs/licensing-explained.md`](licensing-explained.md#the-gated-set--this-list-is-the-api-halfs-review) is superseded in **shape** by decision 1 but remains an accurate description of the code as merged, so it stands as Critical Rule 9's review surface until the surface gate is implemented.
 
-**Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), ADR-039 (local-model collaborator — the fifth enforcement site named in the 2026-08-18 amendment), `docs/positioning.md`, `docs/licensing-explained.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1), #1116 (engineering tracker), #1346 (the 2026-08-18 amendment and the 2026-08-19 second amendment).
+**Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), ADR-039 (local-model collaborator — the fifth enforcement site named in the 2026-08-18 amendment), `docs/positioning.md`, `docs/licensing-explained.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1), #1116 (engineering tracker), #1346 (the 2026-08-18 amendment and the 2026-08-19 second amendment), #1521 (surface-gate implementation tracker).
 
 ## ADR-041: Customizable Keyboard Shortcuts (Override Layer)
 
