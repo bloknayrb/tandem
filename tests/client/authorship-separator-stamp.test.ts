@@ -103,7 +103,10 @@ describe("a block separator is never stamped on its own", () => {
     editor.view.dispatch(editor.state.tr.split(mid).setMeta(AUTHORSHIP_ORIGIN_META, "claude"));
 
     expect(entries().map((entry) => entry.author)).toEqual(["user"]);
-    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({ user: ["USER"] });
+    // `USERTEXT`, not `USER`: the same series that suppressed this stamp also
+    // re-anchors the tail a split carries into the new block (#1512), so the
+    // run reads whole across the boundary.
+    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({ user: ["USERTEXT"] });
   });
 
   it("a split at the end of a block mints no unanchored entry, and warns nothing", () => {
@@ -179,9 +182,12 @@ describe("a block separator is never stamped on its own", () => {
     editor.view.dispatch(editor.state.tr.insertText("NEW", tailStart));
 
     expect(entries().length, "the run must not extend across the block boundary").toBe(2);
-    // `TEXT` — the tail the split carried into the new block — is still
-    // unattributed, which is #1512's main half and is not this change's job.
-    // Recorded rather than hidden: the repair PR inverts this line.
-    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({ user: ["NEW", "USER"] });
+    // Two decorations, and the overlap is by design rather than a defect. The
+    // repaired entry spans the boundary, so typing at the head of the new block
+    // lands INSIDE it; `splitCoveringEntries` cuts a covering entry only when
+    // the authors differ, because the gutter resolves an author per character
+    // and a same-author overlap cannot skew it (#1513). Both decorations carry
+    // `user`, so the render is identical either way.
+    expect(decoratedTextByAuthor(ydoc, editor)).toEqual({ user: ["NEW", "USERNEWTEXT"] });
   });
 });

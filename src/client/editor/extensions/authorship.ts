@@ -1,5 +1,5 @@
 import { Extension } from "@tiptap/core";
-import type { Node as PmNode } from "@tiptap/pm/model";
+import type { Node as PmNode, Slice as PmSlice } from "@tiptap/pm/model";
 import { Plugin, PluginKey, type Transaction } from "@tiptap/pm/state";
 import { Mapping } from "@tiptap/pm/transform";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
@@ -231,16 +231,17 @@ interface InsertedSpan {
  * a different offset than asked for. Only the interior boundaries are new, so
  * only they are minted.
  *
- * NOT COVERED: a block-splitting insertion (Enter, `splitListItem`). y-prosemirror
- * implements the split by deleting the tail out of the original `Y.XmlText` and
- * re-inserting it into a new one, which destroys the covering entry's `toRel`
- * before this function ever resolves it — the entry has already collapsed to
- * the split point, so there is nothing left to cut and the tail ends up
- * unattributed. That is pre-existing rather than introduced here, and fixing it
- * needs a different mechanism (re-anchor across the split inside the step loop,
- * where the before-frame still exists). Filed as #1512 and pinned in
- * `authorship-split.test.ts`; stated here so this does not read as complete
- * coverage of insertions.
+ * NOT THIS FUNCTION'S JOB, and it took a different mechanism: a block-structure
+ * change (Enter, `splitListItem`, a backspace join, a heading toggle, a list or
+ * blockquote wrap). y-prosemirror implements those by deleting the affected text
+ * out of its `Y.XmlText` and re-inserting it, or rebuilding the `Y.XmlElement`
+ * outright, which destroys the covering entry's anchor before this function ever
+ * resolves it — the entry has already collapsed, so there is nothing left to cut.
+ * `reanchorCaptured` handles it instead, from a position snapshot taken while the
+ * pre-change Y.Doc was still readable (#1512). Stated here because the two run in
+ * the same handler and the division between them is not obvious from either one:
+ * this function cuts an entry a same-frame insertion widened, that one rebuilds an
+ * entry a structural step destroyed.
  */
 function splitCoveringEntries(
   ydoc: Y.Doc,
@@ -420,6 +421,244 @@ const GUTTER_NODE_TYPES = new Set(["paragraph", "heading"]);
  * fallback count (entries that used to paint stale offsets now decline), so the
  * latch is a precondition for the resolver fix rather than a tidy-up.
  */
+/** Where an anchored entry sat before this transaction reached Y. */
+interface CapturedPosition {
+  id: string;
+  from: PmPos;
+  to: PmPos;
+}
+
+/** A capture is valid for exactly one transaction — see {@link capturePositions}. */
+export interface StructuralCapture {
+  transaction: Transaction;
+  positions: CapturedPosition[];
+}
+
+/**
+ * Does this transaction change block structure?
+ *
+ * `structure` is the flag `prosemirror-transform` sets on the steps that move
+ * or replace whole nodes — split, join, `setBlockType`, `wrap`, `lift`. It is
+ * **not in the typings** (a constructor parameter only), so this reads an
+ * undeclared runtime field; if it ever stops being stored, the repair below
+ * becomes a silent no-op, which is what the positive half of the perf test
+ * exists to catch.
+ *
+ * The second clause is not redundant. A two-paragraph paste is a plain
+ * `ReplaceStep` with `structure: false` and a slice of `{openStart: 1,
+ * openEnd: 1, childCount: 2}` — it destroys a covering entry's anchor exactly
+ * like a split, and a gate keyed on the flag alone would miss it. It also fires
+ * on some purely inline replacements (a DOM diff spanning a mark boundary
+ * produces `childCount > 1`), which costs a resolve pass that then declines to
+ * act; that is the trade for not missing the paste door.
+ */
+function changesBlockStructure(transaction: Transaction): boolean {
+  for (const step of transaction.steps) {
+    if ((step as unknown as { structure?: boolean }).structure === true) return true;
+    const slice = (step as unknown as { slice?: PmSlice }).slice;
+    if (!slice) continue;
+    if (slice.openStart > 0 || slice.openEnd > 0 || slice.content.childCount > 1) return true;
+  }
+  return false;
+}
+
+/**
+ * Every anchored entry's position, resolved against the document as it stood
+ * BEFORE this transaction — the one frame in which a block-structure change's
+ * victims can still be found.
+ *
+ * y-prosemirror writes to Y from its plugin **view**'s `update()`, which
+ * `view.updateState` runs after `EditorState.apply` has finished. So a plugin's
+ * own `apply` still sees the pre-change Y.Doc, while `onTransaction` — which
+ * fires after `updateState` — does not. Measured: during `apply` of a split
+ * round the fragment still reads one paragraph and the entry still resolves to
+ * its full span; by `onTransaction` the entry has collapsed to its head.
+ */
+function capturePositions(
+  ydoc: Y.Doc,
+  authorshipMap: Y.Map<unknown>,
+  oldDoc: PmNode,
+): CapturedPosition[] {
+  const positions: CapturedPosition[] = [];
+  authorshipMap.forEach((value) => {
+    const entry = value as AuthorshipRange;
+    if (!entry?.relRange) return;
+    const at = relRangeToPmPositions(ydoc, oldDoc, entry.relRange);
+    if (!at || at.from >= at.to) return;
+    positions.push({ id: entry.id, from: at.from, to: at.to });
+  });
+  return positions;
+}
+
+/**
+ * Put back the attribution a block-structure change destroyed (#1512).
+ *
+ * y-prosemirror implements such a change by DELETING the affected text out of
+ * its `Y.XmlText` — or rebuilding the `Y.XmlElement` outright — and inserting
+ * fresh items. Nothing links the new items to the old, so the entry's anchor
+ * cannot follow: a split leaves it resolving to the head alone, and a heading
+ * toggle, a list or blockquote wrap, or a backspace-join leave it resolving to
+ * nothing at all. An anchored entry never falls back to its flat range (#1471
+ * §1.5), so those four lose the colouring silently.
+ *
+ * The ProseMirror mapping is the only witness to where the text went, and it
+ * exists only for the duration of the transaction. So: compare where the anchor
+ * says the entry is against where the mapping says its text went, and when they
+ * disagree, believe the mapping — it is derived from the steps that just
+ * applied.
+ */
+function reanchorCaptured(
+  ydoc: Y.Doc,
+  authorshipMap: Y.Map<unknown>,
+  pmDoc: PmNode,
+  mapping: Mapping,
+  captured: readonly CapturedPosition[],
+  insertions: readonly InsertedSpan[],
+  author: AuthorshipRange["author"],
+  alreadyWritten: ReadonlySet<string>,
+): AuthorshipRange[] {
+  const repaired: AuthorshipRange[] = [];
+  const ordered = [...insertions].sort((a, b) => a.flat.from - b.flat.from);
+
+  for (const position of captured) {
+    // An entry this transaction already rewrote — a gap-3 split or a coalesce —
+    // is not ours to touch. Two passes writing one id in one transaction would
+    // be decided by loop order inside the `withBrowser` block below.
+    if (alreadyWritten.has(position.id)) continue;
+    const entry = authorshipMap.get(position.id) as AuthorshipRange | undefined;
+    if (!entry?.relRange) continue;
+
+    // The same bias pair the anchors themselves carry: `from` assoc 0 so text
+    // inserted at the start lands outside, `to` assoc -1 so text appended at the
+    // end lands outside.
+    const mapped = {
+      from: toPmPos(mapping.map(position.from, 1)),
+      to: toPmPos(mapping.map(position.to, -1)),
+    };
+    // The entry's text is gone, not moved. Minting here would produce a
+    // zero-width anchor — which paints nothing, because it resolves INVERTED
+    // rather than expanding — but which nothing can ever reap, since the reap
+    // skips anchored entries by design (#1480). Leave the corpse recognisable.
+    if (mapped.from >= mapped.to) continue;
+
+    const resolvedNow = relRangeToPmPositions(ydoc, pmDoc, entry.relRange);
+    // Both ends, not just `to`. A door that kills `from` while `to` survives
+    // would otherwise be skipped and never repaired — and this is the same
+    // information the endpoint reuse below consumes, so the two are one test.
+    if (resolvedNow && resolvedNow.from === mapped.from && resolvedNow.to === mapped.to) continue;
+
+    let flat: DocumentRange;
+    try {
+      flat = pmSelectionToFlat(pmDoc, mapped);
+    } catch (err) {
+      warnOnce("reanchor-convert", "[authorship] Could not convert a repaired range (#1512)", err);
+      continue;
+    }
+    if (flat.to <= flat.from) continue;
+
+    // Subtract this transaction's insertions when they belong to someone else,
+    // or the repair re-creates the double-coverage defect `splitCoveringEntries`
+    // exists to remove: a transaction that both inserts Claude's text and splits
+    // inside a user run leaves that split declining, and a whole-span re-mint
+    // would then cover Claude's words as the user's. Every insertion in one
+    // transaction shares an author, so one comparison settles it. Separator-only
+    // insertions never reach `insertions` at all, which matters — subtracting a
+    // block boundary would cut the repair in two at exactly the seam it is
+    // supposed to bridge.
+    const spans: DocumentRange[] = [];
+    if (entry.author === author) {
+      spans.push(flat);
+    } else {
+      let cursor = flat.from;
+      for (const cut of ordered) {
+        if (cut.flat.to <= flat.from || cut.flat.from >= flat.to) continue;
+        if (cut.flat.from > cursor) spans.push({ from: cursor, to: cut.flat.from });
+        if (cut.flat.to > cursor) cursor = cut.flat.to;
+      }
+      if (flat.to > cursor) spans.push({ from: cursor, to: flat.to });
+    }
+    if (spans.length === 0) continue;
+
+    // Reuse an endpoint only when it BOTH survived and still bounds the piece.
+    // `flatOffsetToRelPos`'s assoc-directed retry returns a non-null anchor at a
+    // different offset rather than failing, so a re-mint of a known-good
+    // endpoint is how a silently-wrong anchor gets made. But an other-author
+    // insertion sitting exactly at `flat.from` drops the leading gap, and then
+    // `spans[0]` no longer starts where the entry did — reusing there would
+    // pin the surviving anchor to the wrong text.
+    const keepFrom =
+      resolvedNow?.from === mapped.from && spans[0].from === flat.from
+        ? entry.relRange.fromRel
+        : null;
+    const keepTo =
+      resolvedNow?.to === mapped.to && spans[spans.length - 1].to === flat.to
+        ? entry.relRange.toRel
+        : null;
+
+    const pieces: AuthorshipRange[] = [];
+    let declined = false;
+    for (const [index, span] of spans.entries()) {
+      const minted = anchorFlatRange(ydoc, span.from, span.to);
+      if (!minted) {
+        declined = true;
+        break;
+      }
+      const relRange = {
+        fromRel: index === 0 && keepFrom ? keepFrom : minted.fromRel,
+        toRel: index === spans.length - 1 && keepTo ? keepTo : minted.toRel,
+      };
+      pieces.push(
+        index === 0
+          ? { ...entry, range: span, relRange }
+          : {
+              id: freshSiblingId(authorshipMap, entry.id, index),
+              author: entry.author,
+              range: span,
+              relRange,
+              timestamp: entry.timestamp,
+            },
+      );
+    }
+    // All or nothing, as in `splitCoveringEntries`: a half-repaired entry is
+    // worse than an unrepaired one, because the half that did anchor looks
+    // authoritative.
+    if (declined) {
+      warnOnce(
+        "reanchor-declined",
+        "[authorship] Could not re-anchor an entry a structural change moved (#1512)",
+      );
+      continue;
+    }
+    repaired.push(...pieces);
+  }
+
+  return repaired;
+}
+
+/**
+ * A sibling id that is unique in the map, and still a `${base}#…` sibling.
+ *
+ * Both halves are load-bearing. The PREFIX cannot be dropped for a fresh random
+ * id: `stampClaudeAuthorshipWholeDoc` sweeps stale siblings by scanning for
+ * `key.startsWith(`${base}#`)` (`src/server/mcp/document.ts`), so a repaired
+ * piece of `claude-block-3` that did not carry the prefix would survive a
+ * re-open as an orphan under the restored whole-block range.
+ *
+ * The UNIQUENESS cannot be assumed from the loop index, which is what an
+ * earlier version did. `capturePositions` walks every anchored entry including
+ * siblings an earlier repair created, so a second multi-span repair of the same
+ * base regenerates `#r1` and `Y.Map.set` silently overwrites a live entry
+ * covering unrelated text. Nothing warns on that path — `warnOnce` fires only
+ * on a decline — so the guard is cheap next to a loss no one would ever see.
+ */
+function freshSiblingId(authorshipMap: Y.Map<unknown>, baseId: string, index: number): string {
+  let candidate = `${baseId}#r${index}`;
+  for (let bump = 2; authorshipMap.has(candidate); bump++) {
+    candidate = `${baseId}#r${index}_${bump}`;
+  }
+  return candidate;
+}
+
 /**
  * Does an inserted span carry anything a reader would call authored content?
  *
@@ -628,6 +867,16 @@ export function buildAuthorshipDecorations(
 interface AuthorshipPluginState {
   visible: boolean;
   decorations: DecorationSet;
+  /**
+   * Pre-change positions for the transaction being applied, or `null`.
+   *
+   * Set on EVERY return path rather than carried forward — three of the four
+   * paths below return `pluginState` unchanged, so a consumed capture would
+   * survive into the next round and be mapped through a transaction that knows
+   * nothing about the structural change it came from. `onTransaction` checks
+   * the transaction identity as well, which makes that a belt as well as braces.
+   */
+  capture: StructuralCapture | null;
 }
 
 interface AuthorshipOptions {
@@ -695,15 +944,44 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
             return {
               visible,
               decorations: buildAuthorshipDecorations(state.doc, authorshipMap, ydoc, visible),
+              capture: null,
             };
           },
-          apply(
-            tr,
-            pluginState: AuthorshipPluginState,
-            _oldState,
-            newState,
-          ): AuthorshipPluginState {
+          apply(tr, pluginState: AuthorshipPluginState, oldState, newState): AuthorshipPluginState {
             const meta = tr.getMeta(authorshipPluginKey);
+
+            // THE CAPTURE, and it is computed here because this is the last
+            // place the pre-change Y.Doc is readable — see `capturePositions`.
+            //
+            // Deliberately outside the `visible` branch below. Stamping runs
+            // whether or not the overlay is on, and the toggle defaults to OFF,
+            // so a capture gated on visibility would make the whole repair a
+            // no-op for anyone who has not turned the colouring on.
+            let capture: StructuralCapture | null = null;
+            if (tr.getMeta("appendedTransaction")) {
+              // An appended transaction is invisible to the ROOT transaction's
+              // mapping, which is what `onTransaction` maps through — but its
+              // steps are in the Y.Doc the repair reads. Mapping across that
+              // gap would place an anchor one frame behind. So any appended
+              // change invalidates the round, structural or not: `@tiptap/core`
+              // appends TEXT-moving steps on every paste that matches a paste
+              // rule, and `prosemirror-tables` appends structural ones.
+              capture = tr.docChanged ? null : pluginState.capture;
+            } else if (
+              authorshipMap.size > 0 &&
+              !tr.getMeta(ySyncPluginKey) &&
+              !meta &&
+              tr.docChanged &&
+              changesBlockStructure(tr)
+            ) {
+              // y-sync is excluded because for a remote or MCP change Y is
+              // written BEFORE ProseMirror applies, so there is no pre-change
+              // frame left to capture and the positions would be garbage.
+              capture = {
+                transaction: tr,
+                positions: capturePositions(ydoc, authorshipMap, oldState.doc),
+              };
+            }
 
             if (meta?.type === "toggle") {
               const newVisible = meta.visible as boolean;
@@ -715,6 +993,7 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
                   ydoc,
                   newVisible,
                 ),
+                capture,
               };
             }
 
@@ -727,6 +1006,7 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
                   ydoc,
                   pluginState.visible,
                 ),
+                capture,
               };
             }
 
@@ -734,10 +1014,11 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
               return {
                 visible: pluginState.visible,
                 decorations: pluginState.decorations.map(tr.mapping, tr.doc),
+                capture,
               };
             }
 
-            return pluginState;
+            return capture === pluginState.capture ? pluginState : { ...pluginState, capture };
           },
         },
 
@@ -799,7 +1080,7 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
    * filed because accepting a Claude suggestion rendered the words as the
    * user's own.
    */
-  onTransaction({ transaction }) {
+  onTransaction({ transaction, editor }) {
     const ydoc = this.options.ydoc;
     if (!ydoc) return;
 
@@ -920,16 +1201,29 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
             // offset inside a heading prefix, or either endpoint adjacent to an
             // empty block. The entry then behaves exactly as it does today.
             //
-            // UNSTATED INVARIANT, now stated: no `appendTransaction` plugin may
-            // insert or delete TEXT. `EditorState.apply` folds appended steps
-            // into the state handed to `updateState`, and y-prosemirror writes
-            // from `view.state.doc` — but the transaction Tiptap emits is the
-            // ROOT one, so `transaction.doc` does not include them. A text-moving
-            // append would therefore put `range` and the Y.Doc in different
-            // frames. This binds the flat `range` exactly as much as the anchor,
-            // so it is a property of the whole handler rather than of the mint.
-            // True today: `@tiptap/extension-link` is the only extension in the
-            // stack defining `appendTransaction` and it only adds/removes marks.
+            // A LIVE ASSUMPTION, not an invariant — an earlier version of this
+            // comment claimed the latter and was wrong about both halves.
+            //
+            // The assumption: no `appendTransaction` plugin moves TEXT.
+            // `EditorState.apply` folds appended steps into the state handed to
+            // `updateState`, and y-prosemirror writes from `view.state.doc` — but
+            // the transaction Tiptap emits is the ROOT one, so `transaction.doc`
+            // does not include them. A text-moving append puts `range` and the
+            // Y.Doc in different frames, which binds the flat `range` exactly as
+            // much as the anchor: it is a property of the whole handler.
+            //
+            // Four plugins in this stack define `appendTransaction`, not one.
+            // `clearDocument` and `prosemirror-tables`' `tableEditing` do not
+            // move text, and `@tiptap/extension-link`'s autolink only adds and
+            // removes marks. `@tiptap/core`'s PasteRules DOES move text, so the
+            // assumption is already false on a rule-matching paste — it fires
+            // only on a `uiEvent` of paste or drop, so ordinary typing is not
+            // exposed. Filed rather than smuggled in here.
+            //
+            // The exposure is this mint, NOT the structural repair below: that
+            // one invalidates its capture whenever an appended transaction
+            // changes the doc, so it declines instead of repairing from a
+            // mapping it cannot trust.
             const relRange = anchorFlatRange(ydoc, range.from, range.to) ?? undefined;
             if (!relRange) {
               warnOnce(
@@ -959,12 +1253,43 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
     // ydoc, which already holds every one of this transaction's insertions.
     const splitPieces = splitCoveringEntries(ydoc, authorshipMap, pmDoc, insertedSpans, author);
 
+    // #1512: put back what a block-structure change destroyed. The capture was
+    // taken during `apply`, the last point at which the pre-change Y.Doc was
+    // readable, and it is valid for THIS transaction only — an appended
+    // transaction invalidates the round, so a mismatch means "do not map".
+    //
+    // Read before the map write below, never after: that write drives an
+    // observer which dispatches a ProseMirror rebuild. Read before COALESCING
+    // too, for the reason in the next comment.
+    const pluginCapture = (
+      authorshipPluginKey.getState(editor.state) as AuthorshipPluginState | undefined
+    )?.capture;
+    const structuralCapture = pluginCapture?.transaction === transaction ? pluginCapture : null;
+
     // Coalescing, and only for a transaction that produced EXACTLY ONE stamp.
     // Typing is exactly that; a multi-insertion transaction (find-replace-all)
     // produces several non-adjacent stamps, is not repeated per keystroke, and
     // has no single "the stamp" to extend.
+    // NEVER COALESCE ON A STRUCTURAL TRANSACTION (#1512). Measured, because the
+    // failure is silent and survives every other guard in this file: one
+    // transaction that both types same-author text and splits the block ends
+    // up attributing `USERCC` and losing `TEXT` entirely.
+    //
+    // The mechanism is a coincidence, not a bug in the adjacency test. A split
+    // destroys the candidate's `toRel`, and Yjs resolves the destroyed anchor
+    // to the LEFT EDGE of the deletion — which for a mid-run split is exactly
+    // the insertion's start. So `at.to === insertion.pm.from` passes, the merge
+    // looks legitimate, and it rewrites the candidate's `toRel` to the split
+    // boundary. Everything past the split is then unreachable forever, since
+    // anchored entries are never reaped.
+    //
+    // Worse, the merge keeps the candidate's id, which puts it in
+    // `alreadyWritten` and makes `reanchorCaptured` skip the very entry it
+    // exists to rebuild. This predates the repair — measured identical on
+    // master — but the repair cannot land without it, because the repair is
+    // what claims this case is fixed.
     const merged =
-      additions.length === 1 && insertedSpans.length === 1
+      !structuralCapture && additions.length === 1 && insertedSpans.length === 1
         ? coalesceIntoPrevious(
             ydoc,
             authorshipMap,
@@ -990,7 +1315,29 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
     if (additions.length === 1) this.storage.lastStampId = additions[0].id;
     else if (additions.length > 1) this.storage.lastStampId = null;
 
-    if (additions.length === 0 && removals.length === 0 && splitPieces.length === 0) return;
+    const repairs = structuralCapture
+      ? reanchorCaptured(
+          ydoc,
+          authorshipMap,
+          pmDoc,
+          transaction.mapping,
+          structuralCapture.positions,
+          insertedSpans,
+          author,
+          // Ids this transaction has already rewritten. Both sets target
+          // anchored entries by id, so without this the two passes could
+          // write the same id and loop order would decide the winner.
+          new Set([...splitPieces.map((p) => p.id), ...additions.map((a) => a.id)]),
+        )
+      : [];
+
+    if (
+      additions.length === 0 &&
+      removals.length === 0 &&
+      splitPieces.length === 0 &&
+      repairs.length === 0
+    )
+      return;
     // One transaction for both halves, and removals first: the reap compares
     // BEFORE-frame offsets, while an addition's range is in final-frame
     // offsets, so an addition visible to the scan could be deleted by a
@@ -1008,6 +1355,9 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
       // collide. A split targets an anchored entry already in the map, the reap
       // targets only unanchored ones, and an addition's id is freshly minted.
       for (const piece of splitPieces) authorshipMap.set(piece.id, piece);
+      // Repairs before additions, and they cannot collide with either set: the
+      // repair pass skips every id the other two produced.
+      for (const piece of repairs) authorshipMap.set(piece.id, piece);
       for (const entry of additions) authorshipMap.set(entry.id, entry);
     });
   },
