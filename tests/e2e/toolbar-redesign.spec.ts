@@ -8,6 +8,7 @@ import {
   createFixtureDir,
   McpTestClient,
   openAnnotatePopup,
+  selectTextStable,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -17,8 +18,9 @@ import {
  * on click" bug — and locks in toolbar control enumeration so future
  * refactors don't silently drop a button.
  *
- * Reference: `.pipeline-state/issue-484/plan.md`. Selection idiom mirrors
- * `settings-and-filters.spec.ts` (`editor.locator("p").first().selectText()`).
+ * Reference: `.pipeline-state/issue-484/plan.md`. Selection goes through
+ * `selectTextStable()` rather than a bare `selectText()` — see that helper for
+ * why a one-shot programmatic selection loses a race here.
  *
  * Negative-assertion strategy: tests that assert "no annotation was created"
  * dual-assert — `tandem_getAnnotations` is the authoritative server-side
@@ -95,7 +97,7 @@ test("selection lights up annotation entry-points", async ({ page }) => {
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeEnabled({
     timeout: 3_000,
@@ -117,7 +119,7 @@ test("floating selection toolbar stays within a short viewport", async ({ page }
   });
 
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   // Wait for the toolbar to mount before measuring its position — on a short
   // viewport the toolbar can lag the selection event by a frame or two under CI.
@@ -183,7 +185,7 @@ test("the annotate composer never exceeds its placement reserve", async ({ page 
   });
 
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
   await openAnnotatePopup(page);
 
   // Overfill so `field-sizing: content` pins the textarea at its max-height —
@@ -208,7 +210,7 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
   });
 
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
@@ -251,7 +253,7 @@ test("selection popup bar-toggle reads as Hide while the formatting bar is shown
   await expect(page.locator("[data-testid='formatting-bar']")).toBeVisible({ timeout: 10_000 });
 
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
   // A8 (#798): the bar-toggle is always present and toggles both ways (the
@@ -280,7 +282,7 @@ test("hidden formatting bar can be restored from the selection popup", async ({ 
   await expect(bar).toBeHidden({ timeout: 3_000 });
 
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
   const restore = toolbar.locator("[data-testid='popup-show-formatbar-btn']");
@@ -300,7 +302,7 @@ test("floating selection toolbar dismisses with Escape", async ({ page }) => {
   });
 
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
@@ -317,7 +319,7 @@ test("Comment flow creates a comment annotation", async ({ page }) => {
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   // Wave M: selection shows the action surface; click Annotate for the textarea.
   await openAnnotatePopup(page);
@@ -342,7 +344,7 @@ test("Note flow creates a note annotation", async ({ page }) => {
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   // Wave M: selection shows the action surface; click Annotate for the textarea.
   await openAnnotatePopup(page);
@@ -374,7 +376,7 @@ test("#480 regression — popup appears on selection without creating an annotat
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   // Popup action surface appears — but no annotation is created just by
   // selecting text. (Wave M: textarea lives behind the Annotate button, but
@@ -402,7 +404,7 @@ test("Comment submit is disabled when textarea is empty (no annotation created)"
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   // Popup appears — Comment button should be disabled when textarea is empty
   await openAnnotatePopup(page);
@@ -429,7 +431,7 @@ test("plain Enter in popup textarea inserts a newline and creates no annotation"
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   await openAnnotatePopup(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
@@ -454,7 +456,7 @@ test("Ctrl+Enter submits as Comment (outbound to Claude)", async ({ page }) => {
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   await openAnnotatePopup(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
@@ -483,7 +485,7 @@ test("Alt+Enter submits as Note — visible to the user, invisible to Claude", a
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   await openAnnotatePopup(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
@@ -513,7 +515,7 @@ test("empty Alt+Enter / Ctrl+Enter create nothing (guard on both submit paths)",
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   await openAnnotatePopup(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
@@ -545,7 +547,7 @@ test("formatting from the popup survives the click, then Annotate produces a cor
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
@@ -586,7 +588,7 @@ test("popup textarea and submit buttons are visible after Annotate click", async
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
@@ -606,7 +608,7 @@ test("Highlight quick-action creates a highlight annotation", async ({ page }) =
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
   await expect(selectionToolbar).toBeVisible({ timeout: 5_000 });
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
@@ -630,7 +632,7 @@ test("Escape dismisses the popup without creating an annotation", async ({ page 
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 10_000 });
@@ -659,7 +661,7 @@ test("Shift+Enter inserts a newline in the textarea without submitting", async (
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   await openAnnotatePopup(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
@@ -685,7 +687,7 @@ test("suppressSelectionToolbar hides the popup when the find bar is open", async
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   // Wave M: the popup's action surface is what mounts on selection.
   const popup = page.locator("[data-testid='popup-annotate-btn']");
@@ -706,7 +708,7 @@ test("popup highlight button creates a highlight annotation", async ({ page }) =
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   // Wave M: highlight swatches live in the action surface (not annotate mode),
   // so we just need the popup to be mounted. The Annotate button is the
@@ -733,7 +735,7 @@ test("highlight same range twice removes highlight (toggle off)", async ({ page 
     timeout: 10_000,
   });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 
   const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
@@ -747,7 +749,7 @@ test("highlight same range twice removes highlight (toggle off)", async ({ page 
 
   // Re-select the same text and click highlight again — should toggle off.
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
 
@@ -779,7 +781,7 @@ test("highlights on different ranges produce two separate annotations", async ({
 
   // Highlight first paragraph.
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
   const highlightBtn = page.locator("[data-testid='toolbar-highlight-btn']");
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
@@ -790,7 +792,7 @@ test("highlights on different ranges produce two separate annotations", async ({
   // Highlight a different paragraph (section one content).
   const secondPara = editor.locator("p").nth(1);
   await secondPara.click();
-  await secondPara.selectText();
+  await selectTextStable(secondPara);
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
 
@@ -820,7 +822,7 @@ async function openAndWaitForToolbar(page: import("@playwright/test").Page) {
   const editor = page.locator(".tiptap");
   await expect(editor.locator("p").first()).toContainText("first paragraph", { timeout: 10_000 });
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
   await expect(toolbar.getByRole("button", { name: "B", exact: true })).toBeVisible({

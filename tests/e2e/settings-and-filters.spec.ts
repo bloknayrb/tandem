@@ -8,6 +8,7 @@ import {
   McpTestClient,
   openAnnotatePopup,
   openSettingsViaBrandMenu,
+  selectTextStable,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -236,7 +237,7 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
 
   async function selectFirstParagraph(): Promise<void> {
     await editor.click();
-    await editor.locator("p").first().selectText();
+    await selectTextStable(editor.locator("p").first());
   }
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
@@ -684,7 +685,7 @@ test("selections are buffered, not pushed as SSE events (#188)", async ({ page }
   // Make a selection in the editor
   const prose = page.locator(".tandem-editor");
   await prose.click();
-  await prose.locator("h1").first().selectText();
+  await selectTextStable(prose.locator("h1").first());
 
   // Wait well past the maximum dwell time. Server-side, the timer is scheduled
   // with `getDwellMs()` from awareness.ts:30-42, which reads CTRL_ROOM Y.Map.
@@ -730,7 +731,7 @@ test("note filter shows only notes, hides comments (ADR-027 C1)", async ({ page 
   await editor.click();
   // Select the first-paragraph text so we have a non-empty selection.
   const firstParagraph = editor.locator("p").first();
-  await firstParagraph.selectText();
+  await selectTextStable(firstParagraph);
 
   // Wave M (#776): selection shows the action surface; clicking Annotate
   // reveals the textarea. Originally AR3 surfaced the textarea on selection.

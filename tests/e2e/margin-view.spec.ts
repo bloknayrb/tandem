@@ -11,6 +11,7 @@ import {
   openAnnotatePopup,
   openSettingsViaBrandMenu,
   RAIL_HANDLE_TESTID,
+  selectTextStable,
   setRailVisible,
 } from "./helpers";
 
@@ -102,7 +103,7 @@ async function seedNoteViaPopup(
 ): Promise<string> {
   const editor = page.locator(".tiptap");
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
   await openAnnotatePopup(page);
   await page.locator("[data-testid='popup-annotation-input']").fill(text);
   await page.locator("[data-testid='popup-note-submit']").click();
@@ -425,7 +426,7 @@ test("PR2: Claude cannot make a note bubble expose replies (ADR-027)", async ({ 
 
   // Create a real note via the selection popup (pattern: toolbar-redesign.spec.ts).
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
   await openAnnotatePopup(page);
   const popupInput = page.locator("[data-testid='popup-annotation-input']");
   await popupInput.fill("private note");

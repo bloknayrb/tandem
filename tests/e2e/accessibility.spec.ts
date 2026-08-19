@@ -8,6 +8,7 @@ import {
   createFixtureDir,
   McpTestClient,
   openSettingsViaBrandMenu,
+  selectTextStable,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -192,7 +193,7 @@ async function bootWithContent(page: Page) {
 async function selectFirstParagraph(page: Page) {
   const editor = page.locator(".tiptap");
   await editor.click();
-  await editor.locator("p").first().selectText();
+  await selectTextStable(editor.locator("p").first());
 }
 
 type Surface = {
