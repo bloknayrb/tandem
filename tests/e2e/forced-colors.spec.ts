@@ -316,7 +316,15 @@ test("destination markers stay distinguishable by shape, not colour", async ({ p
     shapes.note.background,
     "the private marker must stay unfilled — with both authorship colours mapped to CanvasText, fill is the only thing distinguishing it",
   ).not.toBe(shapes.send.background);
-  expect(shapes.note.background).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+  // Assert the ALPHA, not a literal colour string. Under forced colors a
+  // `transparent` background computes against the forced Canvas rather than
+  // resolving to the `rgba(0, 0, 0, 0)` it does in ordinary rendering — this
+  // run returns `rgba(255, 255, 255, 0)`. The RGB triple is the UA's business;
+  // alpha 0 is the thing that makes the ring a ring.
+  const noteAlpha = Number(
+    /rgba?\([^)]*?(?:,\s*([\d.]+))?\)$/.exec(shapes.note.background)?.[1] ?? "1",
+  );
+  expect(noteAlpha, `the private marker must have no fill; got ${shapes.note.background}`).toBe(0);
 
   // The card's Send carries the same disc, and has no other E2E coverage at
   // all. It renders only for a USER-authored pending note — an imported one
