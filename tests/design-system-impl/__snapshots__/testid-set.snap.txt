@@ -323,6 +323,10 @@ palette-item-{*}
 panel-edge-collapse-{*}
 peek-dot-{*}
 peek-strip-{*}
+pending-update-banner
+pending-update-banner-check
+pending-update-banner-dismiss
+pending-update-banner-live
 popup-annotate-btn
 popup-annotate-row
 popup-annotation-input

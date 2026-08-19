@@ -818,16 +818,30 @@ Updates are Ed25519-signed. The public key lives in `tauri.conf.json` (`plugins.
 Install flow:
 
 ```
-Update available dialog (Ok/Cancel)
-    → User confirms
-    → download_and_install()
-    → kill_sidecar() — releases ports :3478/:3479
+Auto-check → tandem://update-available banner → "Restart to install"
+  (manual/tray check instead shows a native Ok/Cancel dialog)
+    → stop_sidecar_gracefully() — POST /api/shutdown, hard kill on timeout
     → Poll /health until server stops responding (POST_KILL_PORT_RELEASE_SECS = 15s)
       + on Windows, concurrently poll until the sidecar exe unlocks (15s)
-    → app.restart() — Tauri launches the new version
+    → download_and_install()
+        → on download finish: write update-pending.json to the app-data dir (#1118)
+        → macOS / Linux: install, then app.restart()
+        → Windows: install_inner() ends in std::process::exit(0) — app.restart()
+          is NEVER reached there
+    → on install error: clear the marker, then show a native error dialog
 ```
 
-The sidecar kill before restart is required to prevent a port conflict when the new process starts up.
+Next boot, in `setup()` and before the sidecar spawn: read `update-pending.json`, compare its
+`target_version` against `app.package_info().version`, and clear it either way. On a mismatch,
+buffer a version-free reason code and emit a payload-free `pending-update-hint` nudge, which the
+WebView drains into a one-shot banner carrying a "Check for updates" CTA. Evaluation deliberately
+sits in `setup()` rather than after `wait_for_health()`: a half-installed update is precisely a boot
+where the sidecar does *not* come up healthy, so the later position would suppress the hint on
+exactly the boots it exists for. ADR-043 and #1118.
+
+The sidecar kill before install is required to prevent a port conflict when the new process starts
+up — and on Windows the NSIS installer must be able to replace `node-sidecar.exe` on disk, which a
+running process locks.
 
 Both deadlines were 5s until 2026-08-12, when a beta user's v0.21.1 → v0.22.0 update failed against this class of assumption. Note what each actually observes: the first polls `/health`, so it detects "the old server is gone", not "the OS released the port" — a socket in TIME_WAIT is invisible to it. The second polls a real file write-lock. Both are polling loops that return the moment the resource frees, so the wider ceiling costs a healthy machine nothing. The TIME_WAIT half of the problem is handled on the other side of the restart, by `waitForPort` in `src/server/platform.ts` (also widened to 15s).
 

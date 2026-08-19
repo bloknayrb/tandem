@@ -150,12 +150,18 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   gaps)
 
 ### Banners
-- `banner-stack` — the measured wrapper around the four top-of-shell banners
-  (server-restart strip, updater, connection, license). Its bottom edge is
-  published as `--tandem-banner-stack-bottom` so the fixed formatting-bar pill
-  clears it; the selector is the hook the geometry E2E uses to inject a probe.
+- `banner-stack` — the measured wrapper around the five top-of-shell banners
+  (server-restart strip, pending-update, updater, connection, license). Its bottom
+  edge is published as `--tandem-banner-stack-bottom` so the fixed formatting-bar
+  pill clears it; the selector is the hook the geometry E2E uses to inject a probe.
 - `connection-banner`, `connection-banner-retry`
 - `updater-banner`, `updater-banner-{install,dismiss,visible}`
+- `pending-update-banner-live`, `pending-update-banner`,
+  `pending-update-banner-{check,dismiss}` (#1118 — "your update may not have
+  completed"). `pending-update-banner-live` is the **persistent** live-region host
+  and is present even when the banner is not: a live region created in the same
+  commit as its content is commonly never announced (#1431). Do not fold it inside
+  the `{#if}`; `tests/client/pending-update-banner.test.ts` pins that.
 - `review-only-banner`, `review-only-dismiss`,
   `convert-to-markdown-btn`
 - `fidelity-report-banner`, `fidelity-report-details-toggle`,

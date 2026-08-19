@@ -88,7 +88,44 @@ Neither is observable from `perform_install`. Recovery for both requires an exte
 - **No rollback.** The marker is diagnostic + user-recovery-hint only. It does not swap binaries. This deliberately stays inside option (a), not (b).
 - **Tests:** marker round-trip (write→read→clear), version-mismatch→banner, missing-marker→no-op. All compilable as Rust unit tests with a temp dir; **must be run in Bryan's Tauri pass.**
 
-This is intentionally *not* implemented here: it is Rust-only, unbuildable in this environment, and small enough to land cleanly as its own verified change.
+**Implemented (#1118).** The sketch above landed with two deliberate divergences, each recorded
+because a later reader will otherwise assume the sketch describes the code:
+
+1. **Write point.** The sketch says write "before `app.restart()` … (on the `Ok` arm)". The
+   implementation writes from the updater plugin's `on_download_finish` callback instead, because
+   the `Ok` arm is **dead code on Windows**: `install_inner` ends in an unconditional
+   `std::process::exit(0)` (tauri-plugin-updater 2.10.1 `src/updater.rs:865`). Writing *before*
+   `download_and_install` was also rejected — it would span the entire untimed download, during
+   which the sidecar is already stopped and the WebView shows "Server unavailable", so any quit
+   would strand a marker and produce a false hint.
+2. **Clear timing.** The sketch says that on a version mismatch the marker is **kept** ("the marker
+   simply persists and the *next manual* launch surfaces the banner"). The implementation clears it
+   unconditionally at evaluation, because issue #1118 — the tracked requirement — explicitly
+   specifies one-shot: *"then delete the marker (one-shot — never nag twice for the same attempt)"*.
+   Where this spike and the issue disagree, the issue wins. What makes one-shot sufficient is that
+   the banner carries a working "Check for updates" CTA.
+
+   **The cost of this divergence, which the sketch above avoided and which is recorded nowhere
+   else:** keeping the marker meant a later launch could always re-surface the hint. Clearing it at
+   evaluation means that from that moment the hint exists only in RAM — the Rust buffer, and then
+   the WebView's state. A crash, or a tray Quit, in the first seconds of a boot therefore loses it
+   **permanently**, with no second chance on any later boot, because the disk record it would have
+   been recovered from is already gone. Narrow, and accepted: the window is seconds long, and a
+   diagnostic missed once is recoverable in a way that an un-dismissable every-boot banner is not.
+   (Not an instance: an autostart launch. `tauri.conf.json` starts the window hidden, but the
+   webview is still created and loads eagerly, so `App.svelte` mounts and drains, and the banner is
+   there when the tray later shows the window.)
+
+Also worth recording: the marker write is **not** atomic. `cowork_atomic_json::with_locked_json` is
+Windows-only *and* carries a 30-second exclusive-lock budget, and a marker write that can stall an
+update by 30s is the regression #1118 forbids. The reachable bad states without it
+(truncate-then-die, ext4 delayed-allocation zero-fill) are both parse failures, and both are swept
+by the reader's unconditional clear.
+
+Evaluation also moved: the sketch put it in `setup()` "after `wait_for_health` succeeds", but
+`start_sidecar` reaches its health-`Ok` arm only when `wait_for_health` returns `Ok`, and a
+half-installed update *is* a boot where the sidecar does not come up healthy. It now runs early in
+`setup()`, before the sidecar spawn.
 
 ---
 
@@ -97,7 +134,7 @@ This is intentionally *not* implemented here: it is Rust-only, unbuildable in th
 - [x] Both references read; CrabNebula + rfdonnelly key takeaways summarized (§4).
 - [x] One of (a)/(b)/(c) selected with rationale → **(c)** for v1, with the in-process-only slice of (a) sketched as a follow-up (§5–§6).
 - [x] (c) rationale documented (this doc + ADR pointer below).
-- [x] Follow-up implementation issue for the §6 persisted-marker slice — **filed as #1118** (2026-06-11; optional, not v1-blocking).
+- [x] Follow-up implementation issue for the §6 persisted-marker slice — **filed as #1118** (2026-06-11; optional, not v1-blocking). **Implemented; see the divergences recorded at the end of §6.**
 
 **ADR:** Captured as a short decision note in `docs/decisions.md` (ADR-043) so the "no rollback, no in-updater post-restart probe for v1" stance is discoverable from the canonical decisions log.
 

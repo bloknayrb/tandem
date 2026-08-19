@@ -26,7 +26,7 @@ matrix across OS versions, observer soak, accessibility) live in
 - [ ] Sidecar healthy: **Settings → About → Copy Diagnostics** — paste shows the new version, `desktop` in the header, and all checks `[ok]` (warnings acceptable, failures are not).
 - [ ] File association, cold start: with Tandem closed, double-click a `.md` file — Tandem opens **with that file** (not `welcome.md`).
 - [ ] File association, warm start: with Tandem running, double-click another `.md` — it opens as a new tab in the existing window (single-instance).
-- [ ] Updater: on a machine/VM with the **previous** version installed, launch and wait for the titlebar update dot → install → app restarts → About shows the new version → open a document and type (sidecar survived the restart).
+- [ ] Updater: on a machine/VM with the **previous** version installed, launch and wait for the titlebar update dot → install → app restarts → About shows the new version → open a document and type (sidecar survived the restart). **And no "Tandem may not have finished updating" banner appears** — that banner firing after a *successful* update is #1118's false-positive mode, and it would reach every user at once.
 - [ ] Quit from the tray → Task Manager shows **no orphaned `node-sidecar` process**.
 - [ ] Uninstall → reinstall current version still launches (uninstaller didn't strand state that breaks a fresh install).
 
@@ -45,7 +45,7 @@ exactly this residual).
 - [ ] Sidecar healthy: **Settings → About → Copy Diagnostics** as on Windows.
 - [ ] File association, warm start: double-click a `.md` in Finder with Tandem running — opens as a tab.
 - [ ] File association, cold start: with Tandem quit, double-click a `.md` — Tandem launches and switches to the file. (Known limitation: `welcome.md` may flash first — that's documented behavior, not a failure.)
-- [ ] Updater: previous version → update dot → install → restart → new version, document editable.
+- [ ] Updater: previous version → update dot → install → restart → new version, document editable, **and no "Tandem may not have finished updating" banner** (#1118's false-positive mode).
 - [ ] Quit → Activity Monitor shows no orphaned `node-sidecar`.
 
 ## 3. Linux (best effort, any box or VM)
