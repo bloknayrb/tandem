@@ -78,9 +78,21 @@ describe("AI surface inventory (#1346 discovery)", () => {
       ].join(" "),
     ).toEqual(["src/server/local-model/collaborator.ts", "src/server/mcp/channel-routes.ts"]);
 
-    // The third caller is in the defining module itself (`tandem_reply`), so it
-    // is asserted separately rather than being excluded along with the definition.
+    // The third caller is inside the defining module (`tandem_reply`). Asserting
+    // it by shape is not enough: excluding the whole module would make a FOURTH
+    // chat write added here — the likeliest place for one — invisible to the test
+    // whose job is catching exactly that. So count the call sites instead, and
+    // pin which tool the one call belongs to.
     const awareness = stripComments(read("src", "server", "mcp", "awareness.ts"));
+    const callSites = awareness.match(/\bappendClaudeChatMessage\s*\(/g) ?? [];
+    const definition = /export function appendClaudeChatMessage\s*\(/.test(awareness) ? 1 : 0;
+    expect(
+      callSites.length - definition,
+      [
+        "awareness.ts gained (or lost) an appendClaudeChatMessage call. A new one is a",
+        "new AI chat write; add it to the 'AI surfaces' table in docs/licensing-explained.md.",
+      ].join(" "),
+    ).toBe(1);
     expect(awareness).toMatch(/tandem_reply[\s\S]{0,600}appendClaudeChatMessage\s*\(/);
   });
 
