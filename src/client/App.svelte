@@ -412,13 +412,19 @@ if (isTauriRuntime()) {
   const cleanupStartupRejection = wireStartupRejection({
     loadCore: () => import("@tauri-apps/api/core"),
     loadEvent: () => import("@tauri-apps/api/event"),
-    push: (message) =>
+    // The dedup key is scoped BY CODE, not shared across all startup rejections
+    // (#1416). One OS batch can produce a validation refusal now and a delivery
+    // verdict minutes later — when the user answers the server-failure dialog —
+    // and a constant key merged those two into one toast with `count: 2`, which
+    // counts toasts rather than files and can drop the first reason entirely.
+    // Same-code repeats still collapse, which is the behaviour dedup is for.
+    push: (message, code) =>
       notifications.push({
         id: `startup-file-rejected-${Date.now()}`,
         type: "general-error",
         severity: "warning",
         message,
-        dedupKey: "startup-file-rejected",
+        dedupKey: `startup-file-rejected:${code}`,
         timestamp: Date.now(),
         errorCode: "STARTUP_FILE_REJECTED",
       }),
