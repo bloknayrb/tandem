@@ -3702,8 +3702,10 @@ fn native_theme_action(pref: &str, high_contrast: bool, host: NativeHost) -> Nat
         NativeHost::Windows => {
             // Do not force an app mode while High Contrast is active — that
             // would fight the accessibility setting the user turned on.
-            // Mid-session toggling is not re-released by this guard; that is
-            // #1364, a separate, narrower gap.
+            // `high_contrast` is sampled once per call, by design; the client
+            // re-pushes the unchanged preference on a `(forced-colors: active)`
+            // change (#1364), which is what makes a mid-session toggle release
+            // (or re-apply) the app mode without a theme change.
             if high_contrast {
                 return NativeThemeAction::SetAppMode(AppMode::AllowDark);
             }
