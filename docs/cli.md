@@ -178,7 +178,7 @@ These commands are available when running Tandem from a source checkout (`git cl
 | `npm run test:e2e` | Playwright E2E tests (auto-starts servers via `webServer` config). |
 | `npm run test:e2e:ui` | Playwright UI mode for interactive E2E debugging. |
 | `npm run test:tauri-driver` | WebDriver-based Tauri shell tests. |
-| `npm run test:acceptance-harness` | First-use arming acceptance harness (#1393). **Not run by `npm test` or the pre-push hook** — this is its only runner. |
+| `npm run test:acceptance-harness` | First-use arming acceptance harness (#1393), through the fail-closed runner `scripts/spikes/run_acceptance_tests.py`. Also run by CI's `check` job (#1399); still **not** run by `npm test` or the pre-push hook. Two local preconditions: Python 3.10+ on `PATH` under the name `python`, and the `v0.21.0` tag present — a fresh shallow clone has neither, and the tag is where the harness reads its immutable v9 skill baseline. |
 | `npm run capture:screenshots` | Re-captures README screenshots via Playwright. |
 | `npm run capture:design-baselines` | Re-captures the design-system baseline screenshots. |
 
