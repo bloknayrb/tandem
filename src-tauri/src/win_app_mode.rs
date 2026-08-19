@@ -66,6 +66,14 @@
 
 use std::sync::OnceLock;
 
+// `AppModeOutcome` is declared in `lib.rs`, NOT here, even though this module is its
+// only producer. This module is `#![cfg(target_os = "windows")]`, so a type declared
+// here is invisible to the type-checker on every other host — and the classification
+// that maps this outcome onto the IPC contract (`applied_native_theme`, #1368) has to
+// be ungated and unit-testable on the machines this is developed on. Same reasoning,
+// and the same shape, as `crate::AppMode` and `crate::HighContrast` above/below.
+use crate::AppModeOutcome;
+
 use windows_sys::Win32::Foundation::{FARPROC, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
@@ -198,22 +206,6 @@ fn cached_ordinal(slot: &'static OnceLock<usize>, ordinal: u16) -> FARPROC {
 fn build_supports_app_mode() -> bool {
     static SUPPORTED: OnceLock<bool> = OnceLock::new();
     *SUPPORTED.get_or_init(|| windows_version::OsVersion::current().build >= MIN_BUILD_FOR_APP_MODE)
-}
-
-/// What `set_preferred_app_mode` actually managed to do. Distinguishing these
-/// is the point: they are the difference between "this Windows build is too
-/// old", "uxtheme is missing or patched", and "it worked" — which imply
-/// completely different follow-ups in a bug report, and which the previous
-/// `bool` collapsed into a single message asserting two causes at once.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppModeOutcome {
-    Applied,
-    /// Mode set, but ordinal 136 was unresolvable, so long-lived menu objects
-    /// (notably the tray menu) keep drawing from uxtheme's cached theme data.
-    AppliedWithoutFlush,
-    UnsupportedBuild,
-    ModuleUnavailable,
-    OrdinalMissing,
 }
 
 /// Forces (or releases, via `AppMode::AllowDark`) the process-wide Windows

@@ -3655,6 +3655,35 @@ enum AppMode {
     AllowDark,
 }
 
+/// What `set_preferred_app_mode` actually managed to do. Distinguishing these
+/// is the point: they are the difference between "this Windows build is too
+/// old", "uxtheme is missing or patched", and "it worked" — which imply
+/// completely different follow-ups in a bug report, and which the previous
+/// `bool` collapsed into a single message asserting two causes at once.
+///
+/// Declared HERE rather than in `win_app_mode` (its only producer) for the same
+/// reason `AppMode` above is: that module is `#![cfg(target_os = "windows")]`, so a
+/// type declared there is invisible to the type-checker on every other host. Moving
+/// it out is what lets `applied_native_theme` — the function that maps this onto the
+/// IPC contract (#1368) — be an ungated, exhaustively-matched, unit-testable `match`.
+/// The payoff is concrete: adding a variant here is now `error[E0004]` on Linux and
+/// macOS too, not only on CI's `windows-latest` leg.
+///
+/// The `cfg_attr` mirrors the seven existing instances of this idiom in this file:
+/// off Windows nothing constructs the failure variants outside `cfg(test)`, and the
+/// `test` term keeps real dead-code checking wherever a test can actually see it.
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppModeOutcome {
+    Applied,
+    /// Mode set, but ordinal 136 was unresolvable, so long-lived menu objects
+    /// (notably the tray menu) keep drawing from uxtheme's cached theme data.
+    AppliedWithoutFlush,
+    UnsupportedBuild,
+    ModuleUnavailable,
+    OrdinalMissing,
+}
+
 /// The decided action for a `set_native_theme` call, one per platform:
 /// Linux has no reachable native surface (#1363); macOS pushes via
 /// `WebviewWindow::set_theme`; Windows forces (or releases) the process-wide
@@ -3716,6 +3745,93 @@ fn native_theme_action(pref: &str, high_contrast: bool, host: NativeHost) -> Nat
     }
 }
 
+/// Why a `set_native_theme` push failed, as a machine-readable discriminant (#1368).
+///
+/// The five failure sites in this feature used to format five distinct causes into
+/// prose and hand them to one `.catch(e)` on the client, where they were also
+/// indistinguishable from a client-side dynamic-import rejection. A client that wants
+/// to say anything useful about a failure would have had to match on English.
+///
+/// `MainThreadUnavailable` deliberately covers BOTH "we could not dispatch the closure"
+/// and "the sender was dropped before it ran": in both the closure provably never ran,
+/// which is the distinction a caller can act on. The one that is kept separate is
+/// `AppModeTimeout`, because a timeout abandons the wait WITHOUT cancelling the queued
+/// closure — the mode may still apply a moment later — and that difference is the whole
+/// reason the receive is bounded rather than blocking.
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum NativeThemeErrorCode {
+    HighContrastUnknown,
+    SetThemeFailed,
+    AppModeTimeout,
+    MainThreadUnavailable,
+}
+
+/// `camelCase`, matching `NativeThemeOutcome` — the rename on a STRUCT governs field
+/// names, and `kebab-case` here would be a no-op today (`code`, `message` are single
+/// words) and actively wrong the moment anyone adds a `retryAfterMs`. The
+/// `kebab-case` that matters is on the enum above, which governs the variant strings
+/// the client compares against.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeThemeError {
+    code: NativeThemeErrorCode,
+    message: String,
+}
+
+/// Constructors, all UNGATED and unit-tested (`native_theme_error_*`), holding the
+/// message strings that used to be written inline at each `Err(...)` site. Two of
+/// those sites are inside `#[cfg(target_os = "windows")] fn apply_app_mode`, which is
+/// cfg-stripped before name resolution on this repo's development hosts and is
+/// therefore reached by no local compiler and no local test. Keeping the strings out
+/// here means each gated site is a single unambiguous token, and a transposed
+/// code/message pairing fails a test on Linux instead of shipping.
+///
+/// Every message is byte-identical to the string that shipped before #1368, so
+/// `tandem.log` and the client's `console.warn` output do not change.
+impl NativeThemeError {
+    fn high_contrast_unknown() -> Self {
+        Self {
+            code: NativeThemeErrorCode::HighContrastUnknown,
+            message: "could not determine the High Contrast setting; declined to force an app \
+                      mode and released any prior override"
+                .to_string(),
+        }
+    }
+
+    fn set_theme_failed(e: impl std::fmt::Display) -> Self {
+        Self {
+            code: NativeThemeErrorCode::SetThemeFailed,
+            message: format!("set_theme failed: {e}"),
+        }
+    }
+
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    fn app_mode_timeout() -> Self {
+        Self {
+            code: NativeThemeErrorCode::AppModeTimeout,
+            message: "app-mode call timed out (it remains queued and may still apply)".to_string(),
+        }
+    }
+
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    fn main_thread_dropped() -> Self {
+        Self {
+            code: NativeThemeErrorCode::MainThreadUnavailable,
+            message: "app-mode main-thread closure was dropped without running".to_string(),
+        }
+    }
+
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    fn main_thread_dispatch_failed(e: impl std::fmt::Display) -> Self {
+        Self {
+            code: NativeThemeErrorCode::MainThreadUnavailable,
+            message: format!("run_on_main_thread failed: {e}"),
+        }
+    }
+}
+
 /// Applies a decided `NativeThemeAction`'s side effect. Split out from
 /// `set_native_theme` so the platform-specific `apply_app_mode` halves
 /// (below) stay small and symmetric; this function itself is not
@@ -3724,16 +3840,22 @@ fn native_theme_action(pref: &str, high_contrast: bool, host: NativeHost) -> Nat
 /// produces that variant when `host` is `NativeHost::Windows` (i.e. the arm
 /// is compiled everywhere but taken only on Windows; see `apply_app_mode`'s
 /// non-Windows stub).
+///
+/// Returns what the app-mode call achieved, or `None` where no app-mode call was
+/// attempted at all (Linux's `Skip`, macOS's `SetWindowTheme`) — `applied_native_theme`
+/// needs both halves to classify the push for the wire (#1368), and an `Option` keeps
+/// that classification exhaustive over the two real enums instead of inventing a third.
 fn apply_native_theme_action(
     window: &tauri::WebviewWindow,
     action: NativeThemeAction,
-) -> Result<(), String> {
+) -> Result<Option<AppModeOutcome>, NativeThemeError> {
     match action {
-        NativeThemeAction::Skip => Ok(()),
+        NativeThemeAction::Skip => Ok(None),
         NativeThemeAction::SetWindowTheme(theme) => window
             .set_theme(theme)
-            .map_err(|e| format!("set_theme failed: {e}")),
-        NativeThemeAction::SetAppMode(mode) => apply_app_mode(window, mode),
+            .map(|()| None)
+            .map_err(|e| NativeThemeError::set_theme_failed(e)),
+        NativeThemeAction::SetAppMode(mode) => apply_app_mode(window, mode).map(Some),
     }
 }
 
@@ -3753,8 +3875,10 @@ fn apply_native_theme_action(
 /// is a Tauri implementation detail and one `#[tauri::command(async)]` away
 /// from an unbounded wait if the event loop is ever blocked or torn down.
 #[cfg(target_os = "windows")]
-fn apply_app_mode(window: &tauri::WebviewWindow, mode: AppMode) -> Result<(), String> {
-    use win_app_mode::AppModeOutcome;
+fn apply_app_mode(
+    window: &tauri::WebviewWindow,
+    mode: AppMode,
+) -> Result<AppModeOutcome, NativeThemeError> {
     let (tx, rx) = std::sync::mpsc::channel();
     window
         .run_on_main_thread(move || {
@@ -3765,7 +3889,14 @@ fn apply_app_mode(window: &tauri::WebviewWindow, mode: AppMode) -> Result<(), St
             // separately; they imply completely different follow-ups. Bounded
             // at roughly one line per distinct theme change, since
             // `setNativeTheme` dedupes client-side.
-            match win_app_mode::set_preferred_app_mode(mode) {
+            // Bound, then matched, then sent — rather than folding the outcome into the
+            // match arms below. The arms stay BYTE-IDENTICAL to what shipped, which
+            // matters more here than anywhere else in this change: this body is
+            // cfg-stripped on the hosts it is developed on, so a transposition between
+            // two arms would compile on Windows, pass CI and mislabel the wire forever
+            // (#1368).
+            let outcome = win_app_mode::set_preferred_app_mode(mode);
+            match outcome {
                 AppModeOutcome::Applied => {}
                 AppModeOutcome::AppliedWithoutFlush => log::warn!(
                     "set_native_theme: uxtheme ordinal 136 (FlushMenuThemes) unresolved — app \
@@ -3785,19 +3916,19 @@ fn apply_app_mode(window: &tauri::WebviewWindow, mode: AppMode) -> Result<(), St
                      build that should export it — patched or unexpected Windows image"
                 ),
             }
-            let _ = tx.send(());
+            let _ = tx.send(outcome);
         })
-        .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+        .map_err(|e| NativeThemeError::main_thread_dispatch_failed(e))?;
     match rx.recv_timeout(std::time::Duration::from_secs(2)) {
-        Ok(()) => Ok(()),
+        Ok(outcome) => Ok(outcome),
         // A timeout abandons the wait; it does NOT cancel the queued closure,
         // which may still apply the mode a moment later. Distinct from a
         // dropped sender, where the closure provably never ran.
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            Err("app-mode call timed out (it remains queued and may still apply)".to_string())
+            Err(NativeThemeError::app_mode_timeout())
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            Err("app-mode main-thread closure was dropped without running".to_string())
+            Err(NativeThemeError::main_thread_dropped())
         }
     }
 }
@@ -3806,9 +3937,16 @@ fn apply_app_mode(window: &tauri::WebviewWindow, mode: AppMode) -> Result<(), St
 /// compiles on every OS. Unreachable in practice: `native_theme_action`
 /// only produces `SetAppMode` when `host` is `NativeHost::Windows`, and
 /// `current_native_host` only returns that when `cfg!(target_os = "windows")`.
+/// The `Applied` is a placeholder for an unreachable path, not a claim: nothing off
+/// Windows ever calls this. `tests/docs/native-theme-claims.test.ts` pins this
+/// signature against the Windows one, because a mismatch between the two is the one
+/// break that no compiler on this host can see.
 #[cfg(not(target_os = "windows"))]
-fn apply_app_mode(_window: &tauri::WebviewWindow, _mode: AppMode) -> Result<(), String> {
-    Ok(())
+fn apply_app_mode(
+    _window: &tauri::WebviewWindow,
+    _mode: AppMode,
+) -> Result<AppModeOutcome, NativeThemeError> {
+    Ok(AppModeOutcome::Applied)
 }
 
 #[cfg(target_os = "windows")]
@@ -3820,6 +3958,105 @@ fn native_host_high_contrast() -> HighContrast {
 #[cfg(not(target_os = "windows"))]
 fn native_host_high_contrast() -> HighContrast {
     HighContrast::Off
+}
+
+/// What the user actually GOT, as distinct from what the client may TRUST
+/// (`override_active`). #1368.
+///
+/// Before this existed, a successful force, a release, a High-Contrast decline and a
+/// total no-op on a pre-1903 Windows all serialized as
+/// `{ overrideActive: false, osTheme: "light" }` — `override_active` is true only on
+/// macOS with an explicit theme, so on Windows it is a constant and answers a
+/// different question entirely ("may the client trust `osTheme`?").
+///
+/// `AppliedWithoutMenuFlush` is NOT folded into `UnsupportedHost`, and the name is
+/// deliberately neutral over force and release: `AppModeOutcome::AppliedWithoutFlush`
+/// is returned only after ordinal 135 SUCCEEDED, so the process-wide app mode really
+/// is set and menus created afterwards do follow it — only long-lived menu objects
+/// (the tray menu) keep cached theme data. Calling it "unsupported" would attach a
+/// false, permanent warning to a partial success; calling it "forced" would be false
+/// in the other direction, since `AllowDark` reaches this on a RELEASE too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum AppliedNativeTheme {
+    Forced,
+    Released,
+    AppliedWithoutMenuFlush,
+    DeclinedHighContrast,
+    UnsupportedHost,
+    SkippedPlatform,
+}
+
+/// Pure classification of a completed push, for the `applied` field on the wire.
+///
+/// THE ARM SHAPE IS PART OF THE DESIGN, not a formatting choice. Every variant is
+/// enumerated; there is no `_` arm anywhere; and there are no match guards. That is
+/// what makes a new `AppModeOutcome`, `NativeThemeAction` or `AppMode` variant a
+/// compile error on EVERY host — the whole reason `AppModeOutcome` was moved out of
+/// the Windows-gated module. `tests/docs/native-theme-claims.test.ts` pins all three
+/// properties, because both of the natural "simplifications" (a `Some(_) =>` catch-all,
+/// or expressing the High-Contrast test as a guard, which stops rustc counting the arm
+/// toward exhaustiveness and forces a catch-all) pass every behavioural test here while
+/// silently destroying the guarantee.
+///
+/// `high_contrast` is deliberately NOT a parameter. Given `SetAppMode(AllowDark)`,
+/// "the pref resolves to a native theme" IS "High Contrast declined a requested
+/// force": that action arises only from High Contrast (any pref) or from a pref that
+/// resolves to no native theme with High Contrast off. A separate flag could only ever
+/// agree — or introduce a disagreement that cannot occur.
+///
+/// It reads `resolve_theme_pref`, NOT its wrapper `theme_pref_to_native`, and that is
+/// load-bearing rather than stylistic: the wrapper LOGS on the `Unrecognized` branch,
+/// so re-deriving through it would warn twice per push for an unrecognized preference
+/// (once from `native_theme_action`, once from here) and would give a function
+/// documented as pure a side effect. `resolve_theme_pref` is the pure inner half, and
+/// `Native(_)` is by construction exactly the set the wrapper maps to `Some`.
+///
+/// The subtlety worth naming: `SetAppMode(AllowDark)` is emitted for BOTH "the user
+/// picked system, release the force" and "High Contrast is on, decline the force".
+/// Classifying off the action alone labels a plain `system` release as
+/// `DeclinedHighContrast` whenever High Contrast happens to be on — a false claim
+/// about a case where nothing was declined.
+///
+/// Precedence where several could apply: a host that cannot set the mode cannot
+/// release it either, and a missing menu flush is a real visual defect even under High
+/// Contrast (the tray menu keeps the PREVIOUS theme rather than picking up the
+/// accessibility scheme), whereas a High-Contrast decline is the user's own
+/// accessibility setting winning, which is correct behaviour.
+fn applied_native_theme(
+    pref: &str,
+    action: NativeThemeAction,
+    app_mode: Option<AppModeOutcome>,
+) -> AppliedNativeTheme {
+    match action {
+        NativeThemeAction::Skip => AppliedNativeTheme::SkippedPlatform,
+        NativeThemeAction::SetWindowTheme(Some(_)) => AppliedNativeTheme::Forced,
+        NativeThemeAction::SetWindowTheme(None) => AppliedNativeTheme::Released,
+        NativeThemeAction::SetAppMode(mode) => match app_mode {
+            // Unreachable by construction — `apply_native_theme_action`'s `SetAppMode`
+            // arm always yields `Some`. Written out, and failing CLOSED, so the pair has
+            // a stated meaning instead of inviting a `_ =>` that would erase the
+            // exhaustiveness this design is built on.
+            None => AppliedNativeTheme::UnsupportedHost,
+            Some(AppModeOutcome::UnsupportedBuild)
+            | Some(AppModeOutcome::ModuleUnavailable)
+            | Some(AppModeOutcome::OrdinalMissing) => AppliedNativeTheme::UnsupportedHost,
+            Some(AppModeOutcome::AppliedWithoutFlush) => {
+                AppliedNativeTheme::AppliedWithoutMenuFlush
+            }
+            Some(AppModeOutcome::Applied) => match mode {
+                AppMode::ForceDark | AppMode::ForceLight => AppliedNativeTheme::Forced,
+                // An arm BODY `if`, never a match guard — see the note above.
+                AppMode::AllowDark => {
+                    if matches!(resolve_theme_pref(pref), ThemePrefResolution::Native(_)) {
+                        AppliedNativeTheme::DeclinedHighContrast
+                    } else {
+                        AppliedNativeTheme::Released
+                    }
+                }
+            },
+        },
+    }
 }
 
 /// Pure outcome assembly for `set_native_theme`, split out from the real
@@ -3840,6 +4077,7 @@ fn native_host_high_contrast() -> HighContrast {
 /// nothing the user can see. All of it is tracked together in #1363.
 fn native_theme_outcome(
     action: NativeThemeAction,
+    applied: AppliedNativeTheme,
     read_os_theme: impl FnOnce() -> Option<String>,
 ) -> NativeThemeOutcome {
     let (override_active, os_theme) = match action {
@@ -3851,6 +4089,7 @@ fn native_theme_outcome(
     NativeThemeOutcome {
         override_active,
         os_theme,
+        applied,
     }
 }
 
@@ -3868,6 +4107,8 @@ fn native_theme_outcome(
 struct NativeThemeOutcome {
     override_active: bool,
     os_theme: Option<String>,
+    /// The discriminant `override_active` never was (#1368) — see `AppliedNativeTheme`.
+    applied: AppliedNativeTheme,
 }
 
 /// Pushes the app's theme preference to native OS surfaces (#992).
@@ -3903,29 +4144,30 @@ struct NativeThemeOutcome {
 fn set_native_theme(
     window: tauri::WebviewWindow,
     theme: String,
-) -> Result<NativeThemeOutcome, String> {
+) -> Result<NativeThemeOutcome, NativeThemeError> {
     let high_contrast = native_host_high_contrast();
     let action = native_theme_action(&theme, high_contrast.declines_force(), current_native_host());
-    apply_native_theme_action(&window, action)?;
+    let app_mode = apply_native_theme_action(&window, action)?;
     // Fail closed AND fail loud. The action above has already released any
     // prior force, so the accessibility scheme wins — but the push did not
     // achieve the requested theme, and resolving it as success would let the
     // client latch its dedupe on a preference the OS does not have,
     // deduping every later attempt to re-apply it. That is #992 itself,
-    // silently restored, so report the uncertainty instead.
+    // silently restored, so report the uncertainty instead. This stays an
+    // `Err` — #1368 gives it a machine-readable `code` and changes nothing
+    // else about it, because the rejection is what clears the client's latch.
     if high_contrast == HighContrast::Unknown {
-        return Err(
-            "could not determine the High Contrast setting; declined to force an app mode and \
-             released any prior override"
-                .to_string(),
-        );
+        return Err(NativeThemeError::high_contrast_unknown());
     }
-    Ok(native_theme_outcome(action, || match window.theme() {
-        Ok(tauri::Theme::Dark) => Some("dark".to_string()),
-        Ok(_) => Some("light".to_string()),
-        Err(e) => {
-            log::warn!("set_native_theme: window.theme() read-back failed: {e}");
-            None
+    let applied = applied_native_theme(&theme, action, app_mode);
+    Ok(native_theme_outcome(action, applied, || {
+        match window.theme() {
+            Ok(tauri::Theme::Dark) => Some("dark".to_string()),
+            Ok(_) => Some("light".to_string()),
+            Err(e) => {
+                log::warn!("set_native_theme: window.theme() read-back failed: {e}");
+                None
+            }
         }
     }))
 }
@@ -5944,21 +6186,28 @@ mod theme_pref_tests {
         }
     }
 
-    // --- A6/A8: native_theme_outcome, composed with native_theme_action
-    // exactly as set_native_theme's body does — the wiring seam for the
-    // command itself, which needs a live WebviewWindow and can't be
-    // unit-tested directly. ---
+    // --- A6/A8: native_theme_outcome, composed with native_theme_action AND
+    // applied_native_theme exactly as set_native_theme's body does — the wiring
+    // seam for the command itself, which needs a live WebviewWindow and can't be
+    // unit-tested directly. The `app_mode` argument mirrors what
+    // `apply_native_theme_action` returns for that action: `None` where no
+    // app-mode call is attempted (Linux Skip, macOS SetWindowTheme), and
+    // `Some(AppModeOutcome::Applied)` for a Windows app-mode call that worked.
+    // #1368 added the third argument; the degraded-outcome cases live in
+    // `applied_*` below rather than here. ---
 
     #[test]
     fn outcome_macos_explicit_theme_overrides_and_skips_readback() {
         let action = native_theme_action("dark", false, NativeHost::MacOs);
+        let applied = applied_native_theme("dark", action, None);
         let mut read_called = false;
-        let outcome = native_theme_outcome(action, || {
+        let outcome = native_theme_outcome(action, applied, || {
             read_called = true;
             Some("dark".to_string())
         });
         assert!(outcome.override_active);
         assert_eq!(outcome.os_theme, None);
+        assert_eq!(outcome.applied, AppliedNativeTheme::Forced);
         assert!(
             !read_called,
             "osTheme must never be sourced from a read that could echo our own forced theme"
@@ -5968,9 +6217,11 @@ mod theme_pref_tests {
     #[test]
     fn outcome_macos_system_releases_and_reads_authoritatively() {
         let action = native_theme_action("system", false, NativeHost::MacOs);
-        let outcome = native_theme_outcome(action, || Some("dark".to_string()));
+        let applied = applied_native_theme("system", action, None);
+        let outcome = native_theme_outcome(action, applied, || Some("dark".to_string()));
         assert!(!outcome.override_active);
         assert_eq!(outcome.os_theme, Some("dark".to_string()));
+        assert_eq!(outcome.applied, AppliedNativeTheme::Released);
     }
 
     #[test]
@@ -5978,14 +6229,24 @@ mod theme_pref_tests {
         // Windows never calls set_theme, so window.theme() stays honest
         // regardless of which AppMode was forced — overrideActive must be
         // false for every pref, matching the platform contract table.
-        for pref in ["dark", "light", "warm", "system", "bogus"] {
+        for (pref, expected) in [
+            ("dark", AppliedNativeTheme::Forced),
+            ("light", AppliedNativeTheme::Forced),
+            ("warm", AppliedNativeTheme::Forced),
+            ("system", AppliedNativeTheme::Released),
+            // An unrecognized pref resolves to "follow the OS", so it releases
+            // rather than forcing — see `theme_pref_to_native`.
+            ("bogus", AppliedNativeTheme::Released),
+        ] {
             let action = native_theme_action(pref, false, NativeHost::Windows);
-            let outcome = native_theme_outcome(action, || Some("light".to_string()));
+            let applied = applied_native_theme(pref, action, Some(AppModeOutcome::Applied));
+            let outcome = native_theme_outcome(action, applied, || Some("light".to_string()));
             assert!(
                 !outcome.override_active,
                 "windows overrideActive must be false (pref={pref})"
             );
             assert_eq!(outcome.os_theme, Some("light".to_string()));
+            assert_eq!(outcome.applied, expected, "windows applied (pref={pref})");
         }
     }
 
@@ -5997,16 +6258,283 @@ mod theme_pref_tests {
         // the client's 3s poll and every read-back on Linux, with nothing
         // that ever resolves an outcome to clear it again.
         let action = native_theme_action("dark", false, NativeHost::Linux);
+        let applied = applied_native_theme("dark", action, None);
         let mut read_called = false;
-        let outcome = native_theme_outcome(action, || {
+        let outcome = native_theme_outcome(action, applied, || {
             read_called = true;
             Some("light".to_string())
         });
         assert!(!outcome.override_active);
         assert_eq!(outcome.os_theme, Some("light".to_string()));
+        assert_eq!(outcome.applied, AppliedNativeTheme::SkippedPlatform);
         // The reading is untrustworthy on Linux but is still taken, to stay
         // consistent with `get_app_theme` — see `native_theme_outcome`, #1363.
         assert!(read_called);
+    }
+
+    // --- #1368: applied_native_theme, the pure classifier behind the wire's
+    // `applied` discriminant. Every case here is reachable on a real Windows
+    // host and unreachable from `cargo test` on any host without this split —
+    // the whole reason `AppModeOutcome` was moved out of the Windows-gated
+    // module. The `app_mode` argument is what `apply_native_theme_action`
+    // returns: `None` when no app-mode call was attempted at all. ---
+
+    #[test]
+    fn applied_linux_skip_is_skipped_platform() {
+        // A Linux user must never be told anything about Windows menus, and
+        // this variant is what the client keys that silence on.
+        let action = native_theme_action("dark", false, NativeHost::Linux);
+        assert_eq!(
+            applied_native_theme("dark", action, None),
+            AppliedNativeTheme::SkippedPlatform
+        );
+    }
+
+    #[test]
+    fn applied_macos_forces_on_explicit_and_releases_on_system() {
+        for pref in ["dark", "light", "warm"] {
+            let action = native_theme_action(pref, false, NativeHost::MacOs);
+            assert_eq!(
+                applied_native_theme(pref, action, None),
+                AppliedNativeTheme::Forced,
+                "macos pref={pref}"
+            );
+        }
+        for pref in ["system", "bogus"] {
+            let action = native_theme_action(pref, false, NativeHost::MacOs);
+            assert_eq!(
+                applied_native_theme(pref, action, None),
+                AppliedNativeTheme::Released,
+                "macos pref={pref}"
+            );
+        }
+    }
+
+    #[test]
+    fn applied_macos_ignores_high_contrast_entirely() {
+        // macOS has NO High Contrast guard (see native_theme_action): the guard
+        // exists because a Windows app mode fights the colour scheme the OS
+        // substitutes system-wide, and macOS's appearance API has no equivalent
+        // conflict. Letting High Contrast reach this arm would report a decline
+        // that never happened.
+        let action = native_theme_action("dark", true, NativeHost::MacOs);
+        assert_eq!(
+            applied_native_theme("dark", action, None),
+            AppliedNativeTheme::Forced
+        );
+    }
+
+    #[test]
+    fn applied_windows_explicit_pref_under_high_contrast_is_declined() {
+        for pref in ["dark", "light", "warm"] {
+            let action = native_theme_action(pref, true, NativeHost::Windows);
+            assert_eq!(action, NativeThemeAction::SetAppMode(AppMode::AllowDark));
+            assert_eq!(
+                applied_native_theme(pref, action, Some(AppModeOutcome::Applied)),
+                AppliedNativeTheme::DeclinedHighContrast,
+                "windows pref={pref} high_contrast=true"
+            );
+        }
+    }
+
+    #[test]
+    fn applied_windows_system_under_high_contrast_is_released_not_declined() {
+        // THE trap in this classifier. `SetAppMode(AllowDark)` is emitted for
+        // BOTH "the user picked system, release the force" and "High Contrast is
+        // on, decline the force" — so classifying off the action alone reports
+        // `declined-high-contrast` for a plain release whenever High Contrast
+        // happens to be on. Nothing was declined there: the user asked for the
+        // force to be released and it was.
+        for pref in ["system", "bogus"] {
+            let action = native_theme_action(pref, true, NativeHost::Windows);
+            assert_eq!(action, NativeThemeAction::SetAppMode(AppMode::AllowDark));
+            assert_eq!(
+                applied_native_theme(pref, action, Some(AppModeOutcome::Applied)),
+                AppliedNativeTheme::Released,
+                "windows pref={pref} high_contrast=true"
+            );
+        }
+    }
+
+    #[test]
+    fn applied_windows_without_high_contrast_forces_or_releases() {
+        for (pref, expected) in [
+            ("dark", AppliedNativeTheme::Forced),
+            ("light", AppliedNativeTheme::Forced),
+            ("warm", AppliedNativeTheme::Forced),
+            ("system", AppliedNativeTheme::Released),
+            ("bogus", AppliedNativeTheme::Released),
+        ] {
+            let action = native_theme_action(pref, false, NativeHost::Windows);
+            assert_eq!(
+                applied_native_theme(pref, action, Some(AppModeOutcome::Applied)),
+                expected,
+                "windows pref={pref} high_contrast=false"
+            );
+        }
+    }
+
+    #[test]
+    fn applied_without_flush_is_its_own_variant_not_unsupported() {
+        // `AppliedWithoutFlush` is returned only after ordinal 135 SUCCEEDED, so
+        // the process-wide app mode really is set — only long-lived menu objects
+        // (the tray menu) keep cached theme data. Folding it into
+        // `UnsupportedHost` would attach the user-facing "native menus can't
+        // follow the app theme on this Windows build" copy to a partial SUCCESS,
+        // permanently, in an activity tray that is a log. Folding it into
+        // `Forced` would be false on the release path below.
+        for pref in ["dark", "system"] {
+            let action = native_theme_action(pref, false, NativeHost::Windows);
+            assert_eq!(
+                applied_native_theme(pref, action, Some(AppModeOutcome::AppliedWithoutFlush)),
+                AppliedNativeTheme::AppliedWithoutMenuFlush,
+                "windows pref={pref} outcome=AppliedWithoutFlush"
+            );
+        }
+    }
+
+    #[test]
+    fn applied_reports_unsupported_host_for_every_failed_app_mode_call() {
+        for outcome in [
+            AppModeOutcome::UnsupportedBuild,
+            AppModeOutcome::ModuleUnavailable,
+            AppModeOutcome::OrdinalMissing,
+        ] {
+            for pref in ["dark", "system"] {
+                let action = native_theme_action(pref, false, NativeHost::Windows);
+                assert_eq!(
+                    applied_native_theme(pref, action, Some(outcome)),
+                    AppliedNativeTheme::UnsupportedHost,
+                    "windows pref={pref} outcome={outcome:?}"
+                );
+            }
+        }
+        // ...and it outranks the High Contrast decline: a host that cannot set
+        // the mode cannot release it either, so "this host can't do it" is both
+        // the true cause and the actionable one.
+        let action = native_theme_action("dark", true, NativeHost::Windows);
+        assert_eq!(
+            applied_native_theme("dark", action, Some(AppModeOutcome::UnsupportedBuild)),
+            AppliedNativeTheme::UnsupportedHost
+        );
+    }
+
+    #[test]
+    fn applied_set_app_mode_without_an_outcome_fails_closed() {
+        // Unreachable by construction — `apply_native_theme_action`'s SetAppMode
+        // arm always yields `Some`. Asserted anyway so the pair has a stated
+        // meaning: the alternative to writing it out is a `_ =>` catch-all, which
+        // would silently swallow a future `AppModeOutcome` variant and erase the
+        // exhaustiveness this whole design is built on.
+        assert_eq!(
+            applied_native_theme(
+                "dark",
+                NativeThemeAction::SetAppMode(AppMode::ForceDark),
+                None
+            ),
+            AppliedNativeTheme::UnsupportedHost
+        );
+    }
+
+    // --- #1368: the serialized wire shape. serde renames are invisible to every
+    // compiler on both sides of the IPC, and the client compares string literals. ---
+
+    #[test]
+    fn native_theme_outcome_serializes_applied_as_kebab_case() {
+        let value = serde_json::to_value(NativeThemeOutcome {
+            override_active: false,
+            os_theme: Some("light".to_string()),
+            applied: AppliedNativeTheme::DeclinedHighContrast,
+        })
+        .expect("NativeThemeOutcome must serialize");
+        assert_eq!(value["overrideActive"], serde_json::json!(false));
+        assert_eq!(value["osTheme"], serde_json::json!("light"));
+        // Drop `rename_all = "kebab-case"` from AppliedNativeTheme and this is
+        // "DeclinedHighContrast" — which no client comparison ever matches, so the
+        // feature silently does nothing and nothing fails.
+        assert_eq!(
+            value["applied"],
+            serde_json::json!("declined-high-contrast")
+        );
+    }
+
+    #[test]
+    fn every_applied_native_theme_variant_serializes_kebab_case() {
+        for (variant, expected) in [
+            (AppliedNativeTheme::Forced, "forced"),
+            (AppliedNativeTheme::Released, "released"),
+            (
+                AppliedNativeTheme::AppliedWithoutMenuFlush,
+                "applied-without-menu-flush",
+            ),
+            (
+                AppliedNativeTheme::DeclinedHighContrast,
+                "declined-high-contrast",
+            ),
+            (AppliedNativeTheme::UnsupportedHost, "unsupported-host"),
+            (AppliedNativeTheme::SkippedPlatform, "skipped-platform"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(variant).expect("variant must serialize"),
+                serde_json::json!(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn native_theme_error_serializes_camel_case_struct_and_kebab_case_code() {
+        let value = serde_json::to_value(NativeThemeError::high_contrast_unknown())
+            .expect("NativeThemeError must serialize");
+        // The struct's fields are single words today, so `camelCase` here is a
+        // no-op — but `kebab-case` on the STRUCT would be actively wrong for any
+        // future multi-word field, and the rename that IS load-bearing is the one
+        // on the enum, asserted next.
+        assert!(value.get("code").is_some(), "error must carry a code");
+        assert!(value.get("message").is_some(), "error must carry a message");
+        assert_eq!(value["code"], serde_json::json!("high-contrast-unknown"));
+    }
+
+    #[test]
+    fn every_native_theme_error_constructor_pairs_its_code_with_its_message() {
+        // The two `main_thread_*` constructors and `app_mode_timeout` are called
+        // ONLY from `#[cfg(target_os = "windows")] fn apply_app_mode`, which is
+        // cfg-stripped before name resolution on every host this repo is developed
+        // on — no local compiler and no local test reaches those call sites. Keeping
+        // the strings out here is what makes a transposed pairing fail on Linux
+        // instead of shipping. Every message is byte-identical to what shipped
+        // before #1368, so `tandem.log` and the client's console output do not move.
+        let cases: [(NativeThemeError, NativeThemeErrorCode, &str); 5] = [
+            (
+                NativeThemeError::high_contrast_unknown(),
+                NativeThemeErrorCode::HighContrastUnknown,
+                "could not determine the High Contrast setting; declined to force an app mode \
+                 and released any prior override",
+            ),
+            (
+                NativeThemeError::set_theme_failed("boom"),
+                NativeThemeErrorCode::SetThemeFailed,
+                "set_theme failed: boom",
+            ),
+            (
+                NativeThemeError::app_mode_timeout(),
+                NativeThemeErrorCode::AppModeTimeout,
+                "app-mode call timed out (it remains queued and may still apply)",
+            ),
+            (
+                NativeThemeError::main_thread_dropped(),
+                NativeThemeErrorCode::MainThreadUnavailable,
+                "app-mode main-thread closure was dropped without running",
+            ),
+            (
+                NativeThemeError::main_thread_dispatch_failed("boom"),
+                NativeThemeErrorCode::MainThreadUnavailable,
+                "run_on_main_thread failed: boom",
+            ),
+        ];
+        for (error, code, message) in cases {
+            assert_eq!(error.code, code, "code for {message:?}");
+            assert_eq!(error.message, message);
+        }
     }
 
     #[test]

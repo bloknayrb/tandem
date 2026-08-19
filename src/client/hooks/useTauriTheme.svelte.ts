@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
 import type { InvokeFn } from "@client/cowork/cowork-invoke.js";
+import type { TandemNotification } from "@shared/types.js";
 import type { ThemePreference } from "./useTandemSettings.js";
 import type { ResolvedTheme } from "./useTheme.js";
 
@@ -9,6 +10,26 @@ declare global {
     __TANDEM_INITIAL_THEME__?: "light" | "dark";
   }
 }
+
+/**
+ * What the native layer actually DID (#1368) — the discriminant `overrideActive`
+ * never was. `overrideActive` answers "may the client trust `osTheme`?", which on
+ * Windows has one constant answer, so a successful force, a release, a High-Contrast
+ * decline and a total no-op on a pre-1903 host used to be one indistinguishable
+ * payload.
+ *
+ * Mirrors Rust's `AppliedNativeTheme`, serialized kebab-case. The literals are
+ * pinned against the Rust enum in BOTH directions by
+ * `tests/docs/native-theme-claims.test.ts` — a rename on either side would otherwise
+ * make every comparison below silently false forever, with nothing failing.
+ */
+type AppliedNativeTheme =
+  | "forced"
+  | "released"
+  | "applied-without-menu-flush"
+  | "declined-high-contrast"
+  | "unsupported-host"
+  | "skipped-platform";
 
 /**
  * Response shape for the `set_native_theme` Tauri command (#992).
@@ -33,10 +54,115 @@ declare global {
  * to make that guard the obvious shape and to type `recordResolution`'s
  * parameter. Field-name fidelity against Rust's serde attributes is pinned
  * separately, by `tests/docs/native-theme-claims.test.ts`.
+ *
+ * `applied` (#1368) is the discriminant this union never had: `overrideActive` is a
+ * constant on Windows, so it can only ever answer the trust question above, never
+ * "did the push achieve anything?". Everything said about the unchecked assertion
+ * applies to it too — a producer that stops sending the field leaves it `undefined`,
+ * which matches no branch of the surfacing check below and so degrades to silence.
  */
 type NativeThemeOutcome =
-  | { overrideActive: true; osTheme: null }
-  | { overrideActive: false; osTheme: "light" | "dark" | null };
+  // `overrideActive: true` arises only from macOS's `SetWindowTheme(Some(_))`, which
+  // makes no app-mode call at all, so it can only ever be `forced`. Encoded here
+  // because the pair is a real invariant of `native_theme_outcome`; enforced, like
+  // the rest of this union, at runtime rather than by the compiler (see above).
+  | { applied: "forced"; overrideActive: true; osTheme: null }
+  | { applied: AppliedNativeTheme; overrideActive: false; osTheme: "light" | "dark" | null };
+
+/**
+ * Why a push was REJECTED (#1368), mirroring Rust's `NativeThemeError`. Five distinct
+ * causes used to arrive at the `.catch` below as five English sentences,
+ * indistinguishable from each other and from a client-side dynamic-import rejection.
+ */
+export type NativeThemeErrorCode =
+  | "high-contrast-unknown"
+  | "set-theme-failed"
+  | "app-mode-timeout"
+  | "main-thread-unavailable";
+
+export interface NativeThemeError {
+  code: NativeThemeErrorCode;
+  message: string;
+}
+
+/**
+ * The runtime half of the union above. A `Record<NativeThemeErrorCode, true>`, NOT a
+ * `Set` — the key set is then COMPILER-ENFORCED: omitting a code is `error TS2741`.
+ *
+ * That distinction is the whole point and was measured, not assumed. As a
+ * `new Set([...] satisfies NativeThemeErrorCode[])`, deleting one member left
+ * `npm run typecheck` clean and every test passing — `satisfies` checks that each
+ * element is a valid code, never that all codes are present. A code added to Rust and
+ * to the union but forgotten here would make `nativeThemeErrorCode()` return `null`
+ * for a genuine Rust rejection, and #1413's handler would take its "this never
+ * reached Rust" branch forever with nothing failing. The `type` alias stays the
+ * source the doc tripwire's regex reads; this is the source the compiler reads.
+ */
+const NATIVE_THEME_ERROR_CODES: Record<NativeThemeErrorCode, true> = {
+  "high-contrast-unknown": true,
+  "set-theme-failed": true,
+  "app-mode-timeout": true,
+  "main-thread-unavailable": true,
+};
+
+/**
+ * Narrow a rejection value from `invoke("set_native_theme", …)` to its native code.
+ *
+ * `null` is meaningful rather than a failure to parse: it means the rejection did not
+ * come from Rust at all — a dynamic-import failure, a thrown `TypeError`, or a bare
+ * string from a sidecar older than #1368 — so the push never reached the native layer.
+ *
+ * DELIBERATELY UNCONSUMED IN THIS MODULE. #1368's scope is the one outcome that
+ * warrants user-facing copy (`unsupported-host`); the rejection copy belongs to
+ * #1413, which owns the ten `console.warn` terminals in this file. This exists so
+ * that lands without reopening the IPC schema a second time.
+ */
+export function nativeThemeErrorCode(e: unknown): NativeThemeErrorCode | null {
+  if (typeof e !== "object" || e === null) return null;
+  const code: unknown = (e as { code?: unknown }).code;
+  return typeof code === "string" && Object.hasOwn(NATIVE_THEME_ERROR_CODES, code)
+    ? (code as NativeThemeErrorCode)
+    : null;
+}
+
+// ----- The user-facing surface (#1368) -----
+//
+// Mirrors `useTauriFileDrop.svelte.ts`: a caller-supplied `push`, captured at init, so
+// a failure reaches a toast instead of a `console.warn` that reaches nothing. In a
+// release build there is no WebView console at all — `tauri-plugin-devtools` is an
+// optional dependency excluded from release, and `tauri-plugin-log`'s
+// `TargetKind::Webview` pipes Rust logs INTO the WebView, not the reverse.
+let _notify: (n: TandemNotification) => void = () => {};
+
+// Session latch for the unsupported-host toast. NOT a field on `lastPush` /
+// `lastResolved` despite the rule below: those hold PIPELINE facts, whose whole point
+// is to be cleared with their record, and this one has to survive a rejection, an
+// exhausted retry ladder and every later push. It is a session latch, sibling to
+// `_initialized` and `disposed` — and, like `disposed`, it must therefore be cleared
+// in `_resetForTests`, or one test's toast silences every later one.
+//
+// Named `…Toasted`, not `…Notified`, because it gates exactly one `_notify` call
+// inside a self-contained `if`. It is NOT an early return from the resolved `.then`:
+// #1413 adds recorder-only rows there, outside this latch, which an early return would
+// silently swallow on the very pushes they exist to record.
+let unsupportedHostToasted = false;
+
+/**
+ * `dedupKey` coalesces repeats in the toast list and permanently in the activity tray
+ * (`useNotifications.svelte.ts`); the latch above is what stops a repeat popping a NEW
+ * toast once the previous one has expired. Both layers are wanted: the key is shared
+ * with #1413 so one broken feature produces one activity-tray entry, not two.
+ */
+function toast(message: string, severity: TandemNotification["severity"], dedupKey: string): void {
+  _notify({
+    id: `native-theme-${dedupKey}-${Date.now()}`,
+    type: "general-error",
+    severity,
+    message,
+    dedupKey,
+    timestamp: Date.now(),
+  });
+}
 
 class TauriThemeStore {
   current = $state<ResolvedTheme | null>(
@@ -297,6 +423,11 @@ export function _resetForTests(): void {
   lastPush = null;
   lastResolved = null;
   retryAttempts = 0;
+  unsupportedHostToasted = false;
+  // Dropped along with the latch, as the sibling `useTauriFileDrop._resetForTests`
+  // does: a spy left registered from a previous test would receive toasts raised by
+  // the next one, which is the kind of cross-test leak this function exists to stop.
+  _notify = () => {};
   cancelRetry();
   stopPoll();
   releaseThemeListener();
@@ -491,6 +622,23 @@ function pushNativeTheme(pref: ThemePreference, viaRetry: boolean): void {
       if (lastPush) lastPush.inFlight = false;
       recordResolution(outcome);
       retryAttempts = 0;
+      // #1368. Only `unsupported-host` gets copy: `forced`, `released` and
+      // `skipped-platform` are ordinary success, `declined-high-contrast` is the
+      // user's own accessibility setting winning (correct behaviour, and telling
+      // them about it would be noise), and `applied-without-menu-flush` is a partial
+      // success — the app mode IS set, only long-lived menu objects keep cached theme
+      // data — whose wording belongs with #1413's recorder rather than a toast.
+      //
+      // Placed after the supersede check above, so a stale outcome cannot toast, and
+      // written as a self-contained `if` rather than an early return (see the latch).
+      if (outcome.applied === "unsupported-host" && !unsupportedHostToasted) {
+        unsupportedHostToasted = true;
+        toast(
+          "Native menus can't follow the app theme on this Windows build.",
+          "warning",
+          "native-theme-push",
+        );
+      }
       // Authoritative: Rust reads the theme AFTER applying/releasing the
       // override, so on release this is already correct as part of THIS
       // round trip -- no need to wait on a poll tick (acceptReadback above).
@@ -555,8 +703,17 @@ function pushNativeTheme(pref: ThemePreference, viaRetry: boolean): void {
     });
 }
 
-/** Initialize the Tauri theme bridge. Called once on first import in Tauri. */
-export function initTauriTheme(): void {
+/**
+ * Initialize the Tauri theme bridge. Called once on first import in Tauri.
+ *
+ * `push` is REQUIRED rather than optional, for the reason the sibling
+ * `useTauriFileDrop.svelte.ts` states about its own: it makes a future refactor that
+ * drops the App.svelte wiring a compile error rather than a silent UX regression.
+ * Assigned BEFORE the idempotence guard, again mirroring that sibling, so a later
+ * call refreshes the callback even though the rest of init runs once.
+ */
+export function initTauriTheme(push: (n: TandemNotification) => void): void {
+  _notify = push;
   if (_initialized || !isTauriRuntime()) return;
   _initialized = true;
 
