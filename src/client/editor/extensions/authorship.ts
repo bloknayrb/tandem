@@ -556,8 +556,18 @@ export function buildAuthorshipDecorations(
     let userChars = 0;
     let claudeChars = 0;
 
-    const countTo = Math.min(blockTo, authorAt.length);
-    for (let at = blockFrom; at < countTo; at++) {
+    // Content positions only. `blockFrom` is the block's own open token and
+    // `blockTo - 1` its close token — neither is a character anybody authored,
+    // and a within-block entry can never mark them, since its endpoints are
+    // content positions. An entry SPANNING the boundary does mark both, so each
+    // block adjacent to it used to gain one phantom authored character. That is
+    // enough to flip `dominant` in a near-tied block: measured on a tail block
+    // where the user really owns one character and Claude owns two, the bar
+    // came out `user`. Cross-block entries already arrive today from a
+    // multi-block paste, and #1512's repair will make them the ordinary shape
+    // of a run that crossed an Enter.
+    const countTo = Math.min(blockTo - 1, authorAt.length);
+    for (let at = blockFrom + 1; at < countTo; at++) {
       const code = authorAt[at];
       if (code === AUTHOR_NONE) continue;
       if (code === AUTHOR_USER) userChars++;
