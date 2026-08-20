@@ -1405,6 +1405,19 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
       background 120ms,
       color 120ms;
   }
+  /* Reduced motion: literal 120ms tweens with no --morph-* term, so the token
+     zeroing that flattens the A8 morph above leaves them running. Re-declare
+     `none` on the exact selector, once for the in-app
+     `body.tandem-reduce-motion` (class on <body>, so :global(...)) and once for
+     the OS pref — media half last, its specificity only ties. */
+  :global(body.tandem-reduce-motion) .composer-btn {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .composer-btn {
+      transition: none;
+    }
+  }
   .composer-btn:disabled {
     cursor: not-allowed;
     opacity: 0.55;

@@ -541,6 +541,20 @@ function chooseHelp() {
     transition: transform 140ms ease;
   }
 
+  /* The mark's hover/press scale is decoration, not state feedback — reduced
+     motion jumps straight to the scaled size. The guard mirrors the target
+     selector verbatim, which is why it carries two `:global()`s: the inner one
+     is the shape the `.brand-mark` rules here already use, and the outer one is
+     the body class, so only `.brand-btn` takes the component hash. */
+  :global(body.tandem-reduce-motion) .brand-btn :global(.brand-mark) {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .brand-btn :global(.brand-mark) {
+      transition: none;
+    }
+  }
+
   .brand-btn:hover :global(.brand-mark) {
     transform: scale(1.12);
   }
@@ -803,6 +817,17 @@ function chooseHelp() {
     cursor: pointer;
     padding: 0;
     transition: background 0.1s, color 0.1s;
+  }
+
+  /* Window-control hover tint is polish on top of an already-obvious pointer
+     target — reduced motion takes the colour change instantly. */
+  :global(body.tandem-reduce-motion) .title-bar-btn {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .title-bar-btn {
+      transition: none;
+    }
   }
 
   .title-bar-btn:hover:not(:disabled) {

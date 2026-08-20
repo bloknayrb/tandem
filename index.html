@@ -407,6 +407,26 @@
         filter: opacity(0.45);
         transition: filter 200ms ease;
       }
+      /* Reduced motion: solo mode still dims the cards — the 200ms filter ramp
+         on entering/leaving solo is what goes. The selector list is repeated
+         verbatim in both halves; a shortened one would lose on specificity and
+         the guard would silently do nothing. `filter`/`transition` need no
+         vendor prefix, which matters here because this file's <style> is
+         emitted verbatim (nothing autoprefixes index.html). */
+      body.tandem-reduce-motion [data-tandem-mode="solo"] [data-annotation-type="comment"],
+      body.tandem-reduce-motion [data-tandem-mode="solo"] [data-annotation-type="note"],
+      body.tandem-reduce-motion [data-tandem-mode="solo"] [data-testid="margin-column-left"] .margin-bubble,
+      body.tandem-reduce-motion [data-tandem-mode="solo"] [data-testid="margin-column-right"] .margin-bubble {
+        transition: none;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        [data-tandem-mode="solo"] [data-annotation-type="comment"],
+        [data-tandem-mode="solo"] [data-annotation-type="note"],
+        [data-tandem-mode="solo"] [data-testid="margin-column-left"] .margin-bubble,
+        [data-tandem-mode="solo"] [data-testid="margin-column-right"] .margin-bubble {
+          transition: none;
+        }
+      }
 
       /* Fade the in-editor underline decorations to match the side-panel card
          fade above — keeps the visual weight of comments/notes consistent
@@ -415,6 +435,18 @@
       [data-tandem-mode="solo"] .tandem-note {
         opacity: 0.45;
         transition: opacity 200ms ease;
+      }
+      /* Reduced motion: as above — the underlines still fade to 0.45 in solo
+         mode, they just arrive there without the 200ms ramp. */
+      body.tandem-reduce-motion [data-tandem-mode="solo"] .tandem-comment,
+      body.tandem-reduce-motion [data-tandem-mode="solo"] .tandem-note {
+        transition: none;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        [data-tandem-mode="solo"] .tandem-comment,
+        [data-tandem-mode="solo"] .tandem-note {
+          transition: none;
+        }
       }
 
       /* Slash command menu — v7 floating-card variant.

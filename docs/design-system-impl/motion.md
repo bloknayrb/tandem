@@ -345,12 +345,42 @@ wasn't previously written down):**
   literal-duration ones (e.g. `opacity var(--morph-cascade)…, color 0.15s,
   background 0.15s`) is only PARTLY covered — the literal properties still need
   their own re-declared guard. `DocumentTabs.svelte`'s `.tab-add-pill` rules
-  have exactly this shape and are, as of #1425's audit, unguarded for their
-  literal half — see the backlog in #1530.
+  have exactly this shape; #1530 gave both their literal half's own guard.
 
-Known-open gaps in both mechanisms, found while fixing #1425 and not fixed by
-it, are tracked as backlog in #1530 — read it before assuming a file with a
-`prefers-reduced-motion` block guards everything it animates.
+### This policy is enforced by tests, and the enforcement is what to read next
+
+The #1425 audit left roughly ten files with gaps in one mechanism or the other.
+#1530 closed them and replaced "read the backlog issue" with two derived scans,
+which between them cover every `.svelte` and `.css` file under `src/client/` plus
+`index.html`:
+
+- `tests/design-system-impl/reduce-motion-guards.test.ts` — everything except
+  `App.svelte`.
+- `tests/design-system-impl/app-shell-reduce-motion-guards.test.ts` — `App.svelte`
+  alone, because its float-slide rules are guarded under a different selector that
+  needs a proof against the rail markup.
+
+Both DERIVE the set of motion-bearing rules from source rather than listing
+selectors, so a newly-added `transition` is covered the moment it is written. Four
+things they will make you do, each of which shipped broken at least once before
+they existed:
+
+1. **Write both halves.** An `@media`-only guard leaves everyone who uses the
+   in-app toggle without the OS setting unguarded, and vice versa.
+2. **Declare the guard AFTER the rule it guards.** Same selector means same
+   specificity, and an at-rule adds none — source order is the whole mechanism.
+3. **Repeat the target's selector verbatim, `:global(...)` wrappers included.**
+   In a Svelte component a bare inner selector is scope-hashed and a `:global`
+   one is not; they read alike and match different elements. (Wrapping the
+   guard's whole selector in one `:global(...)` is the other accepted form.)
+4. **Keep motion out of inline `style` attributes.** Nothing in a stylesheet can
+   override one without `!important`, so the scans reject a literal
+   `transition`/`animation` there outright — move it into a rule, or make its
+   timing a zeroed token.
+
+The exemption for token-zeroed timings is itself derived: the scan reads which
+custom properties `morphTiming.css` and `tabDragMotion.css` zero **in both**
+blocks, so adding a token without zeroing it cannot silently exempt anything.
 
 ---
 
