@@ -141,16 +141,44 @@ export function redactHomePaths(text: string, redaction: AccountRedaction): stri
 const PATH_TOKEN = /(?:[A-Za-z]:[\\/]|[\\/])[^\s"'<>()]*/g;
 
 /**
- * Every path-shaped token in `text` that still contains `account`.
+ * A name character, matching `SEGMENT_END` above. The two must agree: the scan
+ * exists to catch what the redaction missed, so a shape the redaction
+ * deliberately leaves alone must not be reported as a leak.
+ */
+const NAME_CHAR = "[A-Za-z0-9_-]";
+
+/**
+ * Every path-shaped token in `text` in which `account` survives as a BOUNDED
+ * run — preceded and followed by a non-name character (or the token edge).
  *
  * This is the capture's fail-closed check, and it is what makes narrowing the
  * replacement safe: it does not care how the leak got there. Prose that merely
  * uses the word (`"the user clicked"`) is not path-shaped and is ignored, which
  * is the whole point — the old assertion could not tell the two apart, so it
  * accepted the corrupted copy as proof of redaction.
+ *
+ * The boundary is not optional, and a plain `includes` is wrong in a way that
+ * only bites on the exact account names #1528 is about. Measured:
+ *
+ *   - account `user`, Windows: the redaction correctly produces
+ *     `C:\Users\you\.claude.json`, and `includes("user")` then matches inside
+ *     `Users` and fails the capture on a fully redacted page.
+ *   - account `us` (reachable now the length guard is gone): same, inside `Users`.
+ *   - account `claude`: `includes` matches `/claude-code`, which the redaction
+ *     deliberately leaves intact — this module's own docstring promises it does.
+ *
+ * All three are false positives against a correctly redacted page. Bounding the
+ * run removes them while keeping every real leak: a sibling directory
+ * (`/home/you/.bryan/...`), a path outside the home dir
+ * (`C:\Backups\bryan\...`), and a differently-cased repeat all still report.
+ *
+ * One ambiguity is deliberately left failing. On a machine whose account is
+ * literally `claude`, `.claude.json` — Claude Code's own config filename, not
+ * derived from the account — is a bounded run and reports. Nothing here can
+ * tell those apart, and stopping the capture is the correct side to err on.
  */
 export function findAccountPathLeaks(text: string, account: string): string[] {
   if (!account) return [];
-  const needle = account.toLowerCase();
-  return (text.match(PATH_TOKEN) ?? []).filter((token) => token.toLowerCase().includes(needle));
+  const bounded = new RegExp(`(?<!${NAME_CHAR})${escapeRe(account)}(?!${NAME_CHAR})`, "i");
+  return (text.match(PATH_TOKEN) ?? []).filter((token) => bounded.test(token));
 }

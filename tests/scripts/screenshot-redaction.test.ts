@@ -239,6 +239,51 @@ describe("findAccountPathLeaks — the fail-closed backstop", () => {
       "C:\\Users\\BRYAN\\config.json",
     ]);
   });
+
+  it("does not report a name that is only a SUBSTRING of a path segment", () => {
+    // The scan must agree with the redaction's boundary, or it fails captures
+    // that were redacted perfectly. All three of these were measured failing
+    // against a plain `includes`, and all three are accounts #1528 is about.
+    //
+    // `user` on Windows: the redaction correctly produced `C:\Users\you\...`,
+    // and `includes("user")` then matched inside `Users`.
+    expect(findAccountPathLeaks("C:\\Users\\you\\.claude.json", "user")).toEqual([]);
+    // `us` — reachable only because the length guard is gone.
+    expect(findAccountPathLeaks("C:\\Users\\you\\.claude.json", "us")).toEqual([]);
+    // `claude`: `/claude-code` is the shape redact-account.ts's own docstring
+    // promises stays intact, so reporting it as a leak contradicts the module.
+    // `-` is a name character in SEGMENT_END, and must be one here too.
+    expect(findAccountPathLeaks("see claude.com/claude-code for docs", "claude")).toEqual([]);
+    // The LEADING boundary, which the three cases above do not exercise: they
+    // are all prefix collisions, and a trailing-only guard passes every one of
+    // them. A name that is the SUFFIX of a longer segment needs the other half.
+    expect(findAccountPathLeaks("/var/www/webroot/index.html", "root")).toEqual([]);
+    expect(findAccountPathLeaks("/opt/sysadmin/config.json", "admin")).toEqual([]);
+  });
+
+  it("still reports a bounded run, so the backstop is not weakened", () => {
+    // The boundary must not become an excuse to miss the real thing: each of
+    // these is the account as its own run inside a path, and each must report.
+    expect(findAccountPathLeaks("C:\\Users\\user\\.claude.json", "user")).toEqual([
+      "C:\\Users\\user\\.claude.json",
+    ]);
+    expect(findAccountPathLeaks("/home/you/.us/settings.json", "us")).toEqual([
+      "/home/you/.us/settings.json",
+    ]);
+    expect(findAccountPathLeaks("/home/claude/.claude.json", "claude")).toEqual([
+      "/home/claude/.claude.json",
+    ]);
+  });
+
+  it("leaves one ambiguity failing on purpose, and says so", () => {
+    // On a machine whose account is literally `claude`, Claude Code's own
+    // config filename is a bounded run of the account name. Nothing here can
+    // tell it from a real leak, and stopping the capture is the correct side
+    // to err on — pinned so the choice is deliberate rather than incidental.
+    expect(findAccountPathLeaks("/home/you/.claude.json", "claude")).toEqual([
+      "/home/you/.claude.json",
+    ]);
+  });
 });
 
 /**
