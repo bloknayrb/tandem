@@ -20,6 +20,83 @@ const NEUTRAL_RE = /(?:0\s*,\s*0\s*,\s*0|255\s*,\s*255\s*,\s*255)/;
 const CSS_KEYWORDS = ["color", "background", "border", "fill", "stroke", "style"];
 
 /**
+ * Lengths of a hex body (`#` excluded) that CSS actually accepts as a color:
+ * `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`. A 5- or 7-digit run is not a color
+ * in any browser, so it is not a token violation either — and it *is* the
+ * shape a five-digit issue reference has. `normalizeHexForBlocklist` already
+ * treats 5/7 as out of scope; this makes the CSS-keyword pass agree with it.
+ */
+const VALID_HEX_COLOR_BODY_LENGTHS: ReadonlySet<number> = new Set([3, 4, 6, 8]);
+
+/** A hex body with no `a`-`f` in it at all — the shape of an issue reference. */
+const ALL_DECIMAL_DIGITS_RE = /^[0-9]+$/;
+
+/** `ident:` — a CSS/object property colon that would govern a following value. */
+const PROPERTY_COLON_RE = /[-a-zA-Z_][-a-zA-Z0-9_]*\s*:/;
+
+/** Prefix ending in `=` — assignment, or an unquoted HTML attribute value. */
+const ASSIGNMENT_TAIL_RE = /=\s*$/;
+
+/**
+ * Is the hex at `index` sitting where a *color value* can sit? (issue #1534)
+ *
+ * Three positions count, and the union is deliberately generous — a false
+ * negative here lets a raw color into `src/client/**`, which is strictly worse
+ * than the false positive this narrowing exists to remove:
+ *
+ * - **Declaration value** — walking back to the last `;`, `{` or `}`, the
+ *   segment contains a property colon. Covers `color: #333`,
+ *   `{ borderColor: "#333" }`, `style="border: 1px solid #333"`,
+ *   `background: linear-gradient(#333, #444)`.
+ * - **Whole string literal** — the token is the entire contents of a `"`, `'`
+ *   or backtick literal. Covers `const borderGrey = "#333"`,
+ *   `<Icon color="#333" />`, `["#333", "#000"]`, `ctx.fillStyle = "#333"`.
+ * - **Assignment / bare attribute** — the prefix right-trims to `=`. Covers
+ *   the unquoted HTML attribute form `<svg fill=#333>`.
+ *
+ * The declaration test intentionally accepts ANY identifier before the colon
+ * rather than only CSS-ish ones: restricting it to color/background/border/…
+ * would drop the real color in
+ * `<div class="border-box" style="box-shadow: 0 0 1px #333">`.
+ */
+export function isColorValuePosition(line: string, index: number, raw: string): boolean {
+  const before = line.slice(0, index);
+  const after = line.slice(index + raw.length);
+
+  const quote = before.slice(-1);
+  if ((quote === '"' || quote === "'" || quote === "`") && after.startsWith(quote)) return true;
+
+  if (ASSIGNMENT_TAIL_RE.test(before)) return true;
+
+  const cut = Math.max(before.lastIndexOf(";"), before.lastIndexOf("{"), before.lastIndexOf("}"));
+  return PROPERTY_COLON_RE.test(before.slice(cut + 1));
+}
+
+/**
+ * Does this hex match read as an issue reference rather than a color? (#1534)
+ *
+ * `#1364` is a syntactically valid `#RGBA`, so the old scan reported it as a
+ * raw color whenever its line happened to contain a CSS keyword — and
+ * `forced-colors`, `borderline` and `styles` all contain one, inside string
+ * literals included. Past issue #1000 that is the common shape, and roughly 6
+ * of 16 leading digits produce a valid hex character.
+ *
+ * The narrowing is deliberately as small as it can be: it fires ONLY on a body
+ * with no `a`-`f` character anywhere AND no color-value position. Any hex
+ * carrying a hex letter keeps the previous behavior exactly, and an
+ * all-decimal-digit gray (`#333`, `#333333`) is still caught wherever a color
+ * can actually appear.
+ *
+ * Residual, accepted: `console.warn("[theme] border mismatch: #1364")` still
+ * reports, because `mismatch:` reads as a property colon. That is why `main()`
+ * names the issue-reference possibility in its output.
+ */
+export function isLikelyIssueReference(line: string, index: number, raw: string): boolean {
+  if (!ALL_DECIMAL_DIGITS_RE.test(raw.slice(1))) return false;
+  return !isColorValuePosition(line, index, raw);
+}
+
+/**
  * Bundle-token blocklist (issue #799 / Conflict #6 in the design-system-impl plan).
  *
  * These hex values were lifted from the redesign-bundle assets
@@ -254,10 +331,17 @@ export function checkContent(content: string, rel: string): string[] {
     HEX_RE.lastIndex = 0;
     let hexMatch: RegExpExecArray | null;
     while ((hexMatch = HEX_RE.exec(scanLine)) !== null) {
-      if (hasCssIndicator(scanLine)) {
-        violations.push(`${rel}:${i + 1}: ${hexMatch[0]}`);
-        reportedHexAtIndex.add(hexMatch.index);
-      }
+      if (!hasCssIndicator(scanLine)) continue;
+      const raw = hexMatch[0];
+      // #1534: the CSS-keyword heuristic is a line-level substring test, so it
+      // fires on prose that merely mentions a color. Two narrowings keep it
+      // from reporting an issue reference as a color — both scoped to THIS
+      // pass; the bundle blocklist below matches on exact value and is
+      // deliberately left alone.
+      if (!VALID_HEX_COLOR_BODY_LENGTHS.has(raw.length - 1)) continue;
+      if (isLikelyIssueReference(scanLine, hexMatch.index, raw)) continue;
+      violations.push(`${rel}:${i + 1}: ${raw}`);
+      reportedHexAtIndex.add(hexMatch.index);
     }
 
     // Bundle-blocklist pass: any hex in BUNDLE_BLOCKLIST_HEX is forbidden
@@ -311,6 +395,35 @@ export function checkFile(filePath: string, root = ROOT): string[] {
   return checkContent(content, rel);
 }
 
+/** A reported violation whose token is `#` + decimal digits only. */
+const REPORTED_ALL_DIGIT_HEX_RE = /:\s*#[0-9]+\b/;
+
+/**
+ * Guidance printed under the violation list (#1534).
+ *
+ * Two parts. The `Fix:` line is unconditional — until now only the Claude
+ * PostToolUse hook printed any remedy, so the pre-commit/lint-staged path (the
+ * one #1534 was hit on) reported a violation with no instruction at all.
+ *
+ * The `Note:` is conditional on a reported token being all decimal digits. The
+ * detector no longer reports issue references sitting in prose, but one with a
+ * governing colon (`"[theme] border mismatch: #1364"`) still reads as a
+ * declaration value and reports. Naming the possibility is what turns "raw hex
+ * color violation on a line containing no color" into something actionable —
+ * option 3 of the issue, kept alongside the detector narrowing rather than
+ * instead of it.
+ */
+export function buildErrorGuidance(errors: readonly string[]): string {
+  let out =
+    "Fix: use a semantic var(--tandem-*) token, or import the value from src/client/utils/colors.ts.\n";
+  if (errors.some((v) => REPORTED_ALL_DIGIT_HEX_RE.test(v))) {
+    out +=
+      "Note: a token like `#1364` may be an issue reference rather than a color.\n" +
+      '      If so, move the reference into a comment or drop the `#` ("issue 1364").\n';
+  }
+  return out;
+}
+
 export function main(args = process.argv.slice(2)): void {
   const files = args.length > 0 ? args.map((f) => toSlash(resolve(f))) : collectFiles(CLIENT_DIR);
   const allViolations: string[] = [];
@@ -335,6 +448,7 @@ export function main(args = process.argv.slice(2)): void {
     process.stderr.write(
       `\ncheck-semantic-tokens: ${errors.length} error(s), ${warnings.length} warning(s) found\n`,
     );
+    process.stderr.write(buildErrorGuidance(errors));
     process.exit(1);
   } else if (warnings.length > 0) {
     process.stderr.write(`\ncheck-semantic-tokens: ${warnings.length} warning(s) found\n`);

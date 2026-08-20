@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   BUNDLE_BLOCKLIST_HEX,
+  buildErrorGuidance,
   checkContent,
+  isColorValuePosition,
+  isLikelyIssueReference,
   normalizeHexForBlocklist,
   shouldSkipFile,
 } from "../../scripts/check-semantic-tokens.js";
@@ -335,6 +338,235 @@ describe("check-semantic-tokens", () => {
         "src/client/components/SvelteLive.svelte:2: #f57018 [bundle-blocklist]",
         "src/client/components/SvelteLive.svelte:4: #c96442",
       ]);
+    });
+  });
+  describe("issue references vs colors (#1534)", () => {
+    it("does not flag the reported repro: a 4-digit issue ref in a live log string", () => {
+      // Verbatim from commit 2147224a (the fix for #1364), whose author had to
+      // drop the issue number to get past the gate. `forced-colors` satisfies
+      // the line-level CSS-keyword heuristic; `#1364` is a valid `#RGBA`.
+      // Note the `#` is preceded by `(` — the issue's own suggested "value
+      // position means preceded by `:`, `,`, `(` or whitespace" rule would NOT
+      // have fixed this line, which is why the rule is written differently.
+      const violations = checkContent(
+        `  console.warn("[useTauriTheme] forced-colors unlisten failed (#1364):", e);\n`,
+        "src/client/hooks/useTauriTheme.ts",
+      );
+
+      expect(violations).toEqual([]);
+    });
+
+    it("does not flag issue refs in live strings across the other keyword shapes", () => {
+      const violations = checkContent(
+        [
+          `  throw new Error("border sync failed, see #1364");`,
+          `  logger.info(\`background reload #798 done\`);`,
+          `  console.warn("styles reset (#1123)");`,
+          `  toast(\`fill retry #649\`);`,
+        ].join("\n"),
+        "src/client/utils/log.ts",
+      );
+
+      expect(violations).toEqual([]);
+    });
+
+    it("does not flag a 5- or 7-digit run, which is not a valid CSS color length", () => {
+      // For when the repo passes issue #10000. `normalizeHexForBlocklist`
+      // already treats 5/7-digit bodies as out of scope; this aligns the
+      // CSS-keyword pass with it.
+      const violations = checkContent(
+        `  color: #12345;\n  background: #1234567;\n`,
+        "src/client/components/Length.css",
+      );
+
+      expect(violations).toEqual([]);
+    });
+
+    // --- POSITIVE CONTROLS -------------------------------------------------
+    // The gate exists to keep raw hex out of src/client/**. A narrowing that
+    // lets a real color through is far worse than the false positive it fixes,
+    // so every color-value position gets an explicit test.
+
+    it("still flags an all-digit gray in a CSS declaration (positive control)", () => {
+      const violations = checkContent(
+        `<style>\n  .x { color: #333333; }\n</style>\n`,
+        "src/client/components/Gray.svelte",
+      );
+
+      expect(violations).toEqual(["src/client/components/Gray.svelte:2: #333333"]);
+    });
+
+    it("still flags an all-digit gray that is a whole string literal (positive control)", () => {
+      const violations = checkContent(
+        [
+          `const borderGrey = "#333";`,
+          `const borderInk = '#000';`,
+          "const borderTpl = `#111`;",
+        ].join("\n"),
+        "src/client/utils/palette.ts",
+      );
+
+      expect(violations).toEqual([
+        "src/client/utils/palette.ts:1: #333",
+        "src/client/utils/palette.ts:2: #000",
+        "src/client/utils/palette.ts:3: #111",
+      ]);
+    });
+
+    it("still flags all-digit grays in every other color-value position (positive control)", () => {
+      const violations = checkContent(
+        [
+          `  border: 1px solid #333;`,
+          `  background: linear-gradient(#333, #444);`,
+          `  <span style="border-color:#333">x</span>`,
+          `  <svg fill=#000 />`,
+          `  const p = { borderColor: "#333", fill: "#000" };`,
+          `  --tandem-border: #333;`,
+          // The counterexample that keeps the declaration rule loose: the
+          // governing property here is `box-shadow`, which carries none of the
+          // CSS keywords. A rule that demanded a color-ish property name would
+          // drop this real color.
+          `  <div class="border-box" style="box-shadow: 0 0 1px #333">x</div>`,
+        ].join("\n"),
+        "src/client/components/Positions.svelte",
+      );
+
+      expect(violations).toEqual([
+        "src/client/components/Positions.svelte:1: #333",
+        "src/client/components/Positions.svelte:2: #333",
+        "src/client/components/Positions.svelte:2: #444",
+        "src/client/components/Positions.svelte:3: #333",
+        "src/client/components/Positions.svelte:4: #000",
+        "src/client/components/Positions.svelte:5: #333",
+        "src/client/components/Positions.svelte:5: #000",
+        "src/client/components/Positions.svelte:6: #333",
+        "src/client/components/Positions.svelte:7: #333",
+      ]);
+    });
+
+    it("still flags any hex carrying an a-f character, wherever it sits (positive control)", () => {
+      // The narrowing can only ever fire on an all-decimal-digit body, so a hex
+      // with letters keeps the previous behavior exactly — including in the
+      // prose position that an issue reference would be forgiven in.
+      const violations = checkContent(
+        [
+          `  console.warn("border sync failed #1a2b");`,
+          `  color: #0f0;`,
+          `  background: #abc123;`,
+          `  border-color: #ff00aa80;`,
+        ].join("\n"),
+        "src/client/components/Letters.svelte",
+      );
+
+      expect(violations).toEqual([
+        "src/client/components/Letters.svelte:1: #1a2b",
+        "src/client/components/Letters.svelte:2: #0f0",
+        "src/client/components/Letters.svelte:3: #abc123",
+        "src/client/components/Letters.svelte:4: #ff00aa80",
+      ]);
+    });
+
+    it("still flags `#3333` when it sits in a declaration value (positive control)", () => {
+      // `#3333` is both a valid `#RGBA` gray and issue-reference shaped. In a
+      // value position the color reading wins.
+      const violations = checkContent(`  border-color: #3333;\n`, "src/client/components/Rgba.css");
+
+      expect(violations).toEqual(["src/client/components/Rgba.css:1: #3333"]);
+    });
+
+    it("leaves the #799 bundle blocklist untouched for its all-digit entries", () => {
+      // The narrowing is scoped to the CSS-keyword pass. The blocklist matches
+      // on exact value, which is strong evidence regardless of position, so
+      // `#222222`/`#666666`/`#999999` must still be caught in bare prose.
+      expect(BUNDLE_BLOCKLIST_HEX.has("#222222")).toBe(true);
+      const violations = checkContent(
+        `  console.warn("border drift #222222 and #666666");\n`,
+        "src/client/components/BundleProse.ts",
+      );
+
+      expect(violations).toEqual([
+        "src/client/components/BundleProse.ts:1: #222222 [bundle-blocklist]",
+        "src/client/components/BundleProse.ts:1: #666666 [bundle-blocklist]",
+      ]);
+    });
+
+    it("leaves the rgba, border-radius and box-shadow passes untouched", () => {
+      const violations = checkContent(
+        [
+          `  background: rgba(99, 102, 241, 0.5);`,
+          `<div style="border-radius: 6px"></div>`,
+          `<div style="box-shadow: 0 4px 12px rgba(99, 102, 241, 0.12);"></div>`,
+        ].join("\n"),
+        "src/client/components/OtherPasses.svelte",
+      );
+
+      expect(violations).toEqual([
+        "src/client/components/OtherPasses.svelte:1: rgba(",
+        "src/client/components/OtherPasses.svelte:2: border-radius: 6px",
+        "src/client/components/OtherPasses.svelte:3: rgba(",
+        "src/client/components/OtherPasses.svelte:3: box-shadow: 0 4px 12px rgba(",
+      ]);
+    });
+
+    // --- helper-level units ------------------------------------------------
+
+    it("recognizes the three color-value positions and nothing else", () => {
+      const decl = `  border: 1px solid #333;`;
+      expect(isColorValuePosition(decl, decl.indexOf("#333"), "#333")).toBe(true);
+
+      const lit = `const c = "#333";`;
+      expect(isColorValuePosition(lit, lit.indexOf("#333"), "#333")).toBe(true);
+
+      const attr = `<svg fill=#333 />`;
+      expect(isColorValuePosition(attr, attr.indexOf("#333"), "#333")).toBe(true);
+
+      // Prose inside a string literal: not a value position.
+      const prose = `console.warn("forced-colors failed (#1364):", e);`;
+      expect(isColorValuePosition(prose, prose.indexOf("#1364"), "#1364")).toBe(false);
+
+      // A partial literal is not a whole-string-literal match.
+      const partial = `const c = "#333 solid";`;
+      expect(isColorValuePosition(partial, partial.indexOf("#333"), "#333")).toBe(false);
+    });
+
+    it("only ever treats an all-decimal-digit token as an issue reference", () => {
+      const withLetters = `console.warn("border failed #1a2b");`;
+      expect(isLikelyIssueReference(withLetters, withLetters.indexOf("#1a2b"), "#1a2b")).toBe(
+        false,
+      );
+
+      const digits = `console.warn("border failed #1364");`;
+      expect(isLikelyIssueReference(digits, digits.indexOf("#1364"), "#1364")).toBe(true);
+
+      // Same token, value position -> color wins.
+      const valued = `  border-color: #1364;`;
+      expect(isLikelyIssueReference(valued, valued.indexOf("#1364"), "#1364")).toBe(false);
+    });
+
+    it("still reports a governing-colon issue ref (documented residual)", () => {
+      // `mismatch:` reads as a property colon, so this one still reports. It is
+      // why main() names the issue-reference possibility in its output rather
+      // than only saying "raw hex color".
+      const violations = checkContent(
+        `  console.warn("[theme] border mismatch: #1364");\n`,
+        "src/client/utils/log.ts",
+      );
+
+      expect(violations).toEqual(["src/client/utils/log.ts:1: #1364"]);
+    });
+    it("prints an unconditional Fix: line, and the issue-reference Note only when apt", () => {
+      // The confusing half of #1534: the pre-commit path printed a bare count
+      // and no remedy at all.
+      const colorOnly = buildErrorGuidance(["src/client/a.svelte:2: #abc123"]);
+      expect(colorOnly).toContain("Fix: use a semantic var(--tandem-*) token");
+      expect(colorOnly).not.toContain("issue reference");
+
+      const digitToken = buildErrorGuidance(["src/client/utils/log.ts:1: #1364"]);
+      expect(digitToken).toContain("Fix: use a semantic var(--tandem-*) token");
+      expect(digitToken).toContain("may be an issue reference rather than a color");
+      expect(digitToken).toContain("move the reference into a comment or drop the `#`");
+
+      expect(buildErrorGuidance([])).not.toContain("issue reference");
     });
   });
 });
