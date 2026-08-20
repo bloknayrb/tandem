@@ -224,6 +224,10 @@ describe("windows-acl-proof spec list", () => {
     //
     // Built from non-literal fragments so this file cannot match its own pattern.
     const spawnCall = new RegExp(String.raw`(?:execFile|spawn)\w*\(\s*[^)]*` + "icacls");
+    // A spec can also reach icacls INDIRECTLY, via the shared fixture helper.
+    // Matching only the direct spawn would let a new spec built on the helper
+    // slip past this guard entirely -- the same blind spot in a new shape.
+    const viaFixture = /from\s+["'][^"']*helpers\/win-acl-fixture(?:\.js)?["']/;
     const found: string[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir)) {
@@ -231,7 +235,8 @@ describe("windows-acl-proof spec list", () => {
         if (statSync(full).isDirectory()) {
           walk(full);
         } else if (entry.endsWith(".test.ts")) {
-          if (spawnCall.test(readFileSync(full, "utf-8"))) {
+          const source = readFileSync(full, "utf-8");
+          if (spawnCall.test(source) || viaFixture.test(source)) {
             found.push(path.relative(ROOT, full).replace(/\\/g, "/"));
           }
         }
