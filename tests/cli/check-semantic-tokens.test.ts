@@ -771,7 +771,11 @@ describe("check-semantic-tokens", () => {
       expect(isColorValuePosition(attr, attr.indexOf("#333"), "#333")).toBe(true);
 
       // No identifier before the `=`, and prose after it: not an attribute.
-      const notAttr = `  const n = counts[i] == #1364 ? a : b;`;
+      // The leading `let z = 0;` is load-bearing: without a delimiter earlier
+      // on the line the declaration walk-back is inconclusive and fails toward
+      // reporting (see the multi-line CSS cases below), which would decide this
+      // line before the attribute arm is exercised at all.
+      const notAttr = `  let z = 0; const n = counts[i] == #1364 ? a : b;`;
       expect(isColorValuePosition(notAttr, notAttr.indexOf("#1364"), "#1364")).toBe(false);
 
       // The shape the loose form got wrong: an ungoverned literal whose FIRST
@@ -1425,6 +1429,50 @@ describe("check-semantic-tokens", () => {
       expect(digitToken).toContain("move the reference into a comment or drop the `#`");
 
       expect(buildErrorGuidance([])).not.toContain("issue reference");
+    });
+
+    // The narrowing's own failure mode, and the one that matters most: a real
+    // color going SILENT. `isColorValuePosition`'s literal stack carries across
+    // lines, but its raw-CSS declaration walk-back is line-local — on a
+    // continuation line there is no property colon to find, so an
+    // all-decimal-digit gray was reclassified as an issue reference. The
+    // keyword line gate does not save it: `--tandem-border` contains `border`,
+    // which is how every token in this repo is named. Neither shape appears in
+    // src/client today, so the hole was latent and the "byte-identical output
+    // on the real tree" evidence could not see it.
+    describe("wrapped CSS declarations still report (regression)", () => {
+      it("reports an all-digit hex on a continuation line of a box-shadow", () => {
+        const css = [
+          ".ring {",
+          "  box-shadow:",
+          "    0 0 0 1px #000, 0 0 0 2px var(--tandem-border);",
+          "}",
+        ].join("\n");
+        expect(checkContent(css, "src/client/a.css")).toEqual(["src/client/a.css:3: #000"]);
+      });
+
+      it("reports an all-digit hex on a continuation line of a linear-gradient", () => {
+        const css = [
+          ".fade {",
+          "  background: linear-gradient(",
+          "    #000 0%, var(--tandem-border) 100%",
+          "  );",
+          "}",
+        ].join("\n");
+        expect(checkContent(css, "src/client/a.css")).toEqual(["src/client/a.css:3: #000"]);
+      });
+
+      it("still reports the same hex when the declaration fits on one line", () => {
+        // The positive control: the wrapped cases above must not be passing
+        // only because the file happens to contain `#000` somewhere.
+        const css = ".c {\n  border-color: #000;\n}";
+        expect(checkContent(css, "src/client/a.css")).toEqual(["src/client/a.css:2: #000"]);
+      });
+
+      it("keeps the #1534 narrowing: an issue reference in prose stays silent", () => {
+        const ts = 'console.warn("… forced-colors … (#1364):", e);';
+        expect(checkContent(ts, "src/client/a.ts")).toEqual([]);
+      });
     });
   });
 });

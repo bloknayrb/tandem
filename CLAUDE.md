@@ -137,11 +137,12 @@ Data flows, coordinate systems and the file map are in
 
 ## Semantic Tokens
 
-Full enumeration: [docs/semantic-tokens.md](docs/semantic-tokens.md). `check-token-violation.sh` + pre-commit catch raw hex/rgba in `src/client/**` — these four it does **not** catch:
+Full enumeration: [docs/semantic-tokens.md](docs/semantic-tokens.md). `check-token-violation.sh` + pre-commit catch raw hex/rgba in `src/client/**` — these five it does **not** catch:
 
 - Families are defined in `index.html` `:root` (light) and `[data-theme="dark"]`. Use `var(--tandem-*)` or `src/client/utils/colors.ts`. (`rgba(0,0,0,…)` / `rgba(255,255,255,…)` for shadows and overlays are fine.)
 - **Dark mode uses hand-coded saturated hex, not `color-mix`.** `color-mix` against the dark neutral produces washed-out surfaces; hand-picked values read as intentionally colored.
 - **Theme-picker swatch tokens (`--tandem-swatch-light|dark|warm`) are `:root`-only.** They preview each scheme, so a per-theme override would make them adapt to the theme they are supposed to be showing you.
+- **An all-decimal-digit hex outside a color-value position is read as an issue reference, not a color (#1534)** — so `#333` in prose is exempt while `#a3f` in the same spot still reports. The narrowing is position-gated, not value-gated: it never fires where a color can actually appear, and an inconclusive position fails toward reporting.
 - Pick the right family: `success`/`warning`/`error`/`info`/`suggestion` (violet, distinct from indigo accent) each expose `-fg`, `-fg-strong`, `-bg`, `-border`. Authorship uses `data-tandem-author` attributes, not CSS classes (ADR-026). CSS-facing highlights use `HIGHLIGHT_COLOR_VARS`, not raw `HIGHLIGHT_COLORS`.
 
 ## Desktop App (Tauri)

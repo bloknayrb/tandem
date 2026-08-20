@@ -873,7 +873,26 @@ export function isColorValuePosition(
   if (ATTRIBUTE_ASSIGNMENT_TAIL_RE.test(before)) return true;
   if (isInsideCssColorFunction(before, after)) return true;
 
+  // Raw-CSS declaration walk-back. Unlike the literal stack above, this is
+  // strictly line-local: it can only see the delimiters on THIS line, so on a
+  // continuation line of a wrapped declaration
+  //
+  //     box-shadow:
+  //       0 0 0 1px #000, 0 0 0 2px var(--tandem-border);
+  //
+  // the governing `box-shadow:` is out of reach and no property colon is found.
+  // Reading that as "not a color value" is how an all-decimal-digit gray went
+  // silent in ordinary multi-line CSS — the line gate still passes because
+  // `--tandem-border` contains `border`.
+  //
+  // So the inconclusive case fails toward REPORTING. `cut === -1` means nothing
+  // on this line closed a previous declaration or opened a block before the
+  // token, which is exactly the shape of a continuation line, at any wrap
+  // depth. A lint gate letting a real color through is strictly worse than the
+  // false positive it avoids, and the only tokens reaching here are
+  // all-decimal-digit bodies (`isLikelyIssueReference` is the sole caller).
   const cut = Math.max(before.lastIndexOf(";"), before.lastIndexOf("{"), before.lastIndexOf("}"));
+  if (cut === -1) return true;
   return PROPERTY_COLON_RE.test(before.slice(cut + 1));
 }
 
