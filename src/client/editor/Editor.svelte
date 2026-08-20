@@ -330,8 +330,9 @@ async function openHref(href: string) {
   // still be refused here. Every refusal therefore has to SAY so. A
   // `console.warn` alone is not a channel in the primary distribution: the
   // Tauri release build ships no `devtools` feature, so there is no inspector
-  // the user can open, and `utils/diagnostics.ts` has no console ring buffer,
-  // so it never reaches a bug report either.
+  // the user can open. (Since #1439 `utils/client-log.ts` does carry warnings
+  // into the diagnostics report — but this refusal is one the user needs to see
+  // NOW, not one a maintainer reads afterwards, so the notice stays.)
   if (!currentFilePath) {
     notifyLinkProblem(
       `Can't follow "${href}" — save this document to disk first so relative links have somewhere to resolve against.`,

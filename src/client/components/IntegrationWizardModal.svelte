@@ -57,6 +57,7 @@ import {
 } from "../hooks/useReachabilityCheck.svelte.js";
 import { MCP_BASE_URL } from "../utils/backend-ports.js";
 import { resyncCheckbox } from "../utils/checkbox-sync.js";
+import { logClientWarning } from "../utils/client-log.js";
 import IntegrationTargetCard from "./IntegrationTargetCard.svelte";
 import {
   computeDoneHeaderState,
@@ -272,7 +273,11 @@ async function copyPluginCommands(): Promise<void> {
     // permission, a WebView with no `navigator.clipboard`, and a security
     // policy rejection are three different bugs with three different fixes,
     // and after this catch nobody can tell which one a user hit.
-    console.warn("[wizard] clipboard write failed:", err);
+    // Via `logClientWarning` rather than `console.warn` so the distinguishing
+    // error name survives into a bug report: the release desktop build ships no
+    // devtools, so the console alone is a sink with no reader (#1439). The
+    // console line itself is unchanged.
+    logClientWarning("wizard", "clipboard write failed", err);
     result = "Couldn't copy — select the commands above";
   }
   // THIS is the load-bearing guard: `writeText` spans real tasks, so a user can
