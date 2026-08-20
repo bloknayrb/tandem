@@ -588,9 +588,33 @@ export async function startMcpServerHttp(
   // follow-up; do not re-add a payment-processor endpoint to a server that binds
   // to loopback.
 
-  // Auth middleware for /mcp and /api/* — AFTER apiMiddleware (DNS-rebinding)
-  // but BEFORE route handlers. Loopback is always exempt (Claude Code zero-config).
-  // /health and /.well-known/* are intentionally omitted — they're public/diagnostic.
+  // Auth middleware for /mcp and /api/* — mounted BEFORE the per-route DNS-rebinding
+  // check and, for /api, BEFORE enforceLoopbackMutation too. Express dispatches
+  // middleware in registration order and every one of those checks is attached later in
+  // this same function, so a request that fails auth AND a Host check is answered 401 by
+  // auth, never 403 by the Host check.
+  //
+  // There are TWO Host checks in front of /api/*, not one. `app.use(mcpApp)` below mounts
+  // the SDK sub-app at the ROOT with no path prefix, and createMcpExpressApp installs its
+  // hostHeaderValidation as a bare app.use INSIDE that sub-app — so every request that
+  // reaches that line, /api/* included, passes through the SDK's Host check, and it is
+  // registered before registerApiRoutes attaches lanAwareApiMiddleware per route. The
+  // real /api chain is therefore:
+  //     authMiddleware -> enforceLoopbackMutation -> mcpApp's express.json +
+  //     hostHeaderValidation -> the route's lanAwareApiMiddleware -> handler
+  // The SDK check fires first and answers with a JSON-RPC body ("Invalid Host: evil.com");
+  // lanAwareApiMiddleware narrows it further per route, rejecting hosts the SDK's list
+  // admits (e.g. "localhost:PORT" and "[::1]:PORT") with {"error":"FORBIDDEN"}. Reading a
+  // 403 on /api without checking the body will attribute it to the wrong middleware.
+  //
+  // Loopback is always exempt from auth (Claude Code zero-config), so this ordering has no
+  // security effect either way — both Host checks still run unconditionally for a
+  // loopback-bypassing caller, just after auth instead of before.
+  // /health and /.well-known/* never reach authMiddleware at all: they're registered
+  // directly on `app`, outside both the /api and /mcp prefixes this middleware is mounted
+  // on. They are also registered ABOVE `app.use(mcpApp)`, so they never reach the SDK Host
+  // check either — /health carries its own lanAwareApiMiddleware, the metadata routes are
+  // deliberately unguarded (they must be reachable before auth is established).
   // Note: all channel routes use /api/channel-* paths (covered by /api below).
   app.use("/mcp", authMiddleware);
   app.use("/api", authMiddleware);
