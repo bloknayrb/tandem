@@ -1,7 +1,7 @@
 import path from "node:path";
 import { API_INFO } from "../src/shared/api-paths";
-import { DEFAULT_MCP_PORT } from "../src/shared/constants";
 import { E2E_APP_DATA_DIR } from "./e2e-paths";
+import { E2E_MCP_PORT, E2E_VITE_PORT, E2E_WS_PORT } from "./test-ports";
 
 /**
  * How long to wait for `/api/info`. Generous on purpose: under the fail-closed
@@ -136,87 +136,165 @@ export function foreignServerMessage(reported: string, port: number): string {
     `  reported:  ${reported}`,
     `  expected:  a storage path inside ${E2E_APP_DATA_DIR}`,
     "",
-    'That is almost always the Tandem desktop app, or a "npm run dev:server".',
-    "Playwright's reuseExistingServer ADOPTS it rather than failing, and the",
-    "suite would then run tandem_open, tandem_close, DELETE /api/chat and every",
-    "typing and annotation test against your real documents and real app-data —",
-    "with no per-run wipe, because scripts/e2e-server.mjs never runs on that",
-    "branch.",
+    "The E2E backend runs on a reserved port pair (scripts/test-ports.ts), so",
+    "this is usually a Tandem started with TANDEM_MCP_PORT pointed at the",
+    "reserved pair, or an unrelated process. Running anyway would aim",
+    "tandem_open, tandem_close, DELETE /api/chat and every typing and",
+    "annotation test at that server's real documents and app-data, with no",
+    "per-run wipe.",
     "",
-    "Quit Tandem (or stop the dev server) and run the suite again.",
+    "Quit Tandem (or whatever holds the port) and run the suite again.",
   ].join("\n");
 }
 
 /**
- * Playwright `globalSetup` (#1483).
+ * The port `globalSetup` probes, exported so the wiring test can pin that the
+ * guard and the backend webServer entry cannot silently desynchronize: a
+ * hand-revert of either side back to `DEFAULT_MCP_PORT` fails
+ * `tests/scripts/e2e-guard-wiring.test.ts` before it can turn the guard into a
+ * vacuous probe of an empty product port.
+ */
+export const GUARD_PROBE_PORT = E2E_MCP_PORT;
+
+/**
+ * The dev-server path of the one module every client→backend URL flows
+ * through. `assertServedClientTargetsHarness` reads its *served* form.
+ */
+export const BACKEND_PORTS_MODULE_PATH = "/src/client/utils/backend-ports.ts";
+
+/**
+ * Probe `port` and throw the refusal unless it is clear or provably ours.
+ * Split out of `globalSetup` so a test can exercise the refusal against a stub
+ * server on an ephemeral port (`tests/scripts/e2e-guard.test.ts`).
+ */
+export async function runGuard(port: number = GUARD_PROBE_PORT): Promise<void> {
+  const foreign = await probeForeignServer(port);
+  if (foreign !== null) {
+    throw new Error(foreignServerMessage(foreign, port));
+  }
+}
+
+/**
+ * Does the client the Vite dev server is actually serving target the harness
+ * backend? (#1492's own hazard, #1483 one layer up: a served client still
+ * baked to :3479 would drive the destructive suite into the user's REAL
+ * backend through the UI — `LOCALHOST_ORIGIN_RE` admits any 127.0.0.1 origin
+ * and the calls are loopback, so they would *succeed*.)
+ *
+ * Mechanism, verified against Vite 8: in dev, `import.meta.env.VITE_*` is NOT
+ * statically replaced — Vite prepends an env-object assignment to the served
+ * module (`import.meta.env = {..., "VITE_TANDEM_MCP_PORT": "4729", ...}`).
+ * Either that injection or a future static replacement leaves the port as a
+ * QUOTED string in the served text; a Vite launched without the harness env
+ * contains no quoted harness port anywhere (the module's original source
+ * carries no port digits, so the inline sourcemap cannot false-positive —
+ * base64 has no quote characters). So: fetch the served module, require the
+ * quoted ports plus the env-var name as a right-module sanity check.
+ *
+ * This runs in `globalSetup` — after Playwright has started/health-checked the
+ * webServers, before any spec — which is the one choke point covering all ~50
+ * specs; no spec-level fixture exists (every spec imports `test` raw from
+ * `@playwright/test`), so a per-spec assertion would protect only the specs
+ * that sort after it under `workers: 1`.
+ */
+export function assertServedClientTargetsHarness(
+  servedSource: string,
+  vitePort: number = E2E_VITE_PORT,
+  wsPort: number = E2E_WS_PORT,
+  mcpPort: number = E2E_MCP_PORT,
+): void {
+  const problems: string[] = [];
+  if (!servedSource.includes("VITE_TANDEM_MCP_PORT")) {
+    problems.push(`the served module does not mention VITE_TANDEM_MCP_PORT at all`);
+  }
+  if (!servedSource.includes(`"${mcpPort}"`)) {
+    problems.push(`no "${mcpPort}" (MCP) in the served module`);
+  }
+  if (!servedSource.includes(`"${wsPort}"`)) {
+    problems.push(`no "${wsPort}" (ws) in the served module`);
+  }
+  if (problems.length === 0) return;
+  throw new Error(
+    [
+      "Refusing to run this Playwright suite: the Vite dev server on",
+      `127.0.0.1:${vitePort} is serving a client that does NOT target the`,
+      `harness backend (ws ${wsPort} / mcp ${mcpPort}):`,
+      "",
+      ...problems.map((p) => `  - ${p}`),
+      "",
+      "That client would aim every UI-driven fetch at the PRODUCT ports and",
+      "drive the destructive suite into a real Tandem. This Vite was launched",
+      "without VITE_TANDEM_WS_PORT/VITE_TANDEM_MCP_PORT — usually a hand-started",
+      `\`vite --port ${vitePort}\` or a stale server from before #1492. Stop it and`,
+      "let Playwright start its own.",
+    ].join("\n"),
+  );
+}
+
+/** Fetch the served form of the backend-ports module. Fail-closed: Playwright already health-checked this Vite, so any failure here is a refusal, not a clear. */
+export async function fetchServedBackendPortsModule(
+  vitePort: number = E2E_VITE_PORT,
+  timeoutMs: number = PROBE_TIMEOUT_MS,
+): Promise<string> {
+  const url = `http://127.0.0.1:${vitePort}${BACKEND_PORTS_MODULE_PATH}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    throw new Error(
+      `Refusing to run this Playwright suite: could not read ${url} from the ` +
+        `Vite dev server the suite is about to use (${describeError(err)}), so ` +
+        "the served client's backend ports cannot be verified.",
+    );
+  }
+  if (!res.ok) {
+    throw new Error(
+      `Refusing to run this Playwright suite: ${url} answered HTTP ${res.status}, ` +
+        "so the served client's backend ports cannot be verified.",
+    );
+  }
+  return await res.text();
+}
+
+/**
+ * Playwright `globalSetup` (#1483, retargeted by #1492).
  *
  * **This is a post-flight, not a preflight, and that is a Playwright fact
  * rather than a choice.** `createGlobalSetupTasks`
  * (`node_modules/playwright/lib/runner/tasks.js`) pushes
  * `createPluginSetupTasks` — start and health-check every `webServer` — ahead
- * of `config.globalSetups`. The same ordering is documented from the other side
- * in `tests/perf/global-setup.ts:9-19`, where a wipe that believed it ran
- * first never did. (Playwright internals are cited by function name, never
- * line number — `tests/perf` set that style for this exact citation, and it is
- * the durable form: a line number into `node_modules` rots on every
- * `npm update` with nothing to notice.)
+ * of `config.globalSetups`. The destructive half is test *execution*, and
+ * throwing here aborts before the first spec.
  *
- * So by the time this runs, `reuseExistingServer: !CI` has **already** adopted
- * whatever answered the port. The safety property is narrower than "prevent
- * adoption" and is still sufficient: the destructive half is test *execution*,
- * and throwing here aborts before the first spec. Nothing has touched a
- * document yet.
+ * **What #1492 changed.** The backend runs on a reserved pair
+ * (`scripts/test-ports.ts`) with `reuseExistingServer: false`, so the
+ * default-configuration collision with the desktop app is gone by
+ * construction, and the old gap 2 (adopting a stale E2E server and skipping
+ * the per-run wipe) is closed outright. Two checks remain, and what each is
+ * for:
  *
- * **Why `globalSetup` rather than an npm-script preflight.** A wrapper on
- * `test:e2e` would run genuinely first and make the reasoning simpler — but it
- * is bypassed by `playwright test` directly, which is exactly how someone
- * iterating skips a rebuild (`tests/perf/playwright.config.ts:112-115` records
- * that habit as real). `globalSetup` travels with the config and cannot be
- * skipped. Un-bypassability is worth more here than tidy ordering.
+ *  1. `runGuard` — defense-in-depth on the backend port. It fires only if
+ *     reuse is ever re-enabled, or something wins a race onto the port between
+ *     Playwright's availability check and the run. Deliberate narrowing, not
+ *     vacuity: the wiring test pins `GUARD_PROBE_PORT` to the webServer entry
+ *     so neither side can quietly drift back to `DEFAULT_MCP_PORT`.
+ *  2. The served-client check — the load-bearing half now. The Vite entry
+ *     still allows local reuse, and a served client baked to the product
+ *     ports would drive the suite into a real Tandem through the UI with the
+ *     backend isolation working perfectly.
  *
- * **Why reuse stays enabled** on the backend entry — and the reason is the
- * message, not the mechanism. `reuseExistingServer: false` would *also* stop
- * the run, genuinely pre-flight: `WebServerPlugin._startProcess` checks
- * availability first and throws before `launchProcess`, so with the desktop app
- * answering `/health` the command never runs. But all it throws is
- * `"http://127.0.0.1:3479/health is already used, make sure that nothing is
- * running on the port/url"` — which cannot tell the desktop app from a stale
- * E2E server, names no remedy, and says nothing about what the suite would have
- * done to your documents. It would also forbid reusing a backend you started
- * yourself. The guard buys a diagnosable refusal for the cost of running one
- * step later, and pre-execution is the boundary that matters.
- *
- * **Two things this does NOT cover — do not over-trust it.**
- *
- *  1. *Single-port protection over a two-port hazard.* This probes
- *     `DEFAULT_MCP_PORT` only, while `freePort` frees the ws port too. A
- *     half-dead desktop Tandem — Hocuspocus alive on :3478, MCP HTTP dead —
- *     fails Playwright's `/health` check, so Playwright starts its own server,
- *     whose boot then kills the surviving half. The guard reports clear
- *     throughout, because on its port nothing was listening.
- *  2. *An adopted **stale E2E** server passes.* Its storage path is the E2E one,
- *     so this clears it — but `scripts/e2e-server.mjs` never ran, so the
- *     per-run wipe never happened, and the leftover annotation envelopes that
- *     file's header describes cascade through the suite. Identifying the
- *     server by storage dir cannot distinguish "ours" from "ours, from a run
- *     that crashed an hour ago".
- *
- * **The deeper fix both of those want** is giving the E2E backend its own port
- * so a collision is impossible by construction — the shape `tests/perf` already
- * chose for Vite (`tests/perf/playwright.config.ts:70`). Own port means
- * Playwright always starts the server, which makes the wipe unconditional and
- * the two-port race unreachable. It stops at the backend for a real reason: the
- * browser client bakes `DEFAULT_MCP_PORT`/`DEFAULT_WS_PORT` in at build time
- * across 15 interpolation sites in 9 files, so the client's origin has to
- * become runtime-configurable first. Tracked in #1492 — note that #1492 moving
- * the port would silently desynchronize this guard, which reads
- * `DEFAULT_MCP_PORT` directly rather than deriving it from the `webServer` url
- * Playwright actually adopted. `tests/scripts/e2e-guard-wiring.test.ts` pins
- * the two together so the drift fails a test rather than a suite.
+ * **The true residual, stated plainly (do not oversell the refusal):**
+ * Playwright throws its terse "already used" error only when something
+ * answers 200–403 on the reserved MCP port. A wedged process there, any
+ * non-HTTP process, and **anything at all on the reserved WS port — which no
+ * Playwright check ever probes** — is silently SIGKILLed by the E2E server's
+ * own boot (`freePort`, src/server/platform.ts). For stale E2E servers that
+ * is desirable self-healing; for anything else it is why the reserved pair
+ * must never collide with a pair any doc tells users to occupy
+ * (`scripts/test-ports.ts` holds that inventory, and the wiring test pins
+ * `docs/troubleshooting.md` against it).
  */
 export default async function globalSetup(): Promise<void> {
-  const foreign = await probeForeignServer(DEFAULT_MCP_PORT);
-  if (foreign !== null) {
-    throw new Error(foreignServerMessage(foreign, DEFAULT_MCP_PORT));
-  }
+  await runGuard(GUARD_PROBE_PORT);
+  assertServedClientTargetsHarness(await fetchServedBackendPortsModule(E2E_VITE_PORT));
 }

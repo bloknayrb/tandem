@@ -7,8 +7,6 @@ import * as Y from "yjs";
 import { API_CLOSE, API_INFO, API_RENAME } from "../../shared/api-paths.js";
 import {
   CTRL_ROOM,
-  DEFAULT_MCP_PORT,
-  DEFAULT_WS_PORT,
   Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_ANNOTATIONS,
@@ -22,6 +20,7 @@ import {
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, ClaudeAwareness } from "../../shared/types";
 import type { AppInfoData, DocListEntry, OpenTab } from "../types";
+import { MCP_BASE_URL, WS_URL } from "../utils/backend-ports.js";
 import { installIdFromStoragePath } from "../utils/install-id.js";
 import { installUntaggedWriteWarning } from "../utils/untagged-write-warning.js";
 import { createRebuildScheduler } from "./rebuild-scheduler.js";
@@ -292,7 +291,7 @@ export function createYjsSync(opts?: {
    */
   const fetchServerIdentity = async (): Promise<string | null> => {
     try {
-      const res = await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_INFO}`, {
+      const res = await fetch(`${MCP_BASE_URL}${API_INFO}`, {
         signal: AbortSignal.timeout(5000),
       });
       // A non-ok response returns before the assignment below, so a transient
@@ -435,7 +434,7 @@ export function createYjsSync(opts?: {
       if (import.meta.env.DEV) installUntaggedWriteWarning(ydoc, { label: `doc ${doc.id}` });
       const provider = new HocuspocusProvider(
         withBackoff({
-          url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
+          url: WS_URL,
           name: doc.id,
           document: ydoc,
           // Pinned string, not a closure: if the generation changes after this
@@ -556,7 +555,7 @@ export function createYjsSync(opts?: {
     if (import.meta.env.DEV) installUntaggedWriteWarning(ydoc, { label: "ctrl room" });
     const provider = new HocuspocusProvider(
       withBackoff({
-        url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
+        url: WS_URL,
         name: CTRL_ROOM,
         document: ydoc,
         // Pinned string — same provenance rule as tab providers.
@@ -730,7 +729,7 @@ export function createYjsSync(opts?: {
     }
 
     // Tell the server to close the document — broadcast reconciles tabs.
-    fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_CLOSE}`, {
+    fetch(`${MCP_BASE_URL}${API_CLOSE}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ documentId: tabId }),
@@ -761,7 +760,7 @@ export function createYjsSync(opts?: {
       onError?.(message);
     };
 
-    fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_RENAME}`, {
+    fetch(`${MCP_BASE_URL}${API_RENAME}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ documentId: tabId, newName }),
