@@ -43,6 +43,7 @@ import { registerNavigationTools } from "./navigation.js";
 import { clearAllClaudePresence } from "./presence-expiry.js";
 import type { DiagnosticsHandlerDeps } from "./routes/diagnostics.js";
 import { makeHealthHandler } from "./routes/health.js";
+import { installSchemaDialectStrip } from "./schema-dialect.js";
 import { createMcpSessionRegistry, type McpSessionRegistry } from "./transport-registry.js";
 
 // Injected by tsup at build time; absent in tsx dev and vitest, where createRequire
@@ -248,6 +249,12 @@ function createMcpServer(diagnostics: DiagnosticsToolDeps = {}): McpServer {
   registerAwarenessTools(server);
   registerApplyTools(server);
   registerDiagnosticsTools(server, diagnostics);
+
+  // AFTER registration: the SDK installs its tools/list handler lazily on the
+  // first registerTool, and this wraps that handler (#1564). The return value
+  // is deliberately not acted on — it logs on drift, and the gate that actually
+  // catches drift is `tests/server/mcp-schema-dialect.test.ts` in CI.
+  installSchemaDialectStrip(server);
 
   return server;
 }
