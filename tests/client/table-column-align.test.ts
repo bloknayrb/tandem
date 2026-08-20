@@ -179,31 +179,59 @@ describe("T5 — structural edits from the #923 context menu", () => {
   // (`context-menu/dispatch.ts:103-124`), so driving the commands drives the
   // menu.
 
-  it("stops decorating once a column op desynchronises align from the columns", () => {
+  it("keeps decorating across a column insert, re-indexed", () => {
     const editor = mount({ content: fromMarkdown(ALIGNED_MD) });
     expect(cellAlignments(editor)).toContain("th:center");
 
     editor.commands.setTextSelection(cellPositions(editor)[1] + 2);
     expect(editor.commands.addColumnBefore()).toBe(true);
 
-    // The `align` array is NOT maintained by the column commands — it still has
-    // 3 entries against 4 columns. Rendering it anyway would put every column
-    // from the insertion point one place wrong and silently drop the last one,
-    // with no recourse for the user while the alignment UI is unbuilt. The width
-    // guard bails instead, which is exactly the pre-#995 behaviour for this
-    // table. Re-indexing the array is tracked as #1535; when that lands, this
-    // expectation changes to the corrected alignment.
-    expect(editor.state.doc.child(0).attrs.align).toBe('["left","center","right"]');
-    expect(cellAlignments(editor).every((entry) => entry.endsWith(":-"))).toBe(true);
+    // Before #1535 the array kept its 3 entries against 4 columns and the width
+    // guard bailed, blanking the whole table — the honest answer while nothing
+    // maintained the array. `table-align-commands.ts` now splices it in the same
+    // transaction, so the width guard stays open and every ORIGINAL column keeps
+    // the alignment it had. The inserted column gets `null`, not a value
+    // inherited from the neighbour it displaced.
+    expect(editor.state.doc.child(0).attrs.align).toBe('["left",null,"center","right"]');
+    expect(cellAlignments(editor)).toEqual([
+      "th:left",
+      "th:-",
+      "th:center",
+      "th:right",
+      "td:left",
+      "td:-",
+      "td:center",
+      "td:right",
+    ]);
   });
 
-  it("stops decorating after a column delete too", () => {
+  it("keeps decorating across a column delete, re-indexed", () => {
     const editor = mount({ content: fromMarkdown(ALIGNED_MD) });
 
     editor.commands.setTextSelection(cellPositions(editor)[1] + 2);
     expect(editor.commands.deleteColumn()).toBe(true);
 
-    expect(cellAlignments(editor).every((entry) => entry.endsWith(":-"))).toBe(true);
+    // The centre column is the one removed, so its entry goes with it and the
+    // right column keeps `right` rather than sliding into `center`.
+    expect(editor.state.doc.child(0).attrs.align).toBe('["left","right"]');
+    expect(cellAlignments(editor)).toEqual(["th:left", "th:right", "td:left", "td:right"]);
+  });
+
+  it("T5-width — a table whose align array arrives the wrong length is not decorated", () => {
+    // The column commands maintain the array (#1535), but they are not its only
+    // source: a paste, a file written by a pre-#1535 build, or a hand-edited
+    // attribute can all deliver a positional array that describes a different
+    // table. This is the case the width guard exists for, and the only test that
+    // holds it — deleting `if (align.length !== map.width) return;` fails here
+    // and nowhere else.
+    const editor = mount({
+      content:
+        `<table data-align='["left","center","right"]'><tbody>` +
+        "<tr><td>A</td><td>B</td></tr>" +
+        "</tbody></table>",
+    });
+
+    expect(cellAlignments(editor)).toEqual(["td:-", "td:-"]);
   });
 
   it("recomputes — not maps forward — across a merge that keeps the column count", () => {
