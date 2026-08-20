@@ -956,7 +956,7 @@ Read-only, takes **no parameters**, and is **not** license-gated — diagnostics
   "transport": "http",
   "platform": "win32",
   "arch": "x64",
-  "nodeVersion": "v22.0.0",
+  "nodeVersion": "v22.13.0",
   "tauriSidecar": true,
   "osRelease": "10.0.26100",
   "osVersion": "Windows 11 Pro",
@@ -1074,12 +1074,12 @@ Runs the embedded `tandem doctor` collector and returns the report plus environm
 **Response (200):**
 ```json
 {
-  "report": { "ok": true, "crashed": false, "failures": 0, "warnings": 0, "summary": "All checks passed. Tandem is ready.", "error": null, "results": [ { "check": "node-version", "status": "pass", "message": "Node.js v22.0.0 (>= 22 required)" } ] },
+  "report": { "ok": true, "crashed": false, "failures": 0, "warnings": 0, "summary": "All checks passed. Tandem is ready.", "error": null, "results": [ { "check": "node-version", "status": "pass", "message": "Node.js v22.13.0 (>= 22.12.0 required)" } ] },
   "version": "0.22.1",
   "transport": "http",
   "platform": "win32",
   "arch": "x64",
-  "nodeVersion": "v22.0.0",
+  "nodeVersion": "v22.13.0",
   "tauriSidecar": true,
   "osRelease": "10.0.26100",
   "osVersion": "Windows 11 Pro",

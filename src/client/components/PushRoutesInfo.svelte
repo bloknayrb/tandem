@@ -34,6 +34,7 @@
  */
 import { tick } from "svelte";
 import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../../shared/constants.js";
+import { logClientWarning } from "../utils/client-log.js";
 
 // #1390: the plugin install commands, plus the outcome of the button that
 // copies them. The outcome lives beside the button in its own live region
@@ -90,7 +91,16 @@ async function copyPluginCommands(): Promise<void> {
     // permission, a WebView with no `navigator.clipboard`, and a security
     // policy rejection are three different bugs with three different fixes,
     // and after this catch nobody can tell which one a user hit.
-    console.warn("[push-routes] clipboard write failed:", err);
+    // Via `logClientWarning` rather than `console.warn` so the distinguishing
+    // error name survives into a bug report: the release desktop build ships no
+    // devtools, so the console alone is a sink with no reader (#1439). The
+    // console line itself is unchanged — `logClientWarning` emits
+    // `[scope] event:` — so the `[push-routes]` prefix this component adopted in
+    // #1432 is preserved, and the scope recorded in the client log is
+    // `push-routes` for the same reason the prefix is: this block also renders
+    // in Settings, where a log blaming "wizard" names a surface the user never
+    // opened.
+    logClientWarning("push-routes", "clipboard write failed", err);
     result = "Couldn't copy — select the commands above";
   }
   if (mine !== copyToken) return;
