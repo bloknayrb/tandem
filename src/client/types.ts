@@ -115,7 +115,12 @@ export type FirewallErrorVariant =
  * hand-maintained, and which must degrade to an honest fallback rather than to
  * an empty warning box.
  */
-export type SubnetDetectionReason = "noAdapter" | "noIpv4" | "prefixTooBroad" | "queryFailed";
+export type SubnetDetectionReason =
+  | "noAdapter"
+  | "noIpv4"
+  | "prefixTooBroad"
+  | "queryFailed"
+  | "timeout";
 
 /**
  * Why PowerShell could not be STARTED, so adapter enumeration never ran

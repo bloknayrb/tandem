@@ -4,6 +4,19 @@ mod sentry_reporting;
 mod token_store;
 mod uninstall_scrub;
 
+// #1371: both of these are deliberately UNGATED even though their only consumer
+// today (`firewall.rs`) is Windows-only. A `#[cfg(target_os = "windows")]` module
+// is never parsed on another target, so gating them would put the two pieces of
+// genuinely tricky logic — a process deadline that must bound the whole call, and
+// an in-flight guard replacing the serialization the main thread used to provide
+// for free — where they could not be unit-tested locally. `#[allow(dead_code)]`
+// on `bounded_command` covers non-Windows release builds, where nothing calls it
+// — scoped with `cfg_attr` (as `PortHolder` is) so that on Windows, where the
+// module IS live, a genuinely unused helper added later still warns.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod bounded_command;
+mod single_flight;
+
 #[cfg(target_os = "windows")]
 mod cowork_atomic_json;
 
@@ -3952,8 +3965,15 @@ pub fn prevent_default_flags() -> tauri_plugin_prevent_default::Flags {
 // ---------------------------------------------------------------------------
 // Cowork Tauri invoke commands
 // ---------------------------------------------------------------------------
-// All commands have Windows-native and non-Windows stub variants so that
+// Most commands have Windows-native and non-Windows stub variants so that
 // tauri::generate_handler![] compiles on all platforms.
+//
+// `cowork_detect_vethernet_subnet` is the deliberate exception (#1371): it is ONE
+// ungated `async fn` whose blocking *body* is what gets cfg-split. Do not
+// "restore consistency" by splitting the command itself — the async /
+// spawn_blocking / single-flight wiring is the fix for the main-thread freeze,
+// and a cfg-gated command would put that wiring back where no non-Windows build
+// ever type-checks it.
 
 /// Error string returned by every non-Windows Cowork stub.
 #[cfg(not(target_os = "windows"))]
@@ -3995,7 +4015,10 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         let token = token_store::get_or_create_token()?;
 
         // Detect vEthernet subnet.
-        let cidr = firewall::detect_vethernet_subnet()
+        // The generous budget, not the advisory one: a false timeout HERE aborts
+        // an enable that would have succeeded, where a false timeout on the
+        // advisory probe costs only a re-check.
+        let cidr = firewall::detect_vethernet_subnet(firewall::SUBNET_PROBE_TIMEOUT_ENABLE)
             .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))?;
 
         // Scan workspaces up-front (read-only) — reused for both reconcile and install.
@@ -4807,16 +4830,57 @@ fn cowork_get_meta() -> Result<serde_json::Value, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
-/// Detect the Hyper-V vEthernet subnet.
-#[cfg(target_os = "windows")]
+/// Coalesces concurrent advisory subnet probes (#1371).
+///
+/// Moving the command off the main thread removes an accidental mutex — Tauri
+/// dispatches sync commands inline on the UI thread, so two could never overlap.
+/// "Check again" is user-repeatable, so without this a burst of clicks would
+/// become a burst of `powershell.exe` processes.
+///
+/// **What this deliberately does NOT cover.** `cowork_toggle_integration` runs
+/// its own detection (`detect_vethernet_subnet`, below) and does not join this
+/// flight. Joining would mean either handing Enable a coalesced advisory answer —
+/// which `cowork-invoke.ts` forbids outright, because "the VM can stop between
+/// the two" — or making Enable wait out an advisory probe, and since Enable is
+/// still a sync command that wait would land on the main thread, adding freeze to
+/// fix freeze. The honest bound is therefore at most TWO concurrent probes: one
+/// coalesced advisory, plus at most one from Enable (whose handler blocks the UI
+/// thread, so it cannot double-fire). The repeatable button is fully coalesced.
+static SUBNET_PROBE_FLIGHT: single_flight::SingleFlight<Result<String, String>> =
+    single_flight::SingleFlight::new();
+
+/// Detect the Hyper-V vEthernet subnet (advisory pre-flight).
+///
+/// ONE ungated `async fn` with a cfg-split body, on purpose — see the section
+/// comment above. `async fn` + `spawn_blocking` is the fix, and the pair is not
+/// interchangeable with `#[tauri::command(async)]` on a sync fn: `tauri-macros`
+/// labels that shape `"sync_threadpool"`, but the string is only a tracing span
+/// field — `body_async` calls the sync fn *inside* the future and
+/// `respond_async_serialized_inner` hands it to `async_runtime::spawn`, i.e.
+/// tokio's WORKER pool, where a blocking process wait also stalls every other
+/// `respond_async` command.
 #[tauri::command]
-fn cowork_detect_vethernet_subnet() -> Result<String, String> {
-    firewall::detect_vethernet_subnet()
+async fn cowork_detect_vethernet_subnet() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        SUBNET_PROBE_FLIGHT
+            .run(detect_subnet_advisory_blocking)
+            // `None` means the flight was abandoned, which can only happen if the
+            // leader panicked. Unparseable by `parseFirewallErrorVariant`, so it
+            // surfaces as `status: "unknown"` and a console.error — the right
+            // destination for a genuine bug, and never a blocked Enable button.
+            .unwrap_or_else(|| Err("subnet probe was abandoned".to_string()))
+    })
+    .await
+    .map_err(|e| format!("subnet probe task failed: {e}"))?
+}
+
+#[cfg(target_os = "windows")]
+fn detect_subnet_advisory_blocking() -> Result<String, String> {
+    firewall::detect_vethernet_subnet(firewall::SUBNET_PROBE_TIMEOUT_ADVISORY)
         .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))
 }
 #[cfg(not(target_os = "windows"))]
-#[tauri::command]
-fn cowork_detect_vethernet_subnet() -> Result<String, String> {
+fn detect_subnet_advisory_blocking() -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 

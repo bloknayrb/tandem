@@ -193,11 +193,15 @@ describe("firewallErrorHint", () => {
   // message that blamed the user's Cowork install.
   // -------------------------------------------------------------------------
 
+  // Hand-maintained, and it is an ARRAY LITERAL — adding a member to the
+  // `SubnetDetectionReason` union does NOT break it, so it drifts silently and a
+  // new reason gets none of the coverage below unless it is added here by hand.
   const SUBNET_REASONS: SubnetDetectionReason[] = [
     "noAdapter",
     "noIpv4",
     "prefixTooBroad",
     "queryFailed",
+    "timeout",
   ];
 
   it("gives each subnet-detection reason its own hint", () => {
@@ -206,6 +210,25 @@ describe("firewallErrorHint", () => {
     );
     expect(new Set(hints).size).toBe(hints.length);
     for (const h of hints) expect(h.length).toBeGreaterThan(0);
+  });
+
+  it("the timeout hint names the wait, without quoting a number (#1371)", () => {
+    // Two things at once, and both are load-bearing.
+    //
+    // Naming the wait is what #1371 asks for: a reason that says only "detection
+    // failed" is the blanket message #1298 removed, wearing different words.
+    //
+    // NOT naming a number is forced by the fix's shape: the pre-flight and the
+    // Enable path pass different budgets to the same query
+    // (`SUBNET_PROBE_TIMEOUT_ADVISORY` vs `SUBNET_PROBE_TIMEOUT_ENABLE`), so a
+    // literal "15 seconds" here would be wrong on one of the two paths. This
+    // fails if someone "improves" the copy by adding the number back.
+    const hint = firewallErrorHint({ kind: "subnetDetectionFailed", reason: "timeout" });
+    expect(hint.toLowerCase()).toMatch(/wait/);
+    expect(
+      hint,
+      "the copy must not quote a duration — the two paths use different budgets",
+    ).not.toMatch(/\d+\s*(second|s\b|minute)/i);
   });
 
   it("falls back rather than rendering an empty banner for a blank reason", () => {
