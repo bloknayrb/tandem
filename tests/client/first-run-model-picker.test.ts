@@ -53,7 +53,7 @@ afterEach(() => {
   cleanup();
 });
 
-describe("FirstRunModelPickerModal — local-first default (§3.4)", () => {
+describe("FirstRunModelPickerModal — local-first default", () => {
   it("defaults to Ollama and shows the endpoint field, not an API key", () => {
     const { getByTestId, queryByTestId } = render(FirstRunModelPickerModal, {
       props: { onComplete: vi.fn() },
@@ -85,7 +85,7 @@ describe("FirstRunModelPickerModal — local-first default (§3.4)", () => {
   });
 });
 
-describe("FirstRunModelPickerModal — rolled-back-add guard (§3.3)", () => {
+describe("FirstRunModelPickerModal — rolled-back-add guard", () => {
   it("does NOT setDefault/onComplete when addModel rolls back (returns null)", async () => {
     addModel.mockResolvedValue(null);
     storeSaveError = "Model registry changed elsewhere; reloaded.";

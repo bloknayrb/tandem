@@ -46,7 +46,7 @@ use crate::sentry_reporting::{home_dir_string, redact_home};
 /// `default` arm (TypeScript can't prove exhaustiveness across the Rust/TS
 /// boundary), so a variant added here with no arm there would otherwise
 /// degrade silently to the generic fallback — which is why
-/// `tests/build/firewall-invariant-citations.test.ts` pins all three lists
+/// `tests/build/firewall-contract-alignment.test.ts` pins all three lists
 /// together: the variants here, the union members in `types.ts`, and the
 /// `case` arms of that switch.
 ///
