@@ -3,8 +3,10 @@ import {
   BUNDLE_BLOCKLIST_HEX,
   buildErrorGuidance,
   checkContent,
+  enclosingStringLiteral,
   isColorValuePosition,
   isLikelyIssueReference,
+  looksLikeCssValueString,
   normalizeHexForBlocklist,
   shouldSkipFile,
 } from "../../scripts/check-semantic-tokens.js";
@@ -643,23 +645,185 @@ describe("check-semantic-tokens", () => {
 
     // --- helper-level units ------------------------------------------------
 
-    it("recognizes the three color-value positions and nothing else", () => {
+    it("recognizes each color-value position in isolation", () => {
+      // One case per branch, each chosen so that ONLY that branch can satisfy
+      // it. The previous version of this test asserted "three positions and
+      // nothing else" while the code had more than three, and its declaration
+      // case was satisfied by a different branch before the declaration
+      // walk-back was ever reached — so it isolated nothing.
+
+      // Declaration walk-back, in raw CSS. No literal, no `=`, no function.
       const decl = `  border: 1px solid #333;`;
       expect(isColorValuePosition(decl, decl.indexOf("#333"), "#333")).toBe(true);
 
+      // Whole string literal.
       const lit = `const c = "#333";`;
       expect(isColorValuePosition(lit, lit.indexOf("#333"), "#333")).toBe(true);
 
+      // Bare (unquoted) attribute.
       const attr = `<svg fill=#333 />`;
       expect(isColorValuePosition(attr, attr.indexOf("#333"), "#333")).toBe(true);
 
-      // Prose inside a string literal: not a value position.
+      // Governed literal: the governor is what decides, and the content alone
+      // would not — `unset` is a value word but `thing` is not.
+      const governed = `el.style.background = "thing 0 0 #333";`;
+      expect(isColorValuePosition(governed, governed.indexOf("#333"), "#333")).toBe(true);
+
+      // Self-evident literal: no governor (`const x =` is not one), decided
+      // purely by its own words.
+      const selfEvident = `const x = "1px solid #333";`;
+      expect(isColorValuePosition(selfEvident, selfEvident.indexOf("#333"), "#333")).toBe(true);
+
+      // Color-function argument inside an ungoverned, non-value-word literal.
+      const fn = `const g = wrap("linear-gradient(#333, transparent)");`;
+      expect(isColorValuePosition(fn, fn.indexOf("#333"), "#333")).toBe(true);
+
+      // Prose inside a string literal: none of the above.
       const prose = `console.warn("forced-colors failed (#1364):", e);`;
       expect(isColorValuePosition(prose, prose.indexOf("#1364"), "#1364")).toBe(false);
 
-      // A partial literal is not a whole-string-literal match.
-      const partial = `const c = "#333 solid";`;
+      // A partial literal is not a whole-string-literal match, and `#333 wat`
+      // is not a value string either.
+      const partial = `const c = "#333 wat";`;
       expect(isColorValuePosition(partial, partial.indexOf("#333"), "#333")).toBe(false);
+    });
+
+    it("decides a string literal as a WHOLE, so prose stays prose throughout", () => {
+      // The organising rule of the rewrite, and the one that resolves the two
+      // findings at once. A per-TOKEN test cannot: the shape that makes the
+      // first line a color (a length immediately before the hex) is present in
+      // the second line too, and the second line is an issue reference.
+      const color = `el.style.boxShadow = "0 0 4px 0 #333";`;
+      expect(isColorValuePosition(color, color.indexOf("#333"), "#333")).toBe(true);
+
+      const notColor = `console.log("border shifted 4px #1364");`;
+      expect(isColorValuePosition(notColor, notColor.indexOf("#1364"), "#1364")).toBe(false);
+
+      // Same for an interpolation brace, which the old value-tail regex read as
+      // CSS syntax wherever it appeared.
+      const interp = "console.warn(`style ${name} #1364`);";
+      expect(isColorValuePosition(interp, interp.indexOf("#1364"), "#1364")).toBe(false);
+    });
+
+    it("requires a color function to CLOSE inside its own literal", () => {
+      // Otherwise an unbalanced bracket in a sentence swallows the rest of the
+      // line: `rgba(` here is punctuation, not a call. This is the only thing
+      // separating the two.
+      const real = `const g = wrap("linear-gradient(#333, #444)");`;
+      expect(isColorValuePosition(real, real.indexOf("#333"), "#333")).toBe(true);
+
+      const sentence = `console.warn("border rgba( parse fail #1364");`;
+      expect(isColorValuePosition(sentence, sentence.indexOf("#1364"), "#1364")).toBe(false);
+
+      // A call that closes BEFORE the hex must not govern what follows it.
+      const closed = `console.warn("linear-gradient(a,b) mismatch for border #1364");`;
+      expect(isColorValuePosition(closed, closed.indexOf("#1364"), "#1364")).toBe(false);
+    });
+
+    it("takes the INNERMOST still-open paren, and pops on every close", () => {
+      // The paren walk has two independent halves and each fails silently.
+      // Reaching it at all takes care: an ungoverned literal whose words are
+      // ALL value words is decided by `looksLikeCssValueString` first, so every
+      // fixture here carries a non-value word (`zzz`, `wat`) to get past that
+      // arm. Both mutations below were green until these cases existed.
+
+      // INNERMOST: the wrapper call is not a color function, the inner one is.
+      // Taking the outermost open paren reads `wrap` and misses the gradient.
+      const nested = `const g = note("zzz wrap(linear-gradient(#333, transparent))");`;
+      expect(isColorValuePosition(nested, nested.indexOf("#333"), "#333")).toBe(true);
+
+      // POP ON CLOSE: `rgb(…)` is a color function but it CLOSED before the
+      // hex, so nothing is open at the hex and this is prose. Without the pop
+      // the spent `rgb(` stays registered and governs the issue reference.
+      // The trailing `)` is deliberate — it is what lets the must-close check
+      // pass, which is the only way the missing pop can show itself.
+      const spent = `const s = note("rgb(1,2,3) and border #1364)");`;
+      expect(isColorValuePosition(spent, spent.indexOf("#1364"), "#1364")).toBe(false);
+
+      // Same pair in code rather than in a literal — the two call sites of the
+      // walk must agree.
+      const spentCode = `  .x { width: calc(1px * 2); } note(border #1364)`;
+      expect(isColorValuePosition(spentCode, spentCode.indexOf("#1364"), "#1364")).toBe(false);
+    });
+
+    it("anchors the in-literal property name at a word boundary", () => {
+      // `CSS_PROPERTY_COLON_RE` looks for a CSS-ish property name before a
+      // colon. Unanchored, it finds those names INSIDE longer words, which is
+      // the same substring trap that produced #1534 one level up — `styles`,
+      // `borderline` and `forced-colors` are all real strings in this codebase.
+      const embedded = `  console.warn("[theme] recolor: #1364 pending");`;
+      expect(isColorValuePosition(embedded, embedded.indexOf("#1364"), "#1364")).toBe(false);
+
+      // A name that legitimately STARTS with a property word still counts —
+      // the anchor is at the start, not at both ends, so `border-color` and
+      // `borderColor` keep working.
+      const real = "  const s = `border-color: #1364;`;";
+      expect(isColorValuePosition(real, real.indexOf("#1364"), "#1364")).toBe(true);
+    });
+
+    it("does not read a plain assignment as a bare attribute", () => {
+      // The bare-attribute arm exists for `<svg fill=#333>`. Written as the
+      // loose `/=\s*$/` it also fires on the token after ANY `=`, which is how
+      // a hex opening an ungoverned string used to scan as a color — and,
+      // worse, how the arm silently substitutes for the literal machinery.
+      const attr = `<svg fill=#333 />`;
+      expect(isColorValuePosition(attr, attr.indexOf("#333"), "#333")).toBe(true);
+
+      // No identifier before the `=`, and prose after it: not an attribute.
+      const notAttr = `  const n = counts[i] == #1364 ? a : b;`;
+      expect(isColorValuePosition(notAttr, notAttr.indexOf("#1364"), "#1364")).toBe(false);
+
+      // The shape the loose form got wrong: an ungoverned literal whose FIRST
+      // token is the hex is decided by the literal rules, not by the `=`.
+      // `#1364 wat` is neither a whole literal nor a value string.
+      const opener = "const msg = `#1364 wat, border`;";
+      expect(isColorValuePosition(opener, opener.indexOf("#1364"), "#1364")).toBe(false);
+    });
+
+    it("keeps CSS property names out of the value-word list", () => {
+      // The discriminator `looksLikeCssValueString` rests on: prose about CSS
+      // names the PROPERTY, a real value never does. Adding `border` or
+      // `color` to CSS_VALUE_WORDS to "be more complete" re-opens #1534, so
+      // both directions are pinned here.
+      expect(looksLikeCssValueString("1px solid #333")).toBe(true);
+      expect(looksLikeCssValueString("0 0 0 #333")).toBe(true);
+      expect(looksLikeCssValueString("-webkit-linear-gradient(#333, #444)")).toBe(true);
+      expect(looksLikeCssValueString("no-repeat center #333")).toBe(true);
+
+      expect(looksLikeCssValueString("border shifted 4px #1364")).toBe(false);
+      expect(looksLikeCssValueString("color hidden #1364")).toBe(false);
+      expect(looksLikeCssValueString("background transparent #1364")).toBe(false);
+      expect(looksLikeCssValueString("styles off by 2rem #1364")).toBe(false);
+
+      // Directly: each property name must be ABSENT from the value-word list.
+      // Adding any one of them makes a prose line above pass.
+      for (const property of ["border", "color", "background", "fill", "stroke", "style"]) {
+        expect(looksLikeCssValueString(`${property} #1364`)).toBe(false);
+      }
+    });
+
+    it("tracks string-literal boundaries the way the host language does", () => {
+      // `enclosingStringLiteral` is what makes the whole-literal rule possible,
+      // and every one of these would break it in a way that silently flips a
+      // verdict rather than throwing.
+      const apostrophe = `console.warn("don't touch the border #1364");`;
+      expect(enclosingStringLiteral(apostrophe, apostrophe.indexOf("#1364"))?.quote).toBe('"');
+
+      const nestedQuote = 'console.warn(`he said "border" #1364`);';
+      expect(enclosingStringLiteral(nestedQuote, nestedQuote.indexOf("#1364"))?.quote).toBe("`");
+
+      const escaped = `console.warn("a \\" border #1364");`;
+      expect(enclosingStringLiteral(escaped, escaped.indexOf("#1364"))?.quote).toBe('"');
+
+      // Closed literal: the hex is in code, not in a string.
+      const inCode = `  const a = "x"; border-color: #1364;`;
+      expect(enclosingStringLiteral(inCode, inCode.indexOf("#1364"))).toBeNull();
+
+      // Second literal on the line, not the first.
+      const second = `f("border", "solid #1364")`;
+      expect(enclosingStringLiteral(second, second.indexOf("#1364"))?.start).toBe(
+        second.lastIndexOf('"', second.indexOf("#1364")),
+      );
     });
 
     it("only ever treats an all-decimal-digit token as an issue reference", () => {
@@ -711,17 +875,36 @@ describe("check-semantic-tokens", () => {
       );
     });
 
-    it("still reports a governing-colon issue ref (documented residual)", () => {
-      // `mismatch:` reads as a property colon, so this one still reports. It is
-      // why main() names the issue-reference possibility in its output rather
-      // than only saying "raw hex color".
-      const violations = checkContent(
-        `  console.warn("[theme] border mismatch: #1364");\n`,
-        "src/client/utils/log.ts",
-      );
+    it("retires the prose-colon residual, and keeps the narrowed one", () => {
+      // The first cut at #1534 accepted this line as a residual: `mismatch:`
+      // read as a property colon, so a log message reported as a raw color.
+      // Deciding per-literal retires it — the declaration walk-back is not
+      // consulted for text inside a string at all.
+      expect(
+        checkContent(
+          `  console.warn("[theme] border mismatch: #1364");\n`,
+          "src/client/utils/log.ts",
+        ),
+      ).toEqual([]);
 
-      expect(violations).toEqual(["src/client/utils/log.ts:1: #1364"]);
+      // What replaces it is strictly narrower: inside a literal the property
+      // name itself must be CSS-ish. A sentence that genuinely opens with one
+      // still reports, and that is the same shape the raw-CSS walk-back
+      // accepts, so the two agree rather than disagreeing.
+      expect(
+        checkContent(
+          `  console.warn("background: still wrong, see #1364");\n`,
+          "src/client/utils/log.ts",
+        ),
+      ).toEqual(["src/client/utils/log.ts:1: #1364"]);
+
+      // And the CSS-ish name is what carries a real declaration held in a
+      // template literal, which is why the arm exists.
+      expect(
+        checkContent("  const s = `border: ${w}px solid #333`;\n", "src/client/utils/rules.ts"),
+      ).toEqual(["src/client/utils/rules.ts:1: #333"]);
     });
+
     it("prints an unconditional Fix: line, and the issue-reference Note only when apt", () => {
       // The confusing half of #1534: the pre-commit path printed a bare count
       // and no remedy at all.

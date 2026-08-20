@@ -34,26 +34,278 @@ const ALL_DECIMAL_DIGITS_RE = /^[0-9]+$/;
 /** `ident:` — a CSS/object property colon that would govern a following value. */
 const PROPERTY_COLON_RE = /[-a-zA-Z_][-a-zA-Z0-9_]*\s*:/;
 
-/** Prefix ending in `=` — assignment, or an unquoted HTML attribute value. */
-const ASSIGNMENT_TAIL_RE = /=\s*$/;
+/**
+ * A bare (unquoted) attribute value: `<svg fill=#333>`.
+ *
+ * Narrower than a plain `/=\s*$/`, which also matched `const m = "…"` and so
+ * made every string literal on an assignment line a color context.
+ */
+const ATTRIBUTE_ASSIGNMENT_TAIL_RE = /[-a-zA-Z_][-a-zA-Z0-9_]*\s*=\s*$/;
 
 /**
- * The token immediately before the hex is CSS VALUE syntax — a length, an
- * interpolation carrying a unit, or a border/shadow keyword.
+ * What can appear immediately before a string literal that makes the WHOLE
+ * literal a CSS value: a `style` attribute, a `.style.*`/`.cssText` assignment,
+ * a `setProperty()` value argument, an object-literal property, or a CSS-in-JS
+ * tagged template.
  *
- * Without this the scan misses the most common shape of raw color in this
- * codebase: a hex that is NOT the first token of its value. Two paths, both
- * measured against the pre-#1534 scanner on real shapes from `src/client`:
- *
- *   el.style.border = "1px solid #333";      // no colon anywhere on the line
- *   <div style="border: {w}px solid #333">   // `}` truncates the walk-back
- *
- * The second is the nastier one: `cut` takes the LAST of `;`/`{`/`}`, and a
- * Svelte `{expr}` or a JS `${expr}` inside a style value puts a `}` between the
- * property colon and the hex, so the colon is never seen.
+ * The object-property arm accepts ANY identifier rather than only CSS-ish ones,
+ * matching the declaration walk-back below — restricting it would drop the real
+ * color in `<div class="border-box" style="box-shadow: 0 0 1px #333">`.
  */
-const CSS_VALUE_TAIL_RE =
-  /(?:[\d.]+(?:px|em|rem|%|vh|vw|vmin|vmax|pt|pc|in|cm|mm|ch|ex|q)|\}(?:px|em|rem|%)?|\b(?:solid|dashed|dotted|double|inset|outset|groove|ridge|hidden|none|transparent|currentcolor)\b)\s+$/i;
+const STYLE_STRING_GOVERNOR_RE =
+  /(?:\bstyle(?::[-a-zA-Z0-9_]+)?\s*=|\.style(?:\.[A-Za-z0-9_$]+)?\s*=|\.cssText\s*=|\.setProperty\(\s*(['"`])[^'"`]*\1\s*,|\b(?:css|styled(?:\.[A-Za-z0-9_$]+)?|keyframes|createGlobalStyle)|[-a-zA-Z_][-a-zA-Z0-9_]*\s*:)[\s{(]*$/;
+
+/**
+ * Words that may appear inside a CSS *value*.
+ *
+ * The discriminator this list encodes: **property names are deliberately
+ * absent.** Prose about CSS almost always names the property (`"border shifted
+ * 4px"`, `"background transparent"`, `"color hidden"`), while an actual value
+ * string never does — so `border`/`background`/`color`/`fill`/`stroke` being
+ * missing here is what separates the two, and adding one would re-open #1534.
+ * `CSS_KEYWORDS` above is the opposite list for the opposite purpose; they must
+ * not be merged.
+ */
+const CSS_VALUE_WORDS: ReadonlySet<string> = new Set([
+  // Units (extracted as a bare word out of `4px`, `2rem`, …).
+  "px",
+  "em",
+  "rem",
+  "ex",
+  "ch",
+  "vh",
+  "vw",
+  "vmin",
+  "vmax",
+  "vi",
+  "vb",
+  "dvh",
+  "dvw",
+  "svh",
+  "svw",
+  "lvh",
+  "lvw",
+  "cqw",
+  "cqh",
+  "cqi",
+  "cqb",
+  "pt",
+  "pc",
+  "in",
+  "cm",
+  "mm",
+  "q",
+  "fr",
+  "deg",
+  "rad",
+  "grad",
+  "turn",
+  "s",
+  "ms",
+  "hz",
+  "khz",
+  "dpi",
+  "dpcm",
+  "dppx",
+  "x",
+  // Value keywords.
+  "auto",
+  "none",
+  "normal",
+  "initial",
+  "inherit",
+  "unset",
+  "revert",
+  "transparent",
+  "currentcolor",
+  "important",
+  "solid",
+  "dashed",
+  "dotted",
+  "double",
+  "inset",
+  "outset",
+  "groove",
+  "ridge",
+  "hidden",
+  "visible",
+  "clip",
+  "scroll",
+  "collapse",
+  "separate",
+  "repeat",
+  "no-repeat",
+  "repeat-x",
+  "repeat-y",
+  "round",
+  "space",
+  "cover",
+  "contain",
+  // `fill` is deliberately absent even though `object-fit: fill` is real: it is
+  // also one of the six CSS_KEYWORDS the line gate matches on, so admitting it
+  // would let `"fill #1364"` read as a value. The cost is a missed
+  // `object-fit: fill` value string; the benefit is that the property/value
+  // split stays clean, which is what the whole predicate rests on.
+  "fit-content",
+  "min-content",
+  "max-content",
+  "center",
+  "top",
+  "bottom",
+  "left",
+  "right",
+  "start",
+  "end",
+  "middle",
+  "ease",
+  "ease-in",
+  "ease-out",
+  "ease-in-out",
+  "linear",
+  "step-start",
+  "step-end",
+  "steps",
+  "infinite",
+  "alternate",
+  "alternate-reverse",
+  "forwards",
+  "backwards",
+  "reverse",
+  "paused",
+  "running",
+  "bold",
+  "bolder",
+  "lighter",
+  "italic",
+  "oblique",
+  "underline",
+  "uppercase",
+  "lowercase",
+  "capitalize",
+  "nowrap",
+  "pre",
+  "pre-wrap",
+  "break-word",
+  "border-box",
+  "content-box",
+  "padding-box",
+  // Function names and their bare keyword arguments.
+  "url",
+  "var",
+  "calc",
+  "min",
+  "max",
+  "clamp",
+  "env",
+  "attr",
+  "counter",
+  "srgb",
+  "oklab",
+  "oklch",
+  "lab",
+  "lch",
+  "hwb",
+  "hsl",
+  "hsla",
+  "rgb",
+  "rgba",
+  "to",
+  "from",
+  "at",
+  "circle",
+  "ellipse",
+  "closest-side",
+  "farthest-corner",
+  "shorter",
+  "longer",
+  "increasing",
+  "decreasing",
+  "hue",
+  // Colors that legitimately sit beside a hex in a value.
+  "black",
+  "white",
+  "red",
+  "green",
+  "blue",
+  "gray",
+  "grey",
+  "silver",
+  "yellow",
+  "orange",
+  "purple",
+  "pink",
+  "brown",
+  "cyan",
+  "magenta",
+]);
+
+/**
+ * A property colon whose property name is CSS-ish, for use INSIDE a string
+ * literal: `` `border: ${w}px solid #333` `` is a declaration someone will
+ * assign to `style` a line later, so the hex in it is a real color.
+ *
+ * Much narrower than `PROPERTY_COLON_RE`, and it has to be. The generic form
+ * is safe in raw CSS, where every colon really is a declaration, but inside a
+ * string literal it reads ordinary prose punctuation as CSS: `console.warn(
+ * "[theme] border mismatch: #1364")` was reported for exactly that reason, and
+ * that was the residual the first cut at #1534 accepted rather than fixed.
+ * Requiring the name itself to be CSS-ish retires it — `mismatch` is not a
+ * property, `border-color` and `boxShadow` are.
+ *
+ * Residual, accepted and narrowed: a sentence that opens with a real property
+ * name and a colon (`"background: still wrong, see #1364"`) still reports.
+ * That is the same shape the raw-CSS walk-back accepts, so the two agree.
+ */
+const CSS_PROPERTY_COLON_RE =
+  /\b(?:color|background|border|fill|stroke|style|shadow|outline|gradient|accent|caret|column-rule|text-decoration)[-a-zA-Z0-9_]*\s*:/i;
+
+/**
+ * Does this string literal's content read as a CSS value rather than as prose?
+ *
+ * Every alphabetic word in it must be a value word. `"1px solid #333"` passes
+ * (`px`, `solid`); `"border shifted 4px #1364"` does not (`border`, `shifted`).
+ * A literal with no words at all — `"0 0 0 #333"` — passes vacuously, which is
+ * correct: there is no prose in it to mistake for one.
+ *
+ * Vendor prefixes are stripped so `-webkit-linear-gradient` is judged as
+ * `linear-gradient`, and a hyphenated word is accepted if either the whole word
+ * or every hyphen-separated part is a value word — which is what lets
+ * `linear-gradient`, `repeating-radial-gradient` and `color-mix` through
+ * without enumerating the cross product.
+ */
+/**
+ * Word parts that are only ever half of a hyphenated CSS value word, so they
+ * would be noise in `CSS_VALUE_WORDS` on their own. Keeping them separate is
+ * what lets `linear-gradient`, `repeating-radial-gradient` and `color-mix`
+ * through without enumerating the cross product — and, importantly, without
+ * `color` or `image` becoming standalone value words, which would re-open
+ * #1534 for prose that names those properties.
+ */
+const CSS_VALUE_WORD_PARTS: ReadonlySet<string> = new Set([
+  "color",
+  "conic",
+  "cross",
+  "dark",
+  "fade",
+  "gradient",
+  "image",
+  "light",
+  "mix",
+  "radial",
+  "repeating",
+  "set",
+]);
+
+export function looksLikeCssValueString(content: string): boolean {
+  const words = content.match(/[A-Za-z][A-Za-z-]*/g) ?? [];
+  return words.every((word) => {
+    const w = word.toLowerCase().replace(/^-?(?:webkit|moz|ms|o)-/, "");
+    if (CSS_VALUE_WORDS.has(w)) return true;
+    const parts = w.split("-").filter(Boolean);
+    if (parts.length < 2) return false;
+    return parts.every((part) => CSS_VALUE_WORDS.has(part) || CSS_VALUE_WORD_PARTS.has(part));
+  });
+}
 
 /**
  * CSS functions whose argument list is a color context.
@@ -72,6 +324,7 @@ const CSS_COLOR_FUNCTIONS: ReadonlySet<string> = new Set([
   "hwb",
   "lab",
   "lch",
+  "light-dark",
   "linear-gradient",
   "oklab",
   "oklch",
@@ -81,21 +334,24 @@ const CSS_COLOR_FUNCTIONS: ReadonlySet<string> = new Set([
   "repeating-radial-gradient",
   "rgb",
   "rgba",
+  "var",
 ]);
 
-/** The identifier ending immediately before a `(`. */
+/** The identifier ending immediately before a `(`, vendor prefix stripped. */
 const CALLEE_TAIL_RE = /([A-Za-z][A-Za-z0-9_-]*)$/;
 
 /**
- * Is the hex inside the argument list of a CSS color function?
+ * Is the hex inside the argument list of a CSS color function that is CLOSED
+ * within `region`?
  *
- * Scans `before` tracking paren depth so the LAST STILL-OPEN `(` is found, then
- * checks the identifier in front of it. `linear-gradient(#333, #444)` matches
- * for both stops; `console.warn("… failed (#1364):"` does not, because the
- * innermost open paren is the prose one and has no identifier in front of it —
- * and `warn` would not be in the list either.
+ * Scans for the last still-open `(` before the hex, then checks the identifier
+ * in front of it. The closing requirement is what keeps an unbalanced paren in
+ * prose from swallowing the rest of the line: `console.warn("border rgba(
+ * parse fail #1364")` has an open `rgba(` before the hex, but it never closes
+ * inside the string literal, so it is not a call — it is a sentence containing
+ * a bracket. A real `linear-gradient(#333, #444)` always closes.
  */
-function isInsideCssColorFunction(before: string): boolean {
+function isInsideCssColorFunction(before: string, after: string): boolean {
   const open: number[] = [];
   for (let i = 0; i < before.length; i++) {
     if (before[i] === "(") open.push(i);
@@ -103,44 +359,131 @@ function isInsideCssColorFunction(before: string): boolean {
   }
   const innermost = open.pop();
   if (innermost === undefined) return false;
+  // The call must close after the hex, inside the same region.
+  let depth = 1;
+  let closed = false;
+  for (const ch of after) {
+    if (ch === "(") depth++;
+    else if (ch === ")" && --depth === 0) {
+      closed = true;
+      break;
+    }
+  }
+  if (!closed) return false;
   const callee = CALLEE_TAIL_RE.exec(before.slice(0, innermost));
-  return callee !== null && CSS_COLOR_FUNCTIONS.has(callee[1].toLowerCase());
+  if (callee === null) return false;
+  return CSS_COLOR_FUNCTIONS.has(callee[1].toLowerCase().replace(/^-?(?:webkit|moz|ms|o)-/, ""));
+}
+
+/**
+ * The string literal enclosing `index`, or `null` if `index` is in code.
+ *
+ * A single left-to-right pass with backslash-escape skipping. Only the quote
+ * that opened the literal can close it, so an apostrophe inside `"…"` and a
+ * `"` inside a template literal are both inert — which is the whole point.
+ * Comments are already masked out by `maskComments` before this runs.
+ */
+export function enclosingStringLiteral(
+  line: string,
+  index: number,
+): { quote: string; start: number } | null {
+  let quote: string | null = null;
+  let start = -1;
+  for (let i = 0; i < index; i++) {
+    const ch = line[i];
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (quote === null) {
+      if (ch === '"' || ch === "'" || ch === "`") {
+        quote = ch;
+        start = i;
+      }
+    } else if (ch === quote) {
+      quote = null;
+      start = -1;
+    }
+  }
+  return quote === null ? null : { quote, start };
+}
+
+/** Where a string literal opened at `start` ends, or the line end. */
+function stringLiteralEnd(line: string, start: number, quote: string): number {
+  for (let i = start + 1; i < line.length; i++) {
+    if (line[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (line[i] === quote) return i;
+  }
+  return line.length;
 }
 
 /**
  * Is the hex at `index` sitting where a *color value* can sit? (issue #1534)
  *
- * Three positions count, and the union is deliberately generous — a false
- * negative here lets a raw color into `src/client/**`, which is strictly worse
- * than the false positive this narrowing exists to remove:
+ * The organising question is **"is this token inside a string literal, and if
+ * so, is that literal a CSS value or is it prose?"** — because a line-local
+ * "what token precedes the hex" test cannot answer it. That earlier shape was
+ * wrong in BOTH directions at once, and the two errors could not be fixed
+ * independently: loosening it enough to see the hex in
+ * `el.style.boxShadow = "0 0 0 #333"` (a unitless length is still a length)
+ * necessarily also made it report `console.log("border shifted 4px #1364")`.
+ * Deciding per-LITERAL instead of per-TOKEN resolves both, because a prose
+ * string is prose all the way through.
+ *
+ * In code (not inside any literal):
  *
  * - **Declaration value** — walking back to the last `;`, `{` or `}`, the
- *   segment contains a property colon. Covers `color: #333`,
- *   `{ borderColor: "#333" }`, `style="border: 1px solid #333"`,
- *   `background: linear-gradient(#333, #444)`.
- * - **Whole string literal** — the token is the entire contents of a `"`, `'`
- *   or backtick literal. Covers `const borderGrey = "#333"`,
- *   `<Icon color="#333" />`, `["#333", "#000"]`, `ctx.fillStyle = "#333"`.
- * - **Assignment / bare attribute** — the prefix right-trims to `=`. Covers
- *   the unquoted HTML attribute form `<svg fill=#333>`.
- * - **CSS value tail / color-function argument** — see the two helpers above.
- *   Covers a hex that is not the first token of its value.
+ *   segment contains a property colon. This is the raw-CSS path: `color: #333`,
+ *   `.a { box-shadow: 0 0 1px #333 }`, `background: linear-gradient(#333,#444)`.
+ * - **Bare attribute** — `<svg fill=#333>`.
+ * - **Color-function argument** — inside a `linear-gradient(…)`/`color-mix(…)`
+ *   call that closes on the line.
  *
- * The declaration test intentionally accepts ANY identifier before the colon
- * rather than only CSS-ish ones: restricting it to color/background/border/…
- * would drop the real color in
- * `<div class="border-box" style="box-shadow: 0 0 1px #333">`.
+ * Inside a string literal, the literal is judged as a whole:
+ *
+ * - **Governed** — what precedes the opening quote makes it a CSS value:
+ *   `el.style.border = "…"`, `{ borderColor: "…" }`, `<div style="…">`,
+ *   `setProperty("--x", "…")`.
+ * - **Self-evident** — every word in it is a CSS value word, so it is a CSS
+ *   value wherever it was written: `const BORDER = "1px solid #333"`.
+ * - **Declaration** — it contains a CSS-ish property colon before the hex:
+ *   `` const s = `border: ${w}px solid #333` ``.
+ * - **Color-function argument** — as above but scoped to the literal, so the
+ *   call must also close inside it.
+ * - **Whole literal** — the hex IS the entire contents: `color="#333"`,
+ *   `["#333", "#000"]`, `ctx.fillStyle = "#333"`.
+ *
+ * Anything else inside a literal is prose and reports nothing. That also
+ * retires the residual the previous version accepted: `console.warn("[theme]
+ * border mismatch: #1364")` no longer reads `mismatch:` as a property colon,
+ * because the walk-back is not consulted for text inside a literal at all.
  */
 export function isColorValuePosition(line: string, index: number, raw: string): boolean {
   const before = line.slice(0, index);
   const after = line.slice(index + raw.length);
 
+  // The token is the entire contents of a literal.
   const quote = before.slice(-1);
   if ((quote === '"' || quote === "'" || quote === "`") && after.startsWith(quote)) return true;
 
-  if (ASSIGNMENT_TAIL_RE.test(before)) return true;
-  if (CSS_VALUE_TAIL_RE.test(before)) return true;
-  if (isInsideCssColorFunction(before)) return true;
+  const enclosing = enclosingStringLiteral(line, index);
+  if (enclosing) {
+    const end = stringLiteralEnd(line, enclosing.start, enclosing.quote);
+    const content = line.slice(enclosing.start + 1, end);
+    if (STYLE_STRING_GOVERNOR_RE.test(line.slice(0, enclosing.start))) return true;
+    if (looksLikeCssValueString(content)) return true;
+    if (CSS_PROPERTY_COLON_RE.test(line.slice(enclosing.start + 1, index))) return true;
+    return isInsideCssColorFunction(
+      line.slice(enclosing.start + 1, index),
+      line.slice(index + raw.length, end),
+    );
+  }
+
+  if (ATTRIBUTE_ASSIGNMENT_TAIL_RE.test(before)) return true;
+  if (isInsideCssColorFunction(before, after)) return true;
 
   const cut = Math.max(before.lastIndexOf(";"), before.lastIndexOf("{"), before.lastIndexOf("}"));
   return PROPERTY_COLON_RE.test(before.slice(cut + 1));
@@ -425,7 +768,9 @@ export function checkContent(content: string, rel: string): string[] {
       // value, which is strong evidence regardless of position).
       const allDigits = ALL_DECIMAL_DIGITS_RE.test(raw.slice(1));
       if (allDigits && !VALID_HEX_COLOR_BODY_LENGTHS.has(raw.length - 1)) continue;
-      if (allDigits && !isColorValuePosition(scanLine, hexMatch.index, raw)) continue;
+      // Calls the exported predicate rather than re-inlining it: two copies of
+      // one rule let an edit to either drift, and the tests pin the helper.
+      if (isLikelyIssueReference(scanLine, hexMatch.index, raw)) continue;
       violations.push(`${rel}:${i + 1}: ${raw}`);
       reportedHexAtIndex.add(hexMatch.index);
     }
