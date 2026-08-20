@@ -145,7 +145,8 @@ export function reportError(error: unknown, context?: Record<string, unknown>): 
 /**
  * Exposed for unit tests — the scrubbing is the privacy-load-bearing part.
  * The implementations moved to `shared/scrub-text.ts` when the client log
- * (#1439) became a second consumer; `scrub` stays named here so the existing
- * tests keep their entry point.
+ * (#1439) became a third consumer alongside this file and `server/sentry.ts`,
+ * which until then held byte-identical copies; `scrub` stays named here so the
+ * existing tests keep their entry point.
  */
 export const __test = { scrub: scrubText, redactSecrets, redactPaths };

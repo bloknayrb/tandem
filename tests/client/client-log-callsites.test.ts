@@ -12,10 +12,20 @@ import { describe, expect, it } from "vitest";
  * title, a file path, or user input into. TypeScript cannot express
  * "literal only", so it is pinned here.
  *
- * This matters most for the follow-up that migrates the other ~150
+ * This matters most for the follow-up that migrates the other ~147
  * `console.warn`/`console.error` sites: several of them today do exactly what
  * this forbids (`Editor.svelte` interpolates `resolved.path` into a template
  * literal), and a mechanical sweep would carry that straight into an issue body.
+ *
+ * ## What this scan does NOT establish
+ *
+ * It constrains the SHAPE of what a call site may pass, never the CONTENT. A
+ * bare identifier is still a value someone chose, and `describeCause`'s string
+ * branch captures a `string` cause verbatim — scrubbed and capped, but
+ * `redactPaths` collapses the username segment only, so a path cause still names
+ * the document. So this makes the follow-up sweep MECHANICAL, not SAFE: it
+ * catches the interpolation shapes and leaves a human to judge the values. It
+ * is a lower bound on review, not a substitute for it.
  *
  * ## Why the shape of this test is what it is
  *
@@ -56,13 +66,22 @@ const LOOSE = /\blogClient(?:Warning|Error)\s*\(/g;
 
 /**
  * A COMPLIANT call. `\s*` throughout (not `.`), so a biome-wrapped multi-line
- * call still matches; the third argument may only be a bare identifier or a
- * member expression, which rejects a string literal, a template literal, a
- * concatenation and a call such as `String(err)` — argument three is where
- * untrusted text would actually enter.
+ * call still matches; the third argument may only be a BARE IDENTIFIER, which
+ * rejects a string literal, a template literal, a concatenation, a call such as
+ * `String(err)` — and a member expression. Argument three is where untrusted
+ * text would actually enter.
+ *
+ * Member expressions used to be allowed, and that made this scan pass exactly
+ * the shape the module doc above cites as the reason the sweep is unsafe:
+ * `logClientWarning("editor", "link refused", resolved.path)` scanned clean
+ * while landing a document filename in a public issue body. A bare identifier is
+ * not a guarantee — see "What this scan does NOT establish" — but reaching INTO
+ * an object for a field is the one shape that is nearly always a deliberate
+ * detail grab, so it is worth failing. Both current call sites pass a bare
+ * `err`; a compliant biome-wrapped call still matches.
  */
 const STRICT =
-  /\blogClient(?:Warning|Error)\s*\(\s*"[^"\\]*"\s*,\s*"[^"\\]*"\s*(?:,\s*[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*\s*)?,?\s*\)/g;
+  /\blogClient(?:Warning|Error)\s*\(\s*"[^"\\]*"\s*,\s*"[^"\\]*"\s*(?:,\s*[A-Za-z_$][\w$]*\s*)?,?\s*\)/g;
 
 const files = walk(CLIENT_ROOT).filter((f) => f !== MODULE);
 

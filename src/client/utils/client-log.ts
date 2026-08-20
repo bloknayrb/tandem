@@ -60,6 +60,27 @@ const CAPACITY = 20;
  */
 const MAX_DETAIL_CHARS = 160;
 
+/**
+ * Ceiling on the RAW cause, applied before any pass reads it.
+ *
+ * `MAX_DETAIL_CHARS` bounds what is *stored*, not what is *processed*:
+ * `describeCause` deliberately scrubs the full cause and only then clamps, so
+ * without this the cost of a `catch` is a function of the raw input, on the UI
+ * thread. Two passes are super-linear in ways a regex change alone does not
+ * remove — `collapseLines`' leading `\s*` backtracks across a whitespace run
+ * (128k spaces: 18.2s), and the URL-credential rule's two `[^/\s@]+` runs
+ * either side of a literal `:` have O(n²) ways to split a colon run
+ * (`"https://" + "a:".repeat(50000)`: 33s, before AND after the `\w{1,16}` fix).
+ * Capping the input is what actually bounds both: at 1024 they are 1.2ms and
+ * 3.2ms.
+ *
+ * 1024 rather than `MAX_DETAIL_CHARS` because the pre-clamp string is also what
+ * `fingerprint` keys on, and coalescing on 160 characters is precisely the bug
+ * `fingerprint` exists to avoid. 6.4x the display cap keeps that discrimination
+ * while making the excess unreachable by `detail`.
+ */
+const MAX_CAUSE_CHARS = 1024;
+
 export interface ClientLogEntry {
   /** Seconds since the bundle loaded, one decimal. The LAST occurrence. */
   readonly at: number;
@@ -99,6 +120,19 @@ function elapsedSeconds(): number {
 }
 
 /**
+ * Bound the raw cause before any pass reads it. See `MAX_CAUSE_CHARS`.
+ *
+ * A plain slice: this runs BEFORE scrubbing, so it may leave a half-matched
+ * credential at the cut — which is harmless because the cut sits far beyond
+ * `MAX_DETAIL_CHARS`, so that tail reaches only `fingerprint`, which stores a
+ * hash and no text. `clamp` is what guards the surrogate boundary on the string
+ * that is actually kept.
+ */
+function cap(input: string): string {
+  return input.length > MAX_CAUSE_CHARS ? input.slice(0, MAX_CAUSE_CHARS) : input;
+}
+
+/**
  * Collapse newlines before anything else measures or renders this string.
  *
  * `stripControlChars` in `diagnostics.ts` deliberately does NOT strip `\x0a`
@@ -129,9 +163,17 @@ function collapseLines(input: string): string {
  *    slice rather than before it.
  */
 function clamp(input: string): string {
-  const paired = input.replace(
-    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
-    "",
+  // Ordered alternation rather than a lookahead/lookbehind pair: the first
+  // branch consumes a well-formed pair whole, so a low surrogate that follows a
+  // high one can never be reached by the second branch and only genuinely
+  // unpaired ones are dropped. Written this way because a lookbehind would be
+  // the FIRST one in the browser bundle — esbuild cannot downlevel it, so it
+  // would raise the WKWebView floor from 15.4 to 16.4, and a lookbehind is an
+  // early SyntaxError in JSC, which blanks the whole bundle rather than
+  // degrading one function. Verified byte-identical to the lookbehind form over
+  // 399,592 inputs (exhaustive over high/low/BMP symbols to length 6).
+  const paired = input.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (m) =>
+    m.length === 2 ? m : "",
   );
   if (paired.length <= MAX_DETAIL_CHARS) return paired;
   return `${paired.slice(0, MAX_DETAIL_CHARS).replace(/[\uD800-\uDBFF]$/, "")}…`;
@@ -178,13 +220,18 @@ function isErrorLike(value: object): value is { name: string; message: string } 
  *
  * Returns the scrubbed string UNCLAMPED — `record` clamps for display and
  * fingerprints the full string for coalescing, which are different jobs.
+ * "Unclamped" means un-clamped to `MAX_DETAIL_CHARS`; the raw cause is still cut
+ * to `MAX_CAUSE_CHARS` FIRST, so neither `collapseLines` nor `scrubText` ever
+ * sees an unbounded string. The cut cannot reach `detail`: it sits 6.4x beyond
+ * the display cap, and scrubbing only ever replaces a credential with a
+ * placeholder, so nothing past it can be pulled into the visible window.
  */
 function describeCause(cause: unknown): string {
   if (cause === undefined || cause === null) return "";
-  if (typeof cause === "string") return scrubText(collapseLines(cause));
+  if (typeof cause === "string") return scrubText(collapseLines(cap(cause)));
   if (typeof cause === "object") {
     if (isErrorLike(cause)) {
-      return scrubText(collapseLines(`${cause.name}: ${cause.message}`));
+      return scrubText(collapseLines(cap(`${cause.name}: ${cause.message}`)));
     }
     // Deliberately the TYPE and nothing else: a rejected `{ path, body }`
     // contributes the word "Object", never its contents.
@@ -225,24 +272,48 @@ function record(level: "warn" | "error", scope: string, event: string, cause: un
 }
 
 /**
+ * Never let telemetry throw into the app's error path — `src/client/sentry.ts`'s
+ * own stated norm, and this module is the declared intake for the ~150 other
+ * `console.warn` sites, so it will meet causes today's two never produce.
+ *
+ * `describeCause` reads `cause.name`, and a getter that throws would otherwise
+ * abort the CALLER's `catch` block, so the user-facing recovery line after the
+ * warn never runs. That is also why the console call is emitted first: the
+ * console line is the one part of this that was there before the ring buffer
+ * existed, and it must not become conditional on the buffer succeeding.
+ */
+function recordSafely(level: "warn" | "error", scope: string, event: string, cause: unknown): void {
+  try {
+    record(level, scope, event, cause);
+  } catch {
+    // Deliberately silent. A `console.warn` here would recurse straight back
+    // into a mocked console in tests and add nothing a developer can act on.
+  }
+}
+
+/**
  * Record a client-side warning and log it to the console exactly as before.
  *
  * `scope` and `event` must be **string literals**; `cause` is the thrown value.
  * The console call is byte-identical to a hand-written
  * ``console.warn(`[scope] event:`, err)`` and passes the RAW cause, so a
  * developer with an inspector open keeps the full object and its stack.
+ *
+ * It is also emitted FIRST and the buffer write is caught, so replacing a bare
+ * `console.warn` with this call cannot change what the caller's `catch` block
+ * does — see `recordSafely`.
  */
 export function logClientWarning(scope: string, event: string, cause?: unknown): void {
-  record("warn", scope, event, cause);
   if (cause === undefined) console.warn(`[${scope}] ${event}`);
   else console.warn(`[${scope}] ${event}:`, cause);
+  recordSafely("warn", scope, event, cause);
 }
 
 /** As `logClientWarning`, for failures that warrant `console.error`. */
 export function logClientError(scope: string, event: string, cause?: unknown): void {
-  record("error", scope, event, cause);
   if (cause === undefined) console.error(`[${scope}] ${event}`);
   else console.error(`[${scope}] ${event}:`, cause);
+  recordSafely("error", scope, event, cause);
 }
 
 /**

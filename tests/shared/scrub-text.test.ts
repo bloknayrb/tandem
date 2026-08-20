@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { redactPaths, redactSecrets, scrubText } from "../../src/shared/scrub-text.js";
 
@@ -165,5 +166,49 @@ describe("scrubText", () => {
     expect(scrubText("/Users/dan/.env had sk-ant-api03-SECRETSECRET12")).toBe(
       "/Users/[user]/.env had sk-ant-[redacted]",
     );
+  });
+});
+
+/**
+ * The URL-credential rule opened `(\w+:\/\/)`, an unbounded quantifier with no
+ * literal for the engine to prescan on, so every position inside a run of word
+ * characters became a start candidate that scanned to end-of-string: 10.2s on a
+ * plain 100k-char run of `x` with no credential in it at all. It is bounded to
+ * `\w{1,16}` now.
+ *
+ * Both tests below are deliberately SHAPE-shaped, not wall-clock-shaped. This
+ * repo already has "completes in linear time" gates that fail under load, and a
+ * timing assertion here would join them; what actually needs pinning is that the
+ * bound did not cost any redaction, plus the bound itself.
+ */
+describe("the URL-credential rule's bound", () => {
+  it("still redacts the degenerate scheme shapes a tighter rule would drop", () => {
+    // These are not valid RFC 3986 schemes — a scheme must start with a letter —
+    // but `\w+` matched them, so refusing them now would be redaction LOST, and
+    // the consolidation's whole claim is that none was. The obvious tightening
+    // (`[A-Za-z][A-Za-z0-9+.-]{0,15}`) fails every line here.
+    expect(scrubText("0://user:pass@host")).toBe("0://[redacted]@host");
+    expect(scrubText("__://user:pass@host")).toBe("__://[redacted]@host");
+    expect(scrubText(":8080://user:pass@host")).toBe(":8080://[redacted]@host");
+    expect(scrubText("?tok=1://user:pass@host")).toBe("?tok=1://[redacted]@host");
+  });
+
+  it("is unaffected by a scheme run longer than the bound", () => {
+    // The bound cannot change the OUTPUT, only where the match starts: a longer
+    // word-character run matches its last 16 characters and the earlier ones are
+    // copied through verbatim. This is the property that let the fix be applied
+    // without re-deriving what the rule redacts.
+    const scheme = "w".repeat(40);
+    expect(scrubText(`${scheme}://user:pass@host`)).toBe(`${scheme}://[redacted]@host`);
+  });
+
+  it("keeps the bound in the source — a source scan, because behaviour cannot see it", () => {
+    // Behaviour is identical either way (that is the point of the two tests
+    // above), so nothing else in this file goes red if the bound is reverted.
+    // Precedent for asserting on source text: `client-log-callsites.test.ts`,
+    // `loopback-gate-claims.test.ts`.
+    const source = readFileSync(new URL("../../src/shared/scrub-text.ts", import.meta.url), "utf8");
+    expect(source).toContain(String.raw`(\w{1,16}:\/\/)`);
+    expect(source).not.toContain(String.raw`(\w+:\/\/)`);
   });
 });
