@@ -2668,8 +2668,15 @@ const shouldShowModelPicker = $derived(
           {@render edgeCollapse("right", toggleRightPanel)}
           <div class="rail-tabs-row">
             <div class="rail-tabs-track">
+              <!-- `aria-current` rather than role="tab"/aria-selected: this mirrors
+                   the Settings sidebar switcher (SettingsModal.svelte), which is the
+                   same shape — plain buttons that swap which always-mounted panel is
+                   displayed. role="tab" would oblige the APG pattern's roving
+                   tabindex, taking one of these two buttons out of the tab order;
+                   that is a keyboard behaviour change, not an additive fix. See #1452. -->
               <button
                 data-testid="annotations-tab"
+                aria-current={activeRailTab === "annotations" ? "page" : undefined}
                 class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
                 onclick={() => selectRailTab("annotations")}
               >
@@ -2682,6 +2689,7 @@ const shouldShowModelPicker = $derived(
               </button>
               <button
                 data-testid="chat-tab"
+                aria-current={activeRailTab === "chat" ? "page" : undefined}
                 class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
                 onmousedown={captureSelectionForChat}
                 onclick={() => selectRailTab("chat")}

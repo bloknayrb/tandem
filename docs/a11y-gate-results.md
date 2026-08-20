@@ -148,6 +148,22 @@ Four real defects, all found by the suite failing first:
    30s. Fixed with a longer timeout, **not** retries — retries would also have
    masked the flake class the file guards.
 
+> **Amendment 2026-08-20 (#1452).** An **eighth** test was added to this file:
+> *"the rail's panel switcher exposes which panel is selected"*. The counts above
+> are left at their 2026-08-05 values because this table records that run.
+>
+> The gap it closes is the same class as defect 1 — correct markup that an axe
+> scan cannot fault. The right rail's Annotations/Chat switcher distinguished the
+> active panel with a CSS class and nothing else, so a screen reader announced two
+> identically-shaped buttons with no selected state between them. axe reports no
+> violation for that: an unmarked button is valid markup, just uninformative.
+>
+> Fixed with `aria-current="page"` on the active button, following the Settings
+> sidebar switcher (`SettingsModal.svelte`) rather than the APG tabs pattern —
+> `role="tab"` obliges a roving tabindex, which would take one of the two buttons
+> out of the tab order and is a keyboard behaviour change rather than an additive
+> fix. #1452 records the full pattern as still available if it is ever wanted.
+
 ## A6 — WCAG AA contrast
 
 Two suites, because axe alone cannot answer the criterion as written. axe
