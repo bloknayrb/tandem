@@ -169,11 +169,19 @@ jobs:
           # about October 2026 - up to that review, not past it. If #1345
           # resolves to "restore", the restore work needs a fresh dated gate for
           # this table, because #1345 closes and the table outlives it.
+          # A row must NOT equal today's LATEST_RELEASE_<major>. Add-Candidate
+          # deduplicates, so a pin equal to the pointer is dropped and the net is
+          # present-but-degenerate: in exactly the #1197 failure (the pointer
+          # names a build whose zip is missing) it contributes no candidate at
+          # all. Verified 2026-08-20: LATEST_RELEASE_151 = 151.0.4129.93 and
+          # LATEST_RELEASE_152 = 152.0.4191.35, so both rows below sit BELOW
+          # their pointer, and below the 16-patch walk-back window under it.
+          # Each was fetched and confirmed to contain msedgedriver.exe.
           $pinned = @{
             '149' = '149.0.4022.98'
             '150' = '150.0.4078.83'
-            '151' = '151.0.4129.93'
-            '152' = '152.0.4191.35'
+            '151' = '151.0.4129.50'
+            '152' = '152.0.4191.10'
           }
           # Say a missing row out loud (a ::warning:: annotation, visible on the
           # run page) instead of letting a green-until-it-isn't run hide it.
@@ -265,16 +273,20 @@ jobs:
 
           # Green-but-rescued is the other half of "fail loudly" (#1197). If the
           # hand-pinned row is what won, EVERY live candidate missed - the exact
-          # runtime version, the LATEST_RELEASE_<major> pointer and all 32
-          # walk-back builds - which is #1197's original CDN failure recurring,
-          # survived only because the net happened to still be current. A run
-          # that rendered as an ordinary green would hide exactly that, and the
-          # net is the one candidate guaranteed to expire.
+          # runtime version, the LATEST_RELEASE_<major> pointer and every
+          # walk-back build tried - which is #1197's original CDN failure
+          # recurring, survived only because the net happened to still be
+          # current. A run that rendered as an ordinary green would hide exactly
+          # that, and the net is the one candidate guaranteed to expire.
+          #
+          # The count is interpolated, never hard-coded: the list is 34 builds
+          # only when both live sources resolve and neither collides with the
+          # walk-back. A LATEST_RELEASE_<major> fetch that throws leaves 18.
           if ($driverVersion -eq $pinned[$major] -and $driverVersion -ne $pv -and $driverVersion -ne $latest) {
             Write-Host ("::warning::Only the hand-pinned Edge WebDriver ($driverVersion) resolved for " +
-              "WebView2 major ${major} - every live candidate missed, so msedgedriver.microsoft.com " +
-              "or its LATEST_RELEASE_${major} pointer is broken again (#1197). This run is green " +
-              "only because the last-resort pin is still current.")
+              "WebView2 major ${major} - all $($candidates.Count) candidates tried missed, so " +
+              "msedgedriver.microsoft.com or its LATEST_RELEASE_${major} pointer is broken again " +
+              "(#1197). This run is green only because the last-resort pin is still current.")
           }
 
           # Defense in depth: a mislabelled blob must not become a silently

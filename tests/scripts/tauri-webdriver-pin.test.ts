@@ -89,14 +89,29 @@ function driverStepRun(): string {
 const run = driverStepRun();
 
 /**
- * `run` with whole-line PowerShell comments removed. Everything that asserts the
- * script still DOES something must use this — see the header note; a `#` prefix
- * disables a line while leaving its text intact for `toContain`.
+ * `run` with PowerShell comments removed — BOTH forms. Everything that asserts
+ * the script still DOES something must use this; a comment marker disables a
+ * line while leaving its text intact for `toContain`.
+ *
+ * The block form `<# … #>` is not optional. With only the whole-line `#` filter,
+ * wrapping the last-resort net in a block comment disabled it while the suite
+ * stayed fully green — the exact "grep-shaped test asserting a string while
+ * claiming a semantic property" failure this file exists to avoid. Blank the
+ * span rather than deleting it so line-relative reading of `runCode` still
+ * lines up with the workflow.
  */
 const runCode = run
+  .replace(/<#[\s\S]*?#>/g, (m) => m.replace(/[^\n]/g, " "))
   .split("\n")
   .filter((line) => !/^\s*#/.test(line))
   .join("\n");
+
+/** Index of `needle` in `runCode`, throwing rather than returning -1. */
+function at(needle: string): number {
+  const i = runCode.indexOf(needle);
+  if (i < 0) throw new Error(`${WORKFLOW}: the driver step no longer contains \`${needle}\``);
+  return i;
+}
 
 /** Throws rather than returning `[]`: an empty table must fail, not pass quietly. */
 function pinnedRows(): [string, string][] {
@@ -125,13 +140,15 @@ describe("tauri-webdriver.yml — trigger surface", () => {
 });
 
 describe("tauri-webdriver.yml — Edge WebDriver candidate chain (#1197)", () => {
-  it("still tries the live sources before the hand-pinned net", () => {
-    // Order is load-bearing: an exact runtime match first, then Microsoft's
-    // pointer, then the walk-back, and only then the pin. A refactor that drops
-    // any of these leaves the remaining ones doing more work than they should.
-    expect(runCode).toContain("Add-Candidate $pv");
-    expect(runCode).toContain("Add-Candidate $latest");
-    expect(runCode).toContain("Add-Candidate $pinned[$major]");
+  it("still tries the live sources BEFORE the hand-pinned net", () => {
+    // Order is load-bearing, and asserting only PRESENCE does not capture it:
+    // `Add-Candidate` appends, and the first candidate whose zip downloads wins,
+    // so hoisting the pin above `$pv` makes a stale driver outrank the exact
+    // runtime match — the silent degradation this chain exists to prevent.
+    // Measured: with three order-blind `toContain` calls, that hoist left the
+    // suite 9/9 green.
+    expect(at("Add-Candidate $pv")).toBeLessThan(at("Add-Candidate $latest"));
+    expect(at("Add-Candidate $latest")).toBeLessThan(at("Add-Candidate $pinned[$major]"));
   });
 
   it("still warns when the runners reach a major with no pinned row", () => {
@@ -172,12 +189,32 @@ describe("tauri-webdriver.yml — the $pinned last-resort table", () => {
     expect(misKeyed).toEqual([]);
   });
 
+  it("records that a pinned row must differ from its LATEST_RELEASE pointer", () => {
+    // This invariant cannot be checked offline — it needs a live fetch of
+    // LATEST_RELEASE_<major> — so what is pinned here is that the RULE stays
+    // written down where the #1345 reviewer will meet it. (Same shape as
+    // tests/docs/loopback-gate-claims.test.ts: deleting the prose breaks a test
+    // rather than silently dropping the check.)
+    //
+    // Why it matters: Add-Candidate deduplicates, so a pin equal to the pointer
+    // is dropped, and in exactly the #1197 failure — the pointer naming a build
+    // whose zip is missing — the net contributes no candidate at all. Both new
+    // rows were byte-identical to their pointer when first written.
+    expect(run).toContain("must NOT equal today's LATEST_RELEASE_<major>");
+    expect(run).toMatch(/Verified 2026-\d\d-\d\d/);
+  });
+
   it("names its dated review home so the pin cannot outlive its gate", () => {
     // CLAUDE.md's dated-gate rule: a version pin needs a review path answerable
     // from tracked files. #1345 (2026-11-01) is that path and already lists this
     // table as evidence. Deleting the reference breaks this test rather than
     // silently dropping the link.
-    expect(run).toContain("#1345");
+    // Pin the SENTENCE, not the number. `#1345` occurs three times and `#1197`
+    // seven times in this step, so a bare `toContain("#1345")` survives rewriting
+    // the one line that names the review home — measured: rewriting it to
+    // "REVIEW HOME: nowhere" left the suite 9/9 green.
+    expect(run).toContain("REVIEW HOME: #1345");
+    expect(run).toMatch(/REVIEW HOME: #1345[\s\S]{0,80}2026-11-01/);
     expect(run).toContain("#1197");
   });
 });
