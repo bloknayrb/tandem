@@ -48,7 +48,11 @@ import {
   switchToAnnotationsTab,
 } from "../../tests/e2e/helpers";
 import { E2E_MCP_PORT } from "../test-ports";
-import { buildAccountRedaction, findAccountPathLeaks } from "./redact-account";
+import {
+  type AccountRedactionPlan,
+  findAccountPathLeaks,
+  planAccountRedaction,
+} from "./redact-account";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -417,9 +421,13 @@ async function dismissReadOnlyBanner(page: Page): Promise<void> {
  * `redact-account.ts`; it is a module so the rule is unit-testable without a
  * browser (`tests/scripts/screenshot-redaction.test.ts`).
  */
-async function redactAccountName(page: Page): Promise<void> {
-  const redaction = buildAccountRedaction(os.homedir());
-  if (!redaction) return;
+async function redactAccountName(page: Page): Promise<AccountRedactionPlan> {
+  const plan = planAccountRedaction(os.homedir());
+  // Returned, not swallowed: the caller's leak scan needs to know WHICH of the
+  // two non-redacting outcomes this was. `scan-only` still has to scan (the
+  // name is real, it just cannot be anchored); `none` must not (the account is
+  // already `you`, so every redacted path on the page would report).
+  if (plan.kind !== "redact") return plan;
   // A Playwright evaluate callback is serialized to source and cannot reach
   // module scope, so `redactHomePaths`'s one-line body is repeated here rather
   // than imported. `String.replace` with a `g` regex resets `lastIndex` itself,
@@ -440,7 +448,8 @@ async function redactAccountName(page: Page): Promise<void> {
       const after = before.replace(re, r.replacement);
       if (after !== before) node.nodeValue = after;
     }
-  }, redaction);
+  }, plan.redaction);
+  return plan;
 }
 
 /** Load the app, wait for the editor + first annotation card, settle animations. */
@@ -951,13 +960,18 @@ test("13-setup-wizard", async ({ page }) => {
   });
   await page.waitForTimeout(400);
 
-  await redactAccountName(page);
-  // Prove the redaction reached the DOM rather than trusting that it ran.
-  // `.itc-path` is the element that always prints a resolved path (the wizard's
-  // other path carriers -- `.itc-status`, `.iw-tech-text` -- only appear on an
-  // error), so an empty match here would mean the paths moved out of text nodes
-  // -- a real finding, not a reason to ship the shot anyway.
-  await expect(page.locator(".itc-path").first()).toContainText("you");
+  const plan = await redactAccountName(page);
+  if (plan.kind === "redact") {
+    // Prove the redaction reached the DOM rather than trusting that it ran.
+    // `.itc-path` is the element that always prints a resolved path (the
+    // wizard's other path carriers -- `.itc-status`, `.iw-tech-text` -- only
+    // appear on an error), so an empty match here would mean the paths moved
+    // out of text nodes -- a real finding, not a reason to ship the shot
+    // anyway. Guarded because the other two outcomes rewrite nothing: on a
+    // machine whose account is already `you` there is nothing to prove, and on
+    // an unanchorable home directory the scan below is the whole control.
+    await expect(page.locator(".itc-path").first()).toContainText("you");
+  }
   // And prove nothing leaked. This scans the whole rendered viewport -- what the
   // shot actually captures, which is wider than the `wizard` element the old
   // assertion checked -- for any path-shaped run of text that still carries the
@@ -965,8 +979,12 @@ test("13-setup-wizard", async ({ page }) => {
   // satisfied by corrupting prose that merely uses the word -- which is exactly
   // how #1528's over-replacement passed review. A hit is a reason to stop, not
   // to publish.
-  const account = path.basename(os.homedir());
-  const leaks = findAccountPathLeaks(await page.locator("body").innerText(), account);
+  //
+  // The plan goes in whole rather than a bare account name re-derived from the
+  // home directory: the scan needs the redaction's own parent prefix to avoid
+  // reporting its own output on a `/home/home` machine, and it needs `none` to
+  // mean "do not scan at all".
+  const leaks = findAccountPathLeaks(await page.locator("body").innerText(), plan);
   expect(leaks, `account name survived in rendered path(s): ${leaks.join(", ")}`).toEqual([]);
 
   await page.screenshot({

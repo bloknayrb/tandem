@@ -30,8 +30,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   type AccountRedaction,
-  buildAccountRedaction,
+  type AccountRedactionPlan,
   findAccountPathLeaks,
+  planAccountRedaction,
   redactHomePaths,
 } from "../../scripts/screenshots/redact-account";
 
@@ -42,29 +43,86 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const read = (rel: string) => readFileSync(join(repoRoot, rel), "utf8");
 const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
 
-/** Non-null `buildAccountRedaction`, so a null regression fails loudly here. */
+/** The `redact` arm of a plan, so a downgrade to `scan-only` fails loudly here. */
 function redactionFor(homeDir: string): AccountRedaction {
-  const redaction = buildAccountRedaction(homeDir);
-  if (!redaction) throw new Error(`expected a redaction for ${homeDir}`);
-  return redaction;
+  const plan = planAccountRedaction(homeDir);
+  if (plan.kind !== "redact")
+    throw new Error(`expected a redaction for ${homeDir}, got ${plan.kind}`);
+  return plan.redaction;
 }
 
 const redact = (homeDir: string, text: string) => redactHomePaths(text, redactionFor(homeDir));
 
-describe("buildAccountRedaction", () => {
-  it("declines when there is nothing to redact", () => {
-    expect(buildAccountRedaction("")).toBeNull();
-    expect(buildAccountRedaction("   ")).toBeNull();
-    // Already generic — replacing `you` with `you` only risks false positives.
-    expect(buildAccountRedaction("/home/you")).toBeNull();
-    expect(buildAccountRedaction("/Users/YOU/")).toBeNull();
+/** Scan `text` the way the capture does: through the plan for `homeDir`. */
+const leaksFor = (homeDir: string, text: string): string[] =>
+  findAccountPathLeaks(text, planAccountRedaction(homeDir));
+
+/**
+ * A hand-built `scan-only` plan.
+ *
+ * The arm with no prefix mask, which is what isolates the boundary rules from
+ * the masking rules — and the only way to reach the empty-account guard, since
+ * the planner never produces one.
+ */
+const scanOnly = (account: string): AccountRedactionPlan => ({ kind: "scan-only", account });
+
+describe("planAccountRedaction", () => {
+  it("has nothing to do when the account is absent or already the placeholder", () => {
+    expect(planAccountRedaction("")).toEqual({ kind: "none" });
+    expect(planAccountRedaction("   ")).toEqual({ kind: "none" });
+    // Already generic — replacing `you` with `you` only risks false positives,
+    // and scanning for it would report every correctly redacted path.
+    expect(planAccountRedaction("/home/you")).toEqual({ kind: "none" });
+    expect(planAccountRedaction("/Users/YOU/")).toEqual({ kind: "none" });
   });
 
-  it("declines a home directory with no parent segment to anchor against", () => {
+  it("falls back to scan-only when there is no parent segment to anchor against", () => {
     // Refuses rather than guessing: an unanchored name is exactly the substring
     // match #1528 was about. The capture's leak scan then decides whether the
     // name is actually on screen, and fails the run if it is.
-    expect(buildAccountRedaction("bryan")).toBeNull();
+    expect(planAccountRedaction("bryan")).toEqual({ kind: "scan-only", account: "bryan" });
+  });
+
+  it("falls back to scan-only for a top-level home directory (the /root sandbox)", () => {
+    // `/root` has a parent of `[""]`, which is not a prefix — anchoring against
+    // it degenerates to "any separator". Measured on the version that did:
+    // `/etc/skel/root/profile` became `/etc/skel/you/profile`, which is #1528's
+    // own bug. The scan takes over instead.
+    expect(planAccountRedaction("/root")).toEqual({ kind: "scan-only", account: "root" });
+    // One real segment IS a prefix, so this is not the same case: `C:\Users`
+    // anchors against `C:` and redacts normally.
+    expect(planAccountRedaction("C:\\Users").kind).toBe("redact");
+  });
+
+  it("trims and tolerates a trailing separator", () => {
+    // Both are shapes `os.homedir()` can hand back or a config can carry, and
+    // both change the parent prefix if mishandled: without the trim the leading
+    // segment is `" "` rather than `""`, and without the pop the account
+    // segment is the empty string after the trailing slash.
+    expect(planAccountRedaction("  /home/bryan  ")).toEqual(planAccountRedaction("/home/bryan"));
+    expect(planAccountRedaction("/home/bryan/")).toEqual(planAccountRedaction("/home/bryan"));
+    expect(redact("  /home/bryan  ", "/home/bryan/.claude.json")).toBe("/home/you/.claude.json");
+    expect(redact("/home/bryan/", "/home/bryan/.claude.json")).toBe("/home/you/.claude.json");
+  });
+
+  it("escapes regex metacharacters in the account and in the parent prefix", () => {
+    // An account or a parent directory containing `.` is legal on every OS this
+    // ships to, and an unescaped one turns into "any character" — matching, and
+    // therefore rewriting, a DIFFERENT directory.
+    expect(redact("/home/a.b", "/home/a.b/.claude.json")).toBe("/home/you/.claude.json");
+    expect(redact("/home/a.b", "/home/axb/.claude.json")).toBe("/home/axb/.claude.json");
+    expect(redact("/ho.me/bryan", "/ho.me/bryan/x")).toBe("/ho.me/you/x");
+    expect(redact("/ho.me/bryan", "/hoxme/bryan/x")).toBe("/hoxme/bryan/x");
+  });
+
+  it("matches a doubled separator, which is what a rendered path can carry", () => {
+    // `SEP` is `[\\/]+`, not `[\\/]`. A path joined by a stack that already had a
+    // trailing slash renders `C:\\Users\\\\bryan\\...`, and a single-separator
+    // pattern would ship it.
+    expect(redact("C:\\Users\\bryan", "C:\\Users\\\\bryan\\config.json")).toBe(
+      "C:\\Users\\\\you\\config.json",
+    );
+    expect(redact("/home/bryan", "//home//bryan//notes.md")).toBe("//home//you//notes.md");
   });
 
   it("keeps two-letter accounts — the old length guard is gone", () => {
@@ -79,10 +137,6 @@ describe("buildAccountRedaction", () => {
 describe("redactHomePaths — the account segment of a rendered path", () => {
   it("redacts a posix config path", () => {
     expect(redact("/home/bryan", "/home/bryan/.claude.json")).toBe("/home/you/.claude.json");
-  });
-
-  it("redacts a home directory that is a top-level dir (the /root sandbox case)", () => {
-    expect(redact("/root", "/root/.claude/settings.json")).toBe("/you/.claude/settings.json");
   });
 
   it("redacts macOS Application Support paths", () => {
@@ -124,6 +178,10 @@ describe("redactHomePaths — the account segment of a rendered path", () => {
     expect(redact("/home/root", "/home/root-backup/settings.json")).toBe(
       "/home/root-backup/settings.json",
     );
+    // `_` is a name character in SEGMENT_END, and the docstring says so. It was
+    // claimed in prose and pinned by nothing: dropping it from the class turned
+    // a sibling directory into a redaction.
+    expect(redact("/home/bryan", "/home/bryan_old/notes.md")).toBe("/home/bryan_old/notes.md");
   });
 
   it("leaves a URL path segment that only starts with the account name alone", () => {
@@ -199,13 +257,13 @@ describe("redactHomePaths — ordinary UI copy is not collateral", () => {
     const welcome = read("sample/welcome.md");
     expect(welcome).toMatch(/user/i);
     expect(redact("/home/user", welcome)).toBe(welcome);
-    expect(redact("/root", welcome)).toBe(welcome);
+    expect(redact("/home/root", welcome)).toBe(welcome);
   });
 });
 
 describe("findAccountPathLeaks — the fail-closed backstop", () => {
   it("finds an unredacted path", () => {
-    expect(findAccountPathLeaks("open /home/bryan/.claude.json now", "bryan")).toEqual([
+    expect(leaksFor("/home/bryan", "open /home/bryan/.claude.json now")).toEqual([
       "/home/bryan/.claude.json",
     ]);
   });
@@ -214,75 +272,141 @@ describe("findAccountPathLeaks — the fail-closed backstop", () => {
     // The narrowed replacement rewrites the home segment only; a second
     // occurrence further down would survive it. This is what turns that into a
     // red capture instead of a published leak.
-    expect(findAccountPathLeaks("/home/you/.bryan/settings.json", "bryan")).toEqual([
+    expect(leaksFor("/home/bryan", "/home/you/.bryan/settings.json")).toEqual([
       "/home/you/.bryan/settings.json",
     ]);
   });
 
   it("finds a path outside the home directory entirely", () => {
-    expect(findAccountPathLeaks("C:\\Backups\\bryan\\claude.json", "bryan")).toEqual([
+    expect(leaksFor("C:\\Users\\bryan", "C:\\Backups\\bryan\\claude.json")).toEqual([
       "C:\\Backups\\bryan\\claude.json",
     ]);
+  });
+
+  it("scans on behalf of a home directory it could not anchor", () => {
+    // The `scan-only` arm is the whole reason refusing to redact is safe. There
+    // is no prefix to mask, so every bounded run reports.
+    expect(leaksFor("/root", "/root/.claude/settings.json")).toEqual([
+      "/root/.claude/settings.json",
+    ]);
+    expect(leaksFor("bryan", "/home/bryan/.claude.json")).toEqual(["/home/bryan/.claude.json"]);
+    // ...and prose still is not path-shaped, so the boundary rules still apply.
+    expect(leaksFor("/root", "Reset it from the root of the project.")).toEqual([]);
+  });
+
+  it("does not scan at all when the account is already the placeholder", () => {
+    // MEASURED FAILURE of scanning unconditionally: on `$HOME=/home/you` the
+    // page is correct by definition and every path on it reported as a leak, so
+    // slot 13 could never be captured.
+    expect(leaksFor("/home/you", "/home/you/.claude.json")).toEqual([]);
+    expect(leaksFor("", "/home/anyone/.claude.json")).toEqual([]);
   });
 
   it("ignores prose that merely uses the word", () => {
     // The old assertion (`not.toContainText(account)`) could not tell these
     // apart, which is why corrupted copy read as proof of redaction.
-    expect(findAccountPathLeaks("Ask a user with admin rights to try again.", "user")).toEqual([]);
-    expect(findAccountPathLeaks("Defaults to your home directory if empty.", "home")).toEqual([]);
-    expect(findAccountPathLeaks("/home/you/.claude.json", "bryan")).toEqual([]);
-    expect(findAccountPathLeaks("anything at all", "")).toEqual([]);
+    expect(leaksFor("/home/user", "Ask a user with admin rights to try again.")).toEqual([]);
+    expect(leaksFor("/srv/home", "Defaults to your home directory if empty.")).toEqual([]);
+    expect(leaksFor("/home/bryan", "/home/you/.claude.json")).toEqual([]);
+    // A hand-built plan is the only way to reach an empty account — the planner
+    // returns `none` for one — and without the guard the bounded pattern is two
+    // lookarounds around nothing, which matches at every boundary.
+    expect(findAccountPathLeaks("/home/bryan/x", { kind: "scan-only", account: "" })).toEqual([]);
   });
 
   it("is case-insensitive, matching the redaction", () => {
-    expect(findAccountPathLeaks("C:\\Users\\BRYAN\\config.json", "bryan")).toEqual([
+    expect(leaksFor("C:\\Users\\bryan", "C:\\Users\\BRYAN\\config.json")).toEqual([
       "C:\\Users\\BRYAN\\config.json",
     ]);
   });
 
+  it("does not report the redaction's OWN OUTPUT when the account is in the prefix", () => {
+    // MEASURED FAILURE before the prefix mask: `findAccountPathLeaks(
+    // "/home/you/.claude.json", "home")` returned that token. On `$HOME=/home/home`
+    // the redaction is byte-perfect and slot 13 failed forever. This is a class,
+    // not a case — `users` is the Windows twin, and both are among the default
+    // accounts this module exists for.
+    expect(leaksFor("/home/home", "/home/you/.claude.json")).toEqual([]);
+    expect(leaksFor("C:\\Users\\users", "C:\\Users\\you\\AppData\\Roaming\\Claude")).toEqual([]);
+    // The mask is the redaction's output — prefix AND placeholder — not the
+    // prefix alone, so it cannot swallow a real leak that happens to sit under
+    // a same-named directory somewhere else.
+    expect(leaksFor("/home/home", "/backup/home/config.json")).toEqual([
+      "/backup/home/config.json",
+    ]);
+    expect(leaksFor("/home/home", "/home/home/.claude.json")).toEqual(["/home/home/.claude.json"]);
+    // And a second, genuine occurrence below the masked prefix still reports.
+    expect(leaksFor("/home/home", "/home/you/home/notes.md")).toEqual(["/home/you/home/notes.md"]);
+  });
+
   it("does not report a name that is only a SUBSTRING of a path segment", () => {
+    // Through the `scan-only` arm on purpose: it carries no prefix mask, so
+    // these isolate the BOUNDARY. Routed through a `redact` plan instead, the
+    // first two would pass because the mask ate the token, and a regression in
+    // `NAME_CHAR` would go unnoticed.
+    //
     // The scan must agree with the redaction's boundary, or it fails captures
     // that were redacted perfectly. All three of these were measured failing
     // against a plain `includes`, and all three are accounts #1528 is about.
     //
     // `user` on Windows: the redaction correctly produced `C:\Users\you\...`,
     // and `includes("user")` then matched inside `Users`.
-    expect(findAccountPathLeaks("C:\\Users\\you\\.claude.json", "user")).toEqual([]);
+    expect(findAccountPathLeaks("C:\\Users\\you\\.claude.json", scanOnly("user"))).toEqual([]);
     // `us` — reachable only because the length guard is gone.
-    expect(findAccountPathLeaks("C:\\Users\\you\\.claude.json", "us")).toEqual([]);
+    expect(findAccountPathLeaks("C:\\Users\\you\\.claude.json", scanOnly("us"))).toEqual([]);
     // `claude`: `/claude-code` is the shape redact-account.ts's own docstring
     // promises stays intact, so reporting it as a leak contradicts the module.
     // `-` is a name character in SEGMENT_END, and must be one here too.
-    expect(findAccountPathLeaks("see claude.com/claude-code for docs", "claude")).toEqual([]);
-    // The LEADING boundary, which the three cases above do not exercise: they
-    // are all prefix collisions, and a trailing-only guard passes every one of
-    // them. A name that is the SUFFIX of a longer segment needs the other half.
-    expect(findAccountPathLeaks("/var/www/webroot/index.html", "root")).toEqual([]);
-    expect(findAccountPathLeaks("/opt/sysadmin/config.json", "admin")).toEqual([]);
+    expect(findAccountPathLeaks("see claude.com/claude-code for docs", scanOnly("claude"))).toEqual(
+      [],
+    );
+    // `_` is the other half of that class, claimed in the module's prose and
+    // pinned by nothing until now.
+    expect(findAccountPathLeaks("/home/you/bryan_old/notes.md", scanOnly("bryan"))).toEqual([]);
+    // The LEADING boundary, which the cases above do not exercise: they are all
+    // prefix collisions, and a trailing-only guard passes every one of them. A
+    // name that is the SUFFIX of a longer segment needs the other half.
+    expect(findAccountPathLeaks("/var/www/webroot/index.html", scanOnly("root"))).toEqual([]);
+    expect(findAccountPathLeaks("/opt/sysadmin/config.json", scanOnly("admin"))).toEqual([]);
+  });
+
+  it("escapes regex metacharacters in the account it scans for", () => {
+    // Unescaped, `a.b` matches `axb` and reports a path carrying no part of the
+    // account name — a capture that can never go green.
+    expect(findAccountPathLeaks("/home/axb/.claude.json", scanOnly("a.b"))).toEqual([]);
+    expect(findAccountPathLeaks("/home/a.b/.claude.json", scanOnly("a.b"))).toEqual([
+      "/home/a.b/.claude.json",
+    ]);
   });
 
   it("still reports a bounded run, so the backstop is not weakened", () => {
     // The boundary must not become an excuse to miss the real thing: each of
     // these is the account as its own run inside a path, and each must report.
-    expect(findAccountPathLeaks("C:\\Users\\user\\.claude.json", "user")).toEqual([
+    expect(findAccountPathLeaks("C:\\Users\\user\\.claude.json", scanOnly("user"))).toEqual([
       "C:\\Users\\user\\.claude.json",
     ]);
-    expect(findAccountPathLeaks("/home/you/.us/settings.json", "us")).toEqual([
+    expect(findAccountPathLeaks("/home/you/.us/settings.json", scanOnly("us"))).toEqual([
       "/home/you/.us/settings.json",
     ]);
-    expect(findAccountPathLeaks("/home/claude/.claude.json", "claude")).toEqual([
+    expect(findAccountPathLeaks("/home/claude/.claude.json", scanOnly("claude"))).toEqual([
       "/home/claude/.claude.json",
     ]);
   });
 
-  it("leaves one ambiguity failing on purpose, and says so", () => {
-    // On a machine whose account is literally `claude`, Claude Code's own
-    // config filename is a bounded run of the account name. Nothing here can
-    // tell it from a real leak, and stopping the capture is the correct side
-    // to err on — pinned so the choice is deliberate rather than incidental.
-    expect(findAccountPathLeaks("/home/you/.claude.json", "claude")).toEqual([
-      "/home/you/.claude.json",
-    ]);
+  it("leaves a CLASS of ambiguities failing on purpose, and says so", () => {
+    // Masking the prefix cannot help when the account collides with a segment
+    // BELOW the home directory: nothing distinguishes that from a real second
+    // occurrence. Slot 13's own paths are what collide — `.claude.json`, and
+    // `C:\Users\you\AppData\Roaming\Claude\claude_desktop_config.json` — so the
+    // class is `claude`, `json`, `appdata`, `roaming`, `config`, not the single
+    // `claude` case this once claimed. Stopping the capture is the correct side
+    // to err on, but it needs a human, not a code change. Pinned so the choice
+    // stays deliberate rather than incidental.
+    expect(leaksFor("/home/claude", "/home/you/.claude.json")).toEqual(["/home/you/.claude.json"]);
+    expect(leaksFor("/home/json", "/home/you/.claude.json")).toEqual(["/home/you/.claude.json"]);
+    expect(
+      leaksFor("C:\\Users\\appdata", "C:\\Users\\you\\AppData\\Roaming\\Claude\\config.json"),
+    ).toEqual(["C:\\Users\\you\\AppData\\Roaming\\Claude\\config.json"]);
   });
 });
 
@@ -298,7 +422,9 @@ describe("findAccountPathLeaks — the fail-closed backstop", () => {
  */
 describe("the capture spec's DOM walk, run against a real document", () => {
   const spec = read("scripts/screenshots/capture.spec.ts");
-  const match = spec.match(/await page\.evaluate\(\(r\) => \{\n([\s\S]*?)\n  \}, redaction\);/);
+  const match = spec.match(
+    /await page\.evaluate\(\(r\) => \{\n([\s\S]*?)\n  \}, plan\.redaction\);/,
+  );
   if (!match) {
     throw new Error(
       "Could not lift the page.evaluate callback out of capture.spec.ts — if the " +
@@ -339,11 +465,11 @@ describe("the capture spec's DOM walk, run against a real document", () => {
     // node carries two paths, so a walk that dropped the regex's `g` flag would
     // ship the second one.
     const html =
-      '<span class="itc-path">/root/.claude.json</span>' +
-      '<span class="itc-status">EACCES on /root/.claude/settings.json (also tried /root/.claude.json)</span>';
-    expect(render(html, "/root")).toBe(
-      '<span class="itc-path">/you/.claude.json</span>' +
-        '<span class="itc-status">EACCES on /you/.claude/settings.json (also tried /you/.claude.json)</span>',
+      '<span class="itc-path">/home/root/.claude.json</span>' +
+      '<span class="itc-status">EACCES on /home/root/.claude/settings.json (also tried /home/root/.claude.json)</span>';
+    expect(render(html, "/home/root")).toBe(
+      '<span class="itc-path">/home/you/.claude.json</span>' +
+        '<span class="itc-status">EACCES on /home/you/.claude/settings.json (also tried /home/you/.claude.json)</span>',
     );
   });
 
@@ -373,7 +499,7 @@ describe("capture.spec.ts wiring", () => {
 
   it("builds its redaction from the shared module", () => {
     expect(spec).toContain('from "./redact-account"');
-    expect(spec).toContain("buildAccountRedaction(os.homedir())");
+    expect(spec).toContain("planAccountRedaction(os.homedir())");
   });
 
   it("applies the module's pattern, flags and replacement verbatim in the browser", () => {
@@ -391,5 +517,18 @@ describe("capture.spec.ts wiring", () => {
   it("asserts on path-shaped leaks rather than on the bare account string", () => {
     expect(spec).toContain("findAccountPathLeaks(");
     expect(spec).not.toContain("not.toContainText(account");
+  });
+
+  it("scans with the plan, not a re-derived account name", () => {
+    // Re-deriving the bare account name from the home directory's basename
+    // throws away the two things the scan needs to be correct: the parent
+    // prefix (so it does not report its own output on a `/home/home` machine)
+    // and the `none` outcome (so it does not scan for `you` on a machine
+    // already named that). Both were measured failing.
+    //
+    // The negative below is spelled out rather than described for a reason —
+    // it matches this file too, so keep the expression out of the prose.
+    expect(spec).toContain('findAccountPathLeaks(await page.locator("body").innerText(), plan)');
+    expect(spec).not.toMatch(/path\.basename\(os\.homedir\(\)\)/);
   });
 });

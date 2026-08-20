@@ -31,6 +31,29 @@
  * `.itc-path` (the element the old `:948` assertion happens to target) would
  * have left both uncovered. The walk stays body-wide; what changed is the match.
  *
+ * ## Why not `src/shared/redact-user-paths.ts`
+ *
+ * That module solves the adjacent problem — collapsing user-identifying
+ * prefixes out of diagnostics text before it is published — and `/api/diagnostics`
+ * uses it. It is deliberately not reused here, for three reasons, and its
+ * `escapeRegExp` IS reused so the two do not drift on the one thing they share:
+ *
+ *  1. **Different output.** It rewrites to `~` and `[user]`, which read as
+ *     redaction markers in a bug report and as breakage in a screenshot of a
+ *     file picker. A shot of the setup wizard has to still look like a path.
+ *  2. **Different execution site.** The replacement here runs inside a
+ *     `page.evaluate` callback, which Playwright serializes to source and which
+ *     therefore cannot import anything. What crosses that boundary has to be a
+ *     serializable `{pattern, flags, replacement}`, not a function.
+ *  3. **No paired leak scan.** `findAccountPathLeaks` below is the half that
+ *     makes narrowing the match safe, and it has no counterpart there because
+ *     diagnostics text has no shutter to stop.
+ *
+ * Its generic second pass (`/home/X` → `/home/[user]` regardless of who X is)
+ * is genuinely stronger in one respect: it also covers *other* accounts' names.
+ * That is out of scope here — slot 13 renders this machine's own paths — but it
+ * is the thing to reach for if a future shot ever renders someone else's.
+ *
  * ## The match
  *
  * The account name is replaced only where it is the home directory's own path
@@ -40,6 +63,14 @@
  * Separators are matched interchangeably (`[\\/]`) and matching is
  * case-insensitive, because a rendered path is not guaranteed to use the same
  * separator style or case as `os.homedir()` on Windows.
+ *
+ * A home directory with no non-empty parent segment therefore cannot be
+ * anchored at all, and `planAccountRedaction` refuses rather than approximating.
+ * `/root` is the case that matters — it is this repo's own sandbox `$HOME` —
+ * and the approximation is not close: with an empty parent the pattern
+ * degenerates to `([\\/]+)root`, i.e. *any* separator, which rewrites
+ * `/etc/skel/root/profile` to `/etc/skel/you/profile`. That is precisely the
+ * over-replacement #1528 is about, so it is refused and the scan takes over.
  *
  * Redaction, not fabrication: only the account segment changes, and it changes
  * to a placeholder that reads as one. The parent prefix is echoed back from the
@@ -58,6 +89,8 @@
  * to stop, not to publish.
  */
 
+import { escapeRegExp } from "../../src/shared/redact-user-paths";
+
 /** A serializable redaction, applied identically in Node and inside `page.evaluate`. */
 export interface AccountRedaction {
   /** `RegExp` source. Group 1 is the parent prefix as rendered. */
@@ -67,13 +100,42 @@ export interface AccountRedaction {
   replacement: string;
   /** The account segment being redacted, for `findAccountPathLeaks`. */
   account: string;
+  /**
+   * `RegExp` source for the parent prefix ALONE, no capture group.
+   *
+   * Built from the same segments as `pattern`, so the two cannot disagree.
+   * `findAccountPathLeaks` needs it: the prefix survives redaction by design,
+   * and on a machine whose account collides with one of its segments (`home`,
+   * `users`) a scan that did not know about it would report a byte-perfect
+   * redaction as a leak. See that function.
+   */
+  parentPattern: string;
 }
 
-const REGEX_META = /[.*+?^${}()|[\]\\]/g;
-const escapeRe = (s: string): string => s.replace(REGEX_META, "\\$&");
+/**
+ * What to do about this machine's account name — the three outcomes are NOT
+ * interchangeable, and collapsing them into `AccountRedaction | null` is what
+ * made the first version of this module wrong in both directions at once.
+ *
+ *  - `redact` — anchorable. Rewrite, then scan with the prefix masked.
+ *  - `scan-only` — the name exists but cannot be anchored (`bryan` with no
+ *    parent, `/root` with an empty one). Rewriting would over-replace, so
+ *    nothing is rewritten and the scan alone decides: if the name is on screen
+ *    the capture goes red, which is the correct side to err on.
+ *  - `none` — nothing to do. An empty home directory, or an account already
+ *    named `you`. The scan must NOT run for `you`: it is the placeholder, so
+ *    every correctly redacted path on the page would report as a leak.
+ */
+export type AccountRedactionPlan =
+  | { kind: "redact"; redaction: AccountRedaction }
+  | { kind: "scan-only"; account: string }
+  | { kind: "none" };
 
 /** Path separator, either style, one or more. */
 const SEP = "[\\\\/]+";
+
+/** What the account segment is rewritten to. */
+const PLACEHOLDER = "you";
 
 /**
  * A segment boundary AFTER the account name.
@@ -84,39 +146,43 @@ const SEP = "[\\\\/]+";
  * The cost is that a hypothetical sibling directory named `root.bak` would also
  * redact; the benefit is that sentence punctuation cannot hide a leak. `-` and
  * `_` ARE name characters, which is what keeps `claude.com/claude-code` intact
- * on a machine whose account is `claude`.
+ * on a machine whose account is `claude`, and `/home/bryan_old` intact on a
+ * machine whose account is `bryan`.
  */
 const SEGMENT_END = "(?![A-Za-z0-9_-])";
 
 /**
- * Build the redaction for a home directory, or `null` when there is nothing
- * safe to do.
+ * Decide what can be done about the account name in `homeDir`.
  *
- * Returns `null` for an empty path, for an account already named `you`, and for
- * a home directory with no parent segment to anchor against (`"bryan"` with no
- * separator). That last case refuses rather than guesses: an unanchored name is
- * exactly the substring match this module exists to stop, and the capture's leak
- * assertion will fail the run if the name is actually on screen.
+ * See `AccountRedactionPlan` for why there are three answers rather than two.
  */
-export function buildAccountRedaction(homeDir: string): AccountRedaction | null {
+export function planAccountRedaction(homeDir: string): AccountRedactionPlan {
   const segments = homeDir.trim().split(/[\\/]+/);
   while (segments.length > 0 && segments[segments.length - 1] === "") segments.pop();
 
   const account = segments[segments.length - 1] ?? "";
-  if (!account || account.toLowerCase() === "you") return null;
+  if (!account || account.toLowerCase() === PLACEHOLDER) return { kind: "none" };
 
   const parent = segments.slice(0, -1);
-  if (parent.length === 0) return null;
+  // `split` collapses separator runs, so only the LEADING segment of an
+  // absolute path can be empty — `[]` (a bare `bryan`) and `[""]` (`/root`)
+  // are the two ways to have no prefix to anchor against, and they fail the
+  // same way. See the module docstring.
+  if (parent.every((segment) => segment === "")) return { kind: "scan-only", account };
 
   // `["", "home"]` -> `[\\/]+home`; `["C:", "Users"]` -> `C:[\\/]+Users`; the
   // leading empty segment of an absolute path contributes nothing but leaves
   // the required separator in front of the account.
-  const parentPattern = parent.map(escapeRe).join(SEP);
+  const parentPattern = parent.map(escapeRegExp).join(SEP);
   return {
-    pattern: `(${parentPattern}${SEP})${escapeRe(account)}${SEGMENT_END}`,
-    flags: "gi",
-    replacement: "$1you",
-    account,
+    kind: "redact",
+    redaction: {
+      pattern: `(${parentPattern}${SEP})${escapeRegExp(account)}${SEGMENT_END}`,
+      flags: "gi",
+      replacement: `$1${PLACEHOLDER}`,
+      account,
+      parentPattern,
+    },
   };
 }
 
@@ -148,7 +214,7 @@ const PATH_TOKEN = /(?:[A-Za-z]:[\\/]|[\\/])[^\s"'<>()]*/g;
 const NAME_CHAR = "[A-Za-z0-9_-]";
 
 /**
- * Every path-shaped token in `text` in which `account` survives as a BOUNDED
+ * Every path-shaped token in `text` in which the account survives as a BOUNDED
  * run — preceded and followed by a non-name character (or the token edge).
  *
  * This is the capture's fail-closed check, and it is what makes narrowing the
@@ -157,8 +223,10 @@ const NAME_CHAR = "[A-Za-z0-9_-]";
  * is the whole point — the old assertion could not tell the two apart, so it
  * accepted the corrupted copy as proof of redaction.
  *
- * The boundary is not optional, and a plain `includes` is wrong in a way that
- * only bites on the exact account names #1528 is about. Measured:
+ * ## Two things it has to know about, or it fails a correctly redacted page
+ *
+ * **The boundary.** A plain `includes` is wrong in a way that only bites on the
+ * exact account names #1528 is about. Measured:
  *
  *   - account `user`, Windows: the redaction correctly produces
  *     `C:\Users\you\.claude.json`, and `includes("user")` then matches inside
@@ -167,18 +235,54 @@ const NAME_CHAR = "[A-Za-z0-9_-]";
  *   - account `claude`: `includes` matches `/claude-code`, which the redaction
  *     deliberately leaves intact — this module's own docstring promises it does.
  *
- * All three are false positives against a correctly redacted page. Bounding the
- * run removes them while keeping every real leak: a sibling directory
- * (`/home/you/.bryan/...`), a path outside the home dir
- * (`C:\Backups\bryan\...`), and a differently-cased repeat all still report.
+ * **The parent prefix.** The prefix is echoed back verbatim by design, so on a
+ * machine whose account IS one of its segments, a bounded scan reports the
+ * redaction's own output. Measured, before this was fixed:
+ * `findAccountPathLeaks("/home/you/.claude.json", "home")` returned that whole
+ * token — on `$HOME=/home/home` the page is byte-perfect and slot 13 fails
+ * forever. `home` and `users` are both in this class, and both are among the
+ * default accounts this module exists for. So the plan's `parentPattern` is
+ * masked out of each token — specifically the prefix followed by the
+ * PLACEHOLDER, which is exactly what a successful redaction leaves behind and
+ * therefore provably not a leak — before the bounded run is looked for. The
+ * token reported is the original, not the masked one.
  *
- * One ambiguity is deliberately left failing. On a machine whose account is
- * literally `claude`, `.claude.json` — Claude Code's own config filename, not
- * derived from the account — is a bounded run and reports. Nothing here can
- * tell those apart, and stopping the capture is the correct side to err on.
+ * Real leaks all still report: a sibling directory (`/home/you/.bryan/...`), a
+ * path outside the home dir (`C:\Backups\bryan\...`), an unredacted path
+ * (`/home/home/...` — no placeholder, so nothing masks), and a differently-cased
+ * repeat.
+ *
+ * ## What is deliberately left failing
+ *
+ * Masking the prefix cannot help with an account name that collides with a
+ * segment BELOW the home directory, because nothing distinguishes that from a
+ * real second occurrence. On a machine whose account is `claude`, `json`,
+ * `appdata`, `roaming` or `config`, slot 13's own paths
+ * (`C:\Users\you\AppData\Roaming\Claude\claude_desktop_config.json`,
+ * `/home/you/.claude.json`) contain a bounded run of the account name and
+ * report. Nothing here can tell those from a leak, and stopping the capture is
+ * the correct side to err on — but it IS a class, not a single case, and a
+ * capture run under one of those accounts will need a human decision rather
+ * than a code change.
  */
-export function findAccountPathLeaks(text: string, account: string): string[] {
+export function findAccountPathLeaks(text: string, plan: AccountRedactionPlan): string[] {
+  if (plan.kind === "none") return [];
+
+  const account = plan.kind === "redact" ? plan.redaction.account : plan.account;
+  // Only reachable through a hand-built plan — `planAccountRedaction` returns
+  // `none` for an empty account. Without it the bounded pattern degenerates to
+  // a pair of lookarounds that match at every boundary, reporting every token.
   if (!account) return [];
-  const bounded = new RegExp(`(?<!${NAME_CHAR})${escapeRe(account)}(?!${NAME_CHAR})`, "i");
-  return (text.match(PATH_TOKEN) ?? []).filter((token) => bounded.test(token));
+
+  // `scan-only` has no anchor and therefore no prefix to mask; that is the
+  // whole reason it cannot redact.
+  const mask =
+    plan.kind === "redact"
+      ? new RegExp(`${plan.redaction.parentPattern}${SEP}${PLACEHOLDER}${SEGMENT_END}`, "gi")
+      : null;
+
+  const bounded = new RegExp(`(?<!${NAME_CHAR})${escapeRegExp(account)}(?!${NAME_CHAR})`, "i");
+  return (text.match(PATH_TOKEN) ?? []).filter((token) =>
+    bounded.test(mask ? token.replace(mask, "/") : token),
+  );
 }
