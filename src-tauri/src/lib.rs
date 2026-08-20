@@ -5056,15 +5056,43 @@ fn cowork_set_lan_ip_override(_enabled: bool) -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
-/// Clear the UAC-declined flag and retry the enable flow.
+/// Retry the enable flow after an admin-declined attempt (#1560).
+///
+/// This delegates to `cowork_toggle_integration(true)` and nothing else. It used
+/// to clear `uac_declined_*` first, through `cowork_meta::update(...)?` — and the
+/// `?` was the bug: the canonical cause of that update failing is an unwritable
+/// `cowork-meta.json`, which is precisely when the admin-declined modal is up and
+/// Retry is the user's escape hatch. Under that fault the button returned early,
+/// every time, and the enable was never attempted at all.
+///
+/// The separate clear is gone rather than merely reordered, because on every path
+/// it was either redundant or wrong:
+///
+/// - **Toggle succeeds.** Its enable arm's own `cowork_meta::update` sets
+///   `uac_declined_last_attempt = false` and `uac_declined_at = None` immediately
+///   before the only `Ok(...)` it returns. The flag is cleared by the toggle,
+///   through the same code path, so a second write adds nothing.
+/// - **Toggle hits `AdminDeclined`.** That arm deliberately *re-sets* the flag
+///   with a fresh `uac_declined_at`, which is what re-arms the modal for a decline
+///   that just happened. A pre-emptive clear is undone a few lines later.
+/// - **Toggle fails any other way** (netsh missing, subnet detection failed, every
+///   workspace install failed). Meta is untouched, so the clear was the only
+///   writer — and clearing it there is the wrong outcome: it retires the modal
+///   after a retry that did not enable anything, leaving the user with a transient
+///   inline error and no standing signal that Cowork is still off.
+///
+/// So there is no clear result to report, and no partial-commit shape to report it
+/// as. Whether a *failed* meta persist inside the toggle should itself be fatal is
+/// a separate question, tracked by #1559; whatever that decides, this command
+/// forwards the toggle's verdict unchanged.
+///
+/// Note for anyone tracing the UAC wording: Tandem never elevates itself.
+/// `firewall::run_netsh` spawns a plain `netsh`, so `AdminDeclined` is *inferred*
+/// from netsh's exit code and stderr — no UAC prompt is ever raised on this path,
+/// and none can be accepted or declined.
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn cowork_retry_admin_elevation() -> Result<String, String> {
-    cowork_meta::update(|m| {
-        m.uac_declined_last_attempt = false;
-        m.uac_declined_at = None;
-    })
-    .map_err(|e| e.to_string())?;
     cowork_toggle_integration(true)
 }
 #[cfg(not(target_os = "windows"))]

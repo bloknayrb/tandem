@@ -61,12 +61,19 @@ export function coworkRescan(invoke: InvokeFn): Promise<string> {
   return invoke<string>("cowork_rescan");
 }
 
-export function coworkSetLanIpOverride(invoke: InvokeFn, enabled: boolean): Promise<{ ok: true }> {
-  return invoke<{ ok: true }>("cowork_set_lan_ip_override", { enabled });
+// Both of these resolve with a plain string, not an object. Their Rust
+// commands are `Result<String, String>`, which Tauri resolves with the `String`
+// itself; the previous `{ ok: true }` annotation described a shape the wire has
+// never produced. Nothing read it — both call sites discard the value — so the
+// lie type-checked indefinitely. It matters now because #1560 makes the retry's
+// success payload meaningful: it is the toggle's own "Cowork enabled: N
+// workspace(s) configured".
+export function coworkSetLanIpOverride(invoke: InvokeFn, enabled: boolean): Promise<string> {
+  return invoke<string>("cowork_set_lan_ip_override", { enabled });
 }
 
-export function coworkRetryAdminElevation(invoke: InvokeFn): Promise<{ ok: true }> {
-  return invoke<{ ok: true }>("cowork_retry_admin_elevation");
+export function coworkRetryAdminElevation(invoke: InvokeFn): Promise<string> {
+  return invoke<string>("cowork_retry_admin_elevation");
 }
 
 /**
