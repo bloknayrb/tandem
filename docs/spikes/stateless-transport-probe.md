@@ -68,11 +68,15 @@ false statement and damage the ADR-045 story, which is correct as written.
   which is what Tandem does today and remains correct for the protocol
   versions it speaks.
 
-## Not measured
+## Not measured — for the ADR-012 answer above
 
-No live stateless server was stood up, and no SDK v2 (`createMcpHandler`) was
-exercised. Those belong with #1505's dual-era work. This file answers only the
-narrow ADR-012 claim.
+No live stateless server was stood up; that belongs with #1505's dual-era work.
+Everything above this line answers only the narrow ADR-012 claim.
+
+**SDK v2 is no longer out of scope for this file** — the addendum below was
+added later (#1332) and does cover `createMcpHandler`. It has its own, narrower
+scope statement in its closing paragraph: it reads published tarballs, and still
+stands no v2 server up.
 
 ## Addendum (#1332): v2's legacy composition — GA, not unreleased
 
