@@ -10,6 +10,7 @@ import {
   formatCoworkError,
   isTauriRuntime,
   makeDebouncer,
+  toggleWarnings,
   undetectedDetail,
   workspaceFileStatusFamily,
   workspaceFileStatusLabel,
@@ -1022,5 +1023,45 @@ describe("isTauriRuntime", () => {
   it("returns true when __TAURI_INTERNALS__ is present (Tauri v2)", () => {
     vi.stubGlobal("window", { __TAURI_INTERNALS__: {} } as unknown as Window);
     expect(isTauriRuntime()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toggleWarnings — the defensive read of the toggle's Ok payload (#1438)
+// ---------------------------------------------------------------------------
+
+describe("toggleWarnings", () => {
+  it("returns the warnings a well-formed report carries", () => {
+    expect(toggleWarnings({ message: "Cowork disabled", warnings: ["a", "b"] })).toEqual([
+      "a",
+      "b",
+    ]);
+  });
+
+  it("returns [] for a clean report", () => {
+    expect(
+      toggleWarnings({ message: "Cowork enabled: 1 workspace(s) configured", warnings: [] }),
+    ).toEqual([]);
+  });
+
+  it("returns [] for a sidecar predating #1438, which resolves with a bare string", () => {
+    // The reason this function exists rather than a `.warnings` read at the
+    // call site: a desktop shell can be newer than the sidecar it launched, and
+    // `"…".warnings.length` throws inside the toggle handler — turning a
+    // successful enable into a red error banner.
+    expect(toggleWarnings("Cowork enabled: 1 workspace(s) configured")).toEqual([]);
+  });
+
+  it("returns [] rather than throwing for null, undefined and a missing key", () => {
+    expect(toggleWarnings(null)).toEqual([]);
+    expect(toggleWarnings(undefined)).toEqual([]);
+    expect(toggleWarnings({ message: "Cowork disabled" })).toEqual([]);
+    expect(toggleWarnings({ message: "x", warnings: "not an array" })).toEqual([]);
+  });
+
+  it("drops non-strings instead of stringifying them", () => {
+    // `String({})` renders "[object Object]" into a user-facing banner, which
+    // is worse than saying nothing.
+    expect(toggleWarnings({ message: "x", warnings: ["real", 7, null, {}, ""] })).toEqual(["real"]);
   });
 });

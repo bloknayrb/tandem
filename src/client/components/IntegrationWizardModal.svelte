@@ -378,6 +378,11 @@ async function enableCowork(): Promise<void> {
   coworkError = null;
   try {
     const invoke: InvokeFn = await loadInvoke();
+    // Degraded-success warnings (#1438) are not rendered here for the same
+    // reason as `CoworkOnboardingStep`: a successful enable leaves this
+    // sub-view, so a caveat shown now is discarded unread, and the per-workspace
+    // facts behind it return on every status read for the settings panel to
+    // show. Discarding the payload is a decision here, not an oversight.
     await coworkToggleIntegration(invoke, true);
     const readBack = await coworkStatus.refetch();
     if (readBack) leaveCoworkView();

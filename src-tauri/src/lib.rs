@@ -4515,6 +4515,151 @@ mod enable_persist_outcome_tests {
             !msg.contains("plugin entries"),
             "message must not claim plugin entries were installed when none were: {msg}"
         );
+
+/// The `Ok` payload of `cowork_toggle_integration` (#1438).
+///
+/// The command has always encoded *degraded success* in its `Ok` arm — a
+/// partial multi-workspace install on enable, a leftover firewall rule or a
+/// partial uninstall on disable — as English folded into the success string.
+/// Every client call site awaited the invoke and threw the string away, so all
+/// three rendered as an unqualified green success and the only surviving record
+/// was a `log::warn!` on a Tauri log the user has no route to. A user with three
+/// workspaces where two failed to install saw "Enabled" and a check badge.
+///
+/// Splitting the payload rather than teaching the client to read the message is
+/// deliberate. Branching on message text would couple the client to Rust string
+/// literals, and a reworded warning would then silently stop rendering — the
+/// same class of failure, moved one layer out and made harder to see.
+///
+/// `warnings` empty means clean success. It is never used to report failure:
+/// that is still the `Err` arm, and the two must not blur. A warning here means
+/// "the operation committed, and here is what is imperfect about the result".
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CoworkToggleReport {
+    message: String,
+    warnings: Vec<String>,
+}
+
+/// The user-facing caveat for a firewall rule that could not be removed.
+///
+/// A `const` rather than an inline literal because the disable arm is the only
+/// producer and a test is the only other reader; keeping them on one string
+/// stops the test from passing against a copy of the wording rather than the
+/// wording. The allow mirrors `partial_workspace_warning`'s: the only non-test
+/// reader is inside the `cfg(target_os = "windows")` arm.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const COWORK_LEFTOVER_FIREWALL_WARNING: &str =
+    "A leftover firewall rule may remain. It's harmless — Tandem's server only listens on this computer.";
+
+/// The caveat for a workspace pass where some — but not all — workspaces
+/// succeeded.
+///
+/// `None` when there is nothing to say: no workspaces at all, or every one of
+/// them succeeded. All-failed is NOT this function's case — both arms of the
+/// toggle return `Err` before reaching here, because an operation that landed
+/// nowhere is a failure, not a degraded success.
+///
+/// Kept outside the `cfg(target_os = "windows")` gate so its tests run on every
+/// CI leg; the allow keeps a non-Windows release build warning-free. Direct
+/// precedent: `parse_netstat_listening_pid` and its siblings above.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn partial_workspace_warning(
+    verb: &str,
+    success_count: usize,
+    total: usize,
+    failures: &[String],
+) -> Option<String> {
+    if total == 0 || success_count >= total {
+        return None;
+    }
+    let failed = total - success_count;
+    // The failure detail is included because the alternative is a warning the
+    // user cannot act on. It is the same summary the `Err` arm already builds
+    // for the all-failed case, so this adds no new disclosure surface.
+    let detail = if failures.is_empty() {
+        String::new()
+    } else {
+        format!(" Details: {}", failures.join("; "))
+    };
+    Some(format!(
+        "{failed} of {total} Cowork workspace(s) could not be {verb}.{detail}"
+    ))
+}
+
+#[cfg(test)]
+mod partial_workspace_warning_tests {
+    use super::{partial_workspace_warning, COWORK_LEFTOVER_FIREWALL_WARNING};
+
+    /// The regression #1438 is about: a partial install used to be visible only
+    /// in a `log::warn!`, so this asserts something is produced at all — and
+    /// that it names both halves of the ratio, since "some failed" without a
+    /// count is not actionable.
+    #[test]
+    fn a_partial_pass_produces_a_warning_naming_the_ratio() {
+        let w = partial_workspace_warning(
+            "configured",
+            1,
+            3,
+            &["ws-a/vm-1: Locked".into(), "ws-b/vm-2: SchemaDrift".into()],
+        )
+        .expect("a partial pass must produce a warning");
+        assert!(w.contains("2 of 3"), "{w}");
+        assert!(w.contains("configured"), "{w}");
+        // The detail is what makes it actionable — a user cannot act on
+        // "2 of 3 failed" alone.
+        assert!(w.contains("ws-a/vm-1: Locked"), "{w}");
+        assert!(w.contains("ws-b/vm-2: SchemaDrift"), "{w}");
+    }
+
+    #[test]
+    fn a_clean_pass_produces_nothing() {
+        assert_eq!(partial_workspace_warning("configured", 3, 3, &[]), None);
+    }
+
+    /// Zero workspaces is a clean outcome, not a degraded one. Warning there
+    /// would put a caveat on every enable on a machine that has no Cowork
+    /// workspaces at all — the common case for a new install.
+    #[test]
+    fn no_workspaces_at_all_produces_nothing() {
+        assert_eq!(partial_workspace_warning("configured", 0, 0, &[]), None);
+    }
+
+    /// Defensive: a count above the total is a caller bug, and the honest
+    /// answer is silence rather than a warning claiming a negative failure
+    /// count. `total - success_count` would panic in debug builds.
+    #[test]
+    fn a_success_count_above_the_total_produces_nothing_rather_than_panicking() {
+        assert_eq!(partial_workspace_warning("configured", 4, 3, &[]), None);
+    }
+
+    /// All-failed is deliberately NOT this function's case — both toggle arms
+    /// return `Err` before reaching it. Pinned so a future refactor that routes
+    /// all-failed through here has to make that decision on purpose: it would
+    /// otherwise turn a hard failure into a green toast with a caveat.
+    #[test]
+    fn all_failed_still_produces_a_warning_because_the_caller_never_asks() {
+        let w = partial_workspace_warning("configured", 0, 2, &["a".into(), "b".into()]);
+        assert!(w.is_some(), "the shape is unconditional; the CALLER is the gate");
+    }
+
+    /// Empty failure detail is a degenerate but reachable shape (a caller that
+    /// knows the ratio but not the reasons). It must not emit a dangling
+    /// "Details:" with nothing after it.
+    #[test]
+    fn no_failure_detail_means_no_details_clause() {
+        let w = partial_workspace_warning("cleaned up", 1, 2, &[]).expect("still a warning");
+        assert!(!w.contains("Details"), "{w}");
+        assert!(w.contains("1 of 2"), "{w}");
+    }
+
+    /// The firewall caveat is advisory, and the wording carries the reason it
+    /// is advisory. A rewrite that drops the "only listens on this computer"
+    /// half turns a reassurance into an alarm.
+    #[test]
+    fn the_leftover_firewall_warning_says_why_it_is_harmless() {
+        assert!(COWORK_LEFTOVER_FIREWALL_WARNING.contains("harmless"));
+        assert!(COWORK_LEFTOVER_FIREWALL_WARNING.contains("only listens on this computer"));
     }
 }
 
@@ -4526,7 +4671,7 @@ mod enable_persist_outcome_tests {
 /// all. On disable: uninstalls plugin entries, removes firewall rules.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
+fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleReport, String> {
     use cowork_installer::{install_tandem_plugin_into_workspace, uninstall_tandem_plugin_from_workspace};
     use cowork_workspace_scan::find_cowork_workspaces;
 
@@ -4609,6 +4754,8 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         }
 
         let workspace_count = workspaces.len();
+        // Degraded-success caveats, surfaced on the Ok payload (#1438).
+        let mut warnings: Vec<String> = Vec::new();
 
         let reports: Vec<_> = workspaces
             .iter()
@@ -4657,6 +4804,29 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
                     success_count,
                     workspaces.len()
                 );
+                // #1438: the log is not a route the user has. Carry the caveat
+                // out on the Ok payload so the panel can say so.
+                let failure_summary: Vec<String> = reports
+                    .iter()
+                    .filter(|r| !matches!(r, Ok(report) if matches!(
+                        report.installed_plugins,
+                        cowork_installer::WriteStatus::Ok
+                            | cowork_installer::WriteStatus::AlreadyPresent
+                    )))
+                    .map(|r| match r {
+                        Ok(report) => format!(
+                            "{}/{}: {:?}",
+                            report.workspace_id, report.vm_id, report.installed_plugins
+                        ),
+                        Err(e) => e.to_string(),
+                    })
+                    .collect();
+                warnings.extend(partial_workspace_warning(
+                    "configured",
+                    success_count,
+                    workspaces.len(),
+                    &failure_summary,
+                ));
             }
         }
 
@@ -4670,7 +4840,16 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         if let Err(e) = &persist {
             log::warn!("[cowork] failed to persist meta after enable: {e}");
         }
+        // Both halves survive the #1437 + #1438 merge, and the order matters.
+        // `enable_persist_outcome` owns the FAILURE decision (#1437: a persist
+        // failure after the firewall rule and plugin entries are live is a
+        // partial commit and must fail loud, not resolve green over a stale
+        // state). `warnings` carries DEGRADED SUCCESS (#1438). They compose in
+        // exactly one direction: a persist failure discards the warnings,
+        // because the operation did not succeed and a caveat list beside an
+        // error would imply it did. Warnings ride only on the Ok arm.
         enable_persist_outcome(persist, workspace_count)
+            .map(|message| CoworkToggleReport { message, warnings })
     } else {
         // Disable: uninstall from all workspaces and remove firewall rules.
         let workspaces = find_cowork_workspaces();
@@ -4769,18 +4948,56 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
             ));
         }
 
+        let mut warnings: Vec<String> = Vec::new();
         if firewall_failed {
-            Ok("Cowork disabled (a leftover firewall rule may remain — harmless; \
-                Tandem's server only listens on this computer)"
-                .to_string())
-        } else {
-            Ok("Cowork disabled".to_string())
+            warnings.push(COWORK_LEFTOVER_FIREWALL_WARNING.to_string());
         }
+        // A partial uninstall is the same defect as the partial install above:
+        // it was `log::warn!`-only, so a user with three workspaces where two
+        // still hold plugin entries saw an unqualified "Cowork disabled".
+        //
+        // The predicate must be the SAME one `workspace_all_failed` uses above,
+        // not a bare `is_ok()`. `uninstall_tandem_plugin_from_workspace` returns
+        // `Ok(WorkspaceWriteReport { installed_plugins: WriteStatus::Failed(..) })`
+        // on a revalidation failure (`cowork_installer.rs`) -- an `Ok` that means
+        // the entry is still there. Counting that as a success made this warning
+        // silent for the commonest failure shape, i.e. for exactly the case the
+        // bullet above describes, while `workspace_all_failed` right above was
+        // already treating it as a failure. The enable arm's `failure_summary`
+        // uses the WriteStatus predicate; this one is now symmetric with it.
+        let uninstall_failures: Vec<String> = reports
+            .iter()
+            .filter(|r| {
+                !matches!(
+                    r,
+                    Ok(report)
+                        if matches!(
+                            report.installed_plugins,
+                            cowork_installer::WriteStatus::Ok
+                                | cowork_installer::WriteStatus::AlreadyPresent
+                        )
+                )
+            })
+            .map(|r| match r {
+                Ok(report) => format!(
+                    "{}/{}: {:?}",
+                    report.workspace_id, report.vm_id, report.installed_plugins
+                ),
+                Err(e) => e.to_string(),
+            })
+            .collect();
+        warnings.extend(partial_workspace_warning(
+            "cleaned up",
+            workspaces.len().saturating_sub(uninstall_failures.len()),
+            workspaces.len(),
+            &uninstall_failures,
+        ));
+        Ok(CoworkToggleReport { message: "Cowork disabled".to_string(), warnings })
     }
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-fn cowork_toggle_integration(_enabled: bool) -> Result<String, String> {
+fn cowork_toggle_integration(_enabled: bool) -> Result<CoworkToggleReport, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
@@ -5612,12 +5829,12 @@ fn cowork_set_lan_ip_override(_enabled: bool) -> Result<String, String> {
 /// and none can be accepted or declined.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn cowork_retry_admin_elevation() -> Result<String, String> {
+fn cowork_retry_admin_elevation() -> Result<CoworkToggleReport, String> {
     cowork_toggle_integration(true)
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-fn cowork_retry_admin_elevation() -> Result<String, String> {
+fn cowork_retry_admin_elevation() -> Result<CoworkToggleReport, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 

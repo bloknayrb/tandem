@@ -101,6 +101,7 @@ cowork-settings-undetected
 cowork-settings-unsupported
 cowork-toggle
 cowork-toggle-checkbox
+cowork-toggle-warnings
 cowork-vethernet-cidr
 cowork-workspace-report-{*}-{*}
 cowork-workspace-row-{*}-{*}
