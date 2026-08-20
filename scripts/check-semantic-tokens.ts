@@ -45,15 +45,19 @@ const ATTRIBUTE_ASSIGNMENT_TAIL_RE = /[-a-zA-Z_][-a-zA-Z0-9_]*\s*=\s*$/;
 /**
  * What can appear immediately before a string literal that makes the WHOLE
  * literal a CSS value: a `style` attribute, a `.style.*`/`.cssText` assignment,
- * a `setProperty()` value argument, an object-literal property, or a CSS-in-JS
- * tagged template.
+ * a `setProperty()` value argument, a `setAttribute("style", …)` value
+ * argument, an object-literal property, or a CSS-in-JS tagged template.
  *
- * The object-property arm accepts ANY identifier rather than only CSS-ish ones,
- * matching the declaration walk-back below — restricting it would drop the real
- * color in `<div class="border-box" style="box-shadow: 0 0 1px #333">`.
+ * The object-property arm is NOT "any identifier" — see `CSS_PROPERTY_WORDS`
+ * for why the loose form had to go. This regex is a *governor*: matching it
+ * means the literal is a CSS value and the hex in it reports. So a missing arm
+ * is a silent FALSE NEGATIVE, which is why `setAttribute` is here even though
+ * `looksLikeCssValueString` already covers its well-formed cases —
+ * `el.setAttribute("style", "shadow 2px #333")` is governed but not
+ * value-word-clean, and without the arm the color is lost.
  */
 const STYLE_STRING_GOVERNOR_RE =
-  /(?:\bstyle(?::[-a-zA-Z0-9_]+)?\s*=|\.style(?:\.[A-Za-z0-9_$]+)?\s*=|\.setProperty\(\s*(['"`])[^'"`]*\1\s*,|\b(?:css|styled(?:\.[A-Za-z0-9_$]+)?|keyframes|createGlobalStyle))[\s{(]*$/;
+  /(?:\bstyle(?::[-a-zA-Z0-9_]+)?\s*=|\.style(?:\.[A-Za-z0-9_$]+)?\s*=|\.setProperty\(\s*(['"`])[^'"`]*\1\s*,|\.setAttribute\(\s*(['"`])style\2\s*,|\b(?:css|styled(?:\.[A-Za-z0-9_$]+)?|keyframes|createGlobalStyle))[\s{(]*$/;
 
 /** The identifier of an object-literal / declaration property, if this text ends in one. */
 const PROPERTY_NAME_TAIL_RE = /([-a-zA-Z_][-a-zA-Z0-9_]*)\s*:[\s{(]*$/;
@@ -314,15 +318,32 @@ const CSS_VALUE_WORDS: ReadonlySet<string> = new Set([
 const LEADING_PROPERTY_COLON_RE = /^\s*([-a-zA-Z_][-a-zA-Z0-9_]*)\s*:/;
 
 /**
- * Does this literal OPEN with a CSS declaration?
+ * Is the hex sitting in a CSS **declaration segment** of this literal?
  *
- * Anchored at the literal's start, not merely "contains a CSS-ish colon
- * somewhere". Unanchored it read ordinary log punctuation as CSS — measured,
- * `"border ok. shadow: see #1364"` and `"styles: regressed in #1364"` both
- * reported — which is the same substring trap that produced #1534 one level up.
+ * `contentBefore` is the literal's content up to the hex (carried text from
+ * earlier lines included). A CSS declaration list is `;`-separated, so the
+ * segment that owns the hex starts after the last `;` before it, and the test
+ * is whether THAT segment opens with a CSS-ish property colon.
+ *
+ * This used to be anchored at the literal's start, which is a silent false
+ * negative for every value string that is not a single declaration:
+ * `"display: block; background: #333"` was judged prose all the way through
+ * because `display` is not a CSS_PROPERTY_WORD, and so were the literals
+ * opening `padding:`, `margin:`, `height:`, `grid-template-columns:` and
+ * `transform:`. A lint gate must fail toward reporting; anchoring made it fail
+ * toward silence.
+ *
+ * Segmenting does not widen the prose surface, because the anchor is still an
+ * anchor — it just moves to the segment. The two measured prose shapes stay
+ * silent: `"border ok. shadow: see #1364"` has no `;`, and its one segment
+ * starts `border ok.`, which is not `ident:`; `"styles: regressed in #1364"`
+ * opens with `styles`, which is not a CSS property word (`style` is). And a
+ * segment boundary can only ever move the anchor RIGHT of a `;`, so a hex in
+ * the first segment is judged exactly as before.
  */
-function opensWithCssDeclaration(content: string): boolean {
-  const m = LEADING_PROPERTY_COLON_RE.exec(content);
+function isInCssDeclarationSegment(contentBefore: string): boolean {
+  const segment = contentBefore.slice(contentBefore.lastIndexOf(";") + 1);
+  const m = LEADING_PROPERTY_COLON_RE.exec(segment);
   return m !== null && isCssPropertyName(m[1]);
 }
 
@@ -452,27 +473,33 @@ function isInsideCssColorFunction(before: string, after: string): boolean {
 }
 
 /**
- * A string literal that was still open when a line ended.
+ * One entry of the string-literal scanner's state stack.
  *
- * Only two kinds are carried across lines, and the restriction is the whole
- * safety argument. A **template literal** is the only genuinely multi-line
- * literal in TS/Svelte script. An **attribute value** (`quote` preceded by
- * `=`) is the multi-line form in markup: `src/client/components/
- * CommandPalette.svelte` holds six `style="…"` attributes wrapped across lines.
+ * The stack, not just its bottom frame, is what crosses a line boundary. An
+ * earlier cut carried a single open literal and gave up whenever the stack was
+ * deeper than one — which is exactly the state a wrapped template literal ends
+ * a line in. `src/client/tabs/TabItem.svelte:174` ends inside `${`, so the
+ * carry was dropped; line 176's closing backtick then read as OPENING a
+ * literal, and (being a backtick) it carried, swallowing the component's whole
+ * `<style>` block from 176 to EOF. Tree-wide that shape produced 7 runaway
+ * carries covering 935 lines of `src/client`.
  *
- * Everything else stops at the newline, because carrying it would be actively
- * harmful: 103 lines in `src/client` end mid-`'` or mid-`"` purely from prose
- * apostrophes and quotes (`AppearanceSettings.svelte`'s "document's"). Carrying
- * those would poison every following line of the file. An attribute quote is
- * preceded by `=`; an apostrophe in prose is preceded by a letter.
+ * An `interp` frame is the most reliable multi-line state there is: a line that
+ * ends inside `${…}` is unambiguously mid-template. It is a `lit` frame on top
+ * that needs the `literalMayContinue` judgement.
  */
-interface OpenLiteral {
-  quote: string;
-  /** Whether the text before the opening quote made it a CSS value. */
-  governed: boolean;
-  /** The literal's content from previous lines, for the value-word test. */
-  priorText: string;
-}
+type ScanFrame =
+  | {
+      kind: "lit";
+      quote: string;
+      /** Column the literal opened at, or `-1` if it opened on an earlier line. */
+      start: number;
+      /** Whether the text before the opening quote made it a CSS value. */
+      governed?: boolean;
+      /** The literal's content from previous lines, for the value-word test. */
+      priorText: string;
+    }
+  | { kind: "interp"; depth: number };
 
 /**
  * A literal occupying `[start, end)` on this line — `start < 0` if it opened earlier.
@@ -502,7 +529,39 @@ function isGovernedLiteral(before: string): boolean {
   return STYLE_STRING_GOVERNOR_RE.test(before) || isCssGovernedProperty(before);
 }
 
-/** May a literal opened with `quote` here survive to the next line? */
+/**
+ * `isGovernedLiteral` for a literal opening at `start` on `line`, with one
+ * physical line of look-back.
+ *
+ * `biome.json` sets `lineWidth: 100`, so `el.style.cssText =` and its value
+ * routinely land on different physical lines — and every governor arm matches
+ * text that ends at the assignment. When nothing but indentation precedes the
+ * quote, the governing text is on the line above, and judging the empty prefix
+ * is a guaranteed miss. The look-back is exactly one line and only fires on a
+ * whitespace-only prefix, so it cannot reach past an intervening statement.
+ */
+function isGovernedLiteralOpeningAt(line: string, start: number, prevLine?: string): boolean {
+  const before = line.slice(0, Math.max(start, 0));
+  if (isGovernedLiteral(before)) return true;
+  if (prevLine === undefined || start < 0 || /\S/.test(before)) return false;
+  return isGovernedLiteral(prevLine);
+}
+
+/**
+ * May a literal opened with `quote` here survive to the next line?
+ *
+ * Only two kinds are carried across lines, and the restriction is the whole
+ * safety argument. A **template literal** is the only genuinely multi-line
+ * literal in TS/Svelte script. An **attribute value** (`quote` preceded by
+ * `=`) is the multi-line form in markup: `src/client/components/
+ * CommandPalette.svelte` holds six `style="…"` attributes wrapped across lines.
+ *
+ * Everything else stops at the newline, because carrying it would be actively
+ * harmful: 103 lines in `src/client` end mid-`'` or mid-`"` purely from prose
+ * apostrophes and quotes (`AppearanceSettings.svelte`'s "document's"). Carrying
+ * those would poison every following line of the file. An attribute quote is
+ * preceded by `=`; an apostrophe in prose is preceded by a letter.
+ */
 function literalMayContinue(quote: string, before: string): boolean {
   return quote === "`" || /=\s*$/.test(before);
 }
@@ -514,30 +573,31 @@ function literalMayContinue(quote: string, before: string): boolean {
  * that opened a literal can close it, so an apostrophe inside `"…"` and a `"`
  * inside a template literal are both inert — which is the point. Comments are
  * already masked by `maskComments` before this runs.
+ *
+ * `prevLine` is used only to resolve `governed` for a literal that opens at the
+ * very start of this line (see `isGovernedLiteralOpeningAt`); omit it and the
+ * scan is line-local, which is what the exported helper's unit tests want.
  */
 export function scanStringLiterals(
   line: string,
-  incoming: OpenLiteral | null,
-): { spans: LiteralSpan[]; outgoing: OpenLiteral | null } {
-  type Frame =
-    | { kind: "lit"; quote: string; start: number; governed?: boolean; priorText: string }
-    | { kind: "interp"; depth: number };
-
+  incoming: ScanFrame[] | null,
+  prevLine?: string,
+): { spans: LiteralSpan[]; outgoing: ScanFrame[] | null } {
   const spans: LiteralSpan[] = [];
-  const frames: Frame[] = [];
   // Fast path: a line with no quote at all cannot open or close anything, and
   // most lines are that. Skipping the character loop for them is what keeps
-  // this scan off the critical path of a whole-tree run.
-  if (incoming === null && !QUOTE_RE.test(line)) return { spans, outgoing: null };
-  if (incoming) {
-    frames.push({
-      kind: "lit",
-      quote: incoming.quote,
-      start: -1,
-      governed: incoming.governed,
-      priorText: incoming.priorText,
-    });
+  // this scan off the critical path of a whole-tree run. It is sound only with
+  // no incoming state: a carried `interp` frame is closed by a `}`, which is
+  // not a quote.
+  if ((incoming === null || incoming.length === 0) && !QUOTE_RE.test(line)) {
+    return { spans, outgoing: null };
   }
+  // Copied, never aliased: `depth` is mutated in place below, and the caller
+  // holds the array it passed in. No `start` normalisation here — the outgoing
+  // map below is the ONLY producer of a carried frame and it already writes
+  // `-1`, so a second normalisation would be unreachable code that no test
+  // could distinguish from its own absence.
+  const frames: ScanFrame[] = (incoming ?? []).map((f) => ({ ...f }));
 
   // `charCodeAt` rather than `line[i]`: indexing allocates a one-character
   // string per character, which over `src/client` is millions of allocations.
@@ -601,28 +661,43 @@ export function scanStringLiterals(
     }
   }
 
-  // Carry forward only an UNNESTED literal: a line ending mid-interpolation is
-  // ambiguous, and guessing there would poison every following line.
-  const only = frames.length === 1 ? frames[0] : null;
-  if (only?.kind !== "lit") return { spans, outgoing: null };
-  const beforeOpen = only.start < 0 ? "" : line.slice(0, only.start);
-  if (only.start >= 0 && !literalMayContinue(only.quote, beforeOpen)) {
+  const top = frames.length === 0 ? undefined : frames[frames.length - 1];
+  if (top === undefined) return { spans, outgoing: null };
+  // The judgement is about the TOP frame only, because that is the one the next
+  // line continues inside. A `lit` frame that opened on this line and is not a
+  // plausible multi-line literal (a prose apostrophe) discards the whole stack:
+  // the scan is already wrong, and carrying a stack built on a bogus frame
+  // would spread that error down the file.
+  if (
+    top.kind === "lit" &&
+    top.start >= 0 &&
+    !literalMayContinue(top.quote, line.slice(0, top.start))
+  ) {
     return { spans, outgoing: null };
   }
   return {
     spans,
-    outgoing: {
-      quote: only.quote,
-      governed: only.governed ?? isGovernedLiteral(line.slice(0, Math.max(only.start, 0))),
-      // Capped: a literal that is never closed would otherwise accumulate the
-      // rest of the file, and every hex in it would re-scan the whole thing.
-      // The HEAD is what is kept, because `opensWithCssDeclaration` reads the
-      // start; a wrapped attribute or template runs to a few lines, not 200.
-      priorText: `${only.priorText}${line.slice(only.start + 1)}\n`.slice(
-        0,
-        MAX_CARRIED_LITERAL_CHARS,
-      ),
-    },
+    outgoing: frames.map((f) => {
+      if (f.kind !== "lit") return f;
+      return {
+        kind: "lit" as const,
+        quote: f.quote,
+        start: -1,
+        // Resolved HERE and not later, because the text before the opening
+        // quote does not survive the line boundary. `??` keeps an already
+        // resolved value: a frame carried in has `start === -1` and an empty
+        // prefix, so re-deriving it would answer `false` every time.
+        governed: f.governed ?? isGovernedLiteralOpeningAt(line, f.start, prevLine),
+        // Capped: a literal that is never closed would otherwise accumulate the
+        // rest of the file, and every hex in it would re-scan the whole thing.
+        // The HEAD is what is kept, because the declaration test reads the
+        // start; a wrapped attribute or template runs to a few lines, not 200.
+        priorText: `${f.priorText}${line.slice(Math.max(f.start, -1) + 1)}\n`.slice(
+          0,
+          MAX_CARRIED_LITERAL_CHARS,
+        ),
+      };
+    }),
   };
 }
 
@@ -685,6 +760,7 @@ export function isColorValuePosition(
   index: number,
   raw: string,
   spans?: LiteralSpan[],
+  prevLine?: string,
 ): boolean {
   const before = line.slice(0, index);
   const after = line.slice(index + raw.length);
@@ -705,13 +781,11 @@ export function isColorValuePosition(
   if (span) {
     const contentStart = Math.max(span.start, -1) + 1;
     const content = span.priorText + line.slice(contentStart, span.end);
-    if (span.governed ?? isGovernedLiteral(line.slice(0, Math.max(span.start, 0)))) return true;
+    const contentBefore = span.priorText + line.slice(contentStart, index);
+    if (span.governed ?? isGovernedLiteralOpeningAt(line, span.start, prevLine)) return true;
     if (looksLikeCssValueString(content)) return true;
-    if (opensWithCssDeclaration(content)) return true;
-    return isInsideCssColorFunction(
-      span.priorText + line.slice(contentStart, index),
-      line.slice(index + raw.length, span.end),
-    );
+    if (isInCssDeclarationSegment(contentBefore)) return true;
+    return isInsideCssColorFunction(contentBefore, line.slice(index + raw.length, span.end));
   }
 
   if (ATTRIBUTE_ASSIGNMENT_TAIL_RE.test(before)) return true;
@@ -745,9 +819,10 @@ export function isLikelyIssueReference(
   index: number,
   raw: string,
   spans?: LiteralSpan[],
+  prevLine?: string,
 ): boolean {
   if (!ALL_DECIMAL_DIGITS_RE.test(raw.slice(1))) return false;
-  return !isColorValuePosition(line, index, raw, spans);
+  return !isColorValuePosition(line, index, raw, spans, prevLine);
 }
 
 /**
@@ -956,6 +1031,48 @@ export function shouldSkipFile(relPath: string): boolean {
   return SKIP_FILE_RELS.has(rel) || /\.(test|spec)\.[tj]sx?$/.test(rel);
 }
 
+/**
+ * Per-line string-literal state for a whole file, with a fail-OPEN backstop.
+ *
+ * Running the scanner line by line is what lets a template literal or a wrapped
+ * `style="…"` attribute be judged as ONE literal on its continuation lines.
+ * Without it those lines fall back to the per-token walk-back this design
+ * replaced — silently, and in both directions.
+ *
+ * The backstop is the other half. **No source file ends inside a string
+ * literal**, so a carry that is still open at EOF is proof the scan
+ * desynchronised — a regex literal containing an unpaired quote is enough to do
+ * it. Left alone, every line from the desync to EOF is judged as "inside a
+ * literal that is not a CSS value", i.e. silently exempt: the runaway carry
+ * that swallowed `TabItem.svelte`'s entire `<style>` block was this shape. So
+ * the run is re-scanned line-locally, which is how the check behaved before
+ * multi-line state existed. **A lint gate must fail toward reporting.**
+ *
+ * `carryStart` is the first line of the still-open run, and it is deliberately
+ * not reset when one carry closes and another opens on the same line: over-wide
+ * repair only removes multi-line context, which can only ever add reports.
+ */
+function literalStatesFor(scanLines: string[]): LiteralSpan[][] {
+  const spans: LiteralSpan[][] = [];
+  let open: ScanFrame[] | null = null;
+  let carryStart: number | null = null;
+
+  for (let i = 0; i < scanLines.length; i++) {
+    const result = scanStringLiterals(scanLines[i], open, i > 0 ? scanLines[i - 1] : undefined);
+    spans.push(result.spans);
+    if (result.outgoing === null) carryStart = null;
+    else if (open === null) carryStart = i;
+    open = result.outgoing;
+  }
+
+  if (open !== null && carryStart !== null) {
+    for (let i = carryStart; i < scanLines.length; i++) {
+      spans[i] = scanStringLiterals(scanLines[i], null).spans;
+    }
+  }
+  return spans;
+}
+
 export function checkContent(content: string, rel: string): string[] {
   const violations: string[] = [];
 
@@ -964,23 +1081,21 @@ export function checkContent(content: string, rel: string): string[] {
   // both are in `collectFiles` scope, so they get the same HTML-comment gate.
   const isHtml = rel.endsWith(".html") || rel.endsWith(".svelte");
   const state: CommentState = { inBlockComment: false, inHtmlComment: false };
-  // Running string-literal state, so a template literal or a wrapped `style="…"`
-  // attribute is still judged as ONE literal on its continuation lines. Without
-  // it those lines fall back to the per-token walk-back this design replaced —
-  // silently, and in both directions.
-  let openLiteral: OpenLiteral | null = null;
+
+  // Mask out comment regions (CSS block, HTML, and line-start `//`) while
+  // preserving column indices. The masked line is used for BOTH the
+  // CSS-keyword indicator checks and the regex passes so commented-out hex
+  // and keywords never produce false positives — including comments opened
+  // mid-line after live code, and code that follows a mid-line comment close.
+  // Done for the whole file up front because the literal scan below needs a
+  // second pass over it to repair a desynchronised carry.
+  const scanLines = lines.map((line) => maskComments(line, state, isHtml));
+  const spansByLine = literalStatesFor(scanLines);
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Mask out comment regions (CSS block, HTML, and line-start `//`) while
-    // preserving column indices. The masked line is used for BOTH the
-    // CSS-keyword indicator checks and the regex passes so commented-out hex
-    // and keywords never produce false positives — including comments opened
-    // mid-line after live code, and code that follows a mid-line comment close.
-    const scanLine = maskComments(line, state, isHtml);
-    const literals = scanStringLiterals(scanLine, openLiteral);
-    openLiteral = literals.outgoing;
+    const scanLine = scanLines[i];
+    const literals = { spans: spansByLine[i] };
+    const prevLine = i > 0 ? scanLines[i - 1] : undefined;
 
     // Per-line dedupe of hex matches by character index so the bundle-blocklist
     // pass below does not double-report a position the CSS-keyword pass
@@ -1014,7 +1129,9 @@ export function checkContent(content: string, rel: string): string[] {
       if (allDigits && !VALID_HEX_COLOR_BODY_LENGTHS.has(raw.length - 1)) continue;
       // Calls the exported predicate rather than re-inlining it: two copies of
       // one rule let an edit to either drift, and the tests pin the helper.
-      if (isLikelyIssueReference(scanLine, hexMatch.index, raw, literals.spans)) continue;
+      if (isLikelyIssueReference(scanLine, hexMatch.index, raw, literals.spans, prevLine)) {
+        continue;
+      }
       violations.push(`${rel}:${i + 1}: ${raw}`);
       reportedHexAtIndex.add(hexMatch.index);
     }

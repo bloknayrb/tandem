@@ -1087,6 +1087,201 @@ describe("check-semantic-tokens", () => {
       ).toEqual(["src/client/utils/rules.ts:1: #333"]);
     });
 
+    describe("multi-line literal state", () => {
+      // The scanner's cross-line state is the half of #1534 with no visible
+      // symptom: getting it wrong makes the gate SILENT, and a silent lint gate
+      // looks exactly like a clean tree.
+
+      it("carries the whole frame stack, so an interpolation does not desynchronise the scan", () => {
+        // The `src/client/tabs/TabItem.svelte` shape. Line 2 ends inside `${`,
+        // which is the most reliable multi-line state there is — a line ending
+        // there is unambiguously mid-template. An earlier cut carried only a
+        // lone open literal and gave up on a deeper stack, so line 4's closing
+        // backtick read as OPENING a template that then ran to end of file,
+        // swallowing every following line. Line 6's real color is the canary:
+        // inside a phantom literal it is judged prose and reported nowhere.
+        expect(
+          checkContent(
+            [
+              "const a = [",
+              "  `transition: transform ${",
+              '    lifted ? "var(--x)" : "var(--y)"',
+              "  } var(--z)`,",
+              "];",
+              'const css = "border: 1px solid #333";',
+              "",
+            ].join("\n"),
+            "src/client/tabs/Item.svelte",
+          ),
+        ).toEqual(["src/client/tabs/Item.svelte:6: #333"]);
+      });
+
+      it("exposes the stack itself, not just its effect", () => {
+        // Asserting only through `checkContent` would let a fix that merely
+        // suppressed the carry pass. The state is what changed, so pin it.
+        const first = scanStringLiterals("const s = `border: ${", null);
+        expect(first.outgoing?.map((f) => f.kind)).toEqual(["lit", "interp"]);
+
+        // Continuing into the interpolation keeps the code context: the `"`
+        // literals on this line open AND close, and the stack is unchanged.
+        const second = scanStringLiterals('  w > 0 ? "a" : "b"', first.outgoing);
+        expect(second.outgoing?.map((f) => f.kind)).toEqual(["lit", "interp"]);
+
+        // The `}` pops the interpolation and the backtick then closes the
+        // template, so nothing is carried past the end of the literal.
+        const third = scanStringLiterals("} solid #333`;", second.outgoing);
+        expect(third.outgoing).toBeNull();
+      });
+
+      it("accumulates the literal's text across every line it spans", () => {
+        // `priorText` is what the declaration and value-word tests read. If it
+        // only ever held the most recent line, a declaration on line 1 could not
+        // reach a hex on line 3 — and nothing else in the suite would notice.
+        const l1 = scanStringLiterals("const s = `border:", null);
+        const l2 = scanStringLiterals("  1px", l1.outgoing);
+        const l3 = scanStringLiterals("  solid", l2.outgoing);
+        expect(l3.outgoing?.[0]).toMatchObject({ priorText: "border:\n  1px\n  solid\n" });
+      });
+
+      it("resolves `governed` once, at the line where the literal opened", () => {
+        // The text before the opening quote does not survive the line boundary,
+        // so a carried literal that re-derived `governed` from its (empty)
+        // prefix would answer `false` forever. Carrying the resolved value is
+        // what keeps a wrapped `style="…"` attribute a color context.
+        const opened = scanStringLiterals('<div style="border', null);
+        expect(opened.outgoing?.[0]).toMatchObject({ governed: true });
+        const continued = scanStringLiterals("  2px", opened.outgoing);
+        expect(continued.outgoing?.[0]).toMatchObject({ governed: true });
+      });
+
+      it("carries only a template literal or an attribute value, never a prose apostrophe", () => {
+        // 103 lines in `src/client` end mid-`'` or mid-`"` purely from prose
+        // punctuation. Carrying those poisons every following line — and it
+        // poisons them SILENTLY, because a line judged "inside a literal that
+        // is not a CSS value" reports nothing. The closing apostrophe on line 3
+        // matters: without it the carry would reach EOF and the fail-open
+        // backstop would mask the bug.
+        expect(
+          checkContent(
+            [
+              "<p>the document's</p>",
+              '<div style="border: 1px solid #333"></div>',
+              "<p>that's all</p>",
+              "",
+            ].join("\n"),
+            "src/client/components/A.svelte",
+          ),
+        ).toEqual(["src/client/components/A.svelte:2: #333"]);
+      });
+
+      it("forgets the opening column once a literal crosses a line", () => {
+        // A carried frame's `start` is a column on a line that is gone. Keeping
+        // it makes the span start mid-line, so a hex to the LEFT of that column
+        // resolves to no span at all and drops out of the literal-aware arms
+        // entirely — silently, and only for continuation lines.
+        expect(checkContent("const s = `border:\n#333 borderWidth`;\n", "src/client/a.ts")).toEqual(
+          ["src/client/a.ts:2: #333"],
+        );
+      });
+
+      it("fails OPEN when a carry is still unclosed at end of file", () => {
+        // No source file ends inside a string literal, so a carry that survives
+        // to EOF is proof the scan desynchronised — one unpaired quote in a
+        // regex literal is enough. Left alone, every line from the desync
+        // onward is judged "inside a literal that is not a CSS value", i.e.
+        // silently exempt. The repair re-scans that run line-locally.
+        expect(
+          checkContent(
+            ["const re = `unterminated", 'const t = "border: #333";', ""].join("\n"),
+            "src/client/utils/rules.ts",
+          ),
+        ).toEqual(["src/client/utils/rules.ts:2: #333"]);
+      });
+    });
+
+    describe("declaration segments and governors", () => {
+      it("judges the declaration segment that owns the hex, not the literal's first one", () => {
+        // A CSS declaration list is `;`-separated. Anchoring the property-colon
+        // test at the literal's START meant every value string whose FIRST
+        // property is not a CSS_PROPERTY_WORD went silent all the way through —
+        // `display`, `padding`, `margin`, `height`, `grid-template-columns` and
+        // `transform` all qualify, and each is a real color lost.
+        expect(
+          checkContent('const s = "display: block; background: #333";\n', "src/client/a.ts"),
+        ).toEqual(["src/client/a.ts:1: #333"]);
+        expect(
+          checkContent('const s = "padding: 4px; border-color: #333";\n', "src/client/a.ts"),
+        ).toEqual(["src/client/a.ts:1: #333"]);
+      });
+
+      it("moves the anchor to the segment without unanchoring it", () => {
+        // The segment boundary can only ever move the anchor RIGHT of a `;`, so
+        // the prose shapes that the anchored form was introduced to silence
+        // stay silent — including one the anchored form got WRONG in the other
+        // direction: with the hex after the `;`, `color:` no longer governs it.
+        expect(
+          checkContent('console.warn("color: broken; see #1364");\n', "src/client/log.ts"),
+        ).toEqual([]);
+        expect(
+          checkContent('console.warn("border ok. shadow: see #1364");\n', "src/client/log.ts"),
+        ).toEqual([]);
+        expect(
+          checkContent('console.warn("styles: regressed in #1364");\n', "src/client/log.ts"),
+        ).toEqual([]);
+      });
+
+      it("treats a setAttribute('style', …) value as a governed literal", () => {
+        // A governor is a fail-toward-REPORTING arm, so a missing one is a
+        // silent false negative. `looksLikeCssValueString` covers the
+        // well-formed cases already; this shape is the one it cannot, because
+        // `shadow` is not a value word.
+        expect(
+          checkContent('el.setAttribute("style", "shadow 2px #333");\n', "src/client/a.ts"),
+        ).toEqual(["src/client/a.ts:1: #333"]);
+        // The attribute name is part of the arm: a non-style attribute is not a
+        // CSS context, and reading one as such would report every issue
+        // reference passed to `setAttribute`.
+        expect(
+          checkContent('el.setAttribute("title", "border tweak (#1364)");\n', "src/client/a.ts"),
+        ).toEqual([]);
+      });
+
+      it("looks back exactly one line for a governor, and only past indentation", () => {
+        // `biome.json` sets `lineWidth: 100`, so an assignment and its value
+        // routinely land on different physical lines. Judging the empty prefix
+        // is a guaranteed miss.
+        expect(
+          checkContent(
+            ["el.style.cssText =", '  "border shifted 2px #333";', ""].join("\n"),
+            "src/client/a.ts",
+          ),
+        ).toEqual(["src/client/a.ts:2: #333"]);
+
+        // It must not reach past an intervening statement: anything other than
+        // whitespace before the quote means the current line already answered.
+        // This fixture is the one that has teeth — the previous line really IS
+        // a governor, so only the whitespace-only guard keeps it from reaching.
+        expect(
+          checkContent(
+            ["el.style.cssText =", '  fallback ?? "border tweak (#1364)";', ""].join("\n"),
+            "src/client/a.ts",
+          ),
+        ).toEqual([]);
+        expect(
+          checkContent(
+            ["el.style.cssText = a;", 'const note = "border tweak (#1364)";', ""].join("\n"),
+            "src/client/a.ts",
+          ),
+        ).toEqual([]);
+        expect(
+          checkContent(
+            ['const msg = "x";', 'const note = "border tweak (#1364)";', ""].join("\n"),
+            "src/client/a.ts",
+          ),
+        ).toEqual([]);
+      });
+    });
+
     it("prints an unconditional Fix: line, and the issue-reference Note only when apt", () => {
       // The confusing half of #1534: the pre-commit path printed a bare count
       // and no remedy at all.
