@@ -16,6 +16,14 @@ wrong at runtime. If you are working with Claude Code, [CLAUDE.md](CLAUDE.md) is
   yourself.
 - **Rust and the Tauri toolchain**, if you will touch `src-tauri/` — or if you will push at all.
   The pre-push hook runs `cargo test`. See "Before your first push" below.
+- **Python 3.10 or newer**, on `PATH` as either `python3` or `python` — and, like Rust, it is
+  needed *whether or not* you touch the code that uses it. `tests/scripts/acceptance-harness-wiring.test.ts`
+  is an ordinary vitest test that spawns `scripts/spikes/run_acceptance_tests.py` against
+  deliberately broken fixture suites, and it **fails rather than skips** when no interpreter is
+  found — an absent interpreter must not quietly void the only coverage that runner's decisions
+  have. So `npm test`, and therefore the pre-push hook, need Python: without it 9 of those tests go
+  red and you cannot push. (`npm run test:acceptance-harness` — the 82-test harness itself — is a
+  separate command that is *not* part of `npm test`; see [docs/cli.md](docs/cli.md#testing).)
 
 ## Development setup
 
@@ -121,6 +129,11 @@ after the GTK packages everyone remembers are already installed.
 
 The `dist/` list must stay in sync with `bundle.resources` in `src-tauri/tauri.conf.json`, not with
 whatever happens to be in `dist/`.
+
+`cargo test` is not the only prerequisite the hook drags in: it also runs the full vitest suite,
+and `tests/scripts/acceptance-harness-wiring.test.ts` needs **Python 3.10+** on `PATH` (see
+Prerequisites). Debian and Ubuntu ship it as `python3` only, which is fine — both that test and
+`npm run test:acceptance-harness` accept either name.
 
 **In a fresh `git worktree`, `.husky/_` is gitignored and therefore absent — zero hooks run,
 silently.** Run `npx husky` in the new worktree before your first commit there, or you will push

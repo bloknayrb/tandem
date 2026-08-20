@@ -48,9 +48,24 @@ type Step = {
   shell?: unknown;
 };
 
+/**
+ * `defaults.run.shell` is settable at BOTH workflow and job level, and either
+ * placement overrides the shell of every `run:` step below it. It is the one row
+ * of the step-level defence table whose job/workflow twin would otherwise be
+ * uncovered -- measured: with the step-level `shell:` guard in place, adding
+ * `defaults: {run: {shell: 'bash -c "bash {0}; exit 0"'}}` at either level left
+ * this file 19/19 green while every `run:` step in the job exited 0 regardless of
+ * the command's real status.
+ */
+type Defaults = { run?: { shell?: unknown } };
+
 const workflow = parse(readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf-8")) as {
   on: Record<string, unknown>;
-  jobs: Record<string, { if?: unknown; "continue-on-error"?: unknown; steps: Step[] }>;
+  defaults?: Defaults;
+  jobs: Record<
+    string,
+    { if?: unknown; "continue-on-error"?: unknown; defaults?: Defaults; steps: Step[] }
+  >;
 };
 
 const checkJob = workflow.jobs.check;
@@ -126,6 +141,17 @@ describe("acceptance-harness CI wiring", () => {
     // `continue-on-error` at job level neuters every step at once.
     expect(checkJob.if, "an `if:` on the check job skips it, which reads as pass").toBeUndefined();
     expect(checkJob["continue-on-error"] ?? false).toBeFalsy();
+    // The job/workflow twin of the step-level `shell:` guard above. `defaults.run.shell`
+    // rewrites the shell of every `run:` step at once without touching a single step,
+    // so `bash -c "bash {0}; exit 0"` makes the harness report success while failing.
+    expect(
+      checkJob.defaults?.run?.shell,
+      "a job-level `defaults.run.shell` swallows the exit status of every step in the job",
+    ).toBeUndefined();
+    expect(
+      workflow.defaults?.run?.shell,
+      "a workflow-level `defaults.run.shell` swallows the exit status of every step in every job",
+    ).toBeUndefined();
   });
 
   it("still triggers on every pull request, unfiltered", () => {
@@ -220,6 +246,7 @@ describe("acceptance-harness CI wiring", () => {
 
 describe("acceptance-harness runner is fail-closed", () => {
   const runnerRel = "scripts/spikes/run_acceptance_tests.py";
+  const launcherRel = "scripts/spikes/run-acceptance-harness.mjs";
 
   it("is exactly what the npm script invokes, and exists", () => {
     // Exact equality for the same reason as the ci.yml `run:` assertion, and it
@@ -237,9 +264,23 @@ describe("acceptance-harness runner is fail-closed", () => {
       scripts: Record<string, string>;
     };
     expect(pkg.scripts["test:acceptance-harness"]).toBe(
-      "cd scripts/spikes && python run_acceptance_tests.py",
+      "node scripts/spikes/run-acceptance-harness.mjs",
     );
     expect(existsSync(path.join(ROOT, runnerRel))).toBe(true);
+    expect(existsSync(path.join(ROOT, launcherRel))).toBe(true);
+
+    // The launcher exists to remove an asymmetry, not to add a layer: the npm
+    // script used to hard-code `python`, a name absent from a stock Debian box,
+    // while THIS file resolves `python3` or `python` -- so `npm test` passed and
+    // `npm run test:acceptance-harness` died on the same machine. Pinning the
+    // candidate list keeps the two resolvers from drifting apart again. Source-
+    // level, and weaker than the behavioural block below for that reason; what it
+    // guards is a list, not a decision.
+    const launcher = readFileSync(path.join(ROOT, launcherRel), "utf-8");
+    expect(launcher).toContain('["python3", "python"]');
+    // A launcher that exits 0 regardless would silently void the gate one level
+    // above everything the behavioural block proves about the runner.
+    expect(launcher).not.toMatch(/process\.exit\(\s*0\s*\)/);
   });
 
   it("caps skips rather than flooring executions", () => {
@@ -287,7 +328,10 @@ describe("acceptance-harness runner rejects suites that evaluated nothing", () =
     throw new Error("neither `python3` nor `python` is on PATH; cannot exercise the runner");
   }
 
-  function runAgainst(suiteSource: string): { status: number | null; output: string } {
+  function runAgainst(
+    suiteSource: string,
+    args: string[] = [],
+  ): { status: number | null; output: string } {
     const dir = mkdtempSync(path.join(tmpdir(), "tandem-acceptance-runner-"));
     workspaces.push(dir);
     copyFileSync(
@@ -295,7 +339,7 @@ describe("acceptance-harness runner rejects suites that evaluated nothing", () =
       path.join(dir, "run_acceptance_tests.py"),
     );
     writeFileSync(path.join(dir, "test_session_monitor_acceptance.py"), suiteSource, "utf-8");
-    const proc = spawnSync(python(), ["run_acceptance_tests.py"], {
+    const proc = spawnSync(python(), ["run_acceptance_tests.py", ...args], {
       cwd: dir,
       encoding: "utf-8",
     });
@@ -374,6 +418,19 @@ class Laundered(unittest.TestCase):
     expect(output).toContain("expected_failures=1");
     expect(output).toContain("@unittest.expectedFailure");
     expect(status).toBe(1);
+  });
+
+  it("refuses unittest flags rather than running everything and reporting success", () => {
+    // `loadTestsFromName(MODULE)` hard-codes the target and nothing reads argv, so
+    // `-v`, `-k <pattern>`, `-f` and `Class.test_name` -- all of which worked
+    // against the `python -m unittest MODULE` this runner replaced -- would run
+    // the FULL suite and exit 0. A developer narrowing to one test would read that
+    // 0 as "my one test passed" while having run a superset. The control above
+    // proves this same suite exits 0 with no arguments, so the non-zero here is
+    // attributable to the argument and nothing else.
+    const { status, output } = runAgainst(HEALTHY, ["-v"]);
+    expect(output).toContain("takes no arguments");
+    expect(status).not.toBe(0);
   });
 
   it("rejects a suite with a genuinely failing test", () => {

@@ -81,10 +81,12 @@ jobs:
           node-version: 22
           cache: npm
 
-      # Pinned rather than trusting the runner image to expose the name `python`,
-      # which `npm run test:acceptance-harness` invokes. If the interpreter cannot
-      # be provisioned this step fails the job -- the only acceptable alternative
-      # to running the gate is a red job, never a skipped step.
+      # Pinned rather than trusting the runner image to expose a Python at all.
+      # Both `npm run test:acceptance-harness` (via
+      # scripts/spikes/run-acceptance-harness.mjs) and the vitest fixture block
+      # resolve `python3` then `python`, so either name satisfies them -- but if no
+      # interpreter can be provisioned this step fails the job, which is the only
+      # acceptable alternative to running the gate. Never a skipped step.
       #
       # It sits HERE, not next to the harness step, because the `Test` step needs
       # it too: tests/scripts/acceptance-harness-wiring.test.ts spawns

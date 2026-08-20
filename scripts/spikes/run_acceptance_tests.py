@@ -42,6 +42,9 @@ It is unreachable against the real harness without first deleting 80 tests, but 
 `testsRun - skipped` check below closes it anyway -- a derived quantity, so it does
 not reintroduce the frozen-literal problem a MIN_EXECUTED floor would.
 
+It also takes no arguments at all, and says so rather than ignoring them -- see the
+comment in `main()`.
+
 `tests/scripts/acceptance-harness-wiring.test.ts` spawns this file against purpose-built
 broken fixtures and asserts it exits non-zero, so these decisions are covered as
 behaviour rather than as constants appearing in the source.
@@ -65,6 +68,25 @@ MAX_SKIPS = 2
 
 
 def main() -> int:
+    # `loadTestsFromName(MODULE)` hard-codes the target, so every unittest flag and
+    # selector that worked against the `python -m unittest MODULE` this replaced --
+    # `-v`, `-k <pattern>`, `-f`, `Class.test_name` -- would now run the FULL suite
+    # and exit 0, having ignored the narrowing without a word. A developer who
+    # narrowed to one test would read that exit 0 as "my one test passed". Refusing
+    # is the only option here that cannot be misread; forwarding argv into
+    # `unittest.main()` would hand back the exit-0-on-nothing-evaluated behaviour
+    # this whole file exists to remove.
+    if sys.argv[1:]:
+        print(
+            f"FAIL: this runner takes no arguments (got {sys.argv[1:]}). It always runs all of "
+            f"{MODULE}: unittest flags and test selectors would be silently ignored, not honoured. "
+            f"To narrow a run, invoke `python -m unittest {MODULE} <args>` directly -- but note "
+            "that is NOT the gate: it exits 0 on zero collected, on all-skipped, and on "
+            "@unittest.expectedFailure.",
+            file=sys.stderr,
+        )
+        return 2
+
     loader = unittest.TestLoader()
     suite = loader.loadTestsFromName(MODULE)
 

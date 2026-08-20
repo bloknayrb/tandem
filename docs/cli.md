@@ -174,11 +174,11 @@ These commands are available when running Tandem from a source checkout (`git cl
 
 | Script | What it runs |
 |---|---|
-| `npm test` | Vitest unit tests. |
+| `npm test` | Vitest unit tests. **Needs Python 3.10+ on `PATH`** (as `python3` or `python`) — see the acceptance-harness row below for why, and CONTRIBUTING.md's Prerequisites. |
 | `npm run test:e2e` | Playwright E2E tests (auto-starts servers via `webServer` config). |
 | `npm run test:e2e:ui` | Playwright UI mode for interactive E2E debugging. |
 | `npm run test:tauri-driver` | WebDriver-based Tauri shell tests. |
-| `npm run test:acceptance-harness` | First-use arming acceptance harness (#1393), through the fail-closed runner `scripts/spikes/run_acceptance_tests.py`. Also run by CI's `check` job (#1399); still **not** run by `npm test` or the pre-push hook. Two local preconditions: Python 3.10+ on `PATH` under the name `python`, and the `v0.21.0` tag present — a fresh shallow clone has neither, and the tag is where the harness reads its immutable v9 skill baseline. |
+| `npm run test:acceptance-harness` | First-use arming acceptance harness (#1393), through the fail-closed runner `scripts/spikes/run_acceptance_tests.py` — launched by `scripts/spikes/run-acceptance-harness.mjs`, which resolves `python3` then `python`. Also run by CI's `check` job (#1399). The 82-test harness itself is still **not** run by `npm test` or the pre-push hook, but **Python is a prerequisite of those anyway**: `tests/scripts/acceptance-harness-wiring.test.ts` spawns that runner against broken fixtures and fails, rather than skips, with no interpreter on `PATH`. Preconditions: Python 3.10+ on `PATH` as `python3` or `python` (needed for `npm test` too), and — for this command alone — the `v0.21.0` tag present, which is where the harness reads its immutable v9 skill baseline. A fresh shallow clone has neither. Takes **no arguments**: unittest flags and selectors (`-v`, `-k`, `Class.test_name`) are refused with exit 2, because the runner always loads the whole module and honouring them is not possible — run `python -m unittest test_session_monitor_acceptance <args>` directly to narrow, remembering that bare `unittest` is not the gate. |
 | `npm run capture:screenshots` | Re-captures README screenshots via Playwright. |
 | `npm run capture:design-baselines` | Re-captures the design-system baseline screenshots. |
 
