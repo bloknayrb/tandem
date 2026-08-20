@@ -60,17 +60,27 @@ const workflow = parse(readFileSync(path.join(ROOT, WORKFLOW), "utf-8")) as {
 };
 
 /**
- * Located by the CDN host it downloads from — the step's whole reason to exist —
+ * Located by the driver archive it downloads — the step's whole reason to exist —
  * and NOT by any of the strings this file goes on to assert about, which would
  * make those assertions self-satisfying.
+ *
+ * The anchor is the ARCHIVE NAME rather than the CDN host it is fetched from,
+ * even though the host reads as the more natural landmark. A `.includes()` of a
+ * URL prefix is the shape of `js/incomplete-url-substring-sanitization`, and
+ * CodeQL flags it on sight — correctly in general, since `https://host/` can sit
+ * anywhere in a longer string. It is not a security decision here (this only
+ * picks a YAML step out of a file we control), but an alert that has to be
+ * explained away on every future read is worse than an anchor that raises none.
+ * `edgedriver_win64.zip` is just as unique — one occurrence in the whole
+ * workflow, inside this step — and just as load-bearing.
  */
 function driverStepRun(): string {
   const step = workflow.jobs.webdriver?.steps?.find(
-    (s) => typeof s.run === "string" && s.run.includes("https://msedgedriver.microsoft.com/"),
+    (s) => typeof s.run === "string" && s.run.includes("edgedriver_win64.zip"),
   );
   if (!step?.run) {
     throw new Error(
-      `${WORKFLOW}: the "webdriver" job has no step downloading from msedgedriver.microsoft.com`,
+      `${WORKFLOW}: the "webdriver" job has no step downloading edgedriver_win64.zip`,
     );
   }
   return step.run;
