@@ -6,6 +6,7 @@
 
 import { COWORK_ONBOARDING_SKIPPED_KEY } from "../../shared/constants";
 import type {
+  AdapterEnumerationReason,
   CoworkStatus,
   FirewallErrorVariant,
   SubnetDetectionReason,
@@ -79,7 +80,7 @@ export function undetectedDetail(status: CoworkStatus): UndetectedDetail {
  * `src/client/types.ts` is hand-maintained against `src-tauri/src/firewall.rs`,
  * so a Rust-side rename produces zero TypeScript errors and degrades silently
  * to the fallback hint — which is why the fallback has to stay honest, and why
- * `tests/build/subnet-reason-alignment.test.ts` pins the two lists together.
+ * `tests/build/firewall-reason-alignment.test.ts` pins the two lists together.
  *
  * None of these may say "is Cowork set up on this machine?" — the workspace
  * scan has already succeeded before any of the three surfaces can reach this
@@ -101,6 +102,29 @@ const SUBNET_REASON_HINT: Record<SubnetDetectionReason, string> = {
 };
 
 /**
+ * Recovery copy per adapter-enumeration reason (#1372).
+ *
+ * The old single sentence — "Could not enumerate Hyper-V network adapters. Run
+ * Tandem as administrator or reboot to refresh the adapter list." — covered two
+ * causes with opposite remedies, and asserted an enumeration had been attempted
+ * when the interpreter never launched. Same defect shape as #1298 next door.
+ *
+ * Every entry says PowerShell never started, because that is the one thing all
+ * three have in common and it is what makes "reboot to refresh the adapter
+ * list" visibly the wrong advice. None of them mentions administrator rights:
+ * elevation has nothing to do with whether a process can be spawned, and that
+ * sentence sent people to a UAC prompt that could not have helped.
+ */
+const ADAPTER_REASON_HINT: Record<AdapterEnumerationReason, string> = {
+  notFound:
+    "Tandem couldn't find Windows PowerShell, so it couldn't look up the Hyper-V subnet to allow. Check that powershell.exe is on your PATH — Nano Server and other stripped-down Windows images don't ship it.",
+  permissionDenied:
+    "Windows refused to start PowerShell, so Tandem couldn't look up the Hyper-V subnet to allow. That is usually an application-control policy (AppLocker, WDAC or Software Restriction Policies) — on a managed machine your IT team controls it.",
+  spawnFailed:
+    "Tandem couldn't start Windows PowerShell, so it couldn't look up the Hyper-V subnet to allow. Try again, and if it keeps happening, check that PowerShell runs normally on this machine.",
+};
+
+/**
  * Render a distinct user-facing recovery hint per `FirewallError` variant.
  * Kept pure so `tests/client/cowork-settings.test.ts`
  * can exhaustively cover the variant → hint mapping.
@@ -118,24 +142,79 @@ export function firewallErrorHint(variant: FirewallErrorVariant): string {
     case "subnetDetectionFailed":
       // `||`, not `??`: the left operand is `""` when `reason` is an empty
       // string, and `??` passes that straight through — rendering an empty
-      // warning box while still removing the Enable button. `||` also covers
-      // an absent `reason` (older sidecar) and one this build doesn't
-      // recognise, and no entry in the table is falsy, so nothing valid is
-      // lost. The fallback still names the subnet, because that is the one
-      // thing every case has in common.
-      return (
+      // warning box while still removing the Enable button. `||` also covers an
+      // absent `reason` and one this build doesn't recognise, and no entry in
+      // the table is falsy, so nothing valid is lost. The fallback still names
+      // the subnet, because that is the one thing every case has in common.
+      //
+      // Not for version skew: `firewall.rs` runs in the Tauri shell and the
+      // WebView loads `frontendDist`, so the Rust and the TypeScript ship as
+      // one artifact and cannot disagree. This is defence against a hand-edited
+      // payload and against a Rust-side rename that TypeScript cannot see —
+      // which is a real hazard, since the union is hand-maintained.
+      return withQueryDiagnostics(
         (variant.reason && SUBNET_REASON_HINT[variant.reason]) ||
-        "Tandem couldn't work out the Hyper-V subnet Cowork is using, so it didn't change the firewall. Start a Cowork session and try again."
+          "Tandem couldn't work out the Hyper-V subnet Cowork is using, so it didn't change the firewall. Start a Cowork session and try again.",
+        variant,
       );
     case "adapterEnumerationFailed":
-      return "Could not enumerate Hyper-V network adapters. Run Tandem as administrator or reboot to refresh the adapter list.";
+      // Same `||` reasoning as the subnet arm above: an absent `reason`, an
+      // empty string, or one this build doesn't recognise all fall to copy that
+      // is still true of every case.
+      return (
+        (variant.reason && ADAPTER_REASON_HINT[variant.reason]) ||
+        "Tandem couldn't start Windows PowerShell, so it couldn't look up the Hyper-V subnet to allow."
+      );
     default:
       return `Unexpected firewall error (${(variant as { kind: string }).kind}). Please restart Tandem.`;
   }
 }
 
+/**
+ * Append the query's own diagnostics to a subnet hint, when it has any (#1372).
+ *
+ * The Rust side attaches these only when the PowerShell process actually
+ * failed, so in practice only `queryFailed` from a non-zero exit carries them.
+ * This keys on the fields rather than on the reason, which is the same thing
+ * and stays right if the Rust side ever populates them for another reason.
+ *
+ * **A zero exit code is not evidence and must not be rendered.** An earlier cut
+ * keyed the Rust side on the reason instead of on the process, which gave the
+ * zero-exit/unparseable-output path `exitCode: 0` and an empty stderr — and
+ * this function turned that into "(PowerShell exit 0: (no output))" appended to
+ * "Windows couldn't list Hyper-V network adapters". Self-contradictory, and
+ * strictly worse than the bare hint. The server is where that was fixed; the
+ * guard here is defence in depth, because the failure was invisible from either
+ * side alone.
+ *
+ * The tail has already had the user's home directory collapsed to `~` on the
+ * Rust side. That is a narrowing, not a guarantee: PowerShell can name paths
+ * outside the home directory, and this string is written for a user to paste
+ * into a public issue.
+ */
+function withQueryDiagnostics(
+  hint: string,
+  variant: Extract<FirewallErrorVariant, { kind: "subnetDetectionFailed" }>,
+): string {
+  const hasExit = typeof variant.exitCode === "number" && variant.exitCode !== 0;
+  const hasStderr = (variant.stderrTail ?? "").trim().length > 0;
+  if (!hasExit && !hasStderr) return hint;
+  return `${hint} (PowerShell exit ${
+    hasExit ? variant.exitCode : "unknown"
+  }: ${truncateStderr(variant.stderrTail ?? "")})`;
+}
+
+/**
+ * One line of captured stderr, capped.
+ *
+ * Newlines are collapsed because the only consumers are single-line toasts and
+ * inline warning boxes: a three-line PowerShell ErrorRecord pasted in raw
+ * either stretches the toast or silently loses everything after the first line,
+ * depending on the surface. Same reasoning as `client-log.ts`'s `collapseLines`
+ * for the same class of text.
+ */
 function truncateStderr(tail: string): string {
-  const s = tail.trim();
+  const s = tail.replace(/\s*\n\s*/g, " ").trim();
   if (s.length === 0) return "(no output)";
   if (s.length <= 200) return s;
   return `${s.slice(0, 197)}...`;

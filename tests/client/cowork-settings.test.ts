@@ -24,6 +24,7 @@ import {
   loadInvoke,
 } from "../../src/client/cowork/cowork-invoke.js";
 import type {
+  AdapterEnumerationReason,
   CoworkStatus,
   FirewallErrorVariant,
   SubnetDetectionReason,
@@ -271,6 +272,180 @@ describe("firewallErrorHint", () => {
   it("adapterEnumerationFailed hint mentions Hyper-V adapter", () => {
     const hint = firewallErrorHint({ kind: "adapterEnumerationFailed" }).toLowerCase();
     expect(hint).toContain("hyper-v");
+  });
+
+  // -------------------------------------------------------------------------
+  // #1372: the three reasons behind adapterEnumerationFailed. The old single
+  // sentence told all of them to "run Tandem as administrator or reboot to
+  // refresh the adapter list" — advice that cannot work when the interpreter
+  // never launched — and asserted an enumeration had been attempted.
+  // -------------------------------------------------------------------------
+
+  const ADAPTER_REASONS: AdapterEnumerationReason[] = [
+    "notFound",
+    "permissionDenied",
+    "spawnFailed",
+  ];
+
+  it("gives each adapter-enumeration reason its own hint", () => {
+    const hints = ADAPTER_REASONS.map((reason) =>
+      firewallErrorHint({ kind: "adapterEnumerationFailed", reason }),
+    );
+    expect(new Set(hints).size).toBe(hints.length);
+    const fallback = firewallErrorHint({ kind: "adapterEnumerationFailed" });
+    for (const h of hints) {
+      // Positive control: prove the lookup resolved rather than falling through.
+      expect(h).not.toBe(fallback);
+      expect(h.length).toBeGreaterThan(40);
+    }
+  });
+
+  it("no adapter-enumeration hint offers administrator rights or a reboot", () => {
+    // The defect in one assertion. Elevation has nothing to do with whether a
+    // process can be spawned, and rebooting cannot put PowerShell back on PATH.
+    for (const reason of [...ADAPTER_REASONS, undefined]) {
+      const hint = firewallErrorHint({ kind: "adapterEnumerationFailed", reason }).toLowerCase();
+      expect(hint, `${reason ?? "(no reason)"} still offers elevation`).not.toContain(
+        "administrator",
+      );
+      expect(hint, `${reason ?? "(no reason)"} still offers a reboot`).not.toContain("reboot");
+      // And every one says PowerShell never started, which is what makes the
+      // old advice visibly wrong rather than merely unhelpful.
+      expect(hint).toContain("powershell");
+    }
+  });
+
+  it("notFound points at PATH, permissionDenied at policy — they do not swap", () => {
+    const notFound = firewallErrorHint({
+      kind: "adapterEnumerationFailed",
+      reason: "notFound",
+    });
+    const denied = firewallErrorHint({
+      kind: "adapterEnumerationFailed",
+      reason: "permissionDenied",
+    });
+    expect(notFound).toMatch(/PATH/);
+    expect(denied).toMatch(/AppLocker|WDAC|application-control/i);
+    expect(notFound).not.toMatch(/AppLocker/i);
+    expect(denied).not.toMatch(/PATH/);
+  });
+
+  it("falls back for an absent or unrecognised adapter reason", () => {
+    const noReason = firewallErrorHint({ kind: "adapterEnumerationFailed" });
+    const blank = firewallErrorHint({
+      kind: "adapterEnumerationFailed",
+      reason: "" as AdapterEnumerationReason,
+    });
+    const unknown = firewallErrorHint({
+      kind: "adapterEnumerationFailed",
+      reason: "somethingNew" as AdapterEnumerationReason,
+    });
+    expect(blank).toBe(noReason);
+    expect(unknown).toBe(noReason);
+    expect(noReason.length).toBeGreaterThan(40);
+  });
+
+  // -------------------------------------------------------------------------
+  // #1372: queryFailed now carries the diagnostics the query already captured.
+  // -------------------------------------------------------------------------
+
+  it("queryFailed renders the exit code and stderr tail when they are present", () => {
+    const hint = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      exitCode: 1,
+      stderrTail: "Get-NetAdapter : Access is denied.",
+    });
+    expect(hint).toContain("exit 1");
+    expect(hint).toContain("Access is denied.");
+    // The reason's own advice is kept, not replaced by the diagnostics.
+    expect(hint).toContain(
+      firewallErrorHint({ kind: "subnetDetectionFailed", reason: "queryFailed" }),
+    );
+  });
+
+  it("adds nothing when a subnet variant carries no diagnostics", () => {
+    // A sidecar built before #1372 sends the reason alone, and every reason but
+    // queryFailed still does. Neither may grow an "(PowerShell exit unknown: )".
+    for (const reason of SUBNET_REASONS) {
+      const bare = firewallErrorHint({ kind: "subnetDetectionFailed", reason });
+      expect(bare).not.toContain("PowerShell exit");
+    }
+    expect(
+      firewallErrorHint({
+        kind: "subnetDetectionFailed",
+        reason: "queryFailed",
+        stderrTail: "   ",
+      }),
+    ).not.toContain("PowerShell exit");
+  });
+
+  it("renders an exit code with no stderr, and a stderr with no exit code", () => {
+    // Both halves are independently optional on the wire, so neither may be
+    // required for the other to show.
+    const exitOnly = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      exitCode: 1,
+    });
+    expect(exitOnly).toContain("exit 1");
+    expect(exitOnly).toContain("(no output)");
+    const stderrOnly = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      stderrTail: "boom",
+    });
+    expect(stderrOnly).toContain("exit unknown");
+    expect(stderrOnly).toContain("boom");
+  });
+
+  it("never renders a zero exit code as if it were evidence", () => {
+    // This assertion used to say the opposite. `classify_subnet_output`
+    // returns `queryFailed` on TWO paths — a non-zero exit, and a ZERO exit
+    // whose stdout carried no parseable marker — and an earlier cut keyed the
+    // Rust side's diagnostics on the reason rather than on the process. That
+    // gave the second path `exitCode: 0` with an empty stderr, and this
+    // function appended "(PowerShell exit 0: (no output))" to "Windows
+    // couldn't list Hyper-V network adapters". Self-contradictory, and
+    // strictly worse than the bare hint.
+    //
+    // Fixed on the Rust side (`finish_subnet_query` attaches diagnostics only
+    // when the process failed); the guard here is defence in depth, because
+    // neither side alone made the contradiction visible.
+    const hint = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      exitCode: 0,
+    });
+    expect(hint).not.toContain("PowerShell exit");
+    expect(hint).not.toContain("(no output)");
+
+    // A zero exit that DID produce stderr still shows the stderr — the guard
+    // is about the exit code being uninformative, not about suppressing
+    // evidence.
+    const withText = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      exitCode: 0,
+      stderrTail: "boom",
+    });
+    expect(withText).toContain("exit unknown");
+    expect(withText).toContain("boom");
+  });
+
+  it("collapses a multi-line stderr into the single line the surfaces render", () => {
+    // Every consumer is a single-line toast or an inline warning box, and a
+    // PowerShell ErrorRecord is three lines. Pasted in raw it either stretches
+    // the toast or loses everything after the first line, depending on the
+    // surface.
+    const hint = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      exitCode: 1,
+      stderrTail: "Access is denied.\n    + CategoryInfo : PermissionDenied\n    + FQID : x",
+    });
+    expect(hint).not.toContain("\n");
+    expect(hint).toContain("Access is denied. + CategoryInfo : PermissionDenied + FQID : x");
   });
 
   it("returns a generic hint including the kind for an unknown variant", () => {

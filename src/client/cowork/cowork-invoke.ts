@@ -118,11 +118,24 @@ export async function coworkPreflightSubnet(invoke: InvokeFn): Promise<SubnetPre
       // is diagnosable from a pasted console rather than indistinguishable
       // from "we couldn't tell".
       //
-      // Safe to log verbatim: this command's errors are payload-free on the
-      // wire (`SubnetDetectionFailed { reason }` / `AdapterEnumerationFailed`),
-      // and the variants carrying stderr tails are unreachable from it. Do not
-      // widen that — an io::Error from a failed spawn names the resolved
-      // executable path.
+      // Safe to log verbatim, but NOT for the reason this comment used to
+      // give. Since #1372 this command's `subnetDetectionFailed` does carry a
+      // `stderrTail`, so "payload-free on the wire" is no longer true. What
+      // makes it safe is the branch: nothing reaches here unless
+      // `parseFirewallErrorVariant` already returned null, i.e. `rawMsg` did
+      // not parse as JSON with a string `kind`. Keep that ordering if this is
+      // ever restructured.
+      //
+      // One caveat, so nobody reads that as stronger than it is. `lib.rs` sends
+      // `serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())`, and the
+      // `Display` fallback DOES embed `stderr_tail` while not being JSON — so
+      // it would take this branch. Serialising this enum cannot actually fail
+      // (every field is a `String`), so the fallback is unreachable today; the
+      // ordering argument is what holds, not the payload-free claim.
+      //
+      // The Rust side still keeps the raw `io::Error` from a failed spawn off
+      // the wire entirely (it names the resolved executable path); the wire
+      // carries only the closed `AdapterEnumerationReason`. Do not widen that.
       if (rawMsg === TAURI_NOT_AVAILABLE || rawMsg.includes(COWORK_WINDOWS_ONLY)) {
         console.debug("[cowork] subnet pre-flight unavailable:", rawMsg);
       } else {

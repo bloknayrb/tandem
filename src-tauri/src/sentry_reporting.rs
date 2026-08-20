@@ -159,7 +159,7 @@ fn scrub_event(event: &mut sentry::protocol::Event<'static>) {
 
 /// Best-effort home-directory lookup as a `String`, normalised without a
 /// trailing separator so the replacement reads `~/foo` not `~//foo`.
-fn home_dir_string() -> Option<String> {
+pub(crate) fn home_dir_string() -> Option<String> {
     let home = dirs::home_dir()?;
     let s = home.to_string_lossy();
     Some(s.trim_end_matches(['/', '\\']).to_string())

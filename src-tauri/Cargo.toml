@@ -19,7 +19,7 @@ tauri-build = { version = "2.5.6", features = [] }
 
 [dependencies]
 serde_json = "1.0"
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0.184", features = ["derive"] }
 log = "0.4"
 # Crash reporting (#921), opt-in / off by default. `sentry::init` with an empty
 # DSN yields a disabled (no-op) client. The default feature set does NOT install
