@@ -3,11 +3,12 @@ import {
   BUNDLE_BLOCKLIST_HEX,
   buildErrorGuidance,
   checkContent,
-  enclosingStringLiteral,
   isColorValuePosition,
+  isCssPropertyName,
   isLikelyIssueReference,
   looksLikeCssValueString,
   normalizeHexForBlocklist,
+  scanStringLiterals,
   shouldSkipFile,
 } from "../../scripts/check-semantic-tokens.js";
 
@@ -803,27 +804,208 @@ describe("check-semantic-tokens", () => {
     });
 
     it("tracks string-literal boundaries the way the host language does", () => {
-      // `enclosingStringLiteral` is what makes the whole-literal rule possible,
-      // and every one of these would break it in a way that silently flips a
-      // verdict rather than throwing.
-      const apostrophe = `console.warn("don't touch the border #1364");`;
-      expect(enclosingStringLiteral(apostrophe, apostrophe.indexOf("#1364"))?.quote).toBe('"');
+      const spansOf = (line: string) => scanStringLiterals(line, null).spans;
+      const quoteAt = (line: string, needle: string) => {
+        const at = line.indexOf(needle);
+        const sp = spansOf(line)
+          .filter((s) => s.start < at && at < s.end)
+          .reduce<{ start: number; end: number } | undefined>(
+            (best, s) => (!best || s.start > best.start ? s : best),
+            undefined,
+          );
+        return sp === undefined ? null : line[sp.start];
+      };
 
-      const nestedQuote = 'console.warn(`he said "border" #1364`);';
-      expect(enclosingStringLiteral(nestedQuote, nestedQuote.indexOf("#1364"))?.quote).toBe("`");
-
-      const escaped = `console.warn("a \\" border #1364");`;
-      expect(enclosingStringLiteral(escaped, escaped.indexOf("#1364"))?.quote).toBe('"');
+      // Only the quote that opened a literal can close it.
+      expect(quoteAt(`console.warn("don't touch the border #1364");`, "#1364")).toBe('"');
+      expect(quoteAt('console.warn(`he said "border" #1364`);', "#1364")).toBe("`");
+      expect(quoteAt(`console.warn("a \\" border #1364");`, "#1364")).toBe('"');
 
       // Closed literal: the hex is in code, not in a string.
-      const inCode = `  const a = "x"; border-color: #1364;`;
-      expect(enclosingStringLiteral(inCode, inCode.indexOf("#1364"))).toBeNull();
+      expect(quoteAt(`  const a = "x"; border-color: #1364;`, "#1364")).toBeNull();
 
-      // Second literal on the line, not the first.
-      const second = `f("border", "solid #1364")`;
-      expect(enclosingStringLiteral(second, second.indexOf("#1364"))?.start).toBe(
-        second.lastIndexOf('"', second.indexOf("#1364")),
-      );
+      // A nested literal inside `${…}` is its own literal, and the INNERMOST
+      // one is the one that governs. Reading the inner backtick as closing the
+      // outer template puts the hex in code and loses it entirely.
+      const nested = "el.style.cssText = `border: ${d ? `1px solid #333` : `none`}`;";
+      expect(quoteAt(nested, "#333")).toBe("`");
+      expect(isColorValuePosition(nested, nested.indexOf("#333"), "#333")).toBe(true);
+
+      // And the INNERMOST span is the one that decides. Here the outer literal
+      // is prose and the inner one is a CSS value, so reading the outer loses a
+      // real color; the reverse nesting would report an issue reference.
+      const innerValue = "console.warn(`saw ${`1px solid #333`} applied to border`);";
+      expect(isColorValuePosition(innerValue, innerValue.indexOf("#333"), "#333")).toBe(true);
+    });
+
+    it("carries a multi-line literal across the line break, both directions", () => {
+      // The per-literal decision has to survive a newline or continuation lines
+      // silently fall back to the per-token walk-back this design replaced.
+      // Both of these shapes exist: `CommandPalette.svelte` wraps six `style="…"`
+      // attributes, and multi-line template literals are ordinary TS.
+      expect(
+        checkContent(
+          [
+            "<div",
+            '  style="',
+            "    background: linear-gradient(",
+            "      var(--tandem-border) 0%, #333 100%);",
+            '  "',
+            ">",
+            "",
+          ].join("\n"),
+          "src/client/components/Wrapped.svelte",
+        ),
+      ).toEqual(["src/client/components/Wrapped.svelte:4: #333"]);
+
+      expect(
+        checkContent(
+          "el.style.background = `linear-gradient(\n  #333 0%, var(--tandem-border) 100%)`;\n",
+          "src/client/utils/grad.ts",
+        ),
+      ).toEqual(["src/client/utils/grad.ts:2: #333"]);
+
+      // And the other direction: prose in a multi-line template stays prose.
+      expect(
+        checkContent(
+          "console.warn(`\n  the border broke: see #1364\n`);\n",
+          "src/client/utils/log.ts",
+        ),
+      ).toEqual([]);
+    });
+
+    it("keeps the accumulated literal text, not just the current line", () => {
+      // The declaration that makes this literal a CSS value (`border:`) is on
+      // line 1; the hex is on line 2. Judge line 2 in isolation and the content
+      // is `${borderWidth}px solid #333` — it opens with no declaration, and
+      // `borderWidth` is not a value word, so the whole-literal arm says no and
+      // the color is lost. Only the carried text reaches the declaration.
+      //
+      // The interpolated identifier is doing double duty on purpose: the line
+      // gate (`hasCssIndicator`) is a per-LINE substring test, so line 2 has to
+      // carry one of the six keywords itself or the hex is never even a
+      // candidate. `borderWidth` supplies `border` to the gate while staying a
+      // non-value word for the predicate under test.
+      expect(
+        checkContent(
+          "const s = `border:\n  ${borderWidth}px solid #333`;\n",
+          "src/client/utils/rules.ts",
+        ),
+      ).toEqual(["src/client/utils/rules.ts:2: #333"]);
+    });
+
+    it("opens a literal on a single quote too", () => {
+      // The fast path that skips quote-free lines has to know about all three
+      // quote characters. Missing one means those literals never open, and the
+      // hex silently falls through to the code walk-back — which answers
+      // differently: `mismatch:` reads as a property colon there.
+      expect(
+        checkContent(`  console.warn('border mismatch: #1364');\n`, "src/client/utils/log.ts"),
+      ).toEqual([]);
+
+      // And a real color in a single-quoted attribute still reports.
+      expect(
+        checkContent(`  <div style='color: #333'>x</div>\n`, "src/client/components/S.svelte"),
+      ).toEqual(["src/client/components/S.svelte:1: #333"]);
+    });
+
+    it("carries ONLY a template or an attribute value across a line break", () => {
+      // 103 lines in src/client end mid-`'`/mid-`"` from prose apostrophes
+      // alone. Carrying those would poison every following line of the file, so
+      // a literal continues only if it is a template or opened after `=`.
+      const apostrophe = [
+        "  <p>the document's border</p>",
+        '  <span style="color: #333">x</span>',
+        "",
+      ].join("\n");
+      expect(checkContent(apostrophe, "src/client/components/Prose.svelte")).toEqual([
+        "src/client/components/Prose.svelte:2: #333",
+      ]);
+    });
+
+    it("pins the governor arms that the value-word test would otherwise mask", () => {
+      // Every fixture carries a non-value word (`thing`) so
+      // `looksLikeCssValueString` CANNOT satisfy it — without that, each of
+      // these arms could be deleted with the suite still green, which is the
+      // isolation failure the previous version of this file's positions test
+      // was written to warn about and then committed anyway.
+      const arms: [string, string][] = [
+        [".style.* assignment", `el.style.cssText = "thing 0 0 #333";`],
+        [".setProperty", `el.style.setProperty("--border", "thing 0 0 #333");`],
+        ["css-in-js tag", "const s = css`thing 0 0 #333; border: 0`;"],
+        ["object property", `const s = { borderColor: "thing 0 0 #333" };`],
+        ["camelCase property", `const s = { boxShadow: "thing 0 0 #333", border: 1 };`],
+      ];
+      for (const [name, line] of arms) {
+        expect([name, isColorValuePosition(line, line.indexOf("#333"), "#333")]).toEqual([
+          name,
+          true,
+        ]);
+      }
+
+      // The object arm is restricted to CSS-ish names. src/client holds 121
+      // `label: "…"` shapes; the loose form reported an issue reference in one.
+      const label = `    label: "Toggle authorship colors (#1364)",`;
+      expect(isColorValuePosition(label, label.indexOf("#1364"), "#1364")).toBe(false);
+      expect(isCssPropertyName("borderColor")).toBe(true);
+      expect(isCssPropertyName("boxShadow")).toBe(true);
+      expect(isCssPropertyName("box-shadow")).toBe(true);
+      expect(isCssPropertyName("label")).toBe(false);
+      expect(isCssPropertyName("message")).toBe(false);
+    });
+
+    it("keeps the whole-literal arm as the fallback when quote parity breaks", () => {
+      // This arm is the only one that does not need the literal to be
+      // resolvable, and that is its whole remaining job: a regex literal
+      // containing a quote desynchronises the scan, and every other arm then
+      // fails to see a hex that is plainly a color.
+      const desync = `const RE = /['"]/; el.style.color = "#333";`;
+      expect(isColorValuePosition(desync, desync.indexOf("#333"), "#333")).toBe(true);
+    });
+
+    it("anchors the in-literal declaration to the START of the literal", () => {
+      // Unanchored, a CSS-ish word plus a colon ANYWHERE before the hex counted,
+      // so ordinary log punctuation read as CSS.
+      for (const line of [
+        `  console.warn("border ok. shadow: see #1364");`,
+        `  console.warn("styles: regressed in #1364, border");`,
+        `  console.warn("border ok, accent: regressed in #1364");`,
+      ]) {
+        expect([line, isColorValuePosition(line, line.indexOf("#1364"), "#1364")]).toEqual([
+          line,
+          false,
+        ]);
+      }
+
+      // A real declaration still counts, in both spellings.
+      const decl = "  const s = `border-color: ${w}px solid #333`;";
+      expect(isColorValuePosition(decl, decl.indexOf("#333"), "#333")).toBe(true);
+    });
+
+    it("keeps border widths and filter functions as CSS values", () => {
+      // Real values master caught that a word list must not lose.
+      expect(looksLikeCssValueString("thin solid #333")).toBe(true);
+      expect(looksLikeCssValueString("medium solid #333")).toBe(true);
+      expect(looksLikeCssValueString("drop-shadow(0 0 2px #333)")).toBe(true);
+
+      // `shadow` is a hyphen PART only: `box-shadow` names a property, so prose
+      // about it must still fail even though `drop-shadow` passes.
+      expect(looksLikeCssValueString("box-shadow #1364")).toBe(false);
+      expect(looksLikeCssValueString("shadow #1364")).toBe(false);
+    });
+
+    it("needs the vendor-prefix strip on the color-function callee too", () => {
+      // Reaching the function arm needs a non-value word, or the value-word arm
+      // answers first and the strip looks unnecessary.
+      const prefixed = `const g = note("thing -webkit-linear-gradient(#333, #444)");`;
+      expect(isColorValuePosition(prefixed, prefixed.indexOf("#333"), "#333")).toBe(true);
+    });
+
+    it("needs `color` as a hyphen part for color-mix outside the parens", () => {
+      // Inside the parens the function arm would rescue it; outside, only the
+      // value-word test can, and that needs `color-mix` to parse as a value word.
+      const mix = `const g = "color-mix(in srgb, red 50%, white) #333";`;
+      expect(isColorValuePosition(mix, mix.indexOf("#333"), "#333")).toBe(true);
     });
 
     it("only ever treats an all-decimal-digit token as an issue reference", () => {
