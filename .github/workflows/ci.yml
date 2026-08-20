@@ -111,6 +111,42 @@ jobs:
 
       - run: npm ci
 
+      # TEMPORARY (#1529): the proof's POSITIVE CONTROLS failed on this runner --
+      # both specs assert the reproduced #1299 poison actually denies access, and
+      # on windows-latest it does not. Establish the security context empirically
+      # before deciding what that means. Removed once the cause is settled.
+      - name: Diagnose runner security context
+        continue-on-error: true
+        run: |
+          Write-Host "===== whoami ====="
+          whoami
+          Write-Host "===== whoami /groups ====="
+          whoami /groups
+          Write-Host "===== whoami /priv ====="
+          whoami /priv
+          Write-Host "===== elevation ====="
+          $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $p  = New-Object Security.Principal.WindowsPrincipal($id)
+          Write-Host ("IsElevatedAdmin: " + $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
+          Write-Host ("Owner: " + $id.Owner.Value + "  User: " + $id.User.Value)
+
+          Write-Host "===== reproduce the poison verbatim ====="
+          $root   = Join-Path $env:TEMP ("acl-diag-" + [guid]::NewGuid())
+          $subdir = Join-Path $root "child"
+          New-Item -ItemType Directory -Force -Path $subdir | Out-Null
+          $sid = $id.User.Value
+          icacls $root /inheritance:r /grant:r "*${sid}:F"
+          Write-Host "----- DACL on root -----"
+          icacls $root
+          Write-Host "----- DACL on subdir (expected: empty/deny-all) -----"
+          icacls $subdir
+          Write-Host "----- can node enumerate the subdir? (test expects EPERM) -----"
+          node -e "try { const n = require('fs').readdirSync(process.argv[1]); console.log('READDIR SUCCEEDED (no EPERM), entries=' + n.length) } catch (e) { console.log('READDIR THREW: ' + e.code + ' ' + e.message) }" $subdir
+          Write-Host "----- can node write a file into it? -----"
+          node -e "try { require('fs').writeFileSync(require('path').join(process.argv[1],'probe.txt'),'x'); console.log('WRITE SUCCEEDED') } catch (e) { console.log('WRITE THREW: ' + e.code) }" $subdir
+          icacls $root /grant "*${sid}:(OI)(CI)F" | Out-Null
+          Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+
       - name: Real-icacls proof (#1299 recovery path)
         run: node scripts/ci/windows-acl-proof.mjs
         timeout-minutes: 10
