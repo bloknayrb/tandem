@@ -1,4 +1,4 @@
-import { type AnyExtension, mergeAttributes } from "@tiptap/core";
+import { type AnyExtension, mergeAttributes, type RawCommands } from "@tiptap/core";
 import Highlight from "@tiptap/extension-highlight";
 import Image from "@tiptap/extension-image";
 import Link, { isAllowedUri as tiptapDefaultIsAllowedUri } from "@tiptap/extension-link";
@@ -17,6 +17,7 @@ import { ListItemCheckbox } from "./extensions/list-item-checkbox";
 import { ListSpreadExtension } from "./extensions/list-spread";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { RawMarkdownMark } from "./extensions/raw-markdown";
+import { runColumnCommandWithReindex } from "./extensions/table-align-commands";
 import { TableColumnAlignExtension } from "./extensions/table-column-align";
 import { isSafeExternalHref, isSchemelessPathHref } from "./utils/url-safety";
 
@@ -195,6 +196,42 @@ const TableWithAlignment = Table.extend({
         renderHTML: (attrs: Record<string, unknown>) =>
           attrs.align ? { "data-align": String(attrs.align) } : {},
       },
+    };
+  },
+
+  /**
+   * Re-index `align` when a column is inserted or deleted (#1535).
+   *
+   * `prosemirror-tables` does not know this attribute exists, so its column
+   * commands changed the column count and left the array at its old length and
+   * old positional meaning — every entry after the change point then described
+   * the wrong column, and the next save wrote that to disk. Overriding the
+   * COMMAND rather than patching the #923 context-menu call sites means the
+   * menu, a future toolbar or keyboard binding, and a direct
+   * `editor.commands.addColumnBefore()` all get the fix with nothing to keep in
+   * sync.
+   *
+   * Row operations are deliberately NOT wrapped: `findWidth` takes the per-row
+   * max of colspan sums plus any rowspan carried in from an earlier row, so
+   * `addRowBefore`/`addRowAfter`/`deleteRow`/`toggleHeaderRow`/`mergeCells`/
+   * `splitCell` all preserve the width. That was probed against the
+   * prosemirror-tables source and measured, not assumed, and
+   * `table-align-commands.test.ts` pins it so a future refactor cannot
+   * "helpfully" re-index on a row op.
+   *
+   * The mechanism, the undo-atomicity argument and the Critical Rule 2 answer
+   * are in `table-align-commands.ts`. Read it before changing this.
+   */
+  addCommands() {
+    const parent = this.parent?.() ?? ({} as Record<string, never>);
+    return {
+      ...parent,
+      addColumnBefore: () => (props: Parameters<ReturnType<RawCommands["addColumnBefore"]>>[0]) =>
+        runColumnCommandWithReindex(props, parent.addColumnBefore?.(), "before"),
+      addColumnAfter: () => (props: Parameters<ReturnType<RawCommands["addColumnAfter"]>>[0]) =>
+        runColumnCommandWithReindex(props, parent.addColumnAfter?.(), "after"),
+      deleteColumn: () => (props: Parameters<ReturnType<RawCommands["deleteColumn"]>>[0]) =>
+        runColumnCommandWithReindex(props, parent.deleteColumn?.(), "delete"),
     };
   },
 });
