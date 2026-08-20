@@ -42,6 +42,7 @@ import LicenseBanner from "./components/LicenseBanner.svelte";
 import LicenseWall from "./components/LicenseWall.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
+import PendingUpdateBanner from "./components/PendingUpdateBanner.svelte";
 import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
 import SettingsModal, { SETTINGS_TAB_IDS } from "./components/SettingsModal.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
@@ -82,6 +83,7 @@ import { licenseStore } from "./hooks/useLicense.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
 import { createModels } from "./hooks/useModels.svelte";
 import { createNotifications } from "./hooks/useNotifications.svelte";
+import { createPendingUpdateBanner } from "./hooks/usePendingUpdateBanner.svelte";
 import { createScratchpadPersistence } from "./hooks/useScratchpadPersistence.svelte";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import {
@@ -322,6 +324,10 @@ const connectionBanner = createConnectionBanner(
   () => settingsState.settings.degradedBannerDelayMs,
 );
 const updaterBanner = createUpdaterBanner();
+// #1118: "your update may not have completed". Fed by a Rust-side buffer read in
+// `setup()`, so it is reachable even on a boot where the sidecar never starts —
+// which is the boot it exists for.
+const pendingUpdateBanner = createPendingUpdateBanner();
 createWebViewZoom();
 
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
@@ -2472,6 +2478,15 @@ const shouldShowModelPicker = $derived(
           Server restarted — refreshing documents
         </div>
       {/if}
+
+      <!-- #1118. `visible` prop rather than an `{#if}` wrapper: the component owns
+           its own persistent live-region host, which must outlive its content to
+           announce at all. Already in #1431's target form. -->
+      <PendingUpdateBanner
+        visible={pendingUpdateBanner.showBanner}
+        onCheck={pendingUpdateBanner.check}
+        onDismiss={pendingUpdateBanner.dismiss}
+      />
 
       {#if isTauriRuntime() && updaterBanner.showBanner && updaterBanner.availableVersion}
         <UpdaterBanner
