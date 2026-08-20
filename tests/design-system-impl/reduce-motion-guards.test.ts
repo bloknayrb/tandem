@@ -54,7 +54,27 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 const FILES = [...walk(CLIENT), join(ROOT, "index.html")].sort();
-const rel = (f: string) => relative(ROOT, f);
+/**
+ * A repo-relative path in POSIX separators — the coordinate system every
+ * hardcoded key in this file (`EXCEPTIONS[].file`, `INLINE_ALLOWLIST`) is
+ * written in, and the one `it.each` titles are read in.
+ *
+ * The normalization is load-bearing, not cosmetic. `node:path.relative` returns
+ * BACKSLASHES on Windows, so without it `exceptionFor()` and
+ * `INLINE_ALLOWLIST.get()` never match there: ActivityTray's three `!important`
+ * guards and StatusBar's two allowlisted inline declarations are all present and
+ * correct, and this file failed four times anyway. On Linux CI the separators
+ * agree, so it is green there and red on every Windows machine — which, because
+ * the pre-push hook runs the full vitest suite, blocked Windows developers from
+ * pushing anything at all.
+ *
+ * Normalizing HERE rather than at each comparison is deliberate: every
+ * path-as-key flows through this one function, so there is no second site to
+ * forget. The mirror of the `path.basename` gotcha in CLAUDE.md, and the same
+ * `.replace(/\\/g, "/")` idiom `testid-coverage`, `css-pipeline-contract` and
+ * `ydoc-import-ceiling` already use.
+ */
+const rel = (f: string) => relative(ROOT, f).replace(/\\/g, "/");
 
 /**
  * See `app-shell-reduce-motion-guards.test.ts` for the three inversions this
@@ -347,6 +367,33 @@ describe("reduce-motion guard coverage across src/client (#1530)", () => {
     expect(MOTION_TARGETS.length).toBeGreaterThan(60);
   });
 
+  /**
+   * Every EXCEPTIONS entry must MATCH a real target. A key that matches nothing
+   * is not inert: `exceptionFor()` returns undefined, the entry silently stops
+   * applying, and the target is judged under the ordinary rule instead.
+   *
+   * Today that direction is loud — it is exactly how the Windows separator bug
+   * surfaced, as three ActivityTray failures. But the failure mode is an
+   * accident of which way this particular exception leans, and the general shape
+   * is the "an empty filter result satisfies a zero check" trap: an exception
+   * that RELAXES a check would, on the same missed lookup, degrade into a
+   * silently stricter pass instead. Asserting the keys resolve is the honest
+   * gate either way, and it fails on the lookup rather than on its consequence.
+   */
+  it.each(
+    EXCEPTIONS.map((e) => [`${e.file} — ${e.declared}`, e] as const),
+  )("EXCEPTIONS entry %s matches a real motion target", (_name, exception) => {
+    expect(
+      MOTION_TARGETS.find(
+        (t) => rel(t.file) === exception.file && t.selector === norm(exception.declared),
+      ),
+      `no scanned target matches this EXCEPTIONS entry. Either the rule it excuses is gone — ` +
+        "delete the entry — or the key no longer resolves. `file` is repo-relative with " +
+        "FORWARD slashes (the `rel()` coordinate system, normalized for Windows) and " +
+        "`declared` must equal the target's `norm`-alized selector.",
+    ).toBeDefined();
+  });
+
   it("reads timing tokens that both mechanisms zero — an empty set would exempt nothing and over-report", () => {
     expect([...ZEROED_TOKENS].sort()).toEqual([
       "--a30-chrome",
@@ -521,6 +568,25 @@ describe("reduce-motion guard coverage across src/client (#1530): inline styles 
   const INLINE_ALLOWLIST = new Map<string, { count: number; guardedBy: string[] }>([
     ["src/client/status/StatusBar.svelte", { count: 2, guardedBy: [".status-dot", ".claude-dot"] }],
   ]);
+
+  /**
+   * Same anti-vacuity gate as the EXCEPTIONS one above, for the other
+   * path-keyed map in this file. `INLINE_ALLOWLIST.get(name)` falls back to
+   * `?? 0`, so a key that resolves to nothing is indistinguishable from "this
+   * file is allowed zero" — the allowance just evaporates. Pin that the key
+   * names a file actually in the scanned corpus, in the corpus's own
+   * coordinate system.
+   */
+  it.each(
+    [...INLINE_ALLOWLIST.keys()].map((name) => [name] as const),
+  )("INLINE_ALLOWLIST key %s names a file the inline scan actually visits", (name) => {
+    expect(
+      SVELTE_FILES.map(rel),
+      `\`${name}\` is not among the scanned .svelte files, so its allowance applies to nothing ` +
+        "and the file it was written for is being held to zero. Keys are repo-relative with " +
+        "FORWARD slashes — see `rel()`.",
+    ).toContain(name);
+  });
 
   it("finds inline style attributes to scan — zero means the scanner desynced from the markup", () => {
     const total = SVELTE_FILES.reduce(
