@@ -10,8 +10,9 @@
  * guards are platform-independent text checks rather than Rust ones.
  *
  * HISTORY. This file began life as `firewall-invariant-citations.test.ts`, the
- * regression pin for #1374's dangling-`§N`-citation fix. #1531 finished that
- * job repo-wide, so the citation half moved to
+ * regression pin for #1374's dangling-`§N`-citation fix. #1531 widened that
+ * job to a repo-wide sweep of the label-less shapes, so the citation half
+ * moved to
  * `invariant-citations.test.ts` (detector in `dangling-citations.ts`), whose
  * sweep covers `firewall.rs` along with everything else. Nothing was dropped —
  * what is left here is the part that was never about citations.

@@ -38,6 +38,35 @@
  * OOXML backreference, was given back the `OOXML ` label it was missing
  * rather than carved out — the pattern stays uniform.
  *
+ * WHAT THIS DETECTOR DOES NOT COVER — stated, not implied. It matches the
+ * three shapes above and nothing else, so "no dangling citations" here means
+ * "no *label-less* ones". Three families of the same habit survive it, and the
+ * limit is deliberate because widening to reach them costs more than it buys.
+ * All three are tracked in #1584:
+ *
+ *  - `plan §N` / `the plan's §N` / `M2b plan §N` — `local-model/collaborator.ts`,
+ *    `local-model/index.ts`, `ollama-client.ts`, `panels/cardDensity.ts`, and
+ *    four `tests/client/*` files cite plan sections that live in gitignored
+ *    `.claude/plans/`. They read as labelled, and they DO resolve — but only on
+ *    a machine holding the untracked plan. Inlining the rationale each one
+ *    stands in for means transcribing a document that is not in the repo, which
+ *    is a far larger change than #1531, and one no reviewer of this repo could
+ *    check. Tracked in #1584 rather than half-done here.
+ *  - `review §N` — `license-state.ts`, `mcp/routes/license.ts`. "review" names a
+ *    review conversation, not a document; same defect as `invariant`, but two
+ *    sites, and folding it in would put a third label-word in a pattern whose
+ *    whole argument is that label-words name lists rather than documents.
+ *  - a parenthesised citation with a trailing token — `(§12 L1)` in
+ *    `kv-store.ts`. Branch 3 requires the `)` to follow the numeral, so this
+ *    slips through. Allowing arbitrary trailing text inside the parens would
+ *    start matching `(ADR-040 §5, see below)`-shaped legitimate text.
+ *
+ * One structural limit as well: `invariant-citations.test.ts` runs this pattern
+ * per LINE, so a citation whose label and numeral are split across a comment
+ * line break is invisible to it. Two such wraps exist today (`authorship.ts:502`,
+ * `mcp/server.ts:178`) and both are legitimate issue-anchored citations; the
+ * per-line scan is kept because it is what lets a failure name the line.
+ *
  * `§3` — and only the exact integer `3` — is excluded. It is the one numeral
  * in this family that resolves: the defense-in-depth path guard defined inline
  * at `cowork_workspace_scan.rs:7`/`:605` and cited accurately from

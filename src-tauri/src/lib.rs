@@ -4025,8 +4025,10 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         let firewall_result = firewall::add_cowork_allow_rule(&cidr);
         if let Err(ref e) = firewall_result {
             // Fail-closed: if the firewall rule can't be written, bail — do NOT
-            // walk workspaces. An install without the allow rule is an install the
-            // VM cannot reach, advertised as working.
+            // walk workspaces. Under the shipped default the server binds
+            // 127.0.0.1, so the rule buys nothing; but with a routable
+            // TANDEM_BIND_HOST an install missing it is one the VM cannot
+            // reach, advertised as working. Bailing is correct for both.
             if let firewall::FirewallError::AdminDeclined = e {
                 // The firewall rule needs elevation Tandem does not have (it never
                 // runs elevated, so no UAC prompt ever appears). Do NOT attempt a

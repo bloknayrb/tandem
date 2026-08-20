@@ -1,5 +1,12 @@
 /**
- * Repo-wide guard for #1531 — no dangling `§N` citations in source.
+ * Repo-wide guard for #1531 — no *label-less* dangling `§N` citations in source.
+ *
+ * SCOPE OF THE CLAIM. This is not "every dangling citation is gone". The
+ * detector matches three shapes (see `./dangling-citations`); three further
+ * families of the same habit — `plan §N` into gitignored `.claude/plans/`,
+ * `review §N`, and `(§12 L1)`-style parenthesised citations with a trailing
+ * token — are outside it, and are enumerated there under WHAT THIS DETECTOR
+ * DOES NOT COVER. A green run here means the label-less shapes are gone.
  *
  * #1374 fixed `firewall.rs` and one function of `cowork_installer.rs` and left
  * a narrow test behind, whose own header said in as many words that a green run
@@ -61,7 +68,7 @@ function scannedFiles(): string[] {
     .filter((f) => !SELF_EXCLUDED.has(f));
 }
 
-describe("#1531: dangling §N citations are gone from source", () => {
+describe("#1531: label-less dangling §N citations are gone from source", () => {
   it("scans a plausible number of files (guards against an empty sweep)", () => {
     // A `git ls-files` that returned nothing — wrong cwd, a renamed directory —
     // would make the next test pass while checking zero bytes.
@@ -86,7 +93,7 @@ describe("#1531: dangling §N citations are gone from source", () => {
     }
     expect(
       offenders,
-      "Dangling §N citation(s). These point at a numbered list that does not " +
+      "Label-less dangling §N citation(s). These point at a numbered list that does not " +
         "exist in this repo — see tests/build/dangling-citations.ts. Replace " +
         "each with the rationale it was standing in for, or with a citation " +
         "that names a real document (ADR-0NN §N, RFC NNNN §N.N).",
