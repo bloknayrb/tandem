@@ -302,7 +302,7 @@ describe("T7 — the decoration cannot leak into the document", () => {
 });
 
 describe("T8 — a ragged table must not decorate its rows", () => {
-  it("skips TableMap's unfilled-slot sentinel", () => {
+  it("refuses to decorate a row a TableMap sentinel resolves to", () => {
     // `computeMap` pre-fills its grid with 0 and leaves those zeros for a short
     // row. Zero is never a real cell offset, but `table.nodeAt(0)` returns the
     // first tableRow rather than null, and a node decoration spanning a <tr>
@@ -314,7 +314,16 @@ describe("T8 — a ragged table must not decorate its rows", () => {
     // never calls.
     //
     // Note the width guard does NOT cover this — width is 3 and align has 3
-    // entries — so this is the only test that holds the sentinel skip.
+    // entries — so this is the only test that holds the cell guard's ROLE
+    // check. Weakening that line to a bare `!cell` fails here and nowhere else.
+    //
+    // The <tr> loop below is the robust half of this test, not the
+    // `cellAlignments` expectation: the short row is row 1, so its sentinel
+    // slots land on align[1] ("center"), which is non-null and therefore
+    // emits. A ragged fixture whose MISSING columns happened to be null-aligned
+    // would leave `value === null` and let the mutant pass, so the centre and
+    // right columns here are load-bearing for what this can see. Keep them
+    // non-null if you edit the fixture.
     const editor = mount({
       content: fromMarkdown("| a | b | c |\n| :- | :-: | -: |\n| 1 |\n| 2 | 3 | 4 |\n"),
     });

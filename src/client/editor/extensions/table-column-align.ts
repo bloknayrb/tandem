@@ -8,7 +8,7 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
  * Render GFM column alignment on table cells (#995).
  *
  * #1462 made the alignment *survive*: the server writes mdast's per-column
- * `align` array as a JSON string on the table element (`mdast-ydoc.ts:231`) and
+ * `align` array as a JSON string on the table element (`mdast-ydoc.ts:232`) and
  * `TableWithAlignment` declares the attribute so `computeAttrs` stops discarding
  * it. Nothing rendered it — `editor.css` had no `text-align` at all — so a
  * document's alignment was invisible even though the data was intact.
@@ -58,20 +58,31 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
  *
  * ## Two independent guards, and neither covers the other's case
  *
- * 1. **`relPos === 0` is a sentinel, not a position.** `computeMap` pre-fills the
- *    grid with `0` (`prosemirror-tables/dist/index.js:121`) and LEAVES those
- *    zeros for a short row, recording `{type:"missing"}` in `map.problems`. Zero
- *    is never a real cell offset — `pos` is incremented before the first cell of
- *    every row — but `table.nodeAt(0)` returns the first `tableRow`, NOT null. So
- *    a bare existence check passes, and `Decoration.node` spanning a `<tr>`
- *    exactly is *legal* (`NodeType.valid()` only requires the range to span a
- *    non-text node exactly) and is accepted with no warning. `text-align` on a
- *    `<tr>` then inherits into every cell in that row without its own class, so
- *    one ragged row can centre an entire header. Ragged tables are reachable:
- *    `mdast-ydoc.ts:233-250` does not pad short rows, and `fixTables` runs from
- *    `tableEditing()`'s `appendTransaction`, which `EditorState.create` never
- *    calls. Hence the explicit skip AND the `tableRole` check below — existence
- *    alone is not the question, role is.
+ * 1. **The cell guard tests ROLE, not existence, because of a sentinel.**
+ *    `computeMap` pre-fills the grid with `0`
+ *    (`prosemirror-tables/dist/index.js:124`) and LEAVES those zeros for a short
+ *    row, recording `{type:"missing"}` in `map.problems`. Zero is never a real
+ *    cell offset — `pos` is incremented at `index.js:127`, before the first cell
+ *    of every row — but `table.nodeAt(0)` returns the first `tableRow`, NOT
+ *    null. So a bare existence check passes, and `Decoration.node` spanning a
+ *    `<tr>` exactly is *legal* (`NodeType.valid()` only requires the range to
+ *    span a non-text node exactly) and is accepted with no warning. `text-align`
+ *    on a `<tr>` then inherits into every cell in that row without its own
+ *    class, so one ragged row can centre an entire header. Ragged tables are
+ *    reachable: `mdast-ydoc.ts:233-250` does not pad short rows, and `fixTables`
+ *    runs from `tableEditing()`'s `appendTransaction`, which
+ *    `EditorState.create` never calls.
+ *
+ *    An earlier revision also carried an explicit `if (relPos === 0) continue;`
+ *    ahead of this check and described the two as independent. They are not:
+ *    every sentinel resolves to a `tableRow`, so the role check already refuses
+ *    it, and deleting the skip left the whole suite green. The skip is gone and
+ *    the role check is the single cover — which is also the more durable of the
+ *    two, since it states the invariant the code actually needs ("only decorate
+ *    a cell") in schema terms, whereas `=== 0` hard-codes a private upstream
+ *    detail that would silently stop matching if `computeMap` ever pre-filled
+ *    with something other than zero. T8 pins it: weakening this line to a bare
+ *    `!cell` fails that test.
  * 2. **`align.length !== map.width` bails out entirely.** The `align` array is
  *    NOT maintained by the column commands: `addColumnBefore` on a 3-column table
  *    leaves 3 entries against 4 columns, so every column from the insertion point
@@ -176,13 +187,14 @@ function collectTableDecorations(table: PMNode, pos: number, out: Decoration[]):
 
   for (let i = 0; i < map.map.length; i++) {
     const relPos = map.map[i];
-    // Guard 1. A zero is computeMap's unfilled-slot sentinel, not a position.
-    if (relPos === 0) continue;
     // A colspan/rowspan cell occupies several slots; the FIRST is its top-left,
     // which is why `i % map.width` is its leftmost column.
     if (seen.has(relPos)) continue;
     seen.add(relPos);
 
+    // Guard 1. Role, not existence — see the sentinel note in the header. An
+    // unfilled slot holds `0`, and `table.nodeAt(0)` returns the first
+    // tableRow rather than null, so `!cell` alone would let a <tr> through.
     const cell = table.nodeAt(relPos);
     const role = cell?.type.spec.tableRole;
     if (!cell || (role !== "cell" && role !== "header_cell")) continue;
