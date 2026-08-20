@@ -29,6 +29,7 @@ matrix across OS versions, observer soak, accessibility) live in
 - [ ] Updater: on a machine/VM with the **previous** version installed, launch and wait for the titlebar update dot → install → app restarts → About shows the new version → open a document and type (sidecar survived the restart).
 - [ ] Quit from the tray → Task Manager shows **no orphaned `node-sidecar` process**.
 - [ ] Uninstall → reinstall current version still launches (uninstaller didn't strand state that breaks a fresh install).
+- [ ] **Cowork Retry survives an unwritable meta file (#1560).** Needs an elevated launch and at least one Cowork workspace. Get the admin-declined modal up (enable Cowork, decline the UAC prompt), then make `cowork-meta.json` unwritable — deny write on the **file**, not the parent folder; Windows ignores a read-only attribute on the folder for create-and-rename, and the save is a temp-file-plus-rename. Press **Retry with admin** and accept the UAC prompt this time. The elevation must actually be attempted — before #1560 the button returned an error without ever raising the prompt. Expect the prompt, then an error banner naming *both* that Cowork was enabled and that the notice will reappear.
 
 ## 2. macOS (real hardware, Apple Silicon)
 

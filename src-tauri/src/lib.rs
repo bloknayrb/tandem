@@ -5056,21 +5056,131 @@ fn cowork_set_lan_ip_override(_enabled: bool) -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
+/// Map the retry's two results onto the command's return value (#1560).
+///
+/// The retry does two things, and only one of them is its contract. Re-running
+/// the elevation IS the contract; clearing `uac_declined_*` is bookkeeping ABOUT
+/// it. Treating the bookkeeping as a precondition — `update(...)?` before the
+/// tail call — meant that under the canonical shared cause, an unwritable
+/// `cowork-meta.json`, the toggle was never attempted at all. The one button
+/// offered as the escape hatch did nothing, every time.
+///
+/// So the toggle's verdict wins whenever it has one. A clear that failed while
+/// the toggle SUCCEEDED is still reported as an error, because the on-disk flag
+/// then contradicts the live state: `cowork_get_status` re-reads the file on
+/// every poll, so the admin-declined notice reappears with nothing to explain
+/// it. That is the same partial-commit shape the disable arm already fails loud
+/// on — the write landed nowhere, the side effects landed everywhere.
+///
+/// Kept out of the `cfg(windows)` block so its tests run on every CI platform;
+/// the allow keeps a non-Windows release build warning-free. Direct precedent:
+/// `parse_netstat_listening_pid` and its siblings above.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn retry_admin_elevation_outcome(
+    clear_result: Result<(), String>,
+    toggle_result: Result<String, String>,
+) -> Result<String, String> {
+    // The toggle failing is the retry failing. Its message names the real
+    // obstacle (a declined UAC prompt, a firewall add that was refused); a
+    // bookkeeping error reported over the top of it would only mislead.
+    let toggled = toggle_result?;
+    match clear_result {
+        Ok(()) => Ok(toggled),
+        Err(e) => Err(format!(
+            "{toggled}, but the admin-declined flag could not be cleared, so the notice will \
+             reappear. Tandem could not write cowork-meta.json: {e}"
+        )),
+    }
+}
+
 /// Clear the UAC-declined flag and retry the enable flow.
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn cowork_retry_admin_elevation() -> Result<String, String> {
-    cowork_meta::update(|m| {
-        m.uac_declined_last_attempt = false;
-        m.uac_declined_at = None;
-    })
-    .map_err(|e| e.to_string())?;
-    cowork_toggle_integration(true)
+    let clear = || {
+        cowork_meta::update(|m| {
+            m.uac_declined_last_attempt = false;
+            m.uac_declined_at = None;
+        })
+    };
+
+    let first = clear();
+    if let Err(ref e) = first {
+        log::warn!("[cowork] retry: could not clear uac_declined before the toggle: {e}");
+    }
+    let toggled = cowork_toggle_integration(true);
+    // A failed clear can be transient — an AV lock on the atomic temp file is the
+    // documented case. A toggle that SUCCEEDED proves the meta file is writable
+    // now (its enable arm persists through the same path), so try once more
+    // rather than reporting an obstacle that has already passed.
+    let cleared = if first.is_err() && toggled.is_ok() {
+        clear()
+    } else {
+        first
+    };
+    retry_admin_elevation_outcome(cleared, toggled)
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
 fn cowork_retry_admin_elevation() -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
+}
+
+#[cfg(test)]
+mod retry_admin_elevation_outcome_tests {
+    use super::retry_admin_elevation_outcome;
+
+    /// The regression this exists for. Before #1560 a failed clear returned
+    /// early, so the toggle never ran; there was no toggle result to feed in.
+    /// The assertion is therefore about the toggle's verdict SURVIVING a failed
+    /// clear at all.
+    #[test]
+    fn a_failed_clear_does_not_suppress_a_successful_toggle() {
+        let out = retry_admin_elevation_outcome(
+            Err("Access is denied. (os error 5)".into()),
+            Ok("Cowork enabled: 2 workspace(s) configured".into()),
+        );
+        let msg = out.expect_err("a stale on-disk flag must be reported, not swallowed");
+        // The success half is still named: the elevation DID happen, and a
+        // message that only says "write failed" sends the user to retry an
+        // operation that already succeeded.
+        assert!(
+            msg.contains("Cowork enabled: 2 workspace(s) configured"),
+            "{msg}"
+        );
+        // And the consequence is named, because the user is about to see the
+        // notice again and would otherwise have nothing to connect it to.
+        assert!(msg.contains("the notice will reappear"), "{msg}");
+        assert!(msg.contains("Access is denied. (os error 5)"), "{msg}");
+    }
+
+    #[test]
+    fn both_succeeding_returns_the_toggle_message_unchanged() {
+        let out = retry_admin_elevation_outcome(
+            Ok(()),
+            Ok("Cowork enabled: 1 workspace(s) configured".into()),
+        );
+        assert_eq!(out, Ok("Cowork enabled: 1 workspace(s) configured".into()));
+    }
+
+    /// The toggle is the contract, so its message is the one the user needs.
+    /// A bookkeeping error printed over the top of "UAC declined" would name
+    /// the wrong obstacle.
+    #[test]
+    fn a_failed_toggle_wins_over_a_failed_clear() {
+        let out = retry_admin_elevation_outcome(
+            Err("Access is denied. (os error 5)".into()),
+            Err("Admin permission was declined".into()),
+        );
+        assert_eq!(out, Err("Admin permission was declined".into()));
+    }
+
+    #[test]
+    fn a_failed_toggle_wins_over_a_successful_clear_too() {
+        let out =
+            retry_admin_elevation_outcome(Ok(()), Err("Admin permission was declined".into()));
+        assert_eq!(out, Err("Admin permission was declined".into()));
+    }
 }
 
 /// Minimal ISO-8601 (UTC) timestamp without pulling in chrono.
