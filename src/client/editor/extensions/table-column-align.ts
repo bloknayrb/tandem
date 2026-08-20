@@ -83,22 +83,24 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
  *    detail that would silently stop matching if `computeMap` ever pre-filled
  *    with something other than zero. T8 pins it: weakening this line to a bare
  *    `!cell` fails that test.
- * 2. **`align.length !== map.width` bails out entirely.** The `align` array is
- *    NOT maintained by the column commands: `addColumnBefore` on a 3-column table
- *    leaves 3 entries against 4 columns, so every column from the insertion point
- *    would render one column's alignment too far left and the last would lose it.
- *    Re-indexing the array is deferred to #1535 (it needs command wrappers and a
- *    document write), and #1535 is why this guard exists rather than being
- *    defensive noise: without the re-index the column commands silently rewrite
- *    the user's file, and this guard is what stops the editor from confidently
- *    displaying the corrupted result. Until then, showing nothing
- *    is right: it is exactly the pre-#995 behaviour for that table, whereas
- *    showing a confident wrong answer has no user recourse while the alignment UI
- *    is unbuilt.
+ * 2. **`align.length !== map.width` bails out entirely.** A positional array of
+ *    the wrong length describes a different table: every column from the
+ *    mismatch would render one place off and the last would lose its alignment.
+ *    The column commands themselves no longer produce that state — #1535
+ *    (`table-align-commands.ts`) re-indexes the array inside the same
+ *    transaction as the op — but this guard is NOT thereby redundant, because
+ *    the desync has sources the commands do not control: a paste, a file
+ *    written by a build older than #1535, or a hand-edited `align` attribute.
+ *    Such a table is normalised on its next column op; until then, showing
+ *    nothing is right. It is exactly the pre-#995 behaviour for that table,
+ *    whereas showing a confident wrong answer has no user recourse while the
+ *    alignment UI is unbuilt.
  *
- * These do not subsume each other. For a ragged table the width guard passes
- * (`width === align.length`) and only the sentinel skip protects; for a
- * column-inserted table the sentinel never appears and only the width guard does.
+ * The two guards are independent, and each has a case the other does not see.
+ * A ragged table passes the width guard (`width === align.length`) and is
+ * refused only by the cell guard's role check; a table whose `align` array
+ * arrived the wrong length produces no sentinel at all and is refused only by
+ * the width guard. T8 pins the first, T5-width the second.
  *
  * ## Registration and ordering
  *
