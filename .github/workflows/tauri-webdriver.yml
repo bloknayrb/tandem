@@ -146,12 +146,37 @@ jobs:
           Write-Host "WebView2 Runtime: $pv (major $major)"
 
           # Known-good driver builds keyed by WebView2 major. Only consulted once
-          # every live candidate has missed; keep in sync as majors roll.
-          $pinned = @{ '149' = '149.0.4022.98'; '150' = '150.0.4078.83' }
-          # This table rots silently: when the runners roll to a major with no
-          # row, Add-Candidate gets $null and the last-resort net just vanishes.
-          # Say so out loud (an ::warning:: annotation, visible on the run page)
-          # instead of letting a green-until-it-isn't run hide it.
+          # every live candidate has missed. Each row was verified downloadable
+          # (HTTP 200, and the zip really contains msedgedriver.exe) when added.
+          #
+          # HOW THIS ROTS, measured rather than assumed (2026-08-20). It is NOT
+          # that the CDN drops old blobs: 149.0.4022.98 still serves today, and
+          # #1197's original failure was a LATEST_RELEASE_ pointer naming a build
+          # that was never published at all. The rot is a NEW MAJOR WITH NO ROW:
+          # `$pinned[$major]` on a missing key is $null and Add-Candidate returns
+          # immediately, so the last-resort net simply is not there. Worse, a
+          # MIS-KEYED row ('152' = '151.0...') is dropped by Add-Candidate's
+          # in-major filter with no error AND without tripping the ContainsKey
+          # warning below, because the key IS present. Both shapes are pinned by
+          # tests/scripts/tauri-webdriver-pin.test.ts, which is the only thing
+          # that reads this table on an ordinary PR - this job is dispatch-only,
+          # so the annotations below reach nobody until someone runs it.
+          #
+          # REVIEW HOME: #1345, dated 2026-11-01, which already lists "the
+          # current pinned driver table in the workflow versus what Microsoft
+          # ships at review time" among the evidence it weighs. Edge ships stable
+          # majors roughly every 4 weeks, so these rows cover the runners to
+          # about October 2026 - up to that review, not past it. If #1345
+          # resolves to "restore", the restore work needs a fresh dated gate for
+          # this table, because #1345 closes and the table outlives it.
+          $pinned = @{
+            '149' = '149.0.4022.98'
+            '150' = '150.0.4078.83'
+            '151' = '151.0.4129.93'
+            '152' = '152.0.4191.35'
+          }
+          # Say a missing row out loud (a ::warning:: annotation, visible on the
+          # run page) instead of letting a green-until-it-isn't run hide it.
           if (-not $pinned.ContainsKey($major)) {
             Write-Host ("::warning::No hand-pinned Edge WebDriver for WebView2 major " + $major +
               " - the last-resort fallback is gone. Add a row to `$pinned in .github/workflows/tauri-webdriver.yml.")
@@ -237,6 +262,20 @@ jobs:
           }
           $how = if ($driverVersion -eq $pv) { 'exact runtime match' } else { 'in-major fallback' }
           Write-Host "Edge WebDriver: $driverVersion ($how; runtime $pv)"
+
+          # Green-but-rescued is the other half of "fail loudly" (#1197). If the
+          # hand-pinned row is what won, EVERY live candidate missed - the exact
+          # runtime version, the LATEST_RELEASE_<major> pointer and all 32
+          # walk-back builds - which is #1197's original CDN failure recurring,
+          # survived only because the net happened to still be current. A run
+          # that rendered as an ordinary green would hide exactly that, and the
+          # net is the one candidate guaranteed to expire.
+          if ($driverVersion -eq $pinned[$major] -and $driverVersion -ne $pv -and $driverVersion -ne $latest) {
+            Write-Host ("::warning::Only the hand-pinned Edge WebDriver ($driverVersion) resolved for " +
+              "WebView2 major ${major} - every live candidate missed, so msedgedriver.microsoft.com " +
+              "or its LATEST_RELEASE_${major} pointer is broken again (#1197). This run is green " +
+              "only because the last-resort pin is still current.")
+          }
 
           # Defense in depth: a mislabelled blob must not become a silently
           # browser-matched driver, which is the connect-hang failure mode.
