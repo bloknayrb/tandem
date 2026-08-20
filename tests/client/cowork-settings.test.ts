@@ -971,7 +971,9 @@ describe("cowork invoke wrappers", () => {
   });
 
   it("coworkRetryAdminElevation calls the expected command", async () => {
-    const invoke = vi.fn<InvokeFn>().mockResolvedValue({ ok: true } as unknown);
+    const invoke = vi
+      .fn<InvokeFn>()
+      .mockResolvedValue("Cowork enabled: 2 workspace(s) configured" as unknown);
     await coworkRetryAdminElevation(invoke as unknown as InvokeFn);
     expect(invoke).toHaveBeenCalledWith("cowork_retry_admin_elevation");
   });
