@@ -55,9 +55,14 @@ const ATTRIBUTE_ASSIGNMENT_TAIL_RE = /[-a-zA-Z_][-a-zA-Z0-9_]*\s*=\s*$/;
  * `looksLikeCssValueString` already covers its well-formed cases —
  * `el.setAttribute("style", "shadow 2px #333")` is governed but not
  * value-word-clean, and without the arm the color is lost.
+ *
+ * The `setAttribute` attribute name is matched case-INSENSITIVELY, unlike
+ * everything else here: HTML attribute names are case-insensitive, so `"STYLE"`
+ * is the same attribute and skipping it would be a silent false negative. The
+ * property spellings around it are JS identifiers and stay exact.
  */
 const STYLE_STRING_GOVERNOR_RE =
-  /(?:\bstyle(?::[-a-zA-Z0-9_]+)?\s*=|\.style(?:\.[A-Za-z0-9_$]+)?\s*=|\.setProperty\(\s*(['"`])[^'"`]*\1\s*,|\.setAttribute\(\s*(['"`])style\2\s*,|\b(?:css|styled(?:\.[A-Za-z0-9_$]+)?|keyframes|createGlobalStyle))[\s{(]*$/;
+  /(?:\bstyle(?::[-a-zA-Z0-9_]+)?\s*=|\.style(?:\.[A-Za-z0-9_$]+)?\s*=|\.setProperty\(\s*(['"`])[^'"`]*\1\s*,|\.setAttribute\(\s*(['"`])[sS][tT][yY][lL][eE]\2\s*,|\b(?:css|styled(?:\.[A-Za-z0-9_$]+)?|keyframes|createGlobalStyle))[\s{(]*$/;
 
 /** The identifier of an object-literal / declaration property, if this text ends in one. */
 const PROPERTY_NAME_TAIL_RE = /([-a-zA-Z_][-a-zA-Z0-9_]*)\s*:[\s{(]*$/;
@@ -333,18 +338,70 @@ const LEADING_PROPERTY_COLON_RE = /^\s*([-a-zA-Z_][-a-zA-Z0-9_]*)\s*:/;
  * `transform:`. A lint gate must fail toward reporting; anchoring made it fail
  * toward silence.
  *
- * Segmenting does not widen the prose surface, because the anchor is still an
- * anchor — it just moves to the segment. The two measured prose shapes stay
- * silent: `"border ok. shadow: see #1364"` has no `;`, and its one segment
- * starts `border ok.`, which is not `ident:`; `"styles: regressed in #1364"`
- * opens with `styles`, which is not a CSS property word (`style` is). And a
- * segment boundary can only ever move the anchor RIGHT of a `;`, so a hex in
- * the first segment is judged exactly as before.
+ * **Only a top-level `;` is a separator.** A raw `lastIndexOf(";")` is wrong,
+ * and wrong in the silent direction: `;` occurs inside `url()` (a `data:…;
+ * base64,` URI is the common case), inside a nested quoted run
+ * (`url('a;b.png')`), and inside a `${…}` interpolation. Any of those drags the
+ * anchor right of the property colon that actually governs the hex, and the
+ * literal then reads as prose all the way through — so
+ * `"background: url(data:image/png;base64,AAA) #333"` goes silent, which is a
+ * false negative this file's own predecessor did not have. `findLastTopLevelSemicolon`
+ * is what keeps the split honest.
+ *
+ * Segmenting DOES widen the prose surface slightly, and this is the accepted
+ * cost. The residual is "a segment that opens with a property colon", where it
+ * used to be "a literal that opens with one": `"reset failed; background: see
+ * #1364"` now reports. Prose with a semicolon followed by `<cssword>:` is rare
+ * enough — and the false negatives it buys back are common enough — to take the
+ * trade, but the two measured prose shapes were never the boundary case. Both
+ * still stay silent for the same reason as before: `"border ok. shadow: see
+ * #1364"` has no `;` at all, and `"styles: regressed in #1364"` opens with
+ * `styles`, which is not a CSS property word (`style` is).
  */
 function isInCssDeclarationSegment(contentBefore: string): boolean {
-  const segment = contentBefore.slice(contentBefore.lastIndexOf(";") + 1);
+  const segment = contentBefore.slice(findLastTopLevelSemicolon(contentBefore) + 1);
   const m = LEADING_PROPERTY_COLON_RE.exec(segment);
   return m !== null && isCssPropertyName(m[1]);
+}
+
+/**
+ * Index of the last `;` in `text` that is a CSS declaration separator, or `-1`.
+ *
+ * "Separator" means: outside every `(…)` and outside every nested quoted run.
+ * Both exclusions are reachable and both are pinned — see the false negatives
+ * enumerated on `isInCssDeclarationSegment`.
+ *
+ * `text` is a string literal's *content*, so a quote character in it is
+ * necessarily a NESTED one (the delimiter itself is not part of the content),
+ * which is why any of the three quote characters opens a run here. Escapes are
+ * honoured so `"url(\"a;b\")"` does not leave the scanner stuck in a quote.
+ *
+ * There is deliberately no `${…}` arm. A `;` inside an interpolation looked
+ * like a third case, but in valid source it is always already inside one of the
+ * two above: a bare `;` is a statement separator, so it needs a block, and an
+ * expression position reaches a block only through a call's parens (an IIFE, a
+ * `.map(i => { … })` callback) — while a `;` in interpolated *text* is inside a
+ * nested quote. Every fixture built for a `${…}` arm turned out to be killed by
+ * the quote or paren arm instead, which is the file's own standard for
+ * unreachable code: a branch no test can distinguish from its own absence.
+ */
+function findLastTopLevelSemicolon(text: string): number {
+  let last = -1;
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote !== null) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") quote = ch;
+    else if (ch === "(") depth++;
+    else if (ch === ")" && depth > 0) depth--;
+    else if (ch === ";" && depth === 0) last = i;
+  }
+  return last;
 }
 
 /**
@@ -524,6 +581,21 @@ const QUOTE_RE = /["'`]/;
 /** Head of a carried literal kept for the value-word and declaration tests. */
 const MAX_CARRIED_LITERAL_CHARS = 4096;
 
+/**
+ * Deepest frame stack carried across a line boundary.
+ *
+ * Carrying the whole stack costs an O(depth) copy and an O(depth × 4096) string
+ * build per line, so a file whose every line net-opens a template plus an
+ * interpolation is O(N² · 4096) — measured at 2.4 s for 1000 such lines and a
+ * V8 heap-OOM abort at 4000, which in a pre-commit hook is a dead commit with
+ * no diagnosis. Deepest stack measured anywhere in `src/client` is 2.
+ *
+ * Past the cap the carry is DROPPED, which is the same fail-open posture as the
+ * EOF backstop: the next line is scanned as if nothing were open, which can only
+ * add reports, never silence one.
+ */
+const MAX_CARRIED_FRAME_DEPTH = 8;
+
 /** Does the text before an opening quote make the whole literal a CSS value? */
 function isGovernedLiteral(before: string): boolean {
   return STYLE_STRING_GOVERNOR_RE.test(before) || isCssGovernedProperty(before);
@@ -543,7 +615,13 @@ function isGovernedLiteral(before: string): boolean {
 function isGovernedLiteralOpeningAt(line: string, start: number, prevLine?: string): boolean {
   const before = line.slice(0, Math.max(start, 0));
   if (isGovernedLiteral(before)) return true;
-  if (prevLine === undefined || start < 0 || /\S/.test(before)) return false;
+  // No `start < 0` guard: a carried frame already holds a resolved `governed`,
+  // so `??` short-circuits before this is ever called with one. Guarding here
+  // anyway would be unreachable code that no test could distinguish from its
+  // own absence — and `start < 0` yields an empty `before`, which is
+  // whitespace-only, so the look-back it would suppress is the right answer
+  // for it regardless.
+  if (prevLine === undefined || /\S/.test(before)) return false;
   return isGovernedLiteral(prevLine);
 }
 
@@ -589,7 +667,10 @@ export function scanStringLiterals(
   // this scan off the critical path of a whole-tree run. It is sound only with
   // no incoming state: a carried `interp` frame is closed by a `}`, which is
   // not a quote.
-  if ((incoming === null || incoming.length === 0) && !QUOTE_RE.test(line)) {
+  // `incoming === null` is the whole test: the outgoing map is the only producer
+  // of a carried stack and it returns `null` rather than an empty array, so an
+  // `incoming.length === 0` arm would be unreachable.
+  if (incoming === null && !QUOTE_RE.test(line)) {
     return { spans, outgoing: null };
   }
   // Copied, never aliased: `depth` is mutated in place below, and the caller
@@ -663,6 +744,7 @@ export function scanStringLiterals(
 
   const top = frames.length === 0 ? undefined : frames[frames.length - 1];
   if (top === undefined) return { spans, outgoing: null };
+  if (frames.length > MAX_CARRIED_FRAME_DEPTH) return { spans, outgoing: null };
   // The judgement is about the TOP frame only, because that is the one the next
   // line continues inside. A `lit` frame that opened on this line and is not a
   // plausible multi-line literal (a prose apostrophe) discards the whole stack:

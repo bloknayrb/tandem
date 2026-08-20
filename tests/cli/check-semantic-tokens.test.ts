@@ -1116,6 +1116,44 @@ describe("check-semantic-tokens", () => {
         ).toEqual(["src/client/tabs/Item.svelte:6: #333"]);
       });
 
+      it("drops the carry rather than let the stack grow without bound", () => {
+        // Carrying the whole stack costs an O(depth) copy plus an
+        // O(depth × 4096) string build per line, so a file whose every line
+        // net-opens a template and an interpolation is quadratic: measured at
+        // 2.4 s for 1000 such lines and a V8 heap-OOM abort at 4000, which in a
+        // pre-commit hook is a dead commit with no diagnosis. Deepest stack
+        // measured anywhere in `src/client` is 2.
+        //
+        // Dropping is fail-OPEN, the same posture as the EOF backstop: the next
+        // line is scanned as if nothing were open, which can only add reports.
+        let open = scanStringLiterals("const s = `a ${", null).outgoing;
+        // Four more `lit`+`interp` pairs takes the stack to 10, past the cap of
+        // 8. Asserted on the way up so this fails on an off-by-one rather than
+        // only on the absence of a cap entirely.
+        const depths: (number | null)[] = [open?.length ?? null];
+        for (let i = 0; i < 4; i++) {
+          open = scanStringLiterals("  `b ${", open).outgoing;
+          depths.push(open?.length ?? null);
+        }
+        expect(depths).toEqual([2, 4, 6, 8, null]);
+      });
+
+      it("copies the incoming stack rather than aliasing the caller's", () => {
+        // `depth` on an `interp` frame is mutated IN PLACE by the character
+        // loop, and `literalStatesFor` holds the array it passed in and reuses
+        // it on the fail-open repair. Aliasing would mutate the caller's state
+        // under it — a defect with no failing assertion anywhere, because the
+        // repair path re-scans from `null` and would simply produce different
+        // spans than the first pass did.
+        const base = scanStringLiterals("const s = `a ${", null).outgoing;
+        expect(base).not.toBeNull();
+        const snapshot = JSON.stringify(base);
+        // A line that opens a nested `{`, which increments the `interp` frame's
+        // `depth` — the one field mutated in place.
+        scanStringLiterals("  fn({", base);
+        expect(JSON.stringify(base)).toBe(snapshot);
+      });
+
       it("exposes the stack itself, not just its effect", () => {
         // Asserting only through `checkContent` would let a fix that merely
         // suppressed the carry pass. The state is what changed, so pin it.
@@ -1214,6 +1252,50 @@ describe("check-semantic-tokens", () => {
         ).toEqual(["src/client/a.ts:1: #333"]);
       });
 
+      it("counts only a TOP-LEVEL semicolon as a declaration separator", () => {
+        // A raw `lastIndexOf(";")` is wrong in the silent direction. Each of
+        // these carries a `;` that is not a separator, and each one drags the
+        // anchor right of the `background:`/`border:` that actually governs the
+        // hex — so the literal reads as prose all the way through and the color
+        // vanishes. `data:…;base64,` is the shape that matters: an inline
+        // `background:` with a data URI and a hex fallback is ordinary code.
+        expect(
+          checkContent(
+            'const s = "background: url(data:image/png;base64,AAA) #333";\n',
+            "src/client/a.ts",
+          ),
+        ).toEqual(["src/client/a.ts:1: #333"]);
+        expect(
+          checkContent("const s = \"background: url('a;b.png') #333\";\n", "src/client/a.ts"),
+        ).toEqual(["src/client/a.ts:1: #333"]);
+        // A nested quoted run OUTSIDE any parens — the `url()` shapes above are
+        // killed by the paren arm alone, so without this one the quote arm is
+        // unpinned. Same for the interpolated `${a ? "x;y" : "z"}` shape: its
+        // `;` sits in a nested `"` run, which is why there is no `${…}` arm.
+        expect(checkContent("const s = \"background: 'a;b' #333\";\n", "src/client/a.ts")).toEqual([
+          "src/client/a.ts:1: #333",
+        ]);
+        expect(
+          checkContent('const s = `border: ${a ? "x;y" : "z"} solid #333`;\n', "src/client/a.ts"),
+        ).toEqual(["src/client/a.ts:1: #333"]);
+        // An escaped quote inside a `url()` must not leave the scan stuck in a
+        // quoted run for the rest of the literal.
+        expect(
+          checkContent('const s = "border: url(\\"a;b\\") #333";\n', "src/client/a.ts"),
+        ).toEqual(["src/client/a.ts:1: #333"]);
+      });
+
+      it("anchors on the LAST separator, not the first", () => {
+        // Three segments, so `indexOf` and `lastIndexOf` finally disagree: with
+        // the first `;` the segment is `b: 2; border-color: #333`, whose
+        // leading property word is `b` — not a CSS property — and the color
+        // goes silent. Both existing segment fixtures are two-segment strings,
+        // where the two are the same character.
+        expect(
+          checkContent('const s = "a: 1; b: 2; border-color: #333";\n', "src/client/a.ts"),
+        ).toEqual(["src/client/a.ts:1: #333"]);
+      });
+
       it("moves the anchor to the segment without unanchoring it", () => {
         // The segment boundary can only ever move the anchor RIGHT of a `;`, so
         // the prose shapes that the anchored form was introduced to silence
@@ -1230,6 +1312,44 @@ describe("check-semantic-tokens", () => {
         ).toEqual([]);
       });
 
+      it("resolves a wrapped governor for a literal that then spans lines", () => {
+        // The look-back exists in TWO places — the use-site, and the carry-site
+        // where a multi-line literal's `governed` is frozen before the opening
+        // line's text is lost. Only a literal that is both wrapped onto its own
+        // line AND multi-line reaches the second one, and that is exactly what
+        // the 100-column wrap produces for a long `cssText` value.
+        //
+        // The keyword has to be on the HEX's own line: `hasCssIndicator` is a
+        // per-line test applied before any of this machinery, so a
+        // continuation line carrying none of the six keywords is dropped before
+        // the governor is ever consulted, and the fixture would pass vacuously.
+        expect(
+          checkContent(
+            ["el.style.cssText =", "  `shifted", "   border 2px #333`;", ""].join("\n"),
+            "src/client/a.ts",
+          ),
+        ).toEqual(["src/client/a.ts:3: #333"]);
+      });
+
+      it("judges a literal opening at column 0 for continuation like any other", () => {
+        // `top.start >= 0`, not `> 0`. `literalMayContinue` reads the text
+        // BEFORE the quote, and at column 0 that text is empty — so a `'` or
+        // `"` opening there can never continue, and the whole stack must be
+        // dropped rather than carried into the next line.
+        //
+        // Asserted on the scanner and not through `checkContent`: every
+        // `checkContent` shape I could build reaches the same verdict by
+        // another arm, so a fixture there would pass under both spellings and
+        // pin nothing. The state is what differs, so pin the state.
+        expect(scanStringLiterals("'tis a border problem", null).outgoing).toBeNull();
+        // The contrast: the SAME literal one column in still cannot continue,
+        // and one that can (an assignment tail) is carried — so this is about
+        // `literalMayContinue`'s judgement being reached, not about column 0
+        // being special.
+        expect(scanStringLiterals(" 'tis a border problem", null).outgoing).toBeNull();
+        expect(scanStringLiterals("const s = 'border", null).outgoing?.length).toBe(1);
+      });
+
       it("treats a setAttribute('style', …) value as a governed literal", () => {
         // A governor is a fail-toward-REPORTING arm, so a missing one is a
         // silent false negative. `looksLikeCssValueString` covers the
@@ -1244,6 +1364,16 @@ describe("check-semantic-tokens", () => {
         expect(
           checkContent('el.setAttribute("title", "border tweak (#1364)");\n', "src/client/a.ts"),
         ).toEqual([]);
+        // …but the NAME is case-insensitive, because HTML attribute names are.
+        // `"STYLE"` sets the same attribute, so skipping it would be a silent
+        // false negative rather than a stylistic quibble. The value carries a
+        // lowercase `border` deliberately: `hasCssIndicator` is a
+        // case-SENSITIVE per-line pre-filter that runs before any of this, so
+        // `"STYLE"` alone leaves the line unscanned and the fixture would pass
+        // vacuously.
+        expect(
+          checkContent('el.setAttribute("STYLE", "shadow 2px border #333");\n', "src/client/a.ts"),
+        ).toEqual(["src/client/a.ts:1: #333"]);
       });
 
       it("looks back exactly one line for a governor, and only past indentation", () => {
