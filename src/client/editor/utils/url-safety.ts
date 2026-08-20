@@ -188,9 +188,14 @@ const SPECIAL_EXTERNAL_SCHEME = /^(?:https?|ftp):/i;
  * in clause 3**, and that is a real, tracked gap rather than a tidy division of
  * labour: Tiptap's `defaultValidate` fallback alternative matches a hyphen, so
  * `ms-msdt:`, `search-ms:`, `ms-appinstaller:`, `itms-services:` and friends
- * satisfy the `||` and render live with the href verbatim. Closing that means
- * moving to an allowlist posture, which also stops rendering `tel:`/`sms:`/
- * `xmpp:`/`ftps:` — a behaviour change with its own review. Tracked as #1537.
+ * satisfy the `||` and render live with the href verbatim. That gap is closed
+ * by {@link isRenderableLinkScheme} (#1537), which is ANDed alongside this
+ * predicate at the `isAllowedUri` site rather than folded into it — the two
+ * refuse different things and neither covers the other. In particular a single
+ * leading space makes the scheme predicate see a schemeless href (its WHATWG
+ * test is anchored), so `" ms-msdt:/id"` is refused HERE, by clause 1, and not
+ * there; while bare `ms-msdt:/id` carries no special scheme and no Windows
+ * prefix, so it passes this predicate and is refused only there.
  * It also does not cover bidi overrides (U+202A–U+202E), which
  * can make the hover `title` read as a different host than the anchor resolves
  * to; navigation is unaffected (those resolve same-origin, percent-encoded), so
@@ -209,6 +214,148 @@ export function isRenderableLinkHref(raw: string | null | undefined): boolean {
   if (raw.startsWith("//")) return true;
   if (SPECIAL_EXTERNAL_SCHEME.test(raw)) return isSafeExternalHref(raw);
   return rejectUnsafeWindowsPrefix(raw) === null;
+
+ * A WHATWG-URL scheme prefix: `ALPHA *(ALPHA / DIGIT / "+" / "-" / ".") ":"`,
+ * anchored at the start. This is the *parser's* grammar, transcribed — not an
+ * approximation of it (#1537).
+ *
+ * **Why not {@link hasSchemePrefix}.** That helper answers a deliberately
+ * looser question ("is there a `:` before the first `/`, `#` or `?`"), which is
+ * right for the image-src allowlist it lives beside but wrong here: it calls
+ * `2024:plan.md`, `.hidden:note.md`, `12:30 notes.md` and `user@host:x` scheme-
+ * bearing, and none of them is. A browser cannot parse any of those as a scheme
+ * (a leading digit or `.` fails the scheme-start state; `_`, `@` and a space
+ * fail the scheme state), so it resolves each as an ordinary RELATIVE path —
+ * and Tandem opened them: `openHref` -> `resolveRelativeLink` -> `{ok:true}` ->
+ * `openServerPath`. A 300k-case differential found 397 distinct spellings in
+ * that class. Refusing to render them would violate the very rule this change
+ * enforces ("only render as a link if it works as a link"), in the other
+ * direction. So the scheme test has to BE the scheme grammar.
+ *
+ * Written as a regex LITERAL, with the `-` in final position so it is literal
+ * without an escape. That is not stylistic: the bug this file exists to fix is
+ * a `\-` inside a TEMPLATE literal collapsing to a bare `-` and turning the
+ * neighbouring characters into a range. Never move this into a `new RegExp`
+ * string or a template literal.
+ */
+const WHATWG_SCHEME_PREFIX = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * RENDER-TIME SCHEME ALLOWLIST: does this href name a scheme we are willing to
+ * emit as a live `href` attribute at all? (#1537)
+ *
+ * This is the NARROWING term of the `isAllowedUri` union in
+ * `editor-extensions.ts`. Everything else in that expression widens, and the
+ * widest operand is Tiptap's `defaultValidate` — which accepts **any scheme
+ * whose body contains a character outside `[a-z+./0-9:]`**, hyphen included.
+ * Measured against the real dependency, not re-derived: `ms-msdt:/id`,
+ * `ms-appinstaller:?source=…`, `search-ms:crumb=location:\\evil.com\share`,
+ * `ms-officecmd:x`, `view-source:http://evil` and `itms-services://?url=…` all
+ * satisfy it, so the `||` short-circuited and each rendered as a live anchor
+ * with the href verbatim. `search-ms:` is an NTLM/WebDAV-share spelling
+ * reaching the OS from a right-click "Open link in new tab" — the class
+ * `rejectUnsafeWindowsPrefix` exists to prevent.
+ *
+ * **The mechanism is not "hyphenated schemes".** `[a-z0-9+.-]+` is followed by
+ * a negated class that a template-literal escape collapse turned into a RANGE
+ * (`[^a-z+.-:]`, where `.-:` is U+002E–U+003A), so the hyphen fell out of the
+ * negated set. Note what else that range swallows: `/` and the digits are
+ * inside it too, which is why `example.com/path` and `ms2:x` are rejected by
+ * `defaultValidate` — the `/` exclusion is the behaviour #1377 rests on. Any
+ * terminator outside `[a-z+./0-9:]` works: `ms_msdt:x` and `user@host:x` are
+ * accepted by `defaultValidate` as well, while `coap+tcp:x`, `a.b:c`, `x+y:z`
+ * and `ms2:x` are rejected by it. Only `-` is a legal URL scheme character, so
+ * hyphens are the exploitable subset — but do not write the rule down as being
+ * about hyphens.
+ *
+ * **The bar, and it is a product decision, not a security heuristic: only
+ * render as a link if it WORKS as a link.** Every surviving prefix in
+ * {@link SAFE_EXTERNAL_PREFIXES} is traced to a real action in `openHref`
+ * (`Editor.svelte`) — `isSafeExternalHref` returns true for it, so it takes
+ * the `window.open` branch. That includes `mailto:`, which is in the
+ * allowlist and therefore never reaches `resolveRelativeLink`. The schemes
+ * Tiptap allowlists but Tandem does not — `tel:`, `sms:`, `callto:`, `cid:`,
+ * `xmpp:`, `ftps:` — take the other branch and die in `resolveRelativeLink`
+ * with `unsupported-ext`, which `notifyLinkProblem` surfaces as a visible
+ * warning. They were **already broken on click, with a visible refusal**;
+ * dropping the render closes a link that never worked. That is the whole
+ * behaviour change, and it is not a security fix for those six. The AUTHORING
+ * half is not silent either: `applyLink` (`toolbar/handlers.ts`) now reports
+ * the refusal through the same notification channel, because `setLink` returns
+ * `false` for a href this predicate rejects.
+ *
+ * **The rule cuts both ways, and clause 2 is sized for that.** See
+ * {@link WHATWG_SCHEME_PREFIX}: a href that no URL parser reads as
+ * scheme-bearing is a relative path that DID open, so refusing to render it
+ * would break the same rule from the other side.
+ *
+ * Three clauses:
+ *
+ *  1. **`//` is accepted.** Behaviourally REDUNDANT with the scheme branch —
+ *     `//x` cannot match {@link WHATWG_SCHEME_PREFIX} (it starts with `/`), so
+ *     the fall-through would return `true` anyway, and removing this line
+ *     changes no row in the measured corpus. Kept so the `//` case is decided
+ *     explicitly rather than by accident of clause ordering. It is in
+ *     {@link SAFE_EXTERNAL_PREFIXES} and `openHref` hands it to `window.open`
+ *     like any `https://` URL. **Kept under "reaches `window.open`", not under
+ *     "demonstrably works":** a protocol-relative href expands against the PAGE
+ *     scheme, and on Linux the Tauri WebView origin is `tauri://localhost`, so
+ *     `//example.com/x` becomes `tauri://example.com/x` there. Flagged for a
+ *     product decision rather than dropped here — see PLAN.md.
+ *  2. **A scheme-bearing href must be in {@link SAFE_EXTERNAL_PREFIXES}**,
+ *     where "scheme-bearing" means {@link WHATWG_SCHEME_PREFIX} matches — the
+ *     URL parser's own grammar, so this function and the browser agree on what
+ *     "schemeless" means. This is the allowlist posture this file's header
+ *     already claimed to follow. It also subsumes what the `http:/\evil.com/x`
+ *     family needed: a lenient-authority spelling of a special scheme is not a
+ *     literal `"http://"` prefix, so it is refused here. `ftp://` survives it
+ *     and is likewise kept under "reaches `window.open`" — Chromium removed FTP
+ *     support in v88, so the host does nothing with it. Also flagged, not
+ *     dropped.
+ *  3. **Schemeless falls through as `true`.** This predicate answers the SCHEME
+ *     question only. Whether a schemeless href is safe is answered by the
+ *     other operands of the union (`isSchemelessPathHref`) and, at click time,
+ *     by `resolveRelativeLink`'s segment walk. Note `isSchemelessPathHref` uses
+ *     the looser {@link hasSchemePrefix}, so the two disagree about e.g.
+ *     `2024:plan.md` — deliberately: this clause returns `true` and hands the
+ *     row to `defaultValidate`, which is what kept it rendering before #1537
+ *     and what keeps it rendering now.
+ *
+ * **The one thing clause 2 still subtracts that used to open.** A filename that
+ * happens to spell a syntactically valid scheme — `my-file:v2.md`,
+ * `notes:draft.md` — matches {@link WHATWG_SCHEME_PREFIX} and is refused. That
+ * is correct rather than regrettable: a browser reads `my-file:v2.md` as an
+ * opaque non-special URL with scheme `my-file:`, NOT as a relative path, so the
+ * anchor never resolved against the document the way Tandem's segment walk
+ * pretended it did. Colons are legal in POSIX/macOS filenames and illegal on
+ * Windows, so the shape is rare; it is named here so nobody has to rediscover
+ * it from a bug report.
+ *
+ * **What this deliberately does NOT close.** `/\evil.com/x.md`,
+ * `\/evil.com/x.md`, `\\evil.com\share\x.md` and `" /\evil.com/x.md"` carry no
+ * scheme, so clause 3 returns `true` and they still render. Those are #1420's
+ * half, closed by the leading-whitespace and `rejectUnsafeWindowsPrefix`
+ * clauses on `fix/1420-auxclick-link-intercept`. **When that branch lands, this
+ * function collapses into `isRenderableLinkHref` as a replacement for ITS
+ * clause 3 (`SPECIAL_EXTERNAL_SCHEME`), leaving its final
+ * `rejectUnsafeWindowsPrefix` clause untouched.** Folding it in as the final
+ * clause instead would delete that check and turn all four backslash spellings
+ * back on — see PLAN.md / the PR body for the measured table.
+ *
+ * **Not holes, verified rather than assumed:** `ms-msdt%3a/id` and the
+ * full-width-colon spelling `ms-msdt：/id` both stay live, and correctly so —
+ * `new URL()` decodes neither into a scheme, so both resolve as ordinary
+ * relative paths under the document origin. The same is true of `:alert(1)`,
+ * `ms_msdt:x` and `user@host:x` after clause 2 was sized to the real grammar.
+ */
+export function isRenderableLinkScheme(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  // Protocol-relative: external, allowlisted, and decided here explicitly.
+  if (raw.startsWith("//")) return true;
+  // Scheme-bearing by the URL parser's own grammar: allowlist or nothing.
+  if (WHATWG_SCHEME_PREFIX.test(raw)) return isSafeExternalHref(raw);
+  // Schemeless: not this predicate's question.
+  return true;
 }
 
 /**

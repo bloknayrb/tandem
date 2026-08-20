@@ -19,7 +19,12 @@ import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { RawMarkdownMark } from "./extensions/raw-markdown";
 import { runColumnCommandWithReindex } from "./extensions/table-align-commands";
 import { TableColumnAlignExtension } from "./extensions/table-column-align";
-import { isRenderableLinkHref, isSafeExternalHref, isSchemelessPathHref } from "./utils/url-safety";
+import {
+  isRenderableLinkHref,
+  isRenderableLinkScheme,
+  isSafeExternalHref,
+  isSchemelessPathHref,
+} from "./utils/url-safety";
 
 // Link mark that surfaces the destination URL on hover via a native `title`
 // tooltip (issue #996). The base `@tiptap/extension-link` renderHTML emits the
@@ -31,7 +36,8 @@ import { isRenderableLinkHref, isSafeExternalHref, isSchemelessPathHref } from "
 // explicit title already exists (e.g. a .docx-imported title attr wins). Reading
 // the base output rather than the raw HTMLAttributes means a disallowed scheme is
 // never given a title and never resurrected. Pointer-cursor styling lives in
-// editor.css (`.tandem-editor a[href]`).
+// editor.css (`.tandem-editor a[href]`), alongside the blocked-link styling keyed
+// on the `data-tandem-link-blocked` attribute this renderHTML sets.
 //
 // Two halves, deliberately separate: the BLANKING lives here in the base
 // renderHTML, but WHICH hrefs get blanked is decided by the `isAllowedUri`
@@ -53,6 +59,22 @@ const LinkWithHoverTitle = Link.extend({
       const href = attrs.href;
       if (typeof href === "string" && href.length > 0 && attrs.title == null) {
         attrs.title = href;
+      }
+      // Mark an anchor the base renderHTML BLANKED, so `editor.css` can stop it
+      // looking clickable — `.tandem-editor a[href]` matches an empty href too,
+      // so a refused link kept `cursor: pointer` and did nothing on click.
+      //
+      // Deliberately an attribute and NOT a `title` (#1537). A disallowed
+      // scheme is never given a title and never resurrected — the rule stated
+      // at the top of this comment block, pinned by the `hasAttribute("title")
+      // === false` rows in `tests/client/link-target-internal.test.ts`. A title
+      // would also have to carry the refused href to be useful, which is both a
+      // resurrection of the string we just refused to emit and a bidi
+      // tooltip-spoofing surface (U+202A-U+202E render a different host than
+      // the anchor resolves to). The attribute carries no href-derived data at
+      // all, so neither problem exists.
+      if (typeof href === "string" && href.length === 0) {
+        attrs["data-tandem-link-blocked"] = "true";
       }
       // Drop `target="_blank"` on anything that is not a safe external URL
       // (#1343). Clicking a relative link to a local `.md` opened it as a
@@ -295,8 +317,46 @@ export function buildSchemaExtensions(): AnyExtension[] {
       // veto's docblock before touching this line: its ordering (leading
       // whitespace first) is load-bearing, and it deliberately does NOT use
       // `URL_HOSTILE_CHARS`.
+      //
+      // `isRenderableLinkScheme` is the one term that NARROWS, and it was added
+      // in #1537 precisely because the paragraph above is a complete
+      // description of an expression that could only ever grow. Tiptap's
+      // `defaultValidate` is NOT the scheme authority the paragraph claims: the
+      // escape collapse described above also puts the hyphen OUTSIDE its
+      // negated class, so `ms-msdt:`, `ms-appinstaller:`, `search-ms:`,
+      // `view-source:` and `itms-services:` all satisfied it and rendered live
+      // with the href verbatim. ANDing can only subtract — measured over a
+      // 68-case corpus and re-measured over 800k generated hrefs, nothing
+      // master rejects becomes accepted.
+      //
+      // It also drops `tel:`/`sms:`/`callto:`/`cid:`/`xmpp:`/`ftps:`, which
+      // Tiptap allowlists and `SAFE_EXTERNAL_PREFIXES` does not. FOLLOWING one
+      // was already broken, with a visible refusal (`openHref` ->
+      // `resolveRelativeLink` -> `unsupported-ext` -> `notifyLinkProblem`), so
+      // the render closed a link that never worked. CREATING one is a SECOND
+      // surface and that reasoning does not cover it: `setLink` reads this
+      // union too, so it started returning `false` where it used to succeed.
+      // `applyLink` (`toolbar/handlers.ts`) reports that refusal through the
+      // notification channel — do not let it go back to a silent no-op.
+      //
+      // Read the predicate's docblock before touching this line. In
+      // particular, "scheme-bearing" there is the WHATWG scheme grammar and
+      // NOT `hasSchemePrefix`: the looser test also blanks colon-bearing
+      // RELATIVE paths (`2024:plan.md`, `.hidden:note.md`) that opened
+      // perfectly well, which breaks the same rule from the other side.
+      //
+      // BOTH narrowing terms are present and NEITHER covers the other. A
+      // leading space makes `isRenderableLinkScheme` see a schemeless href --
+      // its WHATWG test is anchored -- so " ms-msdt:/id" passes it and is
+      // refused only by `isRenderableLinkHref`'s trimStart clause. Bare
+      // "ms-msdt:/id" carries no special scheme and no Windows prefix, so it
+      // passes `isRenderableLinkHref` and is refused only by the scheme
+      // allowlist. Tiptap's own `defaultValidate` strips whitespace before
+      // matching, which is why the whitespace veto has to live out here.
       isAllowedUri: (url, ctx) =>
-        isRenderableLinkHref(url) && (ctx.defaultValidate(url) || isSchemelessPathHref(url)),
+        isRenderableLinkHref(url) &&
+        isRenderableLinkScheme(url) &&
+        (ctx.defaultValidate(url) || isSchemelessPathHref(url)),
       // Autolink is the one surface held at EXACTLY today's behaviour, and only
       // this option can do it: the autolink plugin filters on the RAW TYPED
       // TEXT, not the resolved href, so widening `isAllowedUri` alone would make

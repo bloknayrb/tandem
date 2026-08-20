@@ -467,7 +467,10 @@ function handleEditorClick(e: MouseEvent) {
   testIdPrefix="context-link"
   onApply={(value) => {
     if (editor && !editor.isDestroyed && editor.isEditable && editor.isActive("link")) {
-      applyLink(editor, value);
+      // Third arg is the REFUSAL channel (#1537): `setLink` returns false when
+      // the render gate rejects the scheme, and this editor would otherwise
+      // just close, leaving the old href in place with no explanation.
+      applyLink(editor, value, (n) => onNotify?.(n));
     }
     showContextLinkEditor = false;
   }}

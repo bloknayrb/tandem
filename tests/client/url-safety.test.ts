@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isRenderableLinkHref,
+  isRenderableLinkScheme,
   isSafeExternalHref,
   isSchemelessPathHref,
   SAFE_EXTERNAL_PREFIXES,
@@ -338,6 +339,57 @@ describe("isRenderableLinkHref (the render-time veto, #1420)", () => {
     ]) {
       expect(isRenderableLinkHref(href), `${href} is NOT subtracted by this veto`).toBe(true);
     }
+
+/**
+ * DOCUMENTATION CORPUS for the render-time scheme allowlist (#1537).
+ *
+ * **The load-bearing pins are in `tests/client/link-scheme-allowlist.test.ts`,
+ * not here.** This file is rewritten by the still-open #1545, whose own
+ * predicate returns `true` for every row below and whose tests assert exactly
+ * that — so a merge resolution taking that branch's side would silently delete
+ * these. They are kept as the readable corpus beside the other href predicates;
+ * the canary that must survive lives at a path with no merge base.
+ */
+describe("isRenderableLinkScheme (documentation corpus — see link-scheme-allowlist.test.ts)", () => {
+  it.each([
+    "ms-msdt:/id",
+    "ms-appinstaller:?source=http://evil/x.msix",
+    "search-ms:crumb=location:\\\\evil.com\\share",
+    "view-source:http://evil",
+    "itms-services://?url=http://evil",
+    "tel:+15551234",
+    "ftps://example.com/x",
+  ])("refuses %j, which Tiptap's defaultValidate accepts", (href) => {
+    expect(isRenderableLinkScheme(href)).toBe(false);
+  });
+
+  it.each(SAFE_EXTERNAL_PREFIXES)("keeps the allowlisted prefix %s", (prefix) => {
+    expect(isRenderableLinkScheme(`${prefix}example.com/x`)).toBe(true);
+  });
+
+  it.each([
+    "2024:plan.md",
+    ".hidden:note.md",
+    "12:30 notes.md",
+    "user@host:x",
+    "ms_msdt:x",
+  ])("keeps %j — a colon is not a scheme, and these opened files", (href) => {
+    // The rule cuts both ways. An earlier draft used `hasSchemePrefix` (a `:`
+    // before the first `/`, `#` or `?`) as the scheme test, which called every
+    // row here scheme-bearing and blanked it — while each in fact resolves as a
+    // relative path under the real URL parser, and the ones naming a linkable
+    // file reached `openServerPath`. Clause 2 is the WHATWG scheme grammar for
+    // exactly this reason.
+    expect(new URL(href, "http://localhost:5173/doc/a.md").protocol).toBe("http:");
+    expect(isRenderableLinkScheme(href)).toBe(true);
+  });
+
+  it("does not judge schemeless hrefs — that is the other predicates' half", () => {
+    // Contrast with `isSchemelessPathHref` directly above: that one rejects a
+    // backslash form, this one has no opinion about it. The union needs both.
+    expect(isRenderableLinkScheme("docs/spec.md")).toBe(true);
+    expect(isRenderableLinkScheme("/\\evil.com/x.md")).toBe(true);
+    expect(isSchemelessPathHref("/\\evil.com/x.md")).toBe(false);
   });
 });
 
