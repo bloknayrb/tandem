@@ -96,9 +96,18 @@ const run = driverStepRun();
  * The block form `<# … #>` is not optional. With only the whole-line `#` filter,
  * wrapping the last-resort net in a block comment disabled it while the suite
  * stayed fully green — the exact "grep-shaped test asserting a string while
- * claiming a semantic property" failure this file exists to avoid. Blank the
- * span rather than deleting it so line-relative reading of `runCode` still
- * lines up with the workflow.
+ * claiming a semantic property" failure this file exists to avoid. The span is
+ * blanked rather than deleted so that character offsets in the rest of its own
+ * line are unshifted — `at()` compares offsets, and a block comment opened and
+ * closed mid-line would otherwise drag the code after it leftwards. (Nothing
+ * here reads `runCode` by line NUMBER; the whole-line filter below deletes
+ * lines outright, so `runCode` is much shorter than `run`.)
+ *
+ * `<#` and `#>` are also counted for balance in a test below: the non-greedy
+ * match simply does not fire on an UNTERMINATED `<#`, so the disabled code
+ * survives into `runCode` and every `toContain` stays green. What no
+ * string-shaped test can catch is `if ($false) { … }` around the same code —
+ * that is acknowledged, not solved, here.
  */
 const runCode = run
   .replace(/<#[\s\S]*?#>/g, (m) => m.replace(/[^\n]/g, " "))
@@ -111,6 +120,18 @@ function at(needle: string): number {
   const i = runCode.indexOf(needle);
   if (i < 0) throw new Error(`${WORKFLOW}: the driver step no longer contains \`${needle}\``);
   return i;
+}
+
+/**
+ * The walk-back's `-le <n>` loop bound, read out of the script rather than
+ * duplicated as a literal here. Two assertions below depend on it — the prose
+ * candidate counts and how far a pinned row must sit under its pointer — and a
+ * second hard-coded 16 in this file would just be a third place to drift.
+ */
+function walkBackBound(): number {
+  const m = runCode.match(/-le (\d+) -and/);
+  if (!m?.[1]) throw new Error(`${WORKFLOW}: cannot find the walk-back's '-le <n> -and' bound`);
+  return Number(m[1]);
 }
 
 /** Throws rather than returning `[]`: an empty table must fail, not pass quietly. */
@@ -147,8 +168,44 @@ describe("tauri-webdriver.yml — Edge WebDriver candidate chain (#1197)", () =>
     // runtime match — the silent degradation this chain exists to prevent.
     // Measured: with three order-blind `toContain` calls, that hoist left the
     // suite 9/9 green.
+    //
+    // All FOUR positions are pinned, not three. With only the outer two, moving
+    // the whole walk-back `foreach` block BELOW `Add-Candidate $pinned[$major]`
+    // left the suite 10/10 green — and that reordering makes the stale hand-pin
+    // outrank every live near-miss build, which is the same degradation one step
+    // further down the chain.
     expect(at("Add-Candidate $pv")).toBeLessThan(at("Add-Candidate $latest"));
-    expect(at("Add-Candidate $latest")).toBeLessThan(at("Add-Candidate $pinned[$major]"));
+    expect(at("Add-Candidate $latest")).toBeLessThan(at("foreach ($seed in @($latest, $pv))"));
+    expect(at("foreach ($seed in @($latest, $pv))")).toBeLessThan(
+      at("Add-Candidate $pinned[$major]"),
+    );
+  });
+
+  it("cannot be blinded by an unterminated PowerShell block comment", () => {
+    // `runCode`'s block-comment stripper is `<#[\s\S]*?#>`, which is non-greedy
+    // and therefore does not fire at all on an unterminated `<#`. Measured: a
+    // bare `<# disabled` inserted above `Add-Candidate $pinned[$major]` — which
+    // comments out the whole rest of the script in real pwsh — left the suite
+    // 10/10 green, because the text still reached every `toContain`. Balance is
+    // the cheap invariant that catches it, and it is also a genuine syntax error
+    // in the workflow, so there is no legitimate reason for it to be unbalanced.
+    const opens = (run.match(/<#/g) ?? []).length;
+    const closes = (run.match(/#>/g) ?? []).length;
+    expect(opens).toBe(closes);
+  });
+
+  it("keeps the candidate-count prose derived from the walk-back bound", () => {
+    // Both `::warning::`-adjacent comments quote a maximum list length, and the
+    // review that produced this test found one saying 34 while the other said 35
+    // (the real max is 1 `$pv` + 1 `$latest` + 16 + 16 + 1 pin). A hard-coded
+    // number in prose next to a `-le N` loop bound is drift waiting to happen,
+    // so derive it: change the bound and this fails until the prose follows.
+    const walkBack = walkBackBound();
+    const max = 2 * walkBack + 3; // $pv + $latest + two walk-backs + the pin
+    const noPointer = walkBack + 2; // $pv + its walk-back + the pin
+    expect(run).toContain(`with up to ${max} candidates`);
+    expect(run).toContain(`the list is ${max} builds`);
+    expect(run).toContain(`leaves ${noPointer}`);
   });
 
   it("still warns when the runners reach a major with no pinned row", () => {
@@ -201,7 +258,61 @@ describe("tauri-webdriver.yml — the $pinned last-resort table", () => {
     // whose zip is missing — the net contributes no candidate at all. Both new
     // rows were byte-identical to their pointer when first written.
     expect(run).toContain("must NOT equal today's LATEST_RELEASE_<major>");
-    expect(run).toMatch(/Verified 2026-\d\d-\d\d/);
+    // Not /2026-\d\d-\d\d/, which accepts "Verified 2026-99-99" — a date that
+    // reads as maintained and cannot be a real fetch.
+    expect(run).toMatch(/Verified \d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])/);
+  });
+
+  it("records a live pointer for EVERY row, and every row sits clear of it", () => {
+    // The prose above pins that the RULE stays written down. This pins that the
+    // rule was actually FOLLOWED — possible offline only because the comment now
+    // records the pointers as tracked text, so the fetch is a one-time cost paid
+    // by whoever edits the table rather than a network call on every PR run.
+    //
+    // (a) is the assertion that would have caught the bug this test was added
+    // for: '149' was pinned to a build byte-identical to its own pointer while
+    // the comment verified only 151 and 152, so the degenerate row was invisible.
+    const recorded = new Map(
+      [...run.matchAll(/LATEST_RELEASE_(\d+)\s*=\s*(\d+\.\d+\.\d+\.\d+)/g)].map(
+        (m) => [m[1], m[2]] as [string, string],
+      ),
+    );
+
+    for (const [major, pin] of rows) {
+      const pointer = recorded.get(major);
+
+      // (a) recorded at all — an unverified row is not a verified one.
+      expect(
+        pointer,
+        `${WORKFLOW}: '$pinned' has a row for major ${major} but the comment records no ` +
+          `"LATEST_RELEASE_${major} = <version>" line. Fetch the pointer and record it.`,
+      ).toBeDefined();
+      if (!pointer) continue;
+
+      // (b) differs from the pointer — Add-Candidate deduplicates an equal row
+      // away, leaving the net present-but-degenerate.
+      expect(
+        pin,
+        `${WORKFLOW}: pinned row '${major}' equals its recorded LATEST_RELEASE_${major}, so ` +
+          `Add-Candidate deduplicates it away and the last-resort net is degenerate.`,
+      ).not.toBe(pointer);
+
+      // (c) further below the pointer than the walk-back reaches — that loop
+      // emits pointer-1 .. pointer-N, and deduplicates a row landing in there
+      // for exactly the same reason as (b). Only comparable on the same version
+      // line; a row on a different build line cannot collide with that walk-back.
+      const pinParts = pin.split(".");
+      const ptrParts = pointer.split(".");
+      if (pinParts.slice(0, 3).join(".") !== ptrParts.slice(0, 3).join(".")) continue;
+      const walkBack = walkBackBound();
+      const distance = Number(ptrParts[3]) - Number(pinParts[3]);
+      expect(
+        distance,
+        `${WORKFLOW}: pinned row '${major}' (${pin}) sits ${distance} patches below ` +
+          `LATEST_RELEASE_${major} (${pointer}); the ${walkBack}-patch walk-back under the ` +
+          `pointer swallows it, so the row adds no candidate. Pin more than ${walkBack} below.`,
+      ).toBeGreaterThan(walkBack);
+    }
   });
 
   it("names its dated review home so the pin cannot outlive its gate", () => {

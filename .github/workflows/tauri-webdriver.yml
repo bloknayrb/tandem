@@ -150,9 +150,10 @@ jobs:
           # (HTTP 200, and the zip really contains msedgedriver.exe) when added.
           #
           # HOW THIS ROTS, measured rather than assumed (2026-08-20). It is NOT
-          # that the CDN drops old blobs: 149.0.4022.98 still serves today, and
-          # #1197's original failure was a LATEST_RELEASE_ pointer naming a build
-          # that was never published at all. The rot is a NEW MAJOR WITH NO ROW:
+          # that the CDN drops old blobs: the oldest row below, 149.0.4022.69,
+          # was built 2026-06-12 and still downloads today, and #1197's original
+          # failure was a LATEST_RELEASE_ pointer naming a build that was never
+          # published at all. The rot is a NEW MAJOR WITH NO ROW:
           # `$pinned[$major]` on a missing key is $null and Add-Candidate returns
           # immediately, so the last-resort net simply is not there. Worse, a
           # MIS-KEYED row ('152' = '151.0...') is dropped by Add-Candidate's
@@ -173,12 +174,26 @@ jobs:
           # deduplicates, so a pin equal to the pointer is dropped and the net is
           # present-but-degenerate: in exactly the #1197 failure (the pointer
           # names a build whose zip is missing) it contributes no candidate at
-          # all. Verified 2026-08-20: LATEST_RELEASE_151 = 151.0.4129.93 and
-          # LATEST_RELEASE_152 = 152.0.4191.35, so both rows below sit BELOW
-          # their pointer, and below the 16-patch walk-back window under it.
-          # Each was fetched and confirmed to contain msedgedriver.exe.
+          # all. The same argument extends 16 further: a row inside the walk-back
+          # window BELOW the pointer is deduplicated by the walk-back for the
+          # identical reason, so every row must sit more than 16 patches under
+          # its pointer, not merely differ from it.
+          #
+          # The pointers are recorded here, one line per row, because that is
+          # what makes the rule checkable at all without a network call:
+          # tests/scripts/tauri-webdriver-pin.test.ts parses these lines and
+          # fails if a row has no pointer recorded, equals it, or sits within the
+          # walk-back window under it. Re-fetch and rewrite them when you touch
+          # the table - a row added without its pointer line fails that test.
+          # Verified 2026-08-20, each pointer fetched from
+          # msedgedriver.microsoft.com/LATEST_RELEASE_<major> and each row's
+          # edgedriver_win64.zip downloaded (HTTP 200, contains msedgedriver.exe):
+          #   LATEST_RELEASE_149 = 149.0.4022.98
+          #   LATEST_RELEASE_150 = 150.0.4078.132
+          #   LATEST_RELEASE_151 = 151.0.4129.93
+          #   LATEST_RELEASE_152 = 152.0.4191.35
           $pinned = @{
-            '149' = '149.0.4022.98'
+            '149' = '149.0.4022.69'
             '150' = '150.0.4078.83'
             '151' = '151.0.4129.50'
             '152' = '152.0.4191.10'
@@ -279,7 +294,7 @@ jobs:
           # current. A run that rendered as an ordinary green would hide exactly
           # that, and the net is the one candidate guaranteed to expire.
           #
-          # The count is interpolated, never hard-coded: the list is 34 builds
+          # The count is interpolated, never hard-coded: the list is 35 builds
           # only when both live sources resolve and neither collides with the
           # walk-back. A LATEST_RELEASE_<major> fetch that throws leaves 18.
           if ($driverVersion -eq $pinned[$major] -and $driverVersion -ne $pv -and $driverVersion -ne $latest) {
