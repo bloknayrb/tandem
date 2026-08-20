@@ -17,13 +17,19 @@ import { type CssRule, cssRulesBySelector, styleBlocks } from "../helpers/css-so
  * `prefers-reduced-motion` policy section documents the codebase-wide convention
  * this file pins one instance of.
  *
- * **Scope: App.svelte only.** The same convention is not pinned anywhere else in
- * the codebase. The #1425 audit that found this file's gaps also found gaps in
- * roughly ten other files — mixed guarded/unguarded properties inside one
- * shorthand, `@media`-only guards with no in-app `:global(body.tandem-reduce-motion)`
- * half, and one file whose own comment overstates its coverage. That backlog is
- * tracked in #1530, not here: folding it into this file would mean
- * either fixing all of it first or mislabeling real bugs as sanctioned exceptions.
+ * **Scope: App.svelte only** — and, since #1530, App.svelte is the only file the
+ * repo-wide scan in `reduce-motion-guards.test.ts` EXCLUDES, so the two together
+ * cover the client with no overlap and no gap. When this file was written the
+ * convention was pinned nowhere else: the #1425 audit that found its gaps also
+ * found gaps in roughly ten other files — mixed guarded/unguarded properties
+ * inside one shorthand, `@media`-only guards with no in-app
+ * `:global(body.tandem-reduce-motion)` half, and one file whose own comment
+ * overstated its coverage — and folding that in would have meant either fixing
+ * all of it first or mislabeling real bugs as sanctioned exceptions. #1530 fixed
+ * all of it and then widened the scan; App.svelte stayed here because its
+ * float-slide exception needs the markup proof below, which is specific to this
+ * file's rail markup. **Deleting this file therefore un-scans App.svelte** — the
+ * other file asserts this one still exists for exactly that reason.
  *
  * **Why this can't be a selector-existence check.** `resolveSelectors` in
  * `../helpers/css-source` deliberately treats `@media` as transparent (see its

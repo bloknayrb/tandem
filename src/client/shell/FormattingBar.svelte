@@ -300,6 +300,16 @@ function handleHighlight(color: HighlightColor) {
     flex-shrink: 0;
     transition: background 120ms, color 120ms;
   }
+  /* Hide-bar button: the hover tint is decorative, so reduced motion applies
+     the colours with no fade. */
+  :global(body.tandem-reduce-motion) .fmtbar-hide {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fmtbar-hide {
+      transition: none;
+    }
+  }
   .fmtbar-source {
     height: 26px;
     min-width: 32px;
@@ -317,6 +327,16 @@ function handleHighlight(color: HighlightColor) {
     font-size: 11px;
     font-weight: 600;
     transition: background 120ms, border-color 120ms, color 120ms;
+  }
+  /* Source toggle: the `.on` border/background still land, they just land
+     immediately under reduced motion. */
+  :global(body.tandem-reduce-motion) .fmtbar-source {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fmtbar-source {
+      transition: none;
+    }
   }
   .fmtbar-source:hover {
     background: var(--tandem-surface-sunk);
