@@ -140,8 +140,16 @@ describe("Invariant 7 — /health includes hasSession for loopback callers", () 
 // ── Fix 1 regression: /mcp DNS-rebinding protection with allowedHosts ────────
 //
 // When startMcpServerHttp is called with resolvedLanIP set (non-loopback bind),
-// createMcpExpressApp receives allowedHosts and activates hostHeaderValidation.
-// A request to /mcp with Host: evil.com must be rejected 403.
+// createMcpExpressApp receives allowedHosts and hostHeaderValidation validates
+// against that list. A request to /mcp with Host: evil.com must be rejected 403.
+//
+// resolvedLanIP does NOT switch the check on and off — it only swaps which allowlist
+// is used. With allowedHosts undefined, createMcpExpressApp falls through to
+// localhostHostValidation() whenever the bind host is 127.0.0.1 / localhost / ::1
+// (node_modules/@modelcontextprotocol/sdk/dist/cjs/server/express.js), which is
+// Tandem's default bind — so the SDK Host check is active in the default
+// configuration too. Probed: no resolvedLanIP, POST /mcp with Host: evil.com still
+// returns 403 {"error":{"code":-32000,"message":"Invalid Host: evil.com"}}.
 //
 // Node.js fetch() silently overrides the Host header with the connection target,
 // so we use http.request() with explicit headers to properly spoof the Host header.
@@ -281,14 +289,54 @@ describe('#1488 item 2 — comment above app.use("/mcp", authMiddleware) matches
     "utf-8",
   );
 
+  const MARKER = 'app.use("/mcp", authMiddleware);';
+
+  /**
+   * Returns the contiguous run of `//` lines immediately above `marker`'s line.
+   *
+   * Anchor to the block, never to a byte budget. The first version of this guard
+   * sliced a fixed `idx - 800`, and the block is 887 chars from its first character
+   * to the marker — so the window opened mid-block and left the comment's FIRST line,
+   * the exact line the wrong "AFTER apiMiddleware" claim lived on, outside the
+   * assertion. The guard was green while the comment still made the wrong claim.
+   * A byte budget silently decouples from the comment the moment anyone lengthens it;
+   * walking the block cannot.
+   */
+  function commentBlockAbove(src: string, marker: string): string {
+    const idx = src.indexOf(marker);
+    expect(idx, `${marker} not found in server.ts`).toBeGreaterThan(-1);
+    const before = src.slice(0, idx).split("\n");
+    // The final element is the marker line's own leading indentation, not a full line.
+    let i = before.length - 2;
+    while (i >= 0 && /^\s*\/\//.test(before[i] as string)) i--;
+    // Strip the `//` markers and flatten to a single space-separated line, so every
+    // assertion below is line-wrap tolerant. Matching the raw text would make each
+    // regex hostage to where a formatter happened to break the sentence — and would
+    // let a wrong claim evade the negative assertion just by wrapping across two lines.
+    return before
+      .slice(i + 1)
+      .map((line) => line.replace(/^\s*\/\/ ?/, ""))
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   it("(a) does not claim auth runs AFTER apiMiddleware", () => {
-    const marker = 'app.use("/mcp", authMiddleware);';
-    const idx = serverSrc.indexOf(marker);
-    expect(idx, 'app.use("/mcp", authMiddleware) not found in server.ts').toBeGreaterThan(-1);
-    // The comment block sits directly above the app.use call; 800 chars comfortably
-    // covers it without reaching into unrelated code further up the file.
-    const preceding = serverSrc.slice(Math.max(0, idx - 800), idx);
-    expect(preceding).not.toMatch(/AFTER\s+apiMiddleware/i);
+    expect(commentBlockAbove(serverSrc, MARKER)).not.toMatch(/AFTER\s+apiMiddleware/i);
+  });
+
+  it("(a2) positive control: the block actually states the order and the mcpApp mount", () => {
+    // (a) alone is an absence assertion, and absence satisfies it: deleting the whole
+    // comment block left (a) green because the license-webhook NOTE above simply moved
+    // into view. Pinning a phrase that must be PRESENT makes deletion fail too, so the
+    // pair covers both reintroduction (a) and removal/rewording (a2).
+    const block = commentBlockAbove(serverSrc, MARKER);
+    expect(block).toMatch(/mounted BEFORE the per-route DNS-rebinding/);
+    // The block must also keep saying WHY /api sees the SDK Host check first: mcpApp is
+    // mounted at the root with no path prefix, so its hostHeaderValidation is in front of
+    // /api/* as well, ahead of the route's own lanAwareApiMiddleware. An earlier revision
+    // attributed the /api 403 to lanAwareApiMiddleware alone, which is measurably wrong.
+    expect(block).toMatch(/mounts the SDK sub-app at the ROOT/);
   });
 });
 
@@ -300,10 +348,11 @@ describe('#1488 item 2 — comment above app.use("/mcp", authMiddleware) matches
 // is "127.0.0.2" server-side — genuinely non-loopback to authMiddleware — while
 // the connection never leaves the machine. That lets one request trip two
 // different checks for two different reasons: authMiddleware rejects it with 401
-// (no/bad Authorization), and the Host-header DNS-rebinding check would reject it
-// with 403 (Host: evil.com is in neither allowlist). Whichever check runs first
-// determines the status code actually observed, so this is a live assertion about
-// registration order, not source text.
+// (no/bad Authorization), and a Host-header DNS-rebinding check would reject the same
+// request with 403 (each case below picks a Host that the check it targets refuses —
+// see the note above cases 1-4 for which Host selects which middleware). Whichever
+// check runs first determines the status code actually observed, so this is a live
+// assertion about registration order, not source text.
 //
 // IMPORTANT — this trick depends on isLoopback() matching "127.0.0.1" by exact
 // string, not by CIDR range (see src/server/auth/middleware.ts). If isLoopback()
@@ -314,96 +363,137 @@ describe('#1488 item 2 — comment above app.use("/mcp", authMiddleware) matches
 // auth-ordering regression; it means the loopback definition moved, and this test
 // needs a different non-loopback source address. Do not "fix" it by reordering
 // middleware.
-describe("#1488 item 2 — auth runs before the DNS-rebinding Host check (behavioral)", () => {
-  const AUTH_TOKEN = "test-token-1488-auth-ordering";
-  let orderPort: number;
-  let orderHttpServer: Server;
+//
+// PLATFORM — Linux only, hence the skipIf. `localAddress` is a bind() of the client's
+// outbound socket, and bind() requires the address to be ASSIGNED to an interface; it is
+// not a routing question. Linux's `lo` claims all of 127.0.0.0/8, so 127.0.0.2 is bindable
+// out of the box. macOS `lo0` carries only 127.0.0.1 unless someone runs `ifconfig lo0
+// alias 127.0.0.2`, and Windows behaves likewise — there bind() returns EADDRNOTAVAIL, the
+// `req.on("error", reject)` path fires, and all four cases fail for a reason that has
+// nothing to do with auth ordering. CI would never surface it (only ci.yml's `check` job
+// runs vitest, on ubuntu-latest), but the pre-push hook runs the full vitest suite
+// locally, so a macOS or Windows contributor would be blocked at push by a red suite they
+// did not break. Skipping is the lesser evil, and the skip reason is spelled out in the
+// describe name so it reads as a deliberate platform gap rather than a silent hole. The
+// source-text guard (a)/(a2) above is NOT skipped and still runs everywhere.
+describe.skipIf(process.platform !== "linux")(
+  "#1488 item 2 — auth runs before the DNS-rebinding Host check (behavioral; Linux only — needs a bindable 127.0.0.2 source address)",
+  () => {
+    const AUTH_TOKEN = "test-token-1488-auth-ordering";
+    let orderPort: number;
+    let orderHttpServer: Server;
 
-  beforeEach(async () => {
-    orderPort = await allocPort();
-    // Both a known token (so we can construct a request auth actually accepts)
-    // and a resolvedLanIP (so the /mcp SDK host check is active, matching the
-    // "Fix 1 regression" block above) are required to exercise both prefixes.
-    orderHttpServer = await startMcpServerHttp(orderPort, "127.0.0.1", AUTH_TOKEN, "192.168.1.50");
-  });
-
-  afterEach(() => {
-    return new Promise<void>((resolve, reject) => {
-      orderHttpServer.close((err) => (err ? reject(err) : resolve()));
-    });
-  });
-
-  function rawRequest(
-    path: string,
-    opts: { method?: string; hostHeader: string; authorization?: string; body?: string },
-  ): Promise<{ status: number; body: string }> {
-    return new Promise((resolve, reject) => {
-      const bodyBuf = opts.body !== undefined ? Buffer.from(opts.body, "utf8") : undefined;
-      const headers: Record<string, string | number> = { Host: opts.hostHeader };
-      if (opts.authorization !== undefined) headers.Authorization = opts.authorization;
-      if (bodyBuf !== undefined) {
-        headers["Content-Type"] = "application/json";
-        headers["Content-Length"] = bodyBuf.length;
-      }
-      const req = httpRequest(
-        {
-          host: "127.0.0.1",
-          port: orderPort,
-          path,
-          method: opts.method ?? "GET",
-          // Binds the client's outbound socket to a non-loopback address while
-          // still connecting to the server on 127.0.0.1 — see the block comment
-          // above for why this makes authMiddleware treat the request as
-          // genuinely non-loopback without any real network traffic leaving the
-          // machine.
-          localAddress: "127.0.0.2",
-          headers,
-        },
-        (res) => {
-          let data = "";
-          res.on("data", (chunk: Buffer) => {
-            data += chunk.toString();
-          });
-          res.on("end", () => resolve({ status: res.statusCode ?? 0, body: data }));
-        },
+    beforeEach(async () => {
+      orderPort = await allocPort();
+      // Both a known token (so we can construct a request auth actually accepts)
+      // and a resolvedLanIP (so the /mcp SDK host check is active, matching the
+      // "Fix 1 regression" block above) are required to exercise both prefixes.
+      orderHttpServer = await startMcpServerHttp(
+        orderPort,
+        "127.0.0.1",
+        AUTH_TOKEN,
+        "192.168.1.50",
       );
-      req.on("error", reject);
-      if (bodyBuf !== undefined) req.write(bodyBuf);
-      req.end();
     });
-  }
 
-  it("1) GET /api/info, non-loopback + bad Host + no Authorization -> 401 (auth runs first)", async () => {
-    const { status } = await rawRequest("/api/info", { hostHeader: "evil.com" });
-    expect(status).toBe(401);
-  });
-
-  it("2) control: same request WITH valid Authorization -> 403 (Host check is reachable and fires once auth passes)", async () => {
-    const { status } = await rawRequest("/api/info", {
-      hostHeader: "evil.com",
-      authorization: `Bearer ${AUTH_TOKEN}`,
+    afterEach(() => {
+      return new Promise<void>((resolve, reject) => {
+        orderHttpServer.close((err) => (err ? reject(err) : resolve()));
+      });
     });
-    expect(status).toBe(403);
-  });
 
-  it("3) POST /mcp, non-loopback + bad Host + no Authorization -> 401 (auth runs first)", async () => {
-    const payload = JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 1 });
-    const { status } = await rawRequest("/mcp", {
-      method: "POST",
-      hostHeader: "evil.com",
-      body: payload,
-    });
-    expect(status).toBe(401);
-  });
+    function rawRequest(
+      path: string,
+      opts: { method?: string; hostHeader: string; authorization?: string; body?: string },
+    ): Promise<{ status: number; body: string }> {
+      return new Promise((resolve, reject) => {
+        const bodyBuf = opts.body !== undefined ? Buffer.from(opts.body, "utf8") : undefined;
+        const headers: Record<string, string | number> = { Host: opts.hostHeader };
+        if (opts.authorization !== undefined) headers.Authorization = opts.authorization;
+        if (bodyBuf !== undefined) {
+          headers["Content-Type"] = "application/json";
+          headers["Content-Length"] = bodyBuf.length;
+        }
+        const req = httpRequest(
+          {
+            host: "127.0.0.1",
+            port: orderPort,
+            path,
+            method: opts.method ?? "GET",
+            // Binds the client's outbound socket to a non-loopback address while
+            // still connecting to the server on 127.0.0.1 — see the block comment
+            // above for why this makes authMiddleware treat the request as
+            // genuinely non-loopback without any real network traffic leaving the
+            // machine.
+            localAddress: "127.0.0.2",
+            headers,
+          },
+          (res) => {
+            let data = "";
+            res.on("data", (chunk: Buffer) => {
+              data += chunk.toString();
+            });
+            res.on("end", () => resolve({ status: res.statusCode ?? 0, body: data }));
+          },
+        );
+        req.on("error", reject);
+        if (bodyBuf !== undefined) req.write(bodyBuf);
+        req.end();
+      });
+    }
 
-  it("4) control: same request WITH valid Authorization -> 403 (SDK host check still fires after auth passes)", async () => {
-    const payload = JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 1 });
-    const { status } = await rawRequest("/mcp", {
-      method: "POST",
-      hostHeader: "evil.com",
-      authorization: `Bearer ${AUTH_TOKEN}`,
-      body: payload,
+    // Cases 1+2 target the PER-ROUTE /api check (lanAwareApiMiddleware); cases 3+4 target
+    // the SDK's hostHeaderValidation on /mcp. Picking the Host header is what separates
+    // them, and getting it wrong makes the two "controls" assert the same middleware twice:
+    // `app.use(mcpApp)` mounts the SDK sub-app at the ROOT, so "evil.com" on /api/info is
+    // answered by the SDK, not by lanAwareApiMiddleware — with `evil.com` here, deleting
+    // lanAwareApiMiddleware from the /api/info route entirely left this suite fully green.
+    // "localhost:PORT" is the discriminator: the SDK's allowlist admits it, isHostAllowed
+    // rejects it. The body assertions are the second half of the fix — they name which
+    // middleware actually answered, so a future mix-up cannot hide behind a bare 403.
+    const API_BAD_HOST = () => `localhost:${orderPort}`;
+
+    it("1) GET /api/info, non-loopback + bad Host + no Authorization -> 401 (auth runs first)", async () => {
+      const { status } = await rawRequest("/api/info", { hostHeader: API_BAD_HOST() });
+      expect(status).toBe(401);
     });
-    expect(status).toBe(403);
-  });
-});
+
+    it("2) control: same request WITH valid Authorization -> 403 from lanAwareApiMiddleware (the per-route /api Host check is reachable)", async () => {
+      const { status, body } = await rawRequest("/api/info", {
+        hostHeader: API_BAD_HOST(),
+        authorization: `Bearer ${AUTH_TOKEN}`,
+      });
+      expect(status).toBe(403);
+      // lanAwareApiMiddleware's shape, NOT the SDK's JSON-RPC error body. If the route ever
+      // loses its lanAwareApiMiddleware, "localhost:PORT" sails past the SDK check and this
+      // becomes a 200 from the handler.
+      expect(JSON.parse(body)).toMatchObject({ error: "FORBIDDEN" });
+    });
+
+    it("3) POST /mcp, non-loopback + bad Host + no Authorization -> 401 (auth runs first)", async () => {
+      const payload = JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 1 });
+      const { status } = await rawRequest("/mcp", {
+        method: "POST",
+        hostHeader: "evil.com",
+        body: payload,
+      });
+      expect(status).toBe(401);
+    });
+
+    it("4) control: same request WITH valid Authorization -> 403 from the SDK hostHeaderValidation (a different middleware than case 2)", async () => {
+      const payload = JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 1 });
+      const { status, body } = await rawRequest("/mcp", {
+        method: "POST",
+        hostHeader: "evil.com",
+        authorization: `Bearer ${AUTH_TOKEN}`,
+        body: payload,
+      });
+      expect(status).toBe(403);
+      // The SDK's JSON-RPC error shape, NOT lanAwareApiMiddleware's {error:"FORBIDDEN"}.
+      expect(JSON.parse(body)).toMatchObject({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Invalid Host: evil.com" },
+      });
+    });
+  },
+);
