@@ -18,14 +18,17 @@
 import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { COWORK_PREFLIGHT_CHECKING } from "../../src/client/cowork/cowork-helpers";
+import {
+  COWORK_PREFLIGHT_CHECKING,
+  COWORK_PREFLIGHT_FAILED,
+} from "../../src/client/cowork/cowork-helpers";
 import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
 import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
 const toggleIntegration = vi.fn(async () => ({ ok: true as const }));
 const fakeInvoke = vi.fn();
 
-const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unknown" }));
+const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unavailable" }));
 
 // Spread `importOriginal` rather than re-declaring the module: `cowork-invoke`
 // exports nine symbols and each suite's mock used to name a different subset,
@@ -84,7 +87,7 @@ beforeEach(() => {
   toggleIntegration.mockImplementation(async () => ({ ok: true as const }));
   fakeInvoke.mockClear();
   preflightSubnet.mockClear();
-  preflightSubnet.mockResolvedValue({ status: "unknown" });
+  preflightSubnet.mockResolvedValue({ status: "unavailable" });
 });
 
 afterEach(() => {
@@ -259,6 +262,58 @@ describe("CoworkOnboardingStep — pre-flight live region (#1376)", () => {
       );
     });
     expect(q(container, "cowork-onboarding-preflight-live")).toBe(before);
+  });
+
+  it("says so in the live region when the probe itself breaks (#1436)", async () => {
+    // Onboarding is the surface where silence costs most: a first-run user has
+    // no prior expectation to compare against, so a probe that rendered
+    // nothing read as "checked, all clear". The line has to reach the region
+    // that is already in the a11y tree, not a new one mounted with it.
+    preflightSubnet.mockResolvedValue({ status: "failed" });
+    const { container } = mount();
+    await openConfirm(container);
+    const before = q(container, "cowork-onboarding-preflight-live");
+    expect(before).toBeTruthy();
+
+    await waitFor(() => {
+      expect(q(container, "cowork-onboarding-preflight-failed")?.textContent ?? "").toContain(
+        COWORK_PREFLIGHT_FAILED,
+      );
+    });
+    expect(q(container, "cowork-onboarding-preflight-live")).toBe(before);
+    // CONTAINMENT, not merely presence. Lifting the branch out to a sibling
+    // `{#if}` next to the region leaves node identity and the `-failed` testid
+    // intact while reproducing the original silence exactly, so a test that
+    // stops at the two assertions above pins nothing.
+    expect(q(container, "cowork-onboarding-preflight-live")?.textContent ?? "").toContain(
+      COWORK_PREFLIGHT_FAILED,
+    );
+    // Not a retry: nothing was observed to fail, so Enable stays.
+    expect(q(container, "cowork-onboarding-preflight-retry-btn")).toBeNull();
+    // Muted help text, never the warning-token banner the `blocked` hint uses —
+    // the claim is "we don't know", not "this will fail".
+    expect(q(container, "cowork-onboarding-preflight-failed")?.className ?? "").not.toContain(
+      "cos-preflight",
+    );
+  });
+
+  it("stays silent when the probe was never available", async () => {
+    // The other half of the split, and why it is a split rather than one loud
+    // state: `unavailable` is a probe that was never going to answer, so a
+    // hedged line there would be permanent noise rather than news.
+    preflightSubnet.mockResolvedValue({ status: "unavailable" });
+    const { container } = mount();
+    await openConfirm(container);
+    await probeCount(1);
+    await waitFor(() => {
+      expect(q(container, "cowork-onboarding-preflight-live")?.textContent ?? "").not.toContain(
+        COWORK_PREFLIGHT_CHECKING,
+      );
+    });
+
+    expect(q(container, "cowork-onboarding-preflight-failed")).toBeNull();
+    expect(q(container, "cowork-onboarding-preflight-blocked")).toBeNull();
+    expect(q(container, "cowork-onboarding-preflight-live")?.textContent?.trim()).toBe("");
   });
 
   it("keeps the hint mounted while re-checking it", async () => {

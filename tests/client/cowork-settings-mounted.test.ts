@@ -20,14 +20,17 @@
 import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { COWORK_PREFLIGHT_CHECKING } from "../../src/client/cowork/cowork-helpers";
+import {
+  COWORK_PREFLIGHT_CHECKING,
+  COWORK_PREFLIGHT_FAILED,
+} from "../../src/client/cowork/cowork-helpers";
 import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
 import { coworkErrorCell, coworkStatusCell } from "../helpers/cowork-fixtures.svelte";
 
 const toggleIntegration = vi.fn(async () => ({ ok: true as const }));
 const fakeInvoke = vi.fn();
 
-const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unknown" }));
+const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unavailable" }));
 const setLanIpOverride = vi.fn(async () => {});
 
 // Spread `importOriginal` rather than re-declaring the module: `cowork-invoke`
@@ -149,7 +152,7 @@ beforeEach(() => {
   setLanIpOverride.mockClear();
   setLanIpOverride.mockImplementation(async () => {});
   preflightSubnet.mockClear();
-  preflightSubnet.mockResolvedValue({ status: "unknown" });
+  preflightSubnet.mockResolvedValue({ status: "unavailable" });
 });
 
 afterEach(() => {
@@ -511,6 +514,73 @@ describe("CoworkSettings — pre-flight live region (#1376)", () => {
       expect(q(container, "cowork-preflight-live")?.textContent ?? "").toContain("no adapter");
     });
     expect(q(container, "cowork-preflight-live")).toBe(before);
+  });
+
+  it("lands the broken-probe line in the region that is already mounted (#1436)", async () => {
+    // The bug this issue names: `role="status"` announces added and changed
+    // text, but EMPTYING a region announces nothing. Before the split, a probe
+    // that could not run rendered nothing, so the sequence a screen reader got
+    // was the in-flight line followed by permanent silence. Captured before
+    // the line arrives, so this fails if the copy is ever moved into a wrapper
+    // that mounts with it.
+    preflightSubnet.mockResolvedValue({ status: "failed" });
+    const { container, checkbox } = mount();
+    await setChecked(checkbox, true);
+    const before = q(container, "cowork-preflight-live");
+    expect(before).toBeTruthy();
+
+    await waitFor(() => {
+      expect(q(container, "cowork-preflight-failed")?.textContent ?? "").toContain(
+        COWORK_PREFLIGHT_FAILED,
+      );
+    });
+    expect(q(container, "cowork-preflight-live")).toBe(before);
+    expect(q(container, "cowork-preflight-live")?.textContent ?? "").toContain(
+      COWORK_PREFLIGHT_FAILED,
+    );
+  });
+
+  it("keeps Enable — a check that did not run is not a check that failed", async () => {
+    // `blocked` swaps Enable for "Check again" because we watched detection
+    // fail and know the outcome. `failed` knows nothing, so taking Enable away
+    // would block a user whose Cowork setup is fine on the strength of our own
+    // bug. The two must not share a branch.
+    preflightSubnet.mockResolvedValue({ status: "failed" });
+    const { container, checkbox } = mount();
+    await setChecked(checkbox, true);
+    await waitFor(() => {
+      expect(q(container, "cowork-preflight-failed")).toBeTruthy();
+    });
+
+    expect(q(container, "cowork-preflight-retry-btn")).toBeNull();
+    const enable = q(container, "cowork-enable-confirm-btn") as HTMLButtonElement;
+    expect(enable).toBeTruthy();
+    expect(enable.disabled).toBe(false);
+    // Muted help text, never `cs-preflight` — that class is the warning-token
+    // banner the `blocked` hint wears, and wearing it here would say "this will
+    // fail" about something we did not observe.
+    expect(q(container, "cowork-preflight-failed")?.className ?? "").not.toContain("cs-preflight");
+  });
+
+  it("renders nothing at all when the probe was never available", async () => {
+    // The other half of the split. `unavailable` is every non-Windows and
+    // non-Tauri session — the overwhelmingly common case — and it has no news,
+    // so a hedged line there would be permanent noise for people whose network
+    // was never going to be probed. Only the region and its in-flight line.
+    preflightSubnet.mockResolvedValue({ status: "unavailable" });
+    const { container, checkbox } = mount();
+    await setChecked(checkbox, true);
+    await probeCount(1);
+    await waitFor(() => {
+      expect(q(container, "cowork-preflight-live")?.textContent ?? "").not.toContain(
+        COWORK_PREFLIGHT_CHECKING,
+      );
+    });
+
+    expect(q(container, "cowork-preflight-failed")).toBeNull();
+    expect(q(container, "cowork-preflight-blocked")).toBeNull();
+    expect(q(container, "cowork-preflight-live")?.textContent?.trim()).toBe("");
+    expect(q(container, "cowork-enable-confirm-btn")).toBeTruthy();
   });
 
   it("announces the re-probe without dropping the hint it is re-checking", async () => {

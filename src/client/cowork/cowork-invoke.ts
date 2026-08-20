@@ -25,9 +25,13 @@ export type InvokeFn = <T = unknown>(cmd: string, args?: Record<string, unknown>
 export const TAURI_NOT_AVAILABLE = "Tauri runtime not available";
 
 /**
- * Mirrors `WINDOWS_ONLY_ERR` in `src-tauri/src/lib.rs`. Used only to keep an
- * expected rejection out of `console.error` — a drift here costs a noisy log
- * line, never behaviour, so it is deliberately not pinned by a test.
+ * Mirrors `WINDOWS_ONLY_ERR` in `src-tauri/src/lib.rs`.
+ *
+ * Since #1436 this string SELECTS BEHAVIOUR, not just a log level: it is what
+ * routes the non-Windows rejection to `unavailable` (silent) rather than
+ * `failed` (a visible hedged line). A drift here used to cost a noisy log line;
+ * it now paints a warning on a routine path, so the substring match and its
+ * fixtures are load-bearing.
  */
 export const COWORK_WINDOWS_ONLY = "Cowork integration is Windows-only";
 
@@ -82,14 +86,16 @@ export function coworkDetectVethernetSubnet(invoke: InvokeFn): Promise<string> {
 }
 
 /**
- * Outcome of the enable pre-flight. Three states, not two, because "the probe
- * failed" and "enabling would fail" are different claims:
+ * Outcome of the enable pre-flight. Four states, because "the probe failed"
+ * and "enabling would fail" are different claims, and so are the two reasons a
+ * probe does not answer:
  *
  * - `ok` — a subnet was detected; the enable path's own detection should agree.
  * - `blocked` — the probe returned a structured `FirewallError`, so we can say
  *   what is wrong and offer a retry instead of a button that cannot work.
- * - `unknown` — the probe itself couldn't run. Never block on this; a broken
- *   probe must not stop a user whose enable would have succeeded.
+ * - `unavailable` / `failed` — the probe itself couldn't run. Never block on
+ *   either; a broken probe must not stop a user whose enable would have
+ *   succeeded. Their per-variant notes below carry the rest.
  *
  * The same reasoning applies while a probe is still in flight: callers must
  * leave Enable **clickable** during the probe, not merely re-enable it
@@ -102,7 +108,30 @@ export function coworkDetectVethernetSubnet(invoke: InvokeFn): Promise<string> {
 export type SubnetPreflight =
   | { status: "ok"; cidr: string }
   | { status: "blocked"; hint: string }
-  | { status: "unknown" };
+  /**
+   * The probe cannot run in this environment — not Windows, or no Tauri bridge
+   * in a session that never claimed to have one. Renders nothing, which is
+   * correct: nothing has gone wrong, and a warning would be permanent noise.
+   *
+   * Every surface that probes today is already gated on `isTauriRuntime()` and
+   * on `osSupported`, so in the shipped app this is effectively unreachable —
+   * it is the answer for a caller that probes WITHOUT those gates (the Svelte
+   * harness does) and the reason the `failed` arm can be as loud as it is.
+   * Do not "simplify" it away by folding it into `failed`: the moment a surface
+   * probes ungated, that fold paints a warning on every browser session.
+   */
+  | { status: "unavailable" }
+  /**
+   * The probe ran and broke: an unregistered command, a serde shape drift, a
+   * throw from the bridge. Renders a hedged line (#1436) — the `ok` case is
+   * silent, and silence is only readable if the failure case is not.
+   *
+   * These were one `unknown` value until #1436, which made a genuine fault
+   * pixel-identical to a pass. Splitting them is the whole fix: the two halves
+   * were already distinguished HERE (one logs at `error`, the other at
+   * `debug`), and that distinction simply never reached the wire.
+   */
+  | { status: "failed" };
 
 export async function coworkPreflightSubnet(invoke: InvokeFn): Promise<SubnetPreflight> {
   try {
@@ -111,20 +140,29 @@ export async function coworkPreflightSubnet(invoke: InvokeFn): Promise<SubnetPre
     const rawMsg = err instanceof Error ? err.message : String(err);
     const variant = parseFirewallErrorVariant(rawMsg);
     if (!variant) {
-      // `unknown` is deliberately never rendered, so an unparseable failure is
-      // invisible to the user by design — but it is also how an unregistered
-      // command or a serde downgrade on the Rust side would present, and those
-      // are bugs. Log everything except the two expected cases so a real fault
-      // is diagnosable from a pasted console rather than indistinguishable
-      // from "we couldn't tell".
+      // #1436: the two arms below already existed — one logs at `error`, the
+      // other at `debug` — and the fact that both then returned one `unknown`
+      // is what made a real fault indistinguishable from an environment the
+      // probe was never going to run in.
       //
-      // Safe to log verbatim, but NOT for the reason this comment used to
-      // give. Since #1372 this command's `subnetDetectionFailed` does carry a
-      // `stderrTail`, so "payload-free on the wire" is no longer true. What
-      // makes it safe is the branch: nothing reaches here unless
+      // `TAURI_NOT_AVAILABLE` alone is NOT enough to call it an environment,
+      // and reading it that way was the first cut's bug. `loadInvoke` emits
+      // that string from its own catch when `import("@tauri-apps/api/core")`
+      // fails — so OUTSIDE Tauri it is the ordinary no-bridge case, but INSIDE
+      // Tauri it means a chunk that should exist did not load (a partial
+      // update, a CSP block), which is a fault and the single most likely way
+      // a shipped desktop build reaches this function at all. Every surface
+      // that probes is already gated on `isTauriRuntime()`, so treating it as
+      // an environment sent the one reachable fault straight back to the
+      // silence #1436 is about.
+      //
+      // Logging `rawMsg` verbatim is safe, but NOT for the reason this comment
+      // used to give. Since #1372 this command's `subnetDetectionFailed` does
+      // carry a `stderrTail`, so "payload-free on the wire" is no longer true.
+      // What makes it safe is the BRANCH: nothing reaches here unless
       // `parseFirewallErrorVariant` already returned null, i.e. `rawMsg` did
       // not parse as JSON with a string `kind`. Keep that ordering if this is
-      // ever restructured.
+      // ever restructured, and do not widen the logging to the parsed variants.
       //
       // One caveat, so nobody reads that as stronger than it is. `lib.rs` sends
       // `serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())`, and the
@@ -136,12 +174,15 @@ export async function coworkPreflightSubnet(invoke: InvokeFn): Promise<SubnetPre
       // The Rust side still keeps the raw `io::Error` from a failed spawn off
       // the wire entirely (it names the resolved executable path); the wire
       // carries only the closed `AdapterEnumerationReason`. Do not widen that.
-      if (rawMsg === TAURI_NOT_AVAILABLE || rawMsg.includes(COWORK_WINDOWS_ONLY)) {
+      if (
+        rawMsg.includes(COWORK_WINDOWS_ONLY) ||
+        (rawMsg === TAURI_NOT_AVAILABLE && !isTauriRuntime())
+      ) {
         console.debug("[cowork] subnet pre-flight unavailable:", rawMsg);
-      } else {
-        console.error("[cowork] subnet pre-flight could not be classified:", rawMsg);
+        return { status: "unavailable" };
       }
-      return { status: "unknown" };
+      console.error("[cowork] subnet pre-flight could not be classified:", rawMsg);
+      return { status: "failed" };
     }
     return { status: "blocked", hint: firewallErrorHint(variant) };
   }
