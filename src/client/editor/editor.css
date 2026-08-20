@@ -351,8 +351,20 @@
 /* Claude focus paragraph. The tint, rail and cross-fade moved here from an
    inline `style` on the ProseMirror decoration (`extensions/awareness.ts`),
    where no reduced-motion guard could reach them — every value was static, so
-   nothing had to stay in JS. */
-.tandem-claude-focus {
+   nothing had to stay in JS.
+
+   The `.tandem-editor` prefix is load-bearing, not tidiness. The decoration is
+   applied by `doc.forEach` over TOP-LEVEL nodes, so it lands on blockquotes and
+   lists as readily as on paragraphs — and this file already styles those at
+   (0,1,1): `.tandem-editor blockquote` sets its own `border-left`/`padding`, and
+   `.tandem-editor ul, .tandem-editor ol` set `padding-left`. Higher specificity
+   wins regardless of source order, so a bare `.tandem-claude-focus` (0,1,0) lost
+   the coral rail and the indent on exactly those nodes. The old inline `style`
+   won unconditionally, which is why nothing surfaced when it moved here — the
+   tint and the `::before` gutter rail still render either way. Keep this at
+   (0,2,0) or above; `tests/design-system-impl/claude-focus-specificity.test.ts`
+   pins it against every competing rule in this file. */
+.tandem-editor .tandem-claude-focus {
   position: relative;
   background: var(--tandem-claude-focus-bg);
   border-left: 3px solid var(--tandem-claude-focus-border);
@@ -364,11 +376,11 @@
 /* The tint arriving is state feedback — under reduced motion the focused
    paragraph is simply already tinted. The rail's pulse on `::before` is guarded
    separately, further down with the rest of this file's animations. */
-body.tandem-reduce-motion .tandem-claude-focus {
+body.tandem-reduce-motion .tandem-editor .tandem-claude-focus {
   transition: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .tandem-claude-focus {
+  .tandem-editor .tandem-claude-focus {
     transition: none;
   }
 }
