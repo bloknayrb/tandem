@@ -119,6 +119,14 @@ Phase 1 shipped as ADR-045 / PR #1233. The design doc #438 still asks for alread
 
 **This row has moved since the brief was written.** The #1253 probe has now run, and its findings change what "dual-era" costs — see the note under D-14's neighbours and issue **#1332**. Specifically: SDK v2 has no *stateful* legacy option, so adopting v2 would **delete** ADR-045 Decisions 1, 3 and 4 rather than scope them to legacy. Worth reading #1332 before answering this one.
 
+> **Note added 2026-08-20 (#1332, PR #1548) — the snapshot text above is superseded; it is left as
+> written.** #1332 has now been read, and its answer is the opposite: v2's published tarball exports
+> an `isLegacyRequest` composition seam, so ADR-045 Decisions 1, 3 and 4 **survive** v2 adoption as
+> Tandem-owned wiring in front of a `legacy: 'reject'` handler rather than being deleted. The
+> evidence is the addendum in [`docs/spikes/stateless-transport-probe.md`](../../spikes/stateless-transport-probe.md);
+> the record is ADR-045's 2026-08-18 amendment in [`docs/decisions.md`](../../decisions.md). Read
+> those, not #1332's thread, before answering this row.
+
 ## D-9 — #798 motion umbrella
 
 **Question:** does GA need all of A1–A29, or the named subset?

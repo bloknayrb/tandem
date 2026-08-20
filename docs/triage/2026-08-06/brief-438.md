@@ -43,6 +43,15 @@ The compatibility matrix bounds the answer hard: modern-client→legacy-server *
 legacy-client→modern-server **fails** with *no fall-forward*. Dual-era is the only non-breaking
 destination.
 
+> **Note added 2026-08-20 (#1332, PR #1548) — the snapshot text above is superseded on two points;
+> it is left as written.** `io.modelcontextprotocol/clientInfo` does not carry only `{name, version}`
+> — SDK 1.30.0's `ImplementationSchema` already declared `name`, `version`, and optional `title`,
+> `icons`, `description` and `websiteUrl`, and the GA v2 `Implementation` type matches. The
+> conclusion drawn from it is unchanged: none of those six fields is per-connection, so two
+> concurrent Claude Code instances still send byte-identical values. And the external dependency is
+> no longer un-happened — `@modelcontextprotocol/server@2.0.0` went GA 2026-07-27. See ADR-045's
+> Decision 6 bullet in [`docs/decisions.md`](../../decisions.md).
+
 ## Options
 
 1. **Close #438 as superseded; let #1252/#1253/#1249 carry it.** Costs a body edit recording which
