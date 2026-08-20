@@ -81,6 +81,24 @@ jobs:
           node-version: 22
           cache: npm
 
+      # Pinned rather than trusting the runner image to expose a Python at all.
+      # Both `npm run test:acceptance-harness` (via
+      # scripts/spikes/run-acceptance-harness.mjs) and the vitest fixture block
+      # resolve `python3` then `python`, so either name satisfies them -- but if no
+      # interpreter can be provisioned this step fails the job, which is the only
+      # acceptable alternative to running the gate. Never a skipped step.
+      #
+      # It sits HERE, not next to the harness step, because the `Test` step needs
+      # it too: tests/scripts/acceptance-harness-wiring.test.ts spawns
+      # scripts/spikes/run_acceptance_tests.py against deliberately broken fixture
+      # suites, and those assertions are the only coverage the runner's decisions
+      # have. They fail rather than skip when no interpreter is found, so without
+      # this they would fail confusingly instead of not at all -- but failing
+      # confusingly is still a cost worth removing.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
       - run: npm ci
 
       - name: Lint
@@ -97,6 +115,39 @@ jobs:
 
       - name: Test
         run: npm test -- --run
+
+      # The session-monitor acceptance harness (82 tests) guards the first-use
+      # auto-arm gate and had no runner in CI or the pre-push hook until #1399 --
+      # which is how #1397 bumped skills/tandem/SKILL.md to version 11, breaking
+      # 13 harness tests, with every check on both PRs green throughout.
+      #
+      # It reads its immutable v9 skill baseline with
+      # `git show v0.21.0:skills/tandem/SKILL.md`. checkout@v6 is a depth-1,
+      # tagless clone, so the tag has to be fetched. Measured against this repo:
+      # one tag at depth 1 costs ~2.7s and takes .git from 9.0MB to 38MB, against
+      # ~6.3s/68MB for `fetch-depth: 0` and 57MB for `fetch-tags: true`. The
+      # reason it is this and not those is not the constant: a single-tag fetch is
+      # O(1) in repo age, while both alternatives grow with history/tag count
+      # forever, on this repo's longest job. Committing the baseline as a fixture
+      # was rejected -- it trades an immutable reference for a tracked copy that
+      # the same commit which needs to lie about it can edit.
+      #
+      # No `|| true`: a missing ref exits 128 and must fail HERE, at a step whose
+      # name carries the tag, rather than 40 lines into a Python traceback.
+      - name: Fetch v0.21.0 tag (acceptance-harness skill baseline)
+        run: git fetch --no-tags --depth=1 origin tag v0.21.0
+        timeout-minutes: 2
+
+      # Deliberately unconditional and blocking: no `if:`, no `continue-on-error`
+      # (here or on the job), no `|| true`. A gate that reports success when it
+      # could not evaluate is the #1229 failure mode and is worse than no gate.
+      # Must stay below `npm ci`: one test spawns
+      # scripts/spikes/session-monitor-user-event.mjs, which imports
+      # @hocuspocus/provider. tests/scripts/acceptance-harness-wiring.test.ts
+      # parses this file and fails if any of that changes.
+      - name: Acceptance harness (session-monitor auto-arm)
+        run: npm run test:acceptance-harness
+        timeout-minutes: 3
 
       - name: Build
         run: npm run build
