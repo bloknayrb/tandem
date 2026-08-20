@@ -269,6 +269,49 @@ describe("CoworkSettings — enable confirm wiring (#1375)", () => {
     expect(checkbox.checked).toBe(false);
   });
 
+  it("a rejected disable that still committed re-reads instead of re-checking the box", async () => {
+    // The disable arm rejects AFTER its meta write lands.
+    // `cowork_toggle_integration` persists `enabled = false` (its `meta_persist`
+    // write) and only then returns `Err` if every workspace failed to uninstall
+    // — the mirror of #1437 itself (reject-but-actually-changed instead of
+    // resolve-but-unchanged). With the read-back inside `withInvoke`'s callback
+    // the throw skipped it, the sentinel stayed `true`, and the resync painted
+    // the stale `enabled: true` straight back over a box the user had just
+    // unchecked over an integration that really was off — next to a line
+    // reading "Integration enabled: yes". Re-reading unconditionally is what
+    // makes the paint follow the truth rather than which way the promise
+    // settled.
+    coworkStatusCell.patch({ enabled: true });
+    toggleIntegration.mockRejectedValueOnce(
+      new Error("Cowork disable failed: all 2 workspace(s) failed to uninstall"),
+    );
+    // What the rejected command left on disk: the write DID land.
+    refetch.mockImplementationOnce(async () => {
+      coworkStatusCell.patch({ enabled: false });
+      return true;
+    });
+    const { container, checkbox } = mount();
+    await tick();
+    expect(checkbox.checked).toBe(true);
+
+    await setChecked(checkbox, false);
+
+    // Wait on the mock CALL COUNT, not on the box: `setChecked` already wrote
+    // `checked` by hand, and a mock call emits no DOM mutation for `waitFor`'s
+    // observer to wake on. Before the fix this timed out at 0 calls, because
+    // the throw skipped the read-back entirely.
+    await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1), { interval: 5 });
+    await waitFor(
+      () =>
+        expect(q(container, "cowork-settings")?.textContent).toContain("Integration enabled: no"),
+      { interval: 5 },
+    );
+    // The box must agree with that readout. Before the fix the resync fired
+    // with the STALE `enabled: true` and re-checked it here.
+    expect(checkbox.checked).toBe(false);
+    expect(toggleIntegration).toHaveBeenCalledWith(fakeInvoke, false);
+  });
+
   it("a disable whose read-back fails leaves the box off and says why", async () => {
     // The write landed; only the re-read did not. `status` therefore still says
     // `enabled: true`, and resyncing from it would visibly RE-CHECK the box over
@@ -345,6 +388,83 @@ describe("CoworkSettings — enable confirm wiring (#1375)", () => {
     lanBox.dispatchEvent(new Event("change", { bubbles: true }));
 
     await waitFor(() => expect(lanBox.checked).toBe(false), { interval: 5 });
+  });
+
+  it("a rejected LAN-IP write still re-reads, and snaps the box back to the real value", async () => {
+    // #1437 review, Minor 7: `cowork_set_lan_ip_override`'s own meta write is
+    // fail-closed, but the command can still reject AFTER that write landed
+    // (its follow-on workspace re-walk can fail on its own) — the mirror
+    // image of #1437 itself (reject-but-actually-changed instead of
+    // resolve-but-unchanged). Either way the only safe move is to re-read, so
+    // `refetch()` must run even though the invoke threw.
+    //
+    // Run it in the direction where the manual set and the real value
+    // DISAGREE. The user UNCHECKS a box whose model says `true`; the write
+    // rejects; the re-read reports the unchanged `true`. The final assertion
+    // is then reachable ONLY through `resyncCheckbox` — seeding and asserting
+    // the same value would pass whether the resync ran, was deleted, or never
+    // fired, because the `checked={lanIpOverrideChecked}` binding would paint
+    // it anyway.
+    coworkStatusCell.patch({ lanIpFallback: "192.168.1.100", useLanIpOverride: true });
+    const { container } = mount();
+    await tick();
+
+    const lanBox = q(container, "cowork-lan-ip-override-checkbox") as HTMLInputElement;
+    expect(lanBox.checked).toBe(true);
+
+    setLanIpOverride.mockRejectedValueOnce(new Error("re-walk failed: all workspace(s) failed"));
+    lanBox.checked = false;
+    lanBox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // Wait on the mock CALL COUNT first, not on `lanBox.checked`: the line
+    // above already set the box by hand (simulating the browser's own
+    // pre-`change` write, same as `setChecked()` above), and a mock call count
+    // emits no DOM mutation, so `waitFor`'s MutationObserver can never wake on
+    // it — exactly the vacuous-wait trap `probeCount()` above avoids. Before
+    // the fix, `refetch()` lived INSIDE the `withInvoke` callback, so the
+    // thrown write skipped it entirely and this would time out at 0 calls.
+    await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1), { interval: 5 });
+    // Then wait on the box itself rather than asserting it synchronously here.
+    // The resync runs after the read-back resolves, but not necessarily in the
+    // same microtask — `readBackStatus()` is its own `async` hop — and a
+    // synchronous assert encodes "exactly zero intervening ticks" as a
+    // constant that any refactor of the read-back breaks. It stays
+    // non-vacuous: the line above set the box to `false` by hand, so `true`
+    // here is reachable only through the resync.
+    await waitFor(() => expect(lanBox.checked).toBe(true), { interval: 5 });
+  });
+
+  it("a LAN-IP write that never landed snaps the box back even when the re-read also fails", async () => {
+    // The `!wrote` term in `handleToggleLanIp`'s resync gate. One
+    // corrupt `cowork-meta.json` rejects BOTH `cowork_set_lan_ip_override`
+    // (via `cowork_meta::load`) and `cowork_get_status` (its own
+    // `cowork_meta::load`), so the write never lands AND the re-read fails.
+    // Nothing changed, so the stored status is still accurate and the box must
+    // snap back to it. Gating the resync on `readBack` alone leaves the box
+    // showing an override that is off — and it never heals, because
+    // `useLanIpOverride` did not change, so the `checked={lanIpOverrideChecked}`
+    // binding recomputes to the value Svelte last wrote and `set_checked`
+    // returns before touching the DOM (see `src/client/utils/checkbox-sync.ts`).
+    coworkStatusCell.patch({ lanIpFallback: "192.168.1.100", useLanIpOverride: true });
+    const { container } = mount();
+    await tick();
+
+    const lanBox = q(container, "cowork-lan-ip-override-checkbox") as HTMLInputElement;
+    expect(lanBox.checked).toBe(true);
+
+    setLanIpOverride.mockRejectedValueOnce(new Error("failed to read cowork-meta.json"));
+    // `refetch()` swallows its own failure and reports it by returning false.
+    refetch.mockImplementationOnce(async () => false);
+    lanBox.checked = false;
+    lanBox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1), { interval: 5 });
+    // Only reachable via the resync: the model still says `true`, the user's
+    // click said `false`, and the re-read told us nothing. Waited on rather
+    // than asserted synchronously, for the reason given in the test above —
+    // dropping the `!wrote` term still reddens it, it just takes the poll
+    // timeout to do so.
+    await waitFor(() => expect(lanBox.checked).toBe(true), { interval: 5 });
   });
 
   it("checking an already-enabled box re-asserts it instead of offering Enable", async () => {
@@ -448,6 +568,44 @@ describe("CoworkSettings — enable confirm wiring (#1375)", () => {
     // Box still checked via `confirming === "enable"`, not via `status.enabled`
     // (which a frozen `enabled: false` fixture would leave stale) — accurate.
     expect(checkbox.checked).toBe(true);
+  });
+
+  it("a failed enable leaves the confirm closed and the box unchecked, and says why", async () => {
+    // The mirror of "a failed disable puts the box back" (earlier in this
+    // describe block), which was the only thrown-invoke case covered for
+    // either direction until now. This is not
+    // new behaviour — `handleToggleOn` already handles a thrown toggle
+    // correctly (see its comment: `readBack` stays at its initial `true` on a
+    // throw, so the confirm still closes and `enableBoxChecked` falls back to
+    // the accurate, unchanged status) — it's regression coverage for a real
+    // pre-existing gap this investigation surfaced, not proof of the #1437
+    // fix itself. This test already passes on unmodified `CoworkSettings.svelte`;
+    // the load-bearing test for #1437 is the Rust one
+    // (`enable_persist_outcome_tests` in `src-tauri/src/lib.rs`), since the
+    // fix is that a partial-commit enable now REJECTS instead of resolving,
+    // and this file mocks `coworkToggleIntegration` — it cannot observe that
+    // Rust-side change either way.
+    const { container, checkbox } = mount();
+    await setChecked(checkbox, true);
+
+    toggleIntegration.mockRejectedValueOnce(new Error("disk full"));
+    (q(container, "cowork-enable-confirm-btn") as HTMLButtonElement).click();
+    // `waitFor` on the confirm's own removal — same pattern as "Enable fires
+    // the toggle, closes the confirm..." above — not the disabled-then-
+    // enabled dance the read-back-fail tests use. `busy` (and so `disabled`)
+    // flips back to `false` inside `withInvoke`'s `finally`, ONE microtask
+    // before `closeEnableConfirm()` runs back in `handleToggleOn` — so
+    // waiting on both edges of `disabled` and then synchronously asserting
+    // the confirm is gone races that extra hop and can read the DOM before
+    // Svelte has flushed the removal. Waiting on the removal directly can't
+    // race itself.
+    await waitFor(() => {
+      expect(q(container, "cowork-enable-confirm")).toBeNull();
+    });
+
+    expect(toggleIntegration).toHaveBeenCalledWith(fakeInvoke, true);
+    expect(checkbox.checked).toBe(false);
+    expect(q(container, "cowork-inline-toast")?.textContent).toContain("Failed to enable Cowork");
   });
 
   it("Cancel clears the blocked hint, so a re-open does not paint a stale one", async () => {

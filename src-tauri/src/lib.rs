@@ -4396,6 +4396,128 @@ fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
+/// Outcome of the enable path's final step: persisting `enabled = true` (plus
+/// the vEthernet CIDR and scan timestamp) to `cowork-meta.json`.
+///
+/// By this point the firewall rule and plugin entries are already live —
+/// everything upstream of this call succeeded — so a persist failure here is
+/// a partial commit, not a clean failure. MUST fail loud, mirroring the
+/// disable branch's identical decision at its own `meta_persist` write, whose
+/// comment reads: "this write is the disable's CORE contract ... fail loud
+/// instead of returning a green toast over a stale state". Before this fix the
+/// enable arm was the asymmetric outlier: warn-only, falling through to `Ok`,
+/// so `cowork_toggle_integration`
+/// could resolve while `cowork_get_status` went on honestly reporting
+/// `enabled: false` with nothing to explain the gap — #1437.
+///
+/// Retrying is the recovery path, not a courtesy: the client's
+/// `handleToggleChange` reads `status.enabled` to decide which handler fires,
+/// and that reads `false` here, so there is no client path to
+/// `cowork_toggle_integration(false)` to undo anything with — enabling again
+/// is the only way off this state (safe to repeat: the firewall add and the
+/// per-workspace writes above it are both idempotent). The disk state this
+/// leaves — `enabled: false` with the firewall rule and plugin entries
+/// already live — is exactly what today's silent `Ok` already produces, so
+/// returning `Err` here doesn't create a new exposure, only a visible one;
+/// and the leftover allow rule is inert under the default 127.0.0.1 bind
+/// (the same argument the disable branch's "Firewall removal is ADVISORY"
+/// comment makes for its own leftover-rule case; the launcher never sets
+/// `TANDEM_BIND_HOST`, see `integrations_probe.rs`).
+///
+/// About the count the `Err` message does name: it is `workspace_count` from
+/// the call site, i.e. `workspaces.len()` — the number of workspaces the
+/// enable WALKED, not the number whose plugin entry was actually written. The
+/// partial-install branch above this call deliberately tolerates a
+/// `success_count` lower than that, so on a partial install this message can
+/// name more workspaces than got an entry. Threading `success_count` down
+/// here would close that gap at the cost of another parameter on a message
+/// this rarely reached; the one case worth being exact about is zero, and
+/// that one is special-cased below so the message never claims plugin entries
+/// that were never written.
+///
+/// Pure and free of the Windows-only firewall/workspace-scan types around its
+/// call site, so it's testable without them — same reasoning as
+/// `parse_netstat_listening_pid` above ("kept out of the cfg(windows) block
+/// so its tests run on every CI platform; the allow keeps a non-Windows
+/// release build warning-free"). **Caveat that reasoning doesn't cover: this
+/// function's own body is close to the assertion it's tested against — the
+/// actual defect this fixes is at the call site inside
+/// `#[cfg(target_os = "windows")] fn cowork_toggle_integration`, which a
+/// non-Windows `cargo test` never compiles. The test below pins this
+/// function's Ok/Err mapping; it does NOT prove the call site type-checks or
+/// behaves. That's the `windows-latest` leg of `ci.yml`'s `rust-test` job
+/// plus manual verification — see the PR body.**
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn enable_persist_outcome(persist: Result<(), String>, workspace_count: usize) -> Result<String, String> {
+    match persist {
+        Ok(()) => Ok(format!("Cowork enabled: {workspace_count} workspace(s) configured")),
+        Err(e) => {
+            // Name only what actually happened. The enable arm walks workspaces
+            // and installs a plugin entry per workspace, so on a machine with
+            // no Cowork workspaces there are no plugin entries to report — and
+            // an error message that claims otherwise sends the user looking for
+            // files that were never written.
+            let installed = if workspace_count == 0 {
+                "Cowork's firewall rule was added".to_string()
+            } else {
+                format!(
+                    "Cowork's firewall rule and plugin entries for {workspace_count} workspace(s) were installed"
+                )
+            };
+            Err(format!(
+                "{installed}, but Tandem couldn't save that the integration is on ({e}). \
+                 It will keep showing as off until you try enabling again."
+            ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod enable_persist_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn ok_when_persist_succeeds() {
+        assert_eq!(
+            enable_persist_outcome(Ok(()), 3),
+            Ok("Cowork enabled: 3 workspace(s) configured".to_string())
+        );
+    }
+
+    #[test]
+    fn fails_loud_when_persist_fails() {
+        // #1437: before this fix, a persist failure here was swallowed into a
+        // `log::warn!` and the command still returned `Ok`, so the invoke
+        // resolved while `cowork_get_status` went on honestly reporting
+        // `enabled: false` with nothing to explain the gap. This test pins
+        // only this function's Ok/Err mapping and its message contents — it
+        // cannot compile the call site inside `cowork_toggle_integration`
+        // (Windows-cfg-gated), so it cannot by itself prove the fix landed
+        // correctly there. See the doc comment above and the PR body.
+        let result = enable_persist_outcome(Err("disk full".to_string()), 3);
+        let msg = result.expect_err("persist failure must surface as Err, not a silent Ok");
+        assert!(msg.contains("disk full"));
+        assert!(msg.contains("firewall rule"));
+        assert!(msg.contains("plugin entries for 3 workspace(s)"));
+        assert!(msg.contains("try enabling again"));
+    }
+
+    #[test]
+    fn persist_failure_with_no_workspaces_does_not_claim_plugin_entries() {
+        // The enable arm installs one plugin entry per workspace, so with zero
+        // workspaces there are none — claiming otherwise sends the user hunting
+        // for files that were never written.
+        let result = enable_persist_outcome(Err("disk full".to_string()), 0);
+        let msg = result.expect_err("persist failure must surface as Err, not a silent Ok");
+        assert!(msg.contains("disk full"));
+        assert!(msg.contains("firewall rule"));
+        assert!(
+            !msg.contains("plugin entries"),
+            "message must not claim plugin entries were installed when none were: {msg}"
+        );
+    }
+}
+
 /// Enable or disable the Cowork integration.
 ///
 /// On enable: fetches auth token, detects vEthernet subnet, adds allow firewall
@@ -4538,17 +4660,17 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
             }
         }
 
-        if let Err(e) = cowork_meta::update(|m| {
+        let persist = cowork_meta::update(|m| {
             m.enabled = true;
             m.vethernet_cidr_detected = Some(cidr.clone());
             m.workspaces_last_scanned_at = Some(iso_now());
             m.uac_declined_last_attempt = false;
             m.uac_declined_at = None;
-        }) {
+        });
+        if let Err(e) = &persist {
             log::warn!("[cowork] failed to persist meta after enable: {e}");
         }
-
-        Ok(format!("Cowork enabled: {workspace_count} workspace(s) configured"))
+        enable_persist_outcome(persist, workspace_count)
     } else {
         // Disable: uninstall from all workspaces and remove firewall rules.
         let workspaces = find_cowork_workspaces();
