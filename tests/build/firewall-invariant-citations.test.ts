@@ -1,6 +1,7 @@
 /**
  * Regression pin for #1374 — dangling `(security invariant §N)` /
- * `(invariant §N)` / `(security §N)` citations in `src-tauri/src/firewall.rs`.
+ * `(invariant §N)` / `(security §N)` / bare `(§N)` citations in
+ * `src-tauri/src/firewall.rs`.
  *
  * `firewall.rs` is `#![cfg(target_os = "windows")]`. A cfg-stripped external
  * `mod` is never read from disk by rustc on a non-matching target, so on this
@@ -64,16 +65,29 @@ function readCoworkInstallerRs(): string {
  * Matches the bare `invariant §N` / `security §N` defect shape, with or
  * without surrounding parens (two of the six original citations in
  * `firewall.rs` — `:323` and `:328` — carried no parens at all, so requiring
- * them would have missed exactly those two). `§3` is excluded — see the file
- * header.
+ * them would have missed exactly those two), plus the label-less `(§N)` form.
+ * `§3` is excluded — see the file header.
+ *
+ * The third branch is not hypothetical: `(§N)` with no `invariant`/`security`
+ * label in front of it is already live one `mod` away, same author and same
+ * subsystem, at `src-tauri/src/lib.rs:4169` (`(§12)`) and `:4882` (`(§9)`) —
+ * see issue #1531, which records it as a third citation shape. Those sites
+ * are out of this test's scope (file header, SCOPE), but the shape has to be
+ * in the detector or the same defect could land inside `firewall.rs` unseen.
+ *
+ * It cannot swallow the legitimate `§` uses this repo makes, because it
+ * requires the `(` to be followed by the `§` itself and the `)` to follow the
+ * digits directly: `(ADR-040 §5)` has a label between `(` and `§`, and
+ * `(RFC 4632 §3.1)` has both that and a subsection number where the closing
+ * paren must be. Both are covered in the positive-control test below.
  */
 const DANGLING_CITATION_RE =
-  /(?<![\w-])(?:security\s+)?invariant\s*§\s*(\d+)|(?<![\w-])security\s*§\s*(\d+)(?!\w)/gi;
+  /(?<![\w-])(?:security\s+)?invariant\s*§\s*(\d+)|(?<![\w-])security\s*§\s*(\d+)(?!\w)|\(\s*§\s*(\d+)\s*\)/gi;
 
 function danglingCitations(text: string): string[] {
   const found: string[] = [];
   for (const m of text.matchAll(DANGLING_CITATION_RE)) {
-    const num = m[1] ?? m[2];
+    const num = m[1] ?? m[2] ?? m[3];
     if (num === "3") continue; // the one legitimate, resolvable numeral
     found.push(m[0]);
   }
@@ -98,6 +112,45 @@ function reconcileOrphanFirewallRulesDoc(): string {
   const doc = match?.[1] ?? "";
   expect(doc.length, "matched an empty doc comment").toBeGreaterThan(0);
   return doc;
+}
+
+/**
+ * The `FirewallError` variant names as the wire sees them (camelCase, per
+ * `#[serde(rename_all = "camelCase")]`). Shared by both alignment guards
+ * below so they can never disagree about what the Rust list is.
+ */
+function rustFirewallVariants(): string[] {
+  const rustSrc = readFirewallRs();
+  const enumMatch = /pub enum FirewallError \{([\s\S]*?)\n\}/.exec(rustSrc);
+  expect(enumMatch, "FirewallError enum not found in firewall.rs").not.toBeNull();
+  const variants = [...(enumMatch?.[1] ?? "").matchAll(/^ {4}([A-Z]\w*)\s*(?:,|\{)/gm)].map(
+    (m) => m[1].slice(0, 1).toLowerCase() + m[1].slice(1),
+  );
+  expect(variants.length, "parsed no variants — the enum's shape changed").toBeGreaterThan(0);
+  return variants;
+}
+
+/**
+ * The `case "…":` labels inside `firewallErrorHint`'s switch — the arms the
+ * `FirewallError` doc comment says are pinned. Extracted from that function's
+ * body only (`export function firewallErrorHint(` to the next column-0 `}`),
+ * because `cowork-helpers.ts` holds three other unrelated switches whose case
+ * labels would otherwise be scooped up.
+ */
+function firewallErrorHintArms(): string[] {
+  const helpersSrc = readFileSync(
+    path.join(repoRoot, "src/client/cowork/cowork-helpers.ts"),
+    "utf8",
+  );
+  const fnMatch = /export function firewallErrorHint\([\s\S]*?\n\}/.exec(helpersSrc);
+  expect(
+    fnMatch,
+    "firewallErrorHint's body not found in cowork-helpers.ts — signature or formatting changed",
+  ).not.toBeNull();
+  const body = fnMatch?.[0] ?? "";
+  const arms = [...body.matchAll(/case "([^"]+)":/g)].map((m) => m[1]);
+  expect(arms.length, "parsed no case arms — the switch's shape changed").toBeGreaterThan(0);
+  return arms;
 }
 
 describe("regression pin (#1374): dangling citations are gone", () => {
@@ -125,32 +178,37 @@ describe("regression pin (#1374): dangling citations are gone", () => {
       "Security invariant §5",
     ]);
     expect(danglingCitations("(security invariant §12)")).toEqual(["security invariant §12"]);
+    // The label-less shape (#1531). Its match includes the parens, since they
+    // are the only thing that distinguishes it from a subsection reference.
+    expect(danglingCitations("Rule naming follows (§7).")).toEqual(["(§7)"]);
     expect(danglingCitations("(invariant §3) — the path guard.")).toEqual([]);
+    expect(danglingCitations("(§3) — the path guard.")).toEqual([]);
     expect(
       danglingCitations("ADR-040 §5, JSON-RPC 2.0 §5.1, OOXML §2.5.39, RFC 4632 §3.1, spec §6.4"),
+    ).toEqual([]);
+    // Same real citations, parenthesised — the widened branch must still not
+    // match them.
+    expect(
+      danglingCitations("(ADR-040 §5), (JSON-RPC 2.0 §5.1), (OOXML §2.5.39), (RFC 4632 §3.1)"),
     ).toEqual([]);
   });
 });
 
 describe("forward guards: protect against future drift, not part of #1374's original defect", () => {
-  // Neither of these can fail on this specific change — the alignment was
-  // already correct, and the argv-safety phrase was already present. They
-  // exist to catch what happens NEXT: a new Rust variant with no TS arm, or
-  // a "cleanup" of the module doc that quietly drops a "never".
+  // None of these can fail on this specific change — the enum, the union and
+  // the switch arms were already in agreement, and the argv-safety phrase was
+  // already present. They exist to catch what happens NEXT: a new Rust variant
+  // with no TS union member, the same variant with no switch arm (a separate
+  // hole — the switch's `default:` arm means the compiler stays quiet), or a
+  // "cleanup" of the module doc that quietly drops a "never".
 
   it("FirewallError's variants stay aligned with FirewallErrorVariant (TS)", () => {
-    // Makes the doc comment at firewall.rs:22-29 literally true: it now
+    // Makes the doc comment at firewall.rs:22-31 literally true: it now
     // claims a variant added with no TS arm is "the failure this test pins
     // against" — reusing the extraction shape from
     // `subnet-reason-alignment.test.ts`, which pins the sibling
     // `SubnetDetectionReason` list the same way for the same reason.
-    const rustSrc = readFirewallRs();
-    const enumMatch = /pub enum FirewallError \{([\s\S]*?)\n\}/.exec(rustSrc);
-    expect(enumMatch, "FirewallError enum not found in firewall.rs").not.toBeNull();
-    const rustVariants = [...(enumMatch?.[1] ?? "").matchAll(/^ {4}([A-Z]\w*)\s*(?:,|\{)/gm)].map(
-      (m) => m[1].slice(0, 1).toLowerCase() + m[1].slice(1),
-    );
-    expect(rustVariants.length, "parsed no variants — the enum's shape changed").toBeGreaterThan(0);
+    const rustVariants = rustFirewallVariants();
 
     const tsSrc = readFileSync(path.join(repoRoot, "src/client/types.ts"), "utf8");
     // Non-greedy to the next BLANK line, not the next `;` — `netshFailure`'s
@@ -169,6 +227,25 @@ describe("forward guards: protect against future drift, not part of #1374's orig
     expect(
       tsVariants.slice().sort(),
       `Rust has ${rustVariants.join(", ")}; TypeScript has ${tsVariants.join(", ")}`,
+    ).toEqual(rustVariants.slice().sort());
+  });
+
+  it("every FirewallError variant has its own arm in firewallErrorHint", () => {
+    // The union in `types.ts` is only half of what firewall.rs's doc comment
+    // claims is pinned: it names the `firewallErrorHint` switch as the place
+    // the per-variant hint actually lives, and that switch ends in a runtime
+    // `default:` arm. That arm defeats TypeScript's exhaustiveness check, so
+    // a variant added to the Rust enum AND to the TS union but not to the
+    // switch typechecks clean and silently renders the generic "Unexpected
+    // firewall error (…). Please restart Tandem." fallback — the exact
+    // degradation the doc comment says is pinned. Nothing else catches it:
+    // `tests/client/cowork-settings.test.ts`'s variant list is hand-written,
+    // so it grows only when someone remembers to grow it.
+    const rustVariants = rustFirewallVariants();
+    const arms = firewallErrorHintArms();
+    expect(
+      arms.slice().sort(),
+      `Rust has ${rustVariants.join(", ")}; firewallErrorHint handles ${arms.join(", ")}`,
     ).toEqual(rustVariants.slice().sort());
   });
 
