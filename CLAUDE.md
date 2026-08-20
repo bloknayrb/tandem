@@ -30,10 +30,10 @@ These WILL break things if violated:
 - `npm run dev:standalone` -- Vite (:5173) + server watcher (:3478/:3479) + monitor, via `scripts/dev-standalone.mjs`
 - `npm run dev:server` -- Backend only: Hocuspocus on :3478 + MCP HTTP on :3479
 - `npm run dev:client` / `npm run dev` -- Frontend only (Vite on :5173)
-- `npm run build` -- typecheck + vite build + font-asset check + tsup -> `dist/{server,channel,monitor,stdio-bridge,cli,client}/`
+- `npm run build` -- typecheck + client build + font-asset check + tsup -> `dist/{server,channel,monitor,stdio-bridge,cli,client}/`. The client step is `scripts/build-client.mjs`, **not a bare `vite build`**: it deletes any ambient `VITE_TANDEM_*` so a harness port left exported in your shell cannot bake into the shipped client (which would then be permanently "Disconnected" with no diagnosis). `cargo tauri build` and `npm publish` both route through it.
 - `npm run build:server` -- tsup only (all five entries)
 - `npm run typecheck` -- tsc server + client + `svelte-check --fail-on-warnings`
-- `npm test` -- vitest. `npm run test:e2e` -- Playwright (auto-starts servers; **refuses to run while Tandem or `dev:server` holds :3479**, and frees :3478/:3479 when it starts its own)
+- `npm test` -- vitest. `npm run test:e2e` -- Playwright (auto-starts servers on the **reserved harness ports** in `scripts/test-ports.ts`, never 3478/3479 — coexists with a running Tandem; anything squatting the reserved pair is refused or killed, see the Testing & E2E gotcha)
 - `npm run doctor` -- Diagnose setup issues. `npm run check:tokens` -- raw hex/rgba scan (also pre-commit)
 - `npm run audit:origins` / `npm run audit:ymap-keys` -- static walks for Critical Rules 1 and 2
 - **Start the server before connecting Claude Code.** Vite hot-reloads client code; restart `dev:server` then `/mcp` in Claude Code for server changes.
@@ -204,7 +204,7 @@ code in one of these areas; the one-liner is enough to avoid the trap, not enoug
 - **Pre-overwrite document backups are path-keyed and once-per-run**, covering the text and `.docx` binary branches, keyed by path hash rather than docId. **The failure contract is the opposite of `integrations/backup.ts`**: a failed snapshot warns and lets the save proceed, while deliberate skips *do* set the gate.
 
 ### Testing & E2E
-- **E2E refuses to start while a non-E2E server holds :3479, and frees :3478/:3479 once it starts its own.** The refusal is the load-bearing half (#1483): `reuseExistingServer: !CI` means a local run *adopts* whatever answers the port, and the desktop sidecar answers it — so the destructive suite used to run against real documents with none of the `env:` isolation applied, because `freePort` and `e2e-server.mjs`'s per-run wipe only execute on the branch where nothing was listening. `scripts/e2e-guard.ts` fails closed: anything it cannot prove is an E2E server is refused.
+- **E2E and perf run on reserved port pairs (`scripts/test-ports.ts`), never the product's 3478/3479 (#1492), and the backend is `reuseExistingServer: false`** — a running Tandem or `dev:server` coexists with a test run, and the old #1483 adoption hazard is gone by construction. Two truths to not oversell: the reserved pair is *reserved, not guarded* — anything holding it that fails Playwright's health check (wedged, non-HTTP, or on the never-probed ws port) is SIGKILLed by the harness's own boot `freePort()`; and the load-bearing check is now the served-client half of `scripts/e2e-guard.ts`, which fails closed if the Vite serving the suite lacks the harness `VITE_TANDEM_*` env (a client baked to :3479 drives the destructive suite into the real backend through the UI). **Never renumber the pairs onto ports any doc tells users to occupy** — the wiring test pins `docs/troubleshooting.md` against every harness constant.
 - Uploaded (`upload://`) files are read-only; `tandem_save` returns a session-only save.
 - **`cargo test` requires GTK libs plus both sidecar stubs, and the pre-push hook runs it** — a fresh clone cannot push until they exist. Keep the stub list synced with `bundle.resources`, not with `dist/`. **`libxdo-dev` is required to link and is easy to miss**: it fails as a bare `rust-lld: unable to find library -lxdo`, thousands of lines into linker output. Setup recipe: [docs/gotchas.md](docs/gotchas.md#testing--e2e).
 

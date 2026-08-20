@@ -103,7 +103,7 @@ test.beforeEach(async ({ page }) => {
   // also proves we are past App.svelte's `{#if !yjsSync.ready}` branch (the
   // editor row, and therefore both rails, do not exist inside it).
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 });
 

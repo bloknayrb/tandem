@@ -1,7 +1,6 @@
 import * as Y from "yjs";
 import { API_CHAT } from "../../shared/api-paths";
 import {
-  DEFAULT_MCP_PORT,
   Y_MAP_CHAT,
   Y_MAP_CHAT_DOCUMENT_NAMES,
   Y_MAP_CHAT_SEEN,
@@ -11,6 +10,7 @@ import {
 import { withBrowser } from "../../shared/origins";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
+import { MCP_BASE_URL } from "../utils/backend-ports";
 
 const MAX_SEEN_MESSAGE_IDS = 400;
 
@@ -236,7 +236,7 @@ export function createChatState(options: {
       }
     },
     async clear() {
-      const response = await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_CHAT}`, {
+      const response = await fetch(`${MCP_BASE_URL}${API_CHAT}`, {
         method: "DELETE",
       });
       const result = (await response.json().catch(() => null)) as {

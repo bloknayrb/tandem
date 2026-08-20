@@ -52,7 +52,7 @@ const pingCount = (page: Page) =>
 
 test("a genuine post-load annotation arrival fires the gutter ping (A4)", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   const editor = page.locator(".tiptap");
   await expect(editor.locator("p").first()).toContainText("first paragraph", { timeout: 10_000 });
   await captureAnimations(page);
@@ -77,7 +77,7 @@ test("an annotation present before go-live (bulk load) does NOT ping (A4)", asyn
     text: "bulk-load comment",
     textSnapshot: "Test Document",
   });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   const editor = page.locator(".tiptap");
   await expect(editor.locator("p").first()).toContainText("first paragraph", { timeout: 10_000 });
   await captureAnimations(page);

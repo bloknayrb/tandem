@@ -3,12 +3,16 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  assertServedClientTargetsHarness,
+  fetchServedBackendPortsModule,
   foreignServerMessage,
   isContainedIn,
   isE2EStoragePath,
   probeForeignServer,
+  runGuard,
 } from "../../scripts/e2e-guard";
 import { E2E_APP_DATA_DIR } from "../../scripts/e2e-paths";
+import { E2E_MCP_PORT, E2E_WS_PORT } from "../../scripts/test-ports";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants";
 
 /**
@@ -202,5 +206,94 @@ describe("foreignServerMessage", () => {
 
   it("does not name a specific suite — the screenshots config inherits it too", () => {
     expect(foreignServerMessage("x", 1)).not.toMatch(/\bE2E again\b/);
+  });
+});
+
+/**
+ * `runGuard` is the piece `globalSetup` actually calls. The probe rows above
+ * pin the classification; these pin that a foreign verdict THROWS the refusal
+ * (deleting the guard's throw while keeping the probe would pass every test
+ * above and protect nothing).
+ */
+describe("runGuard", () => {
+  const servers: http.Server[] = [];
+
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((s) => new Promise((r) => s.close(r))));
+  });
+
+  async function serve(handler: http.RequestListener): Promise<number> {
+    const server = http.createServer(handler);
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return (server.address() as AddressInfo).port;
+  }
+
+  it("throws the refusal, naming the path and the port, for a foreign server", async () => {
+    const port = await serve((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ storagePath: "/home/someone/.local/share/tandem/sessions" }));
+    });
+    await expect(runGuard(port)).rejects.toThrow(
+      /Refusing to run this Playwright suite[\s\S]*\/home\/someone\/.local\/share\/tandem\/sessions/,
+    );
+    await expect(runGuard(port)).rejects.toThrow(new RegExp(`127\\.0\\.0\\.1:${port}`));
+  });
+
+  it("passes a clear port", async () => {
+    const port = await serve((_req, res) => res.end());
+    await new Promise((r) => servers.splice(0)[0].close(r));
+    await expect(runGuard(port)).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The served-client check (#1492). Fixtures are the two REAL shapes Vite 8 dev
+ * serves for src/client/utils/backend-ports.ts, captured verbatim: an
+ * env-object assignment prepended to the module. The module body always
+ * mentions the env-var NAME (it reads it), so the name alone must never pass —
+ * only the quoted port values prove which env the server was launched with.
+ */
+describe("assertServedClientTargetsHarness", () => {
+  const BODY =
+    'import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "/src/shared/constants.ts";\n' +
+    "export const MCP_PORT = resolvePort(import.meta.env.VITE_TANDEM_MCP_PORT, DEFAULT_MCP_PORT);\n" +
+    "export const WS_PORT = resolvePort(import.meta.env.VITE_TANDEM_WS_PORT, DEFAULT_WS_PORT);\n";
+  const withHarnessEnv =
+    `import.meta.env = {"BASE_URL": "/", "DEV": true, "MODE": "development", "PROD": false, "SSR": false, ` +
+    `"VITE_TANDEM_MCP_PORT": "${E2E_MCP_PORT}", "VITE_TANDEM_WS_PORT": "${E2E_WS_PORT}"};` +
+    BODY;
+  const withoutEnv =
+    `import.meta.env = {"BASE_URL": "/", "DEV": true, "MODE": "development", "PROD": false, "SSR": false};` +
+    BODY;
+
+  it("accepts the module as served by a Vite launched with the harness env", () => {
+    expect(() => assertServedClientTargetsHarness(withHarnessEnv)).not.toThrow();
+  });
+
+  it("refuses the module as served by a Vite launched WITHOUT the env", () => {
+    // The dangerous case: a hand-started `vite --port <E2E_VITE_PORT>` serving
+    // a client baked to the product ports. The body still names the env var,
+    // so a name-only check would clear it.
+    // [\s\S]: the refusal wraps its message across lines mid-phrase.
+    expect(() => assertServedClientTargetsHarness(withoutEnv)).toThrow(
+      /does NOT target the[\s\S]*harness backend/,
+    );
+  });
+
+  it("refuses when only one of the two ports is present", () => {
+    const mcpOnly = `import.meta.env = {"VITE_TANDEM_MCP_PORT": "${E2E_MCP_PORT}"};` + BODY;
+    expect(() => assertServedClientTargetsHarness(mcpOnly)).toThrow(/\(ws\)/);
+  });
+});
+
+describe("fetchServedBackendPortsModule — fail closed", () => {
+  it("throws (refusal), never returns, when nothing answers the Vite port", async () => {
+    // Grab-and-release an ephemeral port so nothing is listening on it.
+    const server = http.createServer(() => {});
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfo).port;
+    await new Promise((r) => server.close(r));
+    await expect(fetchServedBackendPortsModule(port, 500)).rejects.toThrow(/cannot be verified/);
   });
 });

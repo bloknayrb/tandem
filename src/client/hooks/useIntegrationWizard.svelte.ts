@@ -28,7 +28,6 @@
  * backend outcome, not a guaranteed desktop one.
  */
 
-import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import {
   API_INTEGRATIONS,
   API_INTEGRATIONS_APPLY,
@@ -44,6 +43,7 @@ import {
   type ClientKeychainBackend,
   createDefaultKeychainBackend,
 } from "../keychain/keychain-backend.js";
+import { MCP_BASE_URL } from "../utils/backend-ports.js";
 
 export type WizardStep = "connect" | "applying" | "done" | "error";
 
@@ -148,7 +148,7 @@ function newPickedId(kindPrefix: string): string {
  */
 export function detectedToPicked(install: ExistingMcpInstall): PickedIntegration | null {
   if (install.target.kind === "claude-code") {
-    const url = install.tandemEntry?.url ?? `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
+    const url = install.tandemEntry?.url ?? MCP_BASE_URL;
     const id = newPickedId("claude-code");
     return {
       id,
