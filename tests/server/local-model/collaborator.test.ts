@@ -1219,4 +1219,95 @@ describe("collaborator — streamed write volume at the caller level (#1340)", (
     expect(bytes).toBeGreaterThan(L); // sanity: content was transmitted
     expect(bytes).toBeLessThanOrEqual(12 * L); // RED on master (~104×L)
   });
+
+  it("a tool-call-looping run costs O(total content), not O(per-turn²) × turns (#1292)", async () => {
+    // The path #1292's decision comment named as unanalysed, and the one the
+    // test above cannot reach: it ends its single turn with `hadToolCalls:
+    // false`, so it never crosses a turn boundary. `onTurnEnd({ hadToolCalls:
+    // true })` resets the sink's buffer and its cap counter, so the ramp
+    // restarts on every turn and `loop.ts` defaults `maxTurns` to 12 — which
+    // under the pre-#1340 whole-value re-`set` made the run-scoped cost
+    // `turns × O(perTurn²)` rather than `O(turns × perTurn)`.
+    //
+    // Measured here: 236,110 bytes for 196,608 chars of content — 1.2×, and
+    // stable to ~70 bytes across runs. The same shape on the whole-value
+    // primitive is ~32× (each turn re-sends every prefix: 512 + 1024 + … +
+    // 32768 per turn). The 4× ceiling sits between the two with room on both
+    // sides, and is byte-shaped rather than wall-clock because this box runs
+    // under load.
+    setupDoc("doc-loop-bytes", "Body");
+    const TURNS = 6;
+    const PER_TURN = 32_768;
+    const STEP = 512;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          for (let turn = 0; turn < TURNS; turn++) {
+            for (let sent = 0; sent < PER_TURN; sent += STEP) {
+              opts.onContentDelta?.("x".repeat(STEP));
+              await new Promise((r) => setTimeout(r, 0));
+            }
+            // Every turn but the last ends WITH tool calls — the reset path.
+            opts.onTurnEnd?.({ hadToolCalls: turn < TURNS - 1 });
+          }
+          return cleanResult("");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    let bytes = 0;
+    const onUpdate = (u: Uint8Array) => {
+      bytes += u.byteLength;
+    };
+    ctrl.on("update", onUpdate);
+    try {
+      collab.onEvent(chatEvent("go", { documentId: "doc-loop-bytes" }));
+      await drain(collab);
+    } finally {
+      ctrl.off("update", onUpdate);
+    }
+
+    const content = TURNS * PER_TURN;
+    expect(bytes).toBeGreaterThan(PER_TURN); // sanity: content was transmitted
+    expect(bytes).toBeLessThanOrEqual(4 * content);
+  });
+
+  it("a tool-call turn discards its buffer, so no run-scoped budget is needed (#1292)", async () => {
+    // Why the per-turn cap reset is bounded rather than a hole, and why a
+    // run-scoped CHARACTER budget would be the wrong instrument: the content of
+    // a turn that ends in tool calls is preamble, and `onTurnEnd` throws it
+    // away so the next turn REPLACES it. The visible reply is one turn's worth
+    // whatever the turn count, and a run-scoped budget would be counting
+    // characters that were deliberately discarded — truncating a legitimate
+    // agentic run to pay for a cost the sidecar primitive already removed.
+    //
+    // Pinned because it is the load-bearing half of the argument: if a future
+    // change ever made tool-call turns ACCUMULATE, the run-scoped byte
+    // assertion above would still pass while the reply grew without a ceiling.
+    setupDoc("doc-loop-cap", "Body");
+    const PER_TURN = 40_000; // under the 64 KiB cap on its own; 3× is over it
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          for (let turn = 0; turn < 3; turn++) {
+            opts.onContentDelta?.("x".repeat(PER_TURN));
+            await new Promise((r) => setTimeout(r, 0));
+            opts.onTurnEnd?.({ hadToolCalls: turn < 2 });
+          }
+          return cleanResult("");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-loop-cap" }));
+    await drain(collab);
+
+    const text = chatMessages()[0].text;
+    // Exactly the LAST turn — not 3×, and not truncated: the cap never tripped
+    // because no single turn reached it.
+    expect(text).toBe("x".repeat(PER_TURN));
+    expect(text).not.toContain("Reply truncated");
+  });
 });
