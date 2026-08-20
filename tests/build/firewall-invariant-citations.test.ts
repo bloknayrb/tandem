@@ -206,7 +206,7 @@ describe("forward guards: protect against future drift, not part of #1374's orig
     // Makes the doc comment at firewall.rs:22-31 literally true: it now
     // claims a variant added with no TS arm is "the failure this test pins
     // against" — reusing the extraction shape from
-    // `subnet-reason-alignment.test.ts`, which pins the sibling
+    // `firewall-reason-alignment.test.ts`, which pins the sibling
     // `SubnetDetectionReason` list the same way for the same reason.
     const rustVariants = rustFirewallVariants();
 
