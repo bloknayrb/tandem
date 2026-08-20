@@ -436,6 +436,25 @@ $effect(() => {
     pendingAffordanceFrame = 0;
     // A28: cancel pending dwell/entrance timers so they can't write $state into
     // an unmounted component (or clear `entering` into a later popup's entrance).
+    //
+    // The two bare `clearTimeout`s are NOT an oversight, and must not be
+    // "tidied" into the `clearDwell()` that wraps them. `clearDwell()` also
+    // resets `dwellSatisfied`, and this effect DEPENDS on `dwellSatisfied`:
+    // the `onSelectionUpdate()` call below runs synchronously during the
+    // effect, reaching the re-arm guard in `updateSelectionAffordance` that
+    // reads it. So the dwell timer firing — whose whole job is
+    // `dwellSatisfied = true` — invalidates this effect and re-runs it, and a
+    // teardown that reset the flag would set it straight back to false. The
+    // popup could then never appear at all: measured at 24 of 28 failures in
+    // `toolbar-redesign.spec.ts`.
+    //
+    // What the asymmetry costs is small and, as far as anyone has managed to
+    // reproduce, unreachable: the non-reactive `lastDwellFrom`/`lastDwellTo`
+    // survive into the next editor, so a replacement that mounted with the
+    // *same* non-collapsed range would fail that guard and never arm. Every
+    // real path self-heals first — a new editor mounts collapsed, and the
+    // `!next` branch of `updateSelectionAffordance` calls `clearDwell()` — which
+    // is why a tab switch mid-popup behaves correctly.
     clearTimeout(dwellTimer);
     clearTimeout(enteringTimer);
     cleanup();
