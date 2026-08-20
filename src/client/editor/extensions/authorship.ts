@@ -696,6 +696,44 @@ export function _resetAuthorshipWarnLatch(): void {
 }
 
 /**
+ * Index of the first map in `mapping` that has a mirror partner, or `null` when
+ * none has one. The runtime half of #1481's mirror-free assumption — see the
+ * survey at the reap's `toBefore` construction for what that assumption is.
+ *
+ * `getMirror` rather than the `mirror` array itself: the array is `@internal`
+ * and declared only as a constructor parameter in the published typings, so
+ * reading it back needs a cast — and a cast is what would turn a later rename
+ * of the field into a silent `undefined` here. The accessor is public.
+ *
+ * Exported for the test, which is the only caller that can hand this a mapping
+ * WITH a mirror. Nothing in this stack produces one, so a test driving a real
+ * editor can only ever observe the `null` answer, and would pass just as well
+ * against a function that returned `null` unconditionally.
+ */
+export function firstMirroredMapIndex(mapping: Mapping): number | null {
+  for (let i = 0; i < mapping.maps.length; i++) {
+    if (mapping.getMirror(i) !== undefined) return i;
+  }
+  return null;
+}
+
+/**
+ * DEV-only companion to the above. Call sites guard with `import.meta.env.DEV`
+ * so this is dead code in a production build, and `warnOnce` holds it to one
+ * line per session rather than one per transaction.
+ */
+function warnOnMirroredMapping(mapping: Mapping): void {
+  const index = firstMirroredMapIndex(mapping);
+  if (index === null) return;
+  warnOnce(
+    "mapping-mirror",
+    `[authorship] Transaction mapping carries a mirror (map ${index} <-> ${mapping.getMirror(index)}). ` +
+      "The reap's before-frame mapping drops it, which #1481 established was safe only because " +
+      "nothing in this stack sets one. Re-open #1481 rather than silencing this.",
+  );
+}
+
+/**
  * Resolve an AuthorshipRange to ProseMirror positions.
  *
  * THE FALLBACK ORDERING IS THE WHOLE POINT, and it used to be wrong. An entry
@@ -1163,30 +1201,64 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
             // Neither matters today, because nothing in this stack has a mirror
             // to lose. `Transform.addStep` is the only writer to a
             // transaction's mapping and calls `appendMap(step.getMap())` with
-            // no `mirrors` argument, so EVERY editor command — list wrap,
-            // `liftListItem`, `sinkListItem`, blockquote, heading toggle —
-            // appends mirror-free. Measured over all of those plus history
-            // undo: `mapping.mirror` is `undefined` in every case, and the
-            // before-frame span this recovers is exact.
+            // no `mirrors` argument, so every editor command appends
+            // mirror-free by construction. The structural five — list wrap,
+            // `liftListItem`, `sinkListItem`, blockquote, heading toggle — are
+            // each driven through a real editor in
+            // `tests/client/authorship-stamp.test.ts`, which reads each
+            // dispatched mapping back through `getMirror`. Those five are the
+            // evidence for this paragraph — do not restate it as a measurement
+            // without them, since a claim no test reproduces is exactly what
+            // rots here.
+            //
+            // UNDO IS NOT ON THAT LIST, and its absence is not an omission.
+            // There is no prosemirror-history plugin in this editor to undo
+            // through — `editor-extensions.ts` builds
+            // `StarterKit.configure({ history: false })` because Yjs owns
+            // undo — and the Yjs UndoManager's replay arrives as a transaction
+            // y-prosemirror tags with `ySyncPluginKey`, which returns at the
+            // guard near the top of this handler and never reaches this line.
+            // (`tests/client/authorship-undo-redo.test.ts` drives that path.)
             //
             // The two packages that do pass `mirrors` never reach a dispatched
             // transaction's mapping. `prosemirror-history` mirrors only its own
             // local `remap` (in `popEvent`, `remapping` and `compress`) and
-            // dispatches through `transform.maybeStep` → `addStep`.
+            // dispatches through `transform.maybeStep` → `addStep` — and, per
+            // the paragraph above, is not registered here at all.
             // `prosemirror-collab`'s `rebaseSteps` is the one real producer,
             // and it is INSTALLED but unimported — it ships as a dependency of
             // `@tiptap/pm`, so it is one import away, not one `npm install`
             // away. Tandem syncs through y-prosemirror, which never constructs
             // a `Mapping` at all.
             //
-            // So adding a collab plugin is the single change that would
-            // invalidate this, and it would do so silently. The static import
-            // walk in `tests/client/authorship-stamp.test.ts` is what catches
-            // that; the two reap tests beside it pin the behaviour this
-            // recovers. Note the asymmetry with `toFinal` above, which DOES
-            // carry a mirror through (`Mapping.slice` preserves it): that
-            // difference is invisible only for as long as the field stays
-            // empty, which is what those tests are for.
+            // WHAT WOULD INVALIDATE THIS, AND WHAT WATCHES FOR IT. Two guards,
+            // because neither covers the other's route:
+            //
+            //  - The static import walk in
+            //    `tests/client/authorship-stamp.test.ts` asserts that nothing
+            //    under `src/` imports either collab specifier. It is a CI gate,
+            //    and it catches the obvious route: someone adds a collab plugin
+            //    here. It is also the NARROWER guard, because it matches a
+            //    literal specifier. A collab plugin arriving transitively — a
+            //    third-party Tiptap collaboration extension, a Hocuspocus
+            //    ProseMirror adapter; `@tiptap/pm/collab` is itself only a
+            //    re-export wrapper, so one more wrapper layer is the
+            //    ecosystem's ordinary idiom — or a specifier assembled by
+            //    concatenation, leaves zero matches under `src/` while
+            //    `transaction.mapping.mirror` becomes populated, and the walk
+            //    stays green forever.
+            //  - The DEV-only `warnOnce` on the next line is
+            //    route-independent: it reads the mapping actually in hand, so
+            //    it speaks however the mirror arrived. It is the weaker guard
+            //    in the other direction — it only speaks when someone runs this
+            //    path in a dev build — which is why both are here rather than
+            //    either alone.
+            //
+            // Note the asymmetry with `toFinal` above, which DOES carry a
+            // mirror through (`Mapping.slice` preserves it): that difference is
+            // invisible only for as long as the field stays empty, which is
+            // what the two guards are for.
+            if (import.meta.env.DEV) warnOnMirroredMapping(transaction.mapping);
             toBefore ??= new Mapping(transaction.mapping.maps.slice(0, i)).invert();
             const span = pmSelectionToFlat(beforeDoc, {
               from: toPmPos(toBefore.map(oldStart, 1)),

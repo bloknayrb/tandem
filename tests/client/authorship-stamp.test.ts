@@ -5,14 +5,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Editor, Extension } from "@tiptap/core";
 import type { Transaction } from "@tiptap/pm/state";
-import { findWrapping } from "@tiptap/pm/transform";
+import { findWrapping, Mapping, StepMap } from "@tiptap/pm/transform";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ySyncPluginKey } from "y-prosemirror";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import {
+  _resetAuthorshipWarnLatch,
   AUTHORSHIP_ORIGIN_META,
   AuthorshipExtension,
+  firstMirroredMapIndex,
 } from "../../src/client/editor/extensions/authorship";
 import { insertChatMarkdown } from "../../src/client/panels/chat-insert";
 import { applySuggestion } from "../../src/client/panels/useAnnotationReview.svelte";
@@ -242,9 +244,11 @@ describe("authorship stamp path", () => {
      * a replace-around. It does not, because nothing in this stack ever sets
      * a mirror; the long comment at that line records the survey.
      *
-     * WHAT THESE TESTS ARE FOR, PRECISELY. They do not test mirror handling —
+     * WHAT THE FIRST TWO ARE FOR, PRECISELY. They do not test mirror handling —
      * they cannot, because no transaction here carries a mirror, so a wrong
-     * filter of `undefined` is still `undefined` and would stay green. Their
+     * filter of `undefined` is still `undefined` and would stay green. (The
+     * DEV-guard cases at the bottom of this block do exercise a mirror, by
+     * fabricating one no editor in this repo can produce.) Their
      * value is that they are the first tests to drive `toBefore` with `i > 0`
      * THROUGH A STRUCTURAL STEP and then assert a REAP outcome. The multi-step
      * test above reaches `i = 1` but asserts only on insertion spans, and
@@ -311,6 +315,49 @@ describe("authorship stamp path", () => {
       expect(entries().map((e) => e.id)).not.toContain(stamped[0].id);
     });
 
+    /**
+     * A throwaway editor plus a transaction recorder, torn down whichever way
+     * `run` exits. Separate from the suite's shared `editor` because these
+     * cases need their own starting content (a list to lift out of, a second
+     * item to sink) and must not leave the shared one restructured.
+     */
+    function withProbe<T>(content: string, run: (editor: Editor, seen: Transaction[]) => T): T {
+      const seen: Transaction[] = [];
+      const probeYdoc = new Y.Doc();
+      const probeEditor = new Editor({
+        extensions: [
+          ...buildSchemaExtensions(),
+          AuthorshipExtension.configure({ ydoc: probeYdoc }),
+          Extension.create({
+            name: "mirrorProbe",
+            onTransaction({ transaction }) {
+              seen.push(transaction);
+            },
+          }),
+        ],
+        content,
+      });
+      try {
+        return run(probeEditor, seen);
+      } finally {
+        probeEditor.destroy();
+        probeYdoc.destroy();
+      }
+    }
+
+    /** Position inside `text`, so a case does not hard-code a PM offset. */
+    function posInText(editor: Editor, text: string): number {
+      let found = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (found >= 0) return false;
+        const at = node.isText ? (node.text ?? "").indexOf(text) : -1;
+        if (at >= 0) found = pos + at + 1;
+        return true;
+      });
+      expect(found, `premise: the probe document must contain "${text}"`).toBeGreaterThan(0);
+      return found;
+    }
+
     it("observes no mirror on the transaction the reap maps through", () => {
       // The runtime half of the assumption. It asserts POSITIVELY before it
       // asserts an absence: an assertion of the form "the field is undefined"
@@ -325,22 +372,7 @@ describe("authorship stamp path", () => {
       // This is the runtime half only. It cannot see a collab plugin added to
       // `src/client/editor/`, because this editor will never configure one;
       // the static walk at the bottom of this file is what covers that.
-      const seen: Transaction[] = [];
-      const probeYdoc = new Y.Doc();
-      const probeEditor = new Editor({
-        extensions: [
-          ...buildSchemaExtensions(),
-          AuthorshipExtension.configure({ ydoc: probeYdoc }),
-          Extension.create({
-            name: "mirrorProbe",
-            onTransaction({ transaction }) {
-              seen.push(transaction);
-            },
-          }),
-        ],
-        content: "<p>hello world</p>",
-      });
-      try {
+      withProbe("<p>hello world</p>", (probeEditor, seen) => {
         probeEditor.commands.insertContentAt(6, "brave ");
         seen.length = 0;
 
@@ -357,10 +389,171 @@ describe("authorship stamp path", () => {
         for (let i = 0; i < observed.mapping.maps.length; i++) {
           expect(observed.mapping.getMirror(i)).toBeUndefined();
         }
-      } finally {
-        probeEditor.destroy();
-        probeYdoc.destroy();
-      }
+      });
+    });
+
+    /**
+     * Every structural command the source comment names, driven for real. The
+     * comment asserts they all append mirror-free; a claim about five commands
+     * backed by a probe that drives one is a pin whose evidence lives where the
+     * reader cannot look, and this is an editor the file already builds, so the
+     * loop is cheaper than the prose it replaces.
+     *
+     * Note what is NOT here: history undo. There is no prosemirror-history
+     * plugin in this editor to undo through (`StarterKit.configure({ history:
+     * false })`), and Yjs undo arrives tagged with `ySyncPluginKey`, which the
+     * handler skips before it ever builds a mapping — see
+     * `authorship-undo-redo.test.ts`. A case for it here would assert against a
+     * plugin the product does not register.
+     */
+    const STRUCTURAL_COMMANDS: {
+      name: string;
+      content: string;
+      drive: (editor: Editor) => boolean;
+    }[] = [
+      {
+        name: "list wrap",
+        content: "<p>hello world</p>",
+        drive: (e) => e.commands.toggleBulletList(),
+      },
+      {
+        name: "liftListItem",
+        content: "<ul><li><p>hello world</p></li></ul>",
+        drive: (e) =>
+          e.chain().setTextSelection(posInText(e, "hello")).liftListItem("listItem").run(),
+      },
+      {
+        name: "sinkListItem",
+        content: "<ul><li><p>first</p></li><li><p>second</p></li></ul>",
+        drive: (e) =>
+          e.chain().setTextSelection(posInText(e, "second")).sinkListItem("listItem").run(),
+      },
+      {
+        name: "blockquote toggle",
+        content: "<p>hello world</p>",
+        drive: (e) => e.commands.toggleBlockquote(),
+      },
+      {
+        name: "heading toggle",
+        content: "<p>hello world</p>",
+        drive: (e) => e.commands.toggleHeading({ level: 2 }),
+      },
+    ];
+
+    it.each(STRUCTURAL_COMMANDS)("appends mirror-free through $name", ({ content, drive }) => {
+      withProbe(content, (probeEditor, seen) => {
+        seen.length = 0;
+        expect(drive(probeEditor), "premise: the command must have applied").toBe(true);
+
+        const changing = seen.filter((candidate) => candidate.docChanged);
+        // Zero-of-zero guard, twice over: a command that silently no-opped, or
+        // a doc-changing transaction with no step maps, would satisfy the
+        // mirror assertion vacuously.
+        expect(changing.length, "premise: the command must have changed the doc").toBeGreaterThan(
+          0,
+        );
+        for (const observed of changing) {
+          expect(observed.mapping.maps.length).toBeGreaterThan(0);
+          for (let i = 0; i < observed.mapping.maps.length; i++) {
+            expect(observed.mapping.getMirror(i), `map ${i} carried a mirror`).toBeUndefined();
+          }
+          expect(firstMirroredMapIndex(observed.mapping)).toBeNull();
+        }
+      });
+    });
+
+    describe("the DEV-only runtime guard", () => {
+      // The detector is route-independent where the static walk is not: it
+      // reads the mapping in hand, so it fires whether collab was imported
+      // directly, pulled in transitively by some future Tiptap extension, or
+      // named through a specifier the walk's regex cannot see.
+      beforeEach(() => {
+        _resetAuthorshipWarnLatch();
+      });
+      afterEach(() => {
+        _resetAuthorshipWarnLatch();
+      });
+
+      /** The mirror warning specifically — this editor emits others. */
+      const mirrorWarnings = (warn: { mock: { calls: unknown[][] } }): string[] =>
+        warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes("mirror"));
+
+      it("stays silent on the mirror-free transactions the reap actually sees", () => {
+        // The false-positive direction, and the only thing that catches a
+        // detector that answers "mirrored" unconditionally — every other test
+        // in this file would stay green through that mutation.
+        //
+        // Filtered rather than `not.toHaveBeenCalled()`: this editor has no
+        // Collaboration binding, so every stamp fails to anchor and warns
+        // (#1471). Asserting on the whole console would couple this case to
+        // that unrelated line.
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          editor.commands.insertContentAt(6, "brave ");
+          const tr = editor.state.tr;
+          wrapInBulletList(tr, 6, editor.schema);
+          tr.delete(tr.mapping.map(6, 1), tr.mapping.map(12, -1));
+          editor.view.dispatch(tr);
+
+          expect(mirrorWarnings(warn)).toEqual([]);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it("warns once when the mapping does carry a mirror", () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          editor.commands.insertContentAt(6, "brave ");
+          const stamped = entries();
+          expect(stamped).toHaveLength(1);
+
+          const tr = editor.state.tr;
+          tr.delete(6, 12);
+          // Fabricate what only `prosemirror-collab`'s `rebaseSteps` produces
+          // in the wild. The appended map is EMPTY, so it contributes no ranges
+          // and the reap behaves exactly as it would without it — the mirror is
+          // the single observable difference, which is what makes the pair of
+          // assertions below separable.
+          tr.mapping.appendMap(new StepMap([]), 0);
+          expect(tr.mapping.getMirror(1), "premise: the fabricated pair must be mirrored").toBe(0);
+          editor.view.dispatch(tr);
+
+          // The reap still ran…
+          expect(entries().map((e) => e.id)).not.toContain(stamped[0].id);
+          // …and it said so, naming the issue rather than the symptom.
+          expect(mirrorWarnings(warn)).toHaveLength(1);
+          expect(mirrorWarnings(warn)[0]).toContain("#1481");
+
+          // ONCE, not once per transaction. A mirror that survives is a
+          // standing condition, so an unlatched warning would fire on every
+          // deleting keystroke for the rest of the session and get muted
+          // wholesale — which is how the signal would be lost.
+          editor.commands.insertContentAt(6, "bold ");
+          const second = editor.state.tr;
+          second.delete(6, 11);
+          second.mapping.appendMap(new StepMap([]), 0);
+          editor.view.dispatch(second);
+          expect(mirrorWarnings(warn)).toHaveLength(1);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it("reports the first mirrored index, not merely that one exists", () => {
+        // Direct, because no editor in this repo can produce a mapping with a
+        // mirror at a non-zero index — and an index-returning detector that
+        // always answered 0 would be indistinguishable through the handler.
+        const plain = new StepMap([]);
+        const mirrorless = new Mapping([plain, plain, plain]);
+        expect(firstMirroredMapIndex(mirrorless)).toBeNull();
+
+        const mirrored = new Mapping([plain]);
+        mirrored.appendMap(plain);
+        mirrored.appendMap(plain, 1);
+        expect(mirrored.getMirror(2), "premise: maps 1 and 2 must be a mirrored pair").toBe(1);
+        expect(firstMirroredMapIndex(mirrored)).toBe(1);
+      });
     });
   });
 
@@ -435,10 +628,24 @@ describe("authorship stamp path", () => {
  * that would invalidate the reasoning at `authorship.ts` silently, and no
  * runtime test in this file could see it, because the editors here will never
  * configure a collab plugin.
+ *
+ * WHAT IT DOES NOT COVER, so nobody reads it as the whole guard: it matches a
+ * literal specifier under `src/`. A collab plugin pulled in transitively by
+ * some future third-party Tiptap extension, or named through a specifier built
+ * by concatenation, populates `transaction.mapping.mirror` while leaving this
+ * walk green. That route belongs to the DEV-only `firstMirroredMapIndex` guard
+ * wired at the reap; this one is the half that fails in CI.
  */
 describe("the mirror-free assumption's static half (#1481)", () => {
   const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../src");
-  const COLLAB = /["'](?:prosemirror-collab|@tiptap\/pm\/collab)["']/;
+  // Anchored on an import CONTEXT, not on the bare specifier. Matching any
+  // quoted occurrence fails closed, so it was never dangerous — but the source
+  // comment this pairs with names both packages in prose, and the repair for a
+  // spurious red is to LOOSEN the pattern, which is the one direction that
+  // makes it miss a real import. Covering `from "x"`, `import "x"`,
+  // `import("x")` and `require("x")` keeps prose out of it without widening.
+  const COLLAB =
+    /\b(?:from|import|require)\s*\(?\s*["'](?:prosemirror-collab|@tiptap\/pm\/collab)["']/;
   const SCANNED = new Set([".ts", ".tsx", ".js", ".mjs", ".svelte"]);
 
   function walk(dir: string): string[] {
