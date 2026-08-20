@@ -159,7 +159,7 @@ describe("integration wizard — Cowork sub-view gating", () => {
 
   it("shows the AI-models 'coming soon' line and NO Set-up button while dark", async () => {
     // This file runs with the shipped `BYO_MODELS_ENABLED=false`, so the `{#if}`
-    // (coming-soon) branch renders, not the `{:else}` enabled row (§3.6).
+    // (coming-soon) branch renders, not the `{:else}` enabled row.
     const { container } = render(IntegrationWizardModal, {
       props: { open: true, onClose: vi.fn() },
     });

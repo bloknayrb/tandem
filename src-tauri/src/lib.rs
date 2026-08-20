@@ -3982,8 +3982,8 @@ fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
 ///
 /// On enable: fetches auth token, detects vEthernet subnet, adds allow firewall
 /// rule, walks workspaces, installs plugin entries. When the firewall rule needs
-/// elevation Tandem doesn't have: fail-closed — does NOT write plugin entries
-/// (invariant §4). On disable: uninstalls plugin entries, removes firewall rules.
+/// elevation Tandem doesn't have: fail-closed — does NOT write plugin entries at
+/// all. On disable: uninstalls plugin entries, removes firewall rules.
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
@@ -4025,14 +4025,15 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         let firewall_result = firewall::add_cowork_allow_rule(&cidr);
         if let Err(ref e) = firewall_result {
             // Fail-closed: if the firewall rule can't be written, bail — do NOT
-            // walk workspaces (invariant §4).
+            // walk workspaces. An install without the allow rule is an install the
+            // VM cannot reach, advertised as working.
             if let firewall::FirewallError::AdminDeclined = e {
                 // The firewall rule needs elevation Tandem does not have (it never
                 // runs elevated, so no UAC prompt ever appears). Do NOT attempt a
                 // deny rule — it needs the same elevation and always fails, and the
                 // server binds 127.0.0.1 so port 3479 was never network-exposed.
                 // Record the outcome and surface the structured error for the UI's
-                // honest copy. No plugin entries are written (invariant §4).
+                // honest copy. No plugin entries are written.
                 log::warn!("[cowork] firewall rule needs elevation (none available); no plugin entries written");
                 if let Err(meta_err) = cowork_meta::update(|m| {
                     m.uac_declined_last_attempt = true;
@@ -4050,8 +4051,9 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // Resolve TANDEM_URL (host.docker.internal by default; LAN-IP if override set).
         let tandem_url = cowork_installer::resolve_tandem_url(&cowork_meta::load().map_err(|e| e.to_string())?);
 
-        // Stale-token reconciliation (invariant §12) — AFTER the successful add, so a
-        // fail-closed firewall add never reaches a workspace write (invariant §4).
+        // Stale-token reconciliation — rewrites entries still carrying a previous
+        // auth token. Deliberately AFTER the successful add: a fail-closed firewall
+        // add must never be followed by any workspace write.
         let rewritten_stale_entries =
             cowork_installer::reconcile_stale_workspace_tokens(&workspaces, &token);
         if !rewritten_stale_entries.is_empty() {
@@ -4168,7 +4170,7 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // safe: the deny rule is retired, the allow rule is scoped to the VM subnet, and
         // the server binds 127.0.0.1 only, so a leftover rule is inert. This aligns with
         // reconcile_orphan_firewall_rules (cowork_installer.rs), which already treats remove
-        // failures as non-fatal (§12). (Caveat: leaving the rule is inert only under the default
+        // failures as non-fatal. (Caveat: leaving the rule is inert only under the default
         // loopback bind; a future TANDEM_BIND_HOST=routable + stale VM-CIDR rule is an
         // untested composition. A later enable *may* clear it via reconcile_orphan_firewall_rules, but
         // that's best-effort — reconcile returns early if its scan fails — and the leftover
@@ -4881,7 +4883,7 @@ fn cowork_resolve_validated_handle(handle: &str, op: &str) -> Result<std::path::
 /// snapshot handle from `cowork_scan_workspaces`.
 ///
 /// The handle resolves — in-process — to the exact canonical path validated at
-/// scan time, which is re-checked against invariant §3 before any file I/O (§9).
+/// scan time, which is re-checked against invariant §3 before any file I/O.
 /// A caller-supplied path string is never trusted; an unknown handle is rejected.
 #[cfg(target_os = "windows")]
 #[tauri::command]

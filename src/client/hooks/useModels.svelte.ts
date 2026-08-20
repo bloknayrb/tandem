@@ -25,12 +25,12 @@ import {
  *
  * Historically the registry lived in `TandemSettings.models` (localStorage); M1a
  * relocated the *resolver* to `models.json` but left the client reading/writing
- * localStorage. M2 collapses this to **one authority — the server** (§2). This
+ * localStorage. M2 collapses this to **one authority — the server**. This
  * module is that authority's client mirror: a module-level `$state` singleton
  * loaded from `GET /api/models`, written through on every CRUD op with
  * optimistic-then-reconcile against a content-hash ETag.
  *
- * **Three access shapes over ONE `$state`** (§2.1):
+ * **Three access shapes over ONE `$state`**:
  *  - reactive getters (`createModels()` facade) for Svelte consumers;
  *  - `getModelsSnapshot()` — a synchronous, subscription-free accessor for the
  *    non-Svelte ProseMirror decoration path (`annotation.ts`);
@@ -70,7 +70,7 @@ export interface ModelsState {
    * Add a model. Returns the generated id when the write **committed**, or `null`
    * when it did not (rolled back / reconciled away) — so an imperative caller
    * (first-run picker, Settings save) can branch on success instead of reading the
-   * shared reactive `saveError` after the await (§3.3). The declarative tab banner
+   * shared reactive `saveError` after the await. The declarative tab banner
    * still surfaces `saveError` for fire-and-forget mutators.
    */
   addModel: (
@@ -265,7 +265,7 @@ type WriteOutcome = "committed" | "reconciled" | "rolledback";
 let _writeQueue: Promise<void> = Promise.resolve();
 
 /**
- * Optimistic-then-reconcile server write-through (§3.2), serialized against
+ * Optimistic-then-reconcile server write-through, serialized against
  * overlapping mutations via `_writeQueue`. `apply` expresses the user's single
  * intent as an **absolute** (idempotent) mutation of the live `$state` — once
  * this call's turn in the queue arrives, `apply()` runs synchronously FIRST

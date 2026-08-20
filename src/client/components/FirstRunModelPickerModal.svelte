@@ -30,12 +30,13 @@ interface ProviderOption {
   defaultModelId: string;
 }
 
-// Local-first, matching ModelEditModal (§3.4): v1.0 ships local providers only,
-// so a fresh first run defaults to Ollama and cloud rows render disabled (their
-// BYO key support is v1.1). Cloud rows stay listed — disabled + "coming soon" —
-// so the roadmap is visible; M4 finalizes first-run copy. The cloud/local split
-// is derived from the contract's `isLocalProvider` (single source of truth,
-// same as ModelEditModal) rather than a hand-maintained per-option flag.
+// Local-first, matching ModelEditModal's per-provider gating: v1.0 ships local
+// providers only, so a fresh first run defaults to Ollama and cloud rows render
+// disabled (their BYO key support is v1.1). Cloud rows stay listed — disabled +
+// "coming soon" — so the roadmap is visible; M4 finalizes first-run copy. The
+// cloud/local split is derived from the contract's `isLocalProvider` (single
+// source of truth, same as ModelEditModal) rather than a hand-maintained
+// per-option flag.
 const PROVIDER_OPTIONS: ProviderOption[] = [
   { value: "local-ollama", label: "Ollama (local)", defaultModelId: "llama3.1:70b" },
   { value: "local-llamacpp", label: "llama.cpp (local)", defaultModelId: "local-model" },

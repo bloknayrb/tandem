@@ -124,7 +124,7 @@ describe("undetectedDetail", () => {
 });
 
 // ---------------------------------------------------------------------------
-// firewallErrorHint — one distinct hint per variant (security invariant §13)
+// firewallErrorHint — one distinct hint per variant
 // ---------------------------------------------------------------------------
 
 describe("firewallErrorHint", () => {
