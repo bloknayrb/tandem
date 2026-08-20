@@ -154,7 +154,25 @@ Open as of v0.22.1:
 
 Still open from the v0.21.0 security gate, whose RC re-run failed on 2026-08-05 with two HIGH:
 
-- **#1292 — the last HIGH.** Its code fix shipped in v0.21.0, but it gates on the BYO-models flag flip rather than on the release, so the v0.21.0 changelog entry does not close it. Verify the issue state, not the changelog.
+- **#1292 — the last HIGH.** It gates on the BYO-models flag flip rather than on the release, so no changelog entry closes it. Verify the issue state, not the changelog — and read the state below before repeating either of the two wrong summaries this finding has already produced.
+
+  **"The v0.21.0 fix closed it" is wrong**, and the issue was very nearly closed on it. #1317's two caps (`MAX_STREAMED_CHARS` 64 KiB on the sink, `MAX_STREAMED_RESPONSE_BYTES` 4 MiB on the wire) *bounded* the amplification; they did not remove it. `updateClaudeChatMessage` still re-`set` the whole message value on every flush, so the cost stayed `O(n²)` — measured 2026-08-07 against a live ctrl `Y.Doc`: a 64 KiB reply cost **27 MB** of broadcast, and because the sink's cap resets on `onTurnEnd({ hadToolCalls: true })` while `maxTurns` defaults to 12, a model looping on tool calls reached **~86 MB** at 12 turns (worst case ~325 MB against the 5-minute deadline) — silently, with no truncation marker and no abort.
+
+  **"The 27 MB / 325 MB figures are current" is also wrong.** #1340 replaced the whole-value re-`set` with a minimal diff-splice into a per-message `Y.Text` in the `chatStream` sidecar, which is what actually made the class linear. Re-measured on master 2026-08-20, same rig:
+
+  | shape | content | ctrl update bytes | vs. 2026-08-07 |
+  |---|---|---|---|
+  | 1 turn, 2 KB | 2,000 | 2,214 (1.1×) | 33 KB |
+  | 1 turn, 16 KB | 16,384 | 37,378 (2.3×) | 1.7 MB |
+  | 1 turn, at the cap | 65,536 | 136,090 (2.1×) | 27 MB |
+  | 1 turn, 200 KB offered | 200,000 | 136,090 — capped, marker written, run aborted | — |
+  | 12 tool-call turns × 65 KB | 780,000 | 808,621 (1.0×) | 85.8 MB |
+
+  So the quadratic is gone and the per-turn reset costs ~0.8 MB per run rather than ~86 MB. **What has not changed is the shape**: the cap is still per-turn, and a tool-call turn still writes no marker and does not abort. That is bounded rather than a hole because `onTurnEnd({ hadToolCalls: true })` *discards* the turn's buffer — the content was preamble, the next turn replaces it, and the visible reply is one turn's worth whatever the turn count. A run-scoped *character* budget would therefore be the wrong instrument: it would count characters that were deliberately thrown away and truncate a legitimate agentic run.
+
+  **Whether the residual clears a HIGH is a re-decision, not a fact**, and it belongs to the same person who made the 2026-08-08 call — that call was recorded against 27 MB / 325 MB, which are now wrong by two orders of magnitude. `docs/roadmap.md`'s local-model gate turns on it. Nothing here is reachable in a shipped build: `BYO_MODELS_ENABLED` is a literal `const false` and `startLocalModelCollaborator()` early-returns before `wire()`.
+
+  **The write-volume assertions are the thing that keeps this fixed**, and they are why the numbers above cannot silently rot: `tests/server/local-model/collaborator.test.ts` pins single-turn cost at ≤12×L (#1340) and run-scoped tool-call-loop cost at ≤4× total content (#1292), both byte-shaped rather than wall-clock, plus a pin that a tool-call turn discards its buffer — the load-bearing half of the argument against a run-scoped budget. Each of those three regressions — reverting the sidecar primitive, disabling its prefix scan, making tool-call turns accumulate — turns one or more of them red, verified by hash-guarded mutation.
 
 Closed from that same gate: #1291 (CORS opaque-origin grant), #1293 (inverted loopback gate), #1294, and #1295 (the six-finding LOW batch).
 
