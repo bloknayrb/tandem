@@ -1,4 +1,4 @@
-import { BYO_MODELS_ENABLED, DEFAULT_MCP_PORT } from "../../shared/constants.js";
+import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import { apiModelsSecretPath } from "../../shared/integrations/contract.js";
 import {
   API_MODELS,
@@ -12,6 +12,7 @@ import { reconcileModelsToServerOnce } from "../actions/reconcile-models-registr
 import { createDefaultKeychainBackend } from "../keychain/keychain-backend.js";
 import { projectModelsFile } from "../models/project.js";
 import type { AgentLabelSource } from "../utils/agentLabel.js";
+import { MCP_BASE_URL } from "../utils/backend-ports.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import {
   loadSettings,
@@ -127,7 +128,7 @@ export function _settleReconcile(): void {
 
 // Vite dev server does not proxy `/api/*` so we hit the backend port directly.
 const keychain = createDefaultKeychainBackend({
-  baseUrl: `http://127.0.0.1:${DEFAULT_MCP_PORT}`,
+  baseUrl: MCP_BASE_URL,
   pathFor: apiModelsSecretPath,
 });
 

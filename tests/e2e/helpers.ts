@@ -6,14 +6,15 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { E2E_APP_DATA_DIR } from "../../scripts/e2e-paths.js";
+import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
-import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 import type { ToolResponse } from "../../src/shared/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`;
+/** This suite's own backend (#1492). The perf harness reuses `McpTestClient` against ITS pair by passing a url — see the constructor. */
+const MCP_URL = `http://127.0.0.1:${E2E_MCP_PORT}/mcp`;
 
 /**
  * Annotation dir used by the E2E test server. Used to clean up orphaned
@@ -42,15 +43,18 @@ const E2E_ANNOTATIONS_DIR = path.join(E2E_APP_DATA_DIR, "annotations");
 export class McpTestClient {
   private client: Client;
   private connected = false;
+  private readonly mcpUrl: string;
 
-  constructor() {
+  /** Defaults to the E2E backend; the perf harness passes its own pair's url. */
+  constructor(mcpUrl: string = MCP_URL) {
+    this.mcpUrl = mcpUrl;
     this.client = new Client({ name: "tandem-e2e-test", version: "1.0.0" });
   }
 
   async connect(retries = 5, delayMs = 1000): Promise<void> {
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        const transport = new StreamableHTTPClientTransport(new URL(MCP_URL));
+        const transport = new StreamableHTTPClientTransport(new URL(this.mcpUrl));
         await this.client.connect(transport);
         this.connected = true;
         return;

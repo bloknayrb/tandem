@@ -43,7 +43,7 @@ test.beforeEach(async ({ page }) => {
   // at the BYO_MODELS_ENABLED flip). See settings-models.spec.ts for the twin.
   test.skip(!BYO_MODELS_ENABLED, "Agent-identity UI gated off until BYO_MODELS_ENABLED (#1123)");
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
 });
 
 test("first-run picker appears on a fresh boot with no configured model", async ({ page }) => {

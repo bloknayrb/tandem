@@ -15,7 +15,7 @@ import {
 let mcp: McpTestClient;
 let tmpDir: string;
 
-const APP_URL = "http://127.0.0.1:5173";
+const APP_URL = "/";
 
 test.beforeEach(async () => {
   mcp = new McpTestClient();
