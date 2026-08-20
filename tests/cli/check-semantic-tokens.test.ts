@@ -508,6 +508,139 @@ describe("check-semantic-tokens", () => {
       ]);
     });
 
+    // --- REGRESSION CONTROLS: hex that is NOT the first token of its value ---
+    // The first cut of this narrowing recognized only three positions, and all
+    // three assume the hex begins the value. Every shape below is a real raw
+    // color that the pre-#1534 scanner reported and that cut let through — a
+    // silent hole in the gate, which is strictly worse than the false positive
+    // being fixed. `CSS_VALUE_TAIL_RE` is what closes them; each is pinned so a
+    // future simplification of that regex goes red instead of quiet.
+
+    it("still flags a hex after a length token in a JS style assignment", () => {
+      const violations = checkContent(
+        [
+          `  el.style.boxShadow = "0 0 0 1px #333";`,
+          `  el.style.border = "1px solid #333";`,
+          "  el.style.boxShadow = `0 0 0 ${w}px #333`;",
+        ].join("\n"),
+        "src/client/utils/paint.ts",
+      );
+
+      expect(violations).toEqual([
+        "src/client/utils/paint.ts:1: #333",
+        "src/client/utils/paint.ts:2: #333",
+        "src/client/utils/paint.ts:3: #333",
+      ]);
+    });
+
+    it("still flags a hex whose property colon is hidden behind an interpolation", () => {
+      // The nastiest shape. `cut` takes the LAST of `;`/`{`/`}` before the hex,
+      // so a Svelte `{expr}` or a JS `${expr}` inside a style value puts a `}`
+      // between the property colon and the hex — the declaration walk-back
+      // never sees `border:` at all. The `}`-with-optional-unit branch of
+      // `CSS_VALUE_TAIL_RE` is the only thing catching these.
+      const violations = checkContent(
+        [
+          `  <div style="border: {w}px solid #333">x</div>`,
+          `  <div style="box-shadow: 0 0 {r}px #333">x</div>`,
+          "  <div style:box-shadow={`0 0 ${w}px #333`}>x</div>",
+        ].join("\n"),
+        "src/client/components/Interp.svelte",
+      );
+
+      expect(violations).toEqual([
+        "src/client/components/Interp.svelte:1: #333",
+        "src/client/components/Interp.svelte:2: #333",
+        "src/client/components/Interp.svelte:3: #333",
+      ]);
+    });
+
+    it("still flags a hex in a multi-token rule held in a plain variable", () => {
+      // No `=`-adjacency (the string opens first), no whole-string-literal
+      // match (the literal holds more than the hex), and for the first line no
+      // colon anywhere on it.
+      const violations = checkContent(
+        [`  const borderRule = "1px solid #333";`, "  const s = `border: ${w}px solid #333`;"].join(
+          "\n",
+        ),
+        "src/client/utils/rules.ts",
+      );
+
+      expect(violations).toEqual([
+        "src/client/utils/rules.ts:1: #333",
+        "src/client/utils/rules.ts:2: #333",
+      ]);
+    });
+
+    it("still flags a hex inside a CSS color function, but not one in prose", () => {
+      // `isInsideCssColorFunction` names its callees explicitly. The generic
+      // "any identifier before a `(`" form gets line 4 wrong, and a rule keyed
+      // on the paren being adjacent to the hex gets line 3 wrong — the hex is
+      // the second argument there, and `color-mix` is how a themed color that
+      // should have been a token most often gets written by hand.
+      const violations = checkContent(
+        [
+          `  background: linear-gradient(#333, #444);`,
+          `  const borderGrad = "linear-gradient(#333, #444)";`,
+          `  ctx.fillStyle = "color-mix(in srgb, #333 50%, white)";`,
+          `  console.warn("border sync failed (#1364)");`,
+          // Nesting: the scan must take the INNERMOST still-open paren. Taking
+          // the outermost reads the wrapper call's name and misses this.
+          `  el.style.background = withFallback("linear-gradient(#333, #444)");`,
+          // A CLOSED color-function call earlier on the line must not govern
+          // prose after it — the depth counter has to pop on `)`.
+          `  console.warn("linear-gradient(a,b) mismatch for border #1364");`,
+          // The list is case-insensitive but closed: an unlisted callee leaves
+          // the argument reading as prose.
+          `  logBorder(REPORTED, "#1364 regressed");`,
+        ].join("\n"),
+        "src/client/components/Paren.svelte",
+      );
+
+      expect(violations).toEqual([
+        "src/client/components/Paren.svelte:1: #333",
+        "src/client/components/Paren.svelte:1: #444",
+        "src/client/components/Paren.svelte:2: #333",
+        "src/client/components/Paren.svelte:2: #444",
+        "src/client/components/Paren.svelte:3: #333",
+        "src/client/components/Paren.svelte:5: #333",
+        "src/client/components/Paren.svelte:5: #444",
+      ]);
+    });
+
+    it("still flags a hex after a border-style keyword with no length in front", () => {
+      const violations = checkContent(
+        [
+          `  const borderA = "solid #333";`,
+          `  const borderB = "dashed #444";`,
+          `  const borderC = "inset #555";`,
+        ].join("\n"),
+        "src/client/utils/keywords.ts",
+      );
+
+      expect(violations).toEqual([
+        "src/client/utils/keywords.ts:1: #333",
+        "src/client/utils/keywords.ts:2: #444",
+        "src/client/utils/keywords.ts:3: #555",
+      ]);
+    });
+
+    it("keeps the length guard and the position guard on all-digit bodies only", () => {
+      // A 5- or 7-digit run carrying an `a`-`f` is not a valid CSS color
+      // either, but it IS the shape of a typo'd one, so it must still report —
+      // that is what gating BOTH narrowings on all-digit-ness buys. Without
+      // the gate this line scans clean and a mistyped color ships.
+      const violations = checkContent(
+        [`  color: #abcdef1;`, `  background: #12a45;`, `  border-color: #12345;`].join("\n"),
+        "src/client/components/Typos.css",
+      );
+
+      expect(violations).toEqual([
+        "src/client/components/Typos.css:1: #abcdef1",
+        "src/client/components/Typos.css:2: #12a45",
+      ]);
+    });
+
     // --- helper-level units ------------------------------------------------
 
     it("recognizes the three color-value positions and nothing else", () => {
@@ -541,6 +674,41 @@ describe("check-semantic-tokens", () => {
       // Same token, value position -> color wins.
       const valued = `  border-color: #1364;`;
       expect(isLikelyIssueReference(valued, valued.indexOf("#1364"), "#1364")).toBe(false);
+    });
+
+    it("scopes the declaration walk-back to the innermost `;`/`{`/`}` segment", () => {
+      // `cut` and `PROPERTY_COLON_RE` are the load-bearing pair of the
+      // declaration branch and nothing else pins them directly. A colon in an
+      // EARLIER declaration must not license a later prose token, and a colon
+      // in the SAME segment must license the value after it.
+      const earlier = `  .x { color: red; } console.warn("border ok #1364");`;
+      expect(isColorValuePosition(earlier, earlier.indexOf("#1364"), "#1364")).toBe(false);
+
+      const same = `  .x { color: red; border-color: #1364; }`;
+      expect(isColorValuePosition(same, same.indexOf("#1364"), "#1364")).toBe(true);
+
+      // Any identifier before the colon counts, deliberately — see the
+      // `box-shadow` counterexample above. A bare `:` with no identifier does
+      // not, so a ternary or a URL does not turn prose into a value position.
+      const ternary = `  const s = ok ? "a" : "border #1364";`;
+      expect(isColorValuePosition(ternary, ternary.indexOf("#1364"), "#1364")).toBe(false);
+    });
+
+    it("offers the issue-reference Note for a 4-digit token only", () => {
+      // A reported all-digit token of length 3, 6 or 8 is a gray, and telling
+      // its author to "drop the `#`" yields `color: 000000`. Five- and
+      // seven-digit runs never reach the output. Four is what is left.
+      expect(buildErrorGuidance(["src/client/a.css:1: #1364"])).toContain("issue reference");
+      for (const gray of ["#000", "#333333", "#00000000"]) {
+        expect(buildErrorGuidance([`src/client/a.css:1: ${gray}`])).not.toContain(
+          "issue reference",
+        );
+      }
+      // A bundle-blocklist suffix must not defeat the match for a real 4-digit
+      // token, nor create one for a 6-digit entry.
+      expect(buildErrorGuidance(["src/client/a.css:1: #222222 [bundle-blocklist]"])).not.toContain(
+        "issue reference",
+      );
     });
 
     it("still reports a governing-colon issue ref (documented residual)", () => {

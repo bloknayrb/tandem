@@ -38,6 +38,76 @@ const PROPERTY_COLON_RE = /[-a-zA-Z_][-a-zA-Z0-9_]*\s*:/;
 const ASSIGNMENT_TAIL_RE = /=\s*$/;
 
 /**
+ * The token immediately before the hex is CSS VALUE syntax — a length, an
+ * interpolation carrying a unit, or a border/shadow keyword.
+ *
+ * Without this the scan misses the most common shape of raw color in this
+ * codebase: a hex that is NOT the first token of its value. Two paths, both
+ * measured against the pre-#1534 scanner on real shapes from `src/client`:
+ *
+ *   el.style.border = "1px solid #333";      // no colon anywhere on the line
+ *   <div style="border: {w}px solid #333">   // `}` truncates the walk-back
+ *
+ * The second is the nastier one: `cut` takes the LAST of `;`/`{`/`}`, and a
+ * Svelte `{expr}` or a JS `${expr}` inside a style value puts a `}` between the
+ * property colon and the hex, so the colon is never seen.
+ */
+const CSS_VALUE_TAIL_RE =
+  /(?:[\d.]+(?:px|em|rem|%|vh|vw|vmin|vmax|pt|pc|in|cm|mm|ch|ex|q)|\}(?:px|em|rem|%)?|\b(?:solid|dashed|dotted|double|inset|outset|groove|ridge|hidden|none|transparent|currentcolor)\b)\s+$/i;
+
+/**
+ * CSS functions whose argument list is a color context.
+ *
+ * Named explicitly rather than "any identifier before a `(`", because the
+ * generic form re-opens #1534: the filed repro sits inside `console.warn(`, and
+ * `color-mix(in srgb, #333 50%, white)` shows the hex is not always the first
+ * argument, so a rule loose enough to reach it would also reach any prose
+ * argument of any call. A closed list gets both sides right.
+ */
+const CSS_COLOR_FUNCTIONS: ReadonlySet<string> = new Set([
+  "color-mix",
+  "conic-gradient",
+  "hsl",
+  "hsla",
+  "hwb",
+  "lab",
+  "lch",
+  "linear-gradient",
+  "oklab",
+  "oklch",
+  "radial-gradient",
+  "repeating-conic-gradient",
+  "repeating-linear-gradient",
+  "repeating-radial-gradient",
+  "rgb",
+  "rgba",
+]);
+
+/** The identifier ending immediately before a `(`. */
+const CALLEE_TAIL_RE = /([A-Za-z][A-Za-z0-9_-]*)$/;
+
+/**
+ * Is the hex inside the argument list of a CSS color function?
+ *
+ * Scans `before` tracking paren depth so the LAST STILL-OPEN `(` is found, then
+ * checks the identifier in front of it. `linear-gradient(#333, #444)` matches
+ * for both stops; `console.warn("… failed (#1364):"` does not, because the
+ * innermost open paren is the prose one and has no identifier in front of it —
+ * and `warn` would not be in the list either.
+ */
+function isInsideCssColorFunction(before: string): boolean {
+  const open: number[] = [];
+  for (let i = 0; i < before.length; i++) {
+    if (before[i] === "(") open.push(i);
+    else if (before[i] === ")") open.pop();
+  }
+  const innermost = open.pop();
+  if (innermost === undefined) return false;
+  const callee = CALLEE_TAIL_RE.exec(before.slice(0, innermost));
+  return callee !== null && CSS_COLOR_FUNCTIONS.has(callee[1].toLowerCase());
+}
+
+/**
  * Is the hex at `index` sitting where a *color value* can sit? (issue #1534)
  *
  * Three positions count, and the union is deliberately generous — a false
@@ -53,6 +123,8 @@ const ASSIGNMENT_TAIL_RE = /=\s*$/;
  *   `<Icon color="#333" />`, `["#333", "#000"]`, `ctx.fillStyle = "#333"`.
  * - **Assignment / bare attribute** — the prefix right-trims to `=`. Covers
  *   the unquoted HTML attribute form `<svg fill=#333>`.
+ * - **CSS value tail / color-function argument** — see the two helpers above.
+ *   Covers a hex that is not the first token of its value.
  *
  * The declaration test intentionally accepts ANY identifier before the colon
  * rather than only CSS-ish ones: restricting it to color/background/border/…
@@ -67,6 +139,8 @@ export function isColorValuePosition(line: string, index: number, raw: string): 
   if ((quote === '"' || quote === "'" || quote === "`") && after.startsWith(quote)) return true;
 
   if (ASSIGNMENT_TAIL_RE.test(before)) return true;
+  if (CSS_VALUE_TAIL_RE.test(before)) return true;
+  if (isInsideCssColorFunction(before)) return true;
 
   const cut = Math.max(before.lastIndexOf(";"), before.lastIndexOf("{"), before.lastIndexOf("}"));
   return PROPERTY_COLON_RE.test(before.slice(cut + 1));
@@ -338,8 +412,20 @@ export function checkContent(content: string, rel: string): string[] {
       // from reporting an issue reference as a color — both scoped to THIS
       // pass; the bundle blocklist below matches on exact value and is
       // deliberately left alone.
-      if (!VALID_HEX_COLOR_BODY_LENGTHS.has(raw.length - 1)) continue;
-      if (isLikelyIssueReference(scanLine, hexMatch.index, raw)) continue;
+      // Both narrowings apply ONLY to an all-decimal-digit body. A hex carrying
+      // an `a`-`f` character keeps the previous behaviour exactly, at every
+      // length — including a letter-bearing 5/7-digit body, which is not a CSS
+      // color but IS the shape of a typo'd one (`#abcdef1`), so it must still
+      // report. Gating the length guard on all-digit-ness is what makes the
+      // "letters are unaffected" claim in docs/semantic-tokens.md true.
+      // Both `continue`s leave `reportedHexAtIndex` unset for this position,
+      // deliberately: the skip is a statement about the CSS-KEYWORD pass only.
+      // The bundle pass below then still gets its look at the same token, which
+      // is what keeps `#222222` in prose a violation (it matches on exact
+      // value, which is strong evidence regardless of position).
+      const allDigits = ALL_DECIMAL_DIGITS_RE.test(raw.slice(1));
+      if (allDigits && !VALID_HEX_COLOR_BODY_LENGTHS.has(raw.length - 1)) continue;
+      if (allDigits && !isColorValuePosition(scanLine, hexMatch.index, raw)) continue;
       violations.push(`${rel}:${i + 1}: ${raw}`);
       reportedHexAtIndex.add(hexMatch.index);
     }
@@ -395,8 +481,16 @@ export function checkFile(filePath: string, root = ROOT): string[] {
   return checkContent(content, rel);
 }
 
-/** A reported violation whose token is `#` + decimal digits only. */
-const REPORTED_ALL_DIGIT_HEX_RE = /:\s*#[0-9]+\b/;
+/**
+ * A reported violation whose token is `#` + exactly FOUR decimal digits.
+ *
+ * Four is the only length where the collision is real: a reported all-digit
+ * token of length 3, 6 or 8 (`#000`, `#333333`, `#000000`) is a gray, and
+ * telling its author it "may be an issue reference … drop the `#`" is advice
+ * that produces `color: 000000`. Five- and seven-digit runs never reach the
+ * output at all, so four is what is left.
+ */
+const REPORTED_ALL_DIGIT_HEX_RE = /:\s*#[0-9]{4}(?![0-9])/;
 
 /**
  * Guidance printed under the violation list (#1534).
