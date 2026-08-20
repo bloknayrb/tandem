@@ -6,6 +6,7 @@ import {
   Y_MAP_CHAT_DOCUMENT_NAMES,
   Y_MAP_CHAT_SEEN,
   Y_MAP_CHAT_SEEN_INITIALIZED,
+  Y_MAP_CHAT_STREAM,
 } from "../../shared/constants";
 import { withBrowser } from "../../shared/origins";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
@@ -49,7 +50,17 @@ export function createChatState(options: {
 
   function refresh(doc: Y.Doc): void {
     const next: ChatMessage[] = [];
-    doc.getMap(Y_MAP_CHAT).forEach((value) => next.push(value as ChatMessage));
+    // #1340: while a message streams, its full text-so-far lives in the
+    // chatStream sidecar Y.Text and the chat row's `text` is deliberately
+    // stale — compose here so every downstream consumer (ChatPanel, export,
+    // insert, unread accounting) sees the live text without knowing about
+    // the sidecar. instanceof guards against malformed foreign values.
+    const streamMap = doc.getMap(Y_MAP_CHAT_STREAM);
+    doc.getMap(Y_MAP_CHAT).forEach((value) => {
+      const msg = value as ChatMessage;
+      const live = streamMap.get(msg.id);
+      next.push(live instanceof Y.Text ? { ...msg, text: live.toString() } : msg);
+    });
     next.sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
     messages = next;
     const seen = doc.getMap(Y_MAP_CHAT_SEEN);
@@ -117,15 +128,23 @@ export function createChatState(options: {
     const chat = doc.getMap(Y_MAP_CHAT);
     const seen = doc.getMap(Y_MAP_CHAT_SEEN);
     const names = doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES);
+    const stream = doc.getMap(Y_MAP_CHAT_STREAM);
     const observer = () => refresh(doc);
     chat.observe(observer);
     seen.observe(observer);
     names.observe(observer);
+    // DEEP observe, deliberately: a plain `observe` fires only on key
+    // add/delete, not on edits inside a nested Y.Text — the live streaming
+    // bubble would freeze at its first flush (#1340). Resolved inside this
+    // $effect keyed on getCtrlYdoc(), so generation-gate provider rebuilds
+    // re-attach exactly like the three observers above.
+    stream.observeDeep(observer);
     observer();
     return () => {
       chat.unobserve(observer);
       seen.unobserve(observer);
       names.unobserve(observer);
+      stream.unobserveDeep(observer);
     };
   });
 
