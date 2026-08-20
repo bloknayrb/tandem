@@ -184,21 +184,27 @@ describe("createSubnetPreflight", () => {
     expect(probe.preflight).toEqual(OK);
   });
 
-  it("reports unknown rather than throwing when the probe rejects", async () => {
+  it("reports failed rather than throwing when the probe rejects", async () => {
+    // `failed`, not `unavailable` (#1436). `loadInvoke()` does not throw —
+    // outside Tauri it resolves to an invoke that REJECTS, which
+    // `coworkPreflightSubnet` catches and classifies as `unavailable`. So the
+    // ordinary no-bridge path never reaches this arm; what does reach it is a
+    // genuine client fault, and the user has to be told the check did not run.
     preflightSubnet.mockRejectedValueOnce(new Error("bridge gone"));
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     const probe = createSubnetPreflight();
     await probe.run();
 
-    expect(probe.preflight).toEqual({ status: "unknown" });
+    expect(probe.preflight).toEqual({ status: "failed" });
     expect(probe.probing).toBe(false);
   });
 
   it("records the failure where a bug report can reach it (#1439)", async () => {
-    // `unknown` is never rendered, and the release desktop build ships no
-    // devtools, so before #1439 the cause of a pre-flight failure was
-    // unrecoverable from a user's bug report.
+    // The rendered `failed` line is deliberately vague — it tells the user the
+    // check did not run, not why. The release desktop build ships no devtools,
+    // so without this log the cause of a pre-flight failure would still be
+    // unrecoverable from a user's bug report (#1439).
     _resetClientLog();
     preflightSubnet.mockRejectedValueOnce(new Error("bridge gone"));
     vi.spyOn(console, "error").mockImplementation(() => {});

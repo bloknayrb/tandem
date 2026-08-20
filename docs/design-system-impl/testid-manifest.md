@@ -279,12 +279,24 @@ shipped and were removed:
   `cowork-preflight-{blocked,retry-btn}`. The retry button **replaces** the
   enable-confirm button while detection is known-failing, so a spec asserting
   `*-enable-confirm-btn` visible must first establish the probe did not block.
+- Broken-probe line (#1436): `cowork-preflight-failed`,
+  `cowork-onboarding-preflight-failed` and
+  `integration-wizard-cowork-preflight-failed`. Distinct from `-blocked`
+  because the two say opposite things: `-blocked` reports a detection failure
+  we watched happen and so **replaces** Enable with a retry, while `-failed`
+  reports that the check never ran and therefore leaves Enable exactly where it
+  was — a spec asserting `*-preflight-failed` must find no `*-retry-btn`. The
+  no-probe case renders neither — but note every surface that probes is already
+  gated on `isTauriRuntime()` and `osSupported`, so in the shipped app that case
+  is effectively unreachable and `-failed` is the arm a real session lands on.
+  Absence of all three is still not evidence the probe passed.
 - Pre-flight live regions (#1376): `cowork-preflight-live`,
   `cowork-onboarding-preflight-live` and `integration-wizard-cowork-preflight-live`.
   The `role="status"` wrapper, mounted for the life of the confirm (the wizard's
   for the life of the sub-view) so a hint arriving later is announced rather than
   inserted silently with its region. The `-blocked` testids sit INSIDE it, which
-  is why they still come and go; the wrapper never does. The wizard's carries
+  is why they still come and go; the wrapper never does — `-failed` sits there
+  for the same reason. The wizard's carries
   `display: contents` — its parent is a gapped flex column, so an empty box
   there would be a permanent gap; the other two parents are plain blocks.
   Thirteen more live regions app-wide still have the pre-#1376 shape (#1431).

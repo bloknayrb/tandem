@@ -29,6 +29,29 @@ import type {
 export const COWORK_PREFLIGHT_CHECKING = "Checking your network…";
 
 /**
+ * What the live region says when the pre-flight ran and BROKE (#1436).
+ *
+ * The `ok` case renders nothing, which is only readable if the failure case
+ * renders something: before this existed, a probe that threw emptied the region
+ * and left behind exactly the picture a passing probe leaves behind. The
+ * reasonable reading was "the check passed". For a screen-reader user it was
+ * worse — `role="status"` announces text that is added or changed, and says
+ * nothing at all when a region is EMPTIED, so the sequence was "Checking your
+ * network…" followed by permanent silence.
+ *
+ * Hedged on purpose, and the hedge is the accurate claim: a probe that could
+ * not classify its own failure has said nothing about whether the firewall
+ * write would succeed. This is not `blocked` — it must not swap Enable for
+ * "Check again", because that button exists for the case where we watched
+ * detection fail and know the outcome.
+ *
+ * Distinct from the `unavailable` case, which renders nothing and should: no
+ * Tauri bridge and non-Windows are the ordinary way this probe does not run,
+ * and a hedged warning there would fire on the routine path.
+ */
+export const COWORK_PREFLIGHT_FAILED = "Couldn't check your network — enabling may still work.";
+
+/**
  * High-level branch the Settings UI renders. Collapses the `osSupported` /
  * `coworkDetected` / `uacDeclined` / normal states into a single label.
  */

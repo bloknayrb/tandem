@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   aggregateWorkspaceStatus,
+  COWORK_PREFLIGHT_FAILED,
   coworkReachability,
   coworkReachabilityCopy,
   coworkSettingsVariant,
@@ -508,8 +509,10 @@ describe("formatCoworkError", () => {
 
 // ---------------------------------------------------------------------------
 // coworkPreflightSubnet (#1298) — the probe that decides whether Enable is
-// offered at all. Three states, because "the probe failed" and "enabling would
-// fail" are different claims and only the second one may block a button.
+// offered at all. "The probe failed" and "enabling would fail" are different
+// claims and only the second one may block a button; #1436 then split the
+// first one again, into an environment that was never going to answer and a
+// fault that owes the user a sentence.
 // ---------------------------------------------------------------------------
 
 describe("coworkPreflightSubnet", () => {
@@ -544,27 +547,126 @@ describe("coworkPreflightSubnet", () => {
     expect(result.hint).not.toContain("set up on this machine");
   });
 
-  it("reports unknown — never blocked — when the probe itself cannot run", async () => {
+  it("reports unavailable or failed — never blocked — when the probe cannot run", async () => {
     // A broken probe says nothing about whether enabling would work. Blocking
     // here would stop a user whose enable would have succeeded, which is a
     // worse failure than the one #1298 is fixing.
+    //
+    // #1436 splits the two reasons a probe does not answer. The environment
+    // ones are `unavailable` and stay silent on every surface; anything else is
+    // `failed` and says so. The two were already distinguished by their log
+    // level here — that distinction simply never reached the wire.
+    // Both literals, not the module constants: `rawMsg.includes(...)` is a
+    // substring test against a string the Rust side owns, so a fixture built
+    // from the constant would follow a rename that broke the real match. The
+    // pre-#1436 fixture here read "Windows only" and matched NOTHING — with a
+    // single `unknown` on both arms that was invisible, and it is exactly the
+    // drift this spelling guards.
     for (const thrown of [
       new Error("Tauri runtime not available"),
-      new Error("Windows only"),
-      "a bare string",
+      new Error("Cowork integration is Windows-only"),
     ]) {
       const invoke = (async () => {
         throw thrown;
       }) as InvokeFn;
-      await expect(coworkPreflightSubnet(invoke)).resolves.toEqual({ status: "unknown" });
+      await expect(coworkPreflightSubnet(invoke)).resolves.toEqual({ status: "unavailable" });
     }
+    const bareString = (async () => {
+      throw "a bare string";
+    }) as InvokeFn;
+    await expect(coworkPreflightSubnet(bareString)).resolves.toEqual({ status: "failed" });
   });
 
-  it("treats a non-firewall JSON error as unknown, not blocked", () => {
+  it("treats a non-firewall JSON error as failed, not blocked", () => {
+    // A JSON error with no recognised `kind` is a serde drift or an
+    // unregistered command — a bug on our side, not an environment we cannot
+    // run in. It must not stop the user from enabling, and it must not pretend
+    // the check passed.
     const invoke = (async () => {
       throw new Error(JSON.stringify({ error: "oops" }));
     }) as InvokeFn;
-    return expect(coworkPreflightSubnet(invoke)).resolves.toEqual({ status: "unknown" });
+    return expect(coworkPreflightSubnet(invoke)).resolves.toEqual({ status: "failed" });
+  });
+
+  it("calls a missing bridge INSIDE Tauri a fault, not an environment", async () => {
+    // The finding that made this split worth re-doing. `TAURI_NOT_AVAILABLE`
+    // comes from `loadInvoke`'s own catch when the `@tauri-apps/api/core`
+    // import fails. Outside Tauri that is the ordinary no-bridge case; INSIDE
+    // Tauri it means a chunk that must exist did not load — a partial update, a
+    // CSP block — and since every probing surface is gated on
+    // `isTauriRuntime()`, it is the ONE way a shipped desktop build reaches
+    // this arm at all. Reading it as an environment sent the only reachable
+    // fault straight back to the silence #1436 exists to end.
+    const notLoaded = (async () => {
+      throw new Error("Tauri runtime not available");
+    }) as InvokeFn;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} } as unknown as Window);
+    try {
+      // `await` inside the `try`, not `return promise` — a returned promise
+      // runs the `finally` before it settles, and the unstub would then land
+      // while the classification is still reading the global.
+      await expect(coworkPreflightSubnet(notLoaded)).resolves.toEqual({ status: "failed" });
+    } finally {
+      vi.unstubAllGlobals();
+      error.mockRestore();
+    }
+  });
+
+  it("says something announceable, in the literal", () => {
+    // Every render assertion in the mounted suites reads
+    // `textContent.toContain(COWORK_PREFLIGHT_FAILED)`, which is VACUOUS if the
+    // constant is empty or whitespace — a live region that adds no announceable
+    // text would pass the whole suite that exists to prevent exactly that. This
+    // is the one assertion written against the literal, so the constant cannot
+    // silently go blank.
+    expect(COWORK_PREFLIGHT_FAILED).toContain("Couldn't check your network");
+    expect(COWORK_PREFLIGHT_FAILED.trim().length).toBeGreaterThan(20);
+  });
+
+  it("matches a DECORATED Windows-only rejection, not just the bare string", () => {
+    // The `includes` half of the classification exists for this and only this:
+    // the message can arrive wrapped (`Error: …`, a Tauri prefix). Since #1436
+    // the two arms select silence vs a visible warning line, so a miss here
+    // paints a hedged warning on every non-Windows run — the routine path.
+    const decorated = (async () => {
+      throw new Error("Error: Cowork integration is Windows-only");
+    }) as InvokeFn;
+    return expect(coworkPreflightSubnet(decorated)).resolves.toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("keeps `unavailable` off the error log and `failed` on it", async () => {
+    // The split is only worth having if the two halves stay on the two sides.
+    // A regression that routed the routine non-Windows path to `failed` would
+    // both paint a warning on every non-Windows run and bury a real fault in
+    // the noise.
+    //
+    // `async`/`await`, not `try { return promise } finally`: that shape runs
+    // the `finally` when the promise is RETURNED, so `mockRestore()` wipes the
+    // call history before the assertions read it and every count reads 0.
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const notTauri = (async () => {
+        throw new Error("Tauri runtime not available");
+      }) as InvokeFn;
+      const broken = (async () => {
+        throw new Error("something nobody expected");
+      }) as InvokeFn;
+      const [unavailable, failed] = await Promise.all([
+        coworkPreflightSubnet(notTauri),
+        coworkPreflightSubnet(broken),
+      ]);
+      expect(unavailable).toEqual({ status: "unavailable" });
+      expect(failed).toEqual({ status: "failed" });
+      expect(debug).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      debug.mockRestore();
+      error.mockRestore();
+    }
   });
 });
 

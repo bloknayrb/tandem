@@ -8,6 +8,7 @@ import {
 import {
   aggregateWorkspaceStatus,
   COWORK_PREFLIGHT_CHECKING,
+  COWORK_PREFLIGHT_FAILED,
   coworkReachability,
   coworkReachabilityCopy,
   coworkSettingsVariant,
@@ -339,6 +340,14 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
                  than an Enable button whose outcome we know. -->
             <div class="cs-preflight" data-testid="cowork-preflight-blocked">
               {probe.preflight.hint}
+            </div>
+          {:else if probe.preflight?.status === "failed"}
+            <!-- #1436: `ok` renders nothing, so a broken probe that also
+                 rendered nothing was pixel-identical to a pass. Hedged, and
+                 NOT a retry: we did not observe detection fail, so we have no
+                 grounds to replace Enable. -->
+            <div class="cs-help-text" data-testid="cowork-preflight-failed">
+              {COWORK_PREFLIGHT_FAILED}
             </div>
           {/if}
           {#if probe.probing}
