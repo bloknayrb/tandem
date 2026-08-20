@@ -514,7 +514,7 @@ pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
 // ---------------------------------------------------------------------------
 
 /// Remove orphan `"Tandem Cowork*"` firewall rules left by a previous failed
-/// uninstall (security invariant §12). Returns the names of rules removed, or an
+/// uninstall. Returns the names of rules removed, or an
 /// empty vec on scan/remove failure.
 ///
 /// **Ordering contract (issue #1163):** on the enable path this MUST run *before*
@@ -525,7 +525,7 @@ pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
 /// leaving every enable with no allow rule. The stale-token half of the old
 /// combined reconcile is split into [`reconcile_stale_workspace_tokens`], which
 /// runs *after* a successful add so a fail-closed firewall add never reaches a
-/// workspace write (invariant §4).
+/// workspace write.
 pub fn reconcile_orphan_firewall_rules() -> Vec<String> {
     use crate::firewall;
 
