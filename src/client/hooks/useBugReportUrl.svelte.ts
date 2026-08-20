@@ -1,4 +1,5 @@
 import { TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
+import { readClientLog } from "../utils/client-log";
 import { buildBugReportUrl, formatDiagnostics, summarizeUserAgent } from "../utils/diagnostics";
 import { fetchDiagnostics } from "../utils/diagnostics-fetch";
 
@@ -122,6 +123,10 @@ export function createBugReportUrl(getOpen: () => boolean): BugReportUrlState {
         url = buildBugReportUrl(
           formatDiagnostics(result.payload, {
             browser: summarizeUserAgent(navigator.userAgent),
+            // Client-side warnings the server cannot see (#1439). The section is
+            // rendered above the check list and budgeted, because this URL is
+            // the surface that truncates.
+            clientLog: readClientLog(),
           }),
         );
       })

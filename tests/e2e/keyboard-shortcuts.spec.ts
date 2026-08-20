@@ -48,7 +48,7 @@ test.afterEach(async () => {
 test("Ctrl+W closes the active tab", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
 
   // Both tabs visible
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
@@ -65,7 +65,7 @@ test("Ctrl+W closes the active tab", async ({ page }) => {
 
 test("Ctrl+O opens the file dialog", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   // Dialog absent before the shortcut
@@ -80,7 +80,7 @@ test("'+' button → Browse opens the file dialog", async ({ page }) => {
   // renders FileOpenDialog directly, so the existing "+" → Browse path must still
   // reach the lifted dialog rendering in App.svelte.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid='open-file-btn']")).toBeVisible();
 
   await page.locator("[data-testid='open-file-btn']").click();
@@ -93,7 +93,7 @@ test("Ctrl+N switches to the Nth tab", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "link-target.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
 
   // Wait for all three tabs.
   await expect(page.locator("[data-testid^='tab-name-']")).toHaveCount(3);
@@ -123,7 +123,7 @@ test("Ctrl+N switches to the Nth tab", async ({ page }) => {
 
 test("Ctrl+W is ignored while a form input has focus", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   // Open the find bar and focus its input (an INPUT element).
@@ -139,7 +139,7 @@ test("Ctrl+W is ignored while a form input has focus", async ({ page }) => {
 
 test("Help modal advertises the new shortcuts", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   // Open via the brand menu — Wave M moved the Help entry there (the old standalone
@@ -176,7 +176,7 @@ test("Help modal advertises the new shortcuts", async ({ page }) => {
 test("Ctrl+Shift+F opens the find bar pre-scoped to Open tabs", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']")).toHaveCount(2);
 
   await page.keyboard.press("Control+Shift+F");
@@ -189,7 +189,7 @@ test("Ctrl+Shift+F opens the find bar pre-scoped to Open tabs", async ({ page })
 
 test("Ctrl+Shift+F with one tab open hides scope pills (single-doc fallback)", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   await page.keyboard.press("Control+Shift+F");
@@ -200,7 +200,7 @@ test("Ctrl+Shift+F with one tab open hides scope pills (single-doc fallback)", a
 
 test("Ctrl+G with no active query opens the find bar", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   await expect(page.locator("[data-testid='find-replace-bar']")).toHaveCount(0);
@@ -221,7 +221,7 @@ test("Ctrl+G with no active query opens the find bar", async ({ page }) => {
 
 test("Ctrl+Shift+M toggles solo / tandem mode", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   // Default mode is tandem.
@@ -247,7 +247,7 @@ test("Ctrl+Shift+M toggles solo / tandem mode", async ({ page }) => {
 
 test("Alt+Shift+Left toggles the left panel", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   // Capture initial left-panel visibility via the resize-handle testid.
@@ -280,7 +280,7 @@ test("Alt+Shift+Left toggles the left panel", async ({ page }) => {
 
 test("Alt+Shift+Right toggles the right panel", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   const rightHandle = page.locator(`[data-testid='${RAIL_HANDLE_TESTID.right}']`);
@@ -308,7 +308,7 @@ test("Alt+Shift+Right toggles the right panel", async ({ page }) => {
 test("Ctrl+Alt+T reopens the most recently closed tab", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
 
   const sample = page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" });
   const sample2 = page.locator("[data-testid^='tab-name-']", { hasText: "sample2.md" });
@@ -329,7 +329,7 @@ test("Ctrl+Alt+T no-ops when no tabs have been closed", async ({ page }) => {
   page.on("pageerror", (err) => errors.push(err.message));
 
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   // No tabs closed yet — pressing the shortcut should be a silent no-op.
@@ -348,7 +348,7 @@ test("Alt+] does not crash with no annotations and no console errors", async ({ 
   page.on("pageerror", (err) => errors.push(err.message));
 
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   // Empty annotations list: Alt+] / Alt+[ should be silent no-ops.
@@ -370,7 +370,7 @@ test("Ctrl+Enter accepts the first pending annotation", async ({ page }) => {
     text: "Accept me via keyboard",
     textSnapshot: "Test Document",
   });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await switchToAnnotationsTab(page);
 
   const card = page.locator("[data-testid^='annotation-card-']").first();
@@ -397,7 +397,7 @@ test("Ctrl+Shift+Enter dismisses the first pending annotation", async ({ page })
     text: "Dismiss me via keyboard",
     textSnapshot: "Test Document",
   });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await switchToAnnotationsTab(page);
 
   const card = page.locator("[data-testid^='annotation-card-']").first();
@@ -424,7 +424,7 @@ test("Escape deselects an active annotation even when focus has left the editor"
     text: "Select then deselect",
     textSnapshot: "Test Document",
   });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await switchToAnnotationsTab(page);
 
   const card = page.locator("[data-testid^='annotation-card-']").first();
@@ -446,7 +446,7 @@ test("Escape deselects an active annotation even when focus has left the editor"
 
 test("Ctrl+Alt+M opens the comment popup focused on its textarea", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator(".ProseMirror", { hasText: "Test Document" })).toBeVisible({
     timeout: 10_000,
   });
@@ -487,7 +487,7 @@ test("Ctrl+Alt+T after closing via the X button (DocumentTabs path) reopens", as
   // just the Ctrl+W keydown branch.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
 
   const sample2 = page.locator("[data-testid^='tab-name-']", { hasText: "sample2.md" });
   await expect(sample2).toBeVisible();
@@ -507,7 +507,7 @@ test("Ctrl+Alt+T after closing via the X button (DocumentTabs path) reopens", as
 
 test("Escape closes the command palette even when focus is outside it", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   await page.keyboard.press("Control+Shift+P");
@@ -536,7 +536,7 @@ test("command palette Accept action resolves the first pending annotation from e
     text: "Accept me from the palette",
     textSnapshot: "Test Document",
   });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await switchToAnnotationsTab(page);
 
   const card = page.locator("[data-testid^='annotation-card-']").first();
@@ -561,7 +561,7 @@ test("command palette overlay covers the title bar +new-tab button", async ({ pa
   // Clicking at the +button's coordinates must hit the overlay (closing the
   // palette via handleBackdropClick), NOT the +button underneath.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   await page.keyboard.press("Control+Shift+P");
@@ -591,7 +591,7 @@ test("Help modal overlay covers the title bar +new-tab button", async ({ page })
   // palette test — clicking at the +button must hit the overlay (closing the
   // modal), not the +button beneath it.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   await page.locator("[data-testid='titlebar-brand-menu']").click();

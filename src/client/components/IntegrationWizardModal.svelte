@@ -26,11 +26,7 @@
  * per keypress (the Advanced <details> changes the focusable set while open).
  */
 import { tick, untrack } from "svelte";
-import {
-  BYO_MODELS_ENABLED,
-  CLAUDE_PLUGIN_INSTALL_COMMANDS,
-  DEFAULT_MCP_PORT,
-} from "../../shared/constants.js";
+import { BYO_MODELS_ENABLED, CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../../shared/constants.js";
 import type { ApplyItemResult, ExistingMcpInstall } from "../../shared/integrations/contract.js";
 import {
   COWORK_PREFLIGHT_CHECKING,
@@ -59,7 +55,9 @@ import {
   type ReachabilityStatus,
   type ReachabilityTarget,
 } from "../hooks/useReachabilityCheck.svelte.js";
+import { MCP_BASE_URL } from "../utils/backend-ports.js";
 import { resyncCheckbox } from "../utils/checkbox-sync.js";
+import { logClientWarning } from "../utils/client-log.js";
 import IntegrationTargetCard from "./IntegrationTargetCard.svelte";
 import {
   computeDoneHeaderState,
@@ -84,7 +82,7 @@ let { open, onClose, onSetupModels }: Props = $props();
 // Absolute base URL because the Vite dev server does not proxy /api/* —
 // other client modules (yjsSync, useNotifications, fileUpload) follow the
 // same pattern of pointing directly at the backend port.
-const wizard = createIntegrationWizard({ baseUrl: `http://127.0.0.1:${DEFAULT_MCP_PORT}` });
+const wizard = createIntegrationWizard({ baseUrl: MCP_BASE_URL });
 
 // Single Cowork source of truth (feeds both the "More integrations" row and
 // the Cowork sub-view). `getActive` is a PURE runtime check — it must never
@@ -161,10 +159,7 @@ const coworkVariant = $derived(coworkSettingsVariant(coworkStatus.status));
 // Claude CLI binary probe for the empty state's one-click install. `getActive`
 // reads only externals (`open`, `wizard.step`) — never cliStatus' own state —
 // so the hook's fetch $effect can't self-trigger.
-const cliStatus = createClaudeCliStatus(
-  () => open && wizard.step === "connect",
-  `http://127.0.0.1:${DEFAULT_MCP_PORT}`,
-);
+const cliStatus = createClaudeCliStatus(() => open && wizard.step === "connect", MCP_BASE_URL);
 // Gate the install CTA on a CONFIRMED NOT_INSTALLED. While presence is null
 // (loading) we show the manual-MCP hint, so a user who already has the CLI
 // never sees a flash of the install button before the GET resolves.
@@ -197,7 +192,7 @@ const reachabilityTargets = $derived(
 const reachability = createReachabilityCheck(
   () => reachabilityTargets,
   () => open && wizard.step === "done",
-  `http://127.0.0.1:${DEFAULT_MCP_PORT}`,
+  MCP_BASE_URL,
 );
 
 function reachabilityStatusFor(id: string): ReachabilityStatus | null {
@@ -278,7 +273,11 @@ async function copyPluginCommands(): Promise<void> {
     // permission, a WebView with no `navigator.clipboard`, and a security
     // policy rejection are three different bugs with three different fixes,
     // and after this catch nobody can tell which one a user hit.
-    console.warn("[wizard] clipboard write failed:", err);
+    // Via `logClientWarning` rather than `console.warn` so the distinguishing
+    // error name survives into a bug report: the release desktop build ships no
+    // devtools, so the console alone is a sink with no reader (#1439). The
+    // console line itself is unchanged.
+    logClientWarning("wizard", "clipboard write failed", err);
     result = "Couldn't copy — select the commands above";
   }
   // THIS is the load-bearing guard: `writeText` spans real tasks, so a user can
@@ -960,7 +959,7 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                   If you use Claude Code or Claude Desktop, open it once, then check again. To
                   connect a different MCP-compatible app manually, point it at:
                 </p>
-                <code class="iw-code">http://127.0.0.1:{DEFAULT_MCP_PORT}/mcp</code>
+                <code class="iw-code">{MCP_BASE_URL}/mcp</code>
               </div>
             {:else}
               <p class="iw-intro">

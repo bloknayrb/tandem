@@ -281,10 +281,14 @@ export function registerIntegrationsRoutes(
  *   this machine — the one case the other two do not cover.
  *
  * The cost of making it unconditional is nil for the shipped client: `API_BASE`
- * is a hardcoded `http://127.0.0.1:3479` (`src/client/utils/fileUpload.ts`), so
- * a browser served from a LAN address resolves it to the *viewer's* machine and
- * has never been able to reach `/api` remotely. If remote `/api` access ever
- * becomes a goal, that constant is the thing to change first, deliberately.
+ * (`src/client/utils/fileUpload.ts`) is `MCP_BASE_URL` from
+ * `src/client/utils/backend-ports.ts`, whose **host is the hardcoded literal
+ * `127.0.0.1`** — only the port is configurable, and only at build time, via a
+ * `VITE_TANDEM_MCP_PORT` no shipped build ever carries (#1492;
+ * `scripts/build-client.mjs` strips it). So a browser served from a LAN address
+ * still resolves it to the *viewer's* machine and has never been able to reach
+ * `/api` remotely. If remote `/api` access ever becomes a goal, that host
+ * literal is the thing to change first, deliberately.
  *
  * Scope: this governs the routes that call it — and since #1320 that is no
  * longer the same question as whether `/api` is loopback-only. That property now

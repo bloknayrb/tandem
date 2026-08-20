@@ -4,11 +4,11 @@ import {
   ACTIVITY_HISTORY_CAP,
   ACTIVITY_HISTORY_KEY,
   ACTIVITY_INFO_TTL_MS,
-  DEFAULT_MCP_PORT,
   MAX_VISIBLE_TOASTS,
   TOAST_DISMISS_MS,
 } from "../../shared/constants.js";
 import type { TandemNotification } from "../../shared/types.js";
+import { MCP_BASE_URL } from "../utils/backend-ports.js";
 
 /**
  * An optional action button on a transient toast (#1018). CLIENT-ONLY and
@@ -286,7 +286,7 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
     ingest(notification, true, action);
 
   // ---- SSE: ambient, info stays quiet ----
-  const url = `http://127.0.0.1:${DEFAULT_MCP_PORT}${API_NOTIFY_STREAM}`;
+  const url = `${MCP_BASE_URL}${API_NOTIFY_STREAM}`;
   const es = new EventSource(url);
 
   es.onmessage = (event) => {

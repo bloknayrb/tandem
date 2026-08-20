@@ -4,6 +4,7 @@ import {
   loadInvoke,
   type SubnetPreflight,
 } from "../cowork/cowork-invoke.js";
+import { logClientError } from "../utils/client-log.js";
 
 export interface SubnetPreflightState {
   readonly preflight: SubnetPreflight | null;
@@ -120,7 +121,11 @@ export function createSubnetPreflight(): SubnetPreflightState {
       // nothing about whether enabling would work, so fall through to the
       // unguarded button. Log it: `unknown` is never rendered, so without this
       // a genuine client fault is invisible on both sides of the bridge.
-      console.error("[cowork] subnet pre-flight threw:", err);
+      // Via `logClientError`, so it also reaches a bug report — the release
+      // desktop build has no devtools console to read (#1439). Note Tauri
+      // `invoke` rejects with the Rust error's `Display` STRING, not an `Error`,
+      // which is why `describeCause` keeps a string branch at all.
+      logClientError("cowork", "subnet pre-flight threw", err);
       preflight = { status: "unknown" };
     } finally {
       if (mine === token) probing = false;

@@ -39,7 +39,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
-import { DEFAULT_MCP_PORT, TUTORIAL_ANNOTATION_PREFIX } from "../../src/shared/constants";
+import { TUTORIAL_ANNOTATION_PREFIX } from "../../src/shared/constants";
 import {
   cleanupAllOpenDocuments,
   McpTestClient,
@@ -47,6 +47,7 @@ import {
   setRailVisible,
   switchToAnnotationsTab,
 } from "../../tests/e2e/helpers";
+import { E2E_MCP_PORT } from "../test-ports";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -618,7 +619,7 @@ test("04-toolbar-actions", async ({ page }) => {
   // tab is opened over the API from the page's own (loopback) context.
   const roPath = path.join(tmpDir, "reference-spec.md");
   fs.writeFileSync(roPath, "# Reference Spec\n\nRead-only reference material.\n");
-  const roRes = await page.request.post(`http://127.0.0.1:${DEFAULT_MCP_PORT}/api/open`, {
+  const roRes = await page.request.post(`http://127.0.0.1:${E2E_MCP_PORT}/api/open`, {
     data: { filePath: roPath.replace(/\\/g, "/"), readOnly: true },
   });
   if (!roRes.ok())

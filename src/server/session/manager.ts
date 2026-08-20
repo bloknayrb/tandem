@@ -7,6 +7,7 @@ import {
   SESSION_MAX_AGE,
   Y_MAP_CHAT,
   Y_MAP_CHAT_DOCUMENT_NAMES,
+  Y_MAP_CHAT_STREAM,
 } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
@@ -15,6 +16,7 @@ import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash, ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
 import { parseAnnotationDoc } from "../annotations/schema.js";
 import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
+import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
 import { atomicWrite } from "../file-io/index.js";
 import { SESSION_DIR } from "../platform.js";
 
@@ -238,6 +240,49 @@ function cloneYDoc(doc: Y.Doc): Y.Doc {
   return clone;
 }
 
+/**
+ * Fold any in-flight `chatStream` sidecar entries into their chat rows and
+ * delete them (#1340) — the durability half of the sidecar invariant: durable
+ * CTRL state never carries a LIVE `chatStream` entry.
+ *
+ * TOTAL by construction, because this runs on every persist and every restore
+ * for all users while the only streaming producer ships dark: an entry folds
+ * only when it is a real `Y.Text` AND its chat row still exists; everything
+ * else — an entry whose row the user erased mid-stream (a fold there would
+ * durably resurrect a message the user just deleted), or a malformed value
+ * from a future/buggy build — is deleted without folding.
+ *
+ * Runs on snapshot CLONES in the persist path (never mutates live user-visible
+ * state) and on the freshly-restored doc in `restoreCtrlDoc` (a snapshot
+ * written by a newer or buggy build may carry live entries; without the sweep
+ * an orphan `Y.Text` would stay authoritative over its chat row with no
+ * collector until the next persist).
+ *
+ * It is also the ONLY path that sees an ABANDONED entry — a producer that
+ * crashed or hung without finalizing emits no further writes — so the sidecar
+ * staleness tripwire is reconciled from here, with the ids as found, before
+ * anything is folded or deleted.
+ */
+function foldChatStream(doc: Y.Doc): void {
+  const streamMap = doc.getMap(Y_MAP_CHAT_STREAM);
+  reconcileStreamSidecars(streamMap.keys());
+  if (streamMap.size === 0) return;
+  const chatMap = doc.getMap(Y_MAP_CHAT);
+  withInternal(doc, () => {
+    for (const [id, value] of Array.from(streamMap.entries())) {
+      const existing = chatMap.get(id) as Record<string, unknown> | undefined;
+      // `length > 0`: an EMPTY `Y.Text` is malformed state, not a streamed
+      // empty reply — folding it would blank a chat row holding real text,
+      // which is the opposite of what this defensive sweep is for. It falls
+      // through to the unconditional delete: drop the sidecar, keep the row.
+      if (existing && value instanceof Y.Text && value.length > 0) {
+        chatMap.set(id, { ...existing, text: value.toString() });
+      }
+      streamMap.delete(id);
+    }
+  });
+}
+
 function pruneCtrlDocumentNames(doc: Y.Doc): void {
   const referencedDocumentIds = new Set<string>();
   doc.getMap(Y_MAP_CHAT).forEach((value) => {
@@ -262,6 +307,12 @@ async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
     await fs.mkdir(SESSION_DIR, { recursive: true });
     sessionDirReady = true;
   }
+
+  // Fold in-flight streamed text into the chat rows BEFORE pruning/encoding,
+  // so a crash mid-stream durably keeps the last-flushed text and the file
+  // never contains a live chatStream entry (#1340). Snapshot-only, like the
+  // prunes below — the live doc's sidecar is finalized by its producer.
+  foldChatStream(doc);
 
   // Prune the snapshot, never the live CTRL doc. User-visible deletions must not
   // happen until the corresponding atomic write has succeeded.
@@ -313,12 +364,29 @@ export async function clearCtrlChatDurably(doc: Y.Doc): Promise<number> {
   return enqueueCtrlSnapshot(async () => {
     const snapshot = cloneYDoc(doc);
     const snapshotChat = snapshot.getMap(Y_MAP_CHAT);
+    const snapshotStream = snapshot.getMap(Y_MAP_CHAT_STREAM);
     withInternal(snapshot, () => {
-      for (const id of capturedIds) snapshotChat.delete(id);
+      for (const id of capturedIds) {
+        snapshotChat.delete(id);
+        // Belt-and-braces (#1340). `foldChatStream` already cannot resurrect
+        // the row — it re-`set`s only when `existing && value instanceof Y.Text`
+        // and `snapshotChat.delete(id)` above ran first, in this same
+        // transaction — so this delete is REDUNDANT with that `existing &&`
+        // guard. Kept so the clone never carries an entry for an erased id even
+        // if the guard is ever loosened; it is hygiene, not a data-loss gate.
+        if (snapshotStream.has(id)) snapshotStream.delete(id);
+      }
     });
     await persistCtrlSnapshot(snapshot);
+    const liveStream = doc.getMap(Y_MAP_CHAT_STREAM);
     withInternal(doc, () => {
-      for (const id of capturedIds) liveChat.delete(id);
+      for (const id of capturedIds) {
+        liveChat.delete(id);
+        // A clear racing an in-flight stream must not leave an orphan Y.Text;
+        // updateClaudeChatMessage's !existing guard then keeps later flushes
+        // no-ops (and deletes any entry a mid-race flush recreated).
+        if (liveStream.has(id)) liveStream.delete(id);
+      }
       // Recompute from the current live map so messages that arrived while
       // the snapshot persisted retain their filename metadata. This also
       // clears legacy orphan metadata when chat was already empty.
@@ -353,10 +421,15 @@ export async function loadCtrlSession(): Promise<string | null> {
   }
 }
 
-/** Restore a CTRL_ROOM Y.Doc from base64 state */
+/** Restore a CTRL_ROOM Y.Doc from base64 state. Sweeps any live `chatStream`
+ *  entries the snapshot carried (fold-or-delete) — the write side keeps them
+ *  out of durable files, but a blind `applyUpdate` of a foreign/future
+ *  snapshot must not import an orphan sidecar entry that stays authoritative
+ *  over its chat row with no collector (#1340). */
 export function restoreCtrlDoc(doc: Y.Doc, base64State: string): void {
   const state = Buffer.from(base64State, "base64");
   Y.applyUpdate(doc, new Uint8Array(state));
+  foldChatStream(doc);
 }
 
 /**

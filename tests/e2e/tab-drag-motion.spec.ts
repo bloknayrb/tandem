@@ -82,7 +82,7 @@ async function openTwoTabs(page: Page, reducedMotion: "reduce" | "no-preference"
   await page.emulateMedia({ reducedMotion });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await page.waitForSelector("[data-testid='tab-scroll-container']");
   await expect.poll(() => page.locator(".tab-flip").count(), { timeout: 10_000 }).toBe(2);
   return waitForStableStrip(page);
