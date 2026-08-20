@@ -45,6 +45,7 @@ import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
 import { isOnPath, resolveManyOnPath } from "../shared/integrations/path-lookup.js";
 import { rejectUnsafeWindowsPrefix } from "../shared/windows-path-safety.js";
+import { nodeVersionError } from "./node-version.js";
 
 // Injected by tsup into dist/cli. Absent in tsx dev / vitest (typeof-guarded at
 // use). This is the version the `npx` bridge entries are pinned to.
@@ -185,13 +186,17 @@ class Recorder {
  * `tsup.config.ts`'s `target: "node22"` only needs `>=22.0.0`. Whether
  * `engines.node` itself should come down to `>=22` — with `22.12.0` kept as
  * a documented contributor/build-only floor elsewhere — is an open product
- * question (#1442). Until that's resolved, `doctor` reports against
+ * question, tracked as #1533. Until that's resolved, `doctor` reports against
  * whatever `engines` currently declares, so it never again silently
  * disagrees with it. `src/cli/node-version.ts`'s CLI startup guard is
  * deliberately NOT unified with this constant — it gates every `tandem`
  * invocation (including the plugin's `tandem-channel`/`monitor` entries) on
  * the real ~22.0.0 runtime floor, and tightening it to 22.12.0 would refuse
- * to start on Node versions that run Tandem correctly today.
+ * to start on Node versions that run Tandem correctly today. The two are not
+ * unrelated, though: {@link evaluateNodeVersion} consults that guard's own
+ * predicate — not a second copy of its floor — when deciding whether a
+ * below-floor version is a warn or a fail, so the two files can never drift
+ * into disagreeing about which versions actually RUN.
  */
 export const MIN_NODE_VERSION = "22.12.0";
 
@@ -240,33 +245,92 @@ export function isNodeVersionSupported(version: string): boolean | null {
 }
 
 /**
- * Pure so the pass/fail wording is directly testable, following
+ * Whether a Node version that PARSES but sits below {@link MIN_NODE_VERSION}
+ * is reported as a `fail` (`tandem doctor` exits 1) or a `warn` (exits 0).
+ * Deliberately `"warn"` — a product decision, reversible by editing this one
+ * line.
+ *
+ * The floor is `engines.node`, which the {@link MIN_NODE_VERSION} docblock
+ * above records is a BUILD-toolchain floor: every `>=22.12.0` entry in
+ * `package-lock.json` is `dev: true`, and the highest floor among real
+ * runtime `dependencies` is `>=20.19.0`. So a user on Node 22.0-22.11 has an
+ * install that WORKS — `src/cli/node-version.ts`'s startup guard runs them,
+ * and this same file argues that tightening that guard "would refuse to
+ * start on Node versions that run Tandem correctly today". Reporting `fail`
+ * here would exit 1 on a working install and contradict the paragraph above.
+ *
+ * The tradeoff, taken knowingly: `warn` means a real `engines` violation no
+ * longer trips a script that reads only `tandem doctor`'s exit code. That is
+ * the smaller harm, because the defect #1442 reports is doctor SILENTLY
+ * agreeing with a floor it never checked — and a `warn` naming the real
+ * floor is not silent. Flip this to `"fail"` if #1533 resolves by confirming
+ * `>=22.12.0` as a genuine RUNTIME requirement.
+ *
+ * Two cases are NOT governed by this knob, and both stay `fail`, because the
+ * whole justification above is "this install works" and neither of them is
+ * one. A version the CLI startup guard would REFUSE TO START on (`major <
+ * 22`, per {@link nodeVersionError}) is a broken install, not a lenient
+ * `engines` reading — warning there would tell a Node 20 user everything is
+ * fine while `tandem` itself declines to run. An UNPARSEABLE version is not
+ * known to be anything. Between them they preserve the invariant that
+ * nothing here became more lenient than the major-only code it replaced:
+ * the only behavior change against master is pass → warn, inside 22.0-22.11.
+ */
+const BELOW_FLOOR_STATUS: "warn" | "fail" = "warn";
+
+/**
+ * Pure so the wording is directly testable, following
  * `evaluateNodeToolchain`. `EvalOutcome` (used by most other checks via
  * `recordEvaluation`) has no `"fail"` member, so this check keeps its own
- * local result type and wires into `r.pass`/`r.fail` directly, the same way
- * `checkNodeToolchain` wires `evaluateNodeToolchain`.
+ * local result type and wires into `r.pass`/`r.warn`/`r.fail` directly, the
+ * same way `checkNodeToolchain` wires `evaluateNodeToolchain`.
  */
 export function evaluateNodeVersion(version: string): {
-  status: "pass" | "fail";
+  status: "pass" | "warn" | "fail";
   message: string;
   fix?: string;
 } {
-  if (isNodeVersionSupported(version)) {
+  const supported = isNodeVersionSupported(version);
+  if (supported) {
     return { status: "pass", message: `Node.js ${version} (>= ${MIN_NODE_VERSION} required)` };
   }
-  // `null` (unparseable) fails closed here, same as the pre-existing
+  // `null` (unparseable) fails closed, same as the pre-existing
   // `Number.parseInt` → `NaN` behavior (`NaN >= 22` was already `false`) —
   // preserved deliberately, not a new policy.
+  if (supported === null) {
+    return {
+      status: "fail",
+      message: `Node.js ${version} — unrecognized version string, expected ${MIN_NODE_VERSION}+`,
+      fix: `Install Node.js ${MIN_NODE_VERSION}+ from https://nodejs.org`,
+    };
+  }
+  // Below the declared floor. Whether that is a `fail` or a `warn` is decided
+  // by the CLI startup guard's OWN predicate rather than a second copy of its
+  // floor: if `tandem` would refuse to start on this Node, doctor must not
+  // soften it. Asking `nodeVersionError` directly means the two can never
+  // drift into disagreeing about which versions run — the exact defect #1442
+  // reports, one file over.
+  if (nodeVersionError(version) !== null) {
+    return {
+      status: "fail",
+      message: `Node.js ${version} — Tandem's CLI will not start on this version`,
+      fix: `Install Node.js ${MIN_NODE_VERSION}+ from https://nodejs.org`,
+    };
+  }
+  // Runs, but below the declared floor. Say what the floor IS and where it
+  // comes from rather than that this version is "required" — the docblocks
+  // above record that it is not required at runtime.
   return {
-    status: "fail",
-    message: `Node.js ${version} — version ${MIN_NODE_VERSION}+ required`,
-    fix: `Install Node.js ${MIN_NODE_VERSION}+ from https://nodejs.org`,
+    status: BELOW_FLOOR_STATUS,
+    message: `Node.js ${version} — below package.json's declared engines.node floor of ${MIN_NODE_VERSION}`,
+    fix: `Upgrade to Node.js ${MIN_NODE_VERSION}+ from https://nodejs.org`,
   };
 }
 
 function checkNodeVersion(r: Recorder): void {
   const result = evaluateNodeVersion(process.version);
   if (result.status === "pass") r.pass(result.message);
+  else if (result.status === "warn") r.warn(result.message, result.fix);
   else r.fail(result.message, result.fix);
 }
 
