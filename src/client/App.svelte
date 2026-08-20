@@ -3873,9 +3873,12 @@ const shouldShowModelPicker = $derived(
      were unguarded. `::before`'s `height` change is real motion, not a colour
      crossfade — the stronger obligation of the two (it's why the issue named
      it specifically). Grouped in one block, matching this file's own
-     `.rail-shell, .rail-resize-handle` pairing above and
-     ScrollPill.svelte's `.scroll-pill-thumb::before` (base + `::before`
-     guarded together). Same specificity-vs-source-order shape as `.rail-tab`
+     `.rail-shell, .rail-resize-handle` pairing above — that grouping is the
+     precedent, NOT ScrollPill.svelte: it guards `.scroll-pill-thumb::before`
+     alone, because its base `.scroll-pill-thumb` deliberately declares no
+     transition at all (opacity/transform are written there every frame — see
+     its own comment). Both halves genuinely carry one here, so both are named.
+     Same specificity-vs-source-order shape as `.rail-tab`
      above: `.panel-edge-collapse:hover::before` (above) is higher-specificity
      but declares no `transition` of its own today, so it isn't racing this
      guard — it would need to join both halves below if that ever changes. */

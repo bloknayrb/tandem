@@ -42,15 +42,41 @@ const APP_SVELTE = join(ROOT, "src", "client", "App.svelte");
 const GLOBAL_TOGGLE = ":global(body.tandem-reduce-motion) ";
 
 /**
- * Matches `(prefers-reduced-motion: reduce)` or the bare `(prefers-reduced-motion)`
- * form, but NOT `(prefers-reduced-motion: no-preference)` or any other value.
- * `.includes("prefers-reduced-motion")` alone matches the FEATURE NAME only, so
- * `@media (prefers-reduced-motion: no-preference) { .rail-tab { transition: none } }`
- * — the exact inverse of the intent, killing motion for users who did NOT ask for
- * it and leaving it running for users who did — would satisfy that check. Caught
- * by mutation during #1425 review.
+ * The WHOLE at-rule chain a reduce-motion guard is allowed to sit under, anchored
+ * end to end: `@media (prefers-reduced-motion: reduce)`, or the bare
+ * `(prefers-reduced-motion)` form, and nothing else.
+ *
+ * Anchored-and-whole rather than a substring/`.some()` test because three
+ * different inversions all satisfy the loose forms, and each was mutation-proved
+ * during #1425 review:
+ *
+ * - VALUE: `.includes("prefers-reduced-motion")` matches the FEATURE NAME only,
+ *   so `@media (prefers-reduced-motion: no-preference) { .rail-tab { transition:
+ *   none } }` — the exact inverse of the intent, killing motion for users who did
+ *   NOT ask for it and leaving it running for users who did — satisfies it.
+ * - QUERY: a floating `/prefers-reduced-motion\s*(?::\s*reduce\s*)?\)/` fixes the
+ *   value half but not this one. `@media not all and (prefers-reduced-motion:
+ *   reduce)` is the SAME inversion written as a query negation, and the floating
+ *   regex matches it happily — the reduce feature genuinely is in there, just
+ *   negated.
+ * - CHAIN: `atRules.some(...)` asks whether SOME enclosing at-rule mentions
+ *   reduce, which is strictly weaker than "reduce is the only condition". A guard
+ *   nested inside an unrelated restrictive query — `@media (min-width: 900px) {
+ *   @media (prefers-reduced-motion: reduce) { … } }` — passes while leaving every
+ *   narrow viewport unguarded.
+ *
+ * So the check is this anchored regex against a chain asserted to be length 1.
  */
-const REDUCE_MOTION_QUERY = /prefers-reduced-motion\s*(?::\s*reduce\s*)?\)/;
+const REDUCE_MOTION_QUERY = /^@media\s*\(\s*prefers-reduced-motion\s*(?::\s*reduce\s*)?\)$/;
+
+/**
+ * True only when `atRules` is a chain of exactly one at-rule and that at-rule is
+ * an unnegated, unqualified reduce-motion query — i.e. the rule applies when the
+ * user asks for reduced motion, and under no other condition.
+ */
+function isReduceMotionOnly(atRules: string[]): boolean {
+  return atRules.length === 1 && REDUCE_MOTION_QUERY.test(atRules[0]);
+}
 
 const RULES = cssRulesBySelector(styleBlocks(APP_SVELTE));
 
@@ -78,8 +104,29 @@ function motionDecls(body: string): Decl[] {
     });
 }
 
+/**
+ * A `none` motion declaration, in EITHER sanctioned form.
+ *
+ * `cssRulesBySelector` re-serializes `!important` back into the value (see its
+ * `body` builder in `../helpers/css-source`), so an exact `=== "none"` compare
+ * reads `transition: none !important` — the STRONGER form, and the one this
+ * codebase already uses where a guard races a higher-specificity or inline rule
+ * (`ActivityTray.svelte`, `status/StatusBar.svelte`) — as a real MOTION
+ * declaration. That mis-read is wrong in both directions at once: the guard gets
+ * counted as a motion target needing a guard of its own, and it simultaneously
+ * stops satisfying the target it actually guards, so the failures point at the
+ * wrong rule. Strip the flag before comparing. Mutation-proved during #1425
+ * review; App.svelte's own new `.rail-tab` comment names `!important` as the
+ * sanctioned shape for the racing case, so the next person following #1530 into
+ * this file would have hit it.
+ */
 function isNone(value: string): boolean {
-  return value.trim().toLowerCase() === "none";
+  return (
+    value
+      .replace(/\s*!important\s*$/i, "")
+      .trim()
+      .toLowerCase() === "none"
+  );
 }
 
 /**
@@ -87,13 +134,40 @@ function isNone(value: string): boolean {
  * requires to be guarded. A rule with a grouped selector list (the float-slide
  * rules below carry two selectors per rule) yields one target per selector,
  * since guard coverage is checked per selector.
+ *
+ * `selector` is the rule's RESOLVED selector (`fullSelectors`), never the
+ * authored ancestor-relative one (`selectors`), and everything downstream —
+ * `EXCEPTIONS`, `mediaGuardRule`, `globalGuardRule` — matches in the same
+ * coordinate system. That choice is what makes this file's central claim true
+ * rather than merely asserted. The claim is "the guard's specificity is
+ * IDENTICAL to its target's, so source order decides", and only the resolved
+ * selector can witness it: `selectors` is relative to an ancestor it does not
+ * name, so two rules with the same `selectors` entry can have wildly different
+ * specificity. Wrapping App.svelte's base `.rail-tab` rule in a
+ * `.rail-tabs-track { … }` — an ordinary CSS-nesting tidy-up, which Svelte 5
+ * accepts and lightningcss compiles — makes the base `(0,2,0)` while the
+ * `@media` guard stays `(0,1,0)`, so the GUARD LOSES and OS-level reduced-motion
+ * users get their motion back (the `:global(body.tandem-reduce-motion)` half
+ * still wins, so exactly the half of the audience that never opened Settings
+ * regresses). Under `selectors` that mutation is fully green; under
+ * `fullSelectors` the guard simply stops being found for the now-`.rail-tabs-track
+ * .rail-tab` target and the file reds. Mutation-proved during #1425 review (M12).
+ * `../helpers/css-source`'s own doc comment warns about exactly this — it is how
+ * a nesting rewrite defeated `mode-toggle-thumb-contract.test.ts`'s width gate.
+ *
+ * Matching resolved-to-resolved rather than banning nesting outright is
+ * deliberate: nesting BOTH a rule and its guard under the same parent keeps their
+ * specificities equal and the source-order argument sound, and that stays green.
+ * Where the two forms disagree the disagreement always errs safe — a guard that
+ * resolves differently from its target is reported missing rather than assumed
+ * fine.
  */
 type MotionTarget = { selector: string; prop: "transition" | "animation"; rule: CssRule };
 
 const MOTION_TARGETS: MotionTarget[] = RULES.flatMap((rule) =>
   motionDecls(rule.body)
     .filter((d) => !isNone(d.value))
-    .flatMap((d) => rule.selectors.map((selector) => ({ selector, prop: d.prop, rule }))),
+    .flatMap((d) => rule.fullSelectors.map((selector) => ({ selector, prop: d.prop, rule }))),
 );
 
 /**
@@ -109,6 +183,12 @@ const MOTION_TARGETS: MotionTarget[] = RULES.flatMap((rule) =>
  * the thing that would actually break this guard (the CSS match is fine either
  * way, textually). Don't add an entry here without also adding or confirming its
  * markup proof below.
+ *
+ * `declared` and `guardedAs` are RESOLVED selectors (`fullSelectors`), the same
+ * coordinate system `MOTION_TARGETS` and both guard lookups use — see the
+ * `MotionTarget` doc comment. Every rule involved is top-level today, so the
+ * resolved and authored forms coincide; if one is ever nested, the entry here
+ * must be written as the resolved selector.
  */
 const FLOAT_SLIDE_REASON =
   "the float-slide animation selector and its reduce-motion guard selector are " +
@@ -164,15 +244,17 @@ function guardedSelectorFor(target: MotionTarget): string {
 /**
  * The `@media (prefers-reduced-motion: reduce)` rule declaring `${prop}: none`
  * for `guardedSelector`, or undefined. Reads each candidate rule's OWN `body` —
- * never a joined-body form — and gates on that rule's OWN `atRules` containing a
- * `prefers-reduced-motion` entry, so a `none` declared with no `@media` wrapper
- * at all (a broken "fix") cannot satisfy this.
+ * never a joined-body form — and gates on that rule's OWN `atRules` being exactly
+ * a reduce-motion query (`isReduceMotionOnly`), so neither a `none` declared with
+ * no `@media` wrapper at all (a broken "fix") nor one under a negated or
+ * additionally-constrained query can satisfy this. Matches on `fullSelectors`,
+ * for the reason given on `MotionTarget`.
  */
 function mediaGuardRule(guardedSelector: string, prop: string): CssRule | undefined {
   return RULES.find(
     (r) =>
-      r.atRules.some((a) => REDUCE_MOTION_QUERY.test(a)) &&
-      r.selectors.includes(guardedSelector) &&
+      isReduceMotionOnly(r.atRules) &&
+      r.fullSelectors.includes(guardedSelector) &&
       motionDecls(r.body).some((d) => d.prop === prop && isNone(d.value)),
   );
 }
@@ -181,7 +263,7 @@ function globalGuardRule(guardedSelector: string, prop: string): CssRule | undef
   const wanted = `${GLOBAL_TOGGLE}${guardedSelector}`;
   return RULES.find(
     (r) =>
-      r.selectors.includes(wanted) &&
+      r.fullSelectors.includes(wanted) &&
       motionDecls(r.body).some((d) => d.prop === prop && isNone(d.value)),
   );
 }
@@ -223,7 +305,8 @@ describe("App.svelte reduce-motion guard coverage (#1425)", () => {
       expect(
         media.start,
         `the @media guard for ${guardedSelector} must be declared AFTER the rule it guards — its specificity ` +
-          "is identical (same selector, an at-rule adds none), so it wins only by source order.",
+          "is identical (it was matched by RESOLVED selector, so same-selector really does mean " +
+          "same-specificity, and an at-rule adds none), so it wins only by source order.",
       ).toBeGreaterThan(target.rule.start);
       expect(
         global.start,
@@ -373,12 +456,18 @@ describe("App.svelte reduce-motion guard coverage (#1425): inline `style` attrib
         values.push(src.slice(openedAt, close));
         re.lastIndex = close + 1;
       } else {
-        // `style={` is followed by a template-literal backtick in every current
-        // occurrence (`` style={`...`} ``), which is not itself CSS text and
-        // must not become the first character of the extracted value — a
-        // leading backtick defeats the offender scan's `^transition` anchor
-        // below, since `` `transition: ... `` does not start with the literal
-        // word "transition". Skip exactly one leading backtick if present;
+        // `style={` is COMMONLY — not always — followed by a template-literal
+        // backtick (`` style={`...`} ``). Of the 16 occurrences in this file
+        // today, three are not: two ternaries whose backtick sits after the
+        // condition (`` style={cond ? `width: …` : ""} ``, ~2587/2649) and one
+        // bare member expression (`style={editorStage.layerStyle}`, ~3192; see
+        // the JS-builder block below, which is what covers that shape). A
+        // leading backtick, where present, is not itself CSS text and must not
+        // become the first character of the extracted value — it would defeat
+        // the offender scan's `(?:^|[;\s])` anchor below, since
+        // `` `transition: … `` neither starts with nor is preceded by a
+        // separator before the literal word "transition". So skip exactly one
+        // leading backtick IF present and leave every other shape alone;
         // depth-counting for the matching `}` still starts at the `{` itself; a
         // trailing backtick (if any) is harmless left in the extracted value
         // since nothing here anchors on end-of-string.
@@ -409,7 +498,7 @@ describe("App.svelte reduce-motion guard coverage (#1425): inline `style` attrib
     expect(values.length).toBeGreaterThan(0);
   });
 
-  it("declares no transition/animation inside any inline style attribute", () => {
+  it("declares no transition/animation in any inline style attribute written as literal CSS", () => {
     const offenders = values.filter((v) => /(?:^|[;\s])(?:transition|animation)\s*:/.test(v));
     expect(
       offenders,
@@ -419,6 +508,66 @@ describe("App.svelte reduce-motion guard coverage (#1425): inline `style` attrib
         "`.editor-scroll`'s fix, #1425, and docs/design-system-impl/motion.md's " +
         "`prefers-reduced-motion` policy section); only a genuinely DYNAMIC (JS-computed) duration " +
         "needs token-zeroing (morphTiming.css/tabDragMotion.css) instead.",
+    ).toEqual([]);
+  });
+
+  /**
+   * The scan above is titled "written as literal CSS" for a reason, and this is
+   * the other half. It reads each `style={…}` occurrence's EXPRESSION SOURCE
+   * TEXT, which for `` style={`width: ${x}px`} `` and for a ternary over two
+   * literals IS the CSS — but for `style={someIdentifier}` is just a variable
+   * name. A `transition` the expression PRODUCES at runtime is invisible to it,
+   * and would be exactly as unreachable by every guard above as
+   * `.editor-scroll`'s inline crossfade was before this PR moved it into a rule.
+   *
+   * So each such occurrence is pinned to the module that builds its string, and
+   * that module is scanned directly. `editorStage.layerStyle` is the only one
+   * today (App.svelte ~3192); it comes from `stageLayerStyle()`, which emits
+   * custom properties plus `display`/`grid-template-columns` and no motion — a
+   * fact about THAT file, which is why it is asserted here rather than asserted
+   * in a comment.
+   */
+  const JS_BUILT_INLINE_STYLES: Array<{ expression: string; builder: string }> = [
+    {
+      expression: "editorStage.layerStyle",
+      builder: join(ROOT, "src", "client", "layout", "editor-stage.svelte.ts"),
+    },
+  ];
+
+  it("pins every `style={identifier}` occurrence to the module that builds its CSS", () => {
+    const found = [
+      ...raw.matchAll(/style=\{\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\}/g),
+    ].map((m) => m[1]);
+    expect(
+      [...new Set(found)].sort(),
+      "App.svelte gained (or lost) a `style={someExpression}` whose value is built in JS. The " +
+        "literal-CSS sweep above scans the expression's SOURCE TEXT, so it cannot see a " +
+        "transition/animation the expression produces at runtime. Add the expression to " +
+        "JS_BUILT_INLINE_STYLES with the module that builds its string, so the assertion below " +
+        "scans that module too — otherwise the declaration is unguardable AND unnoticed.",
+    ).toEqual([...JS_BUILT_INLINE_STYLES.map((e) => e.expression)].sort());
+  });
+
+  it.each(
+    JS_BUILT_INLINE_STYLES.map((e) => [e.expression, e] as const),
+  )("%s's builder module declares no transition/animation", (_label, entry) => {
+    // Comments stripped first so prose can neither satisfy nor trip the scan:
+    // block comments wholesale, and `//` comments only where one OPENS a line,
+    // which never touches a `//` inside a string (a URL, say) and so cannot
+    // hide a real declaration.
+    const src = readFileSync(entry.builder, "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^[ \t]*\/\/.*$/gm, "");
+    const offenders = [
+      ...src.matchAll(/(?:^|[;\s"'`])((?:transition|animation)\s*:[^;\n`"']*)/g),
+    ].map((m) => m[1].trim());
+    expect(
+      offenders,
+      `\`${entry.expression}\` is written into an inline \`style\` attribute in App.svelte, and ` +
+        "an inline style is structurally unreachable by every reduce-motion guard in this file " +
+        "(#1396, #1425). A motion declaration emitted from here is therefore unguardable where it " +
+        "lands. Move it into a stylesheet rule and guard THAT, or — if the timing is genuinely " +
+        "JS-computed — use token-zeroing (morphTiming.css/tabDragMotion.css) and record it here.",
     ).toEqual([]);
   });
 });
