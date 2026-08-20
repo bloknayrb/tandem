@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import fs from "fs";
 import path from "path";
+import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -286,16 +287,19 @@ test("middle-clicking a link in a READ-ONLY document does not navigate away (#14
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
   // Re-open read-only through the same route the View Changelog button uses.
+  // The harness MCP port, never the product's 3479 (#1492): a literal here
+  // would drive this destructive suite at whatever backend happens to own the
+  // real port.
   const status = await page.evaluate(
-    async (fp) => {
-      const res = await fetch("http://127.0.0.1:3479/api/open", {
+    async ([fp, url]) => {
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filePath: fp, readOnly: true, force: false }),
       });
       return res.status;
     },
-    path.join(tmpDir, "link-source.md"),
+    [path.join(tmpDir, "link-source.md"), `http://127.0.0.1:${E2E_MCP_PORT}/api/open`] as const,
   );
   expect(status).toBe(200);
 
