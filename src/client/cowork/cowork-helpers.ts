@@ -6,6 +6,7 @@
 
 import { COWORK_ONBOARDING_SKIPPED_KEY } from "../../shared/constants";
 import type {
+  AdapterEnumerationReason,
   CoworkStatus,
   FirewallErrorVariant,
   SubnetDetectionReason,
@@ -26,6 +27,29 @@ import type {
  * screen reader hears; sharing the CSS would be a visual regression.
  */
 export const COWORK_PREFLIGHT_CHECKING = "Checking your network…";
+
+/**
+ * What the live region says when the pre-flight ran and BROKE (#1436).
+ *
+ * The `ok` case renders nothing, which is only readable if the failure case
+ * renders something: before this existed, a probe that threw emptied the region
+ * and left behind exactly the picture a passing probe leaves behind. The
+ * reasonable reading was "the check passed". For a screen-reader user it was
+ * worse — `role="status"` announces text that is added or changed, and says
+ * nothing at all when a region is EMPTIED, so the sequence was "Checking your
+ * network…" followed by permanent silence.
+ *
+ * Hedged on purpose, and the hedge is the accurate claim: a probe that could
+ * not classify its own failure has said nothing about whether the firewall
+ * write would succeed. This is not `blocked` — it must not swap Enable for
+ * "Check again", because that button exists for the case where we watched
+ * detection fail and know the outcome.
+ *
+ * Distinct from the `unavailable` case, which renders nothing and should: no
+ * Tauri bridge and non-Windows are the ordinary way this probe does not run,
+ * and a hedged warning there would fire on the routine path.
+ */
+export const COWORK_PREFLIGHT_FAILED = "Couldn't check your network — enabling may still work.";
 
 /**
  * High-level branch the Settings UI renders. Collapses the `osSupported` /
@@ -79,7 +103,7 @@ export function undetectedDetail(status: CoworkStatus): UndetectedDetail {
  * `src/client/types.ts` is hand-maintained against `src-tauri/src/firewall.rs`,
  * so a Rust-side rename produces zero TypeScript errors and degrades silently
  * to the fallback hint — which is why the fallback has to stay honest, and why
- * `tests/build/subnet-reason-alignment.test.ts` pins the two lists together.
+ * `tests/build/firewall-reason-alignment.test.ts` pins the two lists together.
  *
  * None of these may say "is Cowork set up on this machine?" — the workspace
  * scan has already succeeded before any of the three surfaces can reach this
@@ -98,6 +122,35 @@ const SUBNET_REASON_HINT: Record<SubnetDetectionReason, string> = {
     "The Hyper-V subnet Tandem found is wider than /20. Tandem won't open the firewall that broadly, so it stopped rather than allow more of the network than Cowork needs.",
   queryFailed:
     "Windows couldn't list Hyper-V network adapters, so Tandem can't tell which subnet to allow. Try again, and if it keeps happening, check that PowerShell runs normally on this machine.",
+  // #1371. Names the wait, deliberately WITHOUT a number: the pre-flight and the
+  // Enable path give the query different budgets (`SUBNET_PROBE_TIMEOUT_ADVISORY`
+  // vs `SUBNET_PROBE_TIMEOUT_ENABLE` in `firewall.rs`), so any numeral here would
+  // be wrong on one of the two paths. The exact seconds go to `tandem.log`.
+  timeout:
+    "Tandem asked Windows to list its Hyper-V network adapters and gave up waiting rather than freeze. That usually means the Windows Management Instrumentation service is stuck — restarting the machine clears it. You can also just try again.",
+};
+
+/**
+ * Recovery copy per adapter-enumeration reason (#1372).
+ *
+ * The old single sentence — "Could not enumerate Hyper-V network adapters. Run
+ * Tandem as administrator or reboot to refresh the adapter list." — covered two
+ * causes with opposite remedies, and asserted an enumeration had been attempted
+ * when the interpreter never launched. Same defect shape as #1298 next door.
+ *
+ * Every entry says PowerShell never started, because that is the one thing all
+ * three have in common and it is what makes "reboot to refresh the adapter
+ * list" visibly the wrong advice. None of them mentions administrator rights:
+ * elevation has nothing to do with whether a process can be spawned, and that
+ * sentence sent people to a UAC prompt that could not have helped.
+ */
+const ADAPTER_REASON_HINT: Record<AdapterEnumerationReason, string> = {
+  notFound:
+    "Tandem couldn't find Windows PowerShell, so it couldn't look up the Hyper-V subnet to allow. Check that powershell.exe is on your PATH — Nano Server and other stripped-down Windows images don't ship it.",
+  permissionDenied:
+    "Windows refused to start PowerShell, so Tandem couldn't look up the Hyper-V subnet to allow. That is usually an application-control policy (AppLocker, WDAC or Software Restriction Policies) — on a managed machine your IT team controls it.",
+  spawnFailed:
+    "Tandem couldn't start Windows PowerShell, so it couldn't look up the Hyper-V subnet to allow. Try again, and if it keeps happening, check that PowerShell runs normally on this machine.",
 };
 
 /**
@@ -118,24 +171,79 @@ export function firewallErrorHint(variant: FirewallErrorVariant): string {
     case "subnetDetectionFailed":
       // `||`, not `??`: the left operand is `""` when `reason` is an empty
       // string, and `??` passes that straight through — rendering an empty
-      // warning box while still removing the Enable button. `||` also covers
-      // an absent `reason` (older sidecar) and one this build doesn't
-      // recognise, and no entry in the table is falsy, so nothing valid is
-      // lost. The fallback still names the subnet, because that is the one
-      // thing every case has in common.
-      return (
+      // warning box while still removing the Enable button. `||` also covers an
+      // absent `reason` and one this build doesn't recognise, and no entry in
+      // the table is falsy, so nothing valid is lost. The fallback still names
+      // the subnet, because that is the one thing every case has in common.
+      //
+      // Not for version skew: `firewall.rs` runs in the Tauri shell and the
+      // WebView loads `frontendDist`, so the Rust and the TypeScript ship as
+      // one artifact and cannot disagree. This is defence against a hand-edited
+      // payload and against a Rust-side rename that TypeScript cannot see —
+      // which is a real hazard, since the union is hand-maintained.
+      return withQueryDiagnostics(
         (variant.reason && SUBNET_REASON_HINT[variant.reason]) ||
-        "Tandem couldn't work out the Hyper-V subnet Cowork is using, so it didn't change the firewall. Start a Cowork session and try again."
+          "Tandem couldn't work out the Hyper-V subnet Cowork is using, so it didn't change the firewall. Start a Cowork session and try again.",
+        variant,
       );
     case "adapterEnumerationFailed":
-      return "Could not enumerate Hyper-V network adapters. Run Tandem as administrator or reboot to refresh the adapter list.";
+      // Same `||` reasoning as the subnet arm above: an absent `reason`, an
+      // empty string, or one this build doesn't recognise all fall to copy that
+      // is still true of every case.
+      return (
+        (variant.reason && ADAPTER_REASON_HINT[variant.reason]) ||
+        "Tandem couldn't start Windows PowerShell, so it couldn't look up the Hyper-V subnet to allow."
+      );
     default:
       return `Unexpected firewall error (${(variant as { kind: string }).kind}). Please restart Tandem.`;
   }
 }
 
+/**
+ * Append the query's own diagnostics to a subnet hint, when it has any (#1372).
+ *
+ * The Rust side attaches these only when the PowerShell process actually
+ * failed, so in practice only `queryFailed` from a non-zero exit carries them.
+ * This keys on the fields rather than on the reason, which is the same thing
+ * and stays right if the Rust side ever populates them for another reason.
+ *
+ * **A zero exit code is not evidence and must not be rendered.** An earlier cut
+ * keyed the Rust side on the reason instead of on the process, which gave the
+ * zero-exit/unparseable-output path `exitCode: 0` and an empty stderr — and
+ * this function turned that into "(PowerShell exit 0: (no output))" appended to
+ * "Windows couldn't list Hyper-V network adapters". Self-contradictory, and
+ * strictly worse than the bare hint. The server is where that was fixed; the
+ * guard here is defence in depth, because the failure was invisible from either
+ * side alone.
+ *
+ * The tail has already had the user's home directory collapsed to `~` on the
+ * Rust side. That is a narrowing, not a guarantee: PowerShell can name paths
+ * outside the home directory, and this string is written for a user to paste
+ * into a public issue.
+ */
+function withQueryDiagnostics(
+  hint: string,
+  variant: Extract<FirewallErrorVariant, { kind: "subnetDetectionFailed" }>,
+): string {
+  const hasExit = typeof variant.exitCode === "number" && variant.exitCode !== 0;
+  const hasStderr = (variant.stderrTail ?? "").trim().length > 0;
+  if (!hasExit && !hasStderr) return hint;
+  return `${hint} (PowerShell exit ${
+    hasExit ? variant.exitCode : "unknown"
+  }: ${truncateStderr(variant.stderrTail ?? "")})`;
+}
+
+/**
+ * One line of captured stderr, capped.
+ *
+ * Newlines are collapsed because the only consumers are single-line toasts and
+ * inline warning boxes: a three-line PowerShell ErrorRecord pasted in raw
+ * either stretches the toast or silently loses everything after the first line,
+ * depending on the surface. Same reasoning as `client-log.ts`'s `collapseLines`
+ * for the same class of text.
+ */
 function truncateStderr(tail: string): string {
-  const s = tail.trim();
+  const s = tail.replace(/\s*\n\s*/g, " ").trim();
   if (s.length === 0) return "(no output)";
   if (s.length <= 200) return s;
   return `${s.slice(0, 197)}...`;
@@ -404,4 +512,29 @@ export function makeDebouncer(ms: number): Debouncer {
       }
     },
   };
+}
+
+/**
+ * The warnings a `cowork_toggle_integration` result carries, defensively (#1438).
+ *
+ * Returns `[]` for anything that is not an object with a `warnings` array of
+ * strings — which is not paranoia about our own Rust: a desktop shell can be
+ * talking to a **sidecar predating #1438**, whose command resolved with a bare
+ * string. Reading `.warnings.length` off that throws inside the toggle handler
+ * and turns a successful enable into a red error banner, which is a worse
+ * outcome than the silence this issue is about.
+ *
+ * Non-string entries are dropped rather than stringified: `String(x)` on an
+ * object renders "[object Object]" into a user-facing banner.
+ */
+export function toggleWarnings(result: unknown): string[] {
+  // Only null and undefined need the early return: property access on either
+  // throws, while `.warnings` on a string, number or boolean is simply
+  // `undefined` and falls through to the `Array.isArray` gate below. A
+  // `typeof result !== "object"` guard here would be unreachable — this was
+  // verified by mutation, which is why it is not present.
+  if (result === null || result === undefined) return [];
+  const raw = (result as { warnings?: unknown }).warnings;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((w): w is string => typeof w === "string" && w.length > 0);
 }

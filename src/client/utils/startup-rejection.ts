@@ -39,6 +39,27 @@ export function messageForStartupRejection(code: string): string {
       // A batch. Deliberately plural and reason-free: a Finder multi-select can
       // mix reasons, and naming one of them would be false rather than vague.
       return "Some of those files couldn't be opened in Tandem.";
+    case "open-deferred":
+      // The queue is RETAINED — `promote_healthy_and_drain` still delivers it if
+      // the user restarts the server, which the failure dialog tells them how to
+      // do. So this must not be past tense: "couldn't be opened" would assert a
+      // finality the design deliberately does not have (#1416).
+      return "Tandem couldn't open that file yet — it will open when the server starts.";
+    case "multiple-deferred":
+      return "Tandem couldn't open those files yet — they will open when the server starts.";
+    case "open-failed":
+      // The file passed shell validation and then failed to open anyway — a
+      // non-2xx from `/api/open`, a transport failure, or an open that arrived
+      // after the app gave up starting the server (#1416). Nothing about the
+      // *file* was wrong, so the message stays deliberately vague.
+      //
+      // Byte-identical to `default`, and listed anyway on purpose: `default`
+      // must mean exactly one thing, VERSION SKEW. Without this arm an
+      // `"open_failed"` typo on the Rust side would render identically and
+      // every test here would stay green — which is the desync this pair of
+      // assertions (with `open_failed_code_is_stable` in `lib.rs`) exists to
+      // catch.
+      return "That file couldn't be opened in Tandem.";
     default:
       return "That file couldn't be opened in Tandem.";
   }
@@ -51,8 +72,15 @@ export interface StartupRejectionDeps {
   loadEvent: () => Promise<{
     listen: (event: string, handler: () => void) => Promise<() => void>;
   }>;
-  /** Surface a composed message to the user. */
-  push: (message: string) => void;
+  /**
+   * Surface a composed message to the user.
+   *
+   * The raw `code` rides along ONLY so the caller can scope its toast dedup key
+   * to it. It must not be rendered: the message is the rendered form, and the
+   * whole point of the code being path-free is that nothing derived from it
+   * reaches the DOM as text.
+   */
+  push: (message: string, code: string) => void;
   /** Injected for tests; defaults to `console.warn`. */
   warn?: (message: string, err: unknown) => void;
 }
@@ -87,7 +115,7 @@ export function wireStartupRejection(deps: StartupRejectionDeps): () => void {
       // A failed invoke does NOT consume the buffer — the Rust `take()` only
       // happens on success — so a transient failure self-heals on the next
       // nudge rather than losing the toast.
-      if (code && !cancelled) deps.push(messageForStartupRejection(code));
+      if (code && !cancelled) deps.push(messageForStartupRejection(code), code);
     } catch (err) {
       warn("[App] Failed to drain buffered startup rejection:", err);
     }

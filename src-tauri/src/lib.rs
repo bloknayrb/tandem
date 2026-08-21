@@ -4,6 +4,19 @@ mod sentry_reporting;
 mod token_store;
 mod uninstall_scrub;
 
+// #1371: both of these are deliberately UNGATED even though their only consumer
+// today (`firewall.rs`) is Windows-only. A `#[cfg(target_os = "windows")]` module
+// is never parsed on another target, so gating them would put the two pieces of
+// genuinely tricky logic — a process deadline that must bound the whole call, and
+// an in-flight guard replacing the serialization the main thread used to provide
+// for free — where they could not be unit-tested locally. `#[allow(dead_code)]`
+// on `bounded_command` covers non-Windows release builds, where nothing calls it
+// — scoped with `cfg_attr` (as `PortHolder` is) so that on Windows, where the
+// module IS live, a genuinely unused helper added later still warns.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod bounded_command;
+mod single_flight;
+
 #[cfg(target_os = "windows")]
 mod cowork_atomic_json;
 
@@ -188,6 +201,25 @@ pub const SUPPORTED_FILE_ASSOC_EXTS: &[&str] =
 /// there is exactly one sidecar per process.
 static SIDECAR_HEALTHY: AtomicBool = AtomicBool::new(false);
 
+/// Set when the app has stopped trying to start the server, cleared when it
+/// starts trying again (#1416).
+///
+/// Without it, `SIDECAR_HEALTHY` staying false forever means `try_queue_or_post`
+/// keeps taking the queue branch after the app has given up: file 1 gets a
+/// dialog and a toast, files 2..N queue into a queue with no consumer, logging
+/// at `info` — below the release `LevelFilter::Warn` floor. No tab, no toast, no
+/// warn, which is exactly the bug #1416 was filed about, one file later.
+///
+/// Read and written ONLY under the `PendingOpens` mutex — like the WRITE side of
+/// `SIDECAR_HEALTHY` — so it serialises with the producer for free; see the
+/// ordering proof on [`try_queue_or_post`]. The comparison is deliberately
+/// narrowed to writes: `await_sidecar_healthy` polls `SIDECAR_HEALTHY` unlocked,
+/// so "exactly like `SIDECAR_HEALTHY`" would be a false licence to add an
+/// unlocked reader here. The latch has no such reader, and must not grow one. Clearing is deliberately generous
+/// (any new start attempt clears it, from any route): a stale set costs one
+/// unnecessary fail-fast, a stale clear costs the silence this exists to end.
+static SIDECAR_GAVE_UP: AtomicBool = AtomicBool::new(false);
+
 /// One-shot latch: true from an autostart launch until the first human-presence
 /// signal, and read on EVERY sidecar spawn.
 ///
@@ -343,8 +375,37 @@ fn surface_startup_rejection_with(code: &'static str, nudge: impl FnOnce()) {
 /// Wire code for "more than one file in this batch was refused". Distinct from
 /// the per-reason codes because a mixed batch has no single true reason, and
 /// picking one of them would state something false rather than something vague.
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+///
+/// Ungated since #1416: `post_paths_and_surface` gives it callers on every
+/// platform.
 const CODE_MULTIPLE_REJECTED: &str = "multiple-rejected";
+
+/// Wire code for "the candidate passed shell validation, and then failed to open
+/// anyway" — a non-2xx from `/api/open`, a transport failure, or an open that
+/// arrived after the app stopped trying to start the server (#1416).
+///
+/// Deliberately ONE code for all three, not three: the user's remedy is identical
+/// (try again / reopen the file), the distinction is a diagnostic `tandem.log`
+/// already records with the real error text, and every extra code is another
+/// string that can desync from a stale WebView. Distinct from the *validation*
+/// codes because nothing about the file was wrong — `messageForStartupRejection`
+/// maps it to the deliberately vague "That file couldn't be opened in Tandem."
+const CODE_OPEN_FAILED: &str = "open-failed";
+
+/// Wire codes for "queued, not yet delivered, and the queue is RETAINED".
+///
+/// Split from [`CODE_OPEN_FAILED`] because that code's message is flatly past
+/// tense — "That file couldn't be opened in Tandem." — and for a retained queue
+/// that is a false statement: `promote_healthy_and_drain` will open the file if
+/// the user ever restarts the server, which the failure dialog explicitly tells
+/// them how to do. Asserting a finality the design does not have is the same
+/// defect as the "Abandoning N queued file open(s)" line deleted in this change,
+/// and it would be read by the one user in a position to act on it.
+///
+/// Two codes rather than one because the singular message cannot describe a
+/// five-file drop, mirroring the [`CODE_MULTIPLE_REJECTED`] split.
+const CODE_OPEN_DEFERRED: &str = "open-deferred";
+const CODE_MULTIPLE_DEFERRED: &str = "multiple-deferred";
 
 /// Collapses one OS batch — a Finder multi-select "Open With", a multi-file Dock
 /// drop — into the single code the user should see.
@@ -359,17 +420,32 @@ const CODE_MULTIPLE_REJECTED: &str = "multiple-rejected";
 ///
 /// Accumulating first and surfacing once removes the race rather than narrowing
 /// it. Deliberately ungated and free of Tauri types so it is unit-testable on
-/// every platform — its only caller, `handle_opened_urls`, is macOS-only and
+/// every platform — its principal caller, `handle_opened_urls`, is macOS-only and
 /// cannot be tested from Windows or Linux CI, which is precisely why the logic
 /// must not live inside it.
+///
+/// Since #1416 the batch also carries POST failures (`CODE_OPEN_FAILED`), so ONE
+/// accumulator spans validation *and* delivery for a single OS batch. That is
+/// what keeps "one batch, one surface call" true **for everything that resolves
+/// synchronously with the batch**: a Finder multi-select of a `.pdf` (refused)
+/// plus a 60 MB `.md` (refused by the server) would otherwise write twice into
+/// the one-slot buffer and the user would see a count badge whose value depended
+/// on where the client's async drain landed.
+///
+/// **The claim stops at the async boundary, deliberately.** A path that returns
+/// `OpenRoute::Queued` has no outcome yet, and may not have one for minutes —
+/// its verdict arrives from `report_pending_opens_with` when the user answers
+/// the server-failure dialog. Carrying the accumulator across that gap was
+/// considered and rejected: it would have to stay open for a user-timescale
+/// wait, trading a merge bug for a staleness bug. Instead the client keys its
+/// toast dedup on the CODE (`startup-file-rejected:${code}`), so a validation
+/// reason and a later delivery verdict can never merge into one count badge.
 #[derive(Default)]
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 struct RejectionBatch {
     first: Option<&'static str>,
     count: usize,
 }
 
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 impl RejectionBatch {
     fn record(&mut self, code: &'static str) {
         self.count += 1;
@@ -518,6 +594,391 @@ fn autostart_seen_and_mark(dir: &std::path::Path) -> bool {
         return false;
     }
     false
+}
+
+// ---------------------------------------------------------------------------
+// Pending-update boot marker (#1118, the ADR-043 deferred follow-up)
+//
+// `AppHandle::restart()` is divergent, and on Windows the updater plugin does
+// not even reach it: `install_inner` ends in an unconditional
+// `std::process::exit(0)` after a `ShellExecuteW` whose return is discarded
+// (tauri-plugin-updater-2.10.1 `src/updater.rs:865`). Either way the process
+// that started an update is gone before it can observe the outcome, so "the
+// installer ran and the shell came back on the old binary" is completely
+// silent today. A small file on disk is the smallest carrier of "an update was
+// in flight" across the boundary that divergent exit destroys.
+//
+// Everything here is DELIBERATELY UNGATED — no `#[cfg(target_os = ...)]`. A
+// cfg'd body in this file is parsed but never type-checked on other hosts
+// (cfg-stripping runs before name resolution), so gated logic would be proven
+// by nothing until CI's three-OS `rust-test` matrix. Keeping the logic in
+// ungated helpers that take `&Path` / `&str` is what makes `cargo test` on any
+// one host actually mean something.
+// ---------------------------------------------------------------------------
+
+/// Marker file recording an in-flight update, written beside the `autostart-seen`
+/// marker at the app-data root.
+const PENDING_UPDATE_MARKER: &str = "update-pending.json";
+
+/// Contents of [`PENDING_UPDATE_MARKER`]. Rust-only file, never read by the
+/// sidecar or the WebView, so the field names stay snake_case.
+///
+/// `ts` is DIAGNOSTIC ONLY — nothing branches on it. It exists so a support log
+/// can say when the attempt happened; adding a staleness rule here would be a
+/// behaviour change, not a tidy-up.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct PendingUpdateMarker {
+    target_version: String,
+    ts: u64,
+}
+
+/// What the boot-time read concluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingUpdateVerdict {
+    /// No marker, or one too damaged to trust. Nothing to say.
+    NoMarker,
+    /// The running version matches the version we were installing.
+    Completed,
+    /// A marker survived and we are NOT running the version it names.
+    MayHaveFailed,
+}
+
+/// Shape guard for a version string read back off disk. READER-SIDE ONLY.
+///
+/// The writer deliberately does not validate, so an unusual-but-legitimate
+/// version fails toward SILENCE (written, then read back as `NoMarker` and
+/// deleted) rather than toward a false "your update may not have completed".
+/// Validating on the write side too would produce the same silence with an
+/// extra branch. The `debug` log is what leaves a trace if this ever bites.
+fn plausible_version(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 32
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '+' || c == '-')
+}
+
+/// Pure verdict function — no I/O, no Tauri types, total over well-formed input.
+///
+/// Normalization (trim, strip one leading `v`) is defence-in-depth: the version
+/// we write comes from `Update::version`, which the plugin has already
+/// normalized. It costs nothing and removes a whole class of "nagged after a
+/// successful update" bug if that ever stops being true.
+///
+/// KNOWN RESIDUAL, and it is the one most likely to be hit: this answers "did
+/// the shell binary's version change", NOT "did the update complete". A Windows
+/// half-install where NSIS replaced `Tandem.exe` but not `node-sidecar.exe` —
+/// a state `perform_install` explicitly tolerates, see the "still locked" and
+/// "still responding" warnings — lands here as `Completed`. Recorded in ADR-043
+/// beside "no rollback". Closing it needs the marker to carry an expected
+/// sidecar version, which is a different change.
+fn classify_pending_update(
+    marker: Option<PendingUpdateMarker>,
+    running_version: &str,
+) -> PendingUpdateVerdict {
+    let Some(marker) = marker else {
+        return PendingUpdateVerdict::NoMarker;
+    };
+    // `trim()` here is belt-and-braces for the `running_version` side;
+    // whitespace on the marker side is already screened upstream by
+    // `read_pending_update_marker`, which trims before its shape guard.
+    let normalize = |s: &str| {
+        let t = s.trim();
+        t.strip_prefix('v').unwrap_or(t).to_string()
+    };
+    if normalize(&marker.target_version) == normalize(running_version) {
+        PendingUpdateVerdict::Completed
+    } else {
+        PendingUpdateVerdict::MayHaveFailed
+    }
+}
+
+/// Write the marker. Returns `Result` ONLY so tests can assert on it — the
+/// production caller discards it, because a marker write must never fail an
+/// update (#1118: "best-effort").
+///
+/// The timestamp is computed here rather than by the caller so the panic audit
+/// has one function to read. `.unwrap_or_default()` is load-bearing, not
+/// idiom: `duration_since(UNIX_EPOCH)` errors on a clock set before the epoch,
+/// and the idiomatic `.unwrap()` would panic INSIDE a closure unwinding through
+/// the plugin's `download()`, aborting the tokio task so that NEITHER match arm
+/// in `perform_install` runs and no error dialog ever appears — a silently
+/// failed update, exactly what this issue exists to prevent.
+///
+/// Not atomic, and deliberately so: `cowork_atomic_json::with_locked_json` is
+/// Windows-only AND carries a 30-second exclusive-lock budget, and a marker
+/// write that can stall an update by 30s is the regression #1118 forbids. The
+/// reachable bad states without it (truncate-then-die, ext4 delayed-allocation
+/// zero-fill) are both parse failures, and both are swept by the unconditional
+/// clear in `evaluate_pending_update_marker`.
+fn write_pending_update_marker(dir: &std::path::Path, target_version: &str) -> std::io::Result<()> {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let marker = PendingUpdateMarker {
+        target_version: target_version.to_string(),
+        ts,
+    };
+    let body = serde_json::to_string(&marker)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(dir.join(PENDING_UPDATE_MARKER), body)
+}
+
+/// Read the marker. TOTAL — returns `Option`, never `Result`.
+///
+/// Missing dir, missing file, permission error, non-UTF-8, 0-byte, malformed
+/// JSON, missing fields and implausible versions all collapse to `None`, so a
+/// corrupt marker can never fail a boot. Owning the shape guard here is what
+/// lets `classify_pending_update` stay total over well-formed input.
+fn read_pending_update_marker(dir: &std::path::Path) -> Option<PendingUpdateMarker> {
+    let raw = std::fs::read_to_string(dir.join(PENDING_UPDATE_MARKER)).ok()?;
+    let mut marker: PendingUpdateMarker = serde_json::from_str(&raw).ok()?;
+    // Trim BEFORE the guard, not after. `plausible_version` rejects every ASCII
+    // space, so with the order reversed a marker carrying a stray trailing
+    // newline would be screened out here and silently become `NoMarker` — the
+    // failure would be invisible, and `classify_pending_update`'s own `trim()`
+    // would be unreachable through the only real producer.
+    marker.target_version = marker.target_version.trim().to_string();
+    if !plausible_version(&marker.target_version) {
+        log::debug!("Ignoring pending-update marker with implausible target_version");
+        return None;
+    }
+    Some(marker)
+}
+
+/// Remove the marker. `true` when it is provably gone — removed, or already
+/// absent.
+///
+/// No existence pre-check: that is what makes this a silent no-op on a clean
+/// boot, which in turn is what lets `evaluate_pending_update_marker` call it
+/// unconditionally on every verdict instead of carrying a "did a file exist"
+/// discriminator that would widen the reader back into a `Result`.
+fn clear_pending_update_marker(dir: &std::path::Path) -> bool {
+    match std::fs::remove_file(dir.join(PENDING_UPDATE_MARKER)) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            log::warn!("Could not remove pending-update marker: {e}");
+            false
+        }
+    }
+}
+
+/// Buffered pending-update hint CODE, drained by the WebView.
+///
+/// A SEPARATE static from `STARTUP_REJECTION`, not a reuse: that buffer is one
+/// last-write-wins slot, so sharing it would let a file-open rejection and an
+/// update hint clobber each other.
+///
+/// Same buffer-then-payload-free-nudge shape and the same reason: this is
+/// classified in `setup()`, before `App.svelte` exists at all, let alone its
+/// listener. Emitting an event there drops silently on the exact failure mode it
+/// is meant to surface. See `STARTUP_REJECTION` above for why "the WebView is
+/// surely up by now" is not an inference we are allowed to make.
+static PENDING_UPDATE_HINT: Mutex<Option<String>> = Mutex::new(None);
+
+/// Run `f` against the hint buffer, recovering from (and reporting) a poisoned
+/// mutex. Mirrors `with_rejection`; `.lock().unwrap()` is itself a panic path
+/// and this code must not add one to the boot sequence.
+fn with_pending_hint<R>(what: &str, f: impl FnOnce(&mut Option<String>) -> R) -> R {
+    match PENDING_UPDATE_HINT.lock() {
+        Ok(mut guard) => f(&mut guard),
+        Err(poisoned) => {
+            log::error!("PENDING_UPDATE_HINT mutex poisoned during {what} — recovering");
+            f(&mut poisoned.into_inner())
+        }
+    }
+}
+
+/// Stable, path-free, version-free reason code for the pending-update banner.
+const CODE_UPDATE_MAY_NOT_HAVE_COMPLETED: &str = "update-may-not-have-completed";
+
+/// Payload-free nudge meaning "call `get_pending_update_hint`".
+const EVENT_PENDING_UPDATE_HINT: &str = "pending-update-hint";
+
+/// Buffer first, then nudge — split from the Tauri wrapper so the ORDERING is
+/// testable without an `AppHandle`. A nudge that outran the buffer would hand a
+/// live listener an empty slot and drop the hint permanently.
+///
+/// `&'static str`, not `&str`, and that is a safety property rather than a style
+/// choice: it is what makes "a formatted string carrying a version or a path"
+/// a compile error instead of something review has to notice. Same contract as
+/// `buffer_startup_rejection_code`.
+fn surface_pending_update_hint_with(code: &'static str, nudge: impl FnOnce()) {
+    with_pending_hint("buffer", |slot| *slot = Some(code.to_string()));
+    nudge();
+}
+
+/// Deliver a pending-update hint to the WebView.
+fn surface_pending_update_hint(app: &tauri::AppHandle, code: &'static str) {
+    surface_pending_update_hint_with(code, || {
+        if let Err(e) = app.emit(EVENT_PENDING_UPDATE_HINT, ()) {
+            // Already buffered, so the worst case is the banner waiting for the
+            // client's init drain.
+            log::warn!("Failed to emit {EVENT_PENDING_UPDATE_HINT}: {e}");
+        }
+    });
+}
+
+/// Client-drained accessor. TAKES, so a WebView reload cannot replay a banner
+/// the user already saw.
+#[tauri::command]
+fn get_pending_update_hint() -> Option<String> {
+    with_pending_hint("take", |slot| slot.take())
+}
+
+/// Record that an update install is in flight. Returns `()` — there is nothing
+/// for the caller to inspect, propagate or `?`, which is what makes
+/// "best-effort" a type-level property rather than a convention.
+fn record_pending_update(app: &tauri::AppHandle, target_version: &str) {
+    // NB: no `strip_win_prefix()` here, and that is deliberate. That rule
+    // governs paths handed to the Node sidecar, which cannot resolve `\\?\`.
+    // `std::fs` handles the extended-length prefix correctly, so stripping it
+    // would be the bug.
+    let dir = match app.path().app_data_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("app_data_dir unavailable for pending-update marker: {e}");
+            return;
+        }
+    };
+    match write_pending_update_marker(&dir, target_version) {
+        Ok(()) => log::info!("Recorded pending update to v{target_version}"),
+        Err(e) => log::warn!("Could not write pending-update marker: {e}"),
+    }
+}
+
+/// Drop the marker after an install failure that we OBSERVED in-process.
+///
+/// The `Err` arm already shows the user a native error dialog, so a surviving
+/// marker would nag on the next boot about something they were told to their
+/// face.
+fn clear_pending_update(app: &tauri::AppHandle) {
+    match app.path().app_data_dir() {
+        Ok(dir) => {
+            clear_pending_update_marker(&dir);
+        }
+        Err(e) => log::warn!("app_data_dir unavailable to clear pending-update marker: {e}"),
+    }
+}
+
+/// Decide what to do with a verdict once the clear has been attempted.
+///
+/// Pure, so the policy is exhaustively testable without a filesystem that can
+/// be made to fail `remove_file` — which is not something a test running as
+/// root can arrange.
+///
+/// **A hint that cannot be made one-shot is worse than no hint.** If the clear
+/// failed — a read-only app-data dir, a marker locked by an AV scanner or a
+/// roaming-profile sync — the same `MayHaveFailed` verdict would fire on every
+/// subsequent boot, and the take-once buffer would re-raise the banner each
+/// time with no way for the user to stop it. That is the one residual FALSE
+/// POSITIVE in this design, so it is suppressed rather than shipped: a missed
+/// diagnostic is recoverable, a permanent un-dismissable nag is not.
+fn verdict_after_clear(verdict: PendingUpdateVerdict, cleared: bool) -> PendingUpdateVerdict {
+    if cleared {
+        return verdict;
+    }
+    match verdict {
+        PendingUpdateVerdict::MayHaveFailed => PendingUpdateVerdict::NoMarker,
+        other => other,
+    }
+}
+
+/// Boot-time evaluation, as an UNGATED seam over `&Path` / `&str`.
+///
+/// This exists as its own function for one reason: the one-shot clear is the
+/// single invariant whose failure produces a permanent, every-boot,
+/// un-dismissable nag for every affected user, and with the logic living inside
+/// an `AppHandle`-taking function it was pinned by nothing — deleting the clear
+/// outright left `cargo test`, the client suites, biome and typecheck all green.
+/// The only thing that would have caught it was a hardware-gated manual smoke
+/// bullet on the very platforms whose unavailability is why #1118 sat deferred.
+/// Taking `&Path`/`&str` — the same seam every other helper in this module uses
+/// — is what lets that invariant execute on every host and every CI leg.
+///
+/// Read → classify → clear → apply the suppression policy. Idempotent by
+/// construction and with no latch: the read is destructive, so a second call
+/// finds `NoMarker`, clears a file that is already gone, and hints nothing.
+fn evaluate_pending_update_at(
+    dir: &std::path::Path,
+    running_version: &str,
+) -> PendingUpdateVerdict {
+    let verdict = classify_pending_update(read_pending_update_marker(dir), running_version);
+
+    // Unconditional, on every verdict: `clear` is a no-op when absent, which is
+    // how a corrupt marker gets removed without a "did a file exist" branch.
+    // One-shot is the issue's explicit requirement ("never nag twice for the
+    // same attempt"); the banner's own "Check for updates" CTA is the
+    // remediation, and on a boot where the sidecar never came up it is the ONLY
+    // one available for the next 8 hours (the launch-time `check_for_update`
+    // sits behind `start_sidecar`'s failure `return`, and the periodic task
+    // discards its first immediate tick).
+    let cleared = clear_pending_update_marker(dir);
+    if !cleared {
+        log::error!(
+            "Could not clear the pending-update marker — suppressing the hint rather than \
+             raising a banner that would return on every boot with no way to dismiss it"
+        );
+    }
+    verdict_after_clear(verdict, cleared)
+}
+
+/// Boot-time evaluation. Returns `()`; every step is either infallible or
+/// `match`ed to a log line, so this cannot turn `setup()` into an `Err` and the
+/// app can never fail to start because of the marker.
+///
+/// Runs in `setup()` rather than after `wait_for_health()` — which is what the
+/// issue text suggested — because `start_sidecar`'s health-`Ok` arm is reached
+/// ONLY when `wait_for_health` returns `Ok`, and a half-installed update IS a
+/// boot where the sidecar does not come up healthy. Evaluating there would
+/// suppress the hint on exactly the boots it exists for.
+///
+/// Everything decidable without Tauri lives in `evaluate_pending_update_at`;
+/// what is left here is dir resolution, logging and the emit.
+fn evaluate_pending_update_marker(app: &tauri::AppHandle) {
+    let dir = match app.path().app_data_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("app_data_dir unavailable to read pending-update marker: {e}");
+            return;
+        }
+    };
+    // `package_info().version` and NOT `env!("CARGO_PKG_VERSION")`. `env!` reads
+    // Cargo.toml; the updater's own comparison baseline is
+    // `app.package_info().version` (tauri.conf.json) — see
+    // tauri-plugin-updater `updater.rs:169`. They agree today only because
+    // `tests/plugin/plugin-version-pin.test.ts` pins both to package.json, and
+    // reading a different field than the updater compares would turn a missed
+    // surface in the six-surface version bump into a warning banner on every
+    // user's machine after every successful update.
+    let running = app.package_info().version.to_string();
+
+    match evaluate_pending_update_at(&dir, &running) {
+        PendingUpdateVerdict::NoMarker => {}
+        PendingUpdateVerdict::Completed => {
+            log::info!("Update to v{running} verified — clearing pending-update marker");
+        }
+        PendingUpdateVerdict::MayHaveFailed => {
+            log::warn!("Pending-update marker survived an update — running v{running}");
+            surface_pending_update_hint(app, CODE_UPDATE_MAY_NOT_HAVE_COMPLETED);
+        }
+    }
+}
+
+/// Tauri command — the pending-update banner's "Check for updates" CTA.
+///
+/// `async fn`, mirroring `install_update`: Tauri runs async commands on the
+/// async runtime rather than the IPC thread, which matters because the manual
+/// path reaches `show_update_available_dialog` and that ends in `blocking_show()`.
+///
+/// `manual: true` so the user gets immediate feedback on an explicit action —
+/// including the "you're up to date" dialog, which on a failed-update boot is
+/// itself useful information.
+#[tauri::command]
+async fn check_for_update_now(app: tauri::AppHandle) {
+    check_for_update(&app, true).await;
 }
 
 /// Managed handle to the "tray icon was constructed" flag, so commands can read
@@ -897,6 +1358,12 @@ pub(crate) fn promote_healthy_and_drain(state: &PendingOpens) -> Vec<std::path::
 /// re-open the same TOCTOU window the lock was introduced to close: a
 /// producer could read flag=true between `kill_sidecar` and the clear, then
 /// POST to a sidecar that no longer exists. Used by `restart_sidecar`.
+///
+/// Also clears `SIDECAR_GAVE_UP` (#1416): this call marks the start of a new
+/// attempt, and an open arriving during it must queue for the drain rather than
+/// fail fast against a verdict the app has already withdrawn. `restart_sidecar`
+/// calls this ~6s before `start_sidecar` begins (graceful stop first), so doing
+/// it here rather than only at `start_sidecar`'s top closes that window.
 #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
 pub(crate) fn clear_healthy_under_lock(state: &PendingOpens) {
     let _guard = match state.0.lock() {
@@ -907,6 +1374,84 @@ pub(crate) fn clear_healthy_under_lock(state: &PendingOpens) {
         }
     };
     SIDECAR_HEALTHY.store(false, Ordering::Release);
+    SIDECAR_GAVE_UP.store(false, Ordering::Release);
+}
+
+/// Clear the give-up latch under the `PendingOpens` mutex — "we are trying
+/// again". Called as the FIRST statement of `start_sidecar`, which is what makes
+/// a missed latch self-healing rather than a wedge: the retry dialog's callback
+/// is explicitly not guaranteed to run (see `show_server_error_dialog`), so the
+/// latch must never be the only thing standing between the user and a working
+/// queue.
+pub(crate) fn begin_start_attempt(state: &PendingOpens) {
+    let _guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log::error!("PendingOpens mutex poisoned during start-attempt clear — recovering");
+            poisoned.into_inner()
+        }
+    };
+    SIDECAR_GAVE_UP.store(false, Ordering::Release);
+}
+
+/// Report opens this attempt did not deliver, and latch the give-up when nothing
+/// further will be attempted automatically (#1416).
+///
+/// **Non-destructive, and that is the contract.** The queue survives so a retry
+/// can still deliver it: `show_server_error_dialog`'s retry deliberately threads
+/// `cold_start_file` back in ("setup() FAILED, so nothing was opened"), and the
+/// macOS Apple-Event paths live in this queue rather than in that argument — so
+/// taking the queue here would mean the user performs a positive recovery action
+/// that appears to succeed and still loses the file. The only take is
+/// [`promote_healthy_and_drain`], which is a real delivery.
+///
+/// `terminal` means "no further attempt is offered from here" and controls only
+/// the latch. `surface` is the injection seam, for the same reason
+/// [`surface_startup_rejection_with`] has one: the real callers need an
+/// `AppHandle`, which cannot be constructed in a unit test.
+///
+/// Returns the number of undelivered opens (0 = nothing was pending, and nothing
+/// is surfaced — a failed restart of an app that never had a pending open must
+/// not toast about files).
+fn report_pending_opens_with(
+    state: &PendingOpens,
+    terminal: bool,
+    surface: impl FnOnce(&'static str),
+) -> usize {
+    let pending = {
+        let guard = match state.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                log::error!("PendingOpens mutex poisoned during report — recovering");
+                poisoned.into_inner()
+            }
+        };
+        if terminal {
+            // Under the same lock as the producer's flag read, so a concurrent
+            // `try_queue_or_post` either queues (before) or fails fast (after),
+            // never lands in between.
+            SIDECAR_GAVE_UP.store(true, Ordering::Release);
+        }
+        guard.len()
+    };
+    if pending == 0 {
+        return 0;
+    }
+    // At `warn`, which is the release floor: this replaces #1414's abandoned-queue
+    // line and covers every exit from `start_sidecar`, not just loop exhaustion.
+    log::warn!(
+        "{pending} queued file open(s) undelivered — the server did not start; the queue is \
+         retained so a retry can still deliver them"
+    );
+    // DEFERRED, not failed: the queue survives, so the toast must not claim the
+    // finality this log line explicitly denies. Same 1-vs-N collapse rule as
+    // `RejectionBatch`, but over its own pair of codes.
+    surface(if pending == 1 {
+        CODE_OPEN_DEFERRED
+    } else {
+        CODE_MULTIPLE_DEFERRED
+    });
+    pending
 }
 
 /// Producer-side critical section: under the `PendingOpens` mutex, decide
@@ -925,44 +1470,179 @@ pub(crate) fn clear_healthy_under_lock(state: &PendingOpens) {
 // Used by `handle_opened_urls` (macOS only) and by unit tests; the
 // non-macOS, non-test build sees no call sites.
 #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
-pub(crate) fn try_queue_or_post(
-    state: &PendingOpens,
-    path: std::path::PathBuf,
-) -> Result<(), std::path::PathBuf> {
-    let mut guard = match state.0.lock() {
-        Ok(g) => g,
-        Err(poisoned) => {
-            log::error!("PendingOpens mutex poisoned — recovering and queueing");
-            poisoned.into_inner()
+pub(crate) fn try_queue_or_post(state: &PendingOpens, path: std::path::PathBuf) -> OpenRoute {
+    // Decide (and mutate the queue) under the lock; LOG AFTER the guard drops.
+    // `log::warn!` is real blocking I/O in a release build — a file-sink write
+    // plus `tauri-plugin-log`'s `TargetKind::Webview` emit — where the sibling
+    // `info!` is a no-op below the `LevelFilter::Warn` floor. Doing it inside
+    // would put the first blocking I/O into a critical section every producer
+    // contends for, and an N-file Finder multi-select after a give-up would
+    // serialise N of them. Mirrors `report_pending_opens_with`'s guard-then-log
+    // shape.
+    let mut note: Option<(bool, std::path::PathBuf)> = None;
+    let route = {
+        let mut guard = match state.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                log::error!("PendingOpens mutex poisoned — recovering and queueing");
+                poisoned.into_inner()
+            }
+        };
+        if SIDECAR_HEALTHY.load(Ordering::Acquire) {
+            // Healthy wins over the latch: a server that is answering makes any
+            // earlier give-up verdict stale.
+            OpenRoute::PostNow(path)
+        } else if SIDECAR_GAVE_UP.load(Ordering::Acquire) {
+            // Queueing here would be a promise nothing can keep — no drain is
+            // coming. Say so instead of accumulating paths silently (#1416).
+            note = Some((true, path));
+            OpenRoute::ServerUnavailable
+        } else {
+            note = Some((false, path.clone()));
+            guard.push(path);
+            OpenRoute::Queued
         }
     };
-    if SIDECAR_HEALTHY.load(Ordering::Acquire) {
-        Err(path)
-    } else {
-        log::info!("Queueing file (sidecar not yet healthy): {}", path.display());
-        guard.push(path);
-        Ok(())
+    match note {
+        Some((true, path)) => log::warn!(
+            "Not opening {} — the server is unavailable and no start attempt is in flight",
+            path.display()
+        ),
+        Some((false, path)) => {
+            log::info!("Queueing file (sidecar not yet healthy): {}", path.display())
+        }
+        None => {}
+    }
+    route
+}
+
+/// What [`try_queue_or_post`] decided to do with one candidate path.
+///
+/// A named enum rather than `Result<(), PathBuf>`, where `Err(path)` confusingly
+/// meant "success, POST it": there are three outcomes now, and a `match` makes a
+/// mis-handled arm a compile error. That matters more than usual here because the
+/// only non-test caller is macOS-only, and cfg-stripping runs before type
+/// checking — so a Linux `cargo test` parse-checks that arm and nothing more.
+///
+/// `ServerUnavailable` deliberately carries no path: the caller turns it into a
+/// path-free wire code, and the path is already logged.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) enum OpenRoute {
+    /// Queued; the drain after the next successful health check delivers it.
+    Queued,
+    /// The sidecar is healthy — POST this path now.
+    PostNow(std::path::PathBuf),
+    /// The app gave up on starting the server; nothing will drain a queue.
+    ServerUnavailable,
+}
+
+/// Fetch the auth token off the reactor.
+///
+/// A keyring read is an XPC round-trip to `securityd` that can *write* on first
+/// run; the callers below run on a tokio worker (or, for the Apple-Event batch,
+/// used to run on the main event-loop thread), and neither is a place to block
+/// synchronously. Mirrors `port_holder_for_dialog`'s `spawn_blocking` shape.
+async fn best_effort_token_off_thread(context: &'static str) -> Option<String> {
+    match tauri::async_runtime::spawn_blocking(move || best_effort_token(context)).await {
+        Ok(token) => token,
+        Err(e) => {
+            log::warn!("Token retrieval task failed for {context}: {e}");
+            None
+        }
     }
 }
 
-/// POST every queued path to `/api/open`. The flag flip + drain has already
-/// happened atomically in `promote_healthy_and_drain`; this just runs the I/O.
-async fn post_drained_paths(
+/// POST a batch of paths to `/api/open` and surface the outcome to the user
+/// EXACTLY ONCE (#1416).
+///
+/// Failures used to be `log::warn!`-only, which in a release build
+/// (`LevelFilter::Warn` floor, `tandem.log`) is a file the user never opens: they
+/// double-clicked a document, the window came forward, and they were looking at
+/// `welcome.md` with no explanation. The server refuses things the Rust validator
+/// cannot see — a 50 MB cap, UNC paths, an unreadable-by-permissions file, a
+/// `.docx` the parser rejects — so this is a reachable class, not a corner.
+///
+/// `batch` comes IN rather than starting empty: validation rejections and
+/// delivery failures from the same OS batch must resolve through one accumulator,
+/// or a mixed Finder multi-select writes twice into the one-slot
+/// `STARTUP_REJECTION` buffer and the toast the user sees depends on where the
+/// client's async drain lands (the race `RejectionBatch` exists to remove).
+///
+/// Generic over both the poster and the sink so it is unit-testable with neither
+/// an HTTP server nor an `AppHandle` — the same seam, for the same reason, as
+/// [`surface_startup_rejection_with`]. The `Send` bounds and `&'static str` are
+/// load-bearing: real callers hand the returned future to
+/// `tauri::async_runtime::spawn`, which requires `Future + Send + 'static`, while
+/// the test's `block_on` imposes neither — so without them the test would compile
+/// and the call sites would not.
+async fn post_paths_and_surface<F, Fut>(
+    what: &'static str,
     paths: Vec<std::path::PathBuf>,
-    client: &reqwest::Client,
-) {
-    if paths.is_empty() {
-        return;
-    }
-    let token = best_effort_token("drained-path POSTs");
+    mut batch: RejectionBatch,
+    post: F,
+    surface: impl FnOnce(&'static str) + Send,
+) where
+    F: Fn(std::path::PathBuf) -> Fut + Send,
+    Fut: std::future::Future<Output = Result<(), String>> + Send,
+{
     for path in paths {
-        if let Err(e) = request_open_file(client, token.as_deref(), &path).await {
-            log::warn!(
-                "request_open_file (drain) failed for {}: {e}",
-                path.display()
-            );
+        if let Err(e) = post(path.clone()).await {
+            log::warn!("request_open_file ({what}) failed for {}: {e}", path.display());
+            batch.record(CODE_OPEN_FAILED);
         }
     }
+    if let Some(code) = batch.resolve() {
+        surface(code);
+    }
+}
+
+/// [`post_paths_and_surface`] bound to a live app: this is where the closures
+/// live, so the macOS-only Apple-Event arm can be a single `spawn` of a named
+/// function with none.
+///
+/// That is not a style preference. `handle_opened_urls` is `#[cfg(target_os =
+/// "macos")]` and cfg-stripping happens during expansion, before name resolution
+/// and type checking — a type error, a borrow error or a wrong arity inside it
+/// compiles clean on Linux and Windows with only a dead-code warning. Its real
+/// gate is the `rust-test (macos-latest)` leg of CI, so the less that lives
+/// there, the less rides on one CI leg.
+async fn post_batch_for_app(
+    what: &'static str,
+    app: tauri::AppHandle,
+    paths: Vec<std::path::PathBuf>,
+    batch: RejectionBatch,
+) {
+    if paths.is_empty() {
+        // Surface first, THEN return: a fully-rejected or fully-queued batch still
+        // has something to say, it just has nothing to POST — and this is what
+        // keeps the keyring read off that path (it is the common shape of the
+        // realistic user error since #1344: a double-clicked .pdf, a stale alias).
+        if let Some(code) = batch.resolve() {
+            surface_startup_rejection(&app, code);
+        }
+        return;
+    }
+    let client = app.state::<reqwest::Client>().inner().clone();
+    // Fetched once per batch, after the guard above. The at-most-once, lazy and
+    // failure-memoised properties the old `batch_token` memo hand-rolled are
+    // structural here: there is one fetch site, and it is unreachable when there
+    // is nothing to POST. Falls back to anonymous on failure; loopback bypasses
+    // Bearer enforcement, so that is non-fatal.
+    let token = best_effort_token_off_thread(what).await;
+    post_paths_and_surface(
+        what,
+        paths,
+        batch,
+        // Hoisted-then-cloned deliberately: an `Fn` closure may only borrow, so a
+        // bare `async move` over the captured `token` is E0507.
+        |path| {
+            let client = client.clone();
+            let token = token.clone();
+            async move { request_open_file(&client, token.as_deref(), &path).await }
+        },
+        |code| surface_startup_rejection(&app, code),
+    )
+    .await;
 }
 
 /// Handle a batch of file URLs delivered via macOS `RunEvent::Opened` (Apple
@@ -973,57 +1653,41 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
     // Deliberately BEFORE validation: a fully-rejected batch still needs a
     // visible window, because the thing it produces is a toast.
     show_main_window_for_user(app);
-    // Fetched at most once per batch, and LAZILY — a keyring read is an XPC
-    // round-trip to `securityd` (and can *write* on first run), on the main
-    // event-loop thread. Hoisting it out of the loop stops an N-file "Open
-    // With" paying it N times; deferring it to the first URL that actually
-    // needs a direct POST (accepted, and the sidecar already healthy) stops a
-    // fully-rejected — or fully-queued — batch paying it at all. Since #1344 a
-    // fully-rejected batch is the shape of the realistic user error (a
-    // double-clicked .pdf, a stale alias), so it is the common case, not a
-    // corner. Falls back to anonymous on retrieval failure; loopback bypasses
-    // Bearer enforcement so this is non-fatal, and the failure is memoized so a
-    // locked keychain is not re-hit per URL.
-    let mut batch_token: Option<Option<String>> = None;
-    // Accumulate, then surface once after the loop. See `RejectionBatch` — one
-    // arm here serves BOTH cold and warm start and cannot tell them apart, so
-    // per-URL surfacing raced the client's drain nondeterministically.
+    // ONE accumulator for everything this batch resolves SYNCHRONOUSLY —
+    // validation refusals, opens that arrived after the app gave up, and (inside
+    // `post_batch_for_app`) delivery failures. Those must produce exactly one
+    // surface call: two would write twice into the one-slot buffer and the user
+    // would see a count badge whose value depends on where the client's async
+    // drain landed. Paths that come back `Queued` are NOT in that set — their
+    // verdict arrives later from `report_pending_opens_with`, and the client's
+    // per-code dedup key is what keeps the two from merging. See
+    // `RejectionBatch` and #1416.
     let mut rejected = RejectionBatch::default();
+    let mut direct: Vec<std::path::PathBuf> = Vec::new();
     for url in urls {
-        let path = match classify_opened_url(&url) {
-            Ok(path) => path,
+        match classify_opened_url(&url) {
+            // try_queue_or_post serializes the SIDECAR_HEALTHY check + the push
+            // through the same mutex used by promote_healthy_and_drain. This is
+            // the load-bearing piece of the drain-race fix: any producer that
+            // acquires the lock either pushes (and gets drained) or sees
+            // flag=true (and is handed back the path to POST directly). No
+            // load-before-push window remains.
+            Ok(path) => match try_queue_or_post(app.state::<PendingOpens>().inner(), path) {
+                OpenRoute::Queued => {}
+                OpenRoute::PostNow(path) => direct.push(path),
+                OpenRoute::ServerUnavailable => rejected.record(CODE_OPEN_FAILED),
+            },
             Err(reason) => {
                 log::warn!("Ignoring URL from Opened event ({reason}): {url}");
                 rejected.record(opened_url_reason_code(&reason));
-                continue;
             }
-        };
-        // try_queue_or_post serializes the SIDECAR_HEALTHY check + the push
-        // through the same mutex used by promote_healthy_and_drain. This is
-        // the load-bearing piece of the drain-race fix: any producer that
-        // acquires the lock either pushes (and gets drained) or sees
-        // flag=true (and is handed back the path to POST directly). No
-        // load-before-push window remains.
-        let pending = app.state::<PendingOpens>();
-        if let Err(path) = try_queue_or_post(pending.inner(), path) {
-            let app = app.clone();
-            let token = batch_token
-                .get_or_insert_with(|| best_effort_token("Opened-event batch"))
-                .clone();
-            tauri::async_runtime::spawn(async move {
-                let client = app.state::<reqwest::Client>().inner().clone();
-                if let Err(e) = request_open_file(&client, token.as_deref(), &path).await {
-                    log::warn!(
-                        "request_open_file (Opened) failed for {}: {e}",
-                        path.display()
-                    );
-                }
-            });
         }
     }
-    if let Some(code) = rejected.resolve() {
-        surface_startup_rejection(app, code);
-    }
+    // Unconditional, and deliberately a bare `spawn` of a named function: this
+    // arm is compiled only on macOS, so everything that can fail to type-check
+    // belongs in `post_batch_for_app`, which has ungated callers. It surfaces
+    // `rejected` even when there is nothing to POST.
+    tauri::async_runtime::spawn(post_batch_for_app("Opened", app.clone(), direct, rejected));
 }
 
 /// POST `/api/launcher/start` to promote a deferred Claude Code launcher.
@@ -1248,16 +1912,16 @@ pub fn run() {
 
             match parsed {
                 Ok(Some(path)) => {
-                    let app_handle = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let client = app_handle.state::<reqwest::Client>().inner().clone();
-                        let token = best_effort_token("second-instance POST");
-                        if let Err(e) =
-                            request_open_file(&client, token.as_deref(), &path).await
-                        {
-                            log::warn!("request_open_file (second-instance) failed: {e}");
-                        }
-                    });
+                    // A failure here used to be `log::warn!`-only: the window came
+                    // forward showing the previous tabs and nothing said the file
+                    // had not opened (#1416). One path, so the batch resolves to
+                    // the singular `open-failed`.
+                    tauri::async_runtime::spawn(post_batch_for_app(
+                        "second-instance",
+                        app.clone(),
+                        vec![path],
+                        RejectionBatch::default(),
+                    ));
                 }
                 Ok(None) => {}
                 Err(reason) => {
@@ -1499,6 +2163,17 @@ pub fn run() {
                 );
             }
 
+            // #1118: read the pending-update marker before anything else starts.
+            // Deliberately here and not after `wait_for_health()` (which is what
+            // the issue text suggested): `start_sidecar` reaches its health-`Ok`
+            // arm only when `wait_for_health` returns `Ok`, and a half-installed
+            // update IS a boot where the sidecar does not come up healthy — so
+            // evaluating there would suppress the hint on exactly the boots it
+            // exists for. Same position and same reasoning as the
+            // `surface_startup_rejection` call above: no listener is wired yet in
+            // `setup()`, which is precisely the case the buffer covers.
+            evaluate_pending_update_marker(app.handle());
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // Copy sample files BEFORE sidecar spawn so the server's
@@ -1536,6 +2211,22 @@ pub fn run() {
 
                 if let Err(e) = start_result {
                     log::error!("Sidecar failed: {e}");
+                    // NOT terminal: the dialog below offers "Retry Server Start",
+                    // which re-runs `start_sidecar` with the queue intact. So this
+                    // warns (evidence for every exit, including the five `?`
+                    // bail-outs the old tail block sat past) without latching and
+                    // without destroying anything. The latch is set on the Close
+                    // branch of that dialog instead. #1416
+                    report_pending_opens_with(
+                        handle.state::<PendingOpens>().inner(),
+                        false,
+                        |_code| {
+                            // Deliberately no toast here: the modal is about to say
+                            // the server failed and offer the retry that would open
+                            // these files. "Some of those files couldn't be opened"
+                            // alongside it would contradict the button.
+                        },
+                    );
                     // Ask the OS what is actually holding the port instead of
                     // telling the user to go find out.
                     let holder = port_holder_for_dialog().await;
@@ -1825,6 +2516,8 @@ pub fn run() {
             cowork_retry_admin_elevation,
             restart_sidecar,
             get_startup_rejection,
+            get_pending_update_hint,
+            check_for_update_now,
             show_in_file_manager,
             show_context_menu,
             show_tab_context_menu,
@@ -1923,6 +2616,13 @@ fn restart_sidecar(app: tauri::AppHandle) {
             // channel. Keep sensitive detail out of both.
             log::error!("[restart_sidecar] failed to restart sidecar: {e}");
             eprintln!("[restart_sidecar] failed to restart sidecar: {e}");
+            // Terminal: nothing retries automatically from here. The queue is
+            // retained (Settings -> Network -> Restart server still delivers it),
+            // but until someone tries again a further open must fail fast rather
+            // than join a queue with no consumer. #1416
+            report_pending_opens_with(handle.state::<PendingOpens>().inner(), true, |code| {
+                surface_startup_rejection(&handle, code)
+            });
             if let Err(emit_err) =
                 handle.emit("sidecar-restart-failed", "SIDECAR_RESTART_FAILED")
             {
@@ -2078,6 +2778,7 @@ fn show_server_error_dialog(
     // one only re-dials the Hocuspocus WebSocket. Two same-labelled buttons
     // meaning different things is worse than a longer label.
     let handle = app.clone();
+    let declined_handle = app.clone();
     builder
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Retry Server Start".to_string(),
@@ -2085,6 +2786,19 @@ fn show_server_error_dialog(
         ))
         .show(move |retry| {
             if !retry {
+                // Declining the retry is what makes the failure terminal, and it
+                // is decided here rather than at the `start_sidecar` call site —
+                // that site cannot know which button the user will press. Without
+                // this arm the latch never fires on the cold-start path, so the
+                // SECOND double-clicked file queues into a queue with no consumer
+                // and is silent at `info`, below the release log floor: verbatim
+                // the #1416 bug, one file later. The toast also lands here rather
+                // than before the modal, i.e. at the moment it becomes true.
+                report_pending_opens_with(
+                    declined_handle.state::<PendingOpens>().inner(),
+                    true,
+                    |code| surface_startup_rejection(&declined_handle, code),
+                );
                 return;
             }
             tauri::async_runtime::spawn(async move {
@@ -2130,6 +2844,12 @@ fn show_server_error_dialog(
                     }
                     Err(e) => {
                         log::error!("Server-start retry failed: {e}");
+                        // Terminal: the second dialog is `allow_retry = false`.
+                        report_pending_opens_with(
+                            handle.state::<PendingOpens>().inner(),
+                            true,
+                            |code| surface_startup_rejection(&handle, code),
+                        );
                         let holder = port_holder_for_dialog().await;
                         show_server_error_dialog(&handle, &e, holder, cold_start_file, false);
                     }
@@ -2730,6 +3450,11 @@ async fn start_sidecar(
     client: &reqwest::Client,
     cold_start_file: Option<&std::path::Path>,
 ) -> Result<(), String> {
+    // FIRST statement, before the debug fast path below returns: this call IS the
+    // new attempt, so any earlier give-up verdict is withdrawn here. A clear
+    // written after the fast path would never run on it. See `begin_start_attempt`.
+    begin_start_attempt(handle.state::<PendingOpens>().inner());
+
     // Debug-only: skip spawn if a server is already running (e.g. `npm run dev:standalone`
     // alongside `cargo tauri dev`). In release builds the installed app must own its
     // sidecar exclusively — a stale `tsx watch` dev session, an older release process,
@@ -2738,6 +3463,13 @@ async fn start_sidecar(
     // The sidecar's own `freePort()` step on start handles port conflicts cleanly.
     if cfg!(debug_assertions) && check_health(&client).await {
         log::info!("Server already healthy — skipping sidecar spawn (debug build)");
+        // Promote + drain here too, or this early return is a silent hole: the
+        // server IS healthy, we just did not spawn it, so `SIDECAR_HEALTHY` would
+        // stay false forever and every Apple-Event open would queue with no
+        // consumer — no tab, no toast, and nothing above the release log floor.
+        // Dev-only, but it is the one door in #1416 with nothing on screen at all.
+        let drained = promote_healthy_and_drain(handle.state::<PendingOpens>().inner());
+        post_batch_for_app("drain", handle.clone(), drained, RejectionBatch::default()).await;
         return Ok(());
     }
 
@@ -2917,7 +3649,8 @@ async fn start_sidecar(
                 // `promote_healthy_and_drain` and `try_queue_or_post` for the
                 // ordering argument that proves no path is orphaned.
                 let drained = promote_healthy_and_drain(handle.state::<PendingOpens>().inner());
-                post_drained_paths(drained, client).await;
+                post_batch_for_app("drain", handle.clone(), drained, RejectionBatch::default())
+                    .await;
 
                 return Ok(());
             }
@@ -2931,26 +3664,14 @@ async fn start_sidecar(
         }
     }
 
-    // The queue is never going to drain, so say so at a level that survives
-    // release builds. `LevelFilter::Warn` is the release floor, and the queue
-    // push logs at `info` — so without this line a file the user double-clicked
-    // is dropped leaving no evidence anywhere: no tab, no toast, and nothing in
-    // `tandem.log`, the one artifact a bug report can attach.
-    let abandoned = {
-        let pending = handle.state::<PendingOpens>();
-        let mut guard = match pending.0.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        std::mem::take(&mut *guard)
-    };
-    if !abandoned.is_empty() {
-        log::warn!(
-            "Abandoning {} queued file open(s) — sidecar never became healthy",
-            abandoned.len()
-        );
-    }
-
+    // #1414's abandoned-queue warn used to live here. It has moved to
+    // `report_pending_opens_with`, called from every `start_sidecar` caller —
+    // this block sat AFTER the retry loop, so the five `?` bail-outs above
+    // (resource_dir, app_data_dir, `.sidecar()`, `.spawn()`, the SidecarState
+    // lock) returned before it and produced no evidence at all. It also TOOK the
+    // queue, which destroyed the very paths the "Retry Server Start" button
+    // exists to deliver (#1416). The queue is now retained; the caller reports
+    // cover every exit, including this one.
     Err(format!(
         "Server failed to start after {MAX_RESTARTS} restart attempts"
     ))
@@ -3731,8 +4452,10 @@ fn native_theme_action(pref: &str, high_contrast: bool, host: NativeHost) -> Nat
         NativeHost::Windows => {
             // Do not force an app mode while High Contrast is active — that
             // would fight the accessibility setting the user turned on.
-            // Mid-session toggling is not re-released by this guard; that is
-            // #1364, a separate, narrower gap.
+            // `high_contrast` is sampled once per call, by design; the client
+            // re-pushes the unchanged preference on a `(forced-colors: active)`
+            // change (#1364), which is what makes a mid-session toggle release
+            // (or re-apply) the app mode without a theme change.
             if high_contrast {
                 return NativeThemeAction::SetAppMode(AppMode::AllowDark);
             }
@@ -4192,8 +4915,15 @@ pub fn prevent_default_flags() -> tauri_plugin_prevent_default::Flags {
 // ---------------------------------------------------------------------------
 // Cowork Tauri invoke commands
 // ---------------------------------------------------------------------------
-// All commands have Windows-native and non-Windows stub variants so that
+// Most commands have Windows-native and non-Windows stub variants so that
 // tauri::generate_handler![] compiles on all platforms.
+//
+// `cowork_detect_vethernet_subnet` is the deliberate exception (#1371): it is ONE
+// ungated `async fn` whose blocking *body* is what gets cfg-split. Do not
+// "restore consistency" by splitting the command itself — the async /
+// spawn_blocking / single-flight wiring is the fix for the main-thread freeze,
+// and a cfg-gated command would put that wiring back where no non-Windows build
+// ever type-checks it.
 
 /// Error string returned by every non-Windows Cowork stub.
 #[cfg(not(target_os = "windows"))]
@@ -4218,15 +4948,362 @@ fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
+/// Outcome of the enable path's final step: persisting `enabled = true` (plus
+/// the vEthernet CIDR and scan timestamp) to `cowork-meta.json`.
+///
+/// By this point the firewall rule and plugin entries are already live —
+/// everything upstream of this call succeeded — so a persist failure here is
+/// a partial commit, not a clean failure. MUST fail loud, mirroring the
+/// disable branch's identical decision at its own `meta_persist` write, whose
+/// comment reads: "this write is the disable's CORE contract ... fail loud
+/// instead of returning a green toast over a stale state". Before this fix the
+/// enable arm was the asymmetric outlier: warn-only, falling through to `Ok`,
+/// so `cowork_toggle_integration`
+/// could resolve while `cowork_get_status` went on honestly reporting
+/// `enabled: false` with nothing to explain the gap — #1437.
+///
+/// Retrying is the recovery path, not a courtesy: the client's
+/// `handleToggleChange` reads `status.enabled` to decide which handler fires,
+/// and that reads `false` here, so there is no client path to
+/// `cowork_toggle_integration(false)` to undo anything with — enabling again
+/// is the only way off this state (safe to repeat: the firewall add and the
+/// per-workspace writes above it are both idempotent). The disk state this
+/// leaves — `enabled: false` with the firewall rule and plugin entries
+/// already live — is exactly what today's silent `Ok` already produces, so
+/// returning `Err` here doesn't create a new exposure, only a visible one;
+/// and the leftover allow rule is inert under the default 127.0.0.1 bind
+/// (the same argument the disable branch's "Firewall removal is ADVISORY"
+/// comment makes for its own leftover-rule case; the launcher never sets
+/// `TANDEM_BIND_HOST`, see `integrations_probe.rs`).
+///
+/// About the count the `Err` message does name: it is `workspace_count` from
+/// the call site, i.e. `workspaces.len()` — the number of workspaces the
+/// enable WALKED, not the number whose plugin entry was actually written. The
+/// partial-install branch above this call deliberately tolerates a
+/// `success_count` lower than that, so on a partial install this message can
+/// name more workspaces than got an entry. Threading `success_count` down
+/// here would close that gap at the cost of another parameter on a message
+/// this rarely reached; the one case worth being exact about is zero, and
+/// that one is special-cased below so the message never claims plugin entries
+/// that were never written.
+///
+/// Pure and free of the Windows-only firewall/workspace-scan types around its
+/// call site, so it's testable without them — same reasoning as
+/// `parse_netstat_listening_pid` above ("kept out of the cfg(windows) block
+/// so its tests run on every CI platform; the allow keeps a non-Windows
+/// release build warning-free"). **Caveat that reasoning doesn't cover: this
+/// function's own body is close to the assertion it's tested against — the
+/// actual defect this fixes is at the call site inside
+/// `#[cfg(target_os = "windows")] fn cowork_toggle_integration`, which a
+/// non-Windows `cargo test` never compiles. The test below pins this
+/// function's Ok/Err mapping; it does NOT prove the call site type-checks or
+/// behaves. That's the `windows-latest` leg of `ci.yml`'s `rust-test` job
+/// plus manual verification — see the PR body.**
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn enable_persist_outcome(persist: Result<(), String>, workspace_count: usize) -> Result<String, String> {
+    match persist {
+        Ok(()) => Ok(format!("Cowork enabled: {workspace_count} workspace(s) configured")),
+        Err(e) => {
+            // Name only what actually happened. The enable arm walks workspaces
+            // and installs a plugin entry per workspace, so on a machine with
+            // no Cowork workspaces there are no plugin entries to report — and
+            // an error message that claims otherwise sends the user looking for
+            // files that were never written.
+            let installed = if workspace_count == 0 {
+                "Cowork's firewall rule was added".to_string()
+            } else {
+                format!(
+                    "Cowork's firewall rule and plugin entries for {workspace_count} workspace(s) were installed"
+                )
+            };
+            Err(format!(
+                "{installed}, but Tandem couldn't save that the integration is on ({e}). \
+                 It will keep showing as off until you try enabling again."
+            ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod enable_persist_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn ok_when_persist_succeeds() {
+        assert_eq!(
+            enable_persist_outcome(Ok(()), 3),
+            Ok("Cowork enabled: 3 workspace(s) configured".to_string())
+        );
+    }
+
+    #[test]
+    fn fails_loud_when_persist_fails() {
+        // #1437: before this fix, a persist failure here was swallowed into a
+        // `log::warn!` and the command still returned `Ok`, so the invoke
+        // resolved while `cowork_get_status` went on honestly reporting
+        // `enabled: false` with nothing to explain the gap. This test pins
+        // only this function's Ok/Err mapping and its message contents — it
+        // cannot compile the call site inside `cowork_toggle_integration`
+        // (Windows-cfg-gated), so it cannot by itself prove the fix landed
+        // correctly there. See the doc comment above and the PR body.
+        let result = enable_persist_outcome(Err("disk full".to_string()), 3);
+        let msg = result.expect_err("persist failure must surface as Err, not a silent Ok");
+        assert!(msg.contains("disk full"));
+        assert!(msg.contains("firewall rule"));
+        assert!(msg.contains("plugin entries for 3 workspace(s)"));
+        assert!(msg.contains("try enabling again"));
+    }
+
+    #[test]
+    fn persist_failure_with_no_workspaces_does_not_claim_plugin_entries() {
+        // The enable arm installs one plugin entry per workspace, so with zero
+        // workspaces there are none — claiming otherwise sends the user hunting
+        // for files that were never written.
+        let result = enable_persist_outcome(Err("disk full".to_string()), 0);
+        let msg = result.expect_err("persist failure must surface as Err, not a silent Ok");
+        assert!(msg.contains("disk full"));
+        assert!(msg.contains("firewall rule"));
+        assert!(
+            !msg.contains("plugin entries"),
+            "message must not claim plugin entries were installed when none were: {msg}"
+        );
+    }
+}
+
+/// Did this workspace's `installed_plugins.json` write actually land?
+///
+/// **The subtlety this exists to name: an `Ok` does not mean it landed.**
+/// Both `install_tandem_plugin_into_workspace` and
+/// `uninstall_tandem_plugin_from_workspace` return
+/// `Ok(WorkspaceWriteReport { installed_plugins: WriteStatus::Failed(..) })`
+/// for a per-file failure -- e.g. a revalidation failure in the uninstall path
+/// (`cowork_installer.rs`) -- reserving `Err` for a failure to even reach the
+/// file. So `r.is_ok()` counts a workspace that still holds its plugin entry
+/// as a success.
+///
+/// Both arms of `cowork_toggle_integration` decide "did this workspace
+/// succeed?" more than once -- for the hard all-failed check and again for the
+/// #1438 degraded-success warning -- and the two must not disagree. They did:
+/// the disable arm's warning used a bare `is_ok()` while its own all-failed
+/// check used the `WriteStatus` test right above it, so a partial uninstall
+/// whose failures were all non-`Err` produced no warning at all. That is the
+/// commonest failure shape and precisely the case the warning was added for.
+/// Routing every such decision through this one predicate is what keeps them
+/// in step.
+#[cfg(target_os = "windows")]
+fn workspace_entry_written(
+    report: &Result<cowork_installer::WorkspaceWriteReport, cowork_atomic_json::CoworkError>,
+) -> bool {
+    matches!(
+        report,
+        Ok(r) if matches!(
+            r.installed_plugins,
+            cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
+        )
+    )
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod workspace_entry_written_tests {
+    use super::workspace_entry_written;
+    use crate::cowork_atomic_json::CoworkError;
+    use crate::cowork_installer::{WorkspaceWriteReport, WriteStatus};
+
+    fn report(status: WriteStatus) -> Result<WorkspaceWriteReport, CoworkError> {
+        Ok(WorkspaceWriteReport {
+            workspace_id: "ws".into(),
+            vm_id: "vm".into(),
+            installed_plugins: status,
+            known_marketplaces: WriteStatus::Ok,
+            cowork_settings: WriteStatus::Ok,
+        })
+    }
+
+    #[test]
+    fn ok_and_already_present_count_as_written() {
+        assert!(workspace_entry_written(&report(WriteStatus::Ok)));
+        assert!(workspace_entry_written(&report(WriteStatus::AlreadyPresent)));
+    }
+
+    #[test]
+    fn an_ok_carrying_a_failed_status_is_not_written() {
+        // The whole reason this predicate exists. `is_ok()` says true here, and
+        // that is what made the #1438 partial-uninstall warning silent for the
+        // commonest failure shape: `uninstall_tandem_plugin_from_workspace`
+        // returns Ok(..Failed) on a revalidation failure, not Err.
+        assert!(!workspace_entry_written(&report(WriteStatus::Failed(
+            "revalidation failed".into()
+        ))));
+        assert!(!workspace_entry_written(&report(WriteStatus::Locked)));
+        assert!(!workspace_entry_written(&report(WriteStatus::SchemaDrift)));
+    }
+
+    #[test]
+    fn a_hard_error_is_not_written() {
+        let err: Result<WorkspaceWriteReport, CoworkError> =
+            Err(CoworkError::InsecureAcl {
+                path: std::path::PathBuf::from("C:/ws"),
+            });
+        assert!(!workspace_entry_written(&err));
+    }
+}
+
+/// The `Ok` payload of `cowork_toggle_integration` (#1438).
+///
+/// The command has always encoded *degraded success* in its `Ok` arm — a
+/// partial multi-workspace install on enable, a leftover firewall rule or a
+/// partial uninstall on disable — as English folded into the success string.
+/// Every client call site awaited the invoke and threw the string away, so all
+/// three rendered as an unqualified green success and the only surviving record
+/// was a `log::warn!` on a Tauri log the user has no route to. A user with three
+/// workspaces where two failed to install saw "Enabled" and a check badge.
+///
+/// Splitting the payload rather than teaching the client to read the message is
+/// deliberate. Branching on message text would couple the client to Rust string
+/// literals, and a reworded warning would then silently stop rendering — the
+/// same class of failure, moved one layer out and made harder to see.
+///
+/// `warnings` empty means clean success. It is never used to report failure:
+/// that is still the `Err` arm, and the two must not blur. A warning here means
+/// "the operation committed, and here is what is imperfect about the result".
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CoworkToggleReport {
+    message: String,
+    warnings: Vec<String>,
+}
+
+/// The user-facing caveat for a firewall rule that could not be removed.
+///
+/// A `const` rather than an inline literal because the disable arm is the only
+/// producer and a test is the only other reader; keeping them on one string
+/// stops the test from passing against a copy of the wording rather than the
+/// wording. The allow mirrors `partial_workspace_warning`'s: the only non-test
+/// reader is inside the `cfg(target_os = "windows")` arm.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const COWORK_LEFTOVER_FIREWALL_WARNING: &str =
+    "A leftover firewall rule may remain. It's harmless — Tandem's server only listens on this computer.";
+
+/// The caveat for a workspace pass where some — but not all — workspaces
+/// succeeded.
+///
+/// `None` when there is nothing to say: no workspaces at all, or every one of
+/// them succeeded. All-failed is NOT this function's case — both arms of the
+/// toggle return `Err` before reaching here, because an operation that landed
+/// nowhere is a failure, not a degraded success.
+///
+/// Kept outside the `cfg(target_os = "windows")` gate so its tests run on every
+/// CI leg; the allow keeps a non-Windows release build warning-free. Direct
+/// precedent: `parse_netstat_listening_pid` and its siblings above.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn partial_workspace_warning(
+    verb: &str,
+    success_count: usize,
+    total: usize,
+    failures: &[String],
+) -> Option<String> {
+    if total == 0 || success_count >= total {
+        return None;
+    }
+    let failed = total - success_count;
+    // The failure detail is included because the alternative is a warning the
+    // user cannot act on. It is the same summary the `Err` arm already builds
+    // for the all-failed case, so this adds no new disclosure surface.
+    let detail = if failures.is_empty() {
+        String::new()
+    } else {
+        format!(" Details: {}", failures.join("; "))
+    };
+    Some(format!(
+        "{failed} of {total} Cowork workspace(s) could not be {verb}.{detail}"
+    ))
+}
+
+#[cfg(test)]
+mod partial_workspace_warning_tests {
+    use super::{partial_workspace_warning, COWORK_LEFTOVER_FIREWALL_WARNING};
+
+    /// The regression #1438 is about: a partial install used to be visible only
+    /// in a `log::warn!`, so this asserts something is produced at all — and
+    /// that it names both halves of the ratio, since "some failed" without a
+    /// count is not actionable.
+    #[test]
+    fn a_partial_pass_produces_a_warning_naming_the_ratio() {
+        let w = partial_workspace_warning(
+            "configured",
+            1,
+            3,
+            &["ws-a/vm-1: Locked".into(), "ws-b/vm-2: SchemaDrift".into()],
+        )
+        .expect("a partial pass must produce a warning");
+        assert!(w.contains("2 of 3"), "{w}");
+        assert!(w.contains("configured"), "{w}");
+        // The detail is what makes it actionable — a user cannot act on
+        // "2 of 3 failed" alone.
+        assert!(w.contains("ws-a/vm-1: Locked"), "{w}");
+        assert!(w.contains("ws-b/vm-2: SchemaDrift"), "{w}");
+    }
+
+    #[test]
+    fn a_clean_pass_produces_nothing() {
+        assert_eq!(partial_workspace_warning("configured", 3, 3, &[]), None);
+    }
+
+    /// Zero workspaces is a clean outcome, not a degraded one. Warning there
+    /// would put a caveat on every enable on a machine that has no Cowork
+    /// workspaces at all — the common case for a new install.
+    #[test]
+    fn no_workspaces_at_all_produces_nothing() {
+        assert_eq!(partial_workspace_warning("configured", 0, 0, &[]), None);
+    }
+
+    /// Defensive: a count above the total is a caller bug, and the honest
+    /// answer is silence rather than a warning claiming a negative failure
+    /// count. `total - success_count` would panic in debug builds.
+    #[test]
+    fn a_success_count_above_the_total_produces_nothing_rather_than_panicking() {
+        assert_eq!(partial_workspace_warning("configured", 4, 3, &[]), None);
+    }
+
+    /// All-failed is deliberately NOT this function's case — both toggle arms
+    /// return `Err` before reaching it. Pinned so a future refactor that routes
+    /// all-failed through here has to make that decision on purpose: it would
+    /// otherwise turn a hard failure into a green toast with a caveat.
+    #[test]
+    fn all_failed_still_produces_a_warning_because_the_caller_never_asks() {
+        let w = partial_workspace_warning("configured", 0, 2, &["a".into(), "b".into()]);
+        assert!(w.is_some(), "the shape is unconditional; the CALLER is the gate");
+    }
+
+    /// Empty failure detail is a degenerate but reachable shape (a caller that
+    /// knows the ratio but not the reasons). It must not emit a dangling
+    /// "Details:" with nothing after it.
+    #[test]
+    fn no_failure_detail_means_no_details_clause() {
+        let w = partial_workspace_warning("cleaned up", 1, 2, &[]).expect("still a warning");
+        assert!(!w.contains("Details"), "{w}");
+        assert!(w.contains("1 of 2"), "{w}");
+    }
+
+    /// The firewall caveat is advisory, and the wording carries the reason it
+    /// is advisory. A rewrite that drops the "only listens on this computer"
+    /// half turns a reassurance into an alarm.
+    #[test]
+    fn the_leftover_firewall_warning_says_why_it_is_harmless() {
+        assert!(COWORK_LEFTOVER_FIREWALL_WARNING.contains("harmless"));
+        assert!(COWORK_LEFTOVER_FIREWALL_WARNING.contains("only listens on this computer"));
+    }
+}
+
 /// Enable or disable the Cowork integration.
 ///
 /// On enable: fetches auth token, detects vEthernet subnet, adds allow firewall
 /// rule, walks workspaces, installs plugin entries. When the firewall rule needs
-/// elevation Tandem doesn't have: fail-closed — does NOT write plugin entries
-/// (invariant §4). On disable: uninstalls plugin entries, removes firewall rules.
+/// elevation Tandem doesn't have: fail-closed — does NOT write plugin entries at
+/// all. On disable: uninstalls plugin entries, removes firewall rules.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
+fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleReport, String> {
     use cowork_installer::{install_tandem_plugin_into_workspace, uninstall_tandem_plugin_from_workspace};
     use cowork_workspace_scan::find_cowork_workspaces;
 
@@ -4235,7 +5312,10 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         let token = token_store::get_or_create_token()?;
 
         // Detect vEthernet subnet.
-        let cidr = firewall::detect_vethernet_subnet()
+        // The generous budget, not the advisory one: a false timeout HERE aborts
+        // an enable that would have succeeded, where a false timeout on the
+        // advisory probe costs only a re-check.
+        let cidr = firewall::detect_vethernet_subnet(firewall::SUBNET_PROBE_TIMEOUT_ENABLE)
             .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))?;
 
         // Scan workspaces up-front (read-only) — reused for both reconcile and install.
@@ -4265,14 +5345,17 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         let firewall_result = firewall::add_cowork_allow_rule(&cidr);
         if let Err(ref e) = firewall_result {
             // Fail-closed: if the firewall rule can't be written, bail — do NOT
-            // walk workspaces (invariant §4).
+            // walk workspaces. Under the shipped default the server binds
+            // 127.0.0.1, so the rule buys nothing; but with a routable
+            // TANDEM_BIND_HOST an install missing it is one the VM cannot
+            // reach, advertised as working. Bailing is correct for both.
             if let firewall::FirewallError::AdminDeclined = e {
                 // The firewall rule needs elevation Tandem does not have (it never
                 // runs elevated, so no UAC prompt ever appears). Do NOT attempt a
                 // deny rule — it needs the same elevation and always fails, and the
                 // server binds 127.0.0.1 so port 3479 was never network-exposed.
                 // Record the outcome and surface the structured error for the UI's
-                // honest copy. No plugin entries are written (invariant §4).
+                // honest copy. No plugin entries are written.
                 log::warn!("[cowork] firewall rule needs elevation (none available); no plugin entries written");
                 if let Err(meta_err) = cowork_meta::update(|m| {
                     m.uac_declined_last_attempt = true;
@@ -4290,8 +5373,9 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // Resolve TANDEM_URL (host.docker.internal by default; LAN-IP if override set).
         let tandem_url = cowork_installer::resolve_tandem_url(&cowork_meta::load().map_err(|e| e.to_string())?);
 
-        // Stale-token reconciliation (invariant §12) — AFTER the successful add, so a
-        // fail-closed firewall add never reaches a workspace write (invariant §4).
+        // Stale-token reconciliation — rewrites entries still carrying a previous
+        // auth token. Deliberately AFTER the successful add: a fail-closed firewall
+        // add must never be followed by any workspace write.
         let rewritten_stale_entries =
             cowork_installer::reconcile_stale_workspace_tokens(&workspaces, &token);
         if !rewritten_stale_entries.is_empty() {
@@ -4302,6 +5386,8 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         }
 
         let workspace_count = workspaces.len();
+        // Degraded-success caveats, surfaced on the Ok payload (#1438).
+        let mut warnings: Vec<String> = Vec::new();
 
         let reports: Vec<_> = workspaces
             .iter()
@@ -4322,15 +5408,7 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // AlreadyPresent — anything else (Locked, SchemaDrift, InsecureAcl, Failed)
         // counts as a failure.
         if !workspaces.is_empty() {
-            let success_count = reports.iter().filter(|r| {
-                match r {
-                    Ok(report) => matches!(
-                        report.installed_plugins,
-                        cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
-                    ),
-                    Err(_) => false,
-                }
-            }).count();
+            let success_count = reports.iter().filter(|r| workspace_entry_written(r)).count();
 
             if success_count == 0 {
                 let failure_summary: Vec<String> = reports.iter().map(|r| match r {
@@ -4350,20 +5428,48 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
                     success_count,
                     workspaces.len()
                 );
+                // #1438: the log is not a route the user has. Carry the caveat
+                // out on the Ok payload so the panel can say so.
+                let failure_summary: Vec<String> = reports
+                    .iter()
+                    .filter(|r| !workspace_entry_written(r))
+                    .map(|r| match r {
+                        Ok(report) => format!(
+                            "{}/{}: {:?}",
+                            report.workspace_id, report.vm_id, report.installed_plugins
+                        ),
+                        Err(e) => e.to_string(),
+                    })
+                    .collect();
+                warnings.extend(partial_workspace_warning(
+                    "configured",
+                    success_count,
+                    workspaces.len(),
+                    &failure_summary,
+                ));
             }
         }
 
-        if let Err(e) = cowork_meta::update(|m| {
+        let persist = cowork_meta::update(|m| {
             m.enabled = true;
             m.vethernet_cidr_detected = Some(cidr.clone());
             m.workspaces_last_scanned_at = Some(iso_now());
             m.uac_declined_last_attempt = false;
             m.uac_declined_at = None;
-        }) {
+        });
+        if let Err(e) = &persist {
             log::warn!("[cowork] failed to persist meta after enable: {e}");
         }
-
-        Ok(format!("Cowork enabled: {workspace_count} workspace(s) configured"))
+        // Both halves survive the #1437 + #1438 merge, and the order matters.
+        // `enable_persist_outcome` owns the FAILURE decision (#1437: a persist
+        // failure after the firewall rule and plugin entries are live is a
+        // partial commit and must fail loud, not resolve green over a stale
+        // state). `warnings` carries DEGRADED SUCCESS (#1438). They compose in
+        // exactly one direction: a persist failure discards the warnings,
+        // because the operation did not succeed and a caveat list beside an
+        // error would imply it did. Warnings ride only on the Ok arm.
+        enable_persist_outcome(persist, workspace_count)
+            .map(|message| CoworkToggleReport { message, warnings })
     } else {
         // Disable: uninstall from all workspaces and remove firewall rules.
         let workspaces = find_cowork_workspaces();
@@ -4379,15 +5485,7 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         }
 
         let workspace_all_failed = if !workspaces.is_empty() {
-            let success_count = reports.iter().filter(|r| {
-                match r {
-                    Ok(report) => matches!(
-                        report.installed_plugins,
-                        cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
-                    ),
-                    Err(_) => false,
-                }
-            }).count();
+            let success_count = reports.iter().filter(|r| workspace_entry_written(r)).count();
 
             if success_count > 0 && success_count < workspaces.len() {
                 log::warn!(
@@ -4408,7 +5506,7 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // safe: the deny rule is retired, the allow rule is scoped to the VM subnet, and
         // the server binds 127.0.0.1 only, so a leftover rule is inert. This aligns with
         // reconcile_orphan_firewall_rules (cowork_installer.rs), which already treats remove
-        // failures as non-fatal (§12). (Caveat: leaving the rule is inert only under the default
+        // failures as non-fatal. (Caveat: leaving the rule is inert only under the default
         // loopback bind; a future TANDEM_BIND_HOST=routable + stale VM-CIDR rule is an
         // untested composition. A later enable *may* clear it via reconcile_orphan_firewall_rules, but
         // that's best-effort — reconcile returns early if its scan fails — and the leftover
@@ -4462,18 +5560,46 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
             ));
         }
 
+        let mut warnings: Vec<String> = Vec::new();
         if firewall_failed {
-            Ok("Cowork disabled (a leftover firewall rule may remain — harmless; \
-                Tandem's server only listens on this computer)"
-                .to_string())
-        } else {
-            Ok("Cowork disabled".to_string())
+            warnings.push(COWORK_LEFTOVER_FIREWALL_WARNING.to_string());
         }
+        // A partial uninstall is the same defect as the partial install above:
+        // it was `log::warn!`-only, so a user with three workspaces where two
+        // still hold plugin entries saw an unqualified "Cowork disabled".
+        //
+        // The predicate must be the SAME one `workspace_all_failed` uses above,
+        // not a bare `is_ok()`. `uninstall_tandem_plugin_from_workspace` returns
+        // `Ok(WorkspaceWriteReport { installed_plugins: WriteStatus::Failed(..) })`
+        // on a revalidation failure (`cowork_installer.rs`) -- an `Ok` that means
+        // the entry is still there. Counting that as a success made this warning
+        // silent for the commonest failure shape, i.e. for exactly the case the
+        // bullet above describes, while `workspace_all_failed` right above was
+        // already treating it as a failure. The enable arm's `failure_summary`
+        // uses the WriteStatus predicate; this one is now symmetric with it.
+        let uninstall_failures: Vec<String> = reports
+            .iter()
+            .filter(|r| !workspace_entry_written(r))
+            .map(|r| match r {
+                Ok(report) => format!(
+                    "{}/{}: {:?}",
+                    report.workspace_id, report.vm_id, report.installed_plugins
+                ),
+                Err(e) => e.to_string(),
+            })
+            .collect();
+        warnings.extend(partial_workspace_warning(
+            "cleaned up",
+            workspaces.len().saturating_sub(uninstall_failures.len()),
+            workspaces.len(),
+            &uninstall_failures,
+        ));
+        Ok(CoworkToggleReport { message: "Cowork disabled".to_string(), warnings })
     }
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-fn cowork_toggle_integration(_enabled: bool) -> Result<String, String> {
+fn cowork_toggle_integration(_enabled: bool) -> Result<CoworkToggleReport, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
@@ -5043,16 +6169,57 @@ fn cowork_get_meta() -> Result<serde_json::Value, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
-/// Detect the Hyper-V vEthernet subnet.
-#[cfg(target_os = "windows")]
+/// Coalesces concurrent advisory subnet probes (#1371).
+///
+/// Moving the command off the main thread removes an accidental mutex — Tauri
+/// dispatches sync commands inline on the UI thread, so two could never overlap.
+/// "Check again" is user-repeatable, so without this a burst of clicks would
+/// become a burst of `powershell.exe` processes.
+///
+/// **What this deliberately does NOT cover.** `cowork_toggle_integration` runs
+/// its own detection (`detect_vethernet_subnet`, below) and does not join this
+/// flight. Joining would mean either handing Enable a coalesced advisory answer —
+/// which `cowork-invoke.ts` forbids outright, because "the VM can stop between
+/// the two" — or making Enable wait out an advisory probe, and since Enable is
+/// still a sync command that wait would land on the main thread, adding freeze to
+/// fix freeze. The honest bound is therefore at most TWO concurrent probes: one
+/// coalesced advisory, plus at most one from Enable (whose handler blocks the UI
+/// thread, so it cannot double-fire). The repeatable button is fully coalesced.
+static SUBNET_PROBE_FLIGHT: single_flight::SingleFlight<Result<String, String>> =
+    single_flight::SingleFlight::new();
+
+/// Detect the Hyper-V vEthernet subnet (advisory pre-flight).
+///
+/// ONE ungated `async fn` with a cfg-split body, on purpose — see the section
+/// comment above. `async fn` + `spawn_blocking` is the fix, and the pair is not
+/// interchangeable with `#[tauri::command(async)]` on a sync fn: `tauri-macros`
+/// labels that shape `"sync_threadpool"`, but the string is only a tracing span
+/// field — `body_async` calls the sync fn *inside* the future and
+/// `respond_async_serialized_inner` hands it to `async_runtime::spawn`, i.e.
+/// tokio's WORKER pool, where a blocking process wait also stalls every other
+/// `respond_async` command.
 #[tauri::command]
-fn cowork_detect_vethernet_subnet() -> Result<String, String> {
-    firewall::detect_vethernet_subnet()
+async fn cowork_detect_vethernet_subnet() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        SUBNET_PROBE_FLIGHT
+            .run(detect_subnet_advisory_blocking)
+            // `None` means the flight was abandoned, which can only happen if the
+            // leader panicked. Unparseable by `parseFirewallErrorVariant`, so it
+            // surfaces as `status: "unknown"` and a console.error — the right
+            // destination for a genuine bug, and never a blocked Enable button.
+            .unwrap_or_else(|| Err("subnet probe was abandoned".to_string()))
+    })
+    .await
+    .map_err(|e| format!("subnet probe task failed: {e}"))?
+}
+
+#[cfg(target_os = "windows")]
+fn detect_subnet_advisory_blocking() -> Result<String, String> {
+    firewall::detect_vethernet_subnet(firewall::SUBNET_PROBE_TIMEOUT_ADVISORY)
         .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))
 }
 #[cfg(not(target_os = "windows"))]
-#[tauri::command]
-fn cowork_detect_vethernet_subnet() -> Result<String, String> {
+fn detect_subnet_advisory_blocking() -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
@@ -5121,7 +6288,7 @@ fn cowork_resolve_validated_handle(handle: &str, op: &str) -> Result<std::path::
 /// snapshot handle from `cowork_scan_workspaces`.
 ///
 /// The handle resolves — in-process — to the exact canonical path validated at
-/// scan time, which is re-checked against invariant §3 before any file I/O (§9).
+/// scan time, which is re-checked against invariant §3 before any file I/O.
 /// A caller-supplied path string is never trusted; an unknown handle is rejected.
 #[cfg(target_os = "windows")]
 #[tauri::command]
@@ -5192,15 +6359,7 @@ fn cowork_set_lan_ip_override(enabled: bool) -> Result<String, String> {
         }
 
         if !workspaces.is_empty() {
-            let success_count = reports.iter().filter(|r| {
-                match r {
-                    Ok(report) => matches!(
-                        report.installed_plugins,
-                        cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
-                    ),
-                    Err(_) => false,
-                }
-            }).count();
+            let success_count = reports.iter().filter(|r| workspace_entry_written(r)).count();
 
             if success_count == 0 {
                 let failure_summary: Vec<String> = reports.iter().map(|r| match r {
@@ -5228,20 +6387,48 @@ fn cowork_set_lan_ip_override(_enabled: bool) -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
-/// Clear the UAC-declined flag and retry the enable flow.
+/// Retry the enable flow after an admin-declined attempt (#1560).
+///
+/// This delegates to `cowork_toggle_integration(true)` and nothing else. It used
+/// to clear `uac_declined_*` first, through `cowork_meta::update(...)?` — and the
+/// `?` was the bug: the canonical cause of that update failing is an unwritable
+/// `cowork-meta.json`, which is precisely when the admin-declined modal is up and
+/// Retry is the user's escape hatch. Under that fault the button returned early,
+/// every time, and the enable was never attempted at all.
+///
+/// The separate clear is gone rather than merely reordered, because on every path
+/// it was either redundant or wrong:
+///
+/// - **Toggle succeeds.** Its enable arm's own `cowork_meta::update` sets
+///   `uac_declined_last_attempt = false` and `uac_declined_at = None` immediately
+///   before the only `Ok(...)` it returns. The flag is cleared by the toggle,
+///   through the same code path, so a second write adds nothing.
+/// - **Toggle hits `AdminDeclined`.** That arm deliberately *re-sets* the flag
+///   with a fresh `uac_declined_at`, which is what re-arms the modal for a decline
+///   that just happened. A pre-emptive clear is undone a few lines later.
+/// - **Toggle fails any other way** (netsh missing, subnet detection failed, every
+///   workspace install failed). Meta is untouched, so the clear was the only
+///   writer — and clearing it there is the wrong outcome: it retires the modal
+///   after a retry that did not enable anything, leaving the user with a transient
+///   inline error and no standing signal that Cowork is still off.
+///
+/// So there is no clear result to report, and no partial-commit shape to report it
+/// as. Whether a *failed* meta persist inside the toggle should itself be fatal is
+/// a separate question, tracked by #1559; whatever that decides, this command
+/// forwards the toggle's verdict unchanged.
+///
+/// Note for anyone tracing the UAC wording: Tandem never elevates itself.
+/// `firewall::run_netsh` spawns a plain `netsh`, so `AdminDeclined` is *inferred*
+/// from netsh's exit code and stderr — no UAC prompt is ever raised on this path,
+/// and none can be accepted or declined.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn cowork_retry_admin_elevation() -> Result<String, String> {
-    cowork_meta::update(|m| {
-        m.uac_declined_last_attempt = false;
-        m.uac_declined_at = None;
-    })
-    .map_err(|e| e.to_string())?;
+fn cowork_retry_admin_elevation() -> Result<CoworkToggleReport, String> {
     cowork_toggle_integration(true)
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-fn cowork_retry_admin_elevation() -> Result<String, String> {
+fn cowork_retry_admin_elevation() -> Result<CoworkToggleReport, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
@@ -5579,7 +6766,33 @@ async fn perform_install(
                 log::debug!("Update download: {chunk_len}/{t} bytes");
             }
         },
-        || { log::info!("Update downloaded -- installing"); },
+        // #1118: the pending-update marker is written HERE, at download-finish,
+        // and neither of the two places that look obvious.
+        //
+        // NOT before `download_and_install`: `build_updater` sets no timeout, so
+        // the marker would span the whole download, and any process death during
+        // it strands a marker with no `Err` arm to clean up — tray Quit, the
+        // Linux-without-tray window close, a crash, a sleep-kill. Not
+        // hypothetical: the sidecar is already dead by this point, so the WebView
+        // sits in "Server unavailable" for the entire download, actively inviting
+        // a quit. Every one of those would become a false "your update may not
+        // have completed" on the next boot.
+        //
+        // NOT on the `Ok` arm below (which is what ADR-043 §6 sketched): that arm
+        // is dead code on Windows, where the plugin's `install_inner` ends in an
+        // unconditional `std::process::exit(0)`.
+        //
+        // This closure fires two lines before `verify_signature`, so a signature
+        // failure does write a marker — that path returns `Err` on every platform
+        // and the `Err` arm below clears it.
+        {
+            let app = app.clone();
+            let version = version.to_string();
+            move || {
+                log::info!("Update downloaded -- installing");
+                record_pending_update(&app, &version);
+            }
+        },
     ).await {
         Ok(()) => {
             log::info!("Update to v{version} installed — restarting");
@@ -5587,6 +6800,10 @@ async fn perform_install(
         }
         Err(e) => {
             log::error!("Update install failed: {e}");
+            // We observed the failure in-process and are about to show a native
+            // dialog about it, so a surviving marker would nag next boot about
+            // something the user was just told.
+            clear_pending_update(app);
             let dialog_msg = if pre_install_warnings.is_empty() {
                 e.to_string()
             } else {
@@ -5659,7 +6876,7 @@ mod pending_opens_tests {
 
         let state = fresh_state();
         let result = try_queue_or_post(&state, PathBuf::from("queued"));
-        assert!(result.is_ok());
+        assert!(matches!(result, OpenRoute::Queued));
         assert_eq!(
             *state.0.lock().unwrap(),
             vec![PathBuf::from("queued")],
@@ -5674,9 +6891,8 @@ mod pending_opens_tests {
 
         let state = fresh_state();
         let result = try_queue_or_post(&state, PathBuf::from("direct"));
-        assert_eq!(
-            result,
-            Err(PathBuf::from("direct")),
+        assert!(
+            matches!(result, OpenRoute::PostNow(ref p) if p == &PathBuf::from("direct")),
             "caller should be handed back the path to POST directly"
         );
         assert!(state.0.lock().unwrap().is_empty(), "no queue side effect");
@@ -5704,7 +6920,7 @@ mod pending_opens_tests {
         // Late producer arriving after the clear observes flag=false and
         // queues the path instead of POSTing.
         let result = try_queue_or_post(&state, PathBuf::from("after-restart"));
-        assert_eq!(result, Ok(()));
+        assert!(matches!(result, OpenRoute::Queued));
         assert_eq!(
             *state.0.lock().unwrap(),
             vec![PathBuf::from("after-restart")]
@@ -5734,10 +6950,160 @@ mod pending_opens_tests {
         // flag=true (set inside the same lock) and the helper hands the path
         // back instead of queuing it.
         let result = try_queue_or_post(&state, PathBuf::from("late"));
-        assert_eq!(result, Err(PathBuf::from("late")));
+        assert!(matches!(result, OpenRoute::PostNow(ref p) if p == &PathBuf::from("late")));
         assert!(state.0.lock().unwrap().is_empty());
 
         SIDECAR_HEALTHY.store(false, Ordering::Release);
+    }
+
+    // ---- #1416: the undelivered-queue report and the give-up latch --------
+    //
+    // These live HERE, not in `startup_rejection_tests`, and every one takes
+    // `FLAG_LOCK`: they mutate the process-wide `SIDECAR_GAVE_UP` /
+    // `SIDECAR_HEALTHY` statics, and cargo runs test fns on parallel threads. A
+    // latch-setting test holding no `FLAG_LOCK` would let
+    // `try_queue_or_post_queues_when_unhealthy` observe gave-up=true and get
+    // `ServerUnavailable` instead of `Queued` — intermittent, one CI leg at a
+    // time, and it would read as a flaky runner rather than as an unserialised
+    // latch. Each resets BOTH flags before returning.
+
+    #[test]
+    fn report_surfaces_without_destroying_the_queue() {
+        // The property BLOCKER-1 protects: "Retry Server Start" re-runs
+        // start_sidecar with the queue intact, so reporting must not take it.
+        // Taking it here means the user performs a recovery action that appears
+        // to succeed and still loses the file.
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        state.0.lock().unwrap().push(PathBuf::from("a.md"));
+        state.0.lock().unwrap().push(PathBuf::from("b.md"));
+
+        let mut surfaced: Vec<&'static str> = Vec::new();
+        let n = report_pending_opens_with(&state, false, |code| surfaced.push(code));
+
+        assert_eq!(n, 2);
+        assert_eq!(
+            surfaced,
+            vec!["multiple-deferred"],
+            "two undelivered opens must report multiplicity, exactly once — and as \
+             DEFERRED, because the queue they are still sitting in survives"
+        );
+        assert_eq!(
+            *state.0.lock().unwrap(),
+            vec![PathBuf::from("a.md"), PathBuf::from("b.md")],
+            "the queue must survive so a retry can still deliver it"
+        );
+        assert!(
+            !SIDECAR_GAVE_UP.load(Ordering::Acquire),
+            "a non-terminal report must not latch — the retry is still on offer"
+        );
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn a_single_undelivered_open_keeps_the_singular_code() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        state.0.lock().unwrap().push(PathBuf::from("only.md"));
+
+        let mut surfaced: Vec<&'static str> = Vec::new();
+        report_pending_opens_with(&state, false, |code| surfaced.push(code));
+
+        assert_eq!(
+            surfaced,
+            vec!["open-deferred"],
+            "a retained queue must not claim the file failed for good — a later \
+             restart still delivers it"
+        );
+
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn an_empty_pending_queue_surfaces_nothing() {
+        // The common case by far: a failed restart of an app that never had a
+        // pending open. A toast about files there would be pure noise.
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        let mut surfaced: Vec<&'static str> = Vec::new();
+        let n = report_pending_opens_with(&state, true, |code| surfaced.push(code));
+
+        assert_eq!(n, 0);
+        assert!(surfaced.is_empty(), "nothing pending, nothing to say");
+        assert!(
+            SIDECAR_GAVE_UP.load(Ordering::Acquire),
+            "the latch is about the server, not about the queue — it still fires"
+        );
+
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn a_terminal_report_latches_give_up_and_a_new_attempt_clears_it() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        state.0.lock().unwrap().push(PathBuf::from("x.md"));
+
+        report_pending_opens_with(&state, true, |_| {});
+        assert!(SIDECAR_GAVE_UP.load(Ordering::Acquire));
+
+        // Both re-entry points withdraw the verdict: restart_sidecar's clear and
+        // start_sidecar's first statement. A latch that stuck would make every
+        // open after one bad restart fail fast forever.
+        clear_healthy_under_lock(&state);
+        assert!(!SIDECAR_GAVE_UP.load(Ordering::Acquire));
+
+        report_pending_opens_with(&state, true, |_| {});
+        assert!(SIDECAR_GAVE_UP.load(Ordering::Acquire));
+        begin_start_attempt(&state);
+        assert!(!SIDECAR_GAVE_UP.load(Ordering::Acquire));
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn try_queue_or_post_fails_fast_after_give_up() {
+        // #1416's second half: without the latch, file 1 gets a dialog and a
+        // toast while files 2..N queue into a queue with no consumer, logging at
+        // `info` — below the release LevelFilter::Warn floor. Silent, verbatim.
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(true, Ordering::Release);
+
+        let state = fresh_state();
+        let result = try_queue_or_post(&state, PathBuf::from("after-give-up.md"));
+        assert!(matches!(result, OpenRoute::ServerUnavailable));
+        assert!(
+            state.0.lock().unwrap().is_empty(),
+            "a fail-fast open must not join the dead queue"
+        );
+
+        // A healthy server makes the verdict stale, latch or no latch.
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+        let result = try_queue_or_post(&state, PathBuf::from("healthy-wins.md"));
+        assert!(matches!(result, OpenRoute::PostNow(_)));
+
+        // And a new attempt puts queueing back.
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        begin_start_attempt(&state);
+        let result = try_queue_or_post(&state, PathBuf::from("trying-again.md"));
+        assert!(matches!(result, OpenRoute::Queued));
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
     }
 }
 
@@ -7546,6 +8912,110 @@ mod startup_rejection_tests {
              files opening is the case a singular message misdescribes"
         );
     }
+
+    // ---- #1416: the post-validation failure code and its batch ------------
+    //
+    // No statics are touched here, so these need neither `REJECTION_LOCK` nor
+    // `pending_opens_tests`'s `FLAG_LOCK`.
+
+    #[test]
+    fn open_failed_code_is_stable() {
+        // The cross-process contract with `messageForStartupRejection`'s
+        // explicit `case "open-failed"`. A rename on either side desyncs
+        // silently, because the client's `default` renders the same text.
+        assert_eq!(CODE_OPEN_FAILED, "open-failed");
+    }
+
+    #[test]
+    fn deferred_codes_are_stable_and_distinct_from_the_failure_codes() {
+        assert_eq!(CODE_OPEN_DEFERRED, "open-deferred");
+        assert_eq!(CODE_MULTIPLE_DEFERRED, "multiple-deferred");
+        // The split is the point: a retained queue still opens on the next
+        // successful start, so it must never render as the past-tense failure
+        // message. Collapsing these back onto the failure codes would restore
+        // the false statement this pair exists to remove.
+        assert_ne!(CODE_OPEN_DEFERRED, CODE_OPEN_FAILED);
+        assert_ne!(CODE_MULTIPLE_DEFERRED, CODE_MULTIPLE_REJECTED);
+    }
+
+    /// Drive `post_paths_and_surface` with an injected poster.
+    ///
+    /// `tauri::async_runtime::block_on` works in a plain `#[test]` — it lazily
+    /// initialises its own runtime and needs no `AppHandle`, no `#[tokio::test]`
+    /// and no tokio dev-dependency.
+    fn run_batch(paths: &[&str], failing: &[&str], seed: Option<&'static str>) -> Vec<&'static str> {
+        let mut surfaced: Vec<&'static str> = Vec::new();
+        let mut batch = RejectionBatch::default();
+        if let Some(code) = seed {
+            batch.record(code);
+        }
+        let owned: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+        tauri::async_runtime::block_on(post_paths_and_surface(
+            "test",
+            owned,
+            batch,
+            // The `fail` decision is computed OUTSIDE the async block on
+            // purpose: an `Fn` closure may only borrow, so an `async move` that
+            // captured `failing` itself would be E0507 on the second call.
+            |path| {
+                let fail = failing.iter().any(|f| path == PathBuf::from(f));
+                async move {
+                    if fail {
+                        Err("boom".to_string())
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+            |code| surfaced.push(code),
+        ));
+        surfaced
+    }
+
+    #[test]
+    fn a_fully_successful_batch_surfaces_nothing() {
+        assert!(
+            run_batch(&["a.md", "b.md"], &[], None).is_empty(),
+            "opening two files successfully must not toast"
+        );
+    }
+
+    #[test]
+    fn a_failed_post_surfaces_the_open_failed_code_once() {
+        // The #1416 bug itself: this used to be a `log::warn!` and nothing else,
+        // which in a release build is a file the user never opens.
+        assert_eq!(run_batch(&["big.md"], &["big.md"], None), vec!["open-failed"]);
+        // Two failures are still ONE surface call, and report multiplicity.
+        assert_eq!(
+            run_batch(&["a.md", "b.md", "c.md"], &["a.md", "c.md"], None),
+            vec!["multiple-rejected"]
+        );
+    }
+
+    #[test]
+    fn a_validation_rejection_and_a_post_failure_share_one_toast() {
+        // One Finder multi-select: a .pdf refused by the validator and a 60 MB
+        // .md refused by the server. Two surface calls would write twice into
+        // the one-slot buffer, and `useNotifications` would show a count badge
+        // whose value depends on where the client's async drain landed — the
+        // exact race `RejectionBatch` exists to remove.
+        let surfaced = run_batch(&["huge.md"], &["huge.md"], Some("unsupported-extension"));
+        assert_eq!(
+            surfaced,
+            vec!["multiple-rejected"],
+            "the batch spans validation AND delivery, and resolves exactly once"
+        );
+    }
+
+    #[test]
+    fn a_batch_with_nothing_to_post_still_surfaces_its_rejections() {
+        // A fully-rejected batch (the common shape since #1344: a double-clicked
+        // .pdf, a stale alias) has nothing to POST and still has something to
+        // say. `post_batch_for_app`'s early return mirrors this by surfacing
+        // BEFORE it returns — that ordering is not covered here, since it needs
+        // an AppHandle; this pins the helper's half of it.
+        assert_eq!(run_batch(&[], &[], Some("not-a-file")), vec!["not-a-file"]);
+    }
 }
 
 #[cfg(test)]
@@ -7725,5 +9195,341 @@ mod autostart_tests {
         // Every launch after that trusts the tray.
         assert!(autostart_seen_and_mark(&root));
         assert!(autostart_seen_and_mark(&root));
+    }
+}
+
+#[cfg(test)]
+mod pending_update_tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    // Serialize the tests that touch PENDING_UPDATE_HINT (a process-wide
+    // static), exactly as `startup_rejection_tests` does with REJECTION_LOCK.
+    static HINT_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn marker(v: &str) -> PendingUpdateMarker {
+        PendingUpdateMarker {
+            target_version: v.to_string(),
+            ts: 1_700_000_000,
+        }
+    }
+
+    // --- write / read round trip -------------------------------------------
+
+    #[test]
+    fn write_then_read_round_trips() {
+        let dir = tempfile::TempDir::new().unwrap();
+        write_pending_update_marker(dir.path(), "0.24.0").unwrap();
+
+        let got = read_pending_update_marker(dir.path()).expect("marker should read back");
+        assert_eq!(got.target_version, "0.24.0");
+        // The timestamp is computed inside the writer. A `ts` stuck at 0 means
+        // the clock step silently degraded (`unwrap_or_default`) on a machine
+        // where it should not have.
+        assert_ne!(got.ts, 0, "writer must stamp a real timestamp");
+        assert!(got.ts > 1_600_000_000, "ts should be a plausible epoch: {}", got.ts);
+    }
+
+    #[test]
+    fn read_returns_none_for_missing_file_and_missing_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert_eq!(read_pending_update_marker(dir.path()), None);
+        assert_eq!(
+            read_pending_update_marker(&dir.path().join("does-not-exist")),
+            None
+        );
+    }
+
+    #[test]
+    fn read_returns_none_for_malformed_json_and_zero_byte_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(PENDING_UPDATE_MARKER);
+
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert_eq!(read_pending_update_marker(dir.path()), None, "malformed JSON");
+
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(read_pending_update_marker(dir.path()), None, "zero-byte file");
+
+        // Well-formed JSON, wrong shape — the `ts` field is missing.
+        std::fs::write(&path, br#"{"target_version":"0.24.0"}"#).unwrap();
+        assert_eq!(read_pending_update_marker(dir.path()), None, "missing field");
+    }
+
+    #[test]
+    fn read_rejects_implausible_version() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(PENDING_UPDATE_MARKER);
+
+        for bad in [
+            "x".repeat(500),
+            "0.24.0\u{0}\u{1}".to_string(),
+            String::new(),
+            "0.24.0 && rm -rf /".to_string(),
+        ] {
+            let body = serde_json::to_string(&PendingUpdateMarker {
+                target_version: bad.clone(),
+                ts: 1,
+            })
+            .unwrap();
+            std::fs::write(&path, body).unwrap();
+            assert_eq!(
+                read_pending_update_marker(dir.path()),
+                None,
+                "should reject implausible version: {bad:?}"
+            );
+        }
+
+        // Control: the guard must not be so tight that real versions bounce.
+        for good in ["0.24.0", "1.0.0-rc.1", "0.24.0+build.5", "v0.24.0"] {
+            let body = serde_json::to_string(&marker(good)).unwrap();
+            std::fs::write(&path, body).unwrap();
+            assert!(
+                read_pending_update_marker(dir.path()).is_some(),
+                "should accept real version: {good}"
+            );
+        }
+    }
+
+    // --- classifier ---------------------------------------------------------
+
+    #[test]
+    fn classify_matching_version_is_completed() {
+        assert_eq!(
+            classify_pending_update(Some(marker("0.24.0")), "0.24.0"),
+            PendingUpdateVerdict::Completed
+        );
+        // Defence-in-depth — `Update::version` reaches us already normalized, so
+        // this pins nothing that can realistically drift. It is here so a future
+        // writer that does NOT normalize cannot silently start nagging after
+        // every successful update. `plausible_version` accepts a leading `v`, so
+        // unlike whitespace this branch IS reachable through the read path.
+        assert_eq!(
+            classify_pending_update(Some(marker("v0.24.0")), "0.24.0"),
+            PendingUpdateVerdict::Completed
+        );
+    }
+
+    #[test]
+    fn whitespace_is_trimmed_on_the_read_path_before_the_shape_guard() {
+        // Order matters and is easy to get backwards. `plausible_version`
+        // rejects every ASCII space, so if the reader guarded before trimming, a
+        // marker carrying a stray trailing newline would silently read back as
+        // `None` -> `NoMarker` -> no banner, and `classify`'s own `trim()` would
+        // be unreachable through the only real producer.
+        let dir = tempfile::TempDir::new().unwrap();
+        let body = serde_json::to_string(&PendingUpdateMarker {
+            target_version: "  0.24.0\n".to_string(),
+            ts: 1,
+        })
+        .unwrap();
+        std::fs::write(dir.path().join(PENDING_UPDATE_MARKER), body).unwrap();
+
+        let got = read_pending_update_marker(dir.path()).expect("whitespace must be trimmed, not rejected");
+        assert_eq!(got.target_version, "0.24.0");
+        assert_eq!(
+            classify_pending_update(Some(got), "0.24.0"),
+            PendingUpdateVerdict::Completed
+        );
+    }
+
+    #[test]
+    fn classify_mismatched_version_is_may_have_failed() {
+        // The load-bearing direction: an inverted comparison here would make the
+        // whole feature silently never fire, and every other test would pass.
+        assert_eq!(
+            classify_pending_update(Some(marker("0.24.0")), "0.23.0"),
+            PendingUpdateVerdict::MayHaveFailed
+        );
+        assert_eq!(
+            classify_pending_update(Some(marker("0.24.0")), "0.24.1"),
+            PendingUpdateVerdict::MayHaveFailed
+        );
+    }
+
+    #[test]
+    fn classify_none_is_no_marker() {
+        assert_eq!(
+            classify_pending_update(None, "0.23.0"),
+            PendingUpdateVerdict::NoMarker
+        );
+    }
+
+    // --- clear --------------------------------------------------------------
+
+    #[test]
+    fn clear_is_idempotent_and_reports_absence() {
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // Already absent must report success, or every clean boot would warn.
+        assert!(clear_pending_update_marker(dir.path()));
+
+        write_pending_update_marker(dir.path(), "0.24.0").unwrap();
+        assert!(clear_pending_update_marker(dir.path()));
+        assert_eq!(read_pending_update_marker(dir.path()), None);
+        assert!(clear_pending_update_marker(dir.path()), "second clear");
+    }
+
+    // --- panic containment --------------------------------------------------
+
+    #[test]
+    fn write_into_a_path_blocked_by_a_file_returns_err_not_panic() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // A regular file where the marker's directory should be: `create_dir_all`
+        // fails. The point is that it returns Err rather than panicking — a
+        // panic here unwinds through the plugin's `download()` and kills both
+        // match arms in `perform_install`, so the user gets no error dialog.
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, b"i am a file").unwrap();
+
+        let result = write_pending_update_marker(&blocked, "0.24.0");
+        assert!(result.is_err(), "expected Err, got {result:?}");
+    }
+
+    // --- buffer + nudge ordering --------------------------------------------
+
+    #[test]
+    fn surface_pending_update_hint_with_buffers_before_nudging() {
+        let _g = HINT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        with_pending_hint("test-reset", |slot| *slot = None);
+
+        // The nudge is payload-free, so a listener answers it by draining the
+        // buffer. If the nudge fired first the slot would be empty and the hint
+        // would be dropped permanently.
+        let mut seen_during_nudge: Option<String> = None;
+        surface_pending_update_hint_with(CODE_UPDATE_MAY_NOT_HAVE_COMPLETED, || {
+            seen_during_nudge = with_pending_hint("test-peek", |slot| slot.clone());
+        });
+
+        assert_eq!(
+            seen_during_nudge.as_deref(),
+            Some(CODE_UPDATE_MAY_NOT_HAVE_COMPLETED),
+            "buffer must be populated BEFORE the nudge fires"
+        );
+
+        with_pending_hint("test-reset", |slot| *slot = None);
+    }
+
+    #[test]
+    fn get_pending_update_hint_takes_once() {
+        let _g = HINT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        with_pending_hint("test-reset", |slot| *slot = None);
+
+        surface_pending_update_hint_with(CODE_UPDATE_MAY_NOT_HAVE_COMPLETED, || {});
+
+        assert_eq!(
+            get_pending_update_hint().as_deref(),
+            Some(CODE_UPDATE_MAY_NOT_HAVE_COMPLETED)
+        );
+        // Take-once: a WebView reload re-runs the init drain, and a peek-style
+        // accessor would replay the banner the user already dismissed.
+        assert_eq!(get_pending_update_hint(), None, "second read must be empty");
+
+        with_pending_hint("test-reset", |slot| *slot = None);
+    }
+
+    // --- the one-shot clear, and the policy that guards it -----------------
+
+    #[test]
+    fn evaluating_a_mismatch_hints_once_and_consumes_the_marker() {
+        // THE load-bearing test of this change. One-shot is the issue's explicit
+        // requirement, and its failure mode is the worst one available: a
+        // permanent, every-boot, un-dismissable banner for every affected user.
+        // Before this test existed, deleting the clear outright left `cargo
+        // test`, the client suites, biome and typecheck all green.
+        let dir = tempfile::TempDir::new().unwrap();
+        write_pending_update_marker(dir.path(), "0.24.0").unwrap();
+
+        assert_eq!(
+            evaluate_pending_update_at(dir.path(), "0.23.0"),
+            PendingUpdateVerdict::MayHaveFailed
+        );
+        assert!(
+            !dir.path().join(PENDING_UPDATE_MARKER).exists(),
+            "the marker must be gone after it has been surfaced once"
+        );
+        // A second boot must say nothing at all.
+        assert_eq!(
+            evaluate_pending_update_at(dir.path(), "0.23.0"),
+            PendingUpdateVerdict::NoMarker,
+            "a second evaluation must not re-raise the hint"
+        );
+    }
+
+    #[test]
+    fn evaluating_a_match_reports_completed_and_consumes_the_marker() {
+        let dir = tempfile::TempDir::new().unwrap();
+        write_pending_update_marker(dir.path(), "0.24.0").unwrap();
+
+        assert_eq!(
+            evaluate_pending_update_at(dir.path(), "0.24.0"),
+            PendingUpdateVerdict::Completed
+        );
+        assert!(!dir.path().join(PENDING_UPDATE_MARKER).exists());
+    }
+
+    #[test]
+    fn evaluating_a_corrupt_marker_says_nothing_and_still_removes_it() {
+        // The clear is unconditional precisely so a marker too damaged to
+        // classify does not linger forever. If the clear were moved onto the
+        // hint branch, this file would survive every boot.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join(PENDING_UPDATE_MARKER), b"{ not json").unwrap();
+
+        assert_eq!(
+            evaluate_pending_update_at(dir.path(), "0.23.0"),
+            PendingUpdateVerdict::NoMarker
+        );
+        assert!(
+            !dir.path().join(PENDING_UPDATE_MARKER).exists(),
+            "a corrupt marker must not linger"
+        );
+    }
+
+    #[test]
+    fn evaluating_a_clean_boot_is_a_silent_no_op() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            evaluate_pending_update_at(dir.path(), "0.23.0"),
+            PendingUpdateVerdict::NoMarker
+        );
+    }
+
+    #[test]
+    fn a_failed_clear_suppresses_the_hint_but_nothing_else() {
+        // Exhaustive over the policy. A `remove_file` failure cannot be staged
+        // in a test running as root, which is exactly why the decision is a pure
+        // function rather than a branch buried in the I/O path.
+        use PendingUpdateVerdict::{Completed, MayHaveFailed, NoMarker};
+        for v in [NoMarker, Completed, MayHaveFailed] {
+            assert_eq!(verdict_after_clear(v, true), v, "a successful clear changes nothing");
+        }
+        assert_eq!(verdict_after_clear(NoMarker, false), NoMarker);
+        assert_eq!(verdict_after_clear(Completed, false), Completed);
+        // The one residual false positive in the design: a hint that cannot be
+        // made one-shot would return every boot with no way to dismiss it, so it
+        // is suppressed rather than shipped.
+        assert_eq!(
+            verdict_after_clear(MayHaveFailed, false),
+            NoMarker,
+            "an un-clearable marker must not raise a permanent nag"
+        );
+    }
+
+    #[test]
+    fn hint_code_is_stable_and_carries_no_version_or_path() {
+        // Cross-process contract with the client's message map.
+        assert_eq!(
+            CODE_UPDATE_MAY_NOT_HAVE_COMPLETED,
+            "update-may-not-have-completed"
+        );
+        assert!(!CODE_UPDATE_MAY_NOT_HAVE_COMPLETED.contains('/'));
+        assert!(!CODE_UPDATE_MAY_NOT_HAVE_COMPLETED.contains('\\'));
+        assert!(
+            !CODE_UPDATE_MAY_NOT_HAVE_COMPLETED
+                .chars()
+                .any(|c| c.is_ascii_digit()),
+            "the code must not carry a version"
+        );
     }
 }

@@ -203,11 +203,85 @@ describe("describeCause — privacy contract", () => {
   it("never truncates into a lone surrogate", () => {
     // `encodeURIComponent` throws URIError on one, and `buildBugReportUrl`
     // answers a throw by dropping the entire prefill.
+    //
+    // The leading `"x"` is the whole point of the fixture and must not be
+    // "tidied" away. Every emoji is two UTF-16 units, so a bare
+    // `"🙂".repeat(200)` puts a LOW surrogate at index 159 and the 160-char cut
+    // lands neatly BETWEEN pairs — deleting the cut-site strip in `clamp` left
+    // this test green, which is how it shipped asserting nothing. One BMP
+    // character of offset puts a HIGH surrogate at index 159 so the cut splits a
+    // pair, which is the case the strip exists for.
+    quiet();
+    logClientWarning("scope", "event", `x${"🙂".repeat(200)}`);
+    const { detail } = readClientLog()[0];
+    expect(() => encodeURIComponent(detail)).not.toThrow();
+    expect(/[\uD800-\uDBFF]$/.test(detail.slice(0, -1))).toBe(false);
+    // Pin the geometry itself, so a later change to `MAX_DETAIL_CHARS` cannot
+    // silently move the cut back between pairs and re-vacuate the assertion.
+    expect(`x${"🙂".repeat(200)}`.charCodeAt(159)).toBeGreaterThanOrEqual(0xd800);
+    expect(`x${"🙂".repeat(200)}`.charCodeAt(159)).toBeLessThanOrEqual(0xdbff);
+  });
+
+  it("still handles a cut that falls between surrogate pairs", () => {
+    // The even case the fixture above used to be. Kept: the two differ in which
+    // branch of `clamp` does the work, and only the odd one exercises the strip.
     quiet();
     logClientWarning("scope", "event", "🙂".repeat(200));
     const { detail } = readClientLog()[0];
     expect(() => encodeURIComponent(detail)).not.toThrow();
-    expect(/[\uD800-\uDBFF]$/.test(detail.slice(0, -1))).toBe(false);
+    expect(detail.endsWith("…")).toBe(true);
+  });
+
+  it("bounds the RAW cause before scrubbing, not just the stored detail", () => {
+    // The ReDoS half of the fix, pinned by SHAPE rather than by a clock.
+    //
+    // `describeCause` scrubs the full cause and only then clamps, so cost was a
+    // function of raw input on the UI thread inside a `catch`. Two passes are
+    // super-linear on their own — `collapseLines`' leading `\s*` over a
+    // whitespace run, and the URL rule's two runs either side of a `:` over a
+    // colon run (`"https://" + "a:".repeat(50000)` took 33s) — and no regex
+    // rewrite removes the second one. The cap is what bounds them.
+    //
+    // Observable consequence, with no timing involved: two causes that agree for
+    // the first `MAX_CAUSE_CHARS` are indistinguishable to `fingerprint`, so
+    // they COALESCE. Delete the `cap(...)` call and they become two entries.
+    quiet();
+    const shared = "z".repeat(2000);
+    logClientWarning("scope", "event", `${shared}AAA`);
+    logClientWarning("scope", "event", `${shared}BBB`);
+    const entries = readClientLog();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].count).toBe(2);
+    // And the converse, so the test cannot pass by coalescing everything: a
+    // difference INSIDE the cap still separates them.
+    _resetClientLog();
+    logClientWarning("scope", "event", `A${shared}`);
+    logClientWarning("scope", "event", `B${shared}`);
+    expect(readClientLog()).toHaveLength(2);
+  });
+
+  it("never lets a throwing cause escape into the caller's catch block", () => {
+    // `src/client/sentry.ts`'s stated norm — never let telemetry throw into the
+    // app's error path — applied here, because this module is the declared
+    // intake for the other ~150 `console.warn` sites. `describeCause` reads
+    // `cause.name`, so a throwing getter would abort the CALLER's `catch` and
+    // the user-facing recovery line after the warn would never run.
+    const { warn } = quiet();
+    const hostile = {
+      get name(): string {
+        throw new Error("boom");
+      },
+      message: "x",
+    };
+    expect(() => logClientWarning("scope", "event", hostile)).not.toThrow();
+    // The console line is the part that predates the ring buffer, so it must be
+    // emitted whether or not the buffer write survives. Asserted by IDENTITY,
+    // not `toHaveBeenCalledWith`: a deep-equality check would itself read the
+    // throwing getter and fail the test from the assertion rather than the code.
+    expect(warn.mock.calls).toHaveLength(1);
+    expect(warn.mock.calls[0][0]).toBe("[scope] event:");
+    expect(warn.mock.calls[0][1]).toBe(hostile);
+    expect(readClientLog()).toHaveLength(0);
   });
 
   it("scrubs user paths and secrets on the way IN", () => {

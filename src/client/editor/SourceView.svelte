@@ -3,6 +3,7 @@ import { untrack } from "svelte";
 import type * as Y from "yjs";
 import { API_DOCUMENT_RAW, API_DOCUMENT_RELOAD } from "../../shared/api-paths.js";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import LiveRegion from "../components/LiveRegion.svelte";
 import { API_BASE } from "../utils/fileUpload.js";
 
 interface Props {
@@ -86,6 +87,19 @@ $effect(() => {
   map.observe(update);
   return () => map.unobserve(update);
 });
+
+/**
+ * One source of truth for the clear-on-commit warning, so the visible strip and
+ * the sr-only announcer below it can never drift apart (#1431). Empty string
+ * when there is nothing to say — the announcer stays mounted and silent.
+ */
+const annotationWarning = $derived(
+  annotationCount > 0
+    ? `Editing the source clears this document's ${annotationCount} annotation${
+        annotationCount === 1 ? "" : "s"
+      } when you return to the editor.`
+    : "",
+);
 
 // Fetch the literal markdown source on mount / when the target doc changes.
 $effect(() => {
@@ -254,11 +268,22 @@ async function copyToClipboard(): Promise<void> {
     </button>
   </div>
 
+  <!-- #1431: `.source-view` is a gapped flex column, so an always-mounted host
+       would sit here as permanent dead air. Instead the sentence gets a
+       permanently-mounted, out-of-flow announcer (not a flex item, so no gap
+       cost) and the visible strip is `aria-hidden` — the pairing
+       `panels/SidePanel.svelte` already documents: one owner per message, and
+       the visible copy must not be read twice. The strip holds no controls, so
+       hiding it from the a11y tree removes nothing but the duplicate. -->
+  <LiveRegion srOnly message={annotationWarning} data-testid="source-view-live" />
+
   {#if annotationCount > 0}
-    <div class="source-view-warning" data-testid="source-view-annotation-warning" role="status">
-      Editing the source clears this document's {annotationCount} annotation{annotationCount === 1
-        ? ""
-        : "s"} when you return to the editor.
+    <div
+      class="source-view-warning"
+      data-testid="source-view-annotation-warning"
+      aria-hidden="true"
+    >
+      {annotationWarning}
     </div>
   {/if}
 

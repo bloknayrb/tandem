@@ -1,6 +1,7 @@
 <script lang="ts">
 import { API_CONVERT } from "../../shared/api-paths";
 import { API_BASE } from "../utils/fileUpload";
+import LiveRegion from "./LiveRegion.svelte";
 import "./tandem-banner.css";
 
 const DISMISS_KEY = "tandem:reviewOnlyBannerDismissed";
@@ -56,55 +57,58 @@ function handleDismiss() {
 }
 </script>
 
-{#if visible && !dismissed}
-  <div
-    class="tandem-banner tandem-banner--info"
-    role="status"
-    aria-live="polite"
-    data-testid="review-only-banner"
-  >
-    <span class="tandem-banner__message">
-      This document is open in review-only mode. You can add annotations and review, but cannot
-      edit directly.
-    </span>
-    {#if error}
-      <span
-        style="color: var(--tandem-error-fg-strong); font-size: var(--tandem-text-xs); max-width: 200px;"
-      >
-        {error}
+<!-- #1431: host outside the `{#if}`, so the region predates its text. It also
+     covers the `{#if error}` strip below — a conversion failure arriving into an
+     already-mounted region is exactly the mutation an AT reads out. -->
+<LiveRegion data-testid="review-only-live">
+  {#if visible && !dismissed}
+    <div
+      class="tandem-banner tandem-banner--info"
+      data-testid="review-only-banner"
+    >
+      <span class="tandem-banner__message">
+        This document is open in review-only mode. You can add annotations and review, but cannot
+        edit directly.
       </span>
-    {/if}
-    {#if documentId}
+      {#if error}
+        <span
+          style="color: var(--tandem-error-fg-strong); font-size: var(--tandem-text-xs); max-width: 200px;"
+        >
+          {error}
+        </span>
+      {/if}
+      {#if documentId}
+        <button
+          type="button"
+          class="tandem-banner__cta"
+          data-testid="convert-to-markdown-btn"
+          onclick={handleConvert}
+          disabled={converting}
+        >
+          {converting ? "Converting…" : "Convert to Markdown"}
+        </button>
+      {/if}
       <button
         type="button"
-        class="tandem-banner__cta"
-        data-testid="convert-to-markdown-btn"
-        onclick={handleConvert}
-        disabled={converting}
+        class="tandem-banner__dismiss"
+        data-testid="review-only-dismiss"
+        onclick={handleDismiss}
+        aria-label="Dismiss review-only banner"
       >
-        {converting ? "Converting…" : "Convert to Markdown"}
+        <svg
+          viewBox="0 0 24 24"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M6 6l12 12M6 18L18 6" />
+        </svg>
       </button>
-    {/if}
-    <button
-      type="button"
-      class="tandem-banner__dismiss"
-      data-testid="review-only-dismiss"
-      onclick={handleDismiss}
-      aria-label="Dismiss review-only banner"
-    >
-      <svg
-        viewBox="0 0 24 24"
-        width="14"
-        height="14"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2.5"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M6 6l12 12M6 18L18 6" />
-      </svg>
-    </button>
-  </div>
-{/if}
+    </div>
+  {/if}
+</LiveRegion>

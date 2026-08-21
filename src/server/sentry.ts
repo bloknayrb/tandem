@@ -42,9 +42,10 @@ function redactHome(input: string): string {
   }
   // Then the shared generic pass, for user segments not under $HOME — another
   // account's path, or the absolute path inside a raw `fs` error. Shared rather
-  // than a local copy of the same three regexes: the local copy had already
-  // drifted (it was case-SENSITIVE on `\Users\`, so a lowercase Windows path
-  // leaked the account name here after the shared module was fixed), and the
+  // than the local copy of the same three regexes this used to hold: that copy
+  // and `src/client/sentry.ts`'s were byte-identical and both case-SENSITIVE on
+  // `\Users\`, so a lowercase Windows path leaked the account name from BOTH.
+  // This PR adds the `/i` to the shared rule and adopts it in both places; the
   // `$HOME` swap above is case-sensitive too, so it does not cover for that.
   // Only the literal-root swap is genuinely server-only — the sidecar can read
   // the environment and the WebView cannot.
@@ -55,13 +56,18 @@ function redactHome(input: string): string {
  * Exposed for unit tests — scrubbing is the privacy-load-bearing part.
  *
  * The secrets half is `shared/scrub-text.ts`, shared with the WebView reporter
- * and the client log. It used to be a private copy here carrying only the
- * original three patterns, which meant the sidecar — the half most likely to
- * hold a credential, since MCP server configs carry `env`/`headers` full of API
- * keys (`GET /api/integrations/existing` exists because of that) — was the LEAST
- * redacted of the three. The path half is shared too; `redactHome` stays local
- * only for its `$HOME` literal swap, which genuinely is server-only because the
- * sidecar can read the environment and the WebView cannot.
+ * and the client log. There were TWO copies before this PR, here and in
+ * `src/client/sentry.ts`, and they had NOT drifted: both carried the same three
+ * patterns (`sk-ant-`, `sk-`, `Bearer`) byte for byte. So the widening — GitHub,
+ * Slack and Stripe tokens, `Basic`, JWTs, `scheme://user:pass@`, credential
+ * query params — is new in this PR, not one copy catching up with another; it
+ * lands in both halves at once precisely because there is now only one to
+ * widen. It matters most here: the sidecar is the half most likely to hold a
+ * credential, since MCP server configs carry `env`/`headers` full of API keys
+ * (`GET /api/integrations/existing` exists because of that). The path half is
+ * shared too; `redactHome` stays local only for its `$HOME` literal swap, which
+ * genuinely is server-only because the sidecar can read the environment and the
+ * WebView cannot.
  */
 export function scrub(input: string): string {
   return redactHome(redactSecrets(input));

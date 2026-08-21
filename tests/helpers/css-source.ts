@@ -79,9 +79,28 @@ export function styleBlocks(file: string): string {
 
 /**
  * One authored rule: its selector list already split, its declaration body,
- * and its selector list resolved against every ancestor rule.
+ * its selector list resolved against every ancestor rule, its enclosing
+ * at-rule chain, and its source offset.
+ *
+ * `atRules` and `start` are additive (added for #1425's reduce-motion guard
+ * check) and intentionally orthogonal to `fullSelectors`: `resolveSelectors`
+ * treats at-rules as transparent on purpose (see its doc comment), so a
+ * selector-only check cannot distinguish a rule sitting inside
+ * `@media (prefers-reduced-motion: reduce)` from an identical one at the top
+ * level. `atRules` is precisely the thing `fullSelectors` deliberately
+ * discards, exposed for callers that need to know a rule is conditional
+ * rather than just what it would match. `start` is the rule's byte offset in
+ * the parsed `css` string (`rule.source.start.offset`), for callers that need
+ * to assert one rule appears after another — e.g. a `@media` guard whose
+ * specificity ties its target and so wins only by source order.
  */
-export type CssRule = { selectors: string[]; fullSelectors: string[]; body: string };
+export type CssRule = {
+  selectors: string[];
+  fullSelectors: string[];
+  body: string;
+  atRules: string[];
+  start: number;
+};
 
 /**
  * Resolve `rule`'s selectors against its ancestor rule chain, cross-multiplied
@@ -150,9 +169,33 @@ export function cssRulesBySelector(css: string): CssRule[] {
       selectors: rule.selectors.map((s) => s.trim()),
       fullSelectors: resolveSelectors(rule, cache),
       body,
+      atRules: enclosingAtRules(rule),
+      start: rule.source?.start?.offset ?? -1,
     });
   });
   return out;
+}
+
+/**
+ * `rule`'s enclosing at-rule chain as `@name params` strings, outermost
+ * first — e.g. `["@media (prefers-reduced-motion: reduce)"]`. Empty for a
+ * rule with no at-rule ancestor. Deliberately independent of
+ * `resolveSelectors`: that walk skips PAST at-rules to keep `fullSelectors`
+ * at-rule-transparent (by design — see its doc comment), so it cannot also
+ * answer "is this rule conditional". This walk answers only that question and
+ * changes nothing about selector resolution.
+ */
+function enclosingAtRules(rule: Rule): string[] {
+  const chain: string[] = [];
+  let ancestor = rule.parent;
+  while (ancestor) {
+    if (ancestor.type === "atrule") {
+      const atrule = ancestor as import("postcss").AtRule;
+      chain.unshift(`@${atrule.name} ${atrule.params}`.trim());
+    }
+    ancestor = ancestor.parent;
+  }
+  return chain;
 }
 
 /**

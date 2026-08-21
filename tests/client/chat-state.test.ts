@@ -8,6 +8,7 @@ import {
   Y_MAP_CHAT_DOCUMENT_NAMES,
   Y_MAP_CHAT_SEEN,
   Y_MAP_CHAT_SEEN_INITIALIZED,
+  Y_MAP_CHAT_STREAM,
 } from "../../src/shared/constants";
 import type { ChatMessage } from "../../src/shared/types";
 import ChatStateHarness from "./fixtures/ChatStateHarness.svelte";
@@ -140,6 +141,77 @@ describe("App-owned chat unread state", () => {
     });
     await waitFor(() => {
       expect(afterRestart.getByTestId("document-names").textContent).toContain("Closed notes.md");
+    });
+  });
+});
+
+describe("streamed message composition (#1340)", () => {
+  afterEach(() => cleanup());
+
+  it("overlays the chatStream sidecar text over a stale chat row, and leaves rows without a sidecar verbatim", async () => {
+    const doc = new Y.Doc();
+    doc.getMap(Y_MAP_CHAT_SEEN).set(Y_MAP_CHAT_SEEN_INITIALIZED, true);
+    doc.getMap(Y_MAP_CHAT).set("plain", claude("plain", 1));
+    doc.getMap(Y_MAP_CHAT).set("streamed", { ...claude("streamed", 2), text: "first flush" });
+    const yText = new Y.Text();
+    doc.transact(() => {
+      doc.getMap(Y_MAP_CHAT_STREAM).set("streamed", yText); // attach before populate
+      yText.insert(0, "first flush plus the streamed tail");
+    });
+
+    const view = render(ChatStateHarness, { props: { doc, synced: true, visible: false } });
+    await waitFor(() => {
+      const texts = JSON.parse(view.getByTestId("message-texts").textContent ?? "[]");
+      // The sidecar is authoritative while it exists; the stale row text must
+      // NOT be shown. The un-streamed message passes through verbatim.
+      expect(texts).toEqual(["plain", "first flush plus the streamed tail"]);
+    });
+  });
+
+  it("re-renders on a nested Y.Text edit — a plain observe would freeze the live bubble", async () => {
+    const doc = new Y.Doc();
+    doc.getMap(Y_MAP_CHAT_SEEN).set(Y_MAP_CHAT_SEEN_INITIALIZED, true);
+    doc.getMap(Y_MAP_CHAT).set("live", { ...claude("live", 1), text: "start" });
+    const yText = new Y.Text();
+    doc.transact(() => {
+      doc.getMap(Y_MAP_CHAT_STREAM).set("live", yText);
+      yText.insert(0, "start");
+    });
+    const view = render(ChatStateHarness, { props: { doc, synced: true, visible: false } });
+    await waitFor(() => {
+      expect(view.getByTestId("message-texts").textContent).toContain("start");
+    });
+
+    // An APPEND inside the existing Y.Text: no chatStream KEY changes, so a
+    // shallow map observe fires nothing — only observeDeep sees it (#1340).
+    yText.insert(yText.length, " and more tokens");
+    await waitFor(() => {
+      expect(view.getByTestId("message-texts").textContent).toContain("start and more tokens");
+    });
+  });
+
+  it("falls back to the row text after finalize (sidecar deleted, row folded)", async () => {
+    const doc = new Y.Doc();
+    doc.getMap(Y_MAP_CHAT_SEEN).set(Y_MAP_CHAT_SEEN_INITIALIZED, true);
+    doc.getMap(Y_MAP_CHAT).set("done", { ...claude("done", 1), text: "partial" });
+    const yText = new Y.Text();
+    doc.transact(() => {
+      doc.getMap(Y_MAP_CHAT_STREAM).set("done", yText);
+      yText.insert(0, "partial + streamed");
+    });
+    const view = render(ChatStateHarness, { props: { doc, synced: true, visible: false } });
+    await waitFor(() => {
+      expect(view.getByTestId("message-texts").textContent).toContain("partial + streamed");
+    });
+
+    // The server-side fold: row re-set with the final text, sidecar deleted.
+    doc.transact(() => {
+      doc.getMap(Y_MAP_CHAT).set("done", { ...claude("done", 1), text: "partial + streamed" });
+      doc.getMap(Y_MAP_CHAT_STREAM).delete("done");
+    });
+    await waitFor(() => {
+      const texts = JSON.parse(view.getByTestId("message-texts").textContent ?? "[]");
+      expect(texts).toEqual(["partial + streamed"]);
     });
   });
 });

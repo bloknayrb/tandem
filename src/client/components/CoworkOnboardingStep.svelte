@@ -2,6 +2,7 @@
 import { TANDEM_REPO_URL } from "../../shared/constants";
 import {
   COWORK_PREFLIGHT_CHECKING,
+  COWORK_PREFLIGHT_FAILED,
   formatCoworkError,
   writeCoworkOnboardingSkipped,
 } from "../cowork/cowork-helpers";
@@ -63,6 +64,16 @@ async function withInvoke(
   }
 }
 
+/**
+ * The toggle's degraded-success warnings (#1438) are deliberately NOT rendered
+ * here. This step advances out of itself on success, so a caveat shown at this
+ * moment is discarded before it can be read — and the facts behind it are not
+ * lost: they come back on every `cowork_get_status` as per-workspace
+ * `WorkspaceStatus.fileStatus`, which the Cowork settings panel renders. The
+ * defect #1438 describes — the caveat existing ONLY in a Tauri log — is closed
+ * by the payload being structured and by that panel, not by a banner on a view
+ * that is about to unmount.
+ */
 async function handleEnable(): Promise<void> {
   const ok = await withInvoke(async (invoke) => {
     await coworkToggleIntegration(invoke, true);
@@ -115,6 +126,12 @@ function handleSkip(): void {
                whose failure we have already observed. -->
           <div class="cos-preflight" data-testid="cowork-onboarding-preflight-blocked">
             {probe.preflight.hint}
+          </div>
+        {:else if probe.preflight?.status === "failed"}
+          <!-- #1436: see the note in CoworkSettings. Hedged, and no retry —
+               nothing was observed to fail, so Enable stays. -->
+          <div class="cos-checking" data-testid="cowork-onboarding-preflight-failed">
+            {COWORK_PREFLIGHT_FAILED}
           </div>
         {/if}
         {#if probe.probing}

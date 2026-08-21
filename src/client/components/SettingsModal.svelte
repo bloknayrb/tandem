@@ -899,6 +899,17 @@ async function handleReplayTutorial(): Promise<void> {
     transition: background 100ms, color 100ms;
   }
 
+  /* Sidebar nav rows: the active tab is conveyed by the final background and
+     weight, so reduced motion can drop the crossfade entirely. */
+  :global(body.tandem-reduce-motion) .settings-modal-nav-btn {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .settings-modal-nav-btn {
+      transition: none;
+    }
+  }
+
   .settings-modal-nav-btn:hover {
     background: var(--tandem-surface);
     color: var(--tandem-fg);
@@ -1090,6 +1101,18 @@ async function handleReplayTutorial(): Promise<void> {
     cursor: pointer;
     transition: background 100ms, color 100ms, border-color 100ms;
   }
+  /* Mode radios are styled globally because the tabs render them, so the guard
+     doubles the `:global` — the target selector is fully global and a scoped
+     descendant would never match it. The checked border/background are the
+     state readout; reduced motion just skips the fade into them. */
+  :global(body.tandem-reduce-motion) :global(.settings-mode-btn) {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.settings-mode-btn) {
+      transition: none;
+    }
+  }
   :global(.settings-mode-btn[aria-checked="true"]) {
     border-color: var(--tandem-accent);
     background: var(--tandem-accent-bg);
@@ -1154,6 +1177,19 @@ async function handleReplayTutorial(): Promise<void> {
       transition: transform 0.18s ease;
       z-index: 2;
       box-shadow: var(--tandem-shadow-3);
+    }
+
+    /* W9 drawer slide. Both halves stay *inside* the width query — the
+       transition only exists below 860px, and a guard hoisted out of it would
+       also kill motion on layouts that never collapse the sidebar. The drawer
+       still opens and closes; under reduced motion it appears in place. */
+    :global(body.tandem-reduce-motion) .settings-modal-sidebar {
+      transition: none;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .settings-modal-sidebar {
+        transition: none;
+      }
     }
 
     .settings-modal[data-narrow-sidebar-open="true"] .settings-modal-sidebar {

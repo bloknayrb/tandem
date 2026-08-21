@@ -2,6 +2,7 @@
 import type { Editor } from "@tiptap/core";
 import { onDestroy } from "svelte";
 import * as Y from "yjs";
+import LiveRegion from "../../components/LiveRegion.svelte";
 import type { OpenTab } from "../../types.js";
 import { createCoalescingTick } from "../../utils/coalescing-tick";
 import {
@@ -492,12 +493,18 @@ async function handleReplaceAll() {
         </div>
       {/if}
 
-      <!-- Partial replace-all warning -->
-      {#if partialWarning}
-        <div class="fr-msg warning" role="status">
-          {partialWarning}
-        </div>
-      {/if}
+      <!-- Partial replace-all warning. #1431: the live region is the HOST, not
+           the strip — a `role="status"` on the node the `{#if}` creates is
+           inserted together with its sentence and is announced by nothing.
+           `.fr` is a flex column with no `gap`, so an empty host costs no
+           layout. -->
+      <LiveRegion data-testid="find-replace-live">
+        {#if partialWarning}
+          <div class="fr-msg warning">
+            {partialWarning}
+          </div>
+        {/if}
+      </LiveRegion>
 
       <!-- Cross-doc results (kept in-panel; restyled to fit B4) -->
       {#if scope === "tabs"}
@@ -552,8 +559,18 @@ async function handleReplaceAll() {
     from { opacity: 0; transform: translateY(-4px) scale(0.985); }
     to { opacity: 1; transform: none; }
   }
+  /* Guards the panel's pop-in. This is an entry animation, and `fr-pop-in`'s
+     100% frame (opacity 1, no transform) is exactly the element's un-animated
+     state — so `animation: none` lands on the final state, no end values to
+     restate. The `:global` half is what reaches the in-app reduceMotion
+     setting; the media query alone never did. */
+  :global(body.tandem-reduce-motion) .fr-anchor {
+    animation: none;
+  }
   @media (prefers-reduced-motion: reduce) {
-    .fr-anchor { animation: none; }
+    .fr-anchor {
+      animation: none;
+    }
   }
 
   .fr {
@@ -655,6 +672,16 @@ async function handleReplaceAll() {
     cursor: pointer;
     transition: background 100ms, color 100ms;
   }
+  /* Guards the prev/next buttons' hover tint. The hover colors still apply;
+     they just arrive without the 100ms cross-fade. */
+  :global(body.tandem-reduce-motion) .fr-nav {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fr-nav {
+      transition: none;
+    }
+  }
   .fr-nav:hover:not(:disabled) {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
@@ -686,6 +713,15 @@ async function handleReplaceAll() {
     display: inline-grid;
     place-items: center;
   }
+  /* Guards the Aa/W/.* toggles' hover and on-state tint. */
+  :global(body.tandem-reduce-motion) .fr-toggle {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fr-toggle {
+      transition: none;
+    }
+  }
   .fr-toggle:hover {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
@@ -713,6 +749,19 @@ async function handleReplaceAll() {
     transition: background 100ms, color 100ms;
     flex-shrink: 0;
   }
+  /* Guards the expand + close buttons' hover/focus tint. Grouped selector, so
+     both halves repeat the whole list — guarding only one of the two would
+     leave the other tweening. */
+  :global(body.tandem-reduce-motion) .fr-expand,
+  :global(body.tandem-reduce-motion) .fr-close {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fr-expand,
+    .fr-close {
+      transition: none;
+    }
+  }
   .fr-expand:hover,
   .fr-close:hover,
   .fr-expand:focus-visible,
@@ -726,6 +775,16 @@ async function handleReplaceAll() {
   }
   .fr-expand svg {
     transition: transform 150ms;
+  }
+  /* Guards the disclosure chevron's 180deg flip — it snaps to the rotated
+     state instead of spinning. */
+  :global(body.tandem-reduce-motion) .fr-expand svg {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fr-expand svg {
+      transition: none;
+    }
   }
   .fr-expand.on svg {
     transform: rotate(180deg);
@@ -778,6 +837,15 @@ async function handleReplaceAll() {
     white-space: nowrap;
     flex-shrink: 0;
   }
+  /* Guards the Replace / Replace All pills' hover tint. */
+  :global(body.tandem-reduce-motion) .fr-replace-btn {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fr-replace-btn {
+      transition: none;
+    }
+  }
   .fr-replace-btn:hover:not(:disabled) {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
@@ -825,6 +893,15 @@ async function handleReplaceAll() {
     font-size: var(--tandem-text-xs);
     cursor: pointer;
     transition: background 100ms, color 100ms, border-color 100ms;
+  }
+  /* Guards the scope pills' hover and selected-state tint. */
+  :global(body.tandem-reduce-motion) .fr-scope-pill {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fr-scope-pill {
+      transition: none;
+    }
   }
   .fr-scope-pill:hover {
     background: var(--tandem-surface-sunk);

@@ -259,8 +259,11 @@ pub fn set_preferred_app_mode(mode: crate::AppMode) -> AppModeOutcome {
 /// True when Windows' High Contrast accessibility mode is currently active.
 /// `native_theme_action` (`lib.rs`) uses this to refuse forcing an app mode
 /// while it's on, so an explicit theme choice never fights the user's
-/// accessibility setting. Mid-session High Contrast toggling does not
-/// re-release an already-forced app mode — that is #1364, not this guard.
+/// accessibility setting. This remains a PER-CALL sample by design — nothing
+/// here subscribes to `WM_SETTINGCHANGE`. Mid-session toggling is handled on
+/// the client instead (#1364): `useTauriTheme.svelte.ts` watches
+/// `(forced-colors: active)` and re-pushes the unchanged preference, which
+/// re-enters this probe and releases (or re-applies) the app mode.
 ///
 /// `uiParam` MUST be `size_of::<HIGHCONTRASTW>()` — `SystemParametersInfoW`
 /// returns FALSE (not an error, just silently declines) for a mismatched

@@ -34,7 +34,7 @@ function providerOptions(container: HTMLElement) {
   return { select, options: Array.from(select.options) };
 }
 
-describe("ModelEditModal — per-provider gating (§3.4)", () => {
+describe("ModelEditModal — per-provider gating", () => {
   it("defaults a new entry to a local provider", () => {
     const { container } = mountAdd();
     const { select } = providerOptions(container);

@@ -25,15 +25,12 @@
  * --tandem-z-above-titlebar, r-5 + shadow-3) and a Tab focus trap re-queried
  * per keypress (the Advanced <details> changes the focusable set while open).
  */
-import { tick, untrack } from "svelte";
-import {
-  BYO_MODELS_ENABLED,
-  CLAUDE_PLUGIN_INSTALL_COMMANDS,
-  DEFAULT_MCP_PORT,
-} from "../../shared/constants.js";
+import { untrack } from "svelte";
+import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import type { ApplyItemResult, ExistingMcpInstall } from "../../shared/integrations/contract.js";
 import {
   COWORK_PREFLIGHT_CHECKING,
+  COWORK_PREFLIGHT_FAILED,
   coworkSettingsVariant,
   formatCoworkError,
   isTauriRuntime,
@@ -59,14 +56,16 @@ import {
   type ReachabilityStatus,
   type ReachabilityTarget,
 } from "../hooks/useReachabilityCheck.svelte.js";
+import { MCP_BASE_URL } from "../utils/backend-ports.js";
 import { resyncCheckbox } from "../utils/checkbox-sync.js";
-import { logClientWarning } from "../utils/client-log.js";
 import IntegrationTargetCard from "./IntegrationTargetCard.svelte";
 import {
   computeDoneHeaderState,
   type PushSupportNote,
   pushSupportNote,
 } from "./integration-wizard-helpers.js";
+import LiveRegion from "./LiveRegion.svelte";
+import PushRoutesInfo from "./PushRoutesInfo.svelte";
 
 interface Props {
   open: boolean;
@@ -85,7 +84,7 @@ let { open, onClose, onSetupModels }: Props = $props();
 // Absolute base URL because the Vite dev server does not proxy /api/* —
 // other client modules (yjsSync, useNotifications, fileUpload) follow the
 // same pattern of pointing directly at the backend port.
-const wizard = createIntegrationWizard({ baseUrl: `http://127.0.0.1:${DEFAULT_MCP_PORT}` });
+const wizard = createIntegrationWizard({ baseUrl: MCP_BASE_URL });
 
 // Single Cowork source of truth (feeds both the "More integrations" row and
 // the Cowork sub-view). `getActive` is a PURE runtime check — it must never
@@ -162,10 +161,7 @@ const coworkVariant = $derived(coworkSettingsVariant(coworkStatus.status));
 // Claude CLI binary probe for the empty state's one-click install. `getActive`
 // reads only externals (`open`, `wizard.step`) — never cliStatus' own state —
 // so the hook's fetch $effect can't self-trigger.
-const cliStatus = createClaudeCliStatus(
-  () => open && wizard.step === "connect",
-  `http://127.0.0.1:${DEFAULT_MCP_PORT}`,
-);
+const cliStatus = createClaudeCliStatus(() => open && wizard.step === "connect", MCP_BASE_URL);
 // Gate the install CTA on a CONFIRMED NOT_INSTALLED. While presence is null
 // (loading) we show the manual-MCP hint, so a user who already has the CLI
 // never sees a flash of the install button before the GET resolves.
@@ -198,7 +194,7 @@ const reachabilityTargets = $derived(
 const reachability = createReachabilityCheck(
   () => reachabilityTargets,
   () => open && wizard.step === "done",
-  `http://127.0.0.1:${DEFAULT_MCP_PORT}`,
+  MCP_BASE_URL,
 );
 
 function reachabilityStatusFor(id: string): ReachabilityStatus | null {
@@ -217,96 +213,55 @@ const whatsNext = $derived.by((): "connected" | "unreachable" | "stdio-only" | "
   return "default";
 });
 
+/**
+ * #1432: does a persistent home for the push routes exist for this user?
+ *
+ * The Settings → AI Assistant section renders on `hasIntegration` — an
+ * `integrations.json` entry with `kind === "claude-code"`. Reaching `step ===
+ * "done"` implies `POST /api/integrations` returned 200 (a non-ok persist takes
+ * the `setError` path), so every picked entry is on disk and this predicate IS
+ * that flag, computed one screen earlier. Unconditional the pointer would be a
+ * lie for an `other-mcp`-only apply, which reaches this same block.
+ */
+const pointsAtSettings = $derived(wizard.picked.some((p) => p.config.kind === "claude-code"));
+
 // MAIN ↔ COWORK sub-view toggle. Reset to "main" on (re)open below.
 let view = $state<"main" | "cowork">("main");
+
+/**
+ * The one live region for all three `loadingDots` progress lines (#1431).
+ *
+ * Mounted with the dialog, so it predates every message it carries; the
+ * conditions mirror the three `{@render loadingDots(...)}` call sites exactly,
+ * and the strings are duplicated deliberately rather than lifted into shared
+ * constants — the visible copy is `aria-hidden`, so a drift between the two
+ * would be invisible rather than wrong, and one grep-able pair per line is the
+ * cheaper failure.
+ *
+ * Honest limit, recorded rather than hacked around: `wizard.detecting` is
+ * `$state(true)` at construction and the wizard is a fresh instance per open,
+ * so the FIRST "Looking for Claude…" is still present in the region's opening
+ * commit and cannot announce. Every later occurrence can — `begin()` sets
+ * `detecting = true` again on "Check again" — and buying that one first string
+ * would take a frame-crossing timer in a shared primitive that no test here
+ * could verify.
+ */
+const progressAnnouncement = $derived.by(() => {
+  if (view === "cowork") return "";
+  if (wizard.step === "connect") {
+    return wizard.detecting ? "Looking for Claude on your computer…" : "";
+  }
+  if (wizard.step === "applying") return "Connecting Claude…";
+  if (wizard.step === "done" && reachability.phase === "verifying") {
+    return "Verifying Claude can reach Tandem…";
+  }
+  return "";
+});
 // Per-mount Cowork enable state — component-local $state so unmount clears it
 // and reopen is clean (explicitly NOT a module-level singleton).
 let coworkBusy = $state(false);
 let coworkError = $state<string | null>(null);
 const coworkProbe = createSubnetPreflight();
-
-// #1390: the plugin install commands, plus the outcome of the button that
-// copies them. The outcome lives beside the button in its own live region
-// rather than in the button's label — a changed accessible name on a button
-// nobody is focused on is announced by nothing, which is the same mistake
-// #1376 exists to fix.
-const PLUGIN_INSTALL_TEXT = CLAUDE_PLUGIN_INSTALL_COMMANDS.join("\n");
-
-/**
- * Outcome of the Copy button, announced from its own live region.
- *
- * MUST be `""` whenever the push-routes block is about to (re)mount — a live
- * region created already holding its text is announced by nothing, which is
- * #1376's defect reintroduced inside the fix for it. Unlike `coworkProbe`,
- * there is no single choke point to hang that on, so the reset is explicit at
- * each transition that can remount the block — `openCoworkView` and
- * `retryDetection` — and `copyToken` is what makes that safe.
- *
- * `close()` deliberately does not reset, and that is the one leg of this
- * invariant the component does not own: it holds only because `App.svelte`
- * renders the modal under `{#if shouldShowWizard}`, so closing DESTROYS this
- * state rather than hiding it. The component is otherwise written for a
- * persistent `open` prop, and under that shape a close/reopen would remount the
- * block still holding "Copied". If the parent ever stops unmounting, this needs
- * a third reset site.
- */
-let pluginCopyResult = $state("");
-
-/**
- * Monotonic ticket, same device as `createSubnetPreflight`'s. The clear is
- * synchronous and the write is two awaits later, so without it a clear cannot
- * dominate an in-flight copy: click Copy, click the Cowork row before the
- * clipboard settles, and the continuation writes "Copied" into an unmounted
- * region that then remounts holding it — the exact thing the clear exists to
- * prevent, caused by the clear's own async gap.
- */
-let copyToken = 0;
-
-async function copyPluginCommands(): Promise<void> {
-  const mine = ++copyToken;
-  let result: string;
-  // `writeText` FIRST, with no await before it. WebKit invalidates the
-  // user-gesture token across an `await`, so a clipboard write placed after one
-  // can be rejected for want of transient activation — hence the clear-and-flush
-  // below happens after the write, not before. (Not testable here: happy-dom
-  // models no activation state, so this is pinned by the comment, deliberately.)
-  try {
-    await navigator.clipboard.writeText(PLUGIN_INSTALL_TEXT);
-    result = "Copied";
-  } catch (err) {
-    // Not rethrown: the message says everything actionable and the commands
-    // stay on screen to be selected by hand. Logged anyway — a denied
-    // permission, a WebView with no `navigator.clipboard`, and a security
-    // policy rejection are three different bugs with three different fixes,
-    // and after this catch nobody can tell which one a user hit.
-    // Via `logClientWarning` rather than `console.warn` so the distinguishing
-    // error name survives into a bug report: the release desktop build ships no
-    // devtools, so the console alone is a sink with no reader (#1439). The
-    // console line itself is unchanged.
-    logClientWarning("wizard", "clipboard write failed", err);
-    result = "Couldn't copy — select the commands above";
-  }
-  // THIS is the load-bearing guard: `writeText` spans real tasks, so a user can
-  // click the Cowork row while it is pending, and without this the superseded
-  // continuation both blanks a region it no longer owns and lands a stale
-  // "Copied" in it. Pinned by "drops a copy result that lands after the user has
-  // left for the sub-view".
-  if (mine !== copyToken) return;
-  // Clear and flush before the outcome: a second click with the SAME outcome
-  // would otherwise re-assign an identical string, mutate no text node, and
-  // announce nothing — so the user clicks the retry the failure message asks
-  // for and hears silence.
-  pluginCopyResult = "";
-  await tick();
-  // Defensive, and unreachable today: every `copyToken` mutator is an `onclick`,
-  // a click is a task, and the gap above is a microtask — so nothing can
-  // supersede across it. Kept because it costs one line and Svelte's async mode
-  // would make `tick()` span a task, at which point it becomes the load-bearing
-  // one. Deliberately NOT tested: reaching it needs a synthetic click dispatched
-  // inside a microtask flush, which pins an interleaving no user can produce.
-  if (mine !== copyToken) return;
-  pluginCopyResult = result;
-}
 
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
@@ -339,16 +294,16 @@ $effect(() => {
  *
  *  Unlike the other two Enable surfaces this one has no confirm step — the
  *  button in the footer fires the real enable directly — so the probe hangs off
- *  view entry instead. Same three-state contract: only a structured firewall
- *  error swaps the button for a retry; a probe that could not run leaves the
- *  button alone rather than blocking an enable that would have worked. */
+ *  view entry instead. Same contract as the other two: only a structured
+ *  firewall error swaps the button for a retry; a probe that could not run
+ *  leaves the button alone rather than blocking an enable that would have
+ *  worked — it only says so, and only when the failure was ours (#1436). */
 function openCoworkView(): void {
   coworkError = null;
   coworkBusy = false;
-  // Remount incoming — see the declaration. Bumping the token is what stops an
-  // in-flight copy from writing its result after this clear.
-  copyToken++;
-  pluginCopyResult = "";
+  // #1432: no `pluginCopyResult` reset here any more. The copy state moved into
+  // `PushRoutesInfo`, and this assignment unmounts that component, so the
+  // remount IS the reset — see its declaration comment.
   view = "cowork";
   void coworkProbe.run();
 }
@@ -382,6 +337,11 @@ async function enableCowork(): Promise<void> {
   coworkError = null;
   try {
     const invoke: InvokeFn = await loadInvoke();
+    // Degraded-success warnings (#1438) are not rendered here for the same
+    // reason as `CoworkOnboardingStep`: a successful enable leaves this
+    // sub-view, so a caveat shown now is discarded unread, and the per-workspace
+    // facts behind it return on every status read for the settings panel to
+    // show. Discarding the payload is a decision here, not an oversight.
     await coworkToggleIntegration(invoke, true);
     const readBack = await coworkStatus.refetch();
     if (readBack) leaveCoworkView();
@@ -447,11 +407,9 @@ function close(): void {
 function retryDetection(): void {
   wizard.reset();
   secretInputs = {};
-  // Same reason as `openCoworkView`: `wizard.reset()` sets `step = "connect"`,
-  // and the push-routes block gates on `step === "done"` — so leaving "done" is
-  // what unmounts it, not the `detecting` flag `reset()` also clears.
-  copyToken++;
-  pluginCopyResult = "";
+  // Same as `openCoworkView` (#1432): `wizard.reset()` sets `step = "connect"`,
+  // and the push-routes block gates on `step === "done"` — so leaving "done"
+  // unmounts `PushRoutesInfo`, which is what clears its copy state.
   void wizard.begin();
   void cliStatus.refetch();
   // The Cowork poller only refreshes every 30s — "Check again" must reflect a
@@ -637,8 +595,14 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
   </svg>
 {/snippet}
 
+<!-- #1431: no `aria-live` here. This snippet's node is created BY the `{#if}`
+     that supplies its label at all three call sites, so the region and its text
+     always arrived together and were announced by nothing. The dialog-level
+     `integration-wizard-progress-live` announcer below owns these three
+     sentences instead; this div is now purely visual, and `aria-hidden` so the
+     sentence is not also read a second time. It holds no controls. -->
 {#snippet loadingDots(label: string)}
-  <div class="iw-loading" aria-live="polite">
+  <div class="iw-loading" aria-hidden="true">
     <span class="iw-dots" aria-hidden="true">
       <span class="iw-dot"></span><span class="iw-dot"></span><span class="iw-dot"></span>
     </span>
@@ -684,54 +648,6 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
       {note.text}
     </span>
   {/if}
-{/snippet}
-
-<!-- The two push routes that need no flag, in the order `doctor.ts` and
-     `README.md` recommend them. Rendered ONCE, above the registered/unregistered
-     `{#if}` rather than inside either arm — which is the fix for #1389, whose
-     defect was the registered arm implying that registering the shim takes the
-     built-in watch away. It does not.
-
-     Deliberately avoids "every session" in any form. The plugin genuinely does
-     apply to every session once installed, but it arms on skill dispatch rather
-     than at session start, and `tests/docs/monitor-arming-claims.test.ts` scores
-     that claim per LINE — a sentence that reads honestly here is one wrap away
-     from an unqualified promise. Saying when it starts and leaving the scope
-     implied is both shorter and not the thing that keeps breaking. -->
-{#snippet pushRoutes()}
-  <p>
-    <strong>The built-in Monitor watch</strong> installs nothing and needs no flag: on first
-    Tandem use, Tandem's bundled skill reads the wake address from Claude's first
-    <code class="iw-code-inline">tandem_status</code> and starts it for that session. It needs a
-    Claude Code that offers a built-in Monitor tool — that is granted per account rather than per
-    version, so upgrading will not add it, and on Windows it also needs Git Bash.
-  </p>
-  <p>
-    <strong>The Tandem plugin</strong> needs no flag either. It starts watching the first time
-    Claude uses Tandem's skill, so ask for Tandem by name rather than expecting it to be listening
-    beforehand, and launch <code class="iw-code-inline">claude</code> from a terminal so it can
-    find Node. It reads the same per-account gate as the built-in Monitor, so it cannot cover for
-    that gate being off — but it does not need Git Bash. It also needs Claude Code 2.1.212 or
-    newer: on anything older the install succeeds and the monitor simply never runs, with nothing
-    to tell you so.
-  </p>
-  <!-- #1390: shown rather than run — see `CLAUDE_PLUGIN_INSTALL_COMMANDS` for
-       why. Before this they were printed by `tandem setup` alone, which a
-       desktop-app user never runs. -->
-  <div class="iw-plugin-install" data-testid="integration-wizard-plugin">
-    <pre class="iw-plugin-commands" data-testid="integration-wizard-plugin-commands">{PLUGIN_INSTALL_TEXT}</pre>
-    <button
-      type="button"
-      class="iw-btn iw-btn-secondary iw-plugin-copy-btn"
-      data-testid="integration-wizard-plugin-copy"
-      onclick={() => void copyPluginCommands()}
-    >
-      Copy
-    </button>
-  </div>
-  <p class="iw-hint-text" role="status" data-testid="integration-wizard-plugin-copy-status">
-    {pluginCopyResult}
-  </p>
 {/snippet}
 
 {#if open}
@@ -787,6 +703,15 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
           ×
         </button>
       </header>
+
+      <!-- Out of flow (`srOnly`), so it is not a flex item of `.iw-dialog` and
+           costs none of its `gap`. Sibling of the body rather than inside it,
+           so the `{#if view}` swap below can never unmount it. -->
+      <LiveRegion
+        srOnly
+        message={progressAnnouncement}
+        data-testid="integration-wizard-progress-live"
+      />
 
       <div class="iw-body">
         <!-- The {#if view} swap nests INSIDE the stable .iw-dialog shell (the
@@ -882,6 +807,16 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                   {@render warningIcon()}
                   <span>{coworkProbe.preflight.hint}</span>
                 </div>
+              {:else if coworkProbe.preflight?.status === "failed"}
+                <!-- #1436: see the note in CoworkSettings. `iw-hint-text`
+                     rather than `iw-banner-warning` on purpose — the claim is
+                     "we don't know", not "this will fail". -->
+                <p
+                  class="iw-hint-text"
+                  data-testid="integration-wizard-cowork-preflight-failed"
+                >
+                  {COWORK_PREFLIGHT_FAILED}
+                </p>
               {/if}
               {#if coworkProbe.probing}
                 <p class="iw-hint-text">{COWORK_PREFLIGHT_CHECKING}</p>
@@ -965,7 +900,7 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                   If you use Claude Code or Claude Desktop, open it once, then check again. To
                   connect a different MCP-compatible app manually, point it at:
                 </p>
-                <code class="iw-code">http://127.0.0.1:{DEFAULT_MCP_PORT}/mcp</code>
+                <code class="iw-code">{MCP_BASE_URL}/mcp</code>
               </div>
             {:else}
               <p class="iw-intro">
@@ -1196,26 +1131,44 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 data-testid="integration-wizard-push-mode"
                 data-push-mode={wizard.channelRegistered ? "shim" : "no-shim"}
               >
-                <p>
-                  Sessions Tandem starts for you are woken directly and need nothing further. A
-                  session you start yourself sees your comments and messages when it next checks
-                  its inbox; to have it react as they happen, use one of these — not several.
-                </p>
-                {@render pushRoutes()}
+                <PushRoutesInfo />
+                <!-- Route three. BOTH arms name the CLI flag. Nothing in the app
+                     can turn the shim on: the apply route calls
+                     `shouldRegisterChannelShim` with no override, and it returns
+                     `override ?? false` (`server/integrations/apply.ts`). Its call
+                     site says there is deliberately no wizard checkbox, and any docs
+                     claiming otherwise are wrong — that claim was in three places
+                     until 2026-08-09. This `{:else}` arm was a fourth instance until
+                     #1432; the arm above it said "registered HERE", the ambiguity
+                     that made the false one read as consistent, so both were
+                     rewritten. `tests/docs/channel-shim-optin-claims.test.ts` guards
+                     the shape now. The npm-package caveat is `doctor.ts`'s and is
+                     load-bearing on this surface. -->
                 {#if wizard.channelRegistered}
                   <p>
-                    The channel shim is registered here, and it is the one route that needs
-                    neither of those. Registration alone does not switch it on, though: start the
-                    session with
+                    The channel shim is already registered for Claude Code, and it is the one
+                    route that depends on neither of those gates. Registration alone does not
+                    switch it on: start the session with
                     <code class="iw-code-inline"
                       >claude --dangerously-load-development-channels server:tandem-channel</code
                     >.
                   </p>
                 {:else}
                   <p>
-                    If Claude reports no Monitor tool at all, come back here and register the
-                    channel shim — it is the one route that depends on neither gate, at the cost
-                    of a flag on every session you start.
+                    If Claude reports no Monitor tool at all, the channel shim is the one route
+                    that depends on neither gate. This wizard cannot register it — run
+                    <code class="iw-code-inline">tandem setup --apply --with-channel-shim</code>
+                    from a terminal (that flag is its only opt-in, and it needs Tandem's npm
+                    package, which the desktop app does not install), then start each session
+                    with
+                    <code class="iw-code-inline"
+                      >claude --dangerously-load-development-channels server:tandem-channel</code
+                    >.
+                  </p>
+                {/if}
+                {#if pointsAtSettings}
+                  <p data-testid="integration-wizard-settings-pointer">
+                    These stay available in Settings&nbsp;→&nbsp;AI Assistant.
                   </p>
                 {/if}
               </div>
@@ -1960,30 +1913,6 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
   }
   .iw-push-mode p:last-child {
     margin-bottom: 0;
-  }
-  .iw-plugin-install {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--tandem-space-2);
-    margin-bottom: var(--tandem-space-2);
-  }
-  .iw-plugin-commands {
-    /* `min-width: 0` because a flex item's automatic minimum size is
-       min-content, and these are two unbreakable command lines — without it the
-       <pre> refuses to shrink and pushes the button out of the dialog. */
-    flex: 1 1 auto;
-    min-width: 0;
-    margin: 0;
-    padding: var(--tandem-space-2);
-    font-family: var(--tandem-font-mono);
-    font-size: var(--tandem-text-xs);
-    line-height: 1.6;
-    background: var(--tandem-surface-sunk);
-    border-radius: var(--tandem-r-2);
-    overflow-x: auto;
-  }
-  .iw-plugin-copy-btn {
-    flex: 0 0 auto;
   }
   /* See the markup comment: the parent is a gapped flex column, so a box here
      would cost a gap whenever the region is empty — which is most of the time. */

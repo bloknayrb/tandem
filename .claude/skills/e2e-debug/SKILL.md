@@ -8,9 +8,15 @@ disable-model-invocation: true
 
 Post-mortem guide for Playwright E2E failures in Tandem. Complements the `/e2e` skill (which covers the happy path).
 
-## Critical Warning
+## Ports (#1492)
 
-E2E **refuses to start while a non-E2E server holds :3479** (#1483) — `scripts/e2e-guard.ts` runs as `globalSetup` and fails closed on anything whose `/api/info` storage dir is not the isolated E2E one. A run that dies immediately with "Refusing to run this Playwright suite…" is that guard, not a broken suite: quit Tandem or stop the dev server. Once E2E starts its own server, `freePort()` frees :3478/:3479.
+E2E runs on **reserved ports** (`scripts/test-ports.ts`): Vite 4573, backend 4728 (ws) / 4729 (MCP). A running Tandem or `dev:server` on 3478/3479 is fine and is not touched. Three distinct early-abort signatures:
+
+- **Playwright's "http://127.0.0.1:4729/health is already used"** — something (usually a stale E2E server) is answering the reserved MCP port; the backend entry is `reuseExistingServer: false`. Recovery: `fuser -k 4728/tcp 4729/tcp 4573/tcp` and rerun.
+- **"Refusing to run this Playwright suite against a server it did not start"** — the `scripts/e2e-guard.ts` identity probe (#1483, now defense-in-depth): something answered :4729 that it could not prove is an E2E server.
+- **"…serving a client that does NOT target the harness backend"** — the guard's served-client check: the Vite on :4573 was launched without `VITE_TANDEM_*` (e.g. hand-started), so its client is baked to the product ports and would drive the suite into a real Tandem through the UI. Stop that Vite and let Playwright start its own.
+
+Anything holding the reserved pair that *fails* the health check — wedged, non-HTTP, or sitting on the never-probed :4728 — is silently SIGKILLed by the E2E server's own boot (`freePort()`); that self-healing is why the reserved numbers must never collide with ports any doc tells users to occupy.
 
 ## Pre-Flight Checklist
 
@@ -20,9 +26,9 @@ Before running E2E tests, verify:
 # 1. Server bundle exists (E2E uses pre-built server, not tsx)
 ls dist/server/index.js
 
-# 2. Ports are free (or confirm user is OK with kill)
-curl -sf http://127.0.0.1:3479/health && echo "⚠ Server running on :3479" || echo "✓ Port free"
-curl -sf http://127.0.0.1:3478 && echo "⚠ Hocuspocus running on :3478" || echo "✓ Port free"
+# 2. Reserved ports are free (a holder is either refused or killed — see above)
+curl -sf http://127.0.0.1:4729/health && echo "⚠ Server on :4729 (stale E2E?)" || echo "✓ Port free"
+curl -sf http://127.0.0.1:4728 && echo "⚠ Something on :4728" || echo "✓ Port free"
 
 # 3. Client build exists (for webServer)
 ls dist/client/index.html
@@ -36,14 +42,19 @@ npm run build:server
 ## Failure Categories
 
 ### Timeout waiting for health endpoint
-**Symptom**: `Timed out waiting for http://127.0.0.1:3479/health`
+**Symptom**: `Timed out waiting for http://127.0.0.1:4729/health`
 **Cause**: `dist/server/` is stale or missing
 **Fix**: `npm run build:server` then retry
 
-### net::ERR_CONNECTION_REFUSED on :5173
+### net::ERR_CONNECTION_REFUSED on :4573
 **Symptom**: Client page fails to load
 **Cause**: Vite webServer not started (check `playwright.config.ts` webServer section)
-**Fix**: Verify `npm run dev` works standalone; check for port conflicts on :5173
+**Fix**: Verify `npm run dev -- --port 4573 --strictPort` works standalone; check for port conflicts on :4573.
+A hand-started Vite serves a client baked to the PRODUCT ports and the guard will refuse it — if you export
+`VITE_TANDEM_WS_PORT`/`VITE_TANDEM_MCP_PORT` to work around that, **unset them again**. They are read from the
+ambient shell at build time, so a stale export bakes a harness port into any `npm run build` you run afterwards.
+(`scripts/build-client.mjs` strips them for exactly this reason, and CI greps the bundle — but a bare `vite build`
+does not.)
 
 ### Stale openDocuments / phantom tabs
 **Symptom**: Tests find unexpected documents open or wrong tab state

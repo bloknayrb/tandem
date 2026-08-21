@@ -272,6 +272,29 @@ function releasePageHideListener(): void {
   pagehideHandler = null;
 }
 
+// The `(forced-colors: active)` subscription's release closure (#1364). A
+// SUBSCRIPTION HANDLE, like `unlistenTheme` and `pagehideHandler` above — not a
+// push-pipeline fact, so the "belongs as a field on lastPush/lastResolved" rule does
+// not apply to it. Plain `let`, never `$state`, per the REQUIRED note above.
+//
+// A release CLOSURE rather than the bare handler, because `removeEventListener` needs
+// the MediaQueryList *and* the handler, and happy-dom (like some real engines) returns a
+// NEW MediaQueryList object per `matchMedia()` call — so re-deriving the list at teardown
+// would remove nothing. One closure captures exactly the pair this generation registered,
+// which is the property the `pagehideHandler` note above is really asking for.
+let unlistenForcedColors: (() => void) | null = null;
+
+/** Release the forced-colors subscription, if one was ever registered. */
+function releaseForcedColorsListener(): void {
+  if (!unlistenForcedColors) return;
+  try {
+    unlistenForcedColors();
+  } catch (e) {
+    console.warn("[useTauriTheme] forced-colors unlisten failed:", e);
+  }
+  unlistenForcedColors = null;
+}
+
 // Monotonic ticket dispenser, bumped on every `setNativeTheme` call. A push
 // compares its own ticket against THIS counter, never against `lastPush`, and
 // no `seq` field lives on that record. The durable reason: this counter is
@@ -449,6 +472,7 @@ export function _resetForTests(): void {
   stopPoll();
   releaseThemeListener();
   releasePageHideListener();
+  releaseForcedColorsListener();
   // Must be cleared, even though the sibling `useTauriFileDrop._resetForTests` omits the
   // equivalent line: there the omission is inert because HMR never runs under vitest, but
   // any test here that drives the dispose path would otherwise leave this latched and
@@ -601,8 +625,21 @@ export function setNativeTheme(pref: ThemePreference): void {
  * retry (gets a fresh one). It is deliberately NOT a parameter on the exported
  * `setNativeTheme`: no caller outside this module can meaningfully supply it,
  * and an optional boolean on the public surface would invite one to try.
+ *
+ * `bypassDedupe` (#1364) is the same kind of parameter, for the forced-colors
+ * listener, whose whole point is to re-issue an UNCHANGED preference. It skips the
+ * READ of the dedupe latch for exactly one call and CLEARS NOTHING — which is the
+ * distinction that keeps it race-free. `lastPush` is not nulled first: the call
+ * falls straight through to the ordinary `lastPush = {…}` assignment below, so
+ * the record is never transiently `null`, `inFlight` is never transiently dropped
+ * (which would reopen `acceptReadback`'s in-flight gate), and no window exists in
+ * which the module holds no dedupe claim and `createTheme`'s effect could double-push.
+ * Ordering against a concurrent push is governed entirely by the existing
+ * `++pushSeq` ticket and the `seq !== pushSeq` supersede checks: the forced push is
+ * simply the newest intent. `lastResolved` is untouched — `recordResolution` stays
+ * its only pipeline writer.
  */
-function pushNativeTheme(pref: ThemePreference, viaRetry: boolean): void {
+function pushNativeTheme(pref: ThemePreference, viaRetry: boolean, bypassDedupe = false): void {
   if (!isTauriRuntime()) return;
   // Cancel BEFORE the dedupe check, not after. A new intent supersedes a
   // pending retry whether or not it needs an `invoke`. Today this is a
@@ -615,7 +652,7 @@ function pushNativeTheme(pref: ThemePreference, viaRetry: boolean): void {
   // armed to release the override under an explicit theme. Hoisting it costs
   // nothing and makes the ordering safe independently of that reasoning.
   cancelRetry();
-  if (pref === lastPush?.pref) return;
+  if (!bypassDedupe && pref === lastPush?.pref) return;
   const seq = ++pushSeq;
   // `performance.now()`, not `Date.now()`: `issuedAt` is only ever used to
   // measure an elapsed duration against `PUSH_SETTLE_CEILING_MS`, and the wall
@@ -1059,6 +1096,69 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
       });
   }, POLL_INTERVAL_MS);
 
+  // Re-push on an OS High Contrast change (#1364).
+  //
+  // The Windows guard that declines to force an app mode while High Contrast is on
+  // (`native_theme_action` in lib.rs) samples `SPI_GETHIGHCONTRAST` ONCE, at push time,
+  // and nothing on either side subscribes to changes. So turning High Contrast on while
+  // an explicit theme was already forced left the forced app mode in place until the
+  // user's next theme change: the preference has not changed, so `createTheme`'s effect
+  // does not re-run, and the dedupe latch would refuse the push even if it did. Turning
+  // it back off is the mirror image — the release stands while an explicit theme is
+  // selected. One listener covers both, because it is LEVEL-INDEPENDENT: it never reads
+  // `event.matches` and re-pushes on any change, leaving Rust to decide what the new
+  // state means. There is deliberately no `matches` branch to keep in sync.
+  //
+  // Fail-open by construction: this listener's only job is to say "ask again". Every
+  // decision stays in `native_theme_action`, off the real `SPI_GETHIGHCONTRAST` probe —
+  // `forced-colors` is a CSS-level proxy and is trusted for nothing more than a nudge.
+  // A spurious fire costs one idempotent IPC; a missed fire costs nothing worse than the
+  // pre-#1364 behaviour. That asymmetry is why the proxy is acceptable HERE and would not
+  // be if the client were deciding.
+  //
+  // Registered on every platform rather than behind a host check: `forced-colors` is
+  // effectively the Windows High Contrast signal in Chromium, so off Windows this fires
+  // essentially never, and an idempotent extra push is cheaper than importing platform
+  // detection into this module.
+  //
+  // The `try`/`catch` is for hosts where `matchMedia` throws or is missing (old WebViews;
+  // see the "matchMedia throws" case in useTheme.svelte.ts's browser path) — NOT for test
+  // stubs, which carry the member instead. It WARNS rather than failing silently: a host
+  // without `matchMedia` loses this fix entirely, and a silent feature-detect would make
+  // that indistinguishable from working.
+  try {
+    const forcedColors = window.matchMedia("(forced-colors: active)");
+    const onForcedColorsChange = (): void => {
+      // `lastPush.pref` is this module's only record of the preference, and it is
+      // `null` whenever there is no claim: before the first push, across an armed
+      // retry (which re-pushes and re-samples High Contrast on its own), after an
+      // exhausted ladder, and after a superseded rejection cleared it. Pushing
+      // `undefined` would be worse than waiting for the next real theme change.
+      const pref = lastPush?.pref;
+      if (pref === undefined) return;
+      // Knowingly relaxes `retryAttempts`' "one user intent" rule (see its
+      // declaration) in ONE reachable case: a retry that has FIRED but not settled
+      // leaves `lastPush.viaRetry` true, so `cancelRetry()` below refills its budget
+      // for what is an OS event rather than a user intent. Accepted rather than
+      // flagged — the rule exists to stop a budget being DRAINED across picks, this
+      // refills it, and the cost is bounded at MAX_PUSH_RETRIES + 1 invokes per
+      // physical toggle. An ARMED (not yet fired) retry cannot reach here at all: it
+      // implies `lastPush === null`, so the guard above returns first.
+      pushNativeTheme(pref, false, true);
+    };
+    forcedColors.addEventListener("change", onForcedColorsChange);
+    unlistenForcedColors = () => forcedColors.removeEventListener("change", onForcedColorsChange);
+  } catch (e) {
+    // No issue number in the STRING: `check-semantic-tokens` masks comments but scans
+    // live code, and a `#` followed by 3-8 hex digits on a line whose text looks
+    // CSS-ish ("forced-colors") is read as a raw hex colour. The reference lives in
+    // the comment above instead.
+    console.warn(
+      "[useTauriTheme] forced-colors subscribe failed; High Contrast re-push disabled:",
+      e,
+    );
+  }
+
   // Clean up the polling interval. pagehide is more reliable than unload in
   // Chromium-based environments (including Tauri's WebView2).
   //
@@ -1082,6 +1182,7 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
     cancelRetry();
     releaseThemeListener();
     releasePageHideListener();
+    releaseForcedColorsListener();
   };
   // `event.persisted` means the page is going into the bfcache and can be restored with
   // this module instance intact. Tearing down there would be worse than the leak this

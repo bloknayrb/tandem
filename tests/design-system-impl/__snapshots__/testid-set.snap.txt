@@ -56,6 +56,7 @@ color-picker-close
 command-palette
 comment-thread
 connection-banner
+connection-banner-live
 connection-banner-retry
 convert-to-markdown-btn
 cowork-admin-declined-backdrop
@@ -83,11 +84,13 @@ cowork-onboarding-error
 cowork-onboarding-learn-more-btn
 cowork-onboarding-learn-more-link
 cowork-onboarding-preflight-blocked
+cowork-onboarding-preflight-failed
 cowork-onboarding-preflight-live
 cowork-onboarding-preflight-retry-btn
 cowork-onboarding-skip-btn
 cowork-onboarding-step
 cowork-preflight-blocked
+cowork-preflight-failed
 cowork-preflight-live
 cowork-preflight-retry-btn
 cowork-reachability
@@ -99,6 +102,7 @@ cowork-settings-undetected
 cowork-settings-unsupported
 cowork-toggle
 cowork-toggle-checkbox
+cowork-toggle-warnings
 cowork-vethernet-cidr
 cowork-workspace-report-{*}-{*}
 cowork-workspace-row-{*}-{*}
@@ -148,6 +152,7 @@ error-boundary-recover-btn
 error-boundary-reload-btn
 external-conflict-banner
 external-conflict-keep-btn
+external-conflict-live
 external-conflict-reload-btn
 fidelity-report-banner
 fidelity-report-details
@@ -155,6 +160,8 @@ fidelity-report-details-toggle
 fidelity-report-export-downgrades
 fidelity-report-import-losses
 fidelity-report-integrity-warnings
+fidelity-report-live-assertive
+fidelity-report-live-polite
 file-open-browse
 file-open-dialog
 file-open-error
@@ -169,6 +176,7 @@ find-prev-btn
 find-regex-toggle
 find-replace-bar
 find-replace-expand-btn
+find-replace-live
 find-scope-doc
 find-scope-pills
 find-scope-tabs
@@ -215,6 +223,7 @@ integration-wizard-cowork-back
 integration-wizard-cowork-error
 integration-wizard-cowork-explainer
 integration-wizard-cowork-preflight-blocked
+integration-wizard-cowork-preflight-failed
 integration-wizard-cowork-preflight-live
 integration-wizard-cowork-preflight-retry-btn
 integration-wizard-cowork-setup
@@ -234,12 +243,14 @@ integration-wizard-plugin
 integration-wizard-plugin-commands
 integration-wizard-plugin-copy
 integration-wizard-plugin-copy-status
+integration-wizard-progress-live
 integration-wizard-push-mode
 integration-wizard-push-support-{*}
 integration-wizard-reachability-{*}
 integration-wizard-reopen-hint
 integration-wizard-secret-input-{*}
 integration-wizard-secret-submit-{*}
+integration-wizard-settings-pointer
 integration-wizard-shim-warning
 integration-wizard-step-applying
 integration-wizard-step-detect
@@ -251,6 +262,7 @@ left-outline-rail
 license-activate-error
 license-activate-input
 license-activate-submit
+license-banner-live
 license-buy-link
 license-dark-installed-hint
 license-gate-dark-hint
@@ -320,6 +332,10 @@ palette-item-{*}
 panel-edge-collapse-{*}
 peek-dot-{*}
 peek-strip-{*}
+pending-update-banner
+pending-update-banner-check
+pending-update-banner-dismiss
+pending-update-banner-live
 popup-annotate-btn
 popup-annotate-row
 popup-annotation-input
@@ -348,6 +364,7 @@ reply-toggle-{*}
 reply-{*}
 review-only-banner
 review-only-dismiss
+review-only-live
 save-indicator
 saved-indicator
 send-to-claude-btn-{*}
@@ -383,6 +400,8 @@ settings-modal-mcp-status
 settings-modal-narrow-hamburger
 settings-modal-open-integration-wizard
 settings-modal-open-log-folder-btn
+settings-modal-push-routes
+settings-modal-push-routes-shim
 settings-modal-replay-error
 settings-modal-replay-tutorial-btn
 settings-modal-report-bug-link
@@ -413,6 +432,7 @@ source-view-container
 source-view-copy-btn
 source-view-error
 source-view-exit-btn
+source-view-live
 source-view-textarea
 status-ai-indicator
 status-held-count
@@ -450,8 +470,10 @@ unsaved-indicator-{*}
 updater-banner
 updater-banner-dismiss
 updater-banner-install
+updater-banner-live
 updater-banner-visible
 wake-stall-banner
+wake-stall-live
 {*}-cancel
 {*}-input
 {*}-submit

@@ -413,12 +413,13 @@ export function createScratchpadPersistence(
    * updates the module-level install id) resolves first, then `rebuild()`
    * calls `teardownAllTabs()`. `detach()` flushes each entry's pending
    * debounced write as part of that teardown, so an unflushed keystroke typed
-   * in the moment before a same-port server swap (dev server replaced by the
-   * E2E server `npm run test:e2e` boots on :3478/:3479, for instance) would
-   * otherwise be persisted under the NEW server's install id — content
-   * misattributed to a foreign installation, the same leak class #1387 exists
-   * to close, reopened through the teardown path instead of the initial-open
-   * one.
+   * in the moment before a same-port server swap (a `npm run dev:server`
+   * stopped and the shipped product started in its place, both on :3478/:3479,
+   * for instance — the test harnesses have their own reserved pair since #1492
+   * and are no longer in this rotation) would otherwise be persisted under the
+   * NEW server's install id — content misattributed to a foreign installation,
+   * the same leak class #1387 exists to close, reopened through the teardown
+   * path instead of the initial-open one.
    *
    * Once locked, a later live change is deliberately ignored: the only way the
    * connected install id changes during an entry's life IS that rebuild path,

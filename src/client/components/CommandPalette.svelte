@@ -468,6 +468,7 @@ function handleBackdropClick(e: MouseEvent) {
             <li
               id={`palette-item-${result.id}`}
               data-testid={`palette-item-${result.id}`}
+              class="palette-item"
               role="option"
               aria-selected={isSelected}
               onclick={() => runResult(result)}
@@ -476,7 +477,6 @@ function handleBackdropClick(e: MouseEvent) {
                 display: flex; align-items: center; justify-content: space-between;
                 padding: 8px var(--tandem-space-3);
                 border-radius: var(--tandem-r-3);
-                transition: background 80ms;
                 cursor: {result.kind === 'shortcut' ? 'default' : 'pointer'};
                 background: {isSelected ? 'var(--tandem-accent-bg)' : 'transparent'};
                 color: {isSelected ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg)'};
@@ -581,6 +581,23 @@ function handleBackdropClick(e: MouseEvent) {
   .palette-modal {
     transform-origin: top center;
     animation: tandem-palette-modal-in 260ms var(--tandem-ease-out);
+  }
+
+  /* Row selection tint. The `background` itself stays inline (it is driven by
+     `isSelected`); only the cross-fade moved here, so the reduce-motion guard
+     can beat it on source order instead of needing `!important` against the
+     inline shorthand. Arrow-keying a list is state feedback — under reduced
+     motion the highlight simply lands. */
+  .palette-item {
+    transition: background 80ms;
+  }
+  :global(body.tandem-reduce-motion) .palette-item {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .palette-item {
+      transition: none;
+    }
   }
 
   @keyframes tandem-palette-scrim-in {
