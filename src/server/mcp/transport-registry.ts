@@ -166,6 +166,9 @@ export function createMcpSessionRegistry<S extends ClosableServer, T>(
     opts.onEvicted?.(entry, reason);
   }
 
+  /** Edge-trigger for the pinned-skip log in `reapIdle` — see the comment there. */
+  let lastPinnedSkipCount = 0;
+
   function lruEntry(): McpSessionEntry<S, T> | undefined {
     let oldest: McpSessionEntry<S, T> | undefined;
     for (const entry of sessions.values()) {
@@ -185,7 +188,8 @@ export function createMcpSessionRegistry<S extends ClosableServer, T>(
         const victim = lruEntry();
         if (!victim) break;
         console.error(
-          `[Tandem] MCP session cap (${maxSessions}) reached — evicting least-recently-used session ${victim.sessionId}`,
+          `[Tandem] MCP session cap (${maxSessions}) reached — evicting least-recently-used session ` +
+            `${victim.sessionId} (${victim.openStreams} open stream(s))`,
         );
         await closeEntry(victim, "lru");
       }
@@ -233,9 +237,26 @@ export function createMcpSessionRegistry<S extends ClosableServer, T>(
       // is what broke Claude Desktop's bridge for the rest of the day. The
       // reaper exists for clients that vanished (crash, SIGKILL, closed
       // laptop); an attached one is none of those.
-      const stale = [...sessions.values()].filter(
-        (e) => e.lastSeenAt < cutoff && e.openStreams === 0,
-      );
+      const expired = [...sessions.values()].filter((e) => e.lastSeenAt < cutoff);
+      const stale = expired.filter((e) => e.openStreams === 0);
+      // Narrate the skip, but only on a change. A session that outlives its
+      // TTL now looks, from the log alone, exactly like a reaper that stopped
+      // running — and "sessions accumulate and are never reaped" is the one
+      // new failure mode the pin can produce, bounded only by `maxSessions`.
+      //
+      // Edge-triggered, not level-triggered: an attached-and-quiet desktop
+      // bridge is the *normal* steady state this fix exists to protect, and
+      // this pass runs every five minutes, so logging the condition each time
+      // would print a line every five minutes for the rest of the day.
+      const pinned = expired.length - stale.length;
+      if (pinned !== lastPinnedSkipCount) {
+        lastPinnedSkipCount = pinned;
+        if (pinned > 0) {
+          console.error(
+            `[Tandem] ${pinned} MCP session(s) past the idle TTL but pinned by an open stream — not reaping`,
+          );
+        }
+      }
       for (const entry of stale) {
         console.error(`[Tandem] Reaping idle MCP session ${entry.sessionId}`);
         await closeEntry(entry, "idle");

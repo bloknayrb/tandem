@@ -1,12 +1,14 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   carriedSessionNotFound,
   describeServerInfo,
   getRequestId,
   getResponseId,
+  isReplayId,
   isSseStreamLostError,
   isStaleSessionError,
   makeReplayId,
@@ -1364,6 +1366,24 @@ describe("stale-session helper predicates", () => {
     });
   });
 
+  describe("isReplayId", () => {
+    it("matches any id this bridge minted, not just the awaited one", () => {
+      expect(isReplayId(makeReplayId())).toBe(true);
+      // The point of the prefix test: an id whose reconnect already gave up on
+      // it must still be swallowed, because the failed transport stays
+      // installed and its POST can be answered late.
+      expect(isReplayId("__tandem_reinit_stale-from-a-previous-attempt")).toBe(true);
+    });
+
+    it("never claims an id the client could have issued", () => {
+      expect(isReplayId(1)).toBe(false);
+      expect(isReplayId("1")).toBe(false);
+      expect(isReplayId(undefined)).toBe(false);
+      expect(isReplayId("tandem_reinit_x")).toBe(false);
+      expect(isReplayId("x__tandem_reinit_")).toBe(false);
+    });
+  });
+
   describe("describeServerInfo", () => {
     it("renders name@version and collapses anything else to a sentinel", () => {
       expect(describeServerInfo({ name: "tandem", version: "1.2.3" })).toBe("tandem@1.2.3");
@@ -1400,6 +1420,166 @@ describe("stale-session helper predicates", () => {
   });
 });
 
+/**
+ * Drift detector for the SDK message strings `isSseStreamLostError` matches.
+ *
+ * That predicate is the only trigger a purely-listening client has — no tool
+ * traffic means no 404 to notice — and it works by substring-matching error
+ * text the SDK constructs. `@modelcontextprotocol/sdk` is declared as
+ * `^1.12.1`, so a routine `npm update` can move the minor and reword these
+ * with nothing in CI noticing: the predicate would quietly return false
+ * forever and the wake channel would go dark again exactly as in #1588.
+ *
+ * The unit tests above assert the predicate against strings *we* wrote down,
+ * which proves nothing about the SDK. These drive the real transport against a
+ * real socket and assert the strings it actually emits. If one goes red after
+ * a dependency bump, re-read `client/streamableHttp.js` and update
+ * `isSseStreamLostError` — do not relax the assertion.
+ */
+describe("SDK SSE error strings (drift canary for isSseStreamLostError)", () => {
+  let canaryServer: Server | undefined;
+  let canaryTransport: StreamableHTTPClientTransport | undefined;
+
+  afterEach(async () => {
+    if (canaryTransport) {
+      const t = canaryTransport;
+      canaryTransport = undefined;
+      // Stops any scheduled SSE reconnection before the socket goes away.
+      t.onerror = undefined;
+      await t.close().catch(() => undefined);
+    }
+    if (canaryServer) {
+      const s = canaryServer;
+      canaryServer = undefined;
+      await new Promise<void>((r) => s.close(() => r()));
+    }
+  });
+
+  /**
+   * Handshake against a fake whose GET behaviour the caller chooses, and hand
+   * back the live array `onerror` appends to.
+   */
+  async function driveSse(onGet: (res: ServerResponse) => void): Promise<Error[]> {
+    canaryServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+      if (req.method === "GET" && req.url === "/mcp") {
+        onGet(res);
+        return;
+      }
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as {
+          id?: unknown;
+          method?: unknown;
+        };
+        if (body.method === "initialize") {
+          res.writeHead(200, {
+            "Content-Type": "application/json",
+            "mcp-session-id": "canary-session",
+          });
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: body.id,
+              result: {
+                protocolVersion: "2024-11-05",
+                capabilities: {},
+                serverInfo: { name: "canary", version: "0.0.0" },
+              },
+            }),
+          );
+          return;
+        }
+        res.writeHead(202);
+        res.end();
+      });
+    });
+    await new Promise<void>((r) => (canaryServer as Server).listen(0, "127.0.0.1", r));
+    const addr = (canaryServer as Server).address();
+    if (!addr || typeof addr === "string") throw new Error("server.address() unexpected");
+
+    const errors: Error[] = [];
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${addr.port}/mcp`),
+    );
+    canaryTransport = transport;
+    transport.onerror = (err) => {
+      if (err instanceof Error) errors.push(err);
+    };
+    await transport.start();
+    await transport.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        clientInfo: { name: "canary", version: "0.0.0" },
+        capabilities: {},
+      },
+    });
+    // The standalone GET is opened only from this notification's 202 branch,
+    // and `_startOrAuthSse` rethrows, so a refused GET rejects this send too.
+    await transport
+      .send({ jsonrpc: "2.0", method: "notifications/initialized" })
+      .catch(() => undefined);
+    return errors;
+  }
+
+  async function settle(errors: Error[], want: (e: Error) => boolean, timeoutMs: number) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (errors.some(want)) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error(
+      `SDK never emitted the expected error. Saw: ${JSON.stringify(errors.map((e) => e.message))}`,
+    );
+  }
+
+  it("still says 'Failed to open SSE stream:' when the GET is refused", async () => {
+    const errors = await driveSse((res) => {
+      res.writeHead(500);
+      res.end();
+    });
+    await settle(errors, isSseStreamLostError, 10_000);
+  }, 30_000);
+
+  it("still says 'Maximum reconnection attempts (N) exceeded.' once its retries run out", async () => {
+    // Opens cleanly, then dies, and every reconnect is refused — what a reaped
+    // session looks like to a client that is only listening. The SDK retries
+    // twice (1s, 1.5s) and then emits the terminal string the bridge treats as
+    // its primary trigger.
+    //
+    // The refusals are load-bearing: a *successful* reconnect that then dies
+    // again re-enters `_scheduleReconnection(options, 0)`, so the attempt
+    // counter resets and the terminal string is never reached. Only a run of
+    // failed retries exhausts it.
+    let gets = 0;
+    const errors = await driveSse((res) => {
+      gets += 1;
+      if (gets > 1) {
+        res.writeHead(500);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/event-stream", Connection: "keep-alive" });
+      res.write(": open\n\n");
+      setTimeout(() => res.end(), 20);
+    });
+    await settle(errors, (e) => e.message.includes("Maximum reconnection attempts ("), 20_000);
+    expect(errors.some(isSseStreamLostError)).toBe(true);
+  }, 40_000);
+
+  it("still uses distinct, non-matching wording for the retryable mid-stream errors", () => {
+    // Pinned by reading rather than driving: these two must NOT match, or the
+    // bridge reconnects while the server is still down and races it.
+    expect(isSseStreamLostError(new Error("SSE stream disconnected: socket hang up"))).toBe(false);
+    expect(isSseStreamLostError(new Error("Failed to reconnect SSE stream: fetch failed"))).toBe(
+      false,
+    );
+  });
+});
+
 describe("mcp-stdio re-initializes on a stale upstream session", () => {
   let child: ChildProcessWithoutNullStreams | undefined;
   let sessionServer: Server | undefined;
@@ -1419,6 +1599,20 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     setServerInfo(info: { name: string; version: string }): void;
     /** Accept the next N initialize POSTs and never answer them. */
     stallInitializes(n: number): void;
+    /**
+     * Answer every stalled initialize that is still held open, minting a
+     * session for each. Models a server whose event loop was merely wedged and
+     * then unwedged — the exact scenario the replay deadline exists for, and
+     * the one where a late answer can arrive after the bridge gave up.
+     */
+    releaseStalledInitializes(): number;
+    /**
+     * Kill the open standalone SSE stream and refuse the SDK's next `failNext`
+     * GET retries, which is the only way to reach its terminal
+     * `Maximum reconnection attempts` error: a retry that *succeeds* and then
+     * dies re-enters `_scheduleReconnection(…, 0)` and resets the counter.
+     */
+    breakStandaloneStream(failNext: number): void;
   }
 
   /**
@@ -1430,14 +1624,34 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
    * of them ever forwarded an `initialized` notification, the one thing that
    * makes the SDK open the stream.
    */
-  async function makeSessionServer(): Promise<SessionServer> {
+  async function makeSessionServer(opts: { sse?: boolean } = {}): Promise<SessionServer> {
     const posts: SessionServer["posts"] = [];
     let live: string | undefined;
     let minted = 0;
     let inits = 0;
     let gets = 0;
     let stallInits = 0;
+    let openStream: ServerResponse | undefined;
+    let failNextGets = 0;
+    let held: Array<{ res: ServerResponse; id: string | number | undefined }> = [];
     let serverInfo = { name: "fake-tandem", version: "0.0.0-test" };
+
+    const answerInitialize = (res: ServerResponse, id: string | number | undefined) => {
+      minted += 1;
+      live = `sess-${minted}`;
+      res.writeHead(200, { "Content-Type": "application/json", "mcp-session-id": live });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            protocolVersion: "2024-11-05",
+            capabilities: { tools: {} },
+            serverInfo,
+          },
+        }),
+      );
+    };
 
     sessionServer = createServer((req, res) => {
       if (req.method === "GET" && req.url === "/health") {
@@ -1447,10 +1661,25 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       }
       if (req.method === "GET" && req.url === "/mcp") {
         gets += 1;
-        // 405 = "this server offers no standalone stream". The SDK returns
-        // without erroring, so the bridge sees a clean handshake.
-        res.writeHead(405);
-        res.end();
+        if (failNextGets > 0) {
+          failNextGets -= 1;
+          res.writeHead(500);
+          res.end();
+          return;
+        }
+        if (!opts.sse) {
+          // 405 = "this server offers no standalone stream". The SDK returns
+          // without erroring, so the bridge sees a clean handshake.
+          res.writeHead(405);
+          res.end();
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "text/event-stream", Connection: "keep-alive" });
+        res.write(":open\n\n");
+        openStream = res;
+        res.on("close", () => {
+          if (openStream === res) openStream = undefined;
+        });
         return;
       }
       if (req.method === "POST" && req.url === "/mcp") {
@@ -1470,22 +1699,12 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
             inits += 1;
             if (stallInits > 0) {
               stallInits -= 1;
-              return; // accept and never answer — exercises the replay deadline
+              // Accept and never answer — exercises the replay deadline. Held
+              // rather than dropped so a test can answer it late.
+              held.push({ res, id });
+              return;
             }
-            minted += 1;
-            live = `sess-${minted}`;
-            res.writeHead(200, { "Content-Type": "application/json", "mcp-session-id": live });
-            res.end(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                id,
-                result: {
-                  protocolVersion: "2024-11-05",
-                  capabilities: { tools: {} },
-                  serverInfo,
-                },
-              }),
-            );
+            answerInitialize(res, id);
             return;
           }
 
@@ -1535,6 +1754,17 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       },
       stallInitializes: (n) => {
         stallInits = n;
+      },
+      breakStandaloneStream: (failNext) => {
+        failNextGets = failNext;
+        openStream?.end();
+        openStream = undefined;
+      },
+      releaseStalledInitializes: () => {
+        const flushed = held;
+        held = [];
+        for (const { res, id } of flushed) answerInitialize(res, id);
+        return flushed.length;
       },
     };
   }
@@ -1651,6 +1881,14 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     // a second response for the id it did issue.
     expect(io.stdout()).not.toContain("__tandem_reinit_");
     expect(responsesFor(io.stdout(), 1)).toHaveLength(1);
+
+    // The push half. The SDK opens the standalone server→client stream ONLY
+    // from the `initialized` notification's 202 branch, so a second GET is the
+    // only observable proof the replay re-sent it. Without this assertion,
+    // deleting that send leaves every reconnect test green while every
+    // wake-driven Claude Desktop session silently loses its wake channel —
+    // which is the half of #1588 that has no tool call to re-trigger on.
+    await waitFor(() => fake.getCount() >= 2, "standalone GET re-opened after the heal");
   }, 60_000);
 
   it("forwards the auth and Claude-session headers on the replayed handshake", async () => {
@@ -1719,10 +1957,14 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
   }, 60_000);
 
   it("answers a request that hit the stale session exactly once", async () => {
-    // The 404-retry branch must NOT delete the pendingRequests entry or clear
-    // its timer. Doing so is the natural way to write it, and it makes the
-    // drain's `pendingRequests.has(id)` check read false, skip the request as
-    // "already answered", and return no response at all.
+    // Pins the *outcome* — one response, two POSTs — not any single line.
+    //
+    // Deleting the `pendingRequests` entry on the 404-retry branch is the
+    // natural way to write it, and alone it changes nothing here, because
+    // `enqueueForReconnect` re-arms a missing timer as a structural backstop.
+    // It takes removing both to lose the request outright, which is what the
+    // mutation check in the PR body pairs. Do not upgrade this comment into a
+    // claim about one mutation; it would not be true.
     const fake = await makeSessionServer();
     child = spawnBridge(fake.port);
     const io = collect(child);
@@ -1841,6 +2083,69 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     );
     expect(responsesFor(io.stdout(), 3)[0]?.error).toBeUndefined();
   }, 120_000);
+
+  it("heals a purely-listening client from the lost SSE stream alone", async () => {
+    // The #1588 user, end to end and with **no client traffic at all**. A
+    // desktop session that is attached and quiet has no tool call to 404 and
+    // therefore nothing to notice a dead session with; the terminal SSE error
+    // is its only trigger. Every other test in this describe reaches the
+    // reconnect through a POST 404, and the fakes answer GET with 405, so
+    // until this test the path that serves that user was covered only by unit
+    // tests on a predicate.
+    const fake = await makeSessionServer({ sse: true });
+    child = spawnBridge(fake.port);
+    const io = collect(child);
+    await handshake(child, io, fake);
+    expect(fake.initCount()).toBe(1);
+
+    // Kill the stream and refuse the SDK's two retries, which is what makes it
+    // emit `Maximum reconnection attempts (2) exceeded.` — the bridge's
+    // primary trigger. The third GET succeeds, so the healed session gets its
+    // push channel back.
+    fake.breakStandaloneStream(2);
+
+    await waitFor(
+      () => io.stderr().includes("upstream session re-initialized"),
+      "the lost stream alone to drive a heal",
+      40_000,
+    );
+    expect(fake.initCount()).toBe(2);
+    expect(child.exitCode).toBeNull();
+    // The replayed handshake re-opened the stream: GET #1 (handshake), #2 and
+    // #3 (the refused retries), #4 (after the heal).
+    await waitFor(() => fake.getCount() >= 4, "the standalone stream to re-open");
+    expect(io.stdout()).not.toContain("__tandem_reinit_");
+  }, 90_000);
+
+  it("never writes a late replay answer to stdout after the deadline gave up", async () => {
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "3000" });
+    const io = collect(child);
+    await handshake(child, io, fake);
+
+    // Same wedged server as above, but this one un-wedges. The failed
+    // transport stays installed as `http` — closing it would fire onclose and
+    // kill the bridge — so its still-open POST can be answered seconds after
+    // `pendingReplayId` was nulled. Swallowing by id-equality would let that
+    // answer take the ordinary path onto stdout, where the host SDK reports
+    // `Received a response for an unknown message ID`. The id is ours whether
+    // or not anyone is still waiting for it.
+    fake.stallInitializes(1);
+    fake.retireSession();
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+    await waitFor(
+      () => io.stderr().includes("re-initialize timed out"),
+      "the replay deadline to fire",
+      30_000,
+    );
+
+    expect(fake.releaseStalledInitializes()).toBe(1);
+    // Long enough for the answer to travel and be (mis)handled.
+    await new Promise((r) => setTimeout(r, 1_500));
+
+    expect(io.stdout()).not.toContain("__tandem_reinit_");
+    expect(child.exitCode).toBeNull();
+  }, 60_000);
 
   it("still heals on the fifth restart in a row", async () => {
     // Regression test for the sliding-window retry budget an earlier draft

@@ -182,9 +182,19 @@ export function carriedSessionNotFound(err: unknown): boolean {
  * Only 1 and 4 match. 2 and 3 are covered by the SDK's own two retries and
  * also fire during an ordinary server restart while it is still down, so
  * reconnecting on them means racing a server that is not back yet. 4 fires
- * exactly once per outage and is the primary trigger; 1 is kept because the
- * very first GET (launched from `send()`'s 202 branch) schedules no retries at
- * all, so 4 can never arrive for it.
+ * exactly once per outage and is the primary trigger.
+ *
+ * 1 is kept for the very first GET, launched from `send()`'s 202 branch, which
+ * schedules no retries at all — so 4 can never arrive for it. Note it is NOT
+ * exclusive to that first GET: `_startOrAuthSse` calls `onerror` *and* rethrows
+ * (`client/streamableHttp.js:110-112`), so every scheduled retry that gets a
+ * non-ok response emits 1 before 3 wraps it. That just means the bridge
+ * reconnects one attempt earlier than the ~2.5s the "4 is primary" reasoning
+ * implies, and the `reconnectPending || reconnecting` latch dedupes the rest.
+ * It is benign in both shapes that produce it: a 404 on the GET means the
+ * session really is gone, and a 5xx means an unhealthy server the backoff
+ * already paces. A genuinely *down* server throws a fetch `TypeError` and
+ * matches neither predicate.
  */
 export function isSseStreamLostError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -214,15 +224,47 @@ export function readHandshakeIdentity(
   };
 }
 
-/** Private id for the replayed handshake. Prefixed for greppability in logs. */
+/**
+ * Private id for the replayed handshake. Prefixed for greppability in logs,
+ * and because the prefix — not the currently-awaited id — is what
+ * `isReplayId()` matches on.
+ */
+const REPLAY_ID_PREFIX = "__tandem_reinit_";
+
 export function makeReplayId(): string {
-  return `__tandem_reinit_${randomUUID()}`;
+  return `${REPLAY_ID_PREFIX}${randomUUID()}`;
+}
+
+/**
+ * True for any id this bridge minted for a replayed handshake, including one
+ * whose reconnect already gave up on it.
+ *
+ * Matching the *prefix* rather than the id currently being awaited is
+ * load-bearing. When the replay deadline fires, the failed transport stays
+ * installed as `http` (closing it would fire `onclose` → `shutdown(1)`), so a
+ * server whose event loop was merely wedged — a large `.docx` import, the exact
+ * case the deadline exists for — can answer that POST seconds later, after
+ * `pendingReplayId` has been nulled. An id-equality check would let that
+ * response take the ordinary path and be written to stdout, where the host SDK
+ * reports `Received a response for an unknown message ID`. The id is ours; it
+ * must never reach the client, whether or not anyone is still waiting for it.
+ */
+export function isReplayId(id: string | number | undefined): boolean {
+  return typeof id === "string" && id.startsWith(REPLAY_ID_PREFIX);
 }
 
 /**
  * Render `serverInfo` for identity comparison across a reconnect. Any shape
  * that isn't a `{name, version}` object collapses to a sentinel, so a server
  * that omits it cannot accidentally compare equal to one that supplies it.
+ *
+ * The sentinel does collide with itself: two *different* servers that both
+ * omit `serverInfo` compare equal here, and `protocolVersion` is the only
+ * discriminator left. That is the correct trade — `serverInfo` is REQUIRED by
+ * the MCP spec, so a server omitting it is already non-conforming, and the
+ * alternative (fail every reconnect against such a server) would break a
+ * working setup to defend against a scenario that needs an attacker who can
+ * already bind the loopback port.
  */
 export function describeServerInfo(info: unknown): string {
   const i = info as { name?: unknown; version?: unknown } | null | undefined;
@@ -369,6 +411,8 @@ export async function runMcpStdio(): Promise<void> {
   let reconnectPending = false;
   /** Set when the attempt begins, cleared in its finally. This is what queueing keys on. */
   let reconnecting = false;
+  /** Attempts in the current outage; reset to 0 once a session is re-established. */
+  let reconnectAttempts = 0;
   let backoffMs = BACKOFF_INITIAL_MS;
   /**
    * When the current upstream session was established, or 0 if none ever was.
@@ -394,6 +438,10 @@ export async function runMcpStdio(): Promise<void> {
   const reconnectQueue: JSONRPCMessage[] = [];
   /** `${generation}:${id}` for requests already replayed once — exactly-once. */
   const noRetryKeys = new Set<string>();
+  /** Latched: an unrecognized 404 body repeats on every call, and one line is the signal. */
+  let warnedUnrecognized404 = false;
+  /** Latched: "no captured initialize" never clears, so it would repeat forever. */
+  let warnedNoHandshake = false;
 
   async function sendErrorResponse(
     id: string | number,
@@ -420,9 +468,20 @@ export async function runMcpStdio(): Promise<void> {
       // a silent drop here would recreate exactly the failure mode this
       // module exists to prevent.
       const detail = err instanceof Error ? err.message : String(err);
-      process.stderr.write(
-        `[tandem mcp-stdio] failed to send synthesized error for id ${id}: ${detail}\n`,
-      );
+      // Reporting a failure must not itself be able to fail. stderr can EPIPE
+      // — most likely exactly here, while the host is tearing the child down,
+      // which is when stdio.send() fails in the first place. An escaping throw
+      // would propagate out of every `await sendErrorResponse(...)` in
+      // `synthesizePending`, and from there into the module's
+      // `unhandledRejection` handler, which exits 1. This function's callers
+      // treat it as infallible; it has to be.
+      try {
+        process.stderr.write(
+          `[tandem mcp-stdio] failed to send synthesized error for id ${id}: ${detail}\n`,
+        );
+      } catch {
+        // Nowhere left to report to.
+      }
     }
   }
 
@@ -451,10 +510,14 @@ export async function runMcpStdio(): Promise<void> {
     const gen = generation;
     http.send(msg).catch((err: unknown) => {
       const detail = err instanceof Error ? err.message : String(err);
+      // A newer transport already took over. The rejection itself is expected
+      // — the swap aborts whatever was in flight — so it is logged at a
+      // different level of alarm than a live-session failure, below.
+      if (gen !== generation) {
+        answerAbortedBySwap(msg, requestId);
+        return;
+      }
       process.stderr.write(`[tandem mcp-stdio] upstream send failed: ${detail}\n`);
-      // A newer transport already took over; this rejection belongs to a
-      // session nobody is waiting on any more.
-      if (gen !== generation) return;
 
       if (isStaleSessionError(err)) {
         // Replay is gated more tightly than reconnect. The server emits its
@@ -464,8 +527,23 @@ export async function runMcpStdio(): Promise<void> {
         // session died may have executed — replaying `tandem_edit` there would
         // double-mutate the document — so those take the -32000 below.
         const key = `${gen}:${String(requestId)}`;
-        const canReplay =
-          requestId !== undefined && carriedSessionNotFound(err) && !noRetryKeys.has(key);
+        const sessionNotFound = carriedSessionNotFound(err);
+        // A 404 whose body we could not recognize is worth one line, because
+        // the two things that produce it are the two things hardest to
+        // diagnose from the outside: something other than Tandem is answering
+        // the port, or the SDK changed the message format this parse depends
+        // on (`^1.12.1` is the declared range, so a minor bump can do it). The
+        // effect is silent otherwise — every tool call correctly degrades to
+        // -32000 instead of being replayed, which looks exactly like the bug
+        // this branch was written to fix.
+        if (!sessionNotFound && !warnedUnrecognized404) {
+          warnedUnrecognized404 = true;
+          process.stderr.write(
+            `[tandem mcp-stdio] upstream 404 did not carry ${SESSION_NOT_FOUND_CODE}; ` +
+              `reconnecting but not replaying requests: ${detail}\n`,
+          );
+        }
+        const canReplay = requestId !== undefined && sessionNotFound && !noRetryKeys.has(key);
         // Trigger first. If it declines — no captured initialize — nothing will
         // ever drain the queue, so the request has to fall through to -32000
         // rather than sit there until its own timer fires.
@@ -501,6 +579,40 @@ export async function runMcpStdio(): Promise<void> {
         }
       }
     });
+  }
+
+  /**
+   * Answer a request whose in-flight POST was aborted by a transport swap.
+   *
+   * A.11 accepted that the swap kills in-flight responses; what it did not
+   * accept is *how* the client found out. The old transport's `onmessage` is
+   * unwired, so no answer can ever arrive for this id — yet without this the
+   * request sat in `pendingRequests` until its own timer fired up to 30s later
+   * and reported "no response received within Xms", naming a timeout as the
+   * cause when the real cause was known the instant the swap happened. That is
+   * the most misleading shape available: a wrong diagnosis, delivered slowly.
+   */
+  function answerAbortedBySwap(msg: JSONRPCMessage, requestId: string | number | undefined): void {
+    if (requestId === undefined) return;
+    const handle = pendingRequests.get(requestId);
+    if (handle === undefined) return;
+    // Never race the replay path. A request queued for replay is still in
+    // `pendingRequests` by design (deleting it is how the drain loses it), so
+    // answering here would double-respond. Today no message can be both queued
+    // and holding an older-generation rejection — the 404 branch returns right
+    // after enqueueing, and messages queued from stdin were never sent — but
+    // that argument lives in two functions, and the scan costs at most 64
+    // comparisons on a path that only runs during an outage.
+    if (reconnectQueue.includes(msg)) return;
+    pendingRequests.delete(requestId);
+    clearTimeout(handle);
+    process.stderr.write(
+      `[tandem mcp-stdio] request ${String(requestId)} cancelled by session swap\n`,
+    );
+    void sendErrorResponse(
+      requestId,
+      "Tandem HTTP upstream session was replaced while this request was in flight",
+    );
   }
 
   /**
@@ -661,10 +773,14 @@ export async function runMcpStdio(): Promise<void> {
     const responseId = getResponseId(msg);
     // The replayed handshake's response is ours, not the client's: the client
     // never issued this id and would have no idea what to do with it. Swallow
-    // exactly this one id — everything else arriving on a fresh transport is
-    // legitimate upstream traffic the raw-proxy contract must forward.
-    if (pendingReplayId !== null && responseId === pendingReplayId) {
-      replayResolve?.(msg);
+    // every id carrying our replay prefix — see `isReplayId` for why the test
+    // is the prefix and not `pendingReplayId`. Everything else arriving on a
+    // fresh transport is legitimate upstream traffic the raw-proxy contract
+    // must forward.
+    if (isReplayId(responseId)) {
+      if (pendingReplayId !== null && responseId === pendingReplayId) {
+        replayResolve?.(msg);
+      }
       return;
     }
     captureNegotiated(msg);
@@ -767,9 +883,17 @@ export async function runMcpStdio(): Promise<void> {
       // Guessing a handshake is worse than failing one. Without the client's
       // own `initialize` we cannot faithfully re-negotiate capabilities, and a
       // fabricated one would hand the client a session it never agreed to.
-      process.stderr.write(
-        `[tandem mcp-stdio] upstream session is stale (${reason}) but no client initialize was captured; not re-initializing\n`,
-      );
+      //
+      // Latched: this condition never clears on its own — no `initialize` will
+      // arrive after the session is already up — so every subsequent tool call
+      // would repeat the line for the rest of the process's life. One is the
+      // signal; the rest are noise in a log a user may be reading to find it.
+      if (!warnedNoHandshake) {
+        warnedNoHandshake = true;
+        process.stderr.write(
+          `[tandem mcp-stdio] upstream session is stale (${reason}) but no client initialize was captured; not re-initializing (further occurrences suppressed)\n`,
+        );
+      }
       return "declined";
     }
     reconnectPending = true;
@@ -800,9 +924,46 @@ export async function runMcpStdio(): Promise<void> {
     if (retryTimer) clearTimeout(retryTimer);
     retryTimer = setTimeout(() => {
       retryTimer = undefined;
+      // `runReconnect` returns silently if one is already in flight, which
+      // would strand `reconnectPending` at true with no timer left to clear
+      // it — the bridge would then decline every future trigger as "already
+      // coming" and never reconnect again. Nothing can construct that today
+      // (the pending latch makes a concurrent trigger impossible), but the
+      // cost of not relying on that argument is one re-arm.
+      if (reconnecting) {
+        armReconnectRetry(delayMs, reason);
+        return;
+      }
       void runReconnect(reason);
     }, delayMs);
     retryTimer.unref();
+  }
+
+  /**
+   * Bound one step of the reconnect with its own `REPLAY_DEADLINE_MS` timer.
+   *
+   * Every `await` inside `runReconnect` needs this: the SDK's `send()` awaits
+   * the POST's response with no timeout, so any of them can hang forever
+   * against a wedged server, and a hang leaves `reconnecting` latched with the
+   * `finally` never reached — every later message queues and times out, and
+   * the bridge never recovers even after the server returns.
+   *
+   * The loser of the race keeps a reaction (`Promise.race` subscribes to every
+   * input), so a late rejection cannot reach the module's `unhandledRejection`
+   * handler and exit the process.
+   */
+  function withReplayDeadline<T>(work: Promise<T>, what: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`re-initialize timed out after ${REPLAY_DEADLINE_MS}ms (${what})`)),
+        REPLAY_DEADLINE_MS,
+      );
+      timer.unref();
+    });
+    return Promise.race([work, deadline]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
   }
 
   /** Cancel the replay deadline, if one is armed. */
@@ -845,10 +1006,22 @@ export async function runMcpStdio(): Promise<void> {
     reconnectPending = false;
     reconnecting = true;
     const replayId = makeReplayId();
+    reconnectAttempts += 1;
 
     try {
-      generation += 1;
       const old = http;
+      // Announce the attempt on the way IN, not only on the way out. The
+      // primary path runs with no scheduling delay, so until this line the
+      // whole recovery was silent unless it failed — and the stale session id
+      // is the only field that joins this log to the server's own
+      // `Reaping idle MCP session <id>`. Diagnosing #1588 took correlating
+      // those two files by hand; this is what makes that a grep.
+      process.stderr.write(
+        `[tandem mcp-stdio] re-initializing upstream session ` +
+          `(attempt ${reconnectAttempts}, reason: ${reason}, ` +
+          `stale session ${old.sessionId ?? "<none>"})\n`,
+      );
+      generation += 1;
       // The SDK's close() calls onclose unconditionally and our onclose is
       // shutdown(1), so closing the old transport must not reach it or the
       // very first reconnect kills the bridge. Two things stop that, and the
@@ -860,7 +1033,15 @@ export async function runMcpStdio(): Promise<void> {
       old.onclose = undefined;
       old.onerror = undefined;
       old.onmessage = undefined;
-      await old.close().catch(() => {});
+      // Swallowed deliberately — a close failure must not abort the swap, since
+      // the fresh transport is the recovery — but not silently. The old socket
+      // leaking would show up here first and nowhere else.
+      await old.close().catch((closeErr: unknown) => {
+        process.stderr.write(
+          `[tandem mcp-stdio] closing the stale upstream transport failed (continuing): ` +
+            `${closeErr instanceof Error ? closeErr.message : String(closeErr)}\n`,
+        );
+      });
 
       const fresh = createUpstream();
       wireUpstream(fresh, generation);
@@ -899,6 +1080,23 @@ export async function runMcpStdio(): Promise<void> {
           `upstream rejected re-initialize: ${JSON.stringify((response as { error?: unknown }).error)}`,
         );
       }
+      // No baseline to compare against: `handshakeInit` was captured from
+      // stdin but the original `initialize` never got a response, so the very
+      // first POST of this bridge's life 404'd (server restarted between spawn
+      // and first request). Reported separately because the mismatch message
+      // below names two versions and reads as "somebody else grabbed the
+      // port" — a wrong and alarming diagnosis for what is really "we never
+      // learned what to expect". Still fails closed: adopting whatever
+      // answered would be exactly the fail-open this check exists to stop.
+      // (One clause, not two: `captureNegotiated` writes both fields together
+      // or neither, so `negotiatedServerInfo` cannot be set on its own.)
+      if (negotiatedProtocolVersion === undefined) {
+        throw new Error(
+          `no handshake baseline to verify the new upstream against ` +
+            `(the original initialize never completed); refusing to adopt ` +
+            `${identity.protocolVersion}/${identity.serverInfo}`,
+        );
+      }
       // Fail closed on an identity change. Before this change a substituted
       // upstream could not complete a session at all, because the bridge never
       // re-handshaked; reconnecting turns that fail-closed into fail-open
@@ -917,8 +1115,15 @@ export async function runMcpStdio(): Promise<void> {
       // Re-opens the server→client SSE stream: the SDK starts it only from the
       // `initialized` notification's 202 branch, so skipping this would leave
       // the new session with no way to push anything.
-      await fresh.send(
-        handshakeInitialized ?? { jsonrpc: "2.0", method: "notifications/initialized" },
+      //
+      // Bounded by the same deadline as the handshake above, and for the same
+      // reason — `send()` awaits the POST's response with no timeout of its
+      // own, so a server that accepts this one and never answers would latch
+      // `reconnecting` forever with the `finally` below never reached. Easy to
+      // miss precisely because the dangerous await is the *unremarkable* one.
+      await withReplayDeadline(
+        fresh.send(handshakeInitialized ?? { jsonrpc: "2.0", method: "notifications/initialized" }),
+        "initialized notification",
       );
       lastSessionOpenedAt = Date.now();
 
@@ -926,6 +1131,13 @@ export async function runMcpStdio(): Promise<void> {
       // swallowed by design, but a server restart is exactly when the tool set
       // can change. Without this nudge a newly-added tandem_* tool stays
       // invisible to the host and a removed one stays callable.
+      //
+      // Deliberately NOT fatal, unlike every other stdio write in this file
+      // (`upstreamMessageHandler` treats a failed write as "stdio is broken"
+      // and calls shutdown(1)). This one is an advisory: the session is
+      // already healed and the client's tool calls will work whether or not it
+      // lands. Killing a recovered bridge over a stale tool list would trade
+      // the whole fix for a cache refresh.
       void stdio
         .send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })
         .catch((err: unknown) => {
@@ -939,7 +1151,14 @@ export async function runMcpStdio(): Promise<void> {
       // Synchronous, and before the finally clears `reconnecting`, so no
       // message is ever neither queued nor sent.
       drainReconnectQueue();
-      process.stderr.write(`[tandem mcp-stdio] upstream session re-initialized (${reason})\n`);
+      process.stderr.write(
+        `[tandem mcp-stdio] upstream session re-initialized ` +
+          `(${reason}, after ${reconnectAttempts} attempt${reconnectAttempts === 1 ? "" : "s"}, ` +
+          `new session ${fresh.sessionId ?? "<none>"})\n`,
+      );
+      // Per-episode, not per-process: the count above reads as "this outage
+      // took N tries", and the next outage starts from 1.
+      reconnectAttempts = 0;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[tandem mcp-stdio] re-initialize failed: ${detail}\n`);
@@ -951,9 +1170,8 @@ export async function runMcpStdio(): Promise<void> {
       // installed is also the recovery lane: a transport holding no session id
       // gets a 404 on its next POST, which re-triggers this.
       reconnectQueue.splice(0);
-      await synthesizePending("Tandem HTTP upstream session lost", detail);
-      // Reset first, so the retry below cannot read a stale timestamp and
-      // decide it was a long-lived session that deserves an immediate retry.
+      // Reset first, so the retry cannot read a stale timestamp and decide it
+      // was a long-lived session that deserves an immediate retry.
       lastSessionOpenedAt = 0;
       const { delayMs, nextMs } = nextBackoffMs(backoffMs, 0);
       backoffMs = nextMs;
@@ -964,7 +1182,33 @@ export async function runMcpStdio(): Promise<void> {
       // GET stream and no timer, its wake channel stays dark until the host
       // restarts.
       process.stderr.write(`[tandem mcp-stdio] re-initializing in ${delayMs}ms\n`);
+      // Latch the pending flag across the wait, exactly as `triggerReconnect`
+      // does for its own scheduled retry. Without it both latches read false
+      // during the backoff, so the client's next 404 re-enters
+      // `triggerReconnect`, which clears this timer, re-arms it at a *doubled*
+      // delay, and does so again on every subsequent request — recovery gets
+      // slower the more the user tries to use the tool, which is backwards.
+      // The timer's callback runs `runReconnect`, which clears it.
+      reconnectPending = true;
+      // **Arm the retry BEFORE anything that can throw.** `synthesizePending`
+      // below can reject — `sendErrorResponse` writes to stderr from inside its
+      // own catch, and an EPIPE there (likely precisely when the host is tearing
+      // down) escapes. That would skip the retry, leaving a listening client
+      // with nothing to re-trigger on, *and* escape the `void runReconnect(...)`
+      // call into the module's `unhandledRejection` handler, exiting a Claude
+      // Desktop child nothing will respawn. This routine's contract is that it
+      // never throws; recovery is armed first so the contract holds even if the
+      // reporting fails.
       armReconnectRetry(delayMs, "retry after failed re-initialize");
+      await synthesizePending("Tandem HTTP upstream session lost", detail).catch(
+        (synthErr: unknown) => {
+          process.stderr.write(
+            `[tandem mcp-stdio] failed to report the lost session to the client: ${
+              synthErr instanceof Error ? synthErr.message : String(synthErr)
+            }\n`,
+          );
+        },
+      );
     } finally {
       clearReplayDeadline();
       pendingReplayId = null;
