@@ -214,7 +214,9 @@ export function isRenderableLinkHref(raw: string | null | undefined): boolean {
   if (raw.startsWith("//")) return true;
   if (SPECIAL_EXTERNAL_SCHEME.test(raw)) return isSafeExternalHref(raw);
   return rejectUnsafeWindowsPrefix(raw) === null;
+}
 
+/**
  * A WHATWG-URL scheme prefix: `ALPHA *(ALPHA / DIGIT / "+" / "-" / ".") ":"`,
  * anchored at the start. This is the *parser's* grammar, transcribed — not an
  * approximation of it (#1537).

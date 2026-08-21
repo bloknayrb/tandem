@@ -339,6 +339,8 @@ describe("isRenderableLinkHref (the render-time veto, #1420)", () => {
     ]) {
       expect(isRenderableLinkHref(href), `${href} is NOT subtracted by this veto`).toBe(true);
     }
+  });
+});
 
 /**
  * DOCUMENTATION CORPUS for the render-time scheme allowlist (#1537).

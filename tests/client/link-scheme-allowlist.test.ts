@@ -23,6 +23,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import { applyLink } from "../../src/client/editor/toolbar/handlers";
 import {
+  isRenderableLinkHref,
   isRenderableLinkScheme,
   SAFE_EXTERNAL_PREFIXES,
 } from "../../src/client/editor/utils/url-safety";
@@ -434,5 +435,48 @@ describe("the AUTHORING path says the refusal out loud", () => {
     const seen: TandemNotification[] = [];
     expect(applyLink(editor, "2024:plan.md", (n) => seen.push(n))).toBe(true);
     expect(seen).toHaveLength(0);
+  });
+});
+
+/**
+ * COMPOSITION (#1537 + #1420). Neither branch's suite could assert this,
+ * because each existed while the other's term did not: this file's header
+ * records that it deliberately does not claim the backslash spellings, and
+ * `url-safety.test.ts`'s #1420 block asserts the scheme corpus is NOT
+ * subtracted by that veto. Both statements were true of their own branch and
+ * remain true of their own predicate. What no test covered until now is that
+ * the two ANDed terms cover each other's hole at the `isAllowedUri` site,
+ * which is the only property the merged state adds.
+ *
+ * The asymmetry is real and worth stating: `isRenderableLinkScheme` tests the
+ * WHATWG grammar ANCHORED at index 0, so one leading space makes a hostile
+ * scheme read as schemeless and it returns `true`. Tiptap's own
+ * `defaultValidate` strips whitespace before matching
+ * (`@tiptap/extension-link/dist/index.js:213`), so it cannot catch that
+ * either -- the whitespace veto has to live in the other term.
+ */
+describe("the two narrowing terms compose", () => {
+  const WHITESPACE_ONLY = [" ms-msdt:/id", "  search-ms:crumb=location:" + "\\\\evil.com\\share"];
+
+  it.each(WHITESPACE_ONLY)("blanks %j, which the scheme term alone accepts", (href) => {
+    // Precondition, not decoration: if the scheme term ever started refusing
+    // these, this row would pass for a different reason and stop testing
+    // composition at all.
+    expect(isRenderableLinkScheme(href)).toBe(true);
+    expect(isRenderableLinkHref(href)).toBe(false);
+    const { anchor } = renderLinkMark(href);
+    expect(anchor?.getAttribute("href")).toBe("");
+  });
+
+  it.each(REFUSED_SCHEME_HREFS)("blanks %j, which the href term alone accepts", (href) => {
+    expect(isRenderableLinkHref(href)).toBe(true);
+    expect(isRenderableLinkScheme(href)).toBe(false);
+    const { anchor } = renderLinkMark(href);
+    expect(anchor?.getAttribute("href")).toBe("");
+  });
+
+  it("still renders an ordinary relative path", () => {
+    const { anchor } = renderLinkMark("./other.md");
+    expect(anchor?.getAttribute("href")).toBe("./other.md");
   });
 });
