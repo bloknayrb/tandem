@@ -31,6 +31,10 @@ mod cowork_workspace_scan;
 mod cowork_installer;
 #[cfg(target_os = "windows")]
 mod firewall;
+// Absolute System32 paths, so a bare program name is never resolved by the
+// loader — the application directory is searched ahead of System32.
+#[cfg(target_os = "windows")]
+mod system_paths;
 #[cfg(target_os = "windows")]
 mod cowork_meta;
 // Native theming (#992): resolves the undocumented uxtheme.dll "preferred
@@ -2627,7 +2631,27 @@ fn show_in_file_manager(path: String) -> Result<(), String> {
     if is_unc_or_network_path(&path) {
         return Err("Refusing to reveal a network path in the file manager.".to_string());
     }
+    // The helper's `program` is the answer everywhere except Windows, where the
+    // anchored path below shadows it — so on Windows it is deliberately unread.
+    #[cfg_attr(target_os = "windows", allow(unused_variables))]
     let (program, args) = reveal_command_args(&path, std::env::consts::OS);
+
+    // Anchor the Windows program HERE rather than inside `reveal_command_args`.
+    // That helper takes `target_os` as a parameter precisely so all four arms
+    // run on the Linux CI leg; reading the system directory inside its Windows
+    // arm would make the one arm that ships the least-tested and force it to
+    // assert the *unanchored* form in CI. Environment access belongs at the
+    // spawn site.
+    //
+    // `explorer.exe` is the worst of the bare-name sites, not the mildest: it
+    // lives in `%SystemRoot%`, which the loader reaches only after the
+    // (user-writable) application directory AND System32 — and this is the one
+    // spawn a webview gesture triggers directly. See `system_paths`.
+    #[cfg(target_os = "windows")]
+    let program = crate::system_paths::windows_exe("explorer.exe").ok_or_else(|| {
+        "Failed to reveal in file manager: could not resolve the Windows directory.".to_string()
+    })?;
+
     match std::process::Command::new(program).args(&args).spawn() {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("Failed to reveal {path} in file manager: {e}")),
@@ -3524,29 +3548,28 @@ fn parse_tasklist_image_name(output: &str) -> Option<String> {
 
 /// Run a Windows system binary and capture stdout, or None on any failure.
 ///
-/// Anchored to `%SystemRoot%\System32\` rather than resolved through PATH:
-/// `Command::new("netstat")` searches the application directory (and, absent
-/// `NoDefaultCurrentDirectoryInExePath`, the cwd) ahead of System32, and both
-/// binaries are guaranteed at the fixed path. CREATE_NO_WINDOW keeps a
-/// GUI-subsystem app from flashing a console window.
+/// Anchored through [`system_paths::system32_exe`] rather than resolved by the
+/// loader: `Command::new("netstat")` searches the application directory ahead of
+/// System32, and both binaries are guaranteed at the fixed path. That module
+/// carries the full search order, and why the anchor comes from
+/// `GetSystemDirectoryW` rather than `%SystemRoot%` — an env var the launching
+/// process controls, which as a mitigation is weaker than the bare name it
+/// replaces. CREATE_NO_WINDOW keeps a GUI-subsystem app from flashing a console
+/// window.
 ///
-/// Fails CLOSED when `SystemRoot` is unset, empty, or non-UTF-8: falling back to
-/// the bare name would do exactly the unanchored PATH lookup this exists to
-/// avoid, and `SystemRoot` is a per-process env var that an unelevated launcher
-/// can set before starting an elevated app. Every caller degrades to generic
-/// text on None, so a skipped diagnostic costs nothing. (`freePortWindows` in
-/// src/server/platform.ts makes the opposite call, deliberately — its lookup is
-/// load-bearing for startup rather than cosmetic.)
+/// Fails CLOSED when the system directory cannot be resolved: falling back to
+/// the bare name would do exactly the unanchored lookup this exists to avoid.
+/// Every caller degrades to generic text on None, so a skipped diagnostic costs
+/// nothing. (`freePortWindows` in src/server/platform.ts makes the opposite
+/// call, deliberately — its lookup is load-bearing for startup rather than
+/// cosmetic, and Node cannot reach `GetSystemDirectoryW` without a native
+/// module.)
 #[cfg(target_os = "windows")]
 fn run_system32_tool(exe: &str, args: &[&str]) -> Option<String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    let root = std::env::var("SystemRoot").ok()?;
-    if root.trim().is_empty() {
-        return None;
-    }
-    let program = format!("{root}\\System32\\{exe}");
+    let program = crate::system_paths::system32_exe(exe)?;
     let output = std::process::Command::new(program)
         .args(args)
         .creation_flags(CREATE_NO_WINDOW)

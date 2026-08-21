@@ -16,10 +16,21 @@ export function resolveAppDataDir(): string {
 /**
  * Resolve a Windows system binary by absolute path under `%SystemRoot%`.
  * Bypasses `PATH` so a git-bash / MSYS / Cygwin shadow (e.g. their own
- * `whoami` that doesn't understand Windows flags) can't intercept us.
+ * `whoami` that doesn't understand Windows flags) can't intercept us — and so
+ * the loader never searches a writable directory ahead of the system one.
  * Lives here rather than in a feature module (e.g. `integrations/acl-win.ts`,
  * a former home) because this file is a leaf utility imported broadly across
  * `src/server` — a feature module importing a leaf is fine, the reverse isn't.
+ *
+ * **Known residual: the `SystemRoot` read.** The environment block belongs to
+ * whoever launched the process, so this anchor is only as trustworthy as the
+ * launcher. `src-tauri/src/system_paths.rs` avoids that by calling
+ * `GetSystemDirectoryW`, which Node cannot reach without a native module. What
+ * bounds it here: the Node server never runs elevated, so a launcher that could
+ * poison `SystemRoot` already has everything this process has. Don't "simplify"
+ * the fallback away either — a bare name would be strictly worse than a
+ * possibly-wrong absolute path, since it reintroduces the search this exists to
+ * skip.
  */
 export function systemBin(name: string): string {
   return path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", name);

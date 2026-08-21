@@ -146,7 +146,7 @@ const SUBNET_REASON_HINT: Record<SubnetDetectionReason, string> = {
  */
 const ADAPTER_REASON_HINT: Record<AdapterEnumerationReason, string> = {
   notFound:
-    "Tandem couldn't find Windows PowerShell, so it couldn't look up the Hyper-V subnet to allow. Check that powershell.exe is on your PATH — Nano Server and other stripped-down Windows images don't ship it.",
+    "Tandem couldn't find Windows PowerShell, so it couldn't look up the Hyper-V subnet to allow. Tandem looks for it only in the Windows system folder — Nano Server and other stripped-down Windows images don't ship it there.",
   permissionDenied:
     "Windows refused to start PowerShell, so Tandem couldn't look up the Hyper-V subnet to allow. That is usually an application-control policy (AppLocker, WDAC or Software Restriction Policies) — on a managed machine your IT team controls it.",
   spawnFailed:
@@ -163,7 +163,7 @@ export function firewallErrorHint(variant: FirewallErrorVariant): string {
     case "adminDeclined":
       return "Tandem couldn't update Windows Firewall — that needs administrator rights, and Tandem doesn't run as admin. Nothing was changed, and your documents stay on this computer (the server is only reachable locally).";
     case "netshNotFound":
-      return "Windows Firewall command (netsh) was not found on PATH. Confirm your Windows install is intact.";
+      return "Windows Firewall command (netsh) was not found in the Windows system folder. Confirm your Windows install is intact.";
     case "netshFailure":
       return `Windows Firewall command failed (exit ${variant.exitCode}). Details: ${truncateStderr(
         variant.stderrTail,

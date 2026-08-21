@@ -327,7 +327,8 @@ describe("firewallErrorHint", () => {
 
   it("no adapter-enumeration hint offers administrator rights or a reboot", () => {
     // The defect in one assertion. Elevation has nothing to do with whether a
-    // process can be spawned, and rebooting cannot put PowerShell back on PATH.
+    // process can be spawned, and rebooting cannot put PowerShell back at its
+    // anchored system path (PATH is not consulted at all any more).
     for (const reason of [...ADAPTER_REASONS, undefined]) {
       const hint = firewallErrorHint({ kind: "adapterEnumerationFailed", reason }).toLowerCase();
       expect(hint, `${reason ?? "(no reason)"} still offers elevation`).not.toContain(
@@ -340,7 +341,11 @@ describe("firewallErrorHint", () => {
     }
   });
 
-  it("notFound points at PATH, permissionDenied at policy — they do not swap", () => {
+  // The discriminator used to be PATH-vs-policy. It is now location-vs-policy:
+  // PowerShell is resolved at its anchored system path and PATH is never
+  // consulted, so advice naming PATH would send the user somewhere that cannot
+  // affect the outcome.
+  it("notFound points at where Tandem looked, permissionDenied at policy — they do not swap", () => {
     const notFound = firewallErrorHint({
       kind: "adapterEnumerationFailed",
       reason: "notFound",
@@ -349,9 +354,11 @@ describe("firewallErrorHint", () => {
       kind: "adapterEnumerationFailed",
       reason: "permissionDenied",
     });
-    expect(notFound).toMatch(/PATH/);
+    expect(notFound).toMatch(/system folder/i);
     expect(denied).toMatch(/AppLocker|WDAC|application-control/i);
     expect(notFound).not.toMatch(/AppLocker/i);
+    // Neither may send the user to PATH: it is not consulted on either path.
+    expect(notFound).not.toMatch(/PATH/);
     expect(denied).not.toMatch(/PATH/);
   });
 
