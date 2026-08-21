@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { systemTheme } from "../../src/client/hooks/useTheme.svelte.js";
 
@@ -44,14 +46,58 @@ vi.mock("@tauri-apps/api/window", () => ({
   })),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn((cmd: string) => {
+// `invoke` is exposed through a GETTER rather than as a plain property (#1413).
+// `getInvoke()` in the SUT resolves the dynamic import and THEN reads `m.invoke`, so a
+// throwing getter is the only seam a test has for "the core chunk failed to load" —
+// the exact condition the poll's import re-acquisition ladder exists for, and the only
+// way `invokeRef` stays null. Re-arming the factory per test with `vi.doMock` is not an
+// option here, for the reason this file's header gives at length. Both members are
+// hoisted and identity-stable like every other mock above, so a test can flip the flag
+// and every module instance sees it.
+//
+// `coreImportBroken` MUST be false again once a test ends, and the FILE-LEVEL
+// `afterEach` directly below this mock is the guarantee — not the `finally` blocks in
+// the individual tests, which are a redundant belt and are labelled as one. A test
+// that throws before its `finally` still gets an `afterEach`; a test that sets the flag
+// in a describe with no reset of its own gets one too. That second case is the real
+// hole: the outer `beforeEach` of `setNativeTheme (#992)` binds its spy by reading
+// `core.invoke`, so a flag left true anywhere in this file makes every remaining test
+// in it throw at setup, with a diagnosis pointing nowhere near the culprit.
+// `coreImportGate` is the OTHER half of that seam, and a different failure shape
+// (#1413). The throwing getter can only express "the chunk failed"; it cannot express
+// "the chunk is still loading", because the module namespace is already resolved by the
+// time the getter runs. A gate the FACTORY awaits is the only way to hold
+// `import("@tauri-apps/api/core")` pending, which is what the poll's import budget has
+// to survive. Null by default so the factory stays synchronous for every other test;
+// arming it requires `vi.resetModules()`, since a factory result is memoized.
+const { invokeMock, coreImportBroken, coreImportGate } = vi.hoisted(() => ({
+  invokeMock: vi.fn((cmd: string) => {
     if (cmd === "set_native_theme") {
       return Promise.resolve({ overrideActive: false, osTheme: null });
     }
     return Promise.resolve("light");
   }),
+  coreImportBroken: { current: false },
+  coreImportGate: { current: null as null | Promise<void> },
 }));
+
+vi.mock("@tauri-apps/api/core", async () => {
+  if (coreImportGate.current) await coreImportGate.current;
+  return {
+    get invoke() {
+      if (coreImportBroken.current) throw new Error("Failed to fetch dynamically imported module");
+      return invokeMock;
+    },
+  };
+});
+
+// The single backstop for both seams above, at FILE level so it covers every describe in
+// this file rather than the one that happens to use them today. Registered here, beside
+// the mock it protects, rather than inside a describe, so the pairing is visible.
+afterEach(() => {
+  coreImportBroken.current = false;
+  coreImportGate.current = null;
+});
 
 /**
  * Mirrors the SUT's `MAX_PUSH_RETRIES`, which is not exported. The ladder is
@@ -302,8 +348,12 @@ describe("setNativeTheme (#992)", () => {
   let invoke: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
-    const core = await import("@tauri-apps/api/core");
-    invoke = vi.mocked(core.invoke) as any;
+    // Bound to the hoisted mock DIRECTLY rather than through the module's getter
+    // (#1413). They are the same function, but the getter is a seam built for the SUT:
+    // it throws while `coreImportBroken` is true, so reading it here would make the
+    // harness itself a casualty of a flag a test forgot to clear. Going straight to
+    // `invokeMock` keeps the broken-import seam pointed only at the code under test.
+    invoke = invokeMock as unknown as ReturnType<typeof vi.fn>;
     invoke.mockClear();
     invoke.mockImplementation((cmd: string) => {
       if (cmd === "set_native_theme")
@@ -1178,11 +1228,28 @@ describe("setNativeTheme (#992)", () => {
     });
 
     it("a REJECTED push produces no unsupported-host copy", async () => {
-      // Scoped to this feature's copy rather than to "no notification at all": the
-      // rejection path is #1413's, and it will add a toast there that reads no
-      // `outcome` and fabricates no resolution. What this pins is that the `applied`
-      // surfacing lives in the resolved `.then` ONLY — a failed push has no outcome,
-      // and inventing one is the #1362 class of bug.
+      // Scoped to this feature's COPY rather than to "no notification at all". What
+      // this pins is that the `applied` surfacing lives in the resolved `.then` ONLY —
+      // a failed push has no outcome, and inventing one is the #1362 class of bug.
+      //
+      // NARROWED BY #1413, which is what makes the assertion match the name. This
+      // shipped filtering on `dedupKey === "native-theme-push"` alone, and #1413's
+      // exhaustion toast shares that key deliberately (one broken feature, one
+      // activity-tray entry). The key-only assertion was green here only by a timing
+      // accident: this test runs on REAL timers and `flushAsync()` is a single
+      // `setTimeout(…, 0)`, so it never reaches the ~3.5 s ladder exhaustion where
+      // #1413 toasts. Replacing that one line with a 4000 ms wait — no source change —
+      // reddens it on CORRECT behaviour. Anything that later gives this test fake
+      // timers, or lowers the retry ladder's base delay, would then get a red test
+      // and a diagnosis pointing at #1368's `applied` surfacing, which is not where
+      // the change was.
+      //
+      // The message predicate is what restores the intent: `/Windows/` is the
+      // unsupported-host copy ("Native menus can't follow the app theme on this
+      // Windows build."), and #1413's exhaustion copy is deliberately host-neutral —
+      // its own test pins `not.toMatch(/menus?|windows|…/i)`. So this still reddens
+      // for its target mutation (hoisting the `applied` surfacing into the `.catch`)
+      // while no longer forbidding a toast that legitimately belongs there.
       const { initTauriTheme, setNativeTheme } = await import(
         "../../src/client/hooks/useTauriTheme.svelte.js"
       );
@@ -1195,7 +1262,7 @@ describe("setNativeTheme (#992)", () => {
       await flushAsync();
 
       expect(callsFor(invoke, "set_native_theme").length).toBeGreaterThan(0);
-      expect(nativeThemeToasts()).toHaveLength(0);
+      expect(nativeThemeToasts().filter((t) => /Windows/.test(t.message ?? ""))).toHaveLength(0);
     });
   });
 
@@ -1235,6 +1302,709 @@ describe("setNativeTheme (#992)", () => {
       expect(nativeThemeErrorCode({})).toBeNull();
       expect(nativeThemeErrorCode({ code: "nope" })).toBeNull();
       expect(nativeThemeErrorCode({ code: 7 })).toBeNull();
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // #1413 — every failure path in this module used to terminate at a
+  // `console.warn`, which in a shipped desktop build reaches nothing at all:
+  // `tauri-plugin-log` declares no `TargetKind::Webview`, nothing calls
+  // `attachConsole`, and the release build has no devtools feature. These pin
+  // where each failure now goes instead — one toast, everything else into the
+  // client log that `formatDiagnostics` drains into Copy Diagnostics and the
+  // prefilled bug-report body.
+  //
+  // Harness rules, learned the hard way and worth keeping:
+  //
+  //  1. `vi.unstubAllGlobals()` first, exactly as the #1368 describe above does:
+  //     a `window` stub leaked from an earlier describe makes the SUT register
+  //     its pagehide listener on a plain object the test cannot reach.
+  //  2. `_resetClientLog()` in `beforeEach`, or one test's entries are counted
+  //     by the next one's assertions.
+  //  3. Every assertion filters on scope AND a specific event, never on scope
+  //     alone. Several scenarios here deliberately generate two or three
+  //     independent `useTauriTheme` entries at once — a boot-fetch failure
+  //     alongside a poll failure, an import failure alongside a give-up — and a
+  //     scope-only predicate would silently miscount them.
+  describe("failure surfacing (#1413)", () => {
+    /** Mirrors the SUT's `POLL_INTERVAL_MS`, which is not exported. */
+    const POLL_INTERVAL_MS = 3000;
+
+    beforeEach(async () => {
+      vi.unstubAllGlobals();
+      pushSpy.mockClear();
+      const { _resetClientLog } = await import("../../src/client/utils/client-log.js");
+      _resetClientLog();
+    });
+
+    afterEach(async () => {
+      // `coreImportBroken` is NOT reset here — the file-level `afterEach` beside the
+      // mock owns that, so it holds for every describe in this file rather than only
+      // this one. The `finally` blocks inside the individual tests below are a
+      // redundant belt on top of it, kept for locality, and are not what makes the
+      // discipline hold.
+      const { _resetForTests } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+      _resetForTests();
+      const { _resetClientLog } = await import("../../src/client/utils/client-log.js");
+      _resetClientLog();
+    });
+
+    /** Client-log entries for this module whose `event` matches `pattern`. */
+    async function entries(pattern: RegExp) {
+      const { readClientLog } = await import("../../src/client/utils/client-log.js");
+      return readClientLog().filter((e) => e.scope === "useTauriTheme" && pattern.test(e.event));
+    }
+
+    /** Notifications carrying this feature's dedupKey (shared with #1368). */
+    function nativeThemeToasts(): { dedupKey?: string; severity?: string; message?: string }[] {
+      return pushSpy.mock.calls
+        .map((c) => c[0] as { dedupKey?: string; severity?: string; message?: string })
+        .filter((n) => n?.dedupKey === "native-theme-push");
+    }
+
+    /** Reject every `set_native_theme` with `value`; resolve `get_app_theme`. */
+    function rejectPushWith(value: unknown): void {
+      invoke.mockImplementation((cmd: string) =>
+        cmd === "set_native_theme" ? Promise.reject(value) : Promise.resolve("light"),
+      );
+    }
+
+    // -------- item 1: the exhausted retry ladder is the one toast --------
+
+    it("toasts once, in host-neutral copy, when the retry ladder is exhausted", async () => {
+      // The message is asserted in BOTH directions on purpose. The positive half
+      // pins that a user is told anything at all; the negative half pins that the
+      // copy names no platform surface. There is no `applied` and no host
+      // information on this path — `getInvoke()` never caches a rejection, so a
+      // failed `import("@tauri-apps/api/core")` or a renamed command rejects all
+      // four rungs on EVERY platform, Linux included, where `set_native_theme`
+      // resolves to a no-op action by design (#1363). "Menus may not follow your
+      // theme" would there assert a degradation that is the permanent designed
+      // state. The menus sentence belongs only where `applied` exists.
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal("document", { hasFocus: () => false });
+        const { initTauriTheme, setNativeTheme } = await import(
+          "../../src/client/hooks/useTauriTheme.svelte.js"
+        );
+        initTauriTheme(pushSpy);
+        await vi.advanceTimersByTimeAsync(0);
+        rejectPushWith(new Error("set_theme failed: boom"));
+        pushSpy.mockClear();
+
+        setNativeTheme("dark");
+        await vi.advanceTimersByTimeAsync(4000); // 500 + 1000 + 2000, plus slack
+
+        expect(callsFor(invoke, "set_native_theme")).toHaveLength(1 + MAX_PUSH_RETRIES);
+        const toasts = nativeThemeToasts();
+        expect(toasts).toHaveLength(1);
+        expect(toasts[0].severity).toBe("warning");
+        expect(toasts[0].message).toMatch(/couldn't apply your theme to the system/);
+        expect(toasts[0].message).toMatch(/still follows your choice/);
+        expect(toasts[0].message).not.toMatch(/menus?|windows|macos|linux|tray/i);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("toasts once per session, however many times the ladder is exhausted", async () => {
+      // The `dedupKey` alone does NOT give this. It coalesces repeats in the toast
+      // LIST and permanently in the activity tray, but `schedulePopDismiss` dismisses
+      // a `warning` toast after `TOAST_DISMISS_MS.warning` (6 s), and a repeat arriving
+      // after that pops a NEW toast. A broken bridge with a user picking light, then
+      // dark, then light again produces exhaustions ~7 s apart — comfortably past the
+      // dismissal — so without the session latch every pick pops another notice about
+      // the same one broken thing. `pushFailureToasted` is the second layer, sibling to
+      // #1368's `unsupportedHostToasted`, and this pins both it and its reset.
+      //
+      // Two DIFFERENT preferences, so the SUT's `pref === lastPush?.pref` short-circuit
+      // cannot be what suppresses the second toast.
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal("document", { hasFocus: () => false });
+        const mod = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+        mod.initTauriTheme(pushSpy);
+        await vi.advanceTimersByTimeAsync(0);
+        rejectPushWith(new Error("set_theme failed: boom"));
+        pushSpy.mockClear();
+
+        mod.setNativeTheme("dark");
+        await vi.advanceTimersByTimeAsync(4000);
+        mod.setNativeTheme("light");
+        await vi.advanceTimersByTimeAsync(4000);
+
+        // Both ladders really ran — otherwise this would pass for the wrong reason.
+        expect(callsFor(invoke, "set_native_theme")).toHaveLength(2 * (1 + MAX_PUSH_RETRIES));
+        expect(nativeThemeToasts()).toHaveLength(1);
+        // Every occurrence is still counted where repetition is informative: the
+        // recorder entry, not the notification.
+        const gaveUp = await entries(/^set_native_theme gave up/);
+        expect(gaveUp).toHaveLength(1);
+        expect(gaveUp[0].count).toBe(2);
+
+        // The trap #1368's own latch test names: a session latch that
+        // `_resetForTests` forgets silences every later test, silently.
+        mod._resetForTests();
+        pushSpy.mockClear();
+        mod.initTauriTheme(pushSpy);
+        await vi.advanceTimersByTimeAsync(0);
+        mod.setNativeTheme("dark");
+        await vi.advanceTimersByTimeAsync(4000);
+        expect(nativeThemeToasts()).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not toast while rungs remain — a transient failure the ladder repairs is silent", async () => {
+      // A SHAPE guard, not a regression pin, and it is labelled as one because it
+      // passes with the toast deleted entirely. What it catches is the toast being
+      // hoisted above the `retryAttempts < MAX_PUSH_RETRIES` branch: a `warning`
+      // notification never expires (`shared/types.ts`), so one raised on rung 1 for
+      // a failure that repairs itself 500 ms later is permanent noise in the
+      // activity tray.
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal("document", { hasFocus: () => false });
+        const { initTauriTheme, setNativeTheme } = await import(
+          "../../src/client/hooks/useTauriTheme.svelte.js"
+        );
+        initTauriTheme(pushSpy);
+        await vi.advanceTimersByTimeAsync(0);
+        rejectPushWith(new Error("set_theme failed: boom"));
+        pushSpy.mockClear();
+
+        setNativeTheme("dark");
+        // 1600 ms covers the initial push and the first two retries (500 + 1000);
+        // the third rung is armed for 2000 ms later, so the ladder is NOT spent.
+        await vi.advanceTimersByTimeAsync(1600);
+
+        expect(callsFor(invoke, "set_native_theme").length).toBeGreaterThan(1);
+        expect(nativeThemeToasts()).toHaveLength(0);
+        // Silent to the USER, not to a bug report: a push that eventually
+        // succeeds on rung 3 is still evidence, so the rungs are recorded.
+        const retries = await entries(/^set_native_theme push failed; retrying$/);
+        expect(retries).toHaveLength(1);
+        expect(retries[0].count).toBe(3); // one per rejection, coalesced by cause
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // -------- #1368's error code, consumed --------
+
+    it("names the native cause at exhaustion, and carries Rust's own sentence as the detail", async () => {
+      // Before #1368 these four arrived as four English sentences the client could
+      // not tell apart; the code is what separates them, and `event` must be a
+      // static literal, so the classification has to live in the branch. The
+      // `detail` half matters independently: `describeCause` reads only
+      // `name`/`message` off an object and a `NativeThemeError` has no `name`, so
+      // passing the rejection straight through would record the bare word "Object".
+      const cases: [string, string, RegExp][] = [
+        [
+          "high-contrast-unknown",
+          "could not determine the High Contrast setting; declined to force an app mode and released any prior override",
+          /High Contrast state is unknown/,
+        ],
+        ["set-theme-failed", "SetWindowTheme failed", /could not set the theme/],
+        ["app-mode-timeout", "timed out waiting for the main thread", /app-mode call timed out/],
+        ["main-thread-unavailable", "no main thread", /main thread was unavailable/],
+      ];
+      for (const [code, message, expected] of cases) {
+        vi.useFakeTimers();
+        try {
+          vi.stubGlobal("document", { hasFocus: () => false });
+          const mod = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+          const { _resetClientLog } = await import("../../src/client/utils/client-log.js");
+          mod._resetForTests();
+          _resetClientLog();
+          mod.initTauriTheme(pushSpy);
+          await vi.advanceTimersByTimeAsync(0);
+          rejectPushWith({ code, message });
+
+          mod.setNativeTheme("dark");
+          await vi.advanceTimersByTimeAsync(4000);
+
+          const matched = await entries(expected);
+          expect(matched, `code=${code}`).toHaveLength(1);
+          expect(matched[0].detail, `code=${code}`).toContain(message);
+          // Exactly one "gave up" line, so a future edit cannot emit both the
+          // classified branch and a generic fallback.
+          expect(await entries(/^set_native_theme gave up/), `code=${code}`).toHaveLength(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    });
+
+    it("says the push never reached the native layer when the rejection carries no code", async () => {
+      // `null` from `nativeThemeErrorCode` is an ANSWER, not a parse failure: a
+      // dynamic-import failure, a renamed command or a sidecar older than #1368 all
+      // land here, and none of them is a Rust refusal. Recording them as one would
+      // send a maintainer looking at the wrong side of the IPC boundary.
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal("document", { hasFocus: () => false });
+        const { initTauriTheme, setNativeTheme } = await import(
+          "../../src/client/hooks/useTauriTheme.svelte.js"
+        );
+        initTauriTheme(pushSpy);
+        await vi.advanceTimersByTimeAsync(0);
+        rejectPushWith(new TypeError("invokeRef is not a function"));
+
+        setNativeTheme("dark");
+        await vi.advanceTimersByTimeAsync(4000);
+
+        const matched = await entries(/never reached the native layer/);
+        expect(matched).toHaveLength(1);
+        expect(matched[0].detail).toContain("TypeError: invokeRef is not a function");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // -------- item 2 (as it actually occurs): degraded outcomes that RESOLVE --------
+
+    it("records a High Contrast decline, which resolves successfully and never reaches the .catch", async () => {
+      // The issue frames this as the `Unknown` probe failing, but that is not the
+      // state that occurs: `HighContrast::On` makes Rust decline the force and
+      // return `Ok`, so the promise RESOLVES and the `.catch` is never entered.
+      // Before this row the only client-side record of "the right-click menu
+      // stopped following my theme" was an outcome the client threw away.
+      //
+      // Recorder-only, and the second half of this test is what pins that: #1368
+      // deliberately raises no toast here, because a High Contrast decline is the
+      // user's own accessibility setting winning.
+      const { initTauriTheme, setNativeTheme } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      initTauriTheme(pushSpy);
+      invoke.mockImplementation((cmd: string) =>
+        cmd === "set_native_theme"
+          ? Promise.resolve({
+              overrideActive: false,
+              osTheme: null,
+              applied: "declined-high-contrast",
+            })
+          : Promise.resolve("light"),
+      );
+      setNativeTheme("dark");
+      await flushAsync();
+
+      expect(await entries(/High Contrast is active/)).toHaveLength(1);
+      expect(nativeThemeToasts()).toHaveLength(0);
+    });
+
+    it("records a missing menu flush, which #1368 deliberately leaves untoasted", async () => {
+      const { initTauriTheme, setNativeTheme } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      initTauriTheme(pushSpy);
+      invoke.mockImplementation((cmd: string) =>
+        cmd === "set_native_theme"
+          ? Promise.resolve({
+              overrideActive: false,
+              osTheme: null,
+              applied: "applied-without-menu-flush",
+            })
+          : Promise.resolve("light"),
+      );
+      setNativeTheme("dark");
+      await flushAsync();
+
+      expect(await entries(/open menus keep the old theme/)).toHaveLength(1);
+      expect(nativeThemeToasts()).toHaveLength(0);
+    });
+
+    it("counts every unsupported-host push, though #1368's toast fires only once", async () => {
+      // The recorder row sits OUTSIDE `unsupportedHostToasted` on purpose: the
+      // toast is a notification and fires once, the record is evidence and counts.
+      // Two DIFFERENT preferences, so the module's own dedupe latch cannot be what
+      // produces the single entry — that has to be `record()` coalescing.
+      const { initTauriTheme, setNativeTheme } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      initTauriTheme(pushSpy);
+      invoke.mockImplementation((cmd: string) =>
+        cmd === "set_native_theme"
+          ? Promise.resolve({ overrideActive: false, osTheme: null, applied: "unsupported-host" })
+          : Promise.resolve("light"),
+      );
+      setNativeTheme("dark");
+      await flushAsync();
+      setNativeTheme("light");
+      await flushAsync();
+
+      expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
+      const matched = await entries(/unsupported on this host/);
+      expect(matched).toHaveLength(1);
+      expect(matched[0].count).toBe(2);
+      expect(nativeThemeToasts()).toHaveLength(1);
+    });
+
+    // -------- item 3: the poll's import re-acquisition --------
+
+    it("records each failed re-acquisition of the invoke import", async () => {
+      // The empty catch this replaces justified itself with "already logged by the
+      // init path". That is false in the case that matters: the init path logs the
+      // FIRST failure, at startup, and a chunk fetch that starts failing twenty
+      // minutes later is a different event it could not have logged.
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal("document", { hasFocus: () => true });
+        coreImportBroken.current = true;
+        const { initTauriTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+        initTauriTheme(pushSpy);
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+
+        const matched = await entries(/could not re-acquire the invoke import/);
+        expect(matched).toHaveLength(1);
+        expect(matched[0].count).toBe(3); // one per attempt, coalesced by cause
+        // Scope-only filtering would also pick up the init path's own import
+        // failure; these are two different events and must stay distinguishable.
+        expect(await entries(/^Tauri API import failed$/)).toHaveLength(1);
+      } finally {
+        coreImportBroken.current = false;
+        vi.useRealTimers();
+      }
+    });
+
+    it("stops the poll, loudly, once it gives up re-acquiring the invoke import", async () => {
+      // On Windows the poll is the PRIMARY mechanism (onThemeChanged reliability
+      // for app-mode-only flips is undocumented), so this point is where the app
+      // stops following the OS theme for the rest of the session — and it used to
+      // be a bare `return` that emitted nothing and left the interval firing every
+      // three seconds forever, doing nothing.
+      //
+      // `vi.getTimerCount()` is the assertion because the interval's inertness is
+      // exactly why a call-count assertion cannot see this: with `invokeRef` null
+      // and the budget spent, `get_app_theme` is not called either way. The timer
+      // count is the only observable that distinguishes "dead but running" from
+      // "stopped".
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal("document", { hasFocus: () => true });
+        coreImportBroken.current = true;
+        const { initTauriTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+        initTauriTheme(pushSpy);
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3); // budget spent, not yet spent-and-checked
+        expect(await entries(/gave up re-acquiring/)).toHaveLength(0);
+        expect(vi.getTimerCount()).toBe(1); // the poll interval, still live
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS); // the tick that gives up
+        expect(await entries(/gave up re-acquiring/)).toHaveLength(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        coreImportBroken.current = false;
+        vi.useRealTimers();
+      }
+    });
+
+    it("spends the import budget on failed attempts, not on ticks that watch one", async () => {
+      // The give-up above became TERMINAL (`stopPoll()`), which turns a miscounted
+      // budget into a dead bridge rather than a wasted interval. `getInvoke()` memoizes
+      // `invokePromise` and clears it only on REJECTION, so while one import is pending
+      // every tick gets that same promise back: counting ticks would spend all three
+      // attempts on ONE slow import, give up at tick 4, and stop the poll — and then
+      // the import could still resolve, set `invokeRef`, and find no interval left to
+      // use it. The OS-theme poll would be dead for the session.
+      //
+      // The gate is what makes that expressible: the throwing getter used by the two
+      // tests above can only say "the chunk failed", never "the chunk is still
+      // loading". `vi.resetModules()` is required because a mock factory's result is
+      // memoized after its first call.
+      vi.useFakeTimers();
+      let release!: () => void;
+      try {
+        vi.stubGlobal("document", { hasFocus: () => true });
+        coreImportGate.current = new Promise<void>((r) => {
+          release = r;
+        });
+        vi.resetModules();
+        const mod = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+        mod.initTauriTheme(pushSpy);
+
+        // Five ticks — well past MAX_POLL_IMPORT_ATTEMPTS — with the import still in
+        // flight the whole time. Nothing has failed, so nothing may be given up on.
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 5);
+        const log = await import("../../src/client/utils/client-log.js");
+        expect(
+          log.readClientLog().filter((e) => /gave up re-acquiring/.test(e.event)),
+        ).toHaveLength(0);
+        expect(vi.getTimerCount()).toBe(1); // the poll interval, still live
+
+        // The slow import lands. The poll must still be there to use it.
+        release();
+        coreImportGate.current = null;
+        invokeMock.mockClear();
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 2);
+        expect(callsFor(invokeMock, "get_app_theme").length).toBeGreaterThan(0);
+      } finally {
+        release?.();
+        coreImportGate.current = null;
+        vi.useRealTimers();
+      }
+    });
+
+    // -------- item 4: an outage's shape, not just its start --------
+
+    it("escalates a sustained poll outage instead of reporting it once, ever", async () => {
+      // `pollErrorLogged` was reset only by a SUCCESSFUL poll, so a permanently
+      // failing poll produced exactly one line per session and a 15-second outage
+      // was indistinguishable from a three-hour one.
+      //
+      // The predicate is anchored on the two poll events specifically. This
+      // scenario also fails the boot `get_app_theme` fetch, which records a THIRD
+      // entry under the same scope — a scope-only filter would count it and pass
+      // for the wrong reason.
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal("document", { hasFocus: () => true });
+        invoke.mockImplementation((cmd: string) =>
+          cmd === "get_app_theme"
+            ? Promise.reject(new Error("poll boom"))
+            : Promise.resolve({ overrideActive: false, osTheme: null }),
+        );
+        const { initTauriTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+        initTauriTheme(pushSpy);
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 6);
+
+        // Failure 1 → "theme poll failed"; failure 5 → "theme poll still failing";
+        // 2-4 and 6 are silent. Exactly two, not six and not one.
+        expect(await entries(/^theme poll (failed|still failing)$/)).toHaveLength(2);
+        expect(await entries(/^get_app_theme boot fetch failed$/)).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("escalates geometrically, so a long outage is distinguishable from a short one", async () => {
+      // The rung ladder is 5 → 25 → 125 → …, and the event string is static, so
+      // successive rungs COALESCE into one entry whose `firstAt`/`at`/`count`
+      // bracket the outage. Without `nextEscalation *= 5` the second rung never
+      // arrives and a three-hour outage renders identically to a fifteen-second one.
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal("document", { hasFocus: () => true });
+        invoke.mockImplementation((cmd: string) =>
+          cmd === "get_app_theme"
+            ? Promise.reject(new Error("poll boom"))
+            : Promise.resolve({ overrideActive: false, osTheme: null }),
+        );
+        const { initTauriTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+        initTauriTheme(pushSpy);
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 25);
+
+        const matched = await entries(/^theme poll still failing$/);
+        expect(matched).toHaveLength(1);
+        expect(matched[0].count).toBe(2); // failure 5 and failure 25
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reports a second outage after a recovery, rather than staying suppressed", async () => {
+      // The one-shot latch made the SECOND outage of a session invisible. The
+      // counter has to go back to zero on a successful tick for the next failure to
+      // be reported at all — and the `count` is what shows it did.
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal("document", { hasFocus: () => true });
+        let failPoll = true;
+        invoke.mockImplementation((cmd: string) => {
+          if (cmd !== "get_app_theme")
+            return Promise.resolve({ overrideActive: false, osTheme: null });
+          return failPoll ? Promise.reject(new Error("poll boom")) : Promise.resolve("light");
+        });
+        const { initTauriTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+        initTauriTheme(pushSpy);
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS); // outage 1, failure 1
+        failPoll = false;
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS); // recovery
+        failPoll = true;
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS); // outage 2, failure 1 again
+
+        const matched = await entries(/^theme poll failed$/);
+        expect(matched).toHaveLength(1);
+        expect(matched[0].count).toBe(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("records the END of a sustained outage, which is the only thing that bounds it", async () => {
+      // This used to be a `console.info` proposal, which writes the one signal that
+      // bounds an outage into precisely the sink this whole issue is about. Gated
+      // on the outage having escalated, so an ordinary single blip adds no line.
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal("document", { hasFocus: () => true });
+        let failPoll = true;
+        invoke.mockImplementation((cmd: string) => {
+          if (cmd !== "get_app_theme")
+            return Promise.resolve({ overrideActive: false, osTheme: null });
+          return failPoll ? Promise.reject(new Error("poll boom")) : Promise.resolve("light");
+        });
+        const { initTauriTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+        initTauriTheme(pushSpy);
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 5);
+        expect(await entries(/recovered after a sustained outage/)).toHaveLength(0);
+
+        failPoll = false;
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+        expect(await entries(/recovered after a sustained outage/)).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not report a recovery for a single blip", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal("document", { hasFocus: () => true });
+        let failPoll = true;
+        invoke.mockImplementation((cmd: string) => {
+          if (cmd !== "get_app_theme")
+            return Promise.resolve({ overrideActive: false, osTheme: null });
+          return failPoll ? Promise.reject(new Error("poll boom")) : Promise.resolve("light");
+        });
+        const { initTauriTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+        initTauriTheme(pushSpy);
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+        failPoll = false;
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+
+        expect(await entries(/^theme poll failed$/)).toHaveLength(1);
+        expect(await entries(/recovered after a sustained outage/)).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // -------- item 6: the catch sites the fallback comment never covered --------
+
+    it("records a teardown unlisten failure instead of dropping it on the floor", async () => {
+      // Teardown hygiene, and the least visible of the conversions: it fires from
+      // `_resetForTests`, `teardown()` and the HMR dispose race, none of which a
+      // user is watching. Kept recorder-only — there is nothing for a user to do
+      // about it and the page is going away.
+      const mod = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+      mod.initTauriTheme(pushSpy);
+      await flushAsync();
+      unlistenSpy.mockImplementationOnce(() => {
+        throw new Error("unlisten boom");
+      });
+
+      mod._resetForTests();
+
+      const matched = await entries(/^onThemeChanged unlisten failed$/);
+      expect(matched).toHaveLength(1);
+      expect(matched[0].detail).toContain("Error: unlisten boom");
+    });
+
+    it("the module's source contains no reference to `console` outside comments", () => {
+      // THIS IS A SPELLING CHECK, NOT A SEMANTIC ONE, and the name says only what it
+      // can actually verify. It reads source text. It cannot tell that a failure is
+      // reported at all: a converted site turned back into an empty `catch {}` is
+      // invisible to it by construction, and that is the exact defect shape this file
+      // shipped for months. The behavioural tests above are what pin reporting; this
+      // pins only that no *new* site can quietly choose the console again.
+      // (`tests/shared/unc-check-duplication.test.ts` labels a check of this shape the
+      // same way — the honesty, not the mechanism, is what is being copied.)
+      //
+      // Why it is worth having anyway: four of the converted sites are genuinely hard
+      // to drive from a test — the superseded-rejection branch, the `onThemeChanged`
+      // subscribe failure, the window-API import failure and the disposed-branch
+      // unlisten each need a second throwing module seam to reach — and a per-site
+      // behavioural test for each would cost more than it pins. The framing fact of
+      // #1413 is structural: in a shipped desktop build there is no WebView console
+      // (`tauri-plugin-log` declares no `TargetKind::Webview`, nothing calls
+      // `attachConsole`, and the release build has no devtools feature), so a
+      // `console.*` call in THIS module is by definition a failure path with no reader.
+      //
+      // `logClientWarning` still writes the identical console line, so nothing is lost
+      // for a developer with an inspector open — the rule is about the call site.
+      const src = readFileSync(
+        join(import.meta.dirname, "..", "..", "src", "client", "hooks", "useTauriTheme.svelte.ts"),
+        "utf8",
+      );
+      // Comments are stripped rather than pattern-excluded, so the module's prose may
+      // go on naming `console.warn` as the thing it stopped doing while the check
+      // itself matches the bare IDENTIFIER. A call-shaped regex (`console\.warn\s*\(`)
+      // was the first version of this and it false-passes on every aliasing shape:
+      // `console.warn.bind(console)`, `console["warn"](…)`, `const { warn } = console`.
+      // Matching `console` at all costs nothing here — the module has no legitimate
+      // use for it — and closes all of them at once.
+      const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+      expect(code.match(/\bconsole\b/g) ?? []).toEqual([]);
+      // A floor, so deleting the recorder calls outright cannot pass the check above
+      // by emptying the file of both. Set to the EXACT current count, not a loose
+      // fraction of it: at a loose floor the four sites with no behavioural test could
+      // be deleted for free, which is the hole this number exists to close. Raising it
+      // when a site is added is free; lowering it is the deliberate act it should be.
+      expect((src.match(/\blogClientWarning\s*\(/g) ?? []).length).toBeGreaterThanOrEqual(21);
+    });
+
+    // -------- teardown must invalidate pushes, not just cancel armed timers --------
+
+    it("a real pagehide stops a ladder that an in-flight rejection would otherwise re-arm", async () => {
+      // `teardown()` calls `cancelRetry()`, which clears a timer that is ALREADY
+      // waiting. It cannot reach a `set_native_theme` promise still in flight, and
+      // that promise's `.catch` re-arms the ladder as soon as it passes its
+      // `seq === pushSeq` check — so without the `pushSeq++` in `teardown`, a torn-down
+      // module keeps climbing rungs and can toast on exhaustion through a `_notify`
+      // that teardown does not reset. `_resetForTests` hides this by accident (it sets
+      // `pushSeq = 0`, which makes any captured `seq >= 1` look superseded), so the
+      // test has to drive the REAL `pagehide` path to see it at all.
+      //
+      // The push is held open deliberately: an immediately-rejecting mock settles
+      // before `pagehide` can land, which is the one ordering that cannot exhibit the
+      // bug.
+      vi.useFakeTimers();
+      const addSpy = vi.spyOn(window, "addEventListener");
+      try {
+        vi.stubGlobal("document", { hasFocus: () => false });
+        const { initTauriTheme, setNativeTheme } = await import(
+          "../../src/client/hooks/useTauriTheme.svelte.js"
+        );
+        initTauriTheme(pushSpy);
+        await vi.advanceTimersByTimeAsync(0);
+        const handler = addSpy.mock.calls.find((c) => c[0] === "pagehide")?.[1] as (e: {
+          persisted: boolean;
+        }) => void;
+        expect(handler).toBeTypeOf("function");
+
+        let rejectPush: (reason: unknown) => void = () => {};
+        invoke.mockImplementation((cmd: string) =>
+          cmd === "set_native_theme"
+            ? new Promise((_resolve, reject) => {
+                rejectPush = reject;
+              })
+            : Promise.resolve("light"),
+        );
+        pushSpy.mockClear();
+
+        setNativeTheme("dark");
+        await vi.advanceTimersByTimeAsync(0);
+        const issued = callsFor(invoke, "set_native_theme").length;
+        expect(issued).toBe(1); // the push is in flight, not settled
+
+        handler({ persisted: false }); // real unload -> teardown()
+        rejectPush(new Error("set_theme failed: boom"));
+        await vi.advanceTimersByTimeAsync(8000); // past every rung of the ladder
+
+        expect(callsFor(invoke, "set_native_theme")).toHaveLength(issued);
+        expect(nativeThemeToasts()).toHaveLength(0);
+        // Superseded, not silently swallowed: the outcome still reaches the recorder.
+        expect(await entries(/superseded/)).toHaveLength(1);
+      } finally {
+        addSpy.mockRestore();
+        vi.useRealTimers();
+      }
     });
   });
 });

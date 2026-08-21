@@ -2,6 +2,7 @@
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
 import type { InvokeFn } from "@client/cowork/cowork-invoke.js";
 import type { TandemNotification } from "@shared/types.js";
+import { logClientWarning } from "../utils/client-log.js";
 import type { ThemePreference } from "./useTandemSettings.js";
 import type { ResolvedTheme } from "./useTheme.js";
 
@@ -112,10 +113,11 @@ const NATIVE_THEME_ERROR_CODES: Record<NativeThemeErrorCode, true> = {
  * come from Rust at all — a dynamic-import failure, a thrown `TypeError`, or a bare
  * string from a sidecar older than #1368 — so the push never reached the native layer.
  *
- * DELIBERATELY UNCONSUMED IN THIS MODULE. #1368's scope is the one outcome that
- * warrants user-facing copy (`unsupported-host`); the rejection copy belongs to
- * #1413, which owns the ten `console.warn` terminals in this file. This exists so
- * that lands without reopening the IPC schema a second time.
+ * Consumed by the exhaustion branch of the push `.catch` (#1413), which is the one
+ * place the distinction changes what gets recorded: a Rust refusal names a cause a
+ * maintainer can act on, while `null` says the push never left the WebView. Nothing
+ * ELSE branches on it — the earlier ladder rungs are transient by construction and
+ * the toast is deliberately host-neutral (see the `.catch`).
  */
 export function nativeThemeErrorCode(e: unknown): NativeThemeErrorCode | null {
   if (typeof e !== "object" || e === null) return null;
@@ -146,6 +148,20 @@ let _notify: (n: TandemNotification) => void = () => {};
 // #1413 adds recorder-only rows there, outside this latch, which an early return would
 // silently swallow on the very pushes they exist to record.
 let unsupportedHostToasted = false;
+
+// Session latch for #1413's push-exhaustion toast, sibling to the one directly above
+// and cleared in `_resetForTests` for the same reason.
+//
+// It is NOT redundant with the shared `dedupKey`, and the distinction is the one the
+// `toast()` docstring below states: the key coalesces repeats in the toast LIST and
+// permanently in the activity tray, but `schedulePopDismiss` dismisses a `warning`
+// toast after `TOAST_DISMISS_MS.warning` (6 s), and a repeat arriving after that pops a
+// NEW toast. Without this latch a user with a broken bridge who picks light, then dark,
+// then light again gets a fresh pop each time — the ladder settles in ~3.5 s, so the
+// pops land ~7 s apart, comfortably past the dismissal. The bridge being broken is one
+// fact about the session, so it is told once; every occurrence is still counted by the
+// recorder entry beside the toast, which is where repetition is actually informative.
+let pushFailureToasted = false;
 
 /**
  * `dedupKey` coalesces repeats in the toast list and permanently in the activity tray
@@ -234,7 +250,7 @@ function releaseThemeListener(): void {
   try {
     unlistenTheme();
   } catch (e) {
-    console.warn("[useTauriTheme] onThemeChanged unlisten failed:", e);
+    logClientWarning("useTauriTheme", "onThemeChanged unlisten failed", e);
   }
   unlistenTheme = null;
 }
@@ -274,7 +290,11 @@ function releaseForcedColorsListener(): void {
   try {
     unlistenForcedColors();
   } catch (e) {
-    console.warn("[useTauriTheme] forced-colors unlisten failed:", e);
+    // Same conversion as every other catch site in this module (#1413): in a
+    // shipped desktop build there is no WebView console, so a `console.warn`
+    // here has no reader. Recorder-only, like the sibling teardown site — the
+    // page is going away and there is nothing for a user to act on.
+    logClientWarning("useTauriTheme", "forced-colors unlisten failed", e);
   }
   unlistenForcedColors = null;
 }
@@ -447,6 +467,7 @@ export function _resetForTests(): void {
   lastResolved = null;
   retryAttempts = 0;
   unsupportedHostToasted = false;
+  pushFailureToasted = false;
   // Dropped along with the latch, as the sibling `useTauriFileDrop._resetForTests`
   // does: a spy left registered from a previous test would receive toasts raised by
   // the next one, which is the kind of cross-test leak this function exists to stop.
@@ -676,6 +697,33 @@ function pushNativeTheme(pref: ThemePreference, viaRetry: boolean, bypassDedupe 
           "native-theme-push",
         );
       }
+      // #1413. The recorder half of the surfacing above, and the reason it is not
+      // folded into it: a DEGRADED outcome still RESOLVES. Rust logs each degraded
+      // `AppModeOutcome` on its own side and then returns `Ok`, so none of these ever
+      // reaches the `.catch` below — before this, the only client-side record of a
+      // High-Contrast decline or a missing menu flush was a promise the client
+      // discarded. "Dark mode doesn't work in the right-click menu" had nothing
+      // behind it in a bug report.
+      //
+      // Recorder-only, all three. `declined-high-contrast` is the user's own
+      // accessibility setting winning — correct behaviour, and #1368's tests pin zero
+      // toasts for it; `applied-without-menu-flush` is a partial success; and
+      // `unsupported-host` already has #1368's latched toast directly above. What was
+      // missing in every case is the bug-report half, not the notification.
+      //
+      // Deliberately OUTSIDE `unsupportedHostToasted`, and with no latch of its own:
+      // `record()` coalesces on (level, scope, event, cause fingerprint) and the cause
+      // here is `undefined`, so repeated pushes collapse into ONE entry whose `count`
+      // says how often it happened. The toast fires once; the record counts.
+      if (outcome.applied === "declined-high-contrast")
+        logClientWarning("useTauriTheme", "native theme declined: High Contrast is active");
+      else if (outcome.applied === "unsupported-host")
+        logClientWarning("useTauriTheme", "native theme unsupported on this host");
+      else if (outcome.applied === "applied-without-menu-flush")
+        logClientWarning(
+          "useTauriTheme",
+          "native theme applied, but open menus keep the old theme",
+        );
       // Authoritative: Rust reads the theme AFTER applying/releasing the
       // override, so on release this is already correct as part of THIS
       // round trip -- no need to wait on a poll tick (acceptReadback above).
@@ -698,7 +746,13 @@ function pushNativeTheme(pref: ThemePreference, viaRetry: boolean, bypassDedupe 
       // A superseded rejection stops here. The newer push owns the outcome,
       // including whatever `lastResolved` should end up saying.
       if (seq !== pushSeq) {
-        console.warn(`[useTauriTheme] set_native_theme("${pref}") failed (superseded):`, e);
+        // The preference is dropped from the message rather than interpolated
+        // (#1413): `scope` and `event` must be static literals so nothing can carry
+        // user text into a public issue body — `client-log-callsites.test.ts` pins
+        // that. `pref` is a closed four-value enum and harmless, but relaxing another
+        // change's privacy guard to carry it is how such guards die, and the failure
+        // is not preference-specific.
+        logClientWarning("useTauriTheme", "set_native_theme push failed (superseded)", e);
         return;
       }
 
@@ -709,10 +763,11 @@ function pushNativeTheme(pref: ThemePreference, viaRetry: boolean, bypassDedupe 
           retryHandle = null;
           pushNativeTheme(pref, true);
         }, delay);
-        console.warn(
-          `[useTauriTheme] set_native_theme("${pref}") failed (retry ${retryAttempts}/${MAX_PUSH_RETRIES}):`,
-          e,
-        );
+        // No toast here, and no per-rung classification: the ladder settles in about
+        // 3.5 s and repairs the transient case, so a durable `warning` notification
+        // raised on rung 1 would be durable noise. Recorded, because a push that
+        // eventually succeeds after two rungs is still evidence.
+        logClientWarning("useTauriTheme", "set_native_theme push failed; retrying", e);
         return;
       }
 
@@ -733,10 +788,91 @@ function pushNativeTheme(pref: ThemePreference, viaRetry: boolean, bypassDedupe 
       lastResolved = null;
       // Give the next intent a fresh ladder; see `retryAttempts`.
       retryAttempts = 0;
-      console.warn(
-        `[useTauriTheme] set_native_theme("${pref}") gave up after ${MAX_PUSH_RETRIES} retries; OS theme read-backs re-enabled:`,
-        e,
-      );
+
+      // #1413, consuming #1368's error code. Four Rust refusals and every
+      // client-side failure arrive here as one shape; `nativeThemeErrorCode` is what
+      // separates them, and `null` is a distinct answer rather than a parse failure —
+      // it means the push never left the WebView (a dynamic-import failure, a renamed
+      // command, a sidecar older than #1368), which is a different bug from any Rust
+      // refusal.
+      //
+      // The classification lives in the EVENT STRINGS, hence a branch per code rather
+      // than one interpolated message: `event` must be a static literal
+      // (`client-log-callsites.test.ts`), which is the control that stops user text
+      // reaching a public issue body.
+      //
+      // `cause` is Rust's own sentence for a coded rejection, not the rejection
+      // object. `describeCause` captures a string verbatim but reads only
+      // `name`/`message` off an object, and a `NativeThemeError` has no `name` — so
+      // passing `e` through would record the bare word "Object" and discard the one
+      // sentence Rust wrote to be read.
+      const code = nativeThemeErrorCode(e);
+      const cause = code === null ? e : (e as NativeThemeError).message;
+      switch (code) {
+        case "high-contrast-unknown":
+          logClientWarning(
+            "useTauriTheme",
+            "set_native_theme gave up: the High Contrast state is unknown",
+            cause,
+          );
+          break;
+        case "set-theme-failed":
+          logClientWarning(
+            "useTauriTheme",
+            "set_native_theme gave up: the native layer could not set the theme",
+            cause,
+          );
+          break;
+        case "app-mode-timeout":
+          logClientWarning(
+            "useTauriTheme",
+            "set_native_theme gave up: the app-mode call timed out",
+            cause,
+          );
+          break;
+        case "main-thread-unavailable":
+          logClientWarning(
+            "useTauriTheme",
+            "set_native_theme gave up: the main thread was unavailable",
+            cause,
+          );
+          break;
+        default:
+          logClientWarning(
+            "useTauriTheme",
+            "set_native_theme gave up: the push never reached the native layer",
+            cause,
+          );
+      }
+
+      // The ONLY user-facing copy this module raises on the failure path, and it is
+      // deliberately HOST-NEUTRAL. There is no `applied` here and no host information
+      // of any kind: `getInvoke()` never caches a rejection, so a failed
+      // `import("@tauri-apps/api/core")` or a renamed command rejects all four rungs
+      // on EVERY platform — Linux included, where `set_native_theme` resolves to a
+      // no-op action by design (#1363). Naming menus here would assert a degradation
+      // that on Linux is the permanent designed state. The menus sentence belongs
+      // only where `applied` is available, i.e. the resolved `.then` above.
+      //
+      // Raised at exhaustion rather than on the first rejection because the ladder
+      // repairs the transient case in ~3.5 s, and a `warning` PERSISTS IN THE ACTIVITY
+      // TRAY (`shared/types.ts`) — a spurious one would sit in a log forever. Past
+      // tense for the same reason: a present-tense claim in the tray becomes false as
+      // soon as the next push succeeds. Note that the tray is the half that persists;
+      // the toast itself is popped and then dismissed after `TOAST_DISMISS_MS.warning`,
+      // which is exactly why the latch below is needed as well as the `dedupKey`.
+      //
+      // `dedupKey` is shared with #1368's unsupported-host toast on purpose: one
+      // broken feature should leave one activity-tray entry, not two. `pushFailureToasted`
+      // is the second layer — see its declaration for why the key alone is not enough.
+      if (!pushFailureToasted) {
+        pushFailureToasted = true;
+        toast(
+          "Tandem couldn't apply your theme to the system. The app window still follows your choice — restarting Tandem usually clears this.",
+          "warning",
+          "native-theme-push",
+        );
+      }
     });
 }
 
@@ -785,11 +921,21 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
           setTauriTheme(theme === "dark" ? "dark" : "light");
         })
         .catch((e) => {
-          console.warn("[useTauriTheme] get_app_theme failed:", e);
+          // Survivable, and the fallback that makes it survivable is documented in a
+          // DIFFERENT file, which is why it is named here (#1413 item 6): `systemTheme`
+          // falls through to `window.__TANDEM_INITIAL_THEME__` and then to `matchMedia`
+          // (useTheme.svelte.ts), so the app still resolves a theme with no Tauri
+          // signal at all. What is lost is the accuracy of the boot seed, until the
+          // first `onThemeChanged` event or poll tick supplies a real reading.
+          logClientWarning("useTauriTheme", "get_app_theme boot fetch failed", e);
         });
     })
     .catch((e) => {
-      console.warn("[useTauriTheme] Tauri API import failed:", e);
+      // Same fallback as directly above, plus one more layer: the poll below
+      // re-acquires this import for up to three ticks, so a transient chunk-load
+      // failure here is not the end of the bridge. It is fatal to the bridge only if
+      // those re-acquisitions also fail, and THAT is reported separately.
+      logClientWarning("useTauriTheme", "Tauri API import failed", e);
     });
 
   // Subscribe to onThemeChanged events.
@@ -817,18 +963,18 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
             try {
               unlistenFn();
             } catch (e) {
-              console.warn("[useTauriTheme] onThemeChanged unlisten failed:", e);
+              logClientWarning("useTauriTheme", "onThemeChanged unlisten failed", e);
             }
             return;
           }
           unlistenTheme = unlistenFn;
         })
         .catch((e) => {
-          console.warn("[useTauriTheme] onThemeChanged subscribe failed:", e);
+          logClientWarning("useTauriTheme", "onThemeChanged subscribe failed", e);
         });
     })
     .catch((e) => {
-      console.warn("[useTauriTheme] Tauri window API import failed:", e);
+      logClientWarning("useTauriTheme", "Tauri window API import failed", e);
     });
 
   // Polling fallback while focused (POLL_INTERVAL_MS) -- onThemeChanged reliability
@@ -842,9 +988,33 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
   // is milliseconds, so a skip keyed on it would be a race rather than a
   // rule, and `acceptReadback` already discards anything that lands inside
   // it.
-  let pollErrorLogged = false;
+  // Every counter below is CLOSURE-LOCAL, not a module `let`. That is what keeps
+  // `_resetForTests()` unable to fall out of sync with them: `_resetForTests` clears
+  // `_initialized`, so the next `initTauriTheme` builds a fresh closure with all of
+  // these back at their initial values, and `stopPoll()` disposes the interval that
+  // held the old ones. It also keeps the module-doc rule above honest — none of these
+  // is a push-pipeline fact, so none belongs on `lastPush`/`lastResolved` either.
+  // Failed re-acquisitions of the `invoke` import, and whether one is currently
+  // outstanding. The in-flight flag is load-bearing rather than an optimisation:
+  // `getInvoke()` MEMOIZES `invokePromise` and clears it only on rejection, so while an
+  // import is pending every tick gets the SAME promise back. Counting ticks rather than
+  // attempts would therefore spend the whole budget on one slow import — three ticks
+  // attached to a single pending fetch — and, now that the give-up calls `stopPoll()`,
+  // that miscount would be terminal: the import could still resolve at t≈13 s, set
+  // `invokeRef` and reset the counter, with no interval left to notice. The counter is
+  // incremented in the `.catch`, where an attempt has actually failed.
   let pollImportAttempts = 0;
+  let pollImportInFlight = false;
   const MAX_POLL_IMPORT_ATTEMPTS = 3;
+  // Consecutive failed poll round trips, and the failure number at which the next
+  // escalation entry is written. Geometric, not linear: a one-shot suppression (what
+  // this replaced) makes a 15-second outage and a three-hour outage produce
+  // byte-identical evidence, and per-tick logging would spend the whole 6-line
+  // diagnostics budget in under a minute. 5 → 25 → 125 → … is ≈15 s, 75 s, 6 min,
+  // 31 min, so the entry's `firstAt`/`at`/`count` bracket the outage's real shape.
+  let pollFailures = 0;
+  const POLL_ESCALATE_AFTER = 5;
+  let nextEscalation = POLL_ESCALATE_AFTER;
   pollIntervalHandle = setInterval(() => {
     if (!document.hasFocus() || lastResolved?.overrideActive) return;
     // Re-acquire `invoke` if the init import failed, so a transient failure
@@ -852,15 +1022,57 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
     // `getInvoke()` clears its cache on rejection, so retrying every tick
     // forever would re-attempt a dynamic import every 3s indefinitely.
     if (!invokeRef) {
-      if (pollImportAttempts >= MAX_POLL_IMPORT_ATTEMPTS) return;
-      pollImportAttempts++;
+      // An import is already outstanding: attach nothing, spend nothing, and above
+      // all do NOT let this tick reach the give-up branch below. `getInvoke()` would
+      // hand back the same pending promise, so a slow-but-successful import must be
+      // allowed to finish rather than being counted against its own budget.
+      if (pollImportInFlight) return;
+      if (pollImportAttempts >= MAX_POLL_IMPORT_ATTEMPTS) {
+        // The give-up is the newsworthy moment, not the individual attempts: this is
+        // the transition from "degraded, retrying" to "dead", and on Windows the poll
+        // is the PRIMARY mechanism (`onThemeChanged` reliability for app-mode-only
+        // flips is undocumented — see the comment above), so past this point the app
+        // has stopped following the OS theme for the rest of the session.
+        //
+        // `stopPoll()` is a deliberate behaviour change, and it is what makes that
+        // transition observable rather than merely logged. With `invokeRef` still null
+        // and the attempt budget spent, every later tick reaches this same branch: the
+        // interval can accomplish nothing and can recover from nothing, so leaving it
+        // running for the life of the page only hides a dead bridge behind a live
+        // timer. Both callers of `stopPoll` are idempotent.
+        //
+        // "Can recover from nothing" is only true because of the in-flight guard
+        // above: three attempts have each been observed to REJECT before this line
+        // runs, and `getInvoke()` cleared its cache on every one, so there is no
+        // pending import left that could still resolve.
+        logClientWarning(
+          "useTauriTheme",
+          "theme poll gave up re-acquiring the Tauri invoke import",
+        );
+        stopPoll();
+        return;
+      }
+      pollImportInFlight = true;
       getInvoke()
         .then((invoke) => {
           invokeRef = invoke;
           pollImportAttempts = 0;
         })
-        .catch(() => {
-          /* already logged by the init path; next tick may retry */
+        .catch((e) => {
+          // Incremented HERE, not at the tick that started the attempt: this is the
+          // only place an attempt is known to have failed. See `pollImportInFlight`.
+          //
+          // The empty body this replaces justified itself with "already logged by the
+          // init path", which is false in exactly the case that matters: the init path
+          // logs the FIRST import failure, at startup. A chunk fetch that starts
+          // failing twenty minutes later is a different event it could not have
+          // logged. Bounded at three entries per session by the cap above, and
+          // coalesced to one by `record()` when the cause repeats.
+          pollImportAttempts++;
+          logClientWarning("useTauriTheme", "theme poll could not re-acquire the invoke import", e);
+        })
+        .finally(() => {
+          pollImportInFlight = false;
         });
       return;
     }
@@ -869,12 +1081,21 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
       .then((theme) => {
         const resolved: "light" | "dark" = theme === "dark" ? "dark" : "light";
         acceptReadback(seq, resolved);
-        pollErrorLogged = false;
+        // Recorded, not `console.info`ed: the end of an outage is the one signal that
+        // BOUNDS it, and writing that into the WebView console is the sink this whole
+        // change exists to stop using. Gated on the outage having been long enough to
+        // escalate, so an ordinary single blip does not add a line.
+        if (pollFailures >= POLL_ESCALATE_AFTER)
+          logClientWarning("useTauriTheme", "theme poll recovered after a sustained outage");
+        pollFailures = 0;
+        nextEscalation = POLL_ESCALATE_AFTER;
       })
       .catch((e) => {
-        if (!pollErrorLogged) {
-          console.warn("[useTauriTheme] theme poll failed (further errors suppressed):", e);
-          pollErrorLogged = true;
+        pollFailures++;
+        if (pollFailures === 1) logClientWarning("useTauriTheme", "theme poll failed", e);
+        else if (pollFailures === nextEscalation) {
+          logClientWarning("useTauriTheme", "theme poll still failing", e);
+          nextEscalation *= 5;
         }
       });
   }, POLL_INTERVAL_MS);
@@ -936,8 +1157,9 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
     // live code, and a `#` followed by 3-8 hex digits on a line whose text looks
     // CSS-ish ("forced-colors") is read as a raw hex colour. The reference lives in
     // the comment above instead.
-    console.warn(
-      "[useTauriTheme] forced-colors subscribe failed; High Contrast re-push disabled:",
+    logClientWarning(
+      "useTauriTheme",
+      "forced-colors subscribe failed; High Contrast re-push disabled",
       e,
     );
   }
@@ -961,6 +1183,15 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
   // process-global `window.__TANDEM_INITIAL_THEME__`. It is now released on dispose
   // along with the poll and the retry (#1413).
   const teardown = (): void => {
+    // Invalidate outstanding pushes, not just armed timers. `cancelRetry()` clears a
+    // timer that is already waiting; it cannot reach a `set_native_theme` promise that
+    // is still in flight, and that promise's `.catch` re-arms the ladder unconditionally
+    // once it passes its `seq === pushSeq` check. Bumping the ticket makes every
+    // in-flight push superseded, which the existing rejected-path branch already handles
+    // correctly: record, no retry, no toast. Without this, an HMR dispose mid-push leaves
+    // the OLD module climbing the ladder — and toasting on exhaustion through a `_notify`
+    // teardown does not reset — while the new instance is pushing too.
+    pushSeq++;
     stopPoll();
     cancelRetry();
     releaseThemeListener();
