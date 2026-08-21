@@ -86,15 +86,37 @@ let sizeCapNotified = false;
  */
 const failureNotifiedPaths = new Set<string>();
 
-/** Windows ACL applied to the backup root this run (spawns subprocesses — once is enough). */
-let aclEnsured = false;
+/**
+ * The one Windows ACL application for this run (it spawns icacls + PowerShell,
+ * so once is enough), memoised as a promise rather than a boolean, and
+ * resolving to whether the application actually SUCCEEDED.
+ *
+ * A boolean latch has to be set BEFORE the await, which leaves a window where a
+ * second caller sees "done" and proceeds against a DACL still being rewritten.
+ * With one call site that window was unobservable; the sweep (#1433) is a second
+ * one. Memoising makes "once per run" mean once-and-settled.
+ *
+ * The stored promise is the wrapper below, which catches internally and can
+ * therefore NEVER reject. That is load-bearing, not defensive: a stored rejected
+ * promise would deliver its rejection to every awaiter, and the awaiter that
+ * matters is `snapshotBeforeFirstWrite` — its outer catch would return "failed",
+ * toast the user, and leave `snapshottedPaths` unset, so every 60s autosave
+ * would retry and re-fail. That inverts this module's best-effort contract, in
+ * which an ACL failure is hygiene the save never hears about.
+ *
+ * It resolves to a boolean rather than void because the sweep reports the
+ * outcome to the user: `icacls` can fail (or `assertNoBroadAce` can reject its
+ * result), and a log line claiming a repair that never happened is worse than
+ * no log line at all.
+ */
+let aclPromise: Promise<boolean> | null = null;
 
 /** Test-only: reset the per-run gate and notification/ACL latches. */
 export function _resetDocBackupGateForTests(): void {
   snapshottedPaths.clear();
   sizeCapNotified = false;
   failureNotifiedPaths.clear();
-  aclEnsured = false;
+  aclPromise = null;
 }
 
 /** Resolve the doc-backups root under `appDataDir` (injectable for tests). */
@@ -159,12 +181,96 @@ export function snapshotFilename(filePath: string, now: Date = new Date()): stri
  */
 async function ensureBackupRootHardened(root: string): Promise<void> {
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32" || aclEnsured) return;
-  aclEnsured = true;
-  try {
-    await setRestrictiveAcl(root, { inheritable: true });
-  } catch (aclErr) {
-    console.error("[DocBackup] Restrictive ACL on backup root failed (continuing):", aclErr);
+  await ensureBackupRootAcl(root);
+}
+
+/**
+ * What the ACL application for this run actually did, from this caller's view.
+ *
+ * The sweep needs all four for its log line, and the distinctions are about not
+ * lying to the user: `repaired` vs `already-repaired` stops every poisoned
+ * subdir after the first from claiming its own repair, and `repair-failed`
+ * stops us reporting a repair at all when `icacls` is itself what is broken —
+ * which is a live possibility on the very installs this path exists for.
+ */
+type AclRepairOutcome =
+  /** This call applied the ACL, and it succeeded. */
+  | "repaired"
+  /** An earlier call this run applied it successfully; this one only awaited. */
+  | "already-repaired"
+  /** The ACL application ran and FAILED (this call's or an earlier one's). */
+  | "repair-failed"
+  /** Not Windows — there is no ACL to apply and nothing was done. */
+  | "unsupported";
+
+/**
+ * Apply the backup root's restrictive Windows DACL, at most once per run, and
+ * wait for it to settle. Does NOT create the root — callers that need it created
+ * use `ensureBackupRootHardened`; the sweep deliberately must not create a root
+ * that does not exist.
+ *
+ * Never rejects (see `aclPromise`). Latches on ATTEMPT rather than on success,
+ * matching the boolean it replaces: a failing icacls that we retried on every
+ * poisoned subdir would spawn subprocesses in a loop for no gain.
+ */
+async function ensureBackupRootAcl(root: string): Promise<AclRepairOutcome> {
+  if (process.platform !== "win32") return "unsupported";
+  const startedHere = aclPromise === null;
+  // `??=` assigns synchronously, before any await, so concurrent callers share
+  // one application instead of racing two.
+  aclPromise ??= (async () => {
+    try {
+      await setRestrictiveAcl(root, { inheritable: true });
+      return true;
+    } catch (aclErr) {
+      console.error("[DocBackup] Restrictive ACL on backup root failed (continuing):", aclErr);
+      return false;
+    }
+  })();
+  const applied = await aclPromise;
+  if (!applied) return "repair-failed";
+  return startedHere ? "repaired" : "already-repaired";
+}
+
+/**
+ * A directory refusing to be read because of its permissions — which for the
+ * #1299 empty-DACL case is Windows `EPERM` (`scandir`), not the POSIX `EACCES`
+ * spelling. Both are accepted; only the Windows one is repairable.
+ */
+function isPermissionError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EPERM" || code === "EACCES";
+}
+
+/**
+ * Log a directory the sweep still cannot read after trying to repair it.
+ *
+ * Deliberately drops the stack for the repairable case: an unrepairable folder
+ * prints this on EVERY boot, and a stack trace per boot is exactly the noise
+ * that trains people to ignore startup errors (#1433). Where no repair was
+ * possible (POSIX, or a non-permission error) the full error object is kept —
+ * there the stack is the only diagnostic there is.
+ */
+function logUnreadable(dir: string, err: unknown, repair: AclRepairOutcome): void {
+  const code = (err as NodeJS.ErrnoException).code;
+  switch (repair) {
+    case "repaired":
+      console.error(
+        `[DocBackup] sweep: ${dir} is still unreadable after repairing folder permissions (${code}) — skipping it`,
+      );
+      break;
+    case "already-repaired":
+      console.error(
+        `[DocBackup] sweep: ${dir} is unreadable (${code}); folder permissions were already repaired once this run — skipping it`,
+      );
+      break;
+    case "repair-failed":
+      console.error(
+        `[DocBackup] sweep: ${dir} is unreadable (${code}) and its folder permissions could not be repaired — skipping it`,
+      );
+      break;
+    default:
+      console.error(`[DocBackup] sweep: failed to read ${dir}:`, err);
   }
 }
 
@@ -504,6 +610,15 @@ export async function snapshotBeforeFirstWrite(
  * subdirs. Never throws (caller fires it un-awaited). Callers must gate on
  * `!isStoreReadOnly()` like the orphaned-temp reaper — a read-only peer
  * instance must not race the owner's prune.
+ *
+ * A directory that refuses to be read because of its permissions is treated as
+ * REPAIRABLE, not terminal: the root's inheritable grant is re-applied (once per
+ * run) and the read is retried once. This is the #1299 recovery path, which
+ * before #1433 hung off `snapshotBeforeFirstWrite` alone — so a run that never
+ * saved a document could never reach it, and the sweep logged the same EPERM on
+ * every boot with no route to recovery. Best-effort throughout: a folder that is
+ * still unreadable after the repair is skipped, never fatal, and the rest of the
+ * tree is swept normally.
  */
 export async function sweepDocBackups(
   appDataDir: string,
@@ -517,10 +632,26 @@ export async function sweepDocBackups(
   try {
     subdirs = await fs.readdir(root, { withFileTypes: true });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { cleaned, failed };
+    if (!isPermissionError(err)) {
       console.error(`[DocBackup] sweep: failed to read ${root}:`, err);
+      return { cleaned, failed };
     }
-    return { cleaned, failed };
+    // #1299 residue: an empty DACL denies `scandir` exactly as it denies
+    // `open`. Re-applying the root's inheritable grant is the repair — the
+    // same one the snapshot path has run since v0.21.0. The sweep just never
+    // triggered it, so an install that ran without ever saving a document
+    // stayed broken and logged this on every boot forever (#1433).
+    const repair = await ensureBackupRootAcl(root);
+    try {
+      subdirs = await fs.readdir(root, { withFileTypes: true });
+    } catch (retryErr) {
+      // The retry gets its OWN try: this function is fired un-awaited and its
+      // contract is "never throws", so an unwrapped retry would convert that
+      // into throws-on-one-path, rejecting into the caller's `.catch()`.
+      logUnreadable(root, retryErr, repair);
+      return { cleaned, failed };
+    }
   }
 
   for (const sub of subdirs) {
@@ -531,8 +662,20 @@ export async function sweepDocBackups(
     try {
       entries = await fs.readdir(subPath, { withFileTypes: true });
     } catch (err) {
-      console.error(`[DocBackup] sweep: failed to read ${subPath}:`, err);
-      continue;
+      if (!isPermissionError(err)) {
+        console.error(`[DocBackup] sweep: failed to read ${subPath}:`, err);
+        continue;
+      }
+      // The grant lands on the ROOT and Windows propagates it into every
+      // non-protected child, so one repair fixes every poisoned subdir — the
+      // memo means the first one pays for all of them.
+      const repair = await ensureBackupRootAcl(root);
+      try {
+        entries = await fs.readdir(subPath, { withFileTypes: true });
+      } catch (retryErr) {
+        logUnreadable(subPath, retryErr, repair);
+        continue;
+      }
     }
 
     let liveSnapshots = 0;

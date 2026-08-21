@@ -209,6 +209,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `settings-modal-margin-view-toggle`,
   `settings-modal-cowork-suspense-fallback`,
   `settings-modal-open-integration-wizard`,
+  `settings-modal-push-routes`, `settings-modal-push-routes-shim` (#1432 — the
+  persistent "Real-time updates" section; the `-shim` paragraph is route three,
+  whose two arms are the honesty-critical copy),
   `settings-modal-view-{changelog,documentation}-btn`,
   `settings-modal-changelog-error`, `settings-modal-report-bug-link`
 
@@ -270,7 +273,13 @@ shipped and were removed:
   so the probe runs on entry to the view, and the retry button *replaces*
   `cowork-enable-confirm-btn` while blocked rather than sitting beside it.
 - Plugin install (#1390): `integration-wizard-plugin{,-commands,-copy,-copy-status}`
-  in the push-mode block. Tandem shows these commands rather than running them
+  in the push-mode block. **These four now live in `PushRoutesInfo.svelte`, not
+  the wizard** (#1432) — the block was extracted so Settings → AI Assistant can
+  render the same copy, and the ids kept their wizard-era names because Critical
+  Rule 7 forbids removing a selector. The two hosts never show it at once: the
+  wizard renders it only under `step === "done"`.
+  `integration-wizard-settings-pointer` is the Done screen's gated pointer at
+  that persistent home. Tandem shows these commands rather than running them
   (the reason is on `CLAUDE_PLUGIN_INSTALL_COMMANDS`), so `-commands` holds the
   text and `-copy` is the only affordance. `-copy-status` is the button's
   outcome, in its own live region rather than in the button label — a changed
@@ -335,7 +344,10 @@ site.
   FidelityReportBanner's one expands to two), so a number in two places drifts.
 - `cowork-admin-declined-{backdrop,modal,confirm-disable,error,status-error,disable-btn,disable-confirm-btn,disable-cancel-btn,retry-btn,learn-more-link}`
 - `cowork-settings{,-loading,-unsupported,-undetected,-error}`,
-  `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`, `cowork-explainer`,
+  `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`,
+  `cowork-toggle-warnings` (degraded-success caveats from the last toggle — a
+  `role="status"` block, deliberately not the `role="alert"` error banner, #1438),
+  `cowork-explainer`,
   `cowork-enable-{confirm,confirm-btn,cancel-btn}`,
   `cowork-vethernet-cidr`,
   `cowork-reachability` (post-enable stdio-channel reachability verdict, #1174 gap #3),

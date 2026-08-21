@@ -64,6 +64,16 @@ async function withInvoke(
   }
 }
 
+/**
+ * The toggle's degraded-success warnings (#1438) are deliberately NOT rendered
+ * here. This step advances out of itself on success, so a caveat shown at this
+ * moment is discarded before it can be read — and the facts behind it are not
+ * lost: they come back on every `cowork_get_status` as per-workspace
+ * `WorkspaceStatus.fileStatus`, which the Cowork settings panel renders. The
+ * defect #1438 describes — the caveat existing ONLY in a Tauri log — is closed
+ * by the payload being structured and by that panel, not by a banner on a view
+ * that is about to unmount.
+ */
 async function handleEnable(): Promise<void> {
   const ok = await withInvoke(async (invoke) => {
     await coworkToggleIntegration(invoke, true);

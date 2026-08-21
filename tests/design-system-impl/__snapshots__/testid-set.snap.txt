@@ -102,6 +102,7 @@ cowork-settings-undetected
 cowork-settings-unsupported
 cowork-toggle
 cowork-toggle-checkbox
+cowork-toggle-warnings
 cowork-vethernet-cidr
 cowork-workspace-report-{*}-{*}
 cowork-workspace-row-{*}-{*}
@@ -249,6 +250,7 @@ integration-wizard-reachability-{*}
 integration-wizard-reopen-hint
 integration-wizard-secret-input-{*}
 integration-wizard-secret-submit-{*}
+integration-wizard-settings-pointer
 integration-wizard-shim-warning
 integration-wizard-step-applying
 integration-wizard-step-detect
@@ -398,6 +400,8 @@ settings-modal-mcp-status
 settings-modal-narrow-hamburger
 settings-modal-open-integration-wizard
 settings-modal-open-log-folder-btn
+settings-modal-push-routes
+settings-modal-push-routes-shim
 settings-modal-replay-error
 settings-modal-replay-tutorial-btn
 settings-modal-report-bug-link

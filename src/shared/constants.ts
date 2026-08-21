@@ -341,6 +341,33 @@ export const Y_MAP_FOOTNOTE_BODIES = "footnoteBodies";
  * client/Claude-invisible.
  */
 export const Y_MAP_LINE_ENDING = "lineEnding";
+/**
+ * Per-document mirror of the server's authoritative unsaved-edits flag (#1447).
+ * `true` while the Y.Doc body holds edits that are not yet on disk.
+ *
+ * The source of truth stays module state in `src/server/documents/dirty.ts`
+ * (`version > savedVersion`); this key is a projection of it, published ONLY on
+ * a transition of that boolean, so a keystroke stream costs at most one write
+ * per save cycle. Written via `withInternal` — this is a server metadata
+ * broadcast, the same class as `broadcastOpenDocs` (document-service.ts).
+ *
+ * Why it exists: before it, the client's tab-dirty heuristic reset to clean
+ * 500 ms after mount, so an MCP edit that landed BEFORE any browser/WebView
+ * attached was absorbed into the "clean" baseline and the tab showed no unsaved
+ * dot over genuinely unpersisted work. The client cannot derive this — the
+ * initial CRDT sync and a pre-attach edit are the same bytes to it.
+ *
+ * NOT published for `source: "upload"` docs (scratchpads/uploads): they can
+ * never be persisted to disk without a Save As promotion, so a mirrored `true`
+ * would be a dot with no code path able to clear it.
+ *
+ * Same inertness as Y_MAP_FIDELITY_REPORT / Y_MAP_LINE_ENDING: the dirty
+ * observer watches the body XmlFragment only, so this off-fragment write cannot
+ * feed back into the flag it mirrors, and there is no server-side observer on
+ * per-document documentMeta (the only documentMeta channel observer is
+ * `ctrl-meta`, on CTRL_ROOM). Server write-only, client read-only.
+ */
+export const Y_MAP_DIRTY = "dirtyState";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
 /**

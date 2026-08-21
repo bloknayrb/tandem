@@ -3,6 +3,10 @@ import { onDestroy } from "svelte";
 import { API_LAUNCHER_WORKING_DIRECTORY } from "../../../shared/api-paths";
 import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../../shared/constants";
 import {
+  API_INTEGRATIONS_EXISTING,
+  type ExistingMcpInstall,
+} from "../../../shared/integrations/contract";
+import {
   LAUNCHER_ERROR_IN_PROGRESS,
   LAUNCHER_ERROR_INVALID_BODY,
   LAUNCHER_ERROR_NO_INTEGRATION,
@@ -12,6 +16,7 @@ import {
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { disabledControlStyle } from "../../utils/colors";
 import { API_BASE } from "../../utils/fileUpload";
+import PushRoutesInfo from "../PushRoutesInfo.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
 // Map the server's stable `code` field (POST /api/launcher/working-directory,
@@ -117,6 +122,44 @@ async function loadWorkingDirectory() {
 }
 
 void loadWorkingDirectory();
+
+/**
+ * #1432: is the channel shim already registered for Claude Code?
+ *
+ * `true` → an existing `tandem-channel` entry that validated; `false` → none;
+ * `null` → not yet read, or the read failed. The two rendered arms are written
+ * so `null` and `false` share one, and that shared arm asserts NOTHING about the
+ * current state — every clause in it is either a property of the mechanism or
+ * advice conditioned on "if Claude reports no Monitor tool". An unknown state
+ * therefore cannot make it false.
+ *
+ * Same predicate the wizard uses post-apply (`useIntegrationWizard`), and the
+ * same best-effort shape as `loadWorkingDirectory` above: a failed or
+ * unparseable read leaves `null` rather than guessing. `installs` is defaulted
+ * because this must not throw on a body of another shape.
+ */
+let channelRegistered = $state<boolean | null>(null);
+
+async function loadChannelRegistered() {
+  try {
+    const res = await fetch(`${API_BASE}${API_INTEGRATIONS_EXISTING}`);
+    if (!mounted || !res.ok) return;
+    const body = (await res.json()) as { installs?: ExistingMcpInstall[] };
+    if (!mounted) return;
+    channelRegistered = (body.installs ?? []).some(
+      (i) =>
+        i.target.kind === "claude-code" &&
+        i.channelEntry !== undefined &&
+        i.channelValidation?.status === "valid",
+    );
+  } catch (err) {
+    // Best-effort — the fallback arm is true either way. Detail to the console
+    // only; never surface a raw fetch message (it can carry paths and URLs).
+    console.warn("[Settings] Failed to read channel-shim registration:", err);
+  }
+}
+
+void loadChannelRegistered();
 
 async function persistWorkingDirectory(value: string | null) {
   wdInflight = true;
@@ -350,6 +393,64 @@ function handleReset() {
         {wdError}
       </div>
     {/if}
+  </div>
+{/if}
+
+<!-- #1432: the durable home for the push routes. Before this they existed only
+     on the wizard's Done screen — a one-shot surface reached by completing an
+     apply, destroyed on dismiss, and NOT where a reopen lands (a reopen starts
+     at `connect`). `<PushRoutesInfo />` is the same component the wizard
+     renders, so the copy has one source.
+
+     Gated on `hasIntegration`, which is what this tab already means by "Claude
+     Code is set up". Honest, but UNDERSIZED: someone who wired Claude Code by
+     hand (`claude mcp add`) has all three routes and no `integrations.json`
+     entry, so they see the "No AI connected yet" callout instead — the same
+     predicate negated, and a pre-existing #1022 limitation this section
+     inherits rather than introduces. Widening it is not free: showing
+     Claude-Code-only routes to a Claude-Desktop-only user is #1299's lie
+     pointed the other way. -->
+{#if wdLoaded && hasIntegration}
+  <div
+    data-testid="settings-modal-push-routes"
+    style="display: flex; flex-direction: column; gap: var(--tandem-space-2);"
+  >
+    <div class="settings-section-label">Real-time updates</div>
+    <!-- One sentence, not two: `PushRoutesInfo`'s first rendered line already
+         says sessions Tandem starts for you are woken directly and need nothing
+         further. A second "Sessions Tandem starts for you are already covered."
+         here put the same fact in two consecutive sentences — invisible in the
+         wizard, which has no section hint, and visible only in this host. -->
+    <div class="settings-hint">
+      How a Claude Code session you started yourself hears about your comments as they happen.
+    </div>
+    <PushRoutesInfo />
+    <!-- Route three. Names the CLI flag in BOTH arms because nothing in the app
+         can register the shim — `shouldRegisterChannelShim` returns `override ??
+         false` and the wizard's apply route passes no override, which its own
+         comment states outright. The npm-package caveat is `doctor.ts`'s and
+         matters most HERE: this surface is read inside the desktop app, which
+         does not install that package. Guarded by
+         `tests/docs/channel-shim-optin-claims.test.ts`. -->
+    <p
+      class="settings-hint"
+      data-testid="settings-modal-push-routes-shim"
+      style="margin: 0;"
+    >
+      {#if channelRegistered}
+        The channel shim is already registered for Claude Code, and it is the one route that
+        depends on neither of those gates. Registration alone does not switch it on: start the
+        session with <code>claude --dangerously-load-development-channels server:tandem-channel</code
+        >.
+      {:else}
+        If Claude reports no Monitor tool at all, the channel shim is the one route that depends
+        on neither gate. The setup wizard cannot register it — run
+        <code>tandem setup --apply --with-channel-shim</code> from a terminal (that flag is its
+        only opt-in, and it needs Tandem's npm package, which the desktop app does not install),
+        then start each session with
+        <code>claude --dangerously-load-development-channels server:tandem-channel</code>.
+      {/if}
+    </p>
   </div>
 {/if}
 

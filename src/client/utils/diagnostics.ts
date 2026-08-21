@@ -57,11 +57,24 @@ const STATUS_TAG: Record<DoctorStatus, string> = {
 /**
  * A few check messages interpolate raw file content (e.g. an unparseable
  * `store.lock`). The clipboard text gets pasted into terminals, so strip
- * control characters that could carry ANSI/OSC escape sequences.
+ * control characters that could carry ANSI/OSC escape sequences. Also strips
+ * Unicode bidi/format-override characters (U+200E/F LRM/RLM, U+202A-E
+ * embedding/override, U+2066-9 isolates, U+061C ALM) -- "Trojan Source"-style
+ * characters that visually reorder the surrounding text without any
+ * HTML-escaping catching them, since they aren't `<`/`>`/`&`.
+ *
+ * Exported: also used by `IntegrationTargetCard.svelte` to sanitize
+ * `EntryValidation.reason` strings, which originate from an unvalidated,
+ * user-editable config file (see `extractEntry`'s comment in
+ * `existing-config.ts`) rather than from this module's own doctor-report
+ * content -- the same reason this module needed the control-char strip in
+ * the first place applies there with an even less trusted source.
  */
-function stripControlChars(s: string): string {
+export function stripControlChars(s: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
-  return s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+  return s
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069\u061c]/g, "");
 }
 
 /**

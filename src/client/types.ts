@@ -88,6 +88,29 @@ export interface CoworkStatus {
 }
 
 /**
+ * The `Ok` payload of the `cowork_toggle_integration` Tauri command (#1438).
+ * Mirrors `CoworkToggleReport` in `src-tauri/src/lib.rs`.
+ *
+ * The command encodes *degraded success* — a partial multi-workspace install on
+ * enable, a leftover firewall rule or a partial uninstall on disable. Those used
+ * to live as English inside the success string, which every call site threw
+ * away, so they rendered as an unqualified green success.
+ *
+ * `warnings` is never a failure channel: a rejected invoke is still the only way
+ * the command reports one. A warning means the operation committed and something
+ * about the result is imperfect.
+ *
+ * `warnings` is optional for the same stale-sidecar tolerance the rest of this
+ * surface uses: a desktop shell talking to an older sidecar receives a bare
+ * string where this object should be, and must render something honest rather
+ * than crash on `.length`. Read it through `toggleWarnings()`.
+ */
+export interface CoworkToggleReport {
+  message: string;
+  warnings?: string[];
+}
+
+/**
  * Discriminated union mirroring the Rust `FirewallError` enum. Each variant
  * drives a distinct user-facing recovery hint — see `firewallErrorHint`.
  */
