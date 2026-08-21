@@ -80,7 +80,7 @@ const isCoworkStep = $derived(step?.id === "cowork");
           <div
             class="tut-dot"
             class:is-current={i === currentStep}
-            style="width: var(--tandem-space-2); height: var(--tandem-space-2); border-radius: var(--tandem-r-circle); background: {i <= currentStep ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; transition: background 0.2s;"
+            style="background: {i <= currentStep ? 'var(--tandem-accent)' : 'var(--tandem-border)'}"
           ></div>
         {/each}
       </div>
@@ -132,6 +132,25 @@ const isCoworkStep = $derived(step?.id === "cowork");
 {/if}
 
 <style>
+  /* The dot's size and its fill cross-fade moved out of the inline `style` so
+     the reduce-motion guard below has a rule to beat; only `background` is
+     still inline, because it is what `i <= currentStep` drives. */
+  .tut-dot {
+    width: var(--tandem-space-2);
+    height: var(--tandem-space-2);
+    border-radius: var(--tandem-r-circle);
+    transition: background 0.2s;
+  }
+  /* Advancing a step is state feedback — the fill just lands. */
+  :global(body.tandem-reduce-motion) .tut-dot {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tut-dot {
+      transition: none;
+    }
+  }
+
   /* A22 (#798): the newly-reached progress dot pops once. A dot fires this only
      when it freshly gains `.is-current` (none → animation), so the monotonic
      stepper pops exactly the just-reached dot — not every dot on every advance. */

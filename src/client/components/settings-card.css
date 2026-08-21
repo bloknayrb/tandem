@@ -1,0 +1,28 @@
+/* Selectable "card" controls in the Settings tabs (theme swatches, text size,
+ * density, editor font, per-format font). Their border and fill are computed
+ * per-card in each tab's `cardStyle()` and stay in the inline `style`; only the
+ * cross-fade lives here.
+ *
+ * It has to live in a stylesheet rather than in that string: an inline
+ * `transition` can only be overridden with `!important`, and #1530's reduce-motion
+ * guard needs a rule of its own to beat. A plain `.css` file rather than a
+ * per-component `<style>` block because both tabs render the same control and
+ * neither has a style block today — same arrangement as `tandem-banner.css`.
+ *
+ * Picking a card is state feedback, so under reduced motion the new selection
+ * simply lands. Both mechanisms are guarded: the media query for the OS setting,
+ * `body.tandem-reduce-motion` for Tandem's own toggle.
+ */
+.settings-card {
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+body.tandem-reduce-motion .settings-card {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-card {
+    transition: none;
+  }
+}

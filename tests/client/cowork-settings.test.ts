@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   aggregateWorkspaceStatus,
+  COWORK_PREFLIGHT_FAILED,
   coworkReachability,
   coworkReachabilityCopy,
   coworkSettingsVariant,
@@ -24,6 +25,7 @@ import {
   loadInvoke,
 } from "../../src/client/cowork/cowork-invoke.js";
 import type {
+  AdapterEnumerationReason,
   CoworkStatus,
   FirewallErrorVariant,
   SubnetDetectionReason,
@@ -123,7 +125,7 @@ describe("undetectedDetail", () => {
 });
 
 // ---------------------------------------------------------------------------
-// firewallErrorHint — one distinct hint per variant (security invariant §13)
+// firewallErrorHint — one distinct hint per variant
 // ---------------------------------------------------------------------------
 
 describe("firewallErrorHint", () => {
@@ -192,11 +194,15 @@ describe("firewallErrorHint", () => {
   // message that blamed the user's Cowork install.
   // -------------------------------------------------------------------------
 
+  // Hand-maintained, and it is an ARRAY LITERAL — adding a member to the
+  // `SubnetDetectionReason` union does NOT break it, so it drifts silently and a
+  // new reason gets none of the coverage below unless it is added here by hand.
   const SUBNET_REASONS: SubnetDetectionReason[] = [
     "noAdapter",
     "noIpv4",
     "prefixTooBroad",
     "queryFailed",
+    "timeout",
   ];
 
   it("gives each subnet-detection reason its own hint", () => {
@@ -205,6 +211,25 @@ describe("firewallErrorHint", () => {
     );
     expect(new Set(hints).size).toBe(hints.length);
     for (const h of hints) expect(h.length).toBeGreaterThan(0);
+  });
+
+  it("the timeout hint names the wait, without quoting a number (#1371)", () => {
+    // Two things at once, and both are load-bearing.
+    //
+    // Naming the wait is what #1371 asks for: a reason that says only "detection
+    // failed" is the blanket message #1298 removed, wearing different words.
+    //
+    // NOT naming a number is forced by the fix's shape: the pre-flight and the
+    // Enable path pass different budgets to the same query
+    // (`SUBNET_PROBE_TIMEOUT_ADVISORY` vs `SUBNET_PROBE_TIMEOUT_ENABLE`), so a
+    // literal "15 seconds" here would be wrong on one of the two paths. This
+    // fails if someone "improves" the copy by adding the number back.
+    const hint = firewallErrorHint({ kind: "subnetDetectionFailed", reason: "timeout" });
+    expect(hint.toLowerCase()).toMatch(/wait/);
+    expect(
+      hint,
+      "the copy must not quote a duration — the two paths use different budgets",
+    ).not.toMatch(/\d+\s*(second|s\b|minute)/i);
   });
 
   it("falls back rather than rendering an empty banner for a blank reason", () => {
@@ -273,6 +298,180 @@ describe("firewallErrorHint", () => {
     expect(hint).toContain("hyper-v");
   });
 
+  // -------------------------------------------------------------------------
+  // #1372: the three reasons behind adapterEnumerationFailed. The old single
+  // sentence told all of them to "run Tandem as administrator or reboot to
+  // refresh the adapter list" — advice that cannot work when the interpreter
+  // never launched — and asserted an enumeration had been attempted.
+  // -------------------------------------------------------------------------
+
+  const ADAPTER_REASONS: AdapterEnumerationReason[] = [
+    "notFound",
+    "permissionDenied",
+    "spawnFailed",
+  ];
+
+  it("gives each adapter-enumeration reason its own hint", () => {
+    const hints = ADAPTER_REASONS.map((reason) =>
+      firewallErrorHint({ kind: "adapterEnumerationFailed", reason }),
+    );
+    expect(new Set(hints).size).toBe(hints.length);
+    const fallback = firewallErrorHint({ kind: "adapterEnumerationFailed" });
+    for (const h of hints) {
+      // Positive control: prove the lookup resolved rather than falling through.
+      expect(h).not.toBe(fallback);
+      expect(h.length).toBeGreaterThan(40);
+    }
+  });
+
+  it("no adapter-enumeration hint offers administrator rights or a reboot", () => {
+    // The defect in one assertion. Elevation has nothing to do with whether a
+    // process can be spawned, and rebooting cannot put PowerShell back on PATH.
+    for (const reason of [...ADAPTER_REASONS, undefined]) {
+      const hint = firewallErrorHint({ kind: "adapterEnumerationFailed", reason }).toLowerCase();
+      expect(hint, `${reason ?? "(no reason)"} still offers elevation`).not.toContain(
+        "administrator",
+      );
+      expect(hint, `${reason ?? "(no reason)"} still offers a reboot`).not.toContain("reboot");
+      // And every one says PowerShell never started, which is what makes the
+      // old advice visibly wrong rather than merely unhelpful.
+      expect(hint).toContain("powershell");
+    }
+  });
+
+  it("notFound points at PATH, permissionDenied at policy — they do not swap", () => {
+    const notFound = firewallErrorHint({
+      kind: "adapterEnumerationFailed",
+      reason: "notFound",
+    });
+    const denied = firewallErrorHint({
+      kind: "adapterEnumerationFailed",
+      reason: "permissionDenied",
+    });
+    expect(notFound).toMatch(/PATH/);
+    expect(denied).toMatch(/AppLocker|WDAC|application-control/i);
+    expect(notFound).not.toMatch(/AppLocker/i);
+    expect(denied).not.toMatch(/PATH/);
+  });
+
+  it("falls back for an absent or unrecognised adapter reason", () => {
+    const noReason = firewallErrorHint({ kind: "adapterEnumerationFailed" });
+    const blank = firewallErrorHint({
+      kind: "adapterEnumerationFailed",
+      reason: "" as AdapterEnumerationReason,
+    });
+    const unknown = firewallErrorHint({
+      kind: "adapterEnumerationFailed",
+      reason: "somethingNew" as AdapterEnumerationReason,
+    });
+    expect(blank).toBe(noReason);
+    expect(unknown).toBe(noReason);
+    expect(noReason.length).toBeGreaterThan(40);
+  });
+
+  // -------------------------------------------------------------------------
+  // #1372: queryFailed now carries the diagnostics the query already captured.
+  // -------------------------------------------------------------------------
+
+  it("queryFailed renders the exit code and stderr tail when they are present", () => {
+    const hint = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      exitCode: 1,
+      stderrTail: "Get-NetAdapter : Access is denied.",
+    });
+    expect(hint).toContain("exit 1");
+    expect(hint).toContain("Access is denied.");
+    // The reason's own advice is kept, not replaced by the diagnostics.
+    expect(hint).toContain(
+      firewallErrorHint({ kind: "subnetDetectionFailed", reason: "queryFailed" }),
+    );
+  });
+
+  it("adds nothing when a subnet variant carries no diagnostics", () => {
+    // A sidecar built before #1372 sends the reason alone, and every reason but
+    // queryFailed still does. Neither may grow an "(PowerShell exit unknown: )".
+    for (const reason of SUBNET_REASONS) {
+      const bare = firewallErrorHint({ kind: "subnetDetectionFailed", reason });
+      expect(bare).not.toContain("PowerShell exit");
+    }
+    expect(
+      firewallErrorHint({
+        kind: "subnetDetectionFailed",
+        reason: "queryFailed",
+        stderrTail: "   ",
+      }),
+    ).not.toContain("PowerShell exit");
+  });
+
+  it("renders an exit code with no stderr, and a stderr with no exit code", () => {
+    // Both halves are independently optional on the wire, so neither may be
+    // required for the other to show.
+    const exitOnly = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      exitCode: 1,
+    });
+    expect(exitOnly).toContain("exit 1");
+    expect(exitOnly).toContain("(no output)");
+    const stderrOnly = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      stderrTail: "boom",
+    });
+    expect(stderrOnly).toContain("exit unknown");
+    expect(stderrOnly).toContain("boom");
+  });
+
+  it("never renders a zero exit code as if it were evidence", () => {
+    // This assertion used to say the opposite. `classify_subnet_output`
+    // returns `queryFailed` on TWO paths — a non-zero exit, and a ZERO exit
+    // whose stdout carried no parseable marker — and an earlier cut keyed the
+    // Rust side's diagnostics on the reason rather than on the process. That
+    // gave the second path `exitCode: 0` with an empty stderr, and this
+    // function appended "(PowerShell exit 0: (no output))" to "Windows
+    // couldn't list Hyper-V network adapters". Self-contradictory, and
+    // strictly worse than the bare hint.
+    //
+    // Fixed on the Rust side (`finish_subnet_query` attaches diagnostics only
+    // when the process failed); the guard here is defence in depth, because
+    // neither side alone made the contradiction visible.
+    const hint = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      exitCode: 0,
+    });
+    expect(hint).not.toContain("PowerShell exit");
+    expect(hint).not.toContain("(no output)");
+
+    // A zero exit that DID produce stderr still shows the stderr — the guard
+    // is about the exit code being uninformative, not about suppressing
+    // evidence.
+    const withText = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      exitCode: 0,
+      stderrTail: "boom",
+    });
+    expect(withText).toContain("exit unknown");
+    expect(withText).toContain("boom");
+  });
+
+  it("collapses a multi-line stderr into the single line the surfaces render", () => {
+    // Every consumer is a single-line toast or an inline warning box, and a
+    // PowerShell ErrorRecord is three lines. Pasted in raw it either stretches
+    // the toast or loses everything after the first line, depending on the
+    // surface.
+    const hint = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "queryFailed",
+      exitCode: 1,
+      stderrTail: "Access is denied.\n    + CategoryInfo : PermissionDenied\n    + FQID : x",
+    });
+    expect(hint).not.toContain("\n");
+    expect(hint).toContain("Access is denied. + CategoryInfo : PermissionDenied + FQID : x");
+  });
+
   it("returns a generic hint including the kind for an unknown variant", () => {
     const hint = firewallErrorHint({ kind: "unknownFuture" } as FirewallErrorVariant);
     expect(hint).toContain("unknownFuture");
@@ -310,8 +509,10 @@ describe("formatCoworkError", () => {
 
 // ---------------------------------------------------------------------------
 // coworkPreflightSubnet (#1298) — the probe that decides whether Enable is
-// offered at all. Three states, because "the probe failed" and "enabling would
-// fail" are different claims and only the second one may block a button.
+// offered at all. "The probe failed" and "enabling would fail" are different
+// claims and only the second one may block a button; #1436 then split the
+// first one again, into an environment that was never going to answer and a
+// fault that owes the user a sentence.
 // ---------------------------------------------------------------------------
 
 describe("coworkPreflightSubnet", () => {
@@ -346,27 +547,126 @@ describe("coworkPreflightSubnet", () => {
     expect(result.hint).not.toContain("set up on this machine");
   });
 
-  it("reports unknown — never blocked — when the probe itself cannot run", async () => {
+  it("reports unavailable or failed — never blocked — when the probe cannot run", async () => {
     // A broken probe says nothing about whether enabling would work. Blocking
     // here would stop a user whose enable would have succeeded, which is a
     // worse failure than the one #1298 is fixing.
+    //
+    // #1436 splits the two reasons a probe does not answer. The environment
+    // ones are `unavailable` and stay silent on every surface; anything else is
+    // `failed` and says so. The two were already distinguished by their log
+    // level here — that distinction simply never reached the wire.
+    // Both literals, not the module constants: `rawMsg.includes(...)` is a
+    // substring test against a string the Rust side owns, so a fixture built
+    // from the constant would follow a rename that broke the real match. The
+    // pre-#1436 fixture here read "Windows only" and matched NOTHING — with a
+    // single `unknown` on both arms that was invisible, and it is exactly the
+    // drift this spelling guards.
     for (const thrown of [
       new Error("Tauri runtime not available"),
-      new Error("Windows only"),
-      "a bare string",
+      new Error("Cowork integration is Windows-only"),
     ]) {
       const invoke = (async () => {
         throw thrown;
       }) as InvokeFn;
-      await expect(coworkPreflightSubnet(invoke)).resolves.toEqual({ status: "unknown" });
+      await expect(coworkPreflightSubnet(invoke)).resolves.toEqual({ status: "unavailable" });
     }
+    const bareString = (async () => {
+      throw "a bare string";
+    }) as InvokeFn;
+    await expect(coworkPreflightSubnet(bareString)).resolves.toEqual({ status: "failed" });
   });
 
-  it("treats a non-firewall JSON error as unknown, not blocked", () => {
+  it("treats a non-firewall JSON error as failed, not blocked", () => {
+    // A JSON error with no recognised `kind` is a serde drift or an
+    // unregistered command — a bug on our side, not an environment we cannot
+    // run in. It must not stop the user from enabling, and it must not pretend
+    // the check passed.
     const invoke = (async () => {
       throw new Error(JSON.stringify({ error: "oops" }));
     }) as InvokeFn;
-    return expect(coworkPreflightSubnet(invoke)).resolves.toEqual({ status: "unknown" });
+    return expect(coworkPreflightSubnet(invoke)).resolves.toEqual({ status: "failed" });
+  });
+
+  it("calls a missing bridge INSIDE Tauri a fault, not an environment", async () => {
+    // The finding that made this split worth re-doing. `TAURI_NOT_AVAILABLE`
+    // comes from `loadInvoke`'s own catch when the `@tauri-apps/api/core`
+    // import fails. Outside Tauri that is the ordinary no-bridge case; INSIDE
+    // Tauri it means a chunk that must exist did not load — a partial update, a
+    // CSP block — and since every probing surface is gated on
+    // `isTauriRuntime()`, it is the ONE way a shipped desktop build reaches
+    // this arm at all. Reading it as an environment sent the only reachable
+    // fault straight back to the silence #1436 exists to end.
+    const notLoaded = (async () => {
+      throw new Error("Tauri runtime not available");
+    }) as InvokeFn;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} } as unknown as Window);
+    try {
+      // `await` inside the `try`, not `return promise` — a returned promise
+      // runs the `finally` before it settles, and the unstub would then land
+      // while the classification is still reading the global.
+      await expect(coworkPreflightSubnet(notLoaded)).resolves.toEqual({ status: "failed" });
+    } finally {
+      vi.unstubAllGlobals();
+      error.mockRestore();
+    }
+  });
+
+  it("says something announceable, in the literal", () => {
+    // Every render assertion in the mounted suites reads
+    // `textContent.toContain(COWORK_PREFLIGHT_FAILED)`, which is VACUOUS if the
+    // constant is empty or whitespace — a live region that adds no announceable
+    // text would pass the whole suite that exists to prevent exactly that. This
+    // is the one assertion written against the literal, so the constant cannot
+    // silently go blank.
+    expect(COWORK_PREFLIGHT_FAILED).toContain("Couldn't check your network");
+    expect(COWORK_PREFLIGHT_FAILED.trim().length).toBeGreaterThan(20);
+  });
+
+  it("matches a DECORATED Windows-only rejection, not just the bare string", () => {
+    // The `includes` half of the classification exists for this and only this:
+    // the message can arrive wrapped (`Error: …`, a Tauri prefix). Since #1436
+    // the two arms select silence vs a visible warning line, so a miss here
+    // paints a hedged warning on every non-Windows run — the routine path.
+    const decorated = (async () => {
+      throw new Error("Error: Cowork integration is Windows-only");
+    }) as InvokeFn;
+    return expect(coworkPreflightSubnet(decorated)).resolves.toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("keeps `unavailable` off the error log and `failed` on it", async () => {
+    // The split is only worth having if the two halves stay on the two sides.
+    // A regression that routed the routine non-Windows path to `failed` would
+    // both paint a warning on every non-Windows run and bury a real fault in
+    // the noise.
+    //
+    // `async`/`await`, not `try { return promise } finally`: that shape runs
+    // the `finally` when the promise is RETURNED, so `mockRestore()` wipes the
+    // call history before the assertions read it and every count reads 0.
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const notTauri = (async () => {
+        throw new Error("Tauri runtime not available");
+      }) as InvokeFn;
+      const broken = (async () => {
+        throw new Error("something nobody expected");
+      }) as InvokeFn;
+      const [unavailable, failed] = await Promise.all([
+        coworkPreflightSubnet(notTauri),
+        coworkPreflightSubnet(broken),
+      ]);
+      expect(unavailable).toEqual({ status: "unavailable" });
+      expect(failed).toEqual({ status: "failed" });
+      expect(debug).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      debug.mockRestore();
+      error.mockRestore();
+    }
   });
 });
 
@@ -671,7 +971,9 @@ describe("cowork invoke wrappers", () => {
   });
 
   it("coworkRetryAdminElevation calls the expected command", async () => {
-    const invoke = vi.fn<InvokeFn>().mockResolvedValue({ ok: true } as unknown);
+    const invoke = vi
+      .fn<InvokeFn>()
+      .mockResolvedValue("Cowork enabled: 2 workspace(s) configured" as unknown);
     await coworkRetryAdminElevation(invoke as unknown as InvokeFn);
     expect(invoke).toHaveBeenCalledWith("cowork_retry_admin_elevation");
   });

@@ -210,6 +210,17 @@ function handleColorSelect(color: HighlightColor) {
     align-items: center;
     transition: background 120ms, color 120ms;
   }
+  /* Reduced motion: literal 120ms tweens, no timing token to zero. Dual guard:
+     the in-app `body.tandem-reduce-motion` (class on <body>, so :global(...))
+     AND the OS pref, media half last so it wins the specificity tie. */
+  :global(body.tandem-reduce-motion) .highlight-swatch-toggle {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .highlight-swatch-toggle {
+      transition: none;
+    }
+  }
   .highlight-swatch-toggle:hover:not(:disabled) {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
@@ -302,6 +313,17 @@ function handleColorSelect(color: HighlightColor) {
     flex-shrink: 0;
     transition: transform 100ms, box-shadow 100ms, border-color 100ms;
   }
+  /* Reduced motion: the hover scale is the loudest thing in this component — kill
+     the whole shorthand so the swatch snaps to its hover/selected state instead
+     of springing. Same dual guard. */
+  :global(body.tandem-reduce-motion) .highlight-picker-swatch {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .highlight-picker-swatch {
+      transition: none;
+    }
+  }
   .highlight-picker-swatch-inner {
     display: block;
     width: 20px;
@@ -328,6 +350,16 @@ function handleColorSelect(color: HighlightColor) {
     pointer-events: none;
     opacity: 0;
     transition: opacity 100ms;
+  }
+  /* Reduced motion: the check's fade is state feedback, so it must still appear —
+     `none` shows it instantly rather than suppressing it. Same dual guard. */
+  :global(body.tandem-reduce-motion) .highlight-picker-swatch-check {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .highlight-picker-swatch-check {
+      transition: none;
+    }
   }
   .highlight-picker-swatch.is-selected .highlight-picker-swatch-check {
     opacity: 1;

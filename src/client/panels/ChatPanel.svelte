@@ -386,9 +386,13 @@ async function exportChat() {
       >
         <span style="display: inline-flex; gap: 3px;">
           {#each TYPING_DOT_DELAYS as delay (delay)}
-            <span
-              style="width: 5px; height: 5px; border-radius: 50%; background: var(--tandem-author-claude); animation: tandem-typing-bounce 1.2s ease-in-out {delay}s infinite;"
-            ></span>
+            <!-- Only the per-dot delay stays inline: it is the one value that
+                 varies across the three dots, and it is what makes them bounce
+                 in sequence rather than in unison. Everything else moved into
+                 `.chat-typing-dot` so the reduce-motion guard has a rule to
+                 beat — an inline `animation` shorthand can only be overridden
+                 with `!important`. -->
+            <span class="chat-typing-dot" style="animation-delay: {delay}s"></span>
           {/each}
         </span>
         <span>{claudeStatus ?? "Your AI is thinking..."}</span>
@@ -537,6 +541,27 @@ async function exportChat() {
     background: var(--tandem-border);
   }
 
+  /* Typing indicator dots. The bounce is looping/ambient, so under reduced
+     motion it is removed outright rather than shortened (motion.md's category
+     table) — the dots stay visible and static, which is still a legible
+     "thinking" affordance. The inline `animation-delay` on each dot survives
+     `animation: none`, but a delay with no animation-name is inert. */
+  .chat-typing-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: var(--tandem-r-circle);
+    background: var(--tandem-author-claude);
+    animation: tandem-typing-bounce 1.2s ease-in-out infinite;
+  }
+  :global(body.tandem-reduce-motion) .chat-typing-dot {
+    animation: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chat-typing-dot {
+      animation: none;
+    }
+  }
+
   :global {
     @keyframes tandem-typing-bounce {
       0%,
@@ -641,6 +666,16 @@ async function exportChat() {
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
     transition: border-color 120ms ease, box-shadow 120ms ease;
   }
+  /* Focus-ring feedback on the composer — state-feedback, so it lands on the
+     focused appearance instantly instead of easing into it. */
+  :global(body.tandem-reduce-motion) .chat-textarea {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chat-textarea {
+      transition: none;
+    }
+  }
   .chat-textarea[data-multiline="true"] {
     border-radius: var(--tandem-r-5);
   }
@@ -660,6 +695,15 @@ async function exportChat() {
     place-items: center;
     cursor: pointer;
     transition: filter 150ms ease, background 120ms ease, color 120ms ease;
+  }
+  /* Send-button hover/disabled feedback — same state-feedback treatment. */
+  :global(body.tandem-reduce-motion) .chat-send-btn {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chat-send-btn {
+      transition: none;
+    }
   }
   .chat-send-btn:hover:not(:disabled) {
     filter: brightness(1.12);

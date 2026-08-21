@@ -172,6 +172,40 @@ describe("neutralizeSvelteGlobal", () => {
   });
 });
 
+describe("cssRulesBySelector: atRules and start (#1425's reduce-motion guard check)", () => {
+  // Added alongside two new CssRule fields with no case here yet — precisely the
+  // gap this file's own header warns about: a defect found by review, not by a
+  // test, until one is added. `atRules` is deliberately independent of
+  // `resolveSelectors`'s at-rule-transparent walk (see that function's doc
+  // comment); this pins that it still walks the FULL chain, outermost first,
+  // for a nested at-rule — the shape a single-level fixture cannot distinguish
+  // from "stops after one level".
+  it("returns the full enclosing at-rule chain, outermost first, for a nested at-rule", () => {
+    const css = "@media (min-width: 1px) { @supports (display: grid) { .a { color: red } } }";
+    expect(rules(css).find((r) => r.selectors[0] === ".a")?.atRules).toEqual([
+      "@media (min-width: 1px)",
+      "@supports (display: grid)",
+    ]);
+  });
+
+  it("returns an empty at-rule chain for a rule with no at-rule ancestor", () => {
+    expect(rules(".a{color:red}")[0].atRules).toEqual([]);
+  });
+
+  // `start` falls back to -1 when postcss's source map is absent
+  // (`rule.source?.start?.offset ?? -1`). Every consumer compares two `start`s
+  // with `toBeGreaterThan` to prove source order; a silent -1 on both sides
+  // would make that comparison pass or fail for the wrong reason (-1 is not
+  // greater than -1, so it fails closed here, but nothing enforces that this
+  // fallback is never silently reached in practice — this pins that ordinary
+  // parsed CSS never needs it).
+  it("increases monotonically across two sibling rules, matching source order", () => {
+    const [a, b] = rules(".a{color:red} .b{color:blue}");
+    expect(a.start).toBeGreaterThanOrEqual(0);
+    expect(b.start).toBeGreaterThan(a.start);
+  });
+});
+
 describe("the extractor still reads what this repo authors", () => {
   const files = bundledCssFiles(CLIENT_ROOT);
 

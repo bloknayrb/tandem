@@ -42,6 +42,7 @@ import LicenseBanner from "./components/LicenseBanner.svelte";
 import LicenseWall from "./components/LicenseWall.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
+import PendingUpdateBanner from "./components/PendingUpdateBanner.svelte";
 import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
 import SettingsModal, { SETTINGS_TAB_IDS } from "./components/SettingsModal.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
@@ -82,6 +83,7 @@ import { licenseStore } from "./hooks/useLicense.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
 import { createModels } from "./hooks/useModels.svelte";
 import { createNotifications } from "./hooks/useNotifications.svelte";
+import { createPendingUpdateBanner } from "./hooks/usePendingUpdateBanner.svelte";
 import { createScratchpadPersistence } from "./hooks/useScratchpadPersistence.svelte";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import {
@@ -322,6 +324,10 @@ const connectionBanner = createConnectionBanner(
   () => settingsState.settings.degradedBannerDelayMs,
 );
 const updaterBanner = createUpdaterBanner();
+// #1118: "your update may not have completed". Fed by a Rust-side buffer read in
+// `setup()`, so it is reachable even on a boot where the sidecar never starts —
+// which is the boot it exists for.
+const pendingUpdateBanner = createPendingUpdateBanner();
 createWebViewZoom();
 
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
@@ -2473,6 +2479,15 @@ const shouldShowModelPicker = $derived(
         </div>
       {/if}
 
+      <!-- #1118. `visible` prop rather than an `{#if}` wrapper: the component owns
+           its own persistent live-region host, which must outlive its content to
+           announce at all. Already in #1431's target form. -->
+      <PendingUpdateBanner
+        visible={pendingUpdateBanner.showBanner}
+        onCheck={pendingUpdateBanner.check}
+        onDismiss={pendingUpdateBanner.dismiss}
+      />
+
       {#if isTauriRuntime() && updaterBanner.showBanner && updaterBanner.availableVersion}
         <UpdaterBanner
           version={updaterBanner.availableVersion}
@@ -2515,6 +2530,7 @@ const shouldShowModelPicker = $derived(
         })}
       reduceMotion={settingsState.settings.reduceMotion}
       tandemMode={modeState.tandemMode}
+      onNotify={(n) => notifications.push(n)}
     />
 
     {#if settingsState.settings.formattingBarVisible}
@@ -2533,6 +2549,7 @@ const shouldShowModelPicker = $derived(
           ? () => void requestToggleSourceView()
           : null}
         onHide={() => settingsState.updateSettings({ formattingBarVisible: false })}
+        onNotify={(n) => notifications.push(n)}
       />
     {/if}
 
@@ -2668,8 +2685,15 @@ const shouldShowModelPicker = $derived(
           {@render edgeCollapse("right", toggleRightPanel)}
           <div class="rail-tabs-row">
             <div class="rail-tabs-track">
+              <!-- `aria-current` rather than role="tab"/aria-selected: this mirrors
+                   the Settings sidebar switcher (SettingsModal.svelte), which is the
+                   same shape — plain buttons that swap which always-mounted panel is
+                   displayed. role="tab" would oblige the APG pattern's roving
+                   tabindex, taking one of these two buttons out of the tab order;
+                   that is a keyboard behaviour change, not an additive fix. See #1452. -->
               <button
                 data-testid="annotations-tab"
+                aria-current={activeRailTab === "annotations" ? "page" : undefined}
                 class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
                 onclick={() => selectRailTab("annotations")}
               >
@@ -2682,6 +2706,7 @@ const shouldShowModelPicker = $derived(
               </button>
               <button
                 data-testid="chat-tab"
+                aria-current={activeRailTab === "chat" ? "page" : undefined}
                 class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
                 onmousedown={captureSelectionForChat}
                 onclick={() => selectRailTab("chat")}
@@ -3019,7 +3044,7 @@ const shouldShowModelPicker = $derived(
       use:scrollFade={"y"}
       role="main"
       aria-label="Document editor"
-      style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
+      style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; border-radius: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
       ondragover={fileDrop.handleEditorDragOver}
       ondragleave={fileDrop.handleEditorDragLeave}
       ondrop={fileDrop.handleEditorDrop}
@@ -3704,6 +3729,26 @@ const shouldShowModelPicker = $derived(
     justify-content: center;
     font-weight: 700;
   }
+  /* Reduce motion (#1425): a colour-only crossfade, same shape as `.acb-btn`
+     (ApplyChangesButton.svelte) — but this one shipped without the guard pair
+     `.rail-shell`/`.rail-resize-handle` above already carry. The `@media`
+     guard has the SAME specificity as `.rail-tab` (one class each), so it
+     wins only by being declared AFTER it — the general hazard
+     `.rail-shell.dragging`'s note above documents. `.rail-tab.on` and
+     `.rail-tab:hover:not(.on)` are higher-specificity but declare no
+     `transition` of their own today, so neither is racing this guard; if
+     either ever gains one, it would need to join both halves below. No
+     `!important`: that's reserved for an `animation` guard racing a
+     higher-specificity or inline rule (ActivityTray.svelte, StatusBar.svelte)
+     — not the case here. */
+  @media (prefers-reduced-motion: reduce) {
+    .rail-tab {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .rail-tab {
+    transition: none;
+  }
 
   /* Only reachable when `editorScrollTabIndex` is 0 (a read-only document, see
      its doc comment). `:focus-visible` rather than `:focus` so a mouse click
@@ -3713,6 +3758,29 @@ const shouldShowModelPicker = $derived(
   .editor-scroll:focus-visible {
     outline: 2px solid var(--tandem-accent);
     outline-offset: -2px;
+  }
+  /* File-drop chrome crossfade (#1425). Was an inline `style={...}` declaration
+     on the element below — structurally unreachable by any stylesheet rule,
+     including this reduce-motion pair, the same shape #1396 fixed for the rail
+     drag strip (see tests/design-system-impl/rail-clearance-contract.test.ts).
+     Moved here as its own static rule; the `border`/`background` VALUES stay
+     inline since they're conditional on `fileDrop.fileDragOver` /
+     `tauriFileDrop.fileDragOver` — only the always-the-same `transition`
+     moved. Selector matches the element's literal `class="editor-scroll ..."`
+     (App.svelte, the `<div bind:this={editorScrollEl} ...>`), so this rule
+     targets the exact node the inline style used to animate. */
+  .editor-scroll {
+    transition:
+      border-color 0.15s,
+      background 0.15s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .editor-scroll {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .editor-scroll {
+    transition: none;
   }
 
   .editor-column-wrap {
@@ -3826,5 +3894,28 @@ const shouldShowModelPicker = $derived(
      :hover background still signals the zone on pointer interaction. */
   .panel-edge-collapse:focus-visible {
     outline: none;
+  }
+  /* Reduce motion (#1425): both `.panel-edge-collapse` and its `::before` bar
+     were unguarded. `::before`'s `height` change is real motion, not a colour
+     crossfade — the stronger obligation of the two (it's why the issue named
+     it specifically). Grouped in one block, matching this file's own
+     `.rail-shell, .rail-resize-handle` pairing above — that grouping is the
+     precedent, NOT ScrollPill.svelte: it guards `.scroll-pill-thumb::before`
+     alone, because its base `.scroll-pill-thumb` deliberately declares no
+     transition at all (opacity/transform are written there every frame — see
+     its own comment). Both halves genuinely carry one here, so both are named.
+     Same specificity-vs-source-order shape as `.rail-tab`
+     above: `.panel-edge-collapse:hover::before` (above) is higher-specificity
+     but declares no `transition` of its own today, so it isn't racing this
+     guard — it would need to join both halves below if that ever changes. */
+  @media (prefers-reduced-motion: reduce) {
+    .panel-edge-collapse,
+    .panel-edge-collapse::before {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .panel-edge-collapse,
+  :global(body.tandem-reduce-motion) .panel-edge-collapse::before {
+    transition: none;
   }
 </style>

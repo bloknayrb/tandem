@@ -8,6 +8,7 @@ import {
 import {
   aggregateWorkspaceStatus,
   COWORK_PREFLIGHT_CHECKING,
+  COWORK_PREFLIGHT_FAILED,
   coworkReachability,
   coworkReachabilityCopy,
   coworkSettingsVariant,
@@ -105,6 +106,34 @@ async function withInvoke(
   }
 }
 
+/**
+ * Re-read status with `busy` held across the await, and never reject.
+ *
+ * `withInvoke`'s own `finally` clears `busy` before it returns, and every
+ * control in this panel is `disabled={busy}` — so a read-back running after it
+ * would leave the controls live mid-read, letting a second click land and then
+ * be silently repainted by the `resyncCheckbox` that follows. Re-raising
+ * `busy` here closes that window; nothing can slip through the microtask
+ * between the two, because a user event cannot be dispatched into it.
+ *
+ * The `catch` is not decoration. Callers await this OUTSIDE any `withInvoke`,
+ * from an `onchange={() => void handler(...)}` — so a rejection would escape
+ * as an unhandled one instead of becoming the inline toast it would have been
+ * inside the callback. `refetch` is documented and implemented never to reject
+ * (it swallows into `coworkState.error` and resolves `false`), which makes
+ * this latent rather than live, and latent is exactly when a guard is cheap.
+ */
+async function readBackStatus(): Promise<boolean> {
+  busy = true;
+  try {
+    return await refetch();
+  } catch {
+    return false;
+  } finally {
+    busy = false;
+  }
+}
+
 async function handleToggleOn(): Promise<void> {
   // Same hazard `handleToggleOff` guards against, mirrored: `refetch()` can
   // swallow its own failure into `coworkState.error` and return without
@@ -125,6 +154,45 @@ async function handleToggleOn(): Promise<void> {
   }, "Failed to enable Cowork");
   if (readBack) closeEnableConfirm();
 }
+
+// #1437 (invoke-resolved-treated-as-success): the `readBack`-only gate above
+// is sound BECAUSE `cowork_toggle_integration`'s enable arm now fails loud on
+// every partial commit (`enable_persist_outcome` in `src-tauri/src/lib.rs`) —
+// a resolved ENABLE now really does mean the intent was met. The disable arm
+// makes the weaker promise; `handleToggleOff` below says which and copes.
+//
+// `coworkToggleIntegration` has SIX call sites and this file holds two of
+// them — `handleToggleOn` above and `handleToggleOff` below. The other four,
+// numbered so a later reader can check the count rather than trust it:
+//
+//   3. `IntegrationWizardModal.svelte`'s `enableCowork`, and
+//   4. `CoworkOnboardingStep.svelte`'s `handleEnable`. Same contract, no
+//      changes needed: both already treat a thrown invoke correctly.
+//   5. `cowork_retry_admin_elevation` (`src-tauri/src/lib.rs`, tail-calls
+//      `cowork_toggle_integration(true)`; reached from
+//      `CoworkAdminDeclinedModal.svelte`'s Retry button). It clears
+//      `uac_declined_*` in its OWN earlier, separate `cowork_meta::update`
+//      before ever reaching the toggle, so a failure there splits in two and
+//      only one half self-heals:
+//        - that first update SUCCEEDED and the toggle then rejected: the clear
+//          is on disk, while the modal's local `status` is stale (the throw
+//          skips the `refetch()` after it) and keeps the modal up with a
+//          "Retry failed" error. The next 30s poll catches up and closes it.
+//        - that first update FAILED: it rejects at its own `.map_err(...)?`
+//          and the toggle is never reached, so `uac_declined` stays set and
+//          the modal (`visible = uacDeclined && !dismissed`) stays up
+//          indefinitely. NOT self-healing — and under the canonical shared
+//          cause, an unwritable `cowork-meta.json`, this is the branch you
+//          get. Out of scope for #1437; recorded so it isn't re-derived.
+//   6. `CoworkAdminDeclinedModal.svelte`'s `handleDisable`, calling
+//      `coworkToggleIntegration(invoke, false)` directly. Same DISABLE arm as
+//      `handleToggleOff` below, and it keeps its `refetch()` inside the
+//      callback, so a reject-after-the-write-landed leaves its `status` stale
+//      and the modal up. It paints no checkbox, so there is no latch and the
+//      30s poll clears it — a weaker consequence than the one `handleToggleOff`
+//      had, which is why that one is fixed below and this one is not.
+//
+// If you add a seventh, re-check it against the contract above.
 
 /**
  * The Enable checkbox's rendered state, in ONE place.
@@ -153,19 +221,43 @@ async function handleToggleOff(box: HTMLInputElement): Promise<void> {
   // its own failure into `coworkState.error`, so after a successful toggle
   // whose refetch failed, `status` still says `enabled: true` — and resyncing
   // from it would visibly re-check the box over an integration that is now off.
-  // Three cases, and only the middle one is safe to paint from:
-  //   toggle threw            -> status unchanged AND accurate  -> resync
-  //   toggle ok, refetch ok   -> status fresh                   -> resync
-  //   toggle ok, refetch fail -> status stale and WRONG         -> leave the
-  //     box where the user put it, which is what the write we know landed did.
-  // Not the same thing as #1437, which is an HONEST refetch reporting a partial
-  // commit — there `status` is fresh and must be believed.
-  let readBack = true;
+  //
+  // The read-back runs OUTSIDE the `withInvoke` callback, for the same reason
+  // `handleToggleLanIp` below does it: on this arm a REJECTED invoke does not
+  // mean nothing changed. `cowork_toggle_integration`'s disable arm persists
+  // `enabled = false` (its `meta_persist` write, `src-tauri/src/lib.rs`) and
+  // only THEN returns `Err` if every workspace failed to uninstall — so on
+  // that path the write landed and the command still rejected. With the
+  // read-back inside the callback, the throw skipped it entirely, the sentinel
+  // stayed at its initial `true`, and the resync painted the stale
+  // `enabled: true` back over a box the user had just unchecked over an
+  // integration that really was off. Re-reading unconditionally is what makes
+  // the paint follow the truth instead of following which way the promise
+  // settled.
+  //
+  // Four combinations, and exactly one must not paint:
+  //   wrote,  read ok   -> status fresh            -> resync
+  //   wrote,  read fail -> status stale and WRONG  -> leave the box where the
+  //     user put it, which is what the write we know landed did.
+  //   !wrote, read ok   -> status fresh            -> resync
+  //   !wrote, read fail -> the invoke rejected, so `status` is almost always
+  //     unchanged and therefore still accurate     -> resync. The residual
+  //     rejected-but-actually-written case needs the write AND the re-read to
+  //     fail together; it self-heals at the next 30s poll with no latch, so it
+  //     is knowingly left to the poll.
+  //
+  // #1437 was this same family on the ENABLE side, in the mirror direction —
+  // resolve-but-unchanged rather than reject-but-changed — and that half was
+  // fixed at its source instead of here: the enable arm's meta-persist step
+  // now fails loud (`enable_persist_outcome`, `src-tauri/src/lib.rs`) rather
+  // than warning and falling through to `Ok`.
+  let wrote = false;
   await withInvoke(async (invoke) => {
     await coworkToggleIntegration(invoke, false);
-    readBack = await refetch();
+    wrote = true;
   }, "Failed to disable Cowork");
-  if (readBack) resyncCheckbox(box, enableBoxChecked);
+  const readBack = await readBackStatus();
+  if (readBack || !wrote) resyncCheckbox(box, enableBoxChecked);
 }
 
 /**
@@ -209,14 +301,47 @@ function handleRescan(): void {
 
 async function handleToggleLanIp(box: HTMLInputElement): Promise<void> {
   const enabled = box.checked;
-  let readBack = true;
+  // The read-back sits OUTSIDE the `withInvoke` callback deliberately (#1437
+  // review, Minor 7) — that is what `readBackStatus()` above is for, and
+  // `handleToggleOff` uses it for the same reason.
+  //
+  // `cowork_set_lan_ip_override`'s own meta write is fail-closed, but the
+  // command as a whole can still reject after that write landed — its
+  // follow-on workspace re-walk can fail on its own. With the read-back inside
+  // the callback that throw skipped it entirely, exactly as an outright
+  // `coworkSetLanIpOverride` failure would, and the resync below then painted
+  // the STALE pre-write value over a field that had actually changed.
+  // `withInvoke` never rethrows (it swallows into `error`), so re-reading
+  // unconditionally after it returns recovers the truth whichever of those two
+  // failures happened; on a clean failure, where nothing changed, the re-read
+  // is a redundant but harmless confirmation.
+  let wrote = false;
   await withInvoke(async (invoke) => {
     await coworkSetLanIpOverride(invoke, enabled);
-    readBack = await refetch();
+    wrote = true;
   }, "Failed to update LAN-IP override");
+  const readBack = await readBackStatus();
   // Same hazard as the Enable toggle, same read-back gate — and with no confirm
-  // banner to mask it, the snap-back is this row's entire signal.
-  if (readBack) resyncCheckbox(box, lanIpOverrideChecked);
+  // banner to mask it, the snap-back is this row's entire signal. The `!wrote`
+  // term is load-bearing and is NOT redundant with `readBack`. Read it
+  // precisely: `!wrote` means the invoke REJECTED, which is not the same claim
+  // as "the write never landed" — that gap is the whole reason `refetch()`
+  // moved out of the callback above. But when the invoke rejected, `status` is
+  // almost always unchanged and therefore still accurate, so the box must snap
+  // back to it whether or not the re-read succeeded. The residual
+  // rejected-but-actually-written case is left to the 30s poll: it needs the
+  // re-read to fail as well, and it heals with no latch.
+  //
+  // The case that makes the term mandatory is one shared cause failing both: a
+  // corrupt `cowork-meta.json` rejects `cowork_set_lan_ip_override` (via
+  // `cowork_meta::load`) AND `cowork_get_status` (its own `cowork_meta::load`).
+  // There nothing was written, so gating on `readBack` alone would leave the
+  // box checked over an override that is off — and THAT state does not heal:
+  // `useLanIpOverride` never changed, so the `checked={lanIpOverrideChecked}`
+  // binding recomputes to the value Svelte last wrote and `set_checked`
+  // returns before touching the DOM. See the latch documented in
+  // `src/client/utils/checkbox-sync.ts`.
+  if (readBack || !wrote) resyncCheckbox(box, lanIpOverrideChecked);
 }
 
 function workspaceRowStyle(ws: WorkspaceStatus): string {
@@ -339,6 +464,14 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
                  than an Enable button whose outcome we know. -->
             <div class="cs-preflight" data-testid="cowork-preflight-blocked">
               {probe.preflight.hint}
+            </div>
+          {:else if probe.preflight?.status === "failed"}
+            <!-- #1436: `ok` renders nothing, so a broken probe that also
+                 rendered nothing was pixel-identical to a pass. Hedged, and
+                 NOT a retry: we did not observe detection fail, so we have no
+                 grounds to replace Enable. -->
+            <div class="cs-help-text" data-testid="cowork-preflight-failed">
+              {COWORK_PREFLIGHT_FAILED}
             </div>
           {/if}
           {#if probe.probing}

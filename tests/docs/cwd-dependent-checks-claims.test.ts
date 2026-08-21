@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -64,8 +65,72 @@ const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "sev
  */
 const FALSIFIED_RATIONALE = /would fail for every desktop\s*\/?\s*npm-global install/i;
 
-/** Text files to sweep for the falsified sentence — this file excepted. */
-const SWEEP_GLOBS = ["docs/**/*.md", "src/**/*.ts", "tests/**/*.ts"];
+/**
+ * The fixed, case-insensitive head of `FALSIFIED_RATIONALE`, used to let `git
+ * grep` narrow the sweep to candidate files before the real regex runs. It is
+ * only safe as a prefilter because it is a literal *prefix* of everything the
+ * regex can match — a fixed-string search on it can over-match but never
+ * under-match. The test below pins that relationship against the regex source
+ * rather than trusting this comment.
+ */
+const FALSIFIED_PREFIX = "would fail for every desktop";
+
+/**
+ * A literal that a carrier doc certainly contains, used to prove the `git grep`
+ * prefilter actually searches something. Without it a broken grep returns no
+ * candidates, the offender list is empty for the wrong reason, and the sweep
+ * reports health on a search that never ran.
+ */
+const PREFILTER_CONTROL = "source-checkout-only";
+
+/**
+ * Pathspecs to sweep for the falsified sentence — this file excepted.
+ *
+ * The `:(glob)` magic is load-bearing. A bare `docs/**` + `/*.md` pathspec is
+ * matched with `FNM_PATHNAME` off, so `*` eats slashes and the pattern requires
+ * one — which silently drops every top-level `docs/*.md`, `docs/cli.md`
+ * included. `:(glob)` switches git to wildmatch, where `**` also matches zero
+ * directories, and the set then matches the filesystem walk this sweep replaced
+ * file for file.
+ */
+const SWEEP_PATHSPECS = [":(glob)docs/**/*.md", ":(glob)src/**/*.ts", ":(glob)tests/**/*.ts"];
+
+/** Tracked files under `SWEEP_PATHSPECS`, forward-slashed on every platform. */
+function trackedSweepFiles(): string[] {
+  return execFileSync("git", ["ls-files", "--", ...SWEEP_PATHSPECS], {
+    cwd: ROOT,
+    encoding: "utf-8",
+  })
+    .split("\n")
+    .filter(Boolean);
+}
+
+/**
+ * Tracked files containing any of `literals`, case-insensitively. `git grep` is what
+ * keeps this sweep off the per-file read path: reading all ~1,200 tracked docs
+ * and sources cost well over a second even unloaded, and blew the 15s budget
+ * under full-suite disk contention (the same shape as #1434).
+ */
+function trackedFilesContainingAny(literals: string[]): string[] {
+  const patterns = literals.flatMap((literal) => ["-e", literal]);
+  try {
+    return execFileSync(
+      "git",
+      ["grep", "-I", "-l", "-F", "-i", ...patterns, "--", ...SWEEP_PATHSPECS],
+      {
+        cwd: ROOT,
+        encoding: "utf-8",
+      },
+    )
+      .split("\n")
+      .filter(Boolean);
+  } catch (error) {
+    // `git grep` exits 1 for "no matches", which is not a failure. Anything
+    // else is a broken search and must not read as a clean sweep.
+    if ((error as { status?: number }).status === 1) return [];
+    throw error;
+  }
+}
 
 describe("docs: the cwd-dependent doctor checks", () => {
   for (const carrier of MEMBERSHIP_CARRIERS) {
@@ -93,23 +158,42 @@ describe("docs: the cwd-dependent doctor checks", () => {
     });
   }
 
-  it("no tracked source or doc still claims these checks would FAIL outside a checkout", async () => {
-    const { glob } = await import("node:fs/promises");
-    const offenders: string[] = [];
-    let scanned = 0;
-    for (const pattern of SWEEP_GLOBS) {
-      for await (const rel of glob(pattern, { cwd: ROOT })) {
-        const file = String(rel).replace(/\\/g, "/");
-        if (file.endsWith("cwd-dependent-checks-claims.test.ts")) continue;
-        scanned += 1;
-        if (FALSIFIED_RATIONALE.test(readFileSync(join(ROOT, file), "utf-8"))) offenders.push(file);
-      }
-    }
-    // Positive half again: a glob that silently matched nothing would make the
-    // assertion below true for the wrong reason.
-    expect(scanned).toBeGreaterThan(100);
+  it("no tracked source or doc still claims these checks would FAIL outside a checkout", () => {
+    // The prefilter is only sound while the literal is a prefix of the regex.
+    // Loosening the regex's head — an alternation, an optional word — silently
+    // makes `git grep` miss matches the regex would catch, so pin it here
+    // rather than in a comment nobody re-reads.
+    expect(FALSIFIED_RATIONALE.source.toLowerCase().startsWith(FALSIFIED_PREFIX)).toBe(true);
+
+    // Both literals go through one `git grep`, so the sweep costs two child
+    // processes total rather than one per literal.
+    const candidates = trackedFilesContainingAny([FALSIFIED_PREFIX, PREFILTER_CONTROL]);
+    const bodies = new Map(
+      // `git grep` narrows; the regex still decides. Only the candidates are
+      // read, so the authority over what counts as an offender stays in one
+      // place and the sweep reads a handful of files instead of ~1,200.
+      candidates.map((file) => [file, readFileSync(join(ROOT, file), "utf-8")] as const),
+    );
+
+    // Positive halves. A sweep over an empty file list, or a `git grep` that
+    // finds nothing because it is broken rather than because the repo is
+    // clean, makes the offender assertion true for the wrong reason.
+    expect(trackedSweepFiles().length).toBeGreaterThan(100);
+    expect(
+      [...bodies.values()].filter((text) => text.toLowerCase().includes(PREFILTER_CONTROL)).length,
+      "the git-grep prefilter found nothing it was guaranteed to find",
+    ).toBeGreaterThan(0);
+
+    const offenders = candidates
+      .filter((file) => !file.endsWith("cwd-dependent-checks-claims.test.ts"))
+      .filter((file) => FALSIFIED_RATIONALE.test(bodies.get(file) ?? ""));
     expect(offenders).toEqual([]);
-  });
+    // A generous budget on top of the speedup, not instead of it. What this
+    // test measures is repo-wide I/O, whose wall clock is set by machine load
+    // rather than by anything the assertion is about — the previous 15s default
+    // was reached under full-suite disk contention alone, which made a real
+    // regression here indistinguishable from a busy laptop.
+  }, 60_000);
 
   it("the release smoke checklist expects a clean doctor run, not a known-failing one", () => {
     // The checklist previously told the operator to expect "exactly two [FAIL]
