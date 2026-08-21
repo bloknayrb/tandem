@@ -49,7 +49,7 @@ const SRC = join(ROOT, "src");
 const CLIENT_ROOT = join(SRC, "client");
 const MODULE = join(CLIENT_ROOT, "utils", "client-log.ts");
 // `.svelte` is not optional: one of the two call sites lives in
-// `IntegrationWizardModal.svelte`. (Precedent: `testid-coverage.test.ts`.)
+// `PushRoutesInfo.svelte`. (Precedent: `testid-coverage.test.ts`.)
 const EXT = [".ts", ".svelte"];
 
 function walk(dir: string, out: string[] = []): string[] {

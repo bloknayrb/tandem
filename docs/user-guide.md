@@ -346,7 +346,7 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 | **Network** | Connection details, start-at-login (desktop app only), and the advanced retry/delay controls |
 | **Accessibility** | Motion-reduction and related display preferences |
 | **Collaboration** | Your display name, Solo/Tandem behavior, and presence options |
-| **AI Assistant** | Working directory, the margin annotation view, the integration wizard, Replay tutorial, and Cowork enablement (desktop app only) |
+| **AI Assistant** | Working directory, the margin annotation view, **Real-time updates** (how a session you started yourself hears about your comments as they happen, including the Tandem plugin's install commands with a Copy button), the integration wizard, Replay tutorial, and Cowork enablement (desktop app only) |
 | **Shortcuts** | Click-to-record remapping for every app-level shortcut, with per-row reset and a reset-all |
 | **License** | Activation and current license or trial status |
 | **About** | Version, Copy Diagnostics, and Open log folder (desktop app only) |
