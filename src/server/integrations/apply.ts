@@ -549,7 +549,7 @@ function realpathCached(p: string): string {
  * `%APPDATA%` / `%USERPROFILE%` is redirected to a UNC share now has its
  * Claude Desktop config refused here, where before it was written. That is
  * deliberate — Tandem already refuses to *open a document* from a UNC path
- * (`validate_open_candidate` in `src-tauri/src/lib.rs`, before any filesystem
+ * (`validate_open_candidate` in `src-tauri/src/open_candidate.rs`, before any filesystem
  * call), so a profile whose documents live on the share already cannot use the
  * primary surface, and config writes were the inconsistent hold-out.
  *
