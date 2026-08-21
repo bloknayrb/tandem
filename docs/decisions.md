@@ -1178,6 +1178,41 @@ Three placement details diverge from this ADR's own sketch above and from #1118'
 > - **The watch item** — whether Claude Code itself goes modern-only, which is the only live failure
 >   mode in this whole area and must not sit behind the blocked work. Tracked in **#1506**, on a
 >   monthly cadence deliberately *not* gated on the SDK.
+>
+> **Amendment (2026-08-21, #1588) — Decision 4's reaper needed a second condition, and Decision 1's
+> `404 -32001` needed a client that honours it.** Both halves of one bug, and each covers a case the
+> other cannot.
+>
+> - **The reaper reaps on idleness AND on holding no open SSE stream.** `lastSeenAt` advances only
+>   in `dispatchToSession`, so a client attached by a live `GET /mcp` stream and simply making no
+>   tool calls was indistinguishable from one that had been SIGKILLed — and got closed after 30
+>   minutes. Decision 4 justifies the reaper by "crash, SIGKILL, closed laptop"; an attached client
+>   is none of those, so this is a correction to the implementation rather than a change of policy.
+>   `McpSessionEntry.openStreams` is a **counter, not a boolean**: a client reconnecting its stream
+>   can have the new open observed before the old close, and an unbalanced boolean wedges either at
+>   false (reaping a live client) or true (leaking the session). **LRU eviction stays deliberately
+>   pin-blind** — `lastSeenAt` is evidence of *use*, `openStreams` only of *attachment*, and
+>   preferring streams would evict a session used a second ago to preserve one idle for 29 minutes.
+>   It is also what stops the pin locking a legitimate client out: the cap-exceeding `initialize`
+>   still evicts rather than being refused, and the bridge's new reconnect makes that eviction
+>   recoverable. That pairing is the reason both halves ship together.
+>
+> - **The stdio bridge re-initializes on a stale session.** Decision 1 chose `404 -32001`
+>   *specifically* so the client would re-handshake, and the MCP spec makes that a client MUST — but
+>   until now Tandem shipped no client that did. `src/cli/mcp-stdio.ts` carried an explicit "no
+>   reconnection logic" comment resting on the plugin loader respawning it, which is true for Claude
+>   Code and false for Claude Desktop, where the child lives all day. It now captures the client's
+>   `initialize`/`notifications/initialized` in flight and replays them against a fresh transport
+>   under a private `__tandem_reinit_<uuid>` id whose response is swallowed rather than forwarded,
+>   verifying `protocolVersion` and `serverInfo` against the original handshake and failing closed on
+>   a mismatch — without that check, adding a reconnect would turn a fail-closed into a fail-open for
+>   a process that grabbed the port. Failure is soft: pending requests get their `-32000` and one
+>   capped-exponential retry is armed. It never exits, because killing a Claude Desktop child nothing
+>   will respawn is the regression the whole change exists to prevent.
+>
+> **The reaper never called `clearAllClaudePresence()`** and still does not. `onsessionclosed` fires
+> only from `handleDeleteRequest`, so no coupling is being changed here and nobody should later
+> "restore" one that never existed.
 
 **Context:** Tandem's HTTP MCP server held a single module-level transport. Every `initialize` called `connectFreshTransport()`, which closed the previous transport before attaching a new one. The MCP SDK 404s any request whose `Mcp-Session-Id` it doesn't recognize, so the *second* Claude client to connect silently evicted the first one's tool channel; the evicted client's next `tandem_*` call failed until it re-handshook, which then evicted the second. Two Claude Code sessions — or Claude Code plus Cowork — could not coexist. The SDK was already minting a per-session id on every handshake and we were discarding it.
 
@@ -1195,7 +1230,7 @@ Three placement details diverge from this ADR's own sketch above and from #1118'
 
 6. **`X-Claude-Session-Id` is optional and must stay optional.** It identifies the *Claude Code* session (as opposed to the MCP transport session) and only the stdio-bridge config path carries it — that entry runs as a Claude Code subprocess, so `CLAUDE_CODE_SESSION_ID` is in its environment and `mcp-stdio.ts` forwards it. The direct-HTTP `.mcp.json` entry that `buildMcpEntries` writes for Claude Code CLI (`{type:"http", url}` + static headers) has no subprocess and no per-launch value, so it carries nothing. The server re-validates the header on arrival rather than trusting the sender's guards. Everything here works without it; only the follow-on event-routing work (#438 §3.4) needs it, and closing that gap is a separate decision.
 
-**Consequences:** `GET /health`'s loopback-only `hasSession` now means "≥1 live session" instead of "a transport object exists" — same contract for its consumers (`useAiReadiness`, `tandem doctor`). `/api/info`'s `toolCount` is snapshotted from a throwaway `createMcpServer()` at boot, because there is no longer a boot-time singleton to read it from. `closeMcpSession()` now also clears the idle reaper, so it fully undoes what `startMcpServerHttp` set up — tests that start a server per case must call it or they accumulate one live interval each. Coverage: `tests/server/transport-registry.test.ts` (cap/TTL/LRU/replace/close-failure), `tests/server/mcp-multi-session.test.ts` (real HTTP, two concurrent handshakes, scoped DELETE, unknown-id 404), and `tests/server/mcp-session-context.test.ts` (context isolation). The latter two were each verified to fail against the pre-change implementation, so they pin the regressions rather than restating current behavior.
+**Consequences:** `GET /health`'s loopback-only `hasSession` now means "≥1 live session" instead of "a transport object exists" — same contract for its consumers (`useAiReadiness`, `tandem doctor`). `/api/info`'s `toolCount` is snapshotted from a throwaway `createMcpServer()` at boot, because there is no longer a boot-time singleton to read it from. `closeMcpSession()` now also clears the idle reaper, so it fully undoes what `startMcpServerHttp` set up — tests that start a server per case must call it or they accumulate one live interval each. Coverage: `tests/server/transport-registry.test.ts` (cap/TTL/LRU/replace/close-failure, plus the open-stream pin — that an attached entry survives a reap, that the counter tolerates interleaved open/close, and that LRU stays pin-blind), `tests/server/mcp-multi-session.test.ts` (real HTTP, two concurrent handshakes, scoped DELETE, unknown-id 404, and a real `GET /mcp` surviving a forced reap), and `tests/server/mcp-session-context.test.ts` (context isolation). `reapIdleMcpSessions()` and `getPinnedMcpSessionCount()` are exported beside `closeMcpSession()` for that last group, following the repo's `*ForTests` convention rather than adding a test-only parameter to `startMcpServerHttp`; the reaper interval calls the same export, so test and production drive one path. The latter two were each verified to fail against the pre-change implementation, so they pin the regressions rather than restating current behavior.
 
 **Cross-references:** `docs/spikes/per-client-identity-spec.md` (#438) §2.1/§3.2/§6.4, ADR-012 (Streamable HTTP transport), ADR-023 (Cowork stdio bridge), #452 (multi-Claude concurrency, which this unblocks). Still single-client after this change and tracked separately: `surfacedIds` and the shared chat `read` flag in `mcp/awareness.ts` (spec §3.3), and broadcast-only event routing in `events/sse.ts` (spec §3.4).
 
