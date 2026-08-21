@@ -1351,7 +1351,7 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
     // per-code dedup key is what keeps the two from merging. See
     // `RejectionBatch` and #1416.
     let mut rejected = RejectionBatch::default();
-    let mut direct: Vec<std::path::PathBuf> = Vec::new();
+    let mut direct: Vec<ScreenedOpenPath> = Vec::new();
     for url in urls {
         match classify_opened_url(&url) {
             // try_queue_or_post serializes the SIDECAR_HEALTHY check + the push
