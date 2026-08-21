@@ -71,6 +71,50 @@ jobs:
       - name: Build reaper (compiles the host's reaping path)
         run: cargo build --release --manifest-path reaper/Cargo.toml
 
+  # #1529: the ONLY tests that spawn real `icacls` -- the #1299 proof that a
+  # machine already poisoned by the old non-inheritable grant recovers by running
+  # the fixed build -- had no runner anywhere. `check` is the only vitest job and
+  # it is ubuntu-latest, so those specs loaded, skipped, and reported green on
+  # every push since they were written. Measured: under the JSON reporter
+  # `doc-backup-acl-repair.test.ts` scores file status `passed` on Linux with a
+  # single `skipped` assertion.
+  #
+  # `vitest run <specs>` would NOT fix that -- it is green on exactly the hosts
+  # where the proof cannot run. `scripts/ci/windows-acl-proof.mjs` is the gate: it
+  # refuses on a non-Windows platform, refuses without icacls.exe, and requires
+  # each named Windows-gated `describe` to show >=1 passed / 0 skipped / 0 failed.
+  # Deliberately unconditional and blocking -- no `if:`, no `continue-on-error`
+  # (here or on the job), no `needs:`, no `|| true`. `shell:` is deliberately
+  # absent so the runner's default pwsh template applies, which ends in
+  # `exit $LASTEXITCODE` and therefore propagates node's status.
+  #
+  # Node + vitest only, on purpose: no lint, no biome, no typecheck. A Windows
+  # checkout is where CLAUDE.md's `core.autocrlf` x `.gitattributes eol=lf`
+  # hazard bites, and this gate must not be able to go red for a line-ending
+  # reason unrelated to ACLs.
+  #
+  # Cost, measured against run 32325964215: `check` is 13m02s and every job starts
+  # within 1s of the others, so this ~2-3min leg adds no PR wall clock; the repo
+  # is public, so GitHub-hosted minutes are unmetered.
+  #
+  # tests/scripts/windows-acl-proof-wiring.test.ts parses this job and fails --
+  # on the ubuntu leg -- if any of the above changes or the job is removed.
+  windows-acl-proof:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Real-icacls proof (#1299 recovery path)
+        run: node scripts/ci/windows-acl-proof.mjs
+        timeout-minutes: 10
+
   check:
     runs-on: ubuntu-latest
     steps:

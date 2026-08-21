@@ -281,6 +281,7 @@ function handleKeyDown(e: KeyboardEvent) {
           <li>
             <button
               bind:this={itemEls[i]}
+              class="outline-item"
               data-testid={`outline-heading-${entry.level}-${i}`}
               tabindex={focusedIndex === i || (focusedIndex === -1 && i === 0) ? 0 : -1}
               onclick={() => jumpTo(entry, i)}
@@ -294,7 +295,6 @@ function handleKeyDown(e: KeyboardEvent) {
                 color: ${isActive ? "var(--tandem-accent)" : entry.level === 1 ? "var(--tandem-fg)" : entry.level === 2 ? "var(--tandem-fg-subtle)" : "var(--tandem-fg-muted)"};
                 background: ${isActive ? "var(--tandem-accent-bg)" : "none"};
                 border: none; cursor: pointer; line-height: 1.5;
-                transition: color 0.1s, background 0.1s;
                 gap: var(--tandem-space-2);
               `}
               title={entry.text}
@@ -381,6 +381,22 @@ function handleKeyDown(e: KeyboardEvent) {
     font-weight: 500;
     flex-shrink: 0;
   }
+  /* Only the hover/active cross-fade moved out of the button's inline `style`;
+     everything else there is per-entry data (indent depth, level-derived type,
+     active colours) and has to stay computed. Scroll-spy and hover are state
+     feedback, so under reduced motion the highlight lands instead of easing. */
+  .outline-item {
+    transition: color 0.1s, background 0.1s;
+  }
+  :global(body.tandem-reduce-motion) .outline-item {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .outline-item {
+      transition: none;
+    }
+  }
+
   .outline-tick {
     display: block;
     flex-shrink: 0;

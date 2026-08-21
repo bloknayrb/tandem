@@ -361,7 +361,16 @@ onDestroy(() => {
      is bottom-pinned absolute, so growing it taller makes the tray unfurl
      UPWARD while the pill stays put. Two-phase open: width+radius lead (P1),
      then max-height unfurls (P2, delayed P1). Close reverses the phase order.
-     Timing tokens + reduced-motion (transitions) come from morphTiming.css.
+     Timing tokens come from morphTiming.css, which also zeroes them under
+     reduced motion — but that covers ONLY declarations whose timing is ENTIRELY
+     `var(--morph-*)`, i.e. `.tray-wrap` and `.activity-shell.open .tray-wrap`.
+     Every other transition in this file uses literal durations (or mixes
+     literals into a token-driven shorthand, which token-zeroing covers only
+     partly) and therefore carries its own dual reduced-motion guard —
+     `:global(body.tandem-reduce-motion)` + `@media (prefers-reduced-motion)` —
+     placed immediately after the rule it guards. The guard block at the BOTTOM
+     of this file is an `animation` guard for three unrelated selectors; it is
+     not transition coverage for anything. (#1530)
      ════════════════════════════════════════════════════════ */
   .activity-anchor {
     position: fixed;
@@ -402,6 +411,23 @@ onDestroy(() => {
       box-shadow var(--morph-p2) var(--tandem-ease-out) var(--morph-p1),
       border-color 280ms ease;
   }
+  /* Reduced motion — MIXED shorthand. The width / border-radius / box-shadow
+     terms are token-driven (morphTiming.css zeroes --morph-p1/--morph-p2), but
+     `border-color 280ms ease` is a literal duration token-zeroing cannot reach.
+     Guarding the WHOLE `transition` as `none` is the simplest correct fix: the
+     token terms are already zero under reduced motion, so declaring the whole
+     property `none` changes nothing for them. No `!important` — the guard
+     repeats the target's selector verbatim and sits immediately after it, so it
+     wins on source order. (When closed, the higher-specificity
+     `.activity-shell:not(.open)` rule below governs; it carries its own guard.) */
+  :global(body.tandem-reduce-motion) .activity-shell {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .activity-shell {
+      transition: none;
+    }
+  }
   .activity-shell.open {
     width: 340px;
     border-radius: var(--tandem-r-5);
@@ -415,6 +441,20 @@ onDestroy(() => {
       border-radius var(--morph-p1) var(--tandem-ease-out) var(--morph-p2),
       box-shadow 440ms ease-in,
       border-color 280ms ease var(--morph-p2);
+  }
+  /* Reduced motion — MIXED shorthand, and the worse half: `box-shadow 440ms`
+     and `border-color 280ms` are literal DURATIONS. Zeroing --morph-p2 only
+     zeroes their DELAY, not the duration. Whole `transition` to `none` for the
+     same reason as above. The guard repeats the `:not(.open)` selector verbatim
+     — a bare `.activity-shell` guard is (0,1,0) and would lose to this (0,2,0)
+     rule. No `!important`: equal specificity, later in source order. */
+  :global(body.tandem-reduce-motion) .activity-shell:not(.open) {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .activity-shell:not(.open) {
+      transition: none;
+    }
   }
 
   /* ── Pill row — always-on bottom edge of the shell + the toggle. ── */
@@ -433,6 +473,16 @@ onDestroy(() => {
     cursor: pointer;
     transition: background 100ms ease, border-color 200ms ease 200ms;
     white-space: nowrap;
+  }
+  /* Reduced motion — literal durations; nothing zeroes them. No `!important`:
+     a plain guard placed after its target wins on source order. */
+  :global(body.tandem-reduce-motion) .pill-row {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pill-row {
+      transition: none;
+    }
   }
   .activity-shell.open .pill-row {
     border-top-color: var(--tandem-border);
@@ -455,6 +505,17 @@ onDestroy(() => {
     background: var(--tandem-fg-faint);
     transition: background 200ms ease;
     flex-shrink: 0;
+  }
+  /* Reduced motion — TRANSITION guard. The `animation` guard block at the
+     bottom of this file also names `.pill-row .led`, but it guards `animation`
+     only; this literal-duration `transition` is untouched by it. */
+  :global(body.tandem-reduce-motion) .pill-row .led {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pill-row .led {
+      transition: none;
+    }
   }
   .activity-shell.has-info .pill-row .led {
     background: var(--tandem-info);
@@ -509,6 +570,16 @@ onDestroy(() => {
     place-items: center;
     margin-left: 2px;
   }
+  /* Reduced motion — `var(--tandem-ease-out)` is an EASING token, not a
+     duration token: nothing zeroes the literal 220ms. */
+  :global(body.tandem-reduce-motion) .pill-row .chev {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pill-row .chev {
+      transition: none;
+    }
+  }
   .activity-shell.open .pill-row .chev {
     transform: rotate(180deg);
   }
@@ -560,6 +631,15 @@ onDestroy(() => {
     padding: 2px 8px;
     cursor: pointer;
     transition: background 100ms, color 100ms;
+  }
+  /* Reduced motion — literal durations. */
+  :global(body.tandem-reduce-motion) .tray-head button {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tray-head button {
+      transition: none;
+    }
   }
   .tray-head button:hover {
     background: var(--tandem-surface-sunk);
@@ -651,6 +731,15 @@ onDestroy(() => {
     position: relative;
     transition: background 120ms ease;
   }
+  /* Reduced motion — literal duration. */
+  :global(body.tandem-reduce-motion) .toast-row {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .toast-row {
+      transition: none;
+    }
+  }
   .toast-row:hover {
     background: var(--tandem-surface-sunk);
   }
@@ -734,6 +823,15 @@ onDestroy(() => {
     gap: 5px;
     transition: background 100ms, border-color 100ms;
   }
+  /* Reduced motion — literal durations. */
+  :global(body.tandem-reduce-motion) .toast-row .action {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .toast-row .action {
+      transition: none;
+    }
+  }
   .toast-row .action:hover {
     background: var(--tandem-surface-sunk);
     border-color: var(--tandem-fg-faint);
@@ -806,6 +904,15 @@ onDestroy(() => {
     opacity: 0;
     transition: opacity 100ms, background 100ms, color 100ms;
   }
+  /* Reduced motion — literal durations. */
+  :global(body.tandem-reduce-motion) .toast-row .dismiss {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .toast-row .dismiss {
+      transition: none;
+    }
+  }
   .toast-row:hover .dismiss,
   .toast-row .dismiss:focus-visible {
     opacity: 0.9;
@@ -816,8 +923,10 @@ onDestroy(() => {
     opacity: 1;
   }
 
-  /* Reduced motion — token-zeroing (morphTiming.css) covers the transitions, but
-     NOT these @keyframes animations. Dual guard (OS pref + in-app body class).
+  /* Reduced motion — ANIMATION guard only. This block covers the three
+     @keyframes animations below and nothing else; transitions are guarded
+     per-rule, each immediately after the rule it guards (see the header
+     comment). Dual guard (OS pref + in-app body class).
      `!important` is required: the LED's `animation` lives on the 4-class severity
      selector `.activity-shell.has-error .pill-row .led`, which outranks any guard
      selector on specificity — so we must force it (matches the bundle's
