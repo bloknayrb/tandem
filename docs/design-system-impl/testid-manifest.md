@@ -308,7 +308,10 @@ shipped and were removed:
   Thirteen more live regions app-wide still have the pre-#1376 shape (#1431).
 - `cowork-admin-declined-{backdrop,modal,confirm-disable,error,status-error,disable-btn,disable-confirm-btn,disable-cancel-btn,retry-btn,learn-more-link}`
 - `cowork-settings{,-loading,-unsupported,-undetected,-error}`,
-  `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`, `cowork-explainer`,
+  `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`,
+  `cowork-toggle-warnings` (degraded-success caveats from the last toggle — a
+  `role="status"` block, deliberately not the `role="alert"` error banner, #1438),
+  `cowork-explainer`,
   `cowork-enable-{confirm,confirm-btn,cancel-btn}`,
   `cowork-vethernet-cidr`,
   `cowork-reachability` (post-enable stdio-channel reachability verdict, #1174 gap #3),
