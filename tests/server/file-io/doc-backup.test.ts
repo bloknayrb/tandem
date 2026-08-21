@@ -336,8 +336,23 @@ describe("doc-backup", () => {
 
     /** Run the module's Windows-only branches on a POSIX host. Restored in afterEach. */
     function fakeWindows(): void {
-      prevPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      fakePlatform("win32");
+    }
+
+    /**
+     * ...and the mirror. Case E asserts the POSIX behaviour, so it must FORCE
+     * a POSIX platform rather than inherit one: on a Windows dev machine the
+     * ambient platform is `win32`, the repair runs, and the case fails for a
+     * host reason. The pre-push hook runs the full suite, so an ambient-platform
+     * assertion is a push that only some machines can make.
+     */
+    function fakePosix(): void {
+      fakePlatform("linux");
+    }
+
+    function fakePlatform(value: NodeJS.Platform): void {
+      prevPlatform ??= Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value, configurable: true });
     }
 
     /**
@@ -558,8 +573,10 @@ describe("doc-backup", () => {
     });
 
     it("E: attempts no ACL repair on non-Windows", async () => {
-      // Deliberately NOT fakeWindows(): there is no DACL to re-apply on POSIX,
-      // `icacls` does not exist there, and EACCES is the POSIX spelling.
+      // Forced POSIX, not merely "not fakeWindows()": there is no DACL to
+      // re-apply there, `icacls` does not exist, and EACCES is the POSIX
+      // spelling.
+      fakePosix();
       const poisoned = makeExpiredSubdir("deadbeef");
       poisonReaddir(poisoned, { persistent: true, code: "EACCES" });
 

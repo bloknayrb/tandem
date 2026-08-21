@@ -126,8 +126,15 @@ describe.skipIf(!WIN_ONLY)("doc-backup — recovery from a pre-#1299 poisoned in
     // applied while the per-path subdir already exists.
     const sid = await currentUserSid();
     await execFileAsync(systemBin("icacls.exe"), [root, "/inheritance:r", "/grant:r", `*${sid}:F`]);
+    // Same host-dependence as the sibling case above: on GitHub's Server 2025
+    // image `/inheritance:r` converts the inherited ACEs instead of removing
+    // them, and the converted `(OI)(CI)` entries propagate back down and
+    // un-poison the subdir (#1529). Without this the positive control below
+    // fails there for a fixture reason, on the one host the proof job runs.
+    await normalizePre1299Poison(root, sid);
 
     // Positive control — without it this passes against a healthy tree.
+    await assertPre1299PoisonTook(root, subdir);
     expect(() => fs.readdirSync(subdir)).toThrow(/EPERM/);
 
     const result = await sweepDocBackups(appDataDir);
