@@ -290,7 +290,11 @@ function releaseForcedColorsListener(): void {
   try {
     unlistenForcedColors();
   } catch (e) {
-    console.warn("[useTauriTheme] forced-colors unlisten failed:", e);
+    // Same conversion as every other catch site in this module (#1413): in a
+    // shipped desktop build there is no WebView console, so a `console.warn`
+    // here has no reader. Recorder-only, like the sibling teardown site — the
+    // page is going away and there is nothing for a user to act on.
+    logClientWarning("useTauriTheme", "forced-colors unlisten failed", e);
   }
   unlistenForcedColors = null;
 }
@@ -1153,8 +1157,9 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
     // live code, and a `#` followed by 3-8 hex digits on a line whose text looks
     // CSS-ish ("forced-colors") is read as a raw hex colour. The reference lives in
     // the comment above instead.
-    console.warn(
-      "[useTauriTheme] forced-colors subscribe failed; High Contrast re-push disabled:",
+    logClientWarning(
+      "useTauriTheme",
+      "forced-colors subscribe failed; High Contrast re-push disabled",
       e,
     );
   }
