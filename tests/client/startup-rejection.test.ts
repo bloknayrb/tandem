@@ -61,6 +61,29 @@ describe("messageForStartupRejection", () => {
     expect(messageForStartupRejection("multiple-rejected")).toBe(
       "Some of those files couldn't be opened in Tandem.",
     );
+    // #1416. This exact string is also what `default` returns, so the assertion
+    // alone cannot tell "deliberately mapped" from "unknown code" — what makes
+    // it load-bearing is the explicit `case` in the source, whose absence would
+    // let a Rust-side rename render identically. Its other half is
+    // `open_failed_code_is_stable` in `src-tauri/src/lib.rs`.
+    expect(messageForStartupRejection("open-failed")).toBe(
+      "That file couldn't be opened in Tandem.",
+    );
+    // #1416. The deferred pair must NOT be past tense: the pending-open queue is
+    // retained, so `promote_healthy_and_drain` still opens the file if the user
+    // restarts the server — which is exactly what the failure dialog tells them
+    // to do. "couldn't be opened" would assert a finality the design does not
+    // have, the same defect as the "Abandoning N…" log line this change deleted.
+    expect(messageForStartupRejection("open-deferred")).toBe(
+      "Tandem couldn't open that file yet — it will open when the server starts.",
+    );
+    expect(messageForStartupRejection("multiple-deferred")).toBe(
+      "Tandem couldn't open those files yet — they will open when the server starts.",
+    );
+    for (const code of ["open-deferred", "multiple-deferred"]) {
+      expect(messageForStartupRejection(code)).toContain("yet");
+      expect(messageForStartupRejection(code)).not.toContain("couldn't be opened");
+    }
   });
 
   it("degrades to a vague-but-true message for an unknown code", () => {
@@ -71,6 +94,34 @@ describe("messageForStartupRejection", () => {
       "That file couldn't be opened in Tandem.",
     );
     expect(messageForStartupRejection("")).toBe("That file couldn't be opened in Tandem.");
+  });
+
+  it("passes the raw code alongside the message, for dedup scoping only", async () => {
+    // #1416. `App.svelte` keys its toast dedup on `startup-file-rejected:${code}`
+    // so a validation refusal and a delivery verdict arriving minutes later —
+    // when the user answers the server-failure dialog — cannot merge into one
+    // toast with `count: 2`. That merge counts toasts, not files, and can drop
+    // the first reason entirely. The code must NOT be rendered: the message is
+    // the rendered form.
+    const buf = fakeBuffer("multiple-deferred");
+    const ev = deferredListen();
+    ev.finishWiring();
+    const push = vi.fn();
+
+    wireStartupRejection({
+      loadCore: async () => ({ invoke: buf.invoke }),
+      loadEvent: async () => ({ listen: ev.listen }),
+      push,
+      warn: vi.fn(),
+    });
+    await settle();
+
+    expect(push).toHaveBeenCalledExactlyOnceWith(
+      "Tandem couldn't open those files yet — they will open when the server starts.",
+      "multiple-deferred",
+    );
+    const [message] = push.mock.calls[0] ?? [];
+    expect(message).not.toContain("multiple-deferred");
   });
 
   it("is plural only for the batch code", () => {
@@ -102,7 +153,10 @@ describe("wireStartupRejection", () => {
     });
     await settle();
 
-    expect(push).toHaveBeenCalledExactlyOnceWith("That file type can't be opened in Tandem.");
+    expect(push).toHaveBeenCalledExactlyOnceWith(
+      "That file type can't be opened in Tandem.",
+      "unsupported-extension",
+    );
   });
 
   it("toasts a code that arrives later, via the payload-free nudge", async () => {
@@ -123,7 +177,10 @@ describe("wireStartupRejection", () => {
     ev.nudge();
     await settle();
 
-    expect(push).toHaveBeenCalledExactlyOnceWith("That file path was rejected for safety reasons.");
+    expect(push).toHaveBeenCalledExactlyOnceWith(
+      "That file path was rejected for safety reasons.",
+      "suspicious-path",
+    );
     // The handler receives no arguments — the event is a nudge, not a delivery.
     expect(ev.listen.mock.calls[0]?.[0]).toBe("startup-file-rejected");
   });
@@ -153,6 +210,7 @@ describe("wireStartupRejection", () => {
 
     expect(push).toHaveBeenCalledExactlyOnceWith(
       "That file couldn't be opened — it may have moved or been deleted.",
+      "not-a-file",
     );
   });
 
@@ -194,7 +252,10 @@ describe("wireStartupRejection", () => {
     });
     await settle();
 
-    expect(push).toHaveBeenCalledExactlyOnceWith("That file type can't be opened in Tandem.");
+    expect(push).toHaveBeenCalledExactlyOnceWith(
+      "That file type can't be opened in Tandem.",
+      "unsupported-extension",
+    );
     expect(warn).toHaveBeenCalledOnce();
   });
 
@@ -223,6 +284,7 @@ describe("wireStartupRejection", () => {
     await settle();
     expect(push).toHaveBeenCalledExactlyOnceWith(
       "That file couldn't be opened — it may have moved or been deleted.",
+      "not-a-file",
     );
   });
 

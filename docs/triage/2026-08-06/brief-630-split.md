@@ -19,7 +19,8 @@ The requested split was: items 1–2 actionable on Windows, item 3 hardware-gate
 ## What actually remains
 
 - **Item 4 — `request_open_file` HTTP coverage.** Not done: no `httpmock` in `src-tauri/Cargo.toml`, no `build_open_request` helper anywhere in `lib.rs`. Windows-testable.
-- **Item 5 — aggregate drain-failure summary.** Not done: `post_drained_paths` (`lib.rs:656`) has no error-count summary log. Windows-testable.
+- **Item 5 — aggregate drain-failure summary.** ~~Not done: `post_drained_paths` (`lib.rs:656`) has no error-count summary log. Windows-testable.~~
+  **DONE by #1416 (2026-08-19).** `post_drained_paths` no longer exists; `post_paths_and_surface` counts failures across the whole batch, logs each at `warn`, and collapses the batch into a single user-facing code (`open-failed`, or `multiple-rejected` for 2+). The follow-up this item proposed would now be written against a deleted symbol — the surviving `post_drained_paths` mention in the "If yes" paragraph below is stale for the same reason.
 - **Item 6 — retry-exhaustion drain.** Unverified in detail, but its stated dependency (item 2) is now met, so it is unblocked. Windows-testable.
 - **Item 7 — poisoned-mutex surfacing.** Currently log-only: `PendingOpens` poisoning logs at `lib.rs:591` and `lib.rs:611` with no user-facing event. The issue permits "or document why log-only is sufficient" — that is a one-paragraph decision, not code.
 - **Item 8 — macOS manual validation.** Genuinely hardware-gated, and per project memory this hardware now partly exists (macOS release smoke passed on real hardware for v0.20.0), so it may be runnable.
@@ -37,6 +38,8 @@ The requested split was: items 1–2 actionable on Windows, item 3 hardware-gate
 If you'd rather not carry it: **C** is defensible. Two months of the issue being stale had zero cost precisely because the important parts already shipped.
 
 ## If yes / If no
+
+> **Archive note (2026-08-19, #1416).** This brief is a dated snapshot of what was true on 2026-08-06 and is not maintained. Item 5 has since shipped (see above) and item 6's retry-exhaustion drain shipped in a different shape than proposed — #1416 surfaces undelivered queued opens from every `start_sidecar` caller and deliberately **retains** the queue rather than draining it, because "Retry Server Start" exists to deliver it. Read the paragraph below as history, not as a plan.
 
 **If yes:** edit the #630 body to strike items 1–3 with a pointer to `01e8adc`, note item 7's log-only resolution, and retitle to something like "#630 follow-ups: startup-file HTTP test coverage + drain diagnostics". Label low-priority. Implementable scope for items 4–6 is: factor `build_open_request(client, token, path) -> RequestBuilder` and assert builder shape (Bearer present with token / absent without, JSON body), add an error-count + first-error summary log after `post_drained_paths`, and drain `PendingOpens` with per-path `startup-file-error` emission when `start_sidecar` exhausts retries.
 

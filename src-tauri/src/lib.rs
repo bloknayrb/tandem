@@ -201,6 +201,25 @@ pub const SUPPORTED_FILE_ASSOC_EXTS: &[&str] =
 /// there is exactly one sidecar per process.
 static SIDECAR_HEALTHY: AtomicBool = AtomicBool::new(false);
 
+/// Set when the app has stopped trying to start the server, cleared when it
+/// starts trying again (#1416).
+///
+/// Without it, `SIDECAR_HEALTHY` staying false forever means `try_queue_or_post`
+/// keeps taking the queue branch after the app has given up: file 1 gets a
+/// dialog and a toast, files 2..N queue into a queue with no consumer, logging
+/// at `info` — below the release `LevelFilter::Warn` floor. No tab, no toast, no
+/// warn, which is exactly the bug #1416 was filed about, one file later.
+///
+/// Read and written ONLY under the `PendingOpens` mutex — like the WRITE side of
+/// `SIDECAR_HEALTHY` — so it serialises with the producer for free; see the
+/// ordering proof on [`try_queue_or_post`]. The comparison is deliberately
+/// narrowed to writes: `await_sidecar_healthy` polls `SIDECAR_HEALTHY` unlocked,
+/// so "exactly like `SIDECAR_HEALTHY`" would be a false licence to add an
+/// unlocked reader here. The latch has no such reader, and must not grow one. Clearing is deliberately generous
+/// (any new start attempt clears it, from any route): a stale set costs one
+/// unnecessary fail-fast, a stale clear costs the silence this exists to end.
+static SIDECAR_GAVE_UP: AtomicBool = AtomicBool::new(false);
+
 /// One-shot latch: true from an autostart launch until the first human-presence
 /// signal, and read on EVERY sidecar spawn.
 ///
@@ -356,8 +375,37 @@ fn surface_startup_rejection_with(code: &'static str, nudge: impl FnOnce()) {
 /// Wire code for "more than one file in this batch was refused". Distinct from
 /// the per-reason codes because a mixed batch has no single true reason, and
 /// picking one of them would state something false rather than something vague.
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+///
+/// Ungated since #1416: `post_paths_and_surface` gives it callers on every
+/// platform.
 const CODE_MULTIPLE_REJECTED: &str = "multiple-rejected";
+
+/// Wire code for "the candidate passed shell validation, and then failed to open
+/// anyway" — a non-2xx from `/api/open`, a transport failure, or an open that
+/// arrived after the app stopped trying to start the server (#1416).
+///
+/// Deliberately ONE code for all three, not three: the user's remedy is identical
+/// (try again / reopen the file), the distinction is a diagnostic `tandem.log`
+/// already records with the real error text, and every extra code is another
+/// string that can desync from a stale WebView. Distinct from the *validation*
+/// codes because nothing about the file was wrong — `messageForStartupRejection`
+/// maps it to the deliberately vague "That file couldn't be opened in Tandem."
+const CODE_OPEN_FAILED: &str = "open-failed";
+
+/// Wire codes for "queued, not yet delivered, and the queue is RETAINED".
+///
+/// Split from [`CODE_OPEN_FAILED`] because that code's message is flatly past
+/// tense — "That file couldn't be opened in Tandem." — and for a retained queue
+/// that is a false statement: `promote_healthy_and_drain` will open the file if
+/// the user ever restarts the server, which the failure dialog explicitly tells
+/// them how to do. Asserting a finality the design does not have is the same
+/// defect as the "Abandoning N queued file open(s)" line deleted in this change,
+/// and it would be read by the one user in a position to act on it.
+///
+/// Two codes rather than one because the singular message cannot describe a
+/// five-file drop, mirroring the [`CODE_MULTIPLE_REJECTED`] split.
+const CODE_OPEN_DEFERRED: &str = "open-deferred";
+const CODE_MULTIPLE_DEFERRED: &str = "multiple-deferred";
 
 /// Collapses one OS batch — a Finder multi-select "Open With", a multi-file Dock
 /// drop — into the single code the user should see.
@@ -372,17 +420,32 @@ const CODE_MULTIPLE_REJECTED: &str = "multiple-rejected";
 ///
 /// Accumulating first and surfacing once removes the race rather than narrowing
 /// it. Deliberately ungated and free of Tauri types so it is unit-testable on
-/// every platform — its only caller, `handle_opened_urls`, is macOS-only and
+/// every platform — its principal caller, `handle_opened_urls`, is macOS-only and
 /// cannot be tested from Windows or Linux CI, which is precisely why the logic
 /// must not live inside it.
+///
+/// Since #1416 the batch also carries POST failures (`CODE_OPEN_FAILED`), so ONE
+/// accumulator spans validation *and* delivery for a single OS batch. That is
+/// what keeps "one batch, one surface call" true **for everything that resolves
+/// synchronously with the batch**: a Finder multi-select of a `.pdf` (refused)
+/// plus a 60 MB `.md` (refused by the server) would otherwise write twice into
+/// the one-slot buffer and the user would see a count badge whose value depended
+/// on where the client's async drain landed.
+///
+/// **The claim stops at the async boundary, deliberately.** A path that returns
+/// `OpenRoute::Queued` has no outcome yet, and may not have one for minutes —
+/// its verdict arrives from `report_pending_opens_with` when the user answers
+/// the server-failure dialog. Carrying the accumulator across that gap was
+/// considered and rejected: it would have to stay open for a user-timescale
+/// wait, trading a merge bug for a staleness bug. Instead the client keys its
+/// toast dedup on the CODE (`startup-file-rejected:${code}`), so a validation
+/// reason and a later delivery verdict can never merge into one count badge.
 #[derive(Default)]
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 struct RejectionBatch {
     first: Option<&'static str>,
     count: usize,
 }
 
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 impl RejectionBatch {
     fn record(&mut self, code: &'static str) {
         self.count += 1;
@@ -1295,6 +1358,12 @@ pub(crate) fn promote_healthy_and_drain(state: &PendingOpens) -> Vec<std::path::
 /// re-open the same TOCTOU window the lock was introduced to close: a
 /// producer could read flag=true between `kill_sidecar` and the clear, then
 /// POST to a sidecar that no longer exists. Used by `restart_sidecar`.
+///
+/// Also clears `SIDECAR_GAVE_UP` (#1416): this call marks the start of a new
+/// attempt, and an open arriving during it must queue for the drain rather than
+/// fail fast against a verdict the app has already withdrawn. `restart_sidecar`
+/// calls this ~6s before `start_sidecar` begins (graceful stop first), so doing
+/// it here rather than only at `start_sidecar`'s top closes that window.
 #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
 pub(crate) fn clear_healthy_under_lock(state: &PendingOpens) {
     let _guard = match state.0.lock() {
@@ -1305,6 +1374,84 @@ pub(crate) fn clear_healthy_under_lock(state: &PendingOpens) {
         }
     };
     SIDECAR_HEALTHY.store(false, Ordering::Release);
+    SIDECAR_GAVE_UP.store(false, Ordering::Release);
+}
+
+/// Clear the give-up latch under the `PendingOpens` mutex — "we are trying
+/// again". Called as the FIRST statement of `start_sidecar`, which is what makes
+/// a missed latch self-healing rather than a wedge: the retry dialog's callback
+/// is explicitly not guaranteed to run (see `show_server_error_dialog`), so the
+/// latch must never be the only thing standing between the user and a working
+/// queue.
+pub(crate) fn begin_start_attempt(state: &PendingOpens) {
+    let _guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log::error!("PendingOpens mutex poisoned during start-attempt clear — recovering");
+            poisoned.into_inner()
+        }
+    };
+    SIDECAR_GAVE_UP.store(false, Ordering::Release);
+}
+
+/// Report opens this attempt did not deliver, and latch the give-up when nothing
+/// further will be attempted automatically (#1416).
+///
+/// **Non-destructive, and that is the contract.** The queue survives so a retry
+/// can still deliver it: `show_server_error_dialog`'s retry deliberately threads
+/// `cold_start_file` back in ("setup() FAILED, so nothing was opened"), and the
+/// macOS Apple-Event paths live in this queue rather than in that argument — so
+/// taking the queue here would mean the user performs a positive recovery action
+/// that appears to succeed and still loses the file. The only take is
+/// [`promote_healthy_and_drain`], which is a real delivery.
+///
+/// `terminal` means "no further attempt is offered from here" and controls only
+/// the latch. `surface` is the injection seam, for the same reason
+/// [`surface_startup_rejection_with`] has one: the real callers need an
+/// `AppHandle`, which cannot be constructed in a unit test.
+///
+/// Returns the number of undelivered opens (0 = nothing was pending, and nothing
+/// is surfaced — a failed restart of an app that never had a pending open must
+/// not toast about files).
+fn report_pending_opens_with(
+    state: &PendingOpens,
+    terminal: bool,
+    surface: impl FnOnce(&'static str),
+) -> usize {
+    let pending = {
+        let guard = match state.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                log::error!("PendingOpens mutex poisoned during report — recovering");
+                poisoned.into_inner()
+            }
+        };
+        if terminal {
+            // Under the same lock as the producer's flag read, so a concurrent
+            // `try_queue_or_post` either queues (before) or fails fast (after),
+            // never lands in between.
+            SIDECAR_GAVE_UP.store(true, Ordering::Release);
+        }
+        guard.len()
+    };
+    if pending == 0 {
+        return 0;
+    }
+    // At `warn`, which is the release floor: this replaces #1414's abandoned-queue
+    // line and covers every exit from `start_sidecar`, not just loop exhaustion.
+    log::warn!(
+        "{pending} queued file open(s) undelivered — the server did not start; the queue is \
+         retained so a retry can still deliver them"
+    );
+    // DEFERRED, not failed: the queue survives, so the toast must not claim the
+    // finality this log line explicitly denies. Same 1-vs-N collapse rule as
+    // `RejectionBatch`, but over its own pair of codes.
+    surface(if pending == 1 {
+        CODE_OPEN_DEFERRED
+    } else {
+        CODE_MULTIPLE_DEFERRED
+    });
+    pending
 }
 
 /// Producer-side critical section: under the `PendingOpens` mutex, decide
@@ -1323,44 +1470,179 @@ pub(crate) fn clear_healthy_under_lock(state: &PendingOpens) {
 // Used by `handle_opened_urls` (macOS only) and by unit tests; the
 // non-macOS, non-test build sees no call sites.
 #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
-pub(crate) fn try_queue_or_post(
-    state: &PendingOpens,
-    path: std::path::PathBuf,
-) -> Result<(), std::path::PathBuf> {
-    let mut guard = match state.0.lock() {
-        Ok(g) => g,
-        Err(poisoned) => {
-            log::error!("PendingOpens mutex poisoned — recovering and queueing");
-            poisoned.into_inner()
+pub(crate) fn try_queue_or_post(state: &PendingOpens, path: std::path::PathBuf) -> OpenRoute {
+    // Decide (and mutate the queue) under the lock; LOG AFTER the guard drops.
+    // `log::warn!` is real blocking I/O in a release build — a file-sink write
+    // plus `tauri-plugin-log`'s `TargetKind::Webview` emit — where the sibling
+    // `info!` is a no-op below the `LevelFilter::Warn` floor. Doing it inside
+    // would put the first blocking I/O into a critical section every producer
+    // contends for, and an N-file Finder multi-select after a give-up would
+    // serialise N of them. Mirrors `report_pending_opens_with`'s guard-then-log
+    // shape.
+    let mut note: Option<(bool, std::path::PathBuf)> = None;
+    let route = {
+        let mut guard = match state.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                log::error!("PendingOpens mutex poisoned — recovering and queueing");
+                poisoned.into_inner()
+            }
+        };
+        if SIDECAR_HEALTHY.load(Ordering::Acquire) {
+            // Healthy wins over the latch: a server that is answering makes any
+            // earlier give-up verdict stale.
+            OpenRoute::PostNow(path)
+        } else if SIDECAR_GAVE_UP.load(Ordering::Acquire) {
+            // Queueing here would be a promise nothing can keep — no drain is
+            // coming. Say so instead of accumulating paths silently (#1416).
+            note = Some((true, path));
+            OpenRoute::ServerUnavailable
+        } else {
+            note = Some((false, path.clone()));
+            guard.push(path);
+            OpenRoute::Queued
         }
     };
-    if SIDECAR_HEALTHY.load(Ordering::Acquire) {
-        Err(path)
-    } else {
-        log::info!("Queueing file (sidecar not yet healthy): {}", path.display());
-        guard.push(path);
-        Ok(())
+    match note {
+        Some((true, path)) => log::warn!(
+            "Not opening {} — the server is unavailable and no start attempt is in flight",
+            path.display()
+        ),
+        Some((false, path)) => {
+            log::info!("Queueing file (sidecar not yet healthy): {}", path.display())
+        }
+        None => {}
+    }
+    route
+}
+
+/// What [`try_queue_or_post`] decided to do with one candidate path.
+///
+/// A named enum rather than `Result<(), PathBuf>`, where `Err(path)` confusingly
+/// meant "success, POST it": there are three outcomes now, and a `match` makes a
+/// mis-handled arm a compile error. That matters more than usual here because the
+/// only non-test caller is macOS-only, and cfg-stripping runs before type
+/// checking — so a Linux `cargo test` parse-checks that arm and nothing more.
+///
+/// `ServerUnavailable` deliberately carries no path: the caller turns it into a
+/// path-free wire code, and the path is already logged.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) enum OpenRoute {
+    /// Queued; the drain after the next successful health check delivers it.
+    Queued,
+    /// The sidecar is healthy — POST this path now.
+    PostNow(std::path::PathBuf),
+    /// The app gave up on starting the server; nothing will drain a queue.
+    ServerUnavailable,
+}
+
+/// Fetch the auth token off the reactor.
+///
+/// A keyring read is an XPC round-trip to `securityd` that can *write* on first
+/// run; the callers below run on a tokio worker (or, for the Apple-Event batch,
+/// used to run on the main event-loop thread), and neither is a place to block
+/// synchronously. Mirrors `port_holder_for_dialog`'s `spawn_blocking` shape.
+async fn best_effort_token_off_thread(context: &'static str) -> Option<String> {
+    match tauri::async_runtime::spawn_blocking(move || best_effort_token(context)).await {
+        Ok(token) => token,
+        Err(e) => {
+            log::warn!("Token retrieval task failed for {context}: {e}");
+            None
+        }
     }
 }
 
-/// POST every queued path to `/api/open`. The flag flip + drain has already
-/// happened atomically in `promote_healthy_and_drain`; this just runs the I/O.
-async fn post_drained_paths(
+/// POST a batch of paths to `/api/open` and surface the outcome to the user
+/// EXACTLY ONCE (#1416).
+///
+/// Failures used to be `log::warn!`-only, which in a release build
+/// (`LevelFilter::Warn` floor, `tandem.log`) is a file the user never opens: they
+/// double-clicked a document, the window came forward, and they were looking at
+/// `welcome.md` with no explanation. The server refuses things the Rust validator
+/// cannot see — a 50 MB cap, UNC paths, an unreadable-by-permissions file, a
+/// `.docx` the parser rejects — so this is a reachable class, not a corner.
+///
+/// `batch` comes IN rather than starting empty: validation rejections and
+/// delivery failures from the same OS batch must resolve through one accumulator,
+/// or a mixed Finder multi-select writes twice into the one-slot
+/// `STARTUP_REJECTION` buffer and the toast the user sees depends on where the
+/// client's async drain lands (the race `RejectionBatch` exists to remove).
+///
+/// Generic over both the poster and the sink so it is unit-testable with neither
+/// an HTTP server nor an `AppHandle` — the same seam, for the same reason, as
+/// [`surface_startup_rejection_with`]. The `Send` bounds and `&'static str` are
+/// load-bearing: real callers hand the returned future to
+/// `tauri::async_runtime::spawn`, which requires `Future + Send + 'static`, while
+/// the test's `block_on` imposes neither — so without them the test would compile
+/// and the call sites would not.
+async fn post_paths_and_surface<F, Fut>(
+    what: &'static str,
     paths: Vec<std::path::PathBuf>,
-    client: &reqwest::Client,
-) {
-    if paths.is_empty() {
-        return;
-    }
-    let token = best_effort_token("drained-path POSTs");
+    mut batch: RejectionBatch,
+    post: F,
+    surface: impl FnOnce(&'static str) + Send,
+) where
+    F: Fn(std::path::PathBuf) -> Fut + Send,
+    Fut: std::future::Future<Output = Result<(), String>> + Send,
+{
     for path in paths {
-        if let Err(e) = request_open_file(client, token.as_deref(), &path).await {
-            log::warn!(
-                "request_open_file (drain) failed for {}: {e}",
-                path.display()
-            );
+        if let Err(e) = post(path.clone()).await {
+            log::warn!("request_open_file ({what}) failed for {}: {e}", path.display());
+            batch.record(CODE_OPEN_FAILED);
         }
     }
+    if let Some(code) = batch.resolve() {
+        surface(code);
+    }
+}
+
+/// [`post_paths_and_surface`] bound to a live app: this is where the closures
+/// live, so the macOS-only Apple-Event arm can be a single `spawn` of a named
+/// function with none.
+///
+/// That is not a style preference. `handle_opened_urls` is `#[cfg(target_os =
+/// "macos")]` and cfg-stripping happens during expansion, before name resolution
+/// and type checking — a type error, a borrow error or a wrong arity inside it
+/// compiles clean on Linux and Windows with only a dead-code warning. Its real
+/// gate is the `rust-test (macos-latest)` leg of CI, so the less that lives
+/// there, the less rides on one CI leg.
+async fn post_batch_for_app(
+    what: &'static str,
+    app: tauri::AppHandle,
+    paths: Vec<std::path::PathBuf>,
+    batch: RejectionBatch,
+) {
+    if paths.is_empty() {
+        // Surface first, THEN return: a fully-rejected or fully-queued batch still
+        // has something to say, it just has nothing to POST — and this is what
+        // keeps the keyring read off that path (it is the common shape of the
+        // realistic user error since #1344: a double-clicked .pdf, a stale alias).
+        if let Some(code) = batch.resolve() {
+            surface_startup_rejection(&app, code);
+        }
+        return;
+    }
+    let client = app.state::<reqwest::Client>().inner().clone();
+    // Fetched once per batch, after the guard above. The at-most-once, lazy and
+    // failure-memoised properties the old `batch_token` memo hand-rolled are
+    // structural here: there is one fetch site, and it is unreachable when there
+    // is nothing to POST. Falls back to anonymous on failure; loopback bypasses
+    // Bearer enforcement, so that is non-fatal.
+    let token = best_effort_token_off_thread(what).await;
+    post_paths_and_surface(
+        what,
+        paths,
+        batch,
+        // Hoisted-then-cloned deliberately: an `Fn` closure may only borrow, so a
+        // bare `async move` over the captured `token` is E0507.
+        |path| {
+            let client = client.clone();
+            let token = token.clone();
+            async move { request_open_file(&client, token.as_deref(), &path).await }
+        },
+        |code| surface_startup_rejection(&app, code),
+    )
+    .await;
 }
 
 /// Handle a batch of file URLs delivered via macOS `RunEvent::Opened` (Apple
@@ -1371,57 +1653,41 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
     // Deliberately BEFORE validation: a fully-rejected batch still needs a
     // visible window, because the thing it produces is a toast.
     show_main_window_for_user(app);
-    // Fetched at most once per batch, and LAZILY — a keyring read is an XPC
-    // round-trip to `securityd` (and can *write* on first run), on the main
-    // event-loop thread. Hoisting it out of the loop stops an N-file "Open
-    // With" paying it N times; deferring it to the first URL that actually
-    // needs a direct POST (accepted, and the sidecar already healthy) stops a
-    // fully-rejected — or fully-queued — batch paying it at all. Since #1344 a
-    // fully-rejected batch is the shape of the realistic user error (a
-    // double-clicked .pdf, a stale alias), so it is the common case, not a
-    // corner. Falls back to anonymous on retrieval failure; loopback bypasses
-    // Bearer enforcement so this is non-fatal, and the failure is memoized so a
-    // locked keychain is not re-hit per URL.
-    let mut batch_token: Option<Option<String>> = None;
-    // Accumulate, then surface once after the loop. See `RejectionBatch` — one
-    // arm here serves BOTH cold and warm start and cannot tell them apart, so
-    // per-URL surfacing raced the client's drain nondeterministically.
+    // ONE accumulator for everything this batch resolves SYNCHRONOUSLY —
+    // validation refusals, opens that arrived after the app gave up, and (inside
+    // `post_batch_for_app`) delivery failures. Those must produce exactly one
+    // surface call: two would write twice into the one-slot buffer and the user
+    // would see a count badge whose value depends on where the client's async
+    // drain landed. Paths that come back `Queued` are NOT in that set — their
+    // verdict arrives later from `report_pending_opens_with`, and the client's
+    // per-code dedup key is what keeps the two from merging. See
+    // `RejectionBatch` and #1416.
     let mut rejected = RejectionBatch::default();
+    let mut direct: Vec<std::path::PathBuf> = Vec::new();
     for url in urls {
-        let path = match classify_opened_url(&url) {
-            Ok(path) => path,
+        match classify_opened_url(&url) {
+            // try_queue_or_post serializes the SIDECAR_HEALTHY check + the push
+            // through the same mutex used by promote_healthy_and_drain. This is
+            // the load-bearing piece of the drain-race fix: any producer that
+            // acquires the lock either pushes (and gets drained) or sees
+            // flag=true (and is handed back the path to POST directly). No
+            // load-before-push window remains.
+            Ok(path) => match try_queue_or_post(app.state::<PendingOpens>().inner(), path) {
+                OpenRoute::Queued => {}
+                OpenRoute::PostNow(path) => direct.push(path),
+                OpenRoute::ServerUnavailable => rejected.record(CODE_OPEN_FAILED),
+            },
             Err(reason) => {
                 log::warn!("Ignoring URL from Opened event ({reason}): {url}");
                 rejected.record(opened_url_reason_code(&reason));
-                continue;
             }
-        };
-        // try_queue_or_post serializes the SIDECAR_HEALTHY check + the push
-        // through the same mutex used by promote_healthy_and_drain. This is
-        // the load-bearing piece of the drain-race fix: any producer that
-        // acquires the lock either pushes (and gets drained) or sees
-        // flag=true (and is handed back the path to POST directly). No
-        // load-before-push window remains.
-        let pending = app.state::<PendingOpens>();
-        if let Err(path) = try_queue_or_post(pending.inner(), path) {
-            let app = app.clone();
-            let token = batch_token
-                .get_or_insert_with(|| best_effort_token("Opened-event batch"))
-                .clone();
-            tauri::async_runtime::spawn(async move {
-                let client = app.state::<reqwest::Client>().inner().clone();
-                if let Err(e) = request_open_file(&client, token.as_deref(), &path).await {
-                    log::warn!(
-                        "request_open_file (Opened) failed for {}: {e}",
-                        path.display()
-                    );
-                }
-            });
         }
     }
-    if let Some(code) = rejected.resolve() {
-        surface_startup_rejection(app, code);
-    }
+    // Unconditional, and deliberately a bare `spawn` of a named function: this
+    // arm is compiled only on macOS, so everything that can fail to type-check
+    // belongs in `post_batch_for_app`, which has ungated callers. It surfaces
+    // `rejected` even when there is nothing to POST.
+    tauri::async_runtime::spawn(post_batch_for_app("Opened", app.clone(), direct, rejected));
 }
 
 /// POST `/api/launcher/start` to promote a deferred Claude Code launcher.
@@ -1646,16 +1912,16 @@ pub fn run() {
 
             match parsed {
                 Ok(Some(path)) => {
-                    let app_handle = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let client = app_handle.state::<reqwest::Client>().inner().clone();
-                        let token = best_effort_token("second-instance POST");
-                        if let Err(e) =
-                            request_open_file(&client, token.as_deref(), &path).await
-                        {
-                            log::warn!("request_open_file (second-instance) failed: {e}");
-                        }
-                    });
+                    // A failure here used to be `log::warn!`-only: the window came
+                    // forward showing the previous tabs and nothing said the file
+                    // had not opened (#1416). One path, so the batch resolves to
+                    // the singular `open-failed`.
+                    tauri::async_runtime::spawn(post_batch_for_app(
+                        "second-instance",
+                        app.clone(),
+                        vec![path],
+                        RejectionBatch::default(),
+                    ));
                 }
                 Ok(None) => {}
                 Err(reason) => {
@@ -1945,6 +2211,22 @@ pub fn run() {
 
                 if let Err(e) = start_result {
                     log::error!("Sidecar failed: {e}");
+                    // NOT terminal: the dialog below offers "Retry Server Start",
+                    // which re-runs `start_sidecar` with the queue intact. So this
+                    // warns (evidence for every exit, including the five `?`
+                    // bail-outs the old tail block sat past) without latching and
+                    // without destroying anything. The latch is set on the Close
+                    // branch of that dialog instead. #1416
+                    report_pending_opens_with(
+                        handle.state::<PendingOpens>().inner(),
+                        false,
+                        |_code| {
+                            // Deliberately no toast here: the modal is about to say
+                            // the server failed and offer the retry that would open
+                            // these files. "Some of those files couldn't be opened"
+                            // alongside it would contradict the button.
+                        },
+                    );
                     // Ask the OS what is actually holding the port instead of
                     // telling the user to go find out.
                     let holder = port_holder_for_dialog().await;
@@ -2334,6 +2616,13 @@ fn restart_sidecar(app: tauri::AppHandle) {
             // channel. Keep sensitive detail out of both.
             log::error!("[restart_sidecar] failed to restart sidecar: {e}");
             eprintln!("[restart_sidecar] failed to restart sidecar: {e}");
+            // Terminal: nothing retries automatically from here. The queue is
+            // retained (Settings -> Network -> Restart server still delivers it),
+            // but until someone tries again a further open must fail fast rather
+            // than join a queue with no consumer. #1416
+            report_pending_opens_with(handle.state::<PendingOpens>().inner(), true, |code| {
+                surface_startup_rejection(&handle, code)
+            });
             if let Err(emit_err) =
                 handle.emit("sidecar-restart-failed", "SIDECAR_RESTART_FAILED")
             {
@@ -2489,6 +2778,7 @@ fn show_server_error_dialog(
     // one only re-dials the Hocuspocus WebSocket. Two same-labelled buttons
     // meaning different things is worse than a longer label.
     let handle = app.clone();
+    let declined_handle = app.clone();
     builder
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Retry Server Start".to_string(),
@@ -2496,6 +2786,19 @@ fn show_server_error_dialog(
         ))
         .show(move |retry| {
             if !retry {
+                // Declining the retry is what makes the failure terminal, and it
+                // is decided here rather than at the `start_sidecar` call site —
+                // that site cannot know which button the user will press. Without
+                // this arm the latch never fires on the cold-start path, so the
+                // SECOND double-clicked file queues into a queue with no consumer
+                // and is silent at `info`, below the release log floor: verbatim
+                // the #1416 bug, one file later. The toast also lands here rather
+                // than before the modal, i.e. at the moment it becomes true.
+                report_pending_opens_with(
+                    declined_handle.state::<PendingOpens>().inner(),
+                    true,
+                    |code| surface_startup_rejection(&declined_handle, code),
+                );
                 return;
             }
             tauri::async_runtime::spawn(async move {
@@ -2541,6 +2844,12 @@ fn show_server_error_dialog(
                     }
                     Err(e) => {
                         log::error!("Server-start retry failed: {e}");
+                        // Terminal: the second dialog is `allow_retry = false`.
+                        report_pending_opens_with(
+                            handle.state::<PendingOpens>().inner(),
+                            true,
+                            |code| surface_startup_rejection(&handle, code),
+                        );
                         let holder = port_holder_for_dialog().await;
                         show_server_error_dialog(&handle, &e, holder, cold_start_file, false);
                     }
@@ -3141,6 +3450,11 @@ async fn start_sidecar(
     client: &reqwest::Client,
     cold_start_file: Option<&std::path::Path>,
 ) -> Result<(), String> {
+    // FIRST statement, before the debug fast path below returns: this call IS the
+    // new attempt, so any earlier give-up verdict is withdrawn here. A clear
+    // written after the fast path would never run on it. See `begin_start_attempt`.
+    begin_start_attempt(handle.state::<PendingOpens>().inner());
+
     // Debug-only: skip spawn if a server is already running (e.g. `npm run dev:standalone`
     // alongside `cargo tauri dev`). In release builds the installed app must own its
     // sidecar exclusively — a stale `tsx watch` dev session, an older release process,
@@ -3149,6 +3463,13 @@ async fn start_sidecar(
     // The sidecar's own `freePort()` step on start handles port conflicts cleanly.
     if cfg!(debug_assertions) && check_health(&client).await {
         log::info!("Server already healthy — skipping sidecar spawn (debug build)");
+        // Promote + drain here too, or this early return is a silent hole: the
+        // server IS healthy, we just did not spawn it, so `SIDECAR_HEALTHY` would
+        // stay false forever and every Apple-Event open would queue with no
+        // consumer — no tab, no toast, and nothing above the release log floor.
+        // Dev-only, but it is the one door in #1416 with nothing on screen at all.
+        let drained = promote_healthy_and_drain(handle.state::<PendingOpens>().inner());
+        post_batch_for_app("drain", handle.clone(), drained, RejectionBatch::default()).await;
         return Ok(());
     }
 
@@ -3328,7 +3649,8 @@ async fn start_sidecar(
                 // `promote_healthy_and_drain` and `try_queue_or_post` for the
                 // ordering argument that proves no path is orphaned.
                 let drained = promote_healthy_and_drain(handle.state::<PendingOpens>().inner());
-                post_drained_paths(drained, client).await;
+                post_batch_for_app("drain", handle.clone(), drained, RejectionBatch::default())
+                    .await;
 
                 return Ok(());
             }
@@ -3342,26 +3664,14 @@ async fn start_sidecar(
         }
     }
 
-    // The queue is never going to drain, so say so at a level that survives
-    // release builds. `LevelFilter::Warn` is the release floor, and the queue
-    // push logs at `info` — so without this line a file the user double-clicked
-    // is dropped leaving no evidence anywhere: no tab, no toast, and nothing in
-    // `tandem.log`, the one artifact a bug report can attach.
-    let abandoned = {
-        let pending = handle.state::<PendingOpens>();
-        let mut guard = match pending.0.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        std::mem::take(&mut *guard)
-    };
-    if !abandoned.is_empty() {
-        log::warn!(
-            "Abandoning {} queued file open(s) — sidecar never became healthy",
-            abandoned.len()
-        );
-    }
-
+    // #1414's abandoned-queue warn used to live here. It has moved to
+    // `report_pending_opens_with`, called from every `start_sidecar` caller —
+    // this block sat AFTER the retry loop, so the five `?` bail-outs above
+    // (resource_dir, app_data_dir, `.sidecar()`, `.spawn()`, the SidecarState
+    // lock) returned before it and produced no evidence at all. It also TOOK the
+    // queue, which destroyed the very paths the "Retry Server Start" button
+    // exists to deliver (#1416). The queue is now retained; the caller reports
+    // cover every exit, including this one.
     Err(format!(
         "Server failed to start after {MAX_RESTARTS} restart attempts"
     ))
@@ -6324,7 +6634,7 @@ mod pending_opens_tests {
 
         let state = fresh_state();
         let result = try_queue_or_post(&state, PathBuf::from("queued"));
-        assert!(result.is_ok());
+        assert!(matches!(result, OpenRoute::Queued));
         assert_eq!(
             *state.0.lock().unwrap(),
             vec![PathBuf::from("queued")],
@@ -6339,9 +6649,8 @@ mod pending_opens_tests {
 
         let state = fresh_state();
         let result = try_queue_or_post(&state, PathBuf::from("direct"));
-        assert_eq!(
-            result,
-            Err(PathBuf::from("direct")),
+        assert!(
+            matches!(result, OpenRoute::PostNow(ref p) if p == &PathBuf::from("direct")),
             "caller should be handed back the path to POST directly"
         );
         assert!(state.0.lock().unwrap().is_empty(), "no queue side effect");
@@ -6369,7 +6678,7 @@ mod pending_opens_tests {
         // Late producer arriving after the clear observes flag=false and
         // queues the path instead of POSTing.
         let result = try_queue_or_post(&state, PathBuf::from("after-restart"));
-        assert_eq!(result, Ok(()));
+        assert!(matches!(result, OpenRoute::Queued));
         assert_eq!(
             *state.0.lock().unwrap(),
             vec![PathBuf::from("after-restart")]
@@ -6399,10 +6708,160 @@ mod pending_opens_tests {
         // flag=true (set inside the same lock) and the helper hands the path
         // back instead of queuing it.
         let result = try_queue_or_post(&state, PathBuf::from("late"));
-        assert_eq!(result, Err(PathBuf::from("late")));
+        assert!(matches!(result, OpenRoute::PostNow(ref p) if p == &PathBuf::from("late")));
         assert!(state.0.lock().unwrap().is_empty());
 
         SIDECAR_HEALTHY.store(false, Ordering::Release);
+    }
+
+    // ---- #1416: the undelivered-queue report and the give-up latch --------
+    //
+    // These live HERE, not in `startup_rejection_tests`, and every one takes
+    // `FLAG_LOCK`: they mutate the process-wide `SIDECAR_GAVE_UP` /
+    // `SIDECAR_HEALTHY` statics, and cargo runs test fns on parallel threads. A
+    // latch-setting test holding no `FLAG_LOCK` would let
+    // `try_queue_or_post_queues_when_unhealthy` observe gave-up=true and get
+    // `ServerUnavailable` instead of `Queued` — intermittent, one CI leg at a
+    // time, and it would read as a flaky runner rather than as an unserialised
+    // latch. Each resets BOTH flags before returning.
+
+    #[test]
+    fn report_surfaces_without_destroying_the_queue() {
+        // The property BLOCKER-1 protects: "Retry Server Start" re-runs
+        // start_sidecar with the queue intact, so reporting must not take it.
+        // Taking it here means the user performs a recovery action that appears
+        // to succeed and still loses the file.
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        state.0.lock().unwrap().push(PathBuf::from("a.md"));
+        state.0.lock().unwrap().push(PathBuf::from("b.md"));
+
+        let mut surfaced: Vec<&'static str> = Vec::new();
+        let n = report_pending_opens_with(&state, false, |code| surfaced.push(code));
+
+        assert_eq!(n, 2);
+        assert_eq!(
+            surfaced,
+            vec!["multiple-deferred"],
+            "two undelivered opens must report multiplicity, exactly once — and as \
+             DEFERRED, because the queue they are still sitting in survives"
+        );
+        assert_eq!(
+            *state.0.lock().unwrap(),
+            vec![PathBuf::from("a.md"), PathBuf::from("b.md")],
+            "the queue must survive so a retry can still deliver it"
+        );
+        assert!(
+            !SIDECAR_GAVE_UP.load(Ordering::Acquire),
+            "a non-terminal report must not latch — the retry is still on offer"
+        );
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn a_single_undelivered_open_keeps_the_singular_code() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        state.0.lock().unwrap().push(PathBuf::from("only.md"));
+
+        let mut surfaced: Vec<&'static str> = Vec::new();
+        report_pending_opens_with(&state, false, |code| surfaced.push(code));
+
+        assert_eq!(
+            surfaced,
+            vec!["open-deferred"],
+            "a retained queue must not claim the file failed for good — a later \
+             restart still delivers it"
+        );
+
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn an_empty_pending_queue_surfaces_nothing() {
+        // The common case by far: a failed restart of an app that never had a
+        // pending open. A toast about files there would be pure noise.
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        let mut surfaced: Vec<&'static str> = Vec::new();
+        let n = report_pending_opens_with(&state, true, |code| surfaced.push(code));
+
+        assert_eq!(n, 0);
+        assert!(surfaced.is_empty(), "nothing pending, nothing to say");
+        assert!(
+            SIDECAR_GAVE_UP.load(Ordering::Acquire),
+            "the latch is about the server, not about the queue — it still fires"
+        );
+
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn a_terminal_report_latches_give_up_and_a_new_attempt_clears_it() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        state.0.lock().unwrap().push(PathBuf::from("x.md"));
+
+        report_pending_opens_with(&state, true, |_| {});
+        assert!(SIDECAR_GAVE_UP.load(Ordering::Acquire));
+
+        // Both re-entry points withdraw the verdict: restart_sidecar's clear and
+        // start_sidecar's first statement. A latch that stuck would make every
+        // open after one bad restart fail fast forever.
+        clear_healthy_under_lock(&state);
+        assert!(!SIDECAR_GAVE_UP.load(Ordering::Acquire));
+
+        report_pending_opens_with(&state, true, |_| {});
+        assert!(SIDECAR_GAVE_UP.load(Ordering::Acquire));
+        begin_start_attempt(&state);
+        assert!(!SIDECAR_GAVE_UP.load(Ordering::Acquire));
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn try_queue_or_post_fails_fast_after_give_up() {
+        // #1416's second half: without the latch, file 1 gets a dialog and a
+        // toast while files 2..N queue into a queue with no consumer, logging at
+        // `info` — below the release LevelFilter::Warn floor. Silent, verbatim.
+        let _g = FLAG_LOCK.lock().unwrap();
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(true, Ordering::Release);
+
+        let state = fresh_state();
+        let result = try_queue_or_post(&state, PathBuf::from("after-give-up.md"));
+        assert!(matches!(result, OpenRoute::ServerUnavailable));
+        assert!(
+            state.0.lock().unwrap().is_empty(),
+            "a fail-fast open must not join the dead queue"
+        );
+
+        // A healthy server makes the verdict stale, latch or no latch.
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+        let result = try_queue_or_post(&state, PathBuf::from("healthy-wins.md"));
+        assert!(matches!(result, OpenRoute::PostNow(_)));
+
+        // And a new attempt puts queueing back.
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        begin_start_attempt(&state);
+        let result = try_queue_or_post(&state, PathBuf::from("trying-again.md"));
+        assert!(matches!(result, OpenRoute::Queued));
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
     }
 }
 
@@ -7924,6 +8383,110 @@ mod startup_rejection_tests {
             "multiplicity is reported even when the reason agrees — four of five \
              files opening is the case a singular message misdescribes"
         );
+    }
+
+    // ---- #1416: the post-validation failure code and its batch ------------
+    //
+    // No statics are touched here, so these need neither `REJECTION_LOCK` nor
+    // `pending_opens_tests`'s `FLAG_LOCK`.
+
+    #[test]
+    fn open_failed_code_is_stable() {
+        // The cross-process contract with `messageForStartupRejection`'s
+        // explicit `case "open-failed"`. A rename on either side desyncs
+        // silently, because the client's `default` renders the same text.
+        assert_eq!(CODE_OPEN_FAILED, "open-failed");
+    }
+
+    #[test]
+    fn deferred_codes_are_stable_and_distinct_from_the_failure_codes() {
+        assert_eq!(CODE_OPEN_DEFERRED, "open-deferred");
+        assert_eq!(CODE_MULTIPLE_DEFERRED, "multiple-deferred");
+        // The split is the point: a retained queue still opens on the next
+        // successful start, so it must never render as the past-tense failure
+        // message. Collapsing these back onto the failure codes would restore
+        // the false statement this pair exists to remove.
+        assert_ne!(CODE_OPEN_DEFERRED, CODE_OPEN_FAILED);
+        assert_ne!(CODE_MULTIPLE_DEFERRED, CODE_MULTIPLE_REJECTED);
+    }
+
+    /// Drive `post_paths_and_surface` with an injected poster.
+    ///
+    /// `tauri::async_runtime::block_on` works in a plain `#[test]` — it lazily
+    /// initialises its own runtime and needs no `AppHandle`, no `#[tokio::test]`
+    /// and no tokio dev-dependency.
+    fn run_batch(paths: &[&str], failing: &[&str], seed: Option<&'static str>) -> Vec<&'static str> {
+        let mut surfaced: Vec<&'static str> = Vec::new();
+        let mut batch = RejectionBatch::default();
+        if let Some(code) = seed {
+            batch.record(code);
+        }
+        let owned: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+        tauri::async_runtime::block_on(post_paths_and_surface(
+            "test",
+            owned,
+            batch,
+            // The `fail` decision is computed OUTSIDE the async block on
+            // purpose: an `Fn` closure may only borrow, so an `async move` that
+            // captured `failing` itself would be E0507 on the second call.
+            |path| {
+                let fail = failing.iter().any(|f| path == PathBuf::from(f));
+                async move {
+                    if fail {
+                        Err("boom".to_string())
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+            |code| surfaced.push(code),
+        ));
+        surfaced
+    }
+
+    #[test]
+    fn a_fully_successful_batch_surfaces_nothing() {
+        assert!(
+            run_batch(&["a.md", "b.md"], &[], None).is_empty(),
+            "opening two files successfully must not toast"
+        );
+    }
+
+    #[test]
+    fn a_failed_post_surfaces_the_open_failed_code_once() {
+        // The #1416 bug itself: this used to be a `log::warn!` and nothing else,
+        // which in a release build is a file the user never opens.
+        assert_eq!(run_batch(&["big.md"], &["big.md"], None), vec!["open-failed"]);
+        // Two failures are still ONE surface call, and report multiplicity.
+        assert_eq!(
+            run_batch(&["a.md", "b.md", "c.md"], &["a.md", "c.md"], None),
+            vec!["multiple-rejected"]
+        );
+    }
+
+    #[test]
+    fn a_validation_rejection_and_a_post_failure_share_one_toast() {
+        // One Finder multi-select: a .pdf refused by the validator and a 60 MB
+        // .md refused by the server. Two surface calls would write twice into
+        // the one-slot buffer, and `useNotifications` would show a count badge
+        // whose value depends on where the client's async drain landed — the
+        // exact race `RejectionBatch` exists to remove.
+        let surfaced = run_batch(&["huge.md"], &["huge.md"], Some("unsupported-extension"));
+        assert_eq!(
+            surfaced,
+            vec!["multiple-rejected"],
+            "the batch spans validation AND delivery, and resolves exactly once"
+        );
+    }
+
+    #[test]
+    fn a_batch_with_nothing_to_post_still_surfaces_its_rejections() {
+        // A fully-rejected batch (the common shape since #1344: a double-clicked
+        // .pdf, a stale alias) has nothing to POST and still has something to
+        // say. `post_batch_for_app`'s early return mirrors this by surfacing
+        // BEFORE it returns — that ordering is not covered here, since it needs
+        // an AppHandle; this pins the helper's half of it.
+        assert_eq!(run_batch(&[], &[], Some("not-a-file")), vec!["not-a-file"]);
     }
 }
 
