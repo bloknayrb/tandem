@@ -155,6 +155,16 @@ function dotClass(a: Annotation): string {
     transition: opacity 160ms ease;
     flex-shrink: 0;
   }
+  /* Guards the chevron's hover brighten-fade. The end state (opacity 1) is what
+     the hover rule below sets, so dropping the transition just snaps to it. */
+  :global(body.tandem-reduce-motion) .peek-chevron {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .peek-chevron {
+      transition: none;
+    }
+  }
   /* Contextual preview column: outline ticks or annotation dots, stacked. */
   .peek-content {
     display: flex;
@@ -172,6 +182,15 @@ function dotClass(a: Annotation): string {
     opacity: 0.7;
     transition: opacity 160ms ease;
   }
+  /* Guards the outline ticks' hover brighten-fade. */
+  :global(body.tandem-reduce-motion) .peek-tick {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .peek-tick {
+      transition: none;
+    }
+  }
   .peek-tick.h1 {
     width: 8px;
   }
@@ -188,6 +207,16 @@ function dotClass(a: Annotation): string {
     opacity: 0.85;
     flex-shrink: 0;
     transition: opacity 160ms ease, transform 160ms ease;
+  }
+  /* Guards the annotation dots' hover brighten + 1.05 scale-up. Both end values
+     still apply on hover; only the tween between them goes away. */
+  :global(body.tandem-reduce-motion) .peek-dot {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .peek-dot {
+      transition: none;
+    }
   }
   .peek-dot.user {
     background: var(--tandem-author-user);
@@ -228,6 +257,17 @@ function dotClass(a: Annotation): string {
     pointer-events: none;
     transition: opacity 140ms ease 60ms;
   }
+  /* Guards the rotated panel-name label's delayed fade-in. Removing the
+     transition drops the 60ms delay with it, so the label appears with the
+     widened strip instead of trailing it. */
+  :global(body.tandem-reduce-motion) .peek-label {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .peek-label {
+      transition: none;
+    }
+  }
   /* Width-grow on hover lives on the parent `.rail-shell` (App.svelte) so the
      widened button isn't clipped by the shell's overflow:hidden. Here we only
      brighten the preview atoms when the (shell-)hovered button shows. */
@@ -250,6 +290,17 @@ function dotClass(a: Annotation): string {
     opacity: 0.25;
     transition: opacity 140ms ease;
   }
+  /* Guards the preview's dim-out under the label. Both halves must name the
+     full `.peek-strip:hover .peek-content` — a bare `.peek-content` guard is
+     (0,1,0) against this rule's (0,3,0) and would silently lose. */
+  :global(body.tandem-reduce-motion) .peek-strip:hover .peek-content {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .peek-strip:hover .peek-content {
+      transition: none;
+    }
+  }
   /* tabindex="-1": never reachable via Tab. The only focus paths are the
      keyboard-toggle restoration helper (focusToggleTarget, which focuses the
      strip purely to preserve tab position after the panel collapses) and a
@@ -262,13 +313,10 @@ function dotClass(a: Annotation): string {
   .peek-strip:focus-visible {
     outline: none;
   }
-  @media (prefers-reduced-motion: reduce) {
-    .peek-strip,
-    .peek-chevron,
-    .peek-tick,
-    .peek-dot,
-    .peek-label {
-      transition: none;
-    }
-  }
+  /* The blanket reduced-motion block that used to sit here has been split into
+     the per-rule pairs above, so the in-app `reduceMotion` setting
+     (`body.tandem-reduce-motion`) is honored alongside the OS media query — it
+     reached neither before. `.peek-strip` was in that list but declares no
+     transition of its own, so it is dropped rather than carried forward; and
+     `.peek-strip:hover .peek-content` was missing from it entirely. */
 </style>

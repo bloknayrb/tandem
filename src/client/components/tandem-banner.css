@@ -27,6 +27,20 @@
   /* Subtle slide-in from above on appearance */
   animation: tandem-banner-slide-in 180ms ease-out;
 }
+/* Reduced motion: an entry animation, so the banner jumps straight to its final
+   state. `animation: none` is sufficient here — the keyframes end at
+   translateY(0)/opacity 1, which IS the rule's un-animated resting state, so
+   nothing has to be restated. Dual mechanism: the OS pref AND the in-app
+   reduceMotion setting (body.tandem-reduce-motion), since the app exposes a
+   toggle independent of the OS. */
+body.tandem-reduce-motion .tandem-banner {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tandem-banner {
+    animation: none;
+  }
+}
 
 .tandem-banner--info {
   background: var(--tandem-info-bg);
@@ -135,6 +149,16 @@
     background-color 120ms ease-out,
     border-color 120ms ease-out;
 }
+/* Reduced motion: the CTA still takes its hover background and border color —
+   only the 120ms crossfade is cut. */
+body.tandem-reduce-motion .tandem-banner__cta {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tandem-banner__cta {
+    transition: none;
+  }
+}
 
 .tandem-banner__cta:hover:not(:disabled) {
   background: color-mix(in srgb, var(--tandem-info) 14%, transparent);
@@ -164,6 +188,15 @@
   line-height: 0;
   transition: background-color 120ms ease-out;
 }
+/* Reduced motion: same as the CTA — the hover wash lands instantly. */
+body.tandem-reduce-motion .tandem-banner__dismiss {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tandem-banner__dismiss {
+    transition: none;
+  }
+}
 
 .tandem-banner__dismiss:hover {
   background: color-mix(in srgb, var(--tandem-info) 14%, transparent);
@@ -185,15 +218,12 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tandem-banner {
-    animation: none;
-  }
-  .tandem-banner__cta,
-  .tandem-banner__dismiss {
-    transition: none;
-  }
-}
+/* The reduced-motion guards that used to live here as one trailing
+   `@media (prefers-reduced-motion: reduce)` block have moved next to the three
+   rules they guard (.tandem-banner, .tandem-banner__cta,
+   .tandem-banner__dismiss). Nothing was dropped — each site gained the missing
+   `body.tandem-reduce-motion` half the trailing block never had, so the in-app
+   toggle now works here and not just the OS preference (#1530). */
 
 @media (forced-colors: active) {
   .tandem-banner {

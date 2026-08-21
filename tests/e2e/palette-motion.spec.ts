@@ -30,7 +30,7 @@ test.afterEach(async () => {
 
 test("the command palette modal has the entrance animation wired (A11, #798)", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
 
   await page.keyboard.press("Control+Shift+P");
   const palette = page.locator("[data-testid='command-palette']");

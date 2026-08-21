@@ -95,18 +95,45 @@ export type FirewallErrorVariant =
   | { kind: "adminDeclined" }
   | { kind: "netshNotFound" }
   | { kind: "netshFailure"; exitCode: number; stderrTail: string; stdoutTail: string }
-  | { kind: "subnetDetectionFailed"; reason?: SubnetDetectionReason }
-  | { kind: "adapterEnumerationFailed" };
+  | {
+      kind: "subnetDetectionFailed";
+      reason?: SubnetDetectionReason;
+      exitCode?: number;
+      stderrTail?: string;
+    }
+  | { kind: "adapterEnumerationFailed"; reason?: AdapterEnumerationReason };
 
 /**
  * Why vEthernet subnet detection failed (#1298). Mirrors
  * `SubnetDetectionReason` in `src-tauri/src/firewall.rs`.
  *
- * Optional on the variant above, for the same stale-sidecar tolerance the rest
- * of the Cowork surface uses: a desktop shell talking to an older sidecar gets
- * no `reason` and must still render something honest.
+ * Optional on the variant above, and NOT because of version skew: `firewall.rs`
+ * runs in the Tauri shell and the WebView loads `frontendDist`, so the Rust and
+ * this file compile into one artifact and ship together — there is no sidecar
+ * in this path at all. What optionality buys is tolerance of a Rust-side
+ * rename, which produces zero TypeScript errors because this union is
+ * hand-maintained, and which must degrade to an honest fallback rather than to
+ * an empty warning box.
  */
-export type SubnetDetectionReason = "noAdapter" | "noIpv4" | "prefixTooBroad" | "queryFailed";
+export type SubnetDetectionReason =
+  | "noAdapter"
+  | "noIpv4"
+  | "prefixTooBroad"
+  | "queryFailed"
+  | "timeout";
+
+/**
+ * Why PowerShell could not be STARTED, so adapter enumeration never ran
+ * (#1372). Mirrors `AdapterEnumerationReason` in `src-tauri/src/firewall.rs`.
+ *
+ * Optional on the variant above for the same reason `SubnetDetectionReason` is
+ * — a rename on the Rust side is invisible to TypeScript, so the absent case
+ * has to render something honest. Note this never means "the query failed" — a
+ * PowerShell
+ * that started and then failed arrives as
+ * `subnetDetectionFailed { reason: "queryFailed" }`.
+ */
+export type AdapterEnumerationReason = "notFound" | "permissionDenied" | "spawnFailed";
 
 // ---------------------------------------------------------------------------
 // App info response from GET /api/info

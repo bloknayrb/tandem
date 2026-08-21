@@ -1,15 +1,20 @@
 /**
  * A stable, per-installation identifier for the connected server.
  *
- * Successive Tandem servers are reached at the SAME host:port — an E2E server,
- * a dev server and the real one take turns on `127.0.0.1:5173` / `:3479` — and
- * one host:port is one `localStorage` bucket. So state written while talking to
- * one server is read back while talking to the next. That is how #1387 leaks:
- * scratchpad recovery keys were global to the bucket, so a scratchpad opened on
- * ANY server would restore content persisted while talking to a DIFFERENT one.
- * (Not a claim that `:5173` and `:3479` share storage — they are two origins
- * with two buckets. The Tauri WebView is a third, `http://tauri.localhost`, and
- * was never exposed to this.)
+ * Successive Tandem servers are reached at the SAME host:port — a `npm run dev`
+ * client and the shipped product both live on `127.0.0.1:5173` / `:3479`, and
+ * take turns — and one host:port is one `localStorage` bucket. So state written
+ * while talking to one server is read back while talking to the next. That is
+ * how #1387 leaks: scratchpad recovery keys were global to the bucket, so a
+ * scratchpad opened on ANY server would restore content persisted while talking
+ * to a DIFFERENT one. (Not a claim that `:5173` and `:3479` share storage — they
+ * are two origins with two buckets. The Tauri WebView is a third,
+ * `http://tauri.localhost`, and was never exposed to this.)
+ *
+ * The test harnesses used to be part of that rotation and no longer are: since
+ * #1492 each runs on its own reserved pair from `scripts/test-ports.ts`, i.e.
+ * its own origin and its own bucket. That removes one collision path; it does
+ * not remove the dev-vs-product one, which is why this discriminator stays.
  *
  * The discriminator has to be stable across restarts — recovery exists to
  * survive them — which rules out `generationId`, new on every boot. The

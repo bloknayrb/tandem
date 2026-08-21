@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
-import { DEFAULT_MCP_PORT, TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "../../src/shared/constants";
+import { PERF_MCP_PORT, PERF_WS_PORT } from "../../scripts/test-ports";
+import { TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "../../src/shared/constants";
 
 /**
  * Isolated Playwright config for the v1.0 performance gate.
@@ -28,8 +29,9 @@ import { DEFAULT_MCP_PORT, TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "../../src
  * minification. Open-to-interactive measured there is dominated by the module
  * waterfall, not by the editor, and would be wrong in the pessimistic
  * direction: we would go fix a problem that does not exist in shipped builds.
- * So this config serves `dist/client` via `vite preview` and runs the built
- * server, and `npm run perf:gate` builds both first.
+ * So this config serves the perf client build via `vite preview` and runs the
+ * built server, and `npm run perf:gate` (scripts/perf-build.ts) builds both
+ * first.
  *
  * `--host 127.0.0.1` is NOT cosmetic: `vite preview` defaults to `localhost`,
  * and bare `localhost` was deliberately narrowed out of the server's CORS
@@ -69,7 +71,26 @@ const PERF_SERVER_LAUNCHER = path.join(__dirname, "perf-server.mjs");
 /** Deliberately not 5173 — a running `npm run dev` must not be silently reused. */
 const PREVIEW_PORT = 4318;
 
-const CLIENT_DIST = path.join(REPO_ROOT, "dist", "client", "index.html");
+/**
+ * The perf client is a SEPARATE build in a separate outDir (#1492).
+ * `scripts/perf-build.ts` bakes VITE_TANDEM_* into it so it targets the perf
+ * backend pair — writing that build into `dist/client` would leave a developer
+ * who runs `npm run perf:gate` and then `node dist/server/index.js` with a
+ * shipped-looking client permanently "Disconnected" on the product ports, with
+ * zero diagnosis.
+ *
+ * Nothing consumes this outDir but the perf harness, and three separate
+ * mechanisms keep it out of shipped artifacts: `src/server/mcp/server.ts`
+ * serves `join(__dirname, "../client")`, Tauri's `bundle.resources` names
+ * `../dist/client/` explicitly, and package.json's `files` carries an explicit
+ * `"!dist/perf-client"` negation. That negation is load-bearing, not
+ * belt-and-braces: `files: ["dist/"]` publishes the whole directory and
+ * `prepublishOnly`'s `npm run build` does not clean it, so without the
+ * negation a `perf:gate` run followed by a publish would put a full
+ * perf-baked client in the tarball. `tests/scripts/e2e-guard-wiring.test.ts`
+ * pins it.
+ */
+const CLIENT_DIST = path.join(REPO_ROOT, "dist", "perf-client", "index.html");
 const SERVER_DIST = path.join(REPO_ROOT, "dist", "server", "index.js");
 
 // A MISSING build is fatal: there is nothing to measure. A perf gate that
@@ -105,7 +126,7 @@ function newestMtimeMs(dir: string): number {
 const clientBuiltAt = statSync(CLIENT_DIST).mtimeMs;
 const serverBuiltAt = statSync(SERVER_DIST).mtimeMs;
 console.error(
-  `[perf-gate] dist/client built ${new Date(clientBuiltAt).toISOString()}, ` +
+  `[perf-gate] dist/perf-client built ${new Date(clientBuiltAt).toISOString()}, ` +
     `dist/server built ${new Date(serverBuiltAt).toISOString()}`,
 );
 
@@ -163,14 +184,14 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `npx vite preview --host 127.0.0.1 --port ${PREVIEW_PORT} --strictPort`,
+      command: `npx vite preview --outDir dist/perf-client --host 127.0.0.1 --port ${PREVIEW_PORT} --strictPort`,
       url: `http://127.0.0.1:${PREVIEW_PORT}`,
       reuseExistingServer: false,
       timeout: 120_000,
       // Playwright defaults webServer.cwd to the CONFIG file's directory, not
       // the repo root. Without this, vite resolves `dist` against tests/perf/,
-      // fails to find it, and never reads vite.config.ts at all (so it would
-      // also miss `build.outDir: dist/client`).
+      // fails to find it, and never reads vite.config.ts at all. The --outDir
+      // flag points preview at the perf-baked client (see CLIENT_DIST above).
       cwd: REPO_ROOT,
     },
     {
@@ -178,7 +199,7 @@ export default defineConfig({
       // spawning the server — the only moment that precedes session restore.
       // See PERF_APP_DATA_DIR above and tests/perf/perf-server.mjs.
       command: `node ${JSON.stringify(PERF_SERVER_LAUNCHER)} ${JSON.stringify(SERVER_DIST)}`,
-      url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/health`,
+      url: `http://127.0.0.1:${PERF_MCP_PORT}/health`,
       reuseExistingServer: false,
       timeout: 120_000,
       cwd: REPO_ROOT,
@@ -187,6 +208,10 @@ export default defineConfig({
         [TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV]: "1",
         TANDEM_APP_DATA_DIR: PERF_APP_DATA_DIR,
         TANDEM_NO_SAMPLE: "1",
+        // Own pair (#1492): the built server no longer boots onto the product
+        // ports, where its freePort() SIGKILLed a running desktop Tandem.
+        TANDEM_PORT: String(PERF_WS_PORT),
+        TANDEM_MCP_PORT: String(PERF_MCP_PORT),
       },
     },
   ],

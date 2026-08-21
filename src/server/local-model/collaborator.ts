@@ -28,7 +28,11 @@ import type { AgentIdentity } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { getActiveDocId, requireDocument } from "../documents/registry.js";
 import { type SubscriberKind, subscribe, unsubscribe } from "../events/queue.js";
-import { appendClaudeChatMessage, updateClaudeChatMessage } from "../mcp/awareness.js";
+import {
+  appendClaudeChatMessage,
+  finalizeClaudeChatMessage,
+  updateClaudeChatMessage,
+} from "../mcp/awareness.js";
 import { extractText } from "../mcp/document.js";
 import { readLiveMode } from "../mode.js";
 import { pushNotification } from "../notifications.js";
@@ -45,15 +49,16 @@ const STREAM_FLUSH_CHARS = 80;
 /**
  * Ceiling on a single streamed reply (#1292).
  *
- * Every flush re-`set`s the ENTIRE message value into the ctrl-room Y.Map, which
- * Hocuspocus then broadcasts to every connected client — so a stream of length n
- * costs O(n²) in Yjs encoding and WebSocket bytes. The only other ceiling is the
- * per-response raw-byte cap, which is sized for a whole JSON response rather than
- * a chat bubble; a local model in a repetition loop (a routine failure mode for
- * quantized small models) reaches it with no attacker involved.
- *
- * 64 KiB is generous for a chat bubble. This cap is load-bearing beyond the
- * quadratic blowup: it also bounds what lands in the persisted session file.
+ * Since #1340 each flush is a diff-splice into the `chatStream` sidecar
+ * `Y.Text` — O(delta) on the wire — so the old O(n²) broadcast rationale is
+ * gone. The cap is still load-bearing three ways: it bounds the per-flush CPU
+ * (`updateClaudeChatMessage` reads the current text and scans a prefix, O(n)
+ * per flush), it bounds what the finalize fold writes into the durable chat
+ * row and hence the persisted session file, and it bounds the chat bubble a
+ * user gets shown. A local model in a repetition loop (a routine failure mode
+ * for quantized small models) reaches it with no attacker involved; the only
+ * other ceiling is the per-response raw-byte cap, sized for a whole JSON
+ * response rather than a chat bubble. 64 KiB is generous for a chat bubble.
  */
 const MAX_STREAMED_CHARS = 64 * 1024;
 
@@ -267,7 +272,19 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
         }
       },
       flushFinal: () => write(),
-      dispose: () => cancelTimer(),
+      // Runs in executeRun's `finally` on EVERY exit (clean/budget/timeout/
+      // error after their flushFinal; abort/supersede; throw), and `run()`
+      // awaits the previous slot's promise before starting the next executeRun
+      // — so the finalize fold always lands before any successor stream and
+      // never interleaves with one. Finalize is deliberately NOT ownership-
+      // gated: it appends no content, only folds already-committed CRDT state,
+      // and `isOwner()` is already false for a superseded/aborted run — gating
+      // it would strand the truncation marker (#1292) and every superseded
+      // stream's sidecar entry as a permanent leak (#1340).
+      dispose: () => {
+        cancelTimer();
+        if (liveId !== null) finalizeClaudeChatMessage(liveId);
+      },
     };
   }
 

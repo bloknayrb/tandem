@@ -214,6 +214,8 @@ Chat is **session-scoped**, stored on the `__tandem_ctrl__` Y.Doc (not per-docum
 
 `Y.Map('chat')` on the `__tandem_ctrl__` Y.Doc holds all chat messages keyed by message ID. Each message has `id`, `author` (user/claude), `text`, `timestamp`, and optionally `documentId` and `replyTo`.
 
+**Streaming sidecar (#1340):** while a Claude reply is being token-streamed, its full text-so-far lives in one `Y.Text` per message in `Y.Map('chatStream')` (`Y_MAP_CHAT_STREAM`), keyed by message id — `updateClaudeChatMessage` diff-splices O(delta) appends into it instead of re-`set`ting the whole message value per flush (which was O(n²) on the wire). While the sidecar entry exists it is authoritative over the row's `text` (the client composes in `useChatState.refresh`); `finalizeClaudeChatMessage` folds the text back into the plain chat row and deletes the entry. Durable snapshots never carry a live sidecar entry: `persistCtrlSnapshot` folds on the snapshot clone, and `restoreCtrlDoc` sweeps (fold-or-delete) anything a restored snapshot carried. Both folds drop an entry that is not a non-empty `Y.Text` with a live chat row rather than writing it over the row. Nothing structural forces the terminal `finalize` call, so `foldChatStream` — the one path that enumerates live entries regardless of producer activity — reconciles the `chat-stream-staleness.ts` ledger on every persist and restore and warns once (stderr) for an entry still live after 10 minutes.
+
 ### User → Claude
 
 ```
@@ -578,6 +580,7 @@ Each Y.Map has observers attached by different subsystems. Understanding who own
 | `awareness` | Client Svelte hook | `yjsSync.svelte.ts` → `setupTabObservers()` | Drive "Claude -- typing" status indicator |
 | `userAwareness` | Server event queue | `events/observers/awareness.ts`, via `observers/factory.ts` | Buffer selection for chat messages |
 | `chat` (CTRL_ROOM) | Server event queue | `events/observers/ctrl-chat.ts`, attached via `attachCtrlObservers()` | Emit `chat:message` |
+| `chatStream` (CTRL_ROOM) | Client Svelte hook | `useChatState.svelte.ts` `$effect` — **deep** observe (`observeDeep`), since nested `Y.Text` edits don't fire a plain `observe` | Live-compose in-flight streamed reply text (#1340). **No server-side observer** — server write-only. |
 | `documentMeta` (CTRL_ROOM) | Server event queue | `events/observers/ctrl-meta.ts`, via `attachCtrlObservers()` | Emit `document:opened` / `closed` / `switched` (the latter from `activeDocumentId`) |
 | `annotationReplies` | Server event queue | `events/observers/replies.ts`, via `observers/factory.ts` | Emit reply events |
 | `documentMeta` (CTRL_ROOM) | Client Svelte hook | `yjsSync.svelte.ts` → `handleDocumentListRef` | Sync tab list from server broadcasts (CTRL_ROOM) |
@@ -816,16 +819,30 @@ Updates are Ed25519-signed. The public key lives in `tauri.conf.json` (`plugins.
 Install flow:
 
 ```
-Update available dialog (Ok/Cancel)
-    → User confirms
-    → download_and_install()
-    → kill_sidecar() — releases ports :3478/:3479
+Auto-check → tandem://update-available banner → "Restart to install"
+  (manual/tray check instead shows a native Ok/Cancel dialog)
+    → stop_sidecar_gracefully() — POST /api/shutdown, hard kill on timeout
     → Poll /health until server stops responding (POST_KILL_PORT_RELEASE_SECS = 15s)
       + on Windows, concurrently poll until the sidecar exe unlocks (15s)
-    → app.restart() — Tauri launches the new version
+    → download_and_install()
+        → on download finish: write update-pending.json to the app-data dir (#1118)
+        → macOS / Linux: install, then app.restart()
+        → Windows: install_inner() ends in std::process::exit(0) — app.restart()
+          is NEVER reached there
+    → on install error: clear the marker, then show a native error dialog
 ```
 
-The sidecar kill before restart is required to prevent a port conflict when the new process starts up.
+Next boot, in `setup()` and before the sidecar spawn: read `update-pending.json`, compare its
+`target_version` against `app.package_info().version`, and clear it either way. On a mismatch,
+buffer a version-free reason code and emit a payload-free `pending-update-hint` nudge, which the
+WebView drains into a one-shot banner carrying a "Check for updates" CTA. Evaluation deliberately
+sits in `setup()` rather than after `wait_for_health()`: a half-installed update is precisely a boot
+where the sidecar does *not* come up healthy, so the later position would suppress the hint on
+exactly the boots it exists for. ADR-043 and #1118.
+
+The sidecar kill before install is required to prevent a port conflict when the new process starts
+up — and on Windows the NSIS installer must be able to replace `node-sidecar.exe` on disk, which a
+running process locks.
 
 Both deadlines were 5s until 2026-08-12, when a beta user's v0.21.1 → v0.22.0 update failed against this class of assumption. Note what each actually observes: the first polls `/health`, so it detects "the old server is gone", not "the OS released the port" — a socket in TIME_WAIT is invisible to it. The second polls a real file write-lock. Both are polling loops that return the moment the resource frees, so the wider ceiling costs a healthy machine nothing. The TIME_WAIT half of the problem is handled on the other side of the restart, by `waitForPort` in `src/server/platform.ts` (also widened to 15s).
 
@@ -875,6 +892,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer + subscriber-gated payload tracking), `sse.ts` (SSE endpoint handler), `push-liveness.ts` (consumer heartbeat counters — diagnostics only, never Claude's presence), `observers/` (per-map event derivation), `file-sync-registry.ts` (durable-annotation file-watcher binding), `wake-socket.ts` (the self-armed `ws://…/api/wake` transport — ADR-049), `delivery-state.ts` (per-item surfaced/pushed bookkeeping)
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `mode.ts` -- Solo/Tandem authority (CTRL_ROOM `Y_MAP_MODE`), read by `shouldForwardExternally`
+- `chat-stream-staleness.ts` -- Abandoned-`chatStream`-entry tripwire (#1340): the ledger + warn-once sweep shared by `mcp/awareness.ts` (seeds) and `session/manager.ts`'s `foldChatStream` (checks). A leaf module with no project imports — `session/manager.ts` cannot import `mcp/awareness.ts` without a cycle
 - `startup-file.ts` -- `maybeOpenStartupFile()`; consumes `TANDEM_OPEN_FILE` before HTTP bind
 - `bind-check.ts` -- Bind-host policy: `TANDEM_BIND_HOST`, `TANDEM_LAN_IP`, wildcard handling, the token-provisioned refusal
 - `documents/` -- Per-document state helpers

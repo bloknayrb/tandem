@@ -25,7 +25,10 @@
 import { render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { COWORK_PREFLIGHT_CHECKING } from "../../src/client/cowork/cowork-helpers";
+import {
+  COWORK_PREFLIGHT_CHECKING,
+  COWORK_PREFLIGHT_FAILED,
+} from "../../src/client/cowork/cowork-helpers";
 import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
 import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
@@ -44,7 +47,7 @@ vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
 // The real type, not a transcription: a hand-copied union goes stale silently,
 // and `tests/` is typechecked by nothing (`tsconfig.json` includes only `src`),
 // so the copy would not even fail to compile.
-const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unknown" }));
+const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unavailable" }));
 
 // Spread `importOriginal` rather than re-declaring the module: `cowork-invoke`
 // exports nine symbols and each suite's mock used to name a different subset,
@@ -123,7 +126,7 @@ describe("integration wizard — Cowork sub-view gating", () => {
     toggleIntegration.mockClear();
     fakeInvoke.mockClear();
     preflightSubnet.mockClear();
-    preflightSubnet.mockResolvedValue({ status: "unknown" });
+    preflightSubnet.mockResolvedValue({ status: "unavailable" });
   });
 
   afterEach(() => {
@@ -159,7 +162,7 @@ describe("integration wizard — Cowork sub-view gating", () => {
 
   it("shows the AI-models 'coming soon' line and NO Set-up button while dark", async () => {
     // This file runs with the shipped `BYO_MODELS_ENABLED=false`, so the `{#if}`
-    // (coming-soon) branch renders, not the `{:else}` enabled row (§3.6).
+    // (coming-soon) branch renders, not the `{:else}` enabled row.
     const { container } = render(IntegrationWizardModal, {
       props: { open: true, onClose: vi.fn() },
     });
@@ -359,6 +362,53 @@ describe("integration wizard — Cowork sub-view gating", () => {
       );
     });
     expect(q(container, "integration-wizard-cowork-preflight-live")).toBe(before);
+  });
+
+  it("tells the user the check did not run, hedged (#1436)", async () => {
+    // `iw-hint-text`, not `iw-banner-warning`: the claim is "we don't know",
+    // and a warning banner in the wizard's own visual language would read as
+    // "this will fail" — which we have no evidence for.
+    preflightSubnet.mockResolvedValue({ status: "failed" });
+    const { container } = render(IntegrationWizardModal, {
+      props: { open: true, onClose: vi.fn() },
+    });
+    await tick();
+    (q(container, "integration-wizard-cowork-setup") as HTMLButtonElement).click();
+    await tick();
+    const before = q(container, "integration-wizard-cowork-preflight-live");
+    expect(before).toBeTruthy();
+
+    await waitFor(() => {
+      expect(
+        q(container, "integration-wizard-cowork-preflight-failed")?.textContent ?? "",
+      ).toContain(COWORK_PREFLIGHT_FAILED);
+    });
+    expect(q(container, "integration-wizard-cowork-preflight-live")).toBe(before);
+    // CONTAINMENT, not merely presence: lifting the branch out to a sibling
+    // `{#if}` beside the region keeps node identity and the testid while
+    // reproducing the original silence exactly.
+    expect(q(container, "integration-wizard-cowork-preflight-live")?.textContent ?? "").toContain(
+      COWORK_PREFLIGHT_FAILED,
+    );
+    expect(q(container, "integration-wizard-cowork-preflight-failed")?.className ?? "").toContain(
+      "iw-hint-text",
+    );
+    expect(q(container, "integration-wizard-cowork-preflight-retry-btn")).toBeNull();
+  });
+
+  it("stays silent when the probe was never available", async () => {
+    // `unavailable` is a probe that was never going to answer; a hedged line
+    // there would be permanent noise rather than news.
+    preflightSubnet.mockResolvedValue({ status: "unavailable" });
+    const { container } = render(IntegrationWizardModal, {
+      props: { open: true, onClose: vi.fn() },
+    });
+    await tick();
+    await openCoworkSubView(container);
+
+    expect(q(container, "integration-wizard-cowork-preflight-failed")).toBeNull();
+    expect(q(container, "integration-wizard-cowork-preflight-blocked")).toBeNull();
+    expect(q(container, "integration-wizard-cowork-preflight-live")?.textContent?.trim()).toBe("");
   });
 
   it("leaves Enable available when the probe itself cannot run", async () => {

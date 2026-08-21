@@ -9,13 +9,22 @@ wrong at runtime. If you are working with Claude Code, [CLAUDE.md](CLAUDE.md) is
 
 ## Prerequisites
 
-- **Node.js 22.12.0 or newer**, and npm. This is the floor in `package.json` `engines`, and it is
-  the real one: the server bundle targets `node22`. Note that `tandem doctor` currently only checks
-  for major version `>= 22`, so it will pass a Node 22.0–22.11 install that npm's own gate refuses —
-  tracked as [#1442](https://github.com/bloknayrb/tandem/issues/1442). Check `node --version`
-  yourself.
+- **Node.js 22.12.0 or newer**, and npm. This is the floor `package.json`'s `engines` field
+  declares. In practice it's a build-toolchain constraint — once you're on Node 22, Vite / rolldown
+  (devDependencies) require 22.12 specifically — not a runtime one; `tandem doctor` checks against
+  this same declared value. See
+  [#1533](https://github.com/bloknayrb/tandem/issues/1533) for whether that's the number this
+  project should keep asserting. Check `node --version` yourself.
 - **Rust and the Tauri toolchain**, if you will touch `src-tauri/` — or if you will push at all.
   The pre-push hook runs `cargo test`. See "Before your first push" below.
+- **Python 3.10 or newer**, on `PATH` as either `python3` or `python` — and, like Rust, it is
+  needed *whether or not* you touch the code that uses it. `tests/scripts/acceptance-harness-wiring.test.ts`
+  is an ordinary vitest test that spawns `scripts/spikes/run_acceptance_tests.py` against
+  deliberately broken fixture suites, and it **fails rather than skips** when no interpreter is
+  found — an absent interpreter must not quietly void the only coverage that runner's decisions
+  have. So `npm test`, and therefore the pre-push hook, need Python: without it 9 of those tests go
+  red and you cannot push. (`npm run test:acceptance-harness` — the 82-test harness itself — is a
+  separate command that is *not* part of `npm test`; see [docs/cli.md](docs/cli.md#testing).)
 
 ## Development setup
 
@@ -121,6 +130,11 @@ after the GTK packages everyone remembers are already installed.
 
 The `dist/` list must stay in sync with `bundle.resources` in `src-tauri/tauri.conf.json`, not with
 whatever happens to be in `dist/`.
+
+`cargo test` is not the only prerequisite the hook drags in: it also runs the full vitest suite,
+and `tests/scripts/acceptance-harness-wiring.test.ts` needs **Python 3.10+** on `PATH` (see
+Prerequisites). Debian and Ubuntu ship it as `python3` only, which is fine — both that test and
+`npm run test:acceptance-harness` accept either name.
 
 **In a fresh `git worktree`, `.husky/_` is gitignored and therefore absent — zero hooks run,
 silently.** Run `npx husky` in the new worktree before your first commit there, or you will push

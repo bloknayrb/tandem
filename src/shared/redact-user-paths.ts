@@ -28,7 +28,14 @@ export interface RedactRoot {
   as: string;
 }
 
-function escapeRegExp(s: string): string {
+/**
+ * Escape a literal for embedding in a `RegExp` source.
+ *
+ * Exported because `scripts/screenshots/redact-account.ts` builds its own
+ * patterns from `os.homedir()` segments and needs exactly this; that module
+ * documents why it does not reuse `redactUserPaths` itself.
+ */
+export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 

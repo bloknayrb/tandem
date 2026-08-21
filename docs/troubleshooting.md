@@ -6,7 +6,7 @@ Common first-launch and runtime issues, with diagnostic steps.
 
 If you're running from a source checkout, `npm run doctor` checks the most common setup issues at once:
 
-- Node.js ≥ 22 installed
+- Node.js ≥ 22.12.0 installed
 - `.mcp.json` valid (both `tandem` and `tandem-channel` entries)
 - `~/.claude.json` MCP registration (when present)
 - Claude Desktop's own config file, and whether the entry Tandem wrote there has gone stale
@@ -147,7 +147,7 @@ export TANDEM_URL=http://127.0.0.1:4479
 tandem
 ```
 
-All three need to match — `TANDEM_URL` is what the channel shim and MCP clients connect to.
+All three need to match — `TANDEM_URL` is what the channel shim and MCP clients connect to. (If you are developing Tandem itself, avoid the port pairs reserved by the repo's test harnesses — listed in `scripts/test-ports.ts` — because the test runners kill whatever holds them.)
 
 If the port is still held after the wait (15s), the server logs `Port {port} still not available after {timeoutMs}ms` and tries to bind anyway — so the visible symptom is usually an `EADDRINUSE` a moment later, not the wait message. Identify the holding process with `lsof -i :3479` (macOS/Linux) or `netstat -ano | findstr :3479` (Windows).
 

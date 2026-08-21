@@ -4,6 +4,7 @@ import {
   loadInvoke,
   type SubnetPreflight,
 } from "../cowork/cowork-invoke.js";
+import { logClientError } from "../utils/client-log.js";
 
 export interface SubnetPreflightState {
   readonly preflight: SubnetPreflight | null;
@@ -114,14 +115,22 @@ export function createSubnetPreflight(): SubnetPreflightState {
       preflight = result;
     } catch (err) {
       if (mine !== token) return;
-      // Reaching here means the bridge didn't load, `coworkPreflightSubnet`
-      // threw rather than resolving, or an unrelated `$effect` threw through
-      // the `tick()` flush above — several distinct causes that all say
-      // nothing about whether enabling would work, so fall through to the
-      // unguarded button. Log it: `unknown` is never rendered, so without this
-      // a genuine client fault is invisible on both sides of the bridge.
-      console.error("[cowork] subnet pre-flight threw:", err);
-      preflight = { status: "unknown" };
+      // `failed`, not `unavailable` (#1436). `loadInvoke()` does not throw —
+      // outside Tauri it resolves to an invoke that REJECTS with
+      // `TAURI_NOT_AVAILABLE`, which `coworkPreflightSubnet` catches and
+      // classifies as `unavailable`. So the ordinary no-bridge path never
+      // reaches this arm, and what does reach it is a genuine client fault:
+      // `coworkPreflightSubnet` threw rather than resolving, or an unrelated
+      // `$effect` threw through the `tick()` flush above. Those say nothing
+      // about whether enabling would work, so the button stays unguarded and
+      // the region says so rather than emptying.
+      //
+      // Still logged, via `logClientError` so it also reaches a bug report —
+      // the release desktop build has no devtools console to read (#1439).
+      // Note Tauri `invoke` rejects with the Rust error's `Display` STRING, not
+      // an `Error`, which is why `describeCause` keeps a string branch at all.
+      logClientError("cowork", "subnet pre-flight threw", err);
+      preflight = { status: "failed" };
     } finally {
       if (mine === token) probing = false;
     }

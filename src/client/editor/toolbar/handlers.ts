@@ -1,5 +1,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import "@tiptap/extension-link";
+import type { TandemNotification } from "../../../shared/types.js";
+import { SAFE_EXTERNAL_PREFIXES } from "../utils/url-safety.js";
 
 /**
  * `withPreventDefault` is the canonical handler shape for toolbar buttons
@@ -45,17 +47,58 @@ export function getInitialLinkHref(editor: TiptapEditor): string {
 }
 
 /**
+ * The notification a REFUSED authoring attempt raises (#1537).
+ *
+ * `setLink` consults the same `isAllowedUri` union as render, so since the
+ * scheme allowlist landed, typing `tel:+15551234` into the Link editor returns
+ * `false` and writes nothing. Before the allowlist it succeeded. A silent
+ * no-op is therefore STRICTLY LESS visible than the behaviour it replaced —
+ * the opposite of what the change is for. `openHref` got `notifyLinkProblem`
+ * for exactly this reason in #1377; the authoring path never got the
+ * equivalent, and this is it.
+ *
+ * Past tense deliberately: `warning` persists in the activity tray, which is a
+ * log, so a present-tense observation would outlive the moment it describes
+ * (the convention on `TandemNotification.severity`).
+ */
+function linkRefusedNotification(href: string): TandemNotification {
+  return {
+    id: `link-problem-${Date.now()}`,
+    type: "general-error",
+    severity: "warning",
+    message: `Didn't create the link — Tandem can't link to "${href}". A link must start with ${SAFE_EXTERNAL_PREFIXES.join(", ")} or be a path relative to this document.`,
+    dedupKey: `link-authoring-refused:${href}`,
+    timestamp: Date.now(),
+    errorCode: "LINK_NOT_OPENABLE",
+  };
+}
+
+/**
  * Apply or unset a link mark on the current selection. Trims `url`; an empty
  * string while a link is active unsets it (lets the link-input double as a
  * remove affordance).
+ *
+ * Returns whether the editor accepted the command. `false` means the render
+ * gate refused the href — see {@link linkRefusedNotification}. Pass `onNotify`
+ * (every caller in the app does) so the refusal is SAID rather than swallowed;
+ * the return value is there for tests and for a caller that wants to react
+ * differently, not as an alternative to reporting.
  */
-export function applyLink(editor: TiptapEditor, url: string): void {
+export function applyLink(
+  editor: TiptapEditor,
+  url: string,
+  onNotify?: (n: TandemNotification) => void,
+): boolean {
   const trimmed = url.trim();
   if (trimmed) {
     const chain = editor.chain().focus();
     if (editor.isActive("link")) chain.extendMarkRange("link");
-    chain.setLink({ href: trimmed }).run();
-  } else if (editor.isActive("link")) {
-    editor.chain().focus().extendMarkRange("link").unsetLink().run();
+    const applied = chain.setLink({ href: trimmed }).run();
+    if (!applied) onNotify?.(linkRefusedNotification(trimmed));
+    return applied;
   }
+  if (editor.isActive("link")) {
+    return editor.chain().focus().extendMarkRange("link").unsetLink().run();
+  }
+  return true;
 }

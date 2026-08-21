@@ -24,7 +24,11 @@
  * - `setRestrictiveAcl` calls `/inheritance:r` THEN `/grant:r`. Without
  *   `:r` on both flags, inherited ACEs from the parent dir survive and
  *   `/grant` adds the user as an additional principal instead of
- *   replacing the ACL.
+ *   replacing the ACL. What `/inheritance:r` does to those inherited ACEs
+ *   is host-dependent — see `setRestrictiveAcl`'s docblock. The hardening
+ *   here does not rest on it either way: `assertNoBroadAce` re-reads the
+ *   SDDL after every set, so an inherited ACE that survived as an explicit
+ *   copy would still throw if its principal were broad.
  * - On a DIRECTORY that already has children, the default
  *   (non-inheritable) grant is destructive — pass `{ inheritable: true }`.
  *   See `setRestrictiveAcl`'s docblock for the mechanism.
@@ -158,6 +162,19 @@ async function getCurrentUserSid(signal?: AbortSignal): Promise<string> {
  * created children are unaffected either way: with no inheritable ACE to
  * inherit they fall back to the process token's default DACL.
  *
+ * How destructive that is depends on the host, which matters for
+ * REPRODUCING #1299 rather than for the hardening (#1529). Measured:
+ * on Windows 11 25H2 (`10.0.26200`) `/inheritance:r` removes the inherited
+ * ACEs outright, so the child really is emptied. On GitHub's
+ * `windows-latest` Server 2025 image it behaves like `:d` instead —
+ * the inherited ACEs survive as explicit copies that KEEP their `(OI)(CI)`
+ * flags and propagate back down, leaving the child fully accessible. So
+ * do not read "the child is emptied" as universal; the fixtures in
+ * `tests/helpers/win-acl-fixture.ts` force that state rather than assume
+ * it. The hardening is safe either way, because `assertNoBroadAce` below
+ * re-reads the SDDL after the set and would throw on any surviving copy
+ * whose principal is broad.
+ *
  * Files take no children, so token-file callers correctly leave this off —
  * `(OI)(CI)` on a leaf is meaningless.
  *
@@ -174,8 +191,11 @@ export async function setRestrictiveAcl(
   const sid = await getCurrentUserSid(signal);
 
   // icacls processes flags left-to-right in one invocation:
-  //   /inheritance:r — remove ALL inherited entries (`:d` would copy them
-  //                    as explicit, defeating the purpose)
+  //   /inheritance:r — ask for ALL inherited entries to be removed (`:d`
+  //                    explicitly copies them as explicit instead). Some
+  //                    Windows builds treat `:r` as `:d` anyway — see the
+  //                    docblock; the `assertNoBroadAce` verify below is what
+  //                    makes that safe rather than this flag.
   //   /grant:r       — replace any existing explicit ACE for the user
   //                    rather than ADD a new one (no `:r` → duplicates
   //                    accumulate over repeated runs).
