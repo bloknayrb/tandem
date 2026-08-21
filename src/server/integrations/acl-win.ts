@@ -65,6 +65,13 @@ function throwIfAborted(signal?: AbortSignal): void {
  * routing around it via the legacy shell is the wrong defence posture
  * (admin's policy is a real security boundary). The original error is
  * preserved as `cause` on the fallback's failure for log forensics.
+ *
+ * The 5.1 fallback is anchored with `systemBin`, like the `icacls` and `whoami`
+ * calls two functions down: a bare name lets the loader search directories
+ * ahead of the system one, and this is the interpreter that writes the token
+ * store's ACL. `pwsh.exe` stays a bare name deliberately — PowerShell 7 is
+ * installed outside the system directory and has no fixed path, so PATH is its
+ * genuine discovery mechanism rather than a lookup we could have anchored.
  */
 async function runPowerShell(
   script: string,
@@ -80,7 +87,10 @@ async function runPowerShell(
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") throw err;
     try {
-      return await execFileAsync("powershell.exe", args, { env, signal });
+      return await execFileAsync(systemBin("WindowsPowerShell\\v1.0\\powershell.exe"), args, {
+        env,
+        signal,
+      });
     } catch (fallbackErr) {
       if (signal?.aborted) throw signal.reason ?? fallbackErr;
       throw new Error(

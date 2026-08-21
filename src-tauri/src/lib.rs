@@ -31,6 +31,10 @@ mod cowork_workspace_scan;
 mod cowork_installer;
 #[cfg(target_os = "windows")]
 mod firewall;
+// Absolute System32 paths, so a bare program name is never resolved by the
+// loader — the application directory is searched ahead of System32.
+#[cfg(target_os = "windows")]
+mod system_paths;
 #[cfg(target_os = "windows")]
 mod cowork_meta;
 // Native theming (#992): resolves the undocumented uxtheme.dll "preferred
@@ -3524,29 +3528,28 @@ fn parse_tasklist_image_name(output: &str) -> Option<String> {
 
 /// Run a Windows system binary and capture stdout, or None on any failure.
 ///
-/// Anchored to `%SystemRoot%\System32\` rather than resolved through PATH:
-/// `Command::new("netstat")` searches the application directory (and, absent
-/// `NoDefaultCurrentDirectoryInExePath`, the cwd) ahead of System32, and both
-/// binaries are guaranteed at the fixed path. CREATE_NO_WINDOW keeps a
-/// GUI-subsystem app from flashing a console window.
+/// Anchored through [`system_paths::system32_exe`] rather than resolved by the
+/// loader: `Command::new("netstat")` searches the application directory ahead of
+/// System32, and both binaries are guaranteed at the fixed path. That module
+/// carries the full search order, and why the anchor comes from
+/// `GetSystemDirectoryW` rather than `%SystemRoot%` — an env var the launching
+/// process controls, which as a mitigation is weaker than the bare name it
+/// replaces. CREATE_NO_WINDOW keeps a GUI-subsystem app from flashing a console
+/// window.
 ///
-/// Fails CLOSED when `SystemRoot` is unset, empty, or non-UTF-8: falling back to
-/// the bare name would do exactly the unanchored PATH lookup this exists to
-/// avoid, and `SystemRoot` is a per-process env var that an unelevated launcher
-/// can set before starting an elevated app. Every caller degrades to generic
-/// text on None, so a skipped diagnostic costs nothing. (`freePortWindows` in
-/// src/server/platform.ts makes the opposite call, deliberately — its lookup is
-/// load-bearing for startup rather than cosmetic.)
+/// Fails CLOSED when the system directory cannot be resolved: falling back to
+/// the bare name would do exactly the unanchored lookup this exists to avoid.
+/// Every caller degrades to generic text on None, so a skipped diagnostic costs
+/// nothing. (`freePortWindows` in src/server/platform.ts makes the opposite
+/// call, deliberately — its lookup is load-bearing for startup rather than
+/// cosmetic, and Node cannot reach `GetSystemDirectoryW` without a native
+/// module.)
 #[cfg(target_os = "windows")]
 fn run_system32_tool(exe: &str, args: &[&str]) -> Option<String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    let root = std::env::var("SystemRoot").ok()?;
-    if root.trim().is_empty() {
-        return None;
-    }
-    let program = format!("{root}\\System32\\{exe}");
+    let program = crate::system_paths::system32_exe(exe)?;
     let output = std::process::Command::new(program)
         .args(args)
         .creation_flags(CREATE_NO_WINDOW)

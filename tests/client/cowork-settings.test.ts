@@ -340,7 +340,11 @@ describe("firewallErrorHint", () => {
     }
   });
 
-  it("notFound points at PATH, permissionDenied at policy — they do not swap", () => {
+  // The discriminator used to be PATH-vs-policy. It is now location-vs-policy:
+  // PowerShell is resolved at its anchored system path and PATH is never
+  // consulted, so advice naming PATH would send the user somewhere that cannot
+  // affect the outcome.
+  it("notFound points at where Tandem looked, permissionDenied at policy — they do not swap", () => {
     const notFound = firewallErrorHint({
       kind: "adapterEnumerationFailed",
       reason: "notFound",
@@ -349,9 +353,11 @@ describe("firewallErrorHint", () => {
       kind: "adapterEnumerationFailed",
       reason: "permissionDenied",
     });
-    expect(notFound).toMatch(/PATH/);
+    expect(notFound).toMatch(/system folder/i);
     expect(denied).toMatch(/AppLocker|WDAC|application-control/i);
     expect(notFound).not.toMatch(/AppLocker/i);
+    // Neither may send the user to PATH: it is not consulted on either path.
+    expect(notFound).not.toMatch(/PATH/);
     expect(denied).not.toMatch(/PATH/);
   });
 

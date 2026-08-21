@@ -1,9 +1,15 @@
 //! Windows Firewall management for the Cowork VM subnet allow/deny rules.
 //!
-//! All `netsh` invocations use `Command::new("netsh").args([...])` — never
-//! `cmd.exe`, never string concatenation, never `--%` wrappers: no shell is
-//! interposed, so nothing in an argument value — including the detected CIDR
+//! All `netsh` invocations use `Command::new(<absolute path>).args([...])` —
+//! never `cmd.exe`, never string concatenation, never `--%` wrappers: no shell
+//! is interposed, so nothing in an argument value — including the detected CIDR
 //! in `remoteip={cidr}` — can be re-read as a second command.
+//!
+//! The program slot is an absolute path from `system_paths`, never a bare name.
+//! A bare `"netsh"` is resolved by Rust before `CreateProcess` sees it, and that
+//! search reaches the application directory — writable by the unelevated user,
+//! since Tandem installs per-user — *ahead of* System32. Resolution failure
+//! fails closed onto `NetshNotFound` rather than falling back to the bare name.
 //!
 //! Every invocation is logged with: argv, exit code, a stdout+stderr excerpt,
 //! and wall-clock duration — at DEBUG when it succeeded, at WARN when it did
@@ -28,12 +34,36 @@
 #![cfg(target_os = "windows")]
 
 use std::fmt;
+use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::bounded_command::{output_with_timeout, BoundedOutcome};
 
 use crate::sentry_reporting::{home_dir_string, redact_home};
+
+/// Suppress the console window a GUI-subsystem parent would otherwise get when
+/// it spawns a console-subsystem child. `Stdio::piped()` does NOT do this — the
+/// window is allocated regardless, which is why enabling Cowork used to flash a
+/// `netsh.exe` console that stole focus.
+///
+/// This is a setter, not an OR: a second flag must be `A | B` in one call.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Absolute path to `netsh.exe`, or `None` when the system directory cannot be
+/// resolved.
+///
+/// Callers map `None` onto [`FirewallError::NetshNotFound`] — fail closed. The
+/// bare name would let the loader search the (user-writable) application
+/// directory ahead of System32; see the `system_paths` module.
+fn netsh_path() -> Option<PathBuf> {
+    let resolved = crate::system_paths::system32_exe("netsh.exe");
+    if resolved.is_none() {
+        log::error!("[firewall] could not resolve the Windows system directory for netsh.exe");
+    }
+    resolved
+}
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -71,7 +101,9 @@ pub enum FirewallError {
     /// The user declined the UAC elevation prompt. The install is fail-closed:
     /// a deny rule is written instead.
     AdminDeclined,
-    /// `netsh.exe` was not found on PATH.
+    /// `netsh.exe` was not found at its anchored System32 path — a damaged
+    /// Windows install, or a system directory we could not resolve at all.
+    /// Never a PATH problem: PATH is not consulted (see `netsh_path`).
     NetshNotFound,
     /// `netsh.exe` ran but returned a non-zero exit code.
     NetshFailure { exit_code: i32, stderr_tail: String, stdout_tail: String },
@@ -131,8 +163,11 @@ pub enum FirewallError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AdapterEnumerationReason {
-    /// `powershell.exe` was not on PATH: PATH damage, a Windows edition that
-    /// ships no Windows PowerShell, or a stripped install.
+    /// `powershell.exe` was not at `System32\WindowsPowerShell\v1.0\`: a Windows
+    /// edition that ships no Windows PowerShell, a stripped install, or a system
+    /// directory we could not resolve. Never a PATH problem — PATH is not
+    /// consulted, deliberately, since this was the one site a bare name sent all
+    /// the way through to the inherited environment.
     NotFound,
     /// The OS refused to start it — AppLocker / WDAC / Software Restriction
     /// Policies, or ACLs on the interpreter itself.
@@ -355,8 +390,18 @@ foreach ($adapter in $adapters) {
 }
 "#;
 
-    let mut command = Command::new("powershell");
+    // Anchored, not resolved by the loader — see `system_paths`. Windows
+    // PowerShell is the one binary here that a bare name would send all the way
+    // to the inherited PATH, since it sits *below* System32 rather than in it.
+    let Some(program) = crate::system_paths::windows_powershell_exe() else {
+        log::error!("[firewall] could not resolve the Windows system directory for powershell.exe");
+        return Err(FirewallError::AdapterEnumerationFailed {
+            reason: AdapterEnumerationReason::NotFound,
+        });
+    };
+    let mut command = Command::new(program);
     command.args(["-NoProfile", "-NonInteractive", "-Command", ps_script]);
+    command.creation_flags(CREATE_NO_WINDOW);
 
     let start = Instant::now();
     let bounded = output_with_timeout(command, budget);
@@ -876,7 +921,11 @@ pub fn remove_cowork_rules() -> Result<(), FirewallError> {
 /// Returns `Err` on spawn failure or unexpected netsh errors so that
 /// `reconcile_orphan_firewall_rules` can distinguish "no orphans" from "scan failed".
 pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
-    let mut command = Command::new("netsh");
+    let Some(program) = netsh_path() else {
+        return Err(FirewallError::NetshNotFound);
+    };
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
     command.args([
         "advfirewall",
         "firewall",
@@ -962,7 +1011,11 @@ pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
 /// Logs the invocation (argv, exit code, stdout/stderr tail, elapsed time).
 /// Never constructs a command string — each argument is passed separately.
 fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
-    let mut command = Command::new("netsh");
+    let Some(program) = netsh_path() else {
+        return Err(FirewallError::NetshNotFound);
+    };
+    let mut command = Command::new(&program);
+    command.creation_flags(CREATE_NO_WINDOW);
     command.args(args);
 
     let start = Instant::now();
@@ -1004,9 +1057,14 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
     // about what was redacted (#1372).
     let home = home_dir_string();
 
+    // The resolved program is logged, not just the argv: "which netsh actually
+    // ran" is the question this file's anchoring exists to answer, and a bug
+    // report from a machine with a planted binary would otherwise look identical
+    // to a healthy one.
     log::debug!(
-        "[firewall] netsh {:?}: exit={exit_code}, elapsed={:.2}s, stdout={:?}, stderr={:?}",
+        "[firewall] netsh {:?} ({:?}): exit={exit_code}, elapsed={:.2}s, stdout={:?}, stderr={:?}",
         args,
+        program,
         elapsed.as_secs_f64(),
         redact_and_truncate(&stdout, home.as_deref(), CAPTURED_STREAM_TAIL_LIMIT),
         redact_and_truncate(&stderr, home.as_deref(), CAPTURED_STREAM_TAIL_LIMIT),
@@ -1086,6 +1144,56 @@ fn truncate_head(s: &str, max_bytes: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The anchored `netsh` actually runs.
+    ///
+    /// Every other test in this module is a pure function over captured text, so
+    /// none of them would notice if `netsh_path` resolved somewhere no binary
+    /// lives — the anchoring would fail closed and Cowork would be silently
+    /// dead. `scan_orphan_rules` is the read-only half of the netsh surface (a
+    /// `show rule` query, no elevation, no state change), which makes it the one
+    /// site that can serve as a live positive control.
+    ///
+    /// Asserts on the failure MODE, not on success: a machine with no Tandem
+    /// rules is the normal case and a firewall service that refuses the query is
+    /// environmental. What must never happen is `NetshNotFound` — that is the
+    /// resolution itself having failed.
+    #[test]
+    fn the_anchored_netsh_is_reachable_and_runs() {
+        match scan_orphan_rules() {
+            Ok(_) => {}
+            Err(FirewallError::NetshNotFound) => {
+                panic!("netsh could not be resolved at its anchored System32 path");
+            }
+            Err(other) => {
+                // netsh ran and said something; that is all this test needs.
+                eprintln!("[test] anchored netsh ran and returned: {other:?}");
+            }
+        }
+    }
+
+    /// The anchored Windows PowerShell actually launches.
+    ///
+    /// Same argument as above, and it matters more here: `powershell.exe` is the
+    /// one binary that lives *below* System32 rather than in it, so a resolver
+    /// that forgot the `WindowsPowerShell\v1.0` segment would produce a path
+    /// that never exists on any machine.
+    ///
+    /// `NoAdapter` is the expected verdict on a host without Hyper-V (including
+    /// CI), and is a pass: reaching that classification means the interpreter
+    /// launched and the marker line came back.
+    #[test]
+    fn the_anchored_powershell_is_reachable_and_runs() {
+        match detect_vethernet_subnet(Duration::from_secs(30)) {
+            Ok(_) => {}
+            Err(FirewallError::AdapterEnumerationFailed { reason }) => {
+                panic!("powershell never launched from its anchored path: {reason:?}");
+            }
+            Err(other) => {
+                eprintln!("[test] anchored powershell ran and returned: {other:?}");
+            }
+        }
+    }
 
     #[test]
     fn test_host_to_network() {

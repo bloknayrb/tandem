@@ -79,11 +79,22 @@ const STARTUP_APPROVED_KEY: &str =
 fn remove_autostart_registration() {
     use std::process::Command;
 
+    // Absolute path, never a bare name. This scrub runs inside the signed
+    // `tandem.exe` specifically so that no attacker-planted binary is executed
+    // during uninstall (see `windows/installer-hook.nsi`) — resolving `reg`
+    // through a search that reaches the application directory first would hand
+    // that back. Fail closed: with no system directory we skip the delete and
+    // say so, rather than running whatever `reg` the loader finds.
+    let Some(reg_exe) = crate::system_paths::system32_exe("reg.exe") else {
+        eprintln!("[scrub] could not resolve the Windows system directory; skipped autostart cleanup");
+        return;
+    };
+
     for key in [RUN_KEY, STARTUP_APPROVED_KEY] {
         // Array args, never a composed shell string — the value name is an
         // exact literal, so there is nothing to quote-escape and nothing to
         // enumerate. `/f` suppresses the confirmation prompt.
-        let output = Command::new("reg")
+        let output = Command::new(&reg_exe)
             .args(["delete", key, "/v", AUTOSTART_APP_NAME, "/f"])
             .output();
         match output {
