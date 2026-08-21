@@ -204,7 +204,8 @@ const SPECIAL_EXTERNAL_SCHEME = /^(?:https?|ftp):/i;
  * **Behaviour delta worth knowing:** a Word hyperlink to
  * `\\fileserver\docs\spec.docx` used to render live and produce an explicit
  * "Blocked a link pointing outside this document's folder" notification on
- * click. It now renders as plain text with no href, so the refusal is silent.
+ * click. It now renders with a blanked href — still an `<a>` in the DOM,
+ * but struck through, muted and non-interactive — so the refusal is silent.
  * The security outcome is strictly better; the explanation is what is lost.
  */
 export function isRenderableLinkHref(raw: string | null | undefined): boolean {

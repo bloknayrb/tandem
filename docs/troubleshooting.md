@@ -436,7 +436,9 @@ Clicking a link used to do nothing at all when Tandem refused it. It now says wh
 
 Plain relative paths render and open normally: `[spec](docs/spec.md)` works, as does `./docs/spec.md`, a path with a query string, and a path mixing `/` and `\`. What stays refused is anything that would resolve outside the document's own folder, or a network (UNC) path — resolving one of those on Windows opens a connection and performs an authentication handshake, so it is refused before any filesystem call happens.
 
-Two related gaps are known and still open (#1420): a **middle-click** does not go through the same check a left-click does, and a pasted **image source** isn't checked for the same characters a pasted link is.
+Both of the gaps this section used to list are now addressed. A **middle-click** goes through the same check a left-click does, and a pasted or imported **image source** is screened for the same hostile characters a pasted link is. The middle-click route has been checked on Windows, where it turned out never to have been reachable; macOS and Linux are still untested, which is why `docs/security.md` keeps #1420 on its open list rather than reading it as closed everywhere.
+
+A link Tandem will not treat as safe also no longer *looks* clickable: it stays in the text, struck through and greyed, and does nothing when you click it. That covers network (UNC) paths, `tel:`/`sms:`/`xmpp:`-style links, and anything handing the address to an operating-system handler. **These refusals are silent** — the notification described above only fires for a link that is still live and then refused on click, so if a link is struck through, the strike-through is the whole explanation.
 
 ## Double-clicking a file does nothing
 
