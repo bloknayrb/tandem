@@ -1628,6 +1628,21 @@ $effect(() => {
       opacity var(--morph-cascade) var(--tandem-ease-out)
         calc(var(--morph-p2) - var(--morph-cascade));
   }
+  /* Reduced motion: this shorthand MIXES a token-driven opacity term with three
+     LITERAL 0.15s terms, so zeroing --morph-cascade/--morph-p2 reaches the fade
+     and nothing else — the colour/border/background tweens survive. Re-declare
+     the whole shorthand as `none` on the exact selector. Dual guard: the in-app
+     `body.tandem-reduce-motion` (class on <body>, so :global(...)) AND the OS
+     pref; the media half must come AFTER the rule it guards, since its
+     specificity only ties. #1530. */
+  :global(body.tandem-reduce-motion) .tab-add-pill {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tab-add-pill {
+      transition: none;
+    }
+  }
   .nt-morph.open .tab-add-pill {
     opacity: 0;
     pointer-events: none;
@@ -1636,6 +1651,17 @@ $effect(() => {
       border-color 0.15s,
       background 0.15s,
       opacity var(--morph-cascade) var(--tandem-ease-out); /* fade out fast on open */
+  }
+  /* The open-state variant carries the same mixed shorthand, and a guard on the
+     bare `.tab-add-pill` loses to it on specificity — so repeat the full
+     descendant selector verbatim in both halves. */
+  :global(body.tandem-reduce-motion) .nt-morph.open .tab-add-pill {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .nt-morph.open .tab-add-pill {
+      transition: none;
+    }
   }
   .tab-add-pill:hover {
     color: var(--tandem-accent); /* glyph tint — harmless, never clipped into an arc */

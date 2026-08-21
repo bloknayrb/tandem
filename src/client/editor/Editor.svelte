@@ -29,6 +29,7 @@ import LinkEditor from "./toolbar/LinkEditor.svelte";
 // resolveRelativeLink + INTERNAL_LINK_EXTS hoisted to ./utils/relative-link.ts:
 // module-private here, it had zero test coverage, and its fail-closed traversal
 // guards are exactly the kind of thing that has to be tested.
+import { interceptAnchorGesture } from "./utils/anchor-intercept";
 import {
   LINKABLE_EXTS_LABEL,
   resolveRelativeLink,
@@ -173,10 +174,13 @@ $effect(() => {
       FindReplaceExtension,
       SelectionDecorationExtension,
       // A4: opt-in smart typography (smart quotes/dashes/ellipsis as you
-      // type). Input-rules-only — no new nodes/marks — so it stays out of
-      // buildSchemaExtensions() and is appended here like the other
-      // runtime-param extensions. Default off; conditionally included based
-      // on the tracked `smartTypographyOn` above.
+      // type). Default off; conditionally included based on the tracked
+      // `smartTypographyOn` above — and that CONDITIONAL INCLUSION is why it
+      // is assembled here rather than in buildSchemaExtensions(), which takes
+      // no params and cannot see a setting. Adding no nodes or marks is not by
+      // itself the test: TableColumnAlignExtension (#995) adds neither and does
+      // live in that builder, deliberately, so the client tests exercise its
+      // real registration.
       ...(smartTypographyOn ? [Typography] : []),
       // #1460: a plaintext document cannot store a newline inside a textblock,
       // so Shift+Enter has to split the block instead of inserting a hardBreak.
@@ -371,27 +375,27 @@ async function openHref(href: string) {
   }
 }
 
-async function handleEditorClick(e: MouseEvent) {
-  // --- Anchor intercept (closes #479) --------------------------------------
+// Middle-click handler (#1420). `click` is primary-button-only; a middle click
+// fires `auxclick`, so before this existed the gesture never reached the anchor
+// intercept and never passed through `openHref` — the single trust gate the
+// whole link design rests on.
+//
+// It routes through the SAME `interceptAnchorGesture` as the click path so the
+// two cannot drift, and deliberately does NOT fall through to the annotation
+// block below: a middle click must not select or clear an annotation.
+function handleEditorAuxClick(e: MouseEvent) {
+  interceptAnchorGesture(e, openHref);
+}
+
+function handleEditorClick(e: MouseEvent) {
+  // --- Anchor intercept (closes #479, #1420) -------------------------------
   // We want to own every anchor click except in-page fragments: relative links
   // open as new Tandem tabs, safe-protocol external links open in the default
   // browser, and unrecognised schemes (javascript:, data:, …) are silently
-  // dropped so they can't navigate the editor frame.
-  const anchor = (e.target as HTMLElement).closest("a[href]") as HTMLAnchorElement | null;
-  if (anchor) {
-    const href = anchor.getAttribute("href") ?? "";
-
-    // Empty href or pure fragment → let the browser handle (in-page scroll).
-    if (!href || href.startsWith("#")) {
-      return;
-    }
-
-    // Take ownership of this click — even if no branch below handles it,
-    // we don't want the browser navigating to a javascript:/data:/etc URL.
-    e.preventDefault();
-    await openHref(href);
-    return;
-  }
+  // dropped so they can't navigate the editor frame. The body lives in
+  // `utils/anchor-intercept.ts` because `auxclick` needs the identical decision
+  // and the button/modifier matrix is a security invariant worth unit-testing.
+  if (interceptAnchorGesture(e, openHref)) return;
 
   // --- Annotation click ----------------------------------------------------
   // #768 Bug 2: when annotations overlap (e.g. a highlight inside a Claude
@@ -451,6 +455,7 @@ async function handleEditorClick(e: MouseEvent) {
 <div
   bind:this={editorRoot}
   onclick={handleEditorClick}
+  onauxclick={handleEditorAuxClick}
   role="presentation"
   data-testid="editor-root"
   class:tandem-paged={isPaged}
@@ -462,7 +467,10 @@ async function handleEditorClick(e: MouseEvent) {
   testIdPrefix="context-link"
   onApply={(value) => {
     if (editor && !editor.isDestroyed && editor.isEditable && editor.isActive("link")) {
-      applyLink(editor, value);
+      // Third arg is the REFUSAL channel (#1537): `setLink` returns false when
+      // the render gate rejects the scheme, and this editor would otherwise
+      // just close, leaving the old href in place with no explanation.
+      applyLink(editor, value, (n) => onNotify?.(n));
     }
     showContextLinkEditor = false;
   }}

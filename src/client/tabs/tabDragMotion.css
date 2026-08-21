@@ -29,6 +29,15 @@
   --a30-settle: 200ms; /* cancel / no-target release glides back */
   --a30-shadow: 160ms; /* lift shadow crossfade */
 
+  /* The pill's own chrome cross-fade (background / text / border as a tab goes
+     active, or is hovered). Not part of the drag gesture, but it lives here for
+     the same reason the others do: TabItem writes the whole `transition` as ONE
+     inline shorthand, and a stylesheet rule cannot override a single term of an
+     inline declaration — only `transition: none !important` for all of them,
+     which would take out the deliberately-kept shadow crossfade with it. A
+     token is the only instrument with the right granularity. (#1530) */
+  --a30-chrome: 150ms;
+
   /* Fitted to the strip's clip box, NOT A30's `0 6px 16px oklch(0 0 0 / .18)`.
      The scroller is `overflow-x: auto; overflow-y: hidden` with 6px of vertical
      padding, and with one axis `auto` the other cannot be `visible` — so the
@@ -49,6 +58,7 @@
     --a30-lift: 0ms;
     --a30-shift: 0ms;
     --a30-settle: 0ms;
+    --a30-chrome: 0ms;
   }
 }
 
@@ -56,4 +66,5 @@ body.tandem-reduce-motion {
   --a30-lift: 0ms;
   --a30-shift: 0ms;
   --a30-settle: 0ms;
+  --a30-chrome: 0ms;
 }

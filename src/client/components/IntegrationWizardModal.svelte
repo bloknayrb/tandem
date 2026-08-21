@@ -30,6 +30,7 @@ import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import type { ApplyItemResult, ExistingMcpInstall } from "../../shared/integrations/contract.js";
 import {
   COWORK_PREFLIGHT_CHECKING,
+  COWORK_PREFLIGHT_FAILED,
   coworkSettingsVariant,
   formatCoworkError,
   isTauriRuntime,
@@ -262,9 +263,10 @@ $effect(() => {
  *
  *  Unlike the other two Enable surfaces this one has no confirm step — the
  *  button in the footer fires the real enable directly — so the probe hangs off
- *  view entry instead. Same three-state contract: only a structured firewall
- *  error swaps the button for a retry; a probe that could not run leaves the
- *  button alone rather than blocking an enable that would have worked. */
+ *  view entry instead. Same contract as the other two: only a structured
+ *  firewall error swaps the button for a retry; a probe that could not run
+ *  leaves the button alone rather than blocking an enable that would have
+ *  worked — it only says so, and only when the failure was ours (#1436). */
 function openCoworkView(): void {
   coworkError = null;
   coworkBusy = false;
@@ -754,6 +756,16 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                   {@render warningIcon()}
                   <span>{coworkProbe.preflight.hint}</span>
                 </div>
+              {:else if coworkProbe.preflight?.status === "failed"}
+                <!-- #1436: see the note in CoworkSettings. `iw-hint-text`
+                     rather than `iw-banner-warning` on purpose — the claim is
+                     "we don't know", not "this will fail". -->
+                <p
+                  class="iw-hint-text"
+                  data-testid="integration-wizard-cowork-preflight-failed"
+                >
+                  {COWORK_PREFLIGHT_FAILED}
+                </p>
               {/if}
               {#if coworkProbe.probing}
                 <p class="iw-hint-text">{COWORK_PREFLIGHT_CHECKING}</p>

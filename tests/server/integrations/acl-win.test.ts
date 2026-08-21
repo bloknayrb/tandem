@@ -10,6 +10,12 @@ import {
   assertNoBroadAce,
   setRestrictiveAcl,
 } from "../../../src/server/integrations/acl-win.js";
+import {
+  assertPre1299PoisonTook,
+  currentUserSid,
+  normalizePre1299Poison,
+  restoreAccessForCleanup,
+} from "../../helpers/win-acl-fixture.js";
 
 const WIN_ONLY = process.platform === "win32";
 const execFileAsync = promisify(execFile);
@@ -22,6 +28,11 @@ describe.skipIf(!WIN_ONLY)("acl-win — Windows DACL hardening", () => {
   });
 
   afterEach(async () => {
+    // A poisoned subdir may survive a mid-test failure, and an empty DACL
+    // defeats `rm`. Re-grant inheritably before cleaning up.
+    if (fs.existsSync(tmpDir)) {
+      await restoreAccessForCleanup(tmpDir, await currentUserSid());
+    }
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -76,7 +87,14 @@ describe.skipIf(!WIN_ONLY)("acl-win — Windows DACL hardening", () => {
   // EPERM, repair — with real icacls, because the doc-backup unit suite mocks
   // this module and therefore cannot see any of it. The repair phase is also
   // what makes the tree deletable again in afterEach.
-  it("grant on a directory: non-inheritable strips an existing child's DACL, inheritable repairs it", async () => {
+  //
+  // The title says "a child with an empty DACL", not "the non-inheritable
+  // grant empties the child", because the fixture no longer relies on the
+  // latter: `normalizePre1299Poison` pins the root's DACL afterwards, since
+  // `/inheritance:r` alone does not reach that state on every Windows build
+  // (#1529). What is asserted below is the half that matters to the reporter
+  // and is true everywhere — an inheritable grant repairs such a child.
+  it("an inheritable grant on the root repairs a child left with an empty DACL", async () => {
     const root = path.join(tmpDir, "doc-backups");
     const child = path.join(root, "abc123hash");
     const snapshot = path.join(child, "welcome-20260805-160342-45f01c92.md");
@@ -88,6 +106,9 @@ describe.skipIf(!WIN_ONLY)("acl-win — Windows DACL hardening", () => {
     // Poison: the default grant applies to `root` alone, so breaking
     // inheritance leaves `child` with an EMPTY DACL — deny-all, owner included.
     await setRestrictiveAcl(root);
+    await normalizePre1299Poison(root, await currentUserSid());
+    await assertPre1299PoisonTook(root, child);
+    // Positive control on the operation the repair below has to restore.
     expect(() => fs.writeFileSync(snapshot, "original bytes", { flag: "wx" })).toThrow(/EPERM/);
 
     // Repair: an inheritable grant propagates down to the existing child.

@@ -28,6 +28,12 @@ import {
   docBackupsRoot,
   snapshotBeforeFirstWrite,
 } from "../../../src/server/file-io/doc-backup.js";
+import {
+  assertPre1299PoisonTook,
+  currentUserSid,
+  normalizePre1299Poison,
+  restoreAccessForCleanup,
+} from "../../helpers/win-acl-fixture.js";
 
 vi.mock("../../../src/server/notifications.js", () => ({ pushNotification: vi.fn() }));
 
@@ -35,12 +41,6 @@ const WIN_ONLY = process.platform === "win32";
 const execFileAsync = promisify(execFile);
 const systemBin = (name: string) =>
   path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", name);
-
-/** Current user's SID — the principal the production ACL grants to. */
-async function currentUserSid(): Promise<string> {
-  const { stdout } = await execFileAsync(systemBin("whoami.exe"), ["/user", "/fo", "csv", "/nh"]);
-  return stdout.split(",")[1].replace(/"/g, "").trim();
-}
 
 describe.skipIf(!WIN_ONLY)("doc-backup — recovery from a pre-#1299 poisoned install", () => {
   let tmpDir: string;
@@ -60,10 +60,7 @@ describe.skipIf(!WIN_ONLY)("doc-backup — recovery from a pre-#1299 poisoned in
     // an empty DACL defeats rm. Re-grant inheritably before cleaning up.
     const root = docBackupsRoot(appDataDir);
     if (fs.existsSync(root)) {
-      const sid = await currentUserSid();
-      await execFileAsync(systemBin("icacls.exe"), [root, "/grant", `*${sid}:(OI)(CI)F`]).catch(
-        () => {},
-      );
+      await restoreAccessForCleanup(root, await currentUserSid());
     }
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -77,9 +74,16 @@ describe.skipIf(!WIN_ONLY)("doc-backup — recovery from a pre-#1299 poisoned in
     // the root, applied while the per-path subdir already exists.
     const sid = await currentUserSid();
     await execFileAsync(systemBin("icacls.exe"), [root, "/inheritance:r", "/grant:r", `*${sid}:F`]);
+    // ...then pin the resulting root DACL, because `/inheritance:r` removes
+    // inherited ACEs on Windows 11 but merely converts them on GitHub's
+    // Server 2025 image, where the converted `(OI)(CI)` entries propagate back
+    // down and un-poison the subdir (#1529).
+    await normalizePre1299Poison(root, sid);
 
     // Positive control that the poison took — without this the test would
-    // pass just as well against a healthy tree and prove nothing.
+    // pass just as well against a healthy tree and prove nothing. It throws
+    // rather than skipping: a fixture that cannot poison proves nothing either.
+    await assertPre1299PoisonTook(root, subdir);
     expect(() => fs.readdirSync(subdir)).toThrow(/EPERM/);
 
     const outcome = await snapshotBeforeFirstWrite(docPath, { appDataDir, documentId: "d1" });

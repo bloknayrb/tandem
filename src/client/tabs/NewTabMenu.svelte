@@ -525,6 +525,18 @@ $effect(() => {
     color: var(--tandem-fg);
     transition: background 100ms, color 100ms, border-color 100ms;
   }
+  /* Reduced motion: these 100ms hover tweens are literal, not token-driven — the
+     morph-token zeroing that flattens the row cascade above never reaches them.
+     Dual guard: the in-app `body.tandem-reduce-motion` (class on <body>, so
+     :global(...)) AND the OS pref, the media half last so it wins the tie. */
+  :global(body.tandem-reduce-motion) .ntl-action {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ntl-action {
+      transition: none;
+    }
+  }
   .ntl-action + .ntl-action {
     margin-top: 2px;
   }

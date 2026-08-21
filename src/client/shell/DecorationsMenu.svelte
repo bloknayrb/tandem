@@ -265,6 +265,16 @@ function chooseSettings() {
     font: inherit;
     font-size: 12px;
   }
+  /* The icon button's hover/active tint fades only for polish; the `.on` state
+     still reads from the final colours, so reduced motion drops the fade. */
+  :global(body.tandem-reduce-motion) .ib {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ib {
+      transition: none;
+    }
+  }
   .ib:hover {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);

@@ -60,6 +60,21 @@
 .tandem-editor a[href] {
   cursor: pointer;
 }
+/* A link whose href the render-time guard REFUSED (#1537). The base
+ * `@tiptap/extension-link` renderHTML emits `href=""` for a disallowed scheme,
+ * and `a[href]` above matches an empty attribute too — so a refused link kept
+ * the pointer cursor and did nothing at all on click. `LinkWithHoverTitle` sets
+ * `data-tandem-link-blocked` on exactly those anchors.
+ *
+ * The affordance is deliberately styling only: no `title`, and nothing derived
+ * from the refused href reaches the DOM (see editor-extensions.ts). Tokens
+ * only — `check:tokens` runs pre-commit. */
+.tandem-editor a[data-tandem-link-blocked] {
+  cursor: default;
+  color: var(--tandem-fg-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--tandem-border-strong);
+}
 .tandem-editor ul,
 .tandem-editor ol {
   padding-left: 1.5em;
@@ -158,6 +173,31 @@
 .tandem-editor th {
   background: var(--tandem-surface-muted);
   font-weight: 600;
+  /* Deliberate visual change (#995). The UA stylesheet centres `th`, and nothing
+     here overrode it, so every header cell was centred. Once GFM column
+     alignment renders (see below), leaving that in place would make
+     `| :- | --- | -: |` show header 0 left, header 1 CENTRED and header 2 right
+     — the centred one being the column with no alignment declared at all. A row
+     whose only centred column is the unaligned one reads as broken. Left matches
+     the body cells, and matches how GitHub and every reset-using GFM renderer
+     display an unaligned header. */
+  text-align: left;
+}
+/* GFM column alignment (#995). Applied per cell by
+   `extensions/table-column-align.ts`, which resolves each cell's column through
+   prosemirror-tables' TableMap — the table-level `align` array cannot be
+   expressed as a selector, because a column's cells are not siblings and
+   colspan/rowspan break `:nth-child`. Specificity (0,2,0) clears the
+   `.tandem-editor td` / `.tandem-editor th` rules above; `text-align` inherits
+   into the cell's child paragraph, so no descendant rule is needed. */
+.tandem-editor .tandem-cell-align-left {
+  text-align: left;
+}
+.tandem-editor .tandem-cell-align-center {
+  text-align: center;
+}
+.tandem-editor .tandem-cell-align-right {
+  text-align: right;
 }
 .tandem-editor blockquote {
   border-left: 2px solid var(--tandem-border-strong);
@@ -348,9 +388,41 @@
   color: color-mix(in srgb, var(--tandem-author-claude) 64%, var(--tandem-fg));
 }
 
-/* Claude focus paragraph */
-.tandem-claude-focus {
+/* Claude focus paragraph. The tint, rail and cross-fade moved here from an
+   inline `style` on the ProseMirror decoration (`extensions/awareness.ts`),
+   where no reduced-motion guard could reach them — every value was static, so
+   nothing had to stay in JS.
+
+   The `.tandem-editor` prefix is load-bearing, not tidiness. The decoration is
+   applied by `doc.forEach` over TOP-LEVEL nodes, so it lands on blockquotes and
+   lists as readily as on paragraphs — and this file already styles those at
+   (0,1,1): `.tandem-editor blockquote` sets its own `border-left`/`padding`, and
+   `.tandem-editor ul, .tandem-editor ol` set `padding-left`. Higher specificity
+   wins regardless of source order, so a bare `.tandem-claude-focus` (0,1,0) lost
+   the coral rail and the indent on exactly those nodes. The old inline `style`
+   won unconditionally, which is why nothing surfaced when it moved here — the
+   tint and the `::before` gutter rail still render either way. Keep this at
+   (0,2,0) or above; `tests/design-system-impl/claude-focus-specificity.test.ts`
+   pins it against every competing rule in this file. */
+.tandem-editor .tandem-claude-focus {
   position: relative;
+  background: var(--tandem-claude-focus-bg);
+  border-left: 3px solid var(--tandem-claude-focus-border);
+  padding-left: 8px;
+  transition:
+    background 0.3s ease,
+    border-color 0.3s ease;
+}
+/* The tint arriving is state feedback — under reduced motion the focused
+   paragraph is simply already tinted. The rail's pulse on `::before` is guarded
+   separately, further down with the rest of this file's animations. */
+body.tandem-reduce-motion .tandem-editor .tandem-claude-focus {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tandem-editor .tandem-claude-focus {
+    transition: none;
+  }
 }
 .tandem-claude-focus::before {
   content: "";
@@ -506,6 +578,17 @@ body.tandem-reduce-motion .tandem-annotation-ping::before {
   border-radius: 1px;
   transition: background 200ms;
 }
+/* Reduced motion: the gutter thread still recolors when a block changes hands —
+   it just swaps instantly instead of crossfading. Same dual mechanism as the
+   Claude-presence guards above (OS pref AND the in-app reduceMotion setting). */
+body.tandem-reduce-motion .tandem-editor [data-tandem-author-block]::before {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tandem-editor [data-tandem-author-block]::before {
+    transition: none;
+  }
+}
 .tandem-editor [data-tandem-author-block="user"]::before {
   background: var(--tandem-author-user);
   opacity: 0.55;
@@ -539,6 +622,17 @@ body.tandem-reduce-motion .tandem-annotation-ping::before {
     color 120ms ease-in-out;
   user-select: none;
   vertical-align: middle;
+}
+/* Reduced motion: the chevron still reveals on hover/focus and still takes its
+   hover color — only the 120ms opacity/color fades are cut, so the affordance
+   is unchanged. Dual mechanism, as above. */
+body.tandem-reduce-motion .tandem-editor .tandem-heading-chevron {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tandem-editor .tandem-heading-chevron {
+    transition: none;
+  }
 }
 .tandem-editor h1:hover .tandem-heading-chevron,
 .tandem-editor h2:hover .tandem-heading-chevron,

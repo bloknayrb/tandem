@@ -353,6 +353,21 @@ function handleKeyDown(e: KeyboardEvent) {
     box-shadow: var(--tandem-shadow-1);
     transition: background 0.15s ease, box-shadow 0.15s ease;
   }
+  /* Reduced motion: the card still recolors (selection tint) and still raises
+     its shadow on hover/focus — only the 0.15s ramps are cut. No `!important`:
+     the inline style= above sets background/opacity/cursor but never
+     `transition`, and the A4/A1/A10 lifecycle motion is a JS transition that
+     already opts out via `motionOff()` in cardMotion.ts, so nothing outranks
+     these two declarations. Dual mechanism, matching the typing-dot guard
+     below. */
+  :global(body.tandem-reduce-motion) .tandem-annotation-card {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tandem-annotation-card {
+      transition: none;
+    }
+  }
   .tandem-annotation-card:hover {
     box-shadow: var(--tandem-shadow-2);
   }

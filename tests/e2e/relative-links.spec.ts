@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import fs from "fs";
 import path from "path";
+import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -208,4 +209,129 @@ test("a link that renders live but cannot be opened SAYS so (#1377 render/click 
   } finally {
     cleanupFixtureDir(dir);
   }
+});
+
+test("a cross-host-shaped href renders inert — no live href, no title (#1420)", async ({
+  page,
+}) => {
+  // `/\evil.com/x.md` renders live on master: the configured guard is
+  // `defaultValidate(url) || isSchemelessPathHref(url)`, and `defaultValidate`
+  // accepts a leading `/` via its `[^a-z]` alternative WITHOUT looking at what
+  // follows — so the `||` short-circuits the (correct) rejection away. A
+  // browser resolves the result to `http://evil.com/x.md`.
+  //
+  // mdast→Y.Doc stores link URLs verbatim (`mdast-ydoc.ts` writes
+  // `href: node.url` with no sanitization), so opening a crafted `.md` is the
+  // delivery path — the dominant untrusted-content surface for this app.
+  const dir = createFixtureDir("link-crosshost.md");
+  try {
+    await mcp.callTool("tandem_open", { filePath: path.join(dir, "link-crosshost.md") });
+
+    await page.goto("/");
+    const editor = page.locator(".tandem-editor");
+    await expect(editor).toBeVisible({ timeout: 10_000 });
+    await expect(editor).toContainText("Cross-Host Link");
+
+    const link = editor.locator("a", { hasText: "click me" });
+    await expect(link).toBeVisible({ timeout: 5_000 });
+
+    // The render-time veto blanks it, and the title-injection must not
+    // resurrect it into a tooltip advertising the destination.
+    expect(await link.getAttribute("href")).toBe("");
+    expect(await link.getAttribute("title")).toBeNull();
+  } finally {
+    cleanupFixtureDir(dir);
+  }
+});
+
+test("middle-clicking a relative link routes through the intercept (#1420)", async ({ page }) => {
+  // NOTE ON WHAT THIS DOES AND DOES NOT PROVE. Chromium already suppresses the
+  // middle-click navigation inside a `contenteditable`, so "no popup opened" is
+  // NOT load-bearing here — it holds on master too. What this asserts is that
+  // the `auxclick` gesture now reaches `openHref` at all: on master no
+  // `auxclick` listener existed, so no Tandem tab opened. The read-only test
+  // below is the one that proves `preventDefault()` suppresses anything.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "link-source.md") });
+
+  await page.goto("/");
+  const editor = page.locator(".tandem-editor");
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await expect(editor).toContainText("Link Source");
+
+  const link = editor.locator("a", { hasText: "Open the target document" });
+  await expect(link).toBeVisible({ timeout: 5_000 });
+
+  await link.click({ button: "middle" });
+
+  await expect(
+    page.locator("[data-testid^='tab-name-']", { hasText: "link-target.md" }),
+  ).toBeVisible({ timeout: 10_000 });
+});
+
+test("middle-clicking a link in a READ-ONLY document does not navigate away (#1420)", async ({
+  page,
+  context,
+}) => {
+  // THE LOAD-BEARING ROW. Chromium raises the middle-click default action only
+  // outside a `contenteditable`, and Tandem's editor is
+  // `contenteditable={String(view.editable)}` — so the reproducible surface is
+  // the READ-ONLY editor: View Changelog, upgrade-opens-CHANGELOG.md,
+  // `upload://` files, and any `POST /api/open {readOnly:true}`. That is also
+  // the surface most likely to be carrying externally-authored content.
+  //
+  // Measured on master: middle-click in a non-editable editor opens a popup
+  // (a real navigation to the resolved URL); with a `preventDefault()` listener
+  // it drops to zero.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "link-source.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  // Re-open read-only through the same route the View Changelog button uses.
+  // The harness MCP port, never the product's 3479 (#1492): a literal here
+  // would drive this destructive suite at whatever backend happens to own the
+  // real port.
+  const status = await page.evaluate(
+    async ([fp, url]) => {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: fp, readOnly: true, force: false }),
+      });
+      return res.status;
+    },
+    [path.join(tmpDir, "link-source.md"), `http://127.0.0.1:${E2E_MCP_PORT}/api/open`] as const,
+  );
+  expect(status).toBe(200);
+
+  const editor = page.locator(".tandem-editor");
+  await expect(editor).toContainText("Link Source");
+  // Precondition: without this the test would pass vacuously against an
+  // editable document, where Chromium suppresses the default action anyway.
+  await expect
+    .poll(async () => editor.getAttribute("contenteditable"), { timeout: 10_000 })
+    .toBe("false");
+
+  const link = editor.locator("a", { hasText: "Open the target document" });
+  await expect(link).toBeVisible({ timeout: 5_000 });
+
+  // Collect any popup the browser opens on its own. Asserted BEFORE the
+  // Tandem-tab assertion on purpose: if the tab check came first it would fail
+  // first under a regression, and this clause — the one that actually proves
+  // `preventDefault()` suppressed a navigation — would never be reached.
+  const popups: string[] = [];
+  context.on("page", (opened) => popups.push(opened.url()));
+
+  await link.click({ button: "middle" });
+
+  // Bounded settle: this asserts that something did NOT happen, so there is no
+  // state to poll for. Measured without the `auxclick` handler, Chromium opens
+  // the popup well inside this window.
+  await page.waitForTimeout(2_000);
+  expect(popups, "middle click must not open a browser tab").toEqual([]);
+  expect(page.url()).toContain("127.0.0.1");
+
+  // And the gesture did open a Tandem tab instead.
+  await expect(
+    page.locator("[data-testid^='tab-name-']", { hasText: "link-target.md" }),
+  ).toBeVisible({ timeout: 10_000 });
 });

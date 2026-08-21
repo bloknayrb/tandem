@@ -83,11 +83,13 @@ cowork-onboarding-error
 cowork-onboarding-learn-more-btn
 cowork-onboarding-learn-more-link
 cowork-onboarding-preflight-blocked
+cowork-onboarding-preflight-failed
 cowork-onboarding-preflight-live
 cowork-onboarding-preflight-retry-btn
 cowork-onboarding-skip-btn
 cowork-onboarding-step
 cowork-preflight-blocked
+cowork-preflight-failed
 cowork-preflight-live
 cowork-preflight-retry-btn
 cowork-reachability
@@ -215,6 +217,7 @@ integration-wizard-cowork-back
 integration-wizard-cowork-error
 integration-wizard-cowork-explainer
 integration-wizard-cowork-preflight-blocked
+integration-wizard-cowork-preflight-failed
 integration-wizard-cowork-preflight-live
 integration-wizard-cowork-preflight-retry-btn
 integration-wizard-cowork-setup
@@ -321,6 +324,10 @@ palette-item-{*}
 panel-edge-collapse-{*}
 peek-dot-{*}
 peek-strip-{*}
+pending-update-banner
+pending-update-banner-check
+pending-update-banner-dismiss
+pending-update-banner-live
 popup-annotate-btn
 popup-annotate-row
 popup-annotation-input

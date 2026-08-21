@@ -104,8 +104,9 @@ try {
     // Invoked by the Tauri NSIS uninstaller hook on Windows, and manually on
     // any platform before removing the app. Removes Tandem's MCP config
     // entries + bundled skill everywhere; Cowork plugin entries + firewall
-    // rules on Windows. Runs inside the already-signed tandem.exe (security
-    // invariant §10 — prevents binary-planting during uninstall).
+    // rules on Windows. Runs inside the already-signed tandem.exe rather than a
+    // separate uninstall_scrub.exe — a dedicated scrub binary would sit unsigned
+    // beside the installer at uninstall time, which is a binary-planting target.
     const { runUninstallScrub } = await import("./uninstall-scrub.js");
     const exitCode = await runUninstallScrub();
     process.exit(exitCode);
