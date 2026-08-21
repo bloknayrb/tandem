@@ -4515,6 +4515,86 @@ mod enable_persist_outcome_tests {
             !msg.contains("plugin entries"),
             "message must not claim plugin entries were installed when none were: {msg}"
         );
+    }
+}
+
+/// Did this workspace's `installed_plugins.json` write actually land?
+///
+/// **The subtlety this exists to name: an `Ok` does not mean it landed.**
+/// Both `install_tandem_plugin_into_workspace` and
+/// `uninstall_tandem_plugin_from_workspace` return
+/// `Ok(WorkspaceWriteReport { installed_plugins: WriteStatus::Failed(..) })`
+/// for a per-file failure -- e.g. a revalidation failure in the uninstall path
+/// (`cowork_installer.rs`) -- reserving `Err` for a failure to even reach the
+/// file. So `r.is_ok()` counts a workspace that still holds its plugin entry
+/// as a success.
+///
+/// Both arms of `cowork_toggle_integration` decide "did this workspace
+/// succeed?" more than once -- for the hard all-failed check and again for the
+/// #1438 degraded-success warning -- and the two must not disagree. They did:
+/// the disable arm's warning used a bare `is_ok()` while its own all-failed
+/// check used the `WriteStatus` test right above it, so a partial uninstall
+/// whose failures were all non-`Err` produced no warning at all. That is the
+/// commonest failure shape and precisely the case the warning was added for.
+/// Routing every such decision through this one predicate is what keeps them
+/// in step.
+#[cfg(target_os = "windows")]
+fn workspace_entry_written(
+    report: &Result<cowork_installer::WorkspaceWriteReport, cowork_atomic_json::CoworkError>,
+) -> bool {
+    matches!(
+        report,
+        Ok(r) if matches!(
+            r.installed_plugins,
+            cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
+        )
+    )
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod workspace_entry_written_tests {
+    use super::workspace_entry_written;
+    use crate::cowork_atomic_json::CoworkError;
+    use crate::cowork_installer::{WorkspaceWriteReport, WriteStatus};
+
+    fn report(status: WriteStatus) -> Result<WorkspaceWriteReport, CoworkError> {
+        Ok(WorkspaceWriteReport {
+            workspace_id: "ws".into(),
+            vm_id: "vm".into(),
+            installed_plugins: status,
+            known_marketplaces: WriteStatus::Ok,
+            cowork_settings: WriteStatus::Ok,
+        })
+    }
+
+    #[test]
+    fn ok_and_already_present_count_as_written() {
+        assert!(workspace_entry_written(&report(WriteStatus::Ok)));
+        assert!(workspace_entry_written(&report(WriteStatus::AlreadyPresent)));
+    }
+
+    #[test]
+    fn an_ok_carrying_a_failed_status_is_not_written() {
+        // The whole reason this predicate exists. `is_ok()` says true here, and
+        // that is what made the #1438 partial-uninstall warning silent for the
+        // commonest failure shape: `uninstall_tandem_plugin_from_workspace`
+        // returns Ok(..Failed) on a revalidation failure, not Err.
+        assert!(!workspace_entry_written(&report(WriteStatus::Failed(
+            "revalidation failed".into()
+        ))));
+        assert!(!workspace_entry_written(&report(WriteStatus::Locked)));
+        assert!(!workspace_entry_written(&report(WriteStatus::SchemaDrift)));
+    }
+
+    #[test]
+    fn a_hard_error_is_not_written() {
+        let err: Result<WorkspaceWriteReport, CoworkError> =
+            Err(CoworkError::InsecureAcl {
+                path: std::path::PathBuf::from("C:/ws"),
+            });
+        assert!(!workspace_entry_written(&err));
+    }
+}
 
 /// The `Ok` payload of `cowork_toggle_integration` (#1438).
 ///
@@ -4776,15 +4856,7 @@ fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleReport, String
         // AlreadyPresent — anything else (Locked, SchemaDrift, InsecureAcl, Failed)
         // counts as a failure.
         if !workspaces.is_empty() {
-            let success_count = reports.iter().filter(|r| {
-                match r {
-                    Ok(report) => matches!(
-                        report.installed_plugins,
-                        cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
-                    ),
-                    Err(_) => false,
-                }
-            }).count();
+            let success_count = reports.iter().filter(|r| workspace_entry_written(r)).count();
 
             if success_count == 0 {
                 let failure_summary: Vec<String> = reports.iter().map(|r| match r {
@@ -4808,11 +4880,7 @@ fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleReport, String
                 // out on the Ok payload so the panel can say so.
                 let failure_summary: Vec<String> = reports
                     .iter()
-                    .filter(|r| !matches!(r, Ok(report) if matches!(
-                        report.installed_plugins,
-                        cowork_installer::WriteStatus::Ok
-                            | cowork_installer::WriteStatus::AlreadyPresent
-                    )))
+                    .filter(|r| !workspace_entry_written(r))
                     .map(|r| match r {
                         Ok(report) => format!(
                             "{}/{}: {:?}",
@@ -4865,15 +4933,7 @@ fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleReport, String
         }
 
         let workspace_all_failed = if !workspaces.is_empty() {
-            let success_count = reports.iter().filter(|r| {
-                match r {
-                    Ok(report) => matches!(
-                        report.installed_plugins,
-                        cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
-                    ),
-                    Err(_) => false,
-                }
-            }).count();
+            let success_count = reports.iter().filter(|r| workspace_entry_written(r)).count();
 
             if success_count > 0 && success_count < workspaces.len() {
                 log::warn!(
@@ -4967,17 +5027,7 @@ fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleReport, String
         // uses the WriteStatus predicate; this one is now symmetric with it.
         let uninstall_failures: Vec<String> = reports
             .iter()
-            .filter(|r| {
-                !matches!(
-                    r,
-                    Ok(report)
-                        if matches!(
-                            report.installed_plugins,
-                            cowork_installer::WriteStatus::Ok
-                                | cowork_installer::WriteStatus::AlreadyPresent
-                        )
-                )
-            })
+            .filter(|r| !workspace_entry_written(r))
             .map(|r| match r {
                 Ok(report) => format!(
                     "{}/{}: {:?}",
@@ -5757,15 +5807,7 @@ fn cowork_set_lan_ip_override(enabled: bool) -> Result<String, String> {
         }
 
         if !workspaces.is_empty() {
-            let success_count = reports.iter().filter(|r| {
-                match r {
-                    Ok(report) => matches!(
-                        report.installed_plugins,
-                        cowork_installer::WriteStatus::Ok | cowork_installer::WriteStatus::AlreadyPresent
-                    ),
-                    Err(_) => false,
-                }
-            }).count();
+            let success_count = reports.iter().filter(|r| workspace_entry_written(r)).count();
 
             if success_count == 0 {
                 let failure_summary: Vec<String> = reports.iter().map(|r| match r {
