@@ -327,7 +327,8 @@ describe("firewallErrorHint", () => {
 
   it("no adapter-enumeration hint offers administrator rights or a reboot", () => {
     // The defect in one assertion. Elevation has nothing to do with whether a
-    // process can be spawned, and rebooting cannot put PowerShell back on PATH.
+    // process can be spawned, and rebooting cannot put PowerShell back at its
+    // anchored system path (PATH is not consulted at all any more).
     for (const reason of [...ADAPTER_REASONS, undefined]) {
       const hint = firewallErrorHint({ kind: "adapterEnumerationFailed", reason }).toLowerCase();
       expect(hint, `${reason ?? "(no reason)"} still offers elevation`).not.toContain(

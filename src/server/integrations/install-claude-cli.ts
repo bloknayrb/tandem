@@ -40,8 +40,8 @@ import { get as httpsGetDefault } from "node:https";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-
 import type { ClaudeCliPresence } from "../../shared/integrations/contract.js";
+import { systemBin } from "../platform.js";
 import {
   assertNoBroadAce as assertNoBroadAceDefault,
   setRestrictiveAcl as setRestrictiveAclDefault,
@@ -298,13 +298,9 @@ async function runInterpreter(
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (isWin && code === "ENOENT" && plan.interpreter === "pwsh.exe") {
-      const fallback = join(
-        process.env.SystemRoot ?? "C:\\Windows",
-        "System32",
-        "WindowsPowerShell",
-        "v1.0",
-        "powershell.exe",
-      );
+      // Via `systemBin`, not a hand-rolled join of the same segments: a second
+      // copy of an anchoring rule is how the rule drifts out of one of them.
+      const fallback = systemBin("WindowsPowerShell\\v1.0\\powershell.exe");
       await execFileAsync(fallback, plan.args, {
         timeout: EXEC_TIMEOUT_MS,
         env: plan.env,

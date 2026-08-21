@@ -20,6 +20,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { promisify } from "node:util";
+import { systemBin } from "../platform.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -96,8 +97,11 @@ async function probePs(pid: number): Promise<ProcessIdentity> {
 /** Windows: `tasklist /FI "PID eq <pid>" /FO CSV /NH` → first CSV field is the image name. */
 async function probeTasklist(pid: number): Promise<ProcessIdentity> {
   try {
+    // Anchored, matching `run_system32_tool("tasklist.exe", …)` on the Rust
+    // side: the same probe resolved by bare name in one half and by absolute
+    // path in the other is an asymmetry, not a policy.
     const { stdout } = await execFileAsync(
-      "tasklist",
+      systemBin("tasklist.exe"),
       ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
       { timeout: PROBE_TIMEOUT_MS, windowsHide: true },
     );

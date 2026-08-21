@@ -38,26 +38,28 @@
 
 use std::path::PathBuf;
 
-use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+use windows_sys::Win32::System::SystemInformation::{
+    GetSystemDirectoryW, GetWindowsDirectoryW,
+};
 
-/// `%SystemRoot%\System32` (or `SysWOW64` under WOW64), read from the OS.
+/// Call one of the `Get*DirectoryW` pair, which share a buffer protocol.
 ///
-/// `None` when the call fails or reports a length the retry still cannot hold —
-/// see the fail-closed note in the module docs.
-pub fn system_dir() -> Option<PathBuf> {
+/// Both return the length **excluding** the terminating null on success, and the
+/// required size **including** it on overflow — so `len > buffer.len()` is an
+/// unambiguous overflow signal (a success can be at most `len - 1`, since the
+/// null has to fit).
+fn read_dir_api(api: unsafe extern "system" fn(*mut u16, u32) -> u32) -> Option<PathBuf> {
     // MAX_PATH covers every real system directory; the retry exists because the
-    // API's contract allows a longer one, and a silently truncated path would be
+    // APIs' contract allows a longer one, and a silently truncated path would be
     // worse than no path.
     let mut buffer = vec![0u16; 260];
     // SAFETY: the pointer and length describe `buffer`, and the API writes at
     // most `len` UTF-16 units. It never retains the pointer.
-    let mut len = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+    let mut len = unsafe { api(buffer.as_mut_ptr(), buffer.len() as u32) };
 
     if len as usize > buffer.len() {
-        // Documented overflow signal: the return is the required size INCLUDING
-        // the terminating null, unlike the success return.
         buffer = vec![0u16; len as usize];
-        len = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+        len = unsafe { api(buffer.as_mut_ptr(), buffer.len() as u32) };
     }
 
     // 0 is the documented failure return; a second overflow means the directory
@@ -69,10 +71,53 @@ pub fn system_dir() -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf16(&buffer[..len as usize]).ok()?))
 }
 
+/// `%SystemRoot%\System32` (or `SysWOW64` under WOW64), read from the OS.
+///
+/// `None` when the call fails or reports a length the retry still cannot hold —
+/// see the fail-closed note in the module docs.
+pub fn system_dir() -> Option<PathBuf> {
+    read_dir_api(GetSystemDirectoryW)
+}
+
+/// `%SystemRoot%` itself — `C:\Windows`. Only `explorer.exe` needs this.
+pub fn windows_dir() -> Option<PathBuf> {
+    read_dir_api(GetWindowsDirectoryW)
+}
+
+/// Reject anything that would escape the directory it is joined onto.
+///
+/// `PathBuf::join` REPLACES the base when given an absolute component, so
+/// `join("C:\\evil.exe")` silently discards the anchor entirely — the one input
+/// that could turn these resolvers back into the thing they exist to prevent.
+/// Every caller passes a literal today; this keeps that from being load-bearing.
+fn is_plain_relative(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(':')
+        && !name.starts_with('\\')
+        && !name.starts_with('/')
+        && !name.split(['\\', '/']).any(|part| part == "..")
+}
+
 /// Absolute path to a binary that lives directly in System32 (`netsh.exe`,
 /// `reg.exe`, `netstat.exe`, `tasklist.exe`).
 pub fn system32_exe(name: &str) -> Option<PathBuf> {
+    if !is_plain_relative(name) {
+        return None;
+    }
     Some(system_dir()?.join(name))
+}
+
+/// Absolute path to a binary that lives in `%SystemRoot%` rather than System32.
+///
+/// `explorer.exe` is the only one, and it is a worse case than the System32
+/// binaries rather than a milder one: `C:\Windows` is step **4** of the search
+/// order, so a bare `"explorer"` is outranked by the application directory
+/// *and* by System32.
+pub fn windows_exe(name: &str) -> Option<PathBuf> {
+    if !is_plain_relative(name) {
+        return None;
+    }
+    Some(windows_dir()?.join(name))
 }
 
 /// Absolute path to Windows PowerShell 5.1.
@@ -96,18 +141,21 @@ mod tests {
         assert!(dir.is_absolute(), "{dir:?} should be absolute");
     }
 
-    /// The point of the module: the resolved path must be the system copy, not
-    /// something adjacent to our own binary.
+    /// The point of the module: the resolved path is the system copy.
+    ///
+    /// The obvious companion assertion — "not beside our own binary" — is NOT
+    /// here on purpose. A test binary's `current_exe()` is `target/debug/deps/`,
+    /// so comparing against it can never fire whatever `system32_exe` returns;
+    /// it would read as coverage of the security property while providing none.
+    /// What actually pins that property is the source-text check in
+    /// `tests/build/cowork-subnet-probe-contract.test.ts`, which fails if any
+    /// spawn site goes back to a bare program name.
     #[test]
-    fn system32_exe_is_absolute_and_not_beside_the_application() {
+    fn system32_exe_resolves_under_the_system_directory() {
         let netsh = system32_exe("netsh.exe").expect("netsh.exe path");
         assert!(netsh.is_absolute());
         assert!(netsh.is_file(), "{netsh:?} should exist on any Windows install");
-
-        let app_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from));
-        if let Some(app_dir) = app_dir {
-            assert_ne!(netsh.parent(), Some(app_dir.as_path()));
-        }
+        assert_eq!(netsh.parent(), system_dir().as_deref());
     }
 
     /// Regression guard for the sub-path: `powershell.exe` is one level deeper
@@ -120,13 +168,48 @@ mod tests {
         assert_eq!(ps.parent().and_then(|p| p.file_name()), Some(std::ffi::OsStr::new("v1.0")));
     }
 
-    /// An anchored path must still be handed to `Command` as a single argument
-    /// with no quoting of our own — the module's no-string-concatenation rule
-    /// applies to the program slot too.
     #[test]
-    fn resolved_paths_carry_no_quoting() {
-        let netsh = system32_exe("netsh.exe").expect("netsh.exe path");
-        let text = netsh.to_string_lossy();
-        assert!(!text.contains('"'), "{text} should not be pre-quoted");
+    fn windows_exe_resolves_under_the_windows_directory() {
+        let explorer = windows_exe("explorer.exe").expect("explorer.exe path");
+        assert!(explorer.is_file(), "{explorer:?} should exist on any Windows install");
+        assert_eq!(explorer.parent(), windows_dir().as_deref());
+        // The two directories are distinct, and confusing them is the whole
+        // reason `explorer` needs its own resolver.
+        assert_ne!(windows_dir(), system_dir());
+    }
+
+    /// An absolute or escaping `name` must be refused, not joined.
+    ///
+    /// `PathBuf::join` REPLACES the base on an absolute component, so without
+    /// the guard `system32_exe("C:\\evil.exe")` returns `C:\evil.exe` — the
+    /// resolver handing back an arbitrary path while looking like it anchored
+    /// one. Unreachable from today's literal-only call sites; this is what keeps
+    /// that from being the only thing standing between the two.
+    #[test]
+    fn a_resolver_refuses_a_name_that_would_escape_the_anchor() {
+        for bad in ["C:\\evil.exe", "\\\\server\\share\\evil.exe", "..\\..\\evil.exe", "/evil", ""] {
+            assert_eq!(system32_exe(bad), None, "system32_exe({bad:?}) must refuse");
+            assert_eq!(windows_exe(bad), None, "windows_exe({bad:?}) must refuse");
+        }
+        // The legitimate sub-path form must still be accepted.
+        assert!(system32_exe("WindowsPowerShell\\v1.0\\powershell.exe").is_some());
+    }
+
+    /// Failure is `None`, never a bare name.
+    ///
+    /// This is the property every caller's fail-closed arm depends on, and it is
+    /// the one a well-meaning "make it more robust" edit would break — a
+    /// `.unwrap_or_else(|| name.into())` here would reinstate the exact
+    /// unanchored lookup the module exists to prevent, while every other test in
+    /// this file kept passing.
+    #[test]
+    fn a_resolver_never_returns_a_bare_name() {
+        for path in [
+            system32_exe("netsh.exe").expect("netsh.exe path"),
+            windows_powershell_exe().expect("powershell.exe path"),
+        ] {
+            assert!(path.is_absolute(), "{path:?} must never be a bare name");
+            assert!(path.components().count() > 1, "{path:?} must never be a bare name");
+        }
     }
 }

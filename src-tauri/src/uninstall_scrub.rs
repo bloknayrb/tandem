@@ -77,7 +77,13 @@ const STARTUP_APPROVED_KEY: &str =
 /// common case is a user who never enabled autostart at all.
 #[cfg(target_os = "windows")]
 fn remove_autostart_registration() {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
+
+    // `tandem.exe` is GUI-subsystem, so spawning a console-subsystem child
+    // allocates a console window — during an uninstall, a `reg.exe` window
+    // flashing over the uninstaller. `Stdio` redirection does not suppress it.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     // Absolute path, never a bare name. This scrub runs inside the signed
     // `tandem.exe` specifically so that no attacker-planted binary is executed
@@ -85,8 +91,17 @@ fn remove_autostart_registration() {
     // through a search that reaches the application directory first would hand
     // that back. Fail closed: with no system directory we skip the delete and
     // say so, rather than running whatever `reg` the loader finds.
+    //
+    // NB this widens what a `SCRUB_OK` exit code means. `run_uninstall_scrub`
+    // ignores this function's return and always exits 0, and NSIS's `ExecWait`
+    // reads only that code — so "0 = clean, or nothing was installed" now also
+    // covers "we declined to try", leaving a Run key pointed at a deleted exe.
+    // Kept anyway: reaching this arm means `GetSystemDirectoryW` failed, i.e. the
+    // machine is already broken, and the alternative (a bare `reg`) is the hole.
     let Some(reg_exe) = crate::system_paths::system32_exe("reg.exe") else {
-        eprintln!("[scrub] could not resolve the Windows system directory; skipped autostart cleanup");
+        eprintln!(
+            "[scrub] could not resolve the Windows system directory; skipped autostart cleanup"
+        );
         return;
     };
 
@@ -96,6 +111,7 @@ fn remove_autostart_registration() {
         // enumerate. `/f` suppresses the confirmation prompt.
         let output = Command::new(&reg_exe)
             .args(["delete", key, "/v", AUTOSTART_APP_NAME, "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
         match output {
             // A missing value is the normal case, not a failure. NB: `reg

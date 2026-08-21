@@ -165,6 +165,52 @@ describe("every external process on the Cowork firewall path is bounded (#1371)"
     ).not.toMatch(/\.output\(\)/);
   });
 
+  // The spawn-time counterpart to the deadline pins above, and it needs to be a
+  // TEXT pin for a reason worth stating: the live tests in `firewall.rs` that
+  // actually run netsh and powershell pass just as happily against
+  // `Command::new("netsh")`, because netsh and powershell are on PATH on every
+  // developer machine and every CI runner. They prove the resolver points at a
+  // real binary; only this pin proves the code uses it. `firewall.rs` is
+  // `#![cfg(target_os = "windows")]` and is not even lexed on the Linux legs,
+  // which is why this file's invariants are pinned as source text.
+  it.each([
+    ["pub fn detect_vethernet_subnet(", "the PowerShell adapter query"],
+    ["fn run_netsh(", "netsh rule add/delete"],
+    ["pub fn scan_orphan_rules(", "the orphan-rule scan"],
+  ])("%s spawns an anchored path, never a bare program name", (signature, what) => {
+    const body = rustFnBody(firewall, signature);
+    expect(
+      body,
+      `${what} passes a string literal to Command::new — Rust resolves a bare name itself, ` +
+        `searching the (user-writable) application directory ahead of System32`,
+    ).not.toMatch(/Command::new\(\s*"/);
+  });
+
+  it("resolves every firewall program through system_paths, and never by bare name", () => {
+    // Comments are stripped first: both files explain the hazard by quoting the
+    // very shape being banned (`Command::new("netsh")`), so a raw scan reports
+    // the documentation as the violation.
+    const withoutComments = (src: string) => src.replace(/^\s*(\/\/.*|\/\/\/.*|\/\/!.*)$/gm, "");
+
+    // File-wide rather than per-body: `run_netsh` and `scan_orphan_rules` reach
+    // the resolver through `netsh_path()`, so a body-scoped pin alone would go
+    // green if that helper were rewritten to hand back a bare name.
+    expect(firewall).toContain("crate::system_paths::");
+    expect(
+      withoutComments(firewall),
+      "a bare program name anywhere in firewall.rs defeats the anchoring",
+    ).not.toMatch(/Command::new\(\s*"/);
+
+    // The uninstall scrub is the same class and the same commit: it runs inside
+    // the signed binary specifically so no planted executable runs at uninstall.
+    const scrub = read("src-tauri/src/uninstall_scrub.rs");
+    expect(scrub).toContain("crate::system_paths::");
+    expect(
+      withoutComments(scrub),
+      "the scrub spawns a bare program name, which is what running inside the signed binary exists to prevent",
+    ).not.toMatch(/Command::new\(\s*"/);
+  });
+
   it("keeps the two subnet budgets separate and different", () => {
     // The asymmetry is deliberate: on the advisory path a timeout costs a
     // re-check, so it fails fast; on the Enable path a FALSE timeout aborts an

@@ -2631,7 +2631,27 @@ fn show_in_file_manager(path: String) -> Result<(), String> {
     if is_unc_or_network_path(&path) {
         return Err("Refusing to reveal a network path in the file manager.".to_string());
     }
+    // The helper's `program` is the answer everywhere except Windows, where the
+    // anchored path below shadows it — so on Windows it is deliberately unread.
+    #[cfg_attr(target_os = "windows", allow(unused_variables))]
     let (program, args) = reveal_command_args(&path, std::env::consts::OS);
+
+    // Anchor the Windows program HERE rather than inside `reveal_command_args`.
+    // That helper takes `target_os` as a parameter precisely so all four arms
+    // run on the Linux CI leg; reading the system directory inside its Windows
+    // arm would make the one arm that ships the least-tested and force it to
+    // assert the *unanchored* form in CI. Environment access belongs at the
+    // spawn site.
+    //
+    // `explorer.exe` is the worst of the bare-name sites, not the mildest: it
+    // lives in `%SystemRoot%`, which the loader reaches only after the
+    // (user-writable) application directory AND System32 — and this is the one
+    // spawn a webview gesture triggers directly. See `system_paths`.
+    #[cfg(target_os = "windows")]
+    let program = crate::system_paths::windows_exe("explorer.exe").ok_or_else(|| {
+        "Failed to reveal in file manager: could not resolve the Windows directory.".to_string()
+    })?;
+
     match std::process::Command::new(program).args(&args).spawn() {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("Failed to reveal {path} in file manager: {e}")),

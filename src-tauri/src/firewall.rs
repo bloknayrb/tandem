@@ -98,8 +98,10 @@ fn netsh_path() -> Option<PathBuf> {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum FirewallError {
-    /// The user declined the UAC elevation prompt. The install is fail-closed:
-    /// a deny rule is written instead.
+    /// Elevation was refused. INFERRED from netsh's exit code and output, not
+    /// observed: Tandem never raises a UAC prompt (see `run_netsh`'s
+    /// exit-1-with-empty-stdout heuristic and `docs/security.md`). The install
+    /// is fail-closed: a deny rule is written instead.
     AdminDeclined,
     /// `netsh.exe` was not found at its anchored System32 path — a damaged
     /// Windows install, or a system directory we could not resolve at all.
@@ -144,8 +146,10 @@ pub enum FirewallError {
 /// Why `powershell.exe` could not be started (#1372).
 ///
 /// The three arms exist because their remedies differ, which is the whole test
-/// for splitting a variant: a missing interpreter is a PATH or Windows-edition
-/// problem, a refused one is an execution-policy or application-control
+/// for splitting a variant: a missing interpreter is a Windows-edition or
+/// damaged-install problem (never a PATH one -- PATH is not consulted, see
+/// `windows_powershell_exe`), a refused one is an execution-policy or
+/// application-control problem,
 /// problem, and anything else is neither. The old single variant told all three
 /// to "run Tandem as administrator or reboot to refresh the adapter list" —
 /// advice that cannot work when the interpreter never launched, in a sentence
@@ -153,7 +157,7 @@ pub enum FirewallError {
 ///
 /// **This is a closed set derived from `io::ErrorKind`, never the `io::Error`
 /// itself.** `firewall.rs` deliberately keeps `{e}` in `log::warn!` and off the
-/// wire: a failed `Command::new("powershell")` spawn error carries the resolved
+/// wire: a failed PowerShell spawn error carries the resolved
 /// executable path, and widening this variant to hold it would turn the
 /// client-side logging in `cowork-invoke.ts` into a host-path leak into pasted
 /// bug reports. An `ErrorKind` is a bare discriminant with no such payload —
@@ -399,6 +403,11 @@ foreach ($adapter in $adapters) {
             reason: AdapterEnumerationReason::NotFound,
         });
     };
+    // Logged separately from the outcome line below, which is built by a pure
+    // function that never sees the program. "Which interpreter ran" is the
+    // question the anchoring exists to answer, so it must be answerable from a
+    // bug report rather than only from this source file.
+    log::debug!("[firewall] vEthernet query via {program:?}");
     let mut command = Command::new(program);
     command.args(["-NoProfile", "-NonInteractive", "-Command", ps_script]);
     command.creation_flags(CREATE_NO_WINDOW);
@@ -924,7 +933,7 @@ pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
     let Some(program) = netsh_path() else {
         return Err(FirewallError::NetshNotFound);
     };
-    let mut command = Command::new(program);
+    let mut command = Command::new(&program);
     command.creation_flags(CREATE_NO_WINDOW);
     command.args([
         "advfirewall",
@@ -967,7 +976,8 @@ pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
     let home = home_dir_string();
 
     log::debug!(
-        "[firewall] scan_orphan_rules: exit={exit_code}, elapsed={:.2}s",
+        "[firewall] scan_orphan_rules ({:?}): exit={exit_code}, elapsed={:.2}s",
+        program,
         elapsed.as_secs_f64()
     );
 
@@ -1155,15 +1165,23 @@ mod tests {
     /// site that can serve as a live positive control.
     ///
     /// Asserts on the failure MODE, not on success: a machine with no Tandem
-    /// rules is the normal case and a firewall service that refuses the query is
-    /// environmental. What must never happen is `NetshNotFound` — that is the
-    /// resolution itself having failed.
+    /// rules is the normal case, and an unelevated or busy firewall service is
+    /// environmental. Two modes are NOT environmental and must fail the test —
+    /// `NetshNotFound` (resolution produced a path with no binary at it) and
+    /// `NetshFailure { exit_code: -1 }`, which is this file's marker for "the
+    /// process never completed" and is what a path pointing at a *directory*
+    /// would produce. A timeout is deliberately not in that set: it also reports
+    /// `NetshFailure`, but via `netsh_timeout_error()` with a real exit code, so
+    /// a slow runner cannot flake this.
     #[test]
     fn the_anchored_netsh_is_reachable_and_runs() {
         match scan_orphan_rules() {
             Ok(_) => {}
             Err(FirewallError::NetshNotFound) => {
                 panic!("netsh could not be resolved at its anchored System32 path");
+            }
+            Err(FirewallError::NetshFailure { exit_code: -1, stderr_tail, .. }) => {
+                panic!("netsh never started from its anchored path: {stderr_tail}");
             }
             Err(other) => {
                 // netsh ran and said something; that is all this test needs.
@@ -1182,12 +1200,21 @@ mod tests {
     /// `NoAdapter` is the expected verdict on a host without Hyper-V (including
     /// CI), and is a pass: reaching that classification means the interpreter
     /// launched and the marker line came back.
+    ///
+    /// Only `NotFound` fails the test, deliberately. `PermissionDenied` is what
+    /// an AppLocker / WDAC / SRP machine reports (OS errors 1260 and 740), and
+    /// on a managed corporate laptop that is the *correct* verdict with nothing
+    /// the developer can do about it — panicking there would wedge their
+    /// pre-push hook over a policy this test has no business asserting.
+    /// `NotFound` is also the only reason a broken anchor can produce.
     #[test]
     fn the_anchored_powershell_is_reachable_and_runs() {
         match detect_vethernet_subnet(Duration::from_secs(30)) {
             Ok(_) => {}
-            Err(FirewallError::AdapterEnumerationFailed { reason }) => {
-                panic!("powershell never launched from its anchored path: {reason:?}");
+            Err(FirewallError::AdapterEnumerationFailed {
+                reason: AdapterEnumerationReason::NotFound,
+            }) => {
+                panic!("powershell was not at its anchored System32 sub-path");
             }
             Err(other) => {
                 eprintln!("[test] anchored powershell ran and returned: {other:?}");

@@ -50,6 +50,7 @@ import {
   pathRejectionReason,
   removeConfigEntries,
 } from "../server/integrations/apply.js";
+import { systemBin } from "../server/platform.js";
 import { assertSafeWorkspacePath } from "./win-path-guard.js";
 
 const execFileAsync = promisify(execFile);
@@ -527,10 +528,27 @@ export async function removeSkillDir(logger: ScrubLogger, homeOverride?: string)
 
 /**
  * Delete a Windows Firewall rule by name. Non-existent rules are not an error.
+ *
+ * `netsh` is anchored via `systemBin`, never spawned by bare name: a bare name
+ * is resolved by searching directories ahead of the system one, and an
+ * uninstall is exactly when a leftover binary in a directory being deleted is
+ * plausible.
+ *
+ * **There are two firewall scrubs, and both had to be anchored.** The Tauri
+ * uninstall reaches `netsh` too — `uninstall_scrub.rs` calls
+ * `firewall::remove_cowork_rules()`, which is not obvious from grepping that
+ * file for `netsh`, and a review of this change missed it for exactly that
+ * reason. Anchoring one and not the other closes nothing.
  */
 async function deleteFirewallRule(name: string, logger: ScrubLogger): Promise<void> {
   try {
-    await execFileAsync("netsh", ["advfirewall", "firewall", "delete", "rule", `name=${name}`]);
+    await execFileAsync(systemBin("netsh.exe"), [
+      "advfirewall",
+      "firewall",
+      "delete",
+      "rule",
+      `name=${name}`,
+    ]);
     logger.info(`deleted firewall rule: ${name}`);
   } catch (err) {
     const e = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
