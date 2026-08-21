@@ -209,9 +209,15 @@ const tabStyle = $derived(
     "white-space: nowrap",
     // The target state owns the transition (the A29 convention): picking up
     // runs at --a30-lift, putting down at --a30-settle. Reduced motion zeroes
-    // both tokens but NOT --a30-shadow, so the tab still arrives instantly
-    // while the shadow keeps its crossfade.
-    `transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow var(--a30-shadow) var(--tandem-ease-out), transform ${
+    // those two and --a30-chrome, but NOT --a30-shadow, so the tab and its
+    // chrome both arrive instantly while the shadow keeps its crossfade.
+    //
+    // Every duration here is a token for a reason (#1530): this is one inline
+    // shorthand, so a `body.tandem-reduce-motion` rule could only replace it
+    // wholesale with `!important` — which would zero the shadow crossfade
+    // tabDragMotion.css deliberately keeps. Zeroing the tokens is the only way
+    // to reach some terms and not others.
+    `transition: background var(--a30-chrome), color var(--a30-chrome), border-color var(--a30-chrome), box-shadow var(--a30-shadow) var(--tandem-ease-out), transform ${
       lifted ? "var(--a30-lift)" : "var(--a30-settle)"
     } var(--tandem-ease-out)`,
     // Shrinkable so a crowded strip narrows its tabs before it starts scrolling.

@@ -68,6 +68,39 @@ function callsFor(invoke: { mock: { calls: unknown[][] } }, cmd: string): unknow
   return invoke.mock.calls.filter(([c]) => c === cmd);
 }
 
+/**
+ * The `matchMedia` member every `vi.stubGlobal("window", …)` below SHOULD carry — not
+ * one any assertion needs. `initTauriTheme` queries `(forced-colors: active)` (#1364)
+ * as unconditionally as it calls `window.addEventListener("pagehide", …)`; without the
+ * member the query throws into the source's `try`/`catch`, so those ten tests would
+ * exercise the DEGRADED (matchMedia-unavailable) branch while asserting things about the
+ * push pipeline. Carrying it puts them on the production path instead.
+ *
+ * Measured, so nobody treats ten edits to shared setup as mandatory: with all ten
+ * `matchMedia: inertMatchMedia` lines stripped and the #1364 source fix in place, the
+ * file still passes 37/37. This is a fidelity improvement, not a requirement. (The source
+ * also warns on that branch; vitest surfaced no console output for this file in either
+ * run, so treat the warn as unobserved here rather than as measured.)
+ *
+ * Inert on purpose: these stubs belong to tests about the push pipeline, not about the
+ * forced-colors listener, which has its own describe — with its own live fake — at the
+ * bottom of this file. Note the inertness is exactly what makes note 1 down there true:
+ * this function ignores its query argument, so it can stand in for `matchMedia` without
+ * ever standing in for the fake.
+ *
+ * The source could have feature-detected `matchMedia` instead, and an earlier draft of
+ * #1364 did. That was rejected: the guard would have been shaped by these stubs rather
+ * than by any real host, and it would silently disable the whole fix on a host that
+ * genuinely lacks `matchMedia`. Extending the stubs is the repo's precedent.
+ */
+function inertMatchMedia(): {
+  matches: boolean;
+  addEventListener: () => void;
+  removeEventListener: () => void;
+} {
+  return { matches: false, addEventListener: () => {}, removeEventListener: () => {} };
+}
+
 /** Drain the microtask queue so a dynamic-import + invoke chain settles. */
 async function flushAsync(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0));
@@ -165,6 +198,7 @@ describe("useTauriTheme", () => {
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
+      matchMedia: inertMatchMedia,
       __TANDEM_INITIAL_THEME__: undefined,
     });
 
@@ -198,6 +232,7 @@ describe("useTauriTheme", () => {
       __TANDEM_INITIAL_THEME__: "light" as "light" | "dark",
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
+      matchMedia: inertMatchMedia,
       hasFocus: () => true,
     });
 
@@ -232,7 +267,11 @@ describe("useTauriTheme", () => {
       );
       _resetForTests();
       vi.stubGlobal("document", { hasFocus: () => true });
-      vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+      vi.stubGlobal("window", {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        matchMedia: inertMatchMedia,
+      });
 
       initTauriTheme();
       await vi.advanceTimersByTimeAsync(0); // let the initial get_app_theme settle
@@ -399,6 +438,7 @@ describe("setNativeTheme (#992)", () => {
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
+      matchMedia: inertMatchMedia,
       __TANDEM_INITIAL_THEME__: undefined,
     });
     invoke.mockImplementation((cmd: string) => {
@@ -456,6 +496,7 @@ describe("setNativeTheme (#992)", () => {
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
+      matchMedia: inertMatchMedia,
       __TANDEM_INITIAL_THEME__: undefined,
     });
     invoke.mockImplementation((cmd: string) => {
@@ -507,6 +548,7 @@ describe("setNativeTheme (#992)", () => {
       vi.stubGlobal("window", {
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
+        matchMedia: inertMatchMedia,
         __TANDEM_INITIAL_THEME__: undefined,
       });
 
@@ -567,6 +609,7 @@ describe("setNativeTheme (#992)", () => {
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
+      matchMedia: inertMatchMedia,
       __TANDEM_INITIAL_THEME__: undefined,
     });
     // hasFocus false so no poll tick can confound the assertions below.
@@ -620,6 +663,7 @@ describe("setNativeTheme (#992)", () => {
       vi.stubGlobal("window", {
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
+        matchMedia: inertMatchMedia,
         __TANDEM_INITIAL_THEME__: undefined,
       });
       vi.stubGlobal("document", { hasFocus: () => false });
@@ -680,6 +724,7 @@ describe("setNativeTheme (#992)", () => {
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
+      matchMedia: inertMatchMedia,
       __TANDEM_INITIAL_THEME__: undefined,
     });
     vi.stubGlobal("document", { hasFocus: () => false });
@@ -714,6 +759,7 @@ describe("setNativeTheme (#992)", () => {
       vi.stubGlobal("window", {
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
+        matchMedia: inertMatchMedia,
         __TANDEM_INITIAL_THEME__: undefined,
       });
       vi.stubGlobal("document", { hasFocus: () => false });
@@ -1004,5 +1050,271 @@ describe("setNativeTheme (#992)", () => {
       removeSpy.mockRestore();
       _resetForTests();
     });
+  });
+});
+
+/**
+ * #1364 — an OS High Contrast toggle must re-issue the CURRENT preference.
+ *
+ * The Windows guard that declines to force an app mode while High Contrast is on
+ * (`native_theme_action`, lib.rs) samples `SPI_GETHIGHCONTRAST` once per push, and
+ * nothing subscribes to changes. Since the preference has not changed, `createTheme`'s
+ * effect does not re-run and the dedupe latch would refuse the push if it did — so the
+ * forced app mode stayed in place until the user's next theme change.
+ *
+ * PLACEMENT AND HARNESS ARE LOAD-BEARING, in this order:
+ *
+ *  1. This describe sits LAST in the file, and its `beforeEach` starts with
+ *     `vi.unstubAllGlobals()`. `describe("setNativeTheme (#992)")`'s own `beforeEach`
+ *     never unstubs, so without this the last `vi.stubGlobal("window", …)` above — the
+ *     one in "does not accumulate pagehide listeners" — is still in force. Its
+ *     `matchMedia` is `inertMatchMedia`, which IGNORES its query argument and returns a
+ *     throwaway MediaQueryList, so the SUT registers its listener on an object
+ *     `fc.fire()` can never reach. Re-measured against this file as it ships, with only
+ *     the `beforeEach` unstub commented out: `typeof window.matchMedia === "function"`,
+ *     `window.matchMedia === inertMatchMedia`, the fake's listener count is 0, and
+ *     1 of the 6 tests fails — the FIRST one only, because this describe's own
+ *     `afterEach` unstubs and tests 2-6 then run against the real happy-dom window.
+ *     That masking is itself the argument for keeping the `beforeEach` unstub rather
+ *     than leaning on the `afterEach`: relying on it would make the harness depend on
+ *     execution order, and a `.only` or a reordering would silently break test 1 alone.
+ *     (An earlier version of this note recorded `typeof window.matchMedia ===
+ *     "undefined"` and "every test below would fail". That was measured honestly and
+ *     then falsified by this very diff, which added `matchMedia` to those ten stubs —
+ *     re-measure a comment after the diff stops changing, not when you first write it.)
+ *
+ *  2. `installForcedColorsFake` hands back the SAME MediaQueryList object for every
+ *     `(forced-colors: active)` query, and `fire()` invokes the handlers CAPTURED from
+ *     that object's `addEventListener`. happy-dom returns a NEW MediaQueryList per
+ *     `matchMedia()` call, so dispatching on a freshly obtained one reaches nothing and
+ *     would silently no-op. The test must own the object the SUT received.
+ *
+ *  3. `afterEach` calls `_resetForTests()` UNCONDITIONALLY rather than each test ending
+ *     with it: a failing test would skip a trailing call and leak a live 3s poll (real
+ *     `document.hasFocus()` is true once globals are unstubbed) plus a live listener into
+ *     whatever runs next. The test at the top of this file exists to catch exactly that.
+ *
+ * WHICH TESTS ARE LOAD-BEARING (measured against master, not asserted):
+ *   - "re-pushes the current preference", "re-pushes on every forced-colors change" and
+ *     the listener-lifecycle test are RED before the fix, on the assertion that matters.
+ *   - The two GUARD tests below also go red on master, but only on their PRECONDITION —
+ *     the re-push they need to follow up never happens. Their own distinguishing
+ *     assertions are vacuous there, so read them as shape guards, not as regression
+ *     coverage.
+ *   - "does not push when no preference has ever been pushed" passes on master and is a
+ *     pure guard.
+ */
+describe("forced-colors re-push (#1364)", () => {
+  let invoke: ReturnType<typeof vi.fn>;
+
+  /** The fake `(forced-colors: active)` MediaQueryList — see note 2 above. */
+  function installForcedColorsFake(): {
+    fire: () => void;
+    listenerCount: () => number;
+    addCalls: () => number;
+    removeCalls: () => number;
+  } {
+    const listeners = new Set<() => void>();
+    let addCalls = 0;
+    let removeCalls = 0;
+    const realMatchMedia =
+      typeof window.matchMedia === "function" ? window.matchMedia.bind(window) : null;
+    const mql = {
+      matches: false,
+      media: "(forced-colors: active)",
+      addEventListener: (type: string, cb: () => void) => {
+        if (type !== "change") return;
+        listeners.add(cb);
+        addCalls++;
+      },
+      removeEventListener: (type: string, cb: () => void) => {
+        if (type === "change" && listeners.delete(cb)) removeCalls++;
+      },
+    };
+    vi.stubGlobal("matchMedia", (query: string) =>
+      query.includes("forced-colors") ? mql : (realMatchMedia?.(query) ?? inertMatchMedia()),
+    );
+    return {
+      // Copy before iterating: a handler is free to re-register during dispatch.
+      fire: () => {
+        for (const cb of [...listeners]) cb();
+      },
+      listenerCount: () => listeners.size,
+      addCalls: () => addCalls,
+      removeCalls: () => removeCalls,
+    };
+  }
+
+  beforeEach(async () => {
+    vi.unstubAllGlobals(); // FIRST — see note 1 above
+    const core = await import("@tauri-apps/api/core");
+    invoke = vi.mocked(core.invoke) as any;
+    invoke.mockReset();
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "set_native_theme")
+        return Promise.resolve({ overrideActive: false, osTheme: null });
+      return Promise.resolve("light");
+    });
+    isTauri.mockReturnValue(true);
+    const { _resetForTests } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+    _resetForTests();
+    themeChangedCapture.current = null;
+  });
+
+  afterEach(async () => {
+    const { _resetForTests } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+    _resetForTests(); // unconditional — see note 3 above
+    isTauri.mockReturnValue(false);
+    vi.unstubAllGlobals();
+  });
+
+  // RED BEFORE THE FIX. Nothing in the module touched `matchMedia` at all, so this
+  // asserted 1 against 0.
+  it("re-pushes the current preference when forced-colors changes, bypassing the dedupe latch", async () => {
+    const fc = installForcedColorsFake();
+    const { initTauriTheme, setNativeTheme, _resetForTests } = await import(
+      "../../src/client/hooks/useTauriTheme.svelte.js"
+    );
+    _resetForTests();
+    initTauriTheme();
+    setNativeTheme("dark");
+    await flushAsync();
+    expect(callsFor(invoke, "set_native_theme")).toHaveLength(1);
+
+    fc.fire();
+    await flushAsync();
+
+    // The SAME preference goes out again — that is the whole point: on Windows,
+    // `native_theme_action` re-samples High Contrast and maps "dark" to AllowDark
+    // (release) while it is on, and back to ForceDark once it is off.
+    expect(callsFor(invoke, "set_native_theme")).toEqual([
+      ["set_native_theme", { theme: "dark" }],
+      ["set_native_theme", { theme: "dark" }],
+    ]);
+  });
+
+  // RED BEFORE THE FIX, but only as "the test above with a second event" — it cannot
+  // distinguish a correct implementation from one that re-pushes on an unrelated media
+  // change. What it pins is that the handler is LEVEL-INDEPENDENT: it never reads
+  // `event.matches`, so one code path covers High-Contrast-on and High-Contrast-off, and
+  // there is deliberately no `matches` branch in the source to drift out of sync.
+  it("re-pushes on every forced-colors change, not just the first (no `matches` branch)", async () => {
+    const fc = installForcedColorsFake();
+    const { initTauriTheme, setNativeTheme, _resetForTests } = await import(
+      "../../src/client/hooks/useTauriTheme.svelte.js"
+    );
+    _resetForTests();
+    initTauriTheme();
+    setNativeTheme("dark");
+    await flushAsync();
+
+    fc.fire(); // High Contrast on  -> Rust releases the force
+    await flushAsync();
+    fc.fire(); // High Contrast off -> Rust re-applies it
+    await flushAsync();
+
+    expect(callsFor(invoke, "set_native_theme")).toHaveLength(3);
+  });
+
+  // GUARD. Measured on master it fails, but only on its PRECONDITION (the re-push it
+  // needs to follow up never happens); its own distinguishing assertion — the final
+  // `toHaveLength(2)` — is vacuous there. It pins the SHAPE of the
+  // fix: the bypass skips the READ of the dedupe latch for one call and clears nothing,
+  // so the latch still holds afterwards. An implementation written as
+  // `lastPush = null; setNativeTheme(pref)` fails here, and that shape also reopens
+  // `acceptReadback`'s in-flight gate and lets `createTheme`'s effect double-push.
+  it("GUARD: the bypass does not clear the latch — a later identical push still dedupes", async () => {
+    const fc = installForcedColorsFake();
+    const { initTauriTheme, setNativeTheme, _resetForTests } = await import(
+      "../../src/client/hooks/useTauriTheme.svelte.js"
+    );
+    _resetForTests();
+    initTauriTheme();
+    setNativeTheme("dark");
+    await flushAsync();
+    fc.fire();
+    await flushAsync();
+    expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
+
+    setNativeTheme("dark"); // the effect's ordinary re-run — must still no-op
+    await flushAsync();
+
+    expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
+  });
+
+  // GUARD (vacuous on master). `lastPush` is this module's only record of the
+  // preference, and it is null whenever there is no claim. Pushing `undefined` would be
+  // worse than waiting for the next real theme change.
+  it("GUARD: does not push when no preference has ever been pushed", async () => {
+    const fc = installForcedColorsFake();
+    const { initTauriTheme, _resetForTests } = await import(
+      "../../src/client/hooks/useTauriTheme.svelte.js"
+    );
+    _resetForTests();
+    initTauriTheme();
+    await flushAsync();
+
+    fc.fire();
+    await flushAsync();
+
+    expect(callsFor(invoke, "set_native_theme")).toHaveLength(0);
+  });
+
+  // GUARD. Like the latch guard above, it fails on master on its PRECONDITION only (no
+  // forced push happens there to reject); its own final assertion is vacuous. Pins the
+  // accepted limitation: a forced re-push that REJECTS clears `lastPush` (the failure path's
+  // unconditional `lastPush = null`), after which the module holds no claim and a further
+  // toggle must no-op rather than guess. Reachable in production: `set_native_theme`
+  // returns Err whenever the High Contrast probe yields `Unknown`, so on such a machine
+  // every toggle lands here.
+  it("GUARD: after a rejected forced re-push, a further change no-ops (no claim to re-assert)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fc = installForcedColorsFake();
+      const { initTauriTheme, setNativeTheme, _resetForTests } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      _resetForTests();
+      initTauriTheme();
+      setNativeTheme("dark");
+      await flushAsync();
+
+      invoke.mockImplementationOnce(() => Promise.reject(new Error("ipc failed")));
+      fc.fire();
+      await flushAsync();
+      expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
+
+      fc.fire();
+      await flushAsync();
+
+      expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // RED BEFORE THE FIX (the `toBe(1)` sees 0). The leak class #1413's landed half closed
+  // for `onThemeChanged` and the `pagehide` handler, one function further down: a
+  // listener that is registered but never released is structurally unobservable, which is
+  // how the earlier leaks went unnoticed.
+  it("releases the forced-colors listener on teardown, and does not accumulate", async () => {
+    const fc = installForcedColorsFake();
+    const { initTauriTheme, _resetForTests } = await import(
+      "../../src/client/hooks/useTauriTheme.svelte.js"
+    );
+    _resetForTests();
+
+    initTauriTheme();
+    expect(fc.listenerCount()).toBe(1);
+    _resetForTests();
+    expect(fc.listenerCount()).toBe(0);
+
+    for (let i = 0; i < 3; i++) {
+      initTauriTheme();
+      _resetForTests();
+    }
+    expect(fc.addCalls()).toBe(4); // one per initTauriTheme()
+    expect(fc.removeCalls()).toBe(4); // every registered generation released
+    expect(fc.listenerCount()).toBe(0);
   });
 });

@@ -32,13 +32,14 @@ meant whichever ran last decided what the README showed, and for the three shots
 they shared they used different framing and different seed data. Its unique
 recipes were ported into the spec first.
 
-## Critical warning — free the ports first
+## Critical warning — the reserved harness ports
 
-The capture config spreads the root `playwright.config.ts`, whose `webServer`
-calls `freePort()`. It **kills whatever holds :3478 / :3479** — a running
-`npm run dev:server`, or the installed Tandem desktop app. Confirm those ports
-(and :5173) are free before running, and do not run `npm run test:e2e`
-concurrently.
+The capture config spreads the root `playwright.config.ts`, which since #1492
+runs on the **reserved harness ports** from `scripts/test-ports.ts` (Vite 4573,
+backend 4728/4729) — a running `npm run dev:server` or the installed desktop
+app on 3478/3479 is safe and stays up. The reserved pair itself is not
+negotiable: the harness backend's boot `freePort()` **kills whatever holds
+4728/4729**, so do not run `npm run test:e2e` (same ports) concurrently.
 
 ## Output
 

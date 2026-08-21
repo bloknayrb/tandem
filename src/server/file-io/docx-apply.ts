@@ -721,7 +721,7 @@ const W15_NS = "http://schemas.microsoft.com/office/word/2012/wordml";
 /**
  * Read each Word comment's OWN last-paragraph `w14:paraId` from
  * `word/comments.xml`, keyed by comment id. This is the value OOXML
- * `CT_CommentEx/@paraId` references (§2.5.39) — the comment body's last
+ * `CT_CommentEx/@paraId` references (OOXML §2.5.39) — the comment body's last
  * paragraph, NOT the document paragraph the comment is anchored to. Original
  * case is preserved so the written id matches both the comment's `<w:p>` and
  * any `commentEx` entry Word already wrote. See #1007.

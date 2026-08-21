@@ -2,6 +2,7 @@
 import { TANDEM_REPO_URL } from "../../shared/constants";
 import {
   COWORK_PREFLIGHT_CHECKING,
+  COWORK_PREFLIGHT_FAILED,
   formatCoworkError,
   writeCoworkOnboardingSkipped,
 } from "../cowork/cowork-helpers";
@@ -115,6 +116,12 @@ function handleSkip(): void {
                whose failure we have already observed. -->
           <div class="cos-preflight" data-testid="cowork-onboarding-preflight-blocked">
             {probe.preflight.hint}
+          </div>
+        {:else if probe.preflight?.status === "failed"}
+          <!-- #1436: see the note in CoworkSettings. Hedged, and no retry —
+               nothing was observed to fail, so Enable stays. -->
+          <div class="cos-checking" data-testid="cowork-onboarding-preflight-failed">
+            {COWORK_PREFLIGHT_FAILED}
           </div>
         {/if}
         {#if probe.probing}

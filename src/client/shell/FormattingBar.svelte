@@ -2,7 +2,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import * as Y from "yjs";
 import { toPmPos } from "../../shared/positions/types";
-import type { HighlightColor } from "../../shared/types";
+import type { HighlightColor, TandemNotification } from "../../shared/types";
 import FormattingToolbar from "../editor/toolbar/FormattingToolbar.svelte";
 import HighlightColorPicker from "../editor/toolbar/HighlightColorPicker.svelte";
 import { toggleHighlight } from "../editor/toolbar/highlight-toggle";
@@ -44,6 +44,8 @@ interface Props {
    * affordance), the command palette, or Appearance settings.
    */
   onHide?: () => void;
+  /** Refused-link channel for the bar's Link input — see FormattingToolbar. */
+  onNotify?: (n: TandemNotification) => void;
 }
 
 const {
@@ -59,6 +61,7 @@ const {
   sourceViewActive = false,
   onToggleSourceView = null,
   onHide,
+  onNotify,
 }: Props = $props();
 
 // Force-reactive tick — mirrors FormattingToolbar's pattern so that
@@ -192,7 +195,7 @@ function handleHighlight(color: HighlightColor) {
       data-testid="formatting-bar-track"
       style="display: flex; align-items: center; gap: 1px; overflow-x: clip; overflow-y: visible; min-width: 0;"
     >
-      <FormattingToolbar {editor} />
+      <FormattingToolbar {editor} {onNotify} />
       <div class="fmtbar-divider"></div>
       <HighlightColorPicker disabled={!canHighlight} onHighlight={handleHighlight} />
     </div>
@@ -300,6 +303,16 @@ function handleHighlight(color: HighlightColor) {
     flex-shrink: 0;
     transition: background 120ms, color 120ms;
   }
+  /* Hide-bar button: the hover tint is decorative, so reduced motion applies
+     the colours with no fade. */
+  :global(body.tandem-reduce-motion) .fmtbar-hide {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fmtbar-hide {
+      transition: none;
+    }
+  }
   .fmtbar-source {
     height: 26px;
     min-width: 32px;
@@ -317,6 +330,16 @@ function handleHighlight(color: HighlightColor) {
     font-size: 11px;
     font-weight: 600;
     transition: background 120ms, border-color 120ms, color 120ms;
+  }
+  /* Source toggle: the `.on` border/background still land, they just land
+     immediately under reduced motion. */
+  :global(body.tandem-reduce-motion) .fmtbar-source {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fmtbar-source {
+      transition: none;
+    }
   }
   .fmtbar-source:hover {
     background: var(--tandem-surface-sunk);

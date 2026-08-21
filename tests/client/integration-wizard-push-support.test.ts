@@ -22,6 +22,7 @@
 import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { _resetClientLog, readClientLog } from "../../src/client/utils/client-log";
 
 import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../../src/shared/constants.js";
 import type { ApplyItemResult } from "../../src/shared/integrations/contract.js";
@@ -116,7 +117,7 @@ vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => vi.fn()),
   coworkToggleIntegration: vi.fn(async () => ({ ok: true })),
-  coworkPreflightSubnet: vi.fn(async () => ({ status: "unknown" })),
+  coworkPreflightSubnet: vi.fn(async () => ({ status: "unavailable" })),
 }));
 
 import IntegrationWizardModal from "../../src/client/components/IntegrationWizardModal.svelte";
@@ -417,6 +418,7 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
       },
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    _resetClientLog();
     const { container } = mountPushMode(false);
     await tick();
 
@@ -431,6 +433,18 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     // from a CSP rejection. Without this the catch could stop logging and
     // nothing would notice.
     expect(warn).toHaveBeenCalledWith("[wizard] clipboard write failed:", expect.any(Error));
+    // …and since #1439 it also lands in the client log, which the diagnostics
+    // report drains — the console alone is a sink with no reader in a release
+    // desktop build. The error NAME is the payload: it is what separates a
+    // denied permission from a missing API from a policy rejection.
+    expect(readClientLog()).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        scope: "wizard",
+        event: "clipboard write failed",
+        detail: "Error: denied",
+      }),
+    ]);
   });
 
   it("does not carry a copy status back from the Cowork sub-view", async () => {

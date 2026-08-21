@@ -160,7 +160,9 @@ export async function rotateToken(): Promise<void> {
 
   // TODO(v0.8.1): After rotation, re-walk Cowork workspaces to rewrite
   // env.TANDEM_AUTH_TOKEN so post-rotation Cowork sessions don't 401
-  // (security invariant §6 — silent-failure H1). The Tauri IPC dynamic import
+  // — a rotation that does not reach them strands every Cowork session on a
+  // token the server no longer accepts, and nothing says so until the user next
+  // tries to use Cowork. The Tauri IPC dynamic import
   // approach is inert here: this CLI runs as a Node subprocess with no WebView,
   // so `@tauri-apps/api/core`'s `invoke()` has no bridge to Rust. The fix is
   // an HTTP bridge — add a POST /api/cowork-apply-token endpoint in the server

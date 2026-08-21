@@ -3,6 +3,7 @@ import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
 import type { EditorFont, EditorMeasure } from "../hooks/useTandemSettings";
 import { disabledControlStyle } from "../utils/colors";
+import "./settings-card.css";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
 
 type Props = SettingsTabContext;
@@ -14,6 +15,8 @@ const sectionLabelStyle =
 
 // #1262: moved from AppearanceSettings — fonts are a property of the
 // document surface, not app chrome.
+// Callers must also set `class="settings-card"`, which carries the
+// border/background cross-fade and its reduced-motion guard (#1530).
 function cardStyle(selected: boolean, disabled?: boolean): string {
   return [
     "flex: 1;",
@@ -27,7 +30,6 @@ function cardStyle(selected: boolean, disabled?: boolean): string {
     "font-size: 11px;",
     `color: ${disabled ? "var(--tandem-fg-subtle)" : selected ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-muted)"};`,
     `font-weight: ${selected ? 600 : 400};`,
-    "transition: border-color 0.15s, background 0.15s;",
   ].join(" ");
 }
 
@@ -193,6 +195,7 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
           tabindex={editorFontRg.tabIndexFor(value)}
           disabled={readOnly}
           onclick={() => onUpdate({ editorFont: value })}
+          class="settings-card"
           style={cardStyle(settings.editorFont === value, readOnly)}
         >
           {label}
@@ -239,6 +242,7 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
                 tabindex={fontByExtensionRgs[row.format].tabIndexFor(value)}
                 disabled={readOnly}
                 onclick={() => setFontFor(row.format, value)}
+                class="settings-card"
                 style={cardStyle(effectiveFontFor(row.format) === value, readOnly)}
               >
                 {label}
