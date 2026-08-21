@@ -7,6 +7,7 @@ import type {
   ThemePreference,
 } from "../hooks/useTandemSettings.svelte";
 import { disabledControlStyle } from "../utils/colors";
+import "./settings-card.css";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
 
 type Props = SettingsTabContext;
@@ -25,6 +26,8 @@ const DECORATION_ROWS = [
   ["showNotes", "appearance-show-notes", "Notes (private)"],
 ] as const;
 
+// Callers must also set `class="settings-card"`, which carries the
+// border/background cross-fade and its reduced-motion guard (#1530).
 function cardStyle(selected: boolean, disabled?: boolean): string {
   return [
     "flex: 1;",
@@ -38,7 +41,6 @@ function cardStyle(selected: boolean, disabled?: boolean): string {
     "font-size: 11px;",
     `color: ${disabled ? "var(--tandem-fg-subtle)" : selected ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-muted)"};`,
     `font-weight: ${selected ? 600 : 400};`,
-    "transition: border-color 0.15s, background 0.15s;",
   ].join(" ");
 }
 
@@ -82,6 +84,7 @@ const densityRg = createRadioGroup<Density>(
         tabindex={themeRg.tabIndexFor(t)}
         disabled={readOnly}
         onclick={() => onUpdate({ theme: t })}
+        class="settings-card"
         style={cardStyle(settings.theme === t, readOnly)}
       >
         {t === "light" ? "Light" : t === "warm" ? "Warm" : t === "dark" ? "Dark" : "System"}
@@ -134,6 +137,7 @@ const densityRg = createRadioGroup<Density>(
       tabindex={primaryTabRg.tabIndexFor("chat")}
       disabled={readOnly}
       onclick={() => onUpdate({ primaryTab: "chat" })}
+      class="settings-card"
       style={cardStyle(settings.primaryTab === "chat", readOnly)}
     >
       Chat
@@ -145,6 +149,7 @@ const densityRg = createRadioGroup<Density>(
       tabindex={primaryTabRg.tabIndexFor("annotations")}
       disabled={readOnly}
       onclick={() => onUpdate({ primaryTab: "annotations" })}
+      class="settings-card"
       style={cardStyle(settings.primaryTab === "annotations", readOnly)}
     >
       Annotations
@@ -171,6 +176,7 @@ const densityRg = createRadioGroup<Density>(
         tabindex={textSizeRg.tabIndexFor(size)}
         disabled={readOnly}
         onclick={() => onUpdate({ textSize: size })}
+        class="settings-card"
         style={cardStyle(settings.textSize === size, readOnly)}
       >
         {size === "s" ? "Small" : size === "m" ? "Medium" : "Large"}
@@ -223,6 +229,7 @@ const densityRg = createRadioGroup<Density>(
         tabindex={densityRg.tabIndexFor(value)}
         disabled={readOnly}
         onclick={() => onUpdate({ density: value })}
+        class="settings-card"
         style={cardStyle(settings.density === value, readOnly)}
       >
         {label}

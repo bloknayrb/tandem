@@ -1,16 +1,39 @@
 //! Windows Firewall management for the Cowork VM subnet allow/deny rules.
 //!
 //! All `netsh` invocations use `Command::new("netsh").args([...])` — never
-//! `cmd.exe`, never string concatenation, never `--%` wrappers (security §4).
+//! `cmd.exe`, never string concatenation, never `--%` wrappers: no shell is
+//! interposed, so nothing in an argument value — including the detected CIDR
+//! in `remoteip={cidr}` — can be re-read as a second command.
 //!
-//! Every invocation is logged at DEBUG with: argv, exit code, stdout+stderr tail,
-//! and wall-clock duration.
+//! Every invocation is logged with: argv, exit code, a stdout+stderr excerpt,
+//! and wall-clock duration — at DEBUG when it succeeded, at WARN when it did
+//! not (#1372: DEBUG is filtered out of release desktop builds, so the only
+//! runs anyone ever wants the diagnostics for were the runs that logged
+//! nothing). For the subnet query the level follows the CLASSIFICATION, not the
+//! exit status: a zero exit whose stdout carries no marker is still a failure.
+//!
+//! Two rules govern every captured stream that leaves this module, and both
+//! fail silently when broken:
+//!
+//! 1. **Redact, then truncate.** `redact_home` matches the home directory as a
+//!    substring, so truncating first can slice through that prefix and leave a
+//!    fragment that still spells the username while no longer matching. The
+//!    redaction would then be active only where truncation was not.
+//! 2. **Log the redacted excerpt, not the raw one.** The wire copy is a toast
+//!    the user chooses whether to paste; the log copy is 25 MB of `LogDir` that
+//!    users attach to bug reports. Logging raw makes the durable copy the
+//!    unredacted one, which is the opposite of what raising these lines from
+//!    DEBUG to WARN was for.
 
 #![cfg(target_os = "windows")]
 
 use std::fmt;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use crate::bounded_command::{output_with_timeout, BoundedOutcome};
+
+use crate::sentry_reporting::{home_dir_string, redact_home};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -18,14 +41,32 @@ use std::time::Instant;
 
 /// Errors that can arise from Windows Firewall operations.
 ///
-/// Variants are designed to give the PR-f Settings UI distinct recovery hints
-/// (security invariant §13).
+/// Each variant must drive its own distinct recovery hint in the Settings UI,
+/// not share a generic one — see `FirewallErrorVariant` in
+/// `src/client/types.ts` and the `firewallErrorHint` switch in
+/// `src/client/cowork/cowork-helpers.ts`. That switch ends in a runtime
+/// `default` arm (TypeScript can't prove exhaustiveness across the Rust/TS
+/// boundary), so a variant added here with no arm there would otherwise
+/// degrade silently to the generic fallback — which is why
+/// `tests/build/firewall-contract-alignment.test.ts` pins all three lists
+/// together: the variants here, the union members in `types.ts`, and the
+/// `case` arms of that switch.
 ///
 /// `Serialize`/`Deserialize` enable structured JSON errors over the Tauri IPC:
 /// `{"kind": "adminDeclined"}` etc., matching the TypeScript discriminant in
 /// the Settings UI firewall hint handler.
+/// `rename_all_fields` is NOT redundant with `rename_all` (#1372). Container
+/// `rename_all` renames the VARIANTS only — a struct variant's fields keep
+/// their Rust spelling — so `NetshFailure` went onto the wire as
+/// `{"exit_code":1,"stderr_tail":…}` while `FirewallErrorVariant` in
+/// `src/client/types.ts` declared `exitCode`/`stderrTail`. Every read was
+/// `undefined`, and `truncateStderr(undefined)` throws, so the hint fell
+/// through `formatCoworkError`'s catch to the raw JSON. Nothing caught it:
+/// the client tests hand-build variants in the TypeScript spelling and never
+/// see a Rust-serialized one. `netsh_failure_fields_use_the_wire_spelling`
+/// pins it now.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum FirewallError {
     /// The user declined the UAC elevation prompt. The install is fail-closed:
     /// a deny rule is written instead.
@@ -39,9 +80,66 @@ pub enum FirewallError {
     /// [`SubnetDetectionReason`]. Issue #1298: this used to be one opaque
     /// variant whose single message blamed the user's Cowork install, in a
     /// dialog whose own title said Cowork had been detected.
-    SubnetDetectionFailed { reason: SubnetDetectionReason },
-    /// Hyper-V adapter enumeration via PowerShell failed.
-    AdapterEnumerationFailed,
+    ///
+    /// `exit_code` and `stderr_tail` are the diagnostics the query already
+    /// captured and used to throw away (#1372). They are populated for
+    /// [`SubnetDetectionReason::QueryFailed`] and **only** for it: the other
+    /// three reasons come from a process that exited zero with output we
+    /// understood, so an exit code of 0 and an empty stderr would be noise
+    /// dressed as evidence. Sibling fields rather than a payload on the reason
+    /// itself, because `SubnetDetectionReason` has to stay fieldless — serde
+    /// spells a fieldless variant as a bare string, which is what the
+    /// hand-written TypeScript union and its `SUBNET_REASON_HINT` lookup are
+    /// keyed on, and what `tests/build/firewall-reason-alignment.test.ts`
+    /// parses.
+    SubnetDetectionFailed {
+        reason: SubnetDetectionReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        stderr_tail: String,
+    },
+    /// PowerShell could not be started, so Hyper-V adapter enumeration never
+    /// ran. `reason` says which of the three (#1372) — see
+    /// [`AdapterEnumerationReason`].
+    ///
+    /// Note what this variant does NOT mean: a PowerShell that started and then
+    /// failed is a `SubnetDetectionFailed { reason: QueryFailed }`. This one is
+    /// only ever the spawn.
+    AdapterEnumerationFailed { reason: AdapterEnumerationReason },
+}
+
+/// Why `powershell.exe` could not be started (#1372).
+///
+/// The three arms exist because their remedies differ, which is the whole test
+/// for splitting a variant: a missing interpreter is a PATH or Windows-edition
+/// problem, a refused one is an execution-policy or application-control
+/// problem, and anything else is neither. The old single variant told all three
+/// to "run Tandem as administrator or reboot to refresh the adapter list" —
+/// advice that cannot work when the interpreter never launched, in a sentence
+/// asserting an enumeration was attempted.
+///
+/// **This is a closed set derived from `io::ErrorKind`, never the `io::Error`
+/// itself.** `firewall.rs` deliberately keeps `{e}` in `log::warn!` and off the
+/// wire: a failed `Command::new("powershell")` spawn error carries the resolved
+/// executable path, and widening this variant to hold it would turn the
+/// client-side logging in `cowork-invoke.ts` into a host-path leak into pasted
+/// bug reports. An `ErrorKind` is a bare discriminant with no such payload —
+/// and mapping it to our own closed enum, rather than forwarding it, also keeps
+/// the wire contract exhaustively coverable in TypeScript, which
+/// `#[non_exhaustive] ErrorKind` is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AdapterEnumerationReason {
+    /// `powershell.exe` was not on PATH: PATH damage, a Windows edition that
+    /// ships no Windows PowerShell, or a stripped install.
+    NotFound,
+    /// The OS refused to start it — AppLocker / WDAC / Software Restriction
+    /// Policies, or ACLs on the interpreter itself.
+    PermissionDenied,
+    /// Any other spawn failure. The least-blaming bucket, and deliberately the
+    /// fallback.
+    SpawnFailed,
 }
 
 /// Why `detect_vethernet_subnet` could not produce a CIDR.
@@ -67,11 +165,27 @@ pub enum SubnetDetectionReason {
     /// Adapters matched, but none carried an IPv4 address.
     NoIpv4,
     /// At least one candidate line was present and none survived
-    /// `parse_cidr_from_line` — in practice the `/20` floor (invariant §5).
+    /// `parse_cidr_from_line` — in practice the `/20` floor: prefixes wider
+    /// than /20 are rejected so the firewall rule can never span more of the
+    /// network than Cowork's VM subnet needs.
     PrefixTooBroad,
     /// PowerShell ran but exited non-zero, or its output was not in the shape
     /// we asked for. The least-blaming bucket, and deliberately the fallback.
     QueryFailed,
+    /// The adapter query outlived its deadline and was killed (#1371).
+    ///
+    /// `Get-NetAdapter` goes through WMI, and a wedged `winmgmt` does not return
+    /// — before this variant existed the call simply never came back, so no
+    /// reason was ever produced at all.
+    ///
+    /// Appended last so the four existing wire spellings are untouched. It stays
+    /// FIELDLESS on purpose: `tests/build/subnet-reason-alignment.test.ts` parses
+    /// this enum with `/^\s{4}([A-Z]\w*),\s*$/gm`, so a variant carrying the
+    /// elapsed seconds would make that alignment test unfixably red. The seconds
+    /// live in the log line instead, which is also why the user-facing copy names
+    /// the wait without quoting a number — the two call sites use different
+    /// budgets, so no single string could be honest about both.
+    Timeout,
 }
 
 /// Marker line the detection script prints before any address lines, carrying
@@ -97,7 +211,11 @@ impl fmt::Display for FirewallError {
                 f,
                 "netsh.exe failed (exit {exit_code}): stdout={stdout_tail:?} stderr={stderr_tail:?}"
             ),
-            FirewallError::SubnetDetectionFailed { reason } => match reason {
+            FirewallError::SubnetDetectionFailed {
+                reason,
+                exit_code,
+                stderr_tail,
+            } => match reason {
                 SubnetDetectionReason::NoAdapter => write!(
                     f,
                     "No Hyper-V vEthernet adapter matched — VM not running, WSL mirrored networking, or a localized adapter description"
@@ -112,13 +230,26 @@ impl fmt::Display for FirewallError {
                 ),
                 SubnetDetectionReason::QueryFailed => write!(
                     f,
-                    "Hyper-V adapter query returned an error or unexpected output"
+                    "Hyper-V adapter query returned an error or unexpected output (exit {}): stderr={stderr_tail:?}",
+                    exit_code.map_or_else(|| "?".to_string(), |c| c.to_string())
+                ),
+                SubnetDetectionReason::Timeout => write!(
+                    f,
+                    "Hyper-V adapter query exceeded its deadline and was killed"
                 ),
             },
-            FirewallError::AdapterEnumerationFailed => write!(
-                f,
-                "Hyper-V adapter enumeration failed — PowerShell query returned an error"
-            ),
+            FirewallError::AdapterEnumerationFailed { reason } => match reason {
+                AdapterEnumerationReason::NotFound => {
+                    write!(f, "powershell.exe not found — Hyper-V adapter enumeration never ran")
+                }
+                AdapterEnumerationReason::PermissionDenied => write!(
+                    f,
+                    "Windows refused to start powershell.exe — Hyper-V adapter enumeration never ran"
+                ),
+                AdapterEnumerationReason::SpawnFailed => {
+                    write!(f, "powershell.exe could not be started — Hyper-V adapter enumeration never ran")
+                }
+            },
         }
     }
 }
@@ -128,6 +259,54 @@ impl std::error::Error for FirewallError {}
 // ---------------------------------------------------------------------------
 // Firewall rule names
 // ---------------------------------------------------------------------------
+
+/// Advisory pre-flight budget (#1371).
+///
+/// Timing out here is nearly free: the pre-flight is advisory and never replaces
+/// the enable path's own check, so failing fast is strictly better than making
+/// the user watch a spinner. Matches `PORT_HOLDER_LOOKUP_TIMEOUT` in `lib.rs`,
+/// this crate's other bounded external-process lookup.
+pub const SUBNET_PROBE_TIMEOUT_ADVISORY: Duration = Duration::from_secs(5);
+
+/// Enable-path budget (#1371).
+///
+/// Deliberately more generous than the advisory one, because the asymmetry runs
+/// the other way here: a false timeout ABORTS an enable that would have
+/// succeeded. Both numbers are estimates, not measurements — `detect_vethernet_
+/// subnet` logs its real `elapsed` at DEBUG, so `tandem.log` from a real Windows
+/// host is what should settle them.
+pub const SUBNET_PROBE_TIMEOUT_ENABLE: Duration = Duration::from_secs(15);
+
+/// Budget for a single `netsh` invocation (#1371).
+///
+/// `netsh advfirewall` is normally sub-second, but it is still an unbounded
+/// external process on the main thread: `cowork_toggle_integration` reaches
+/// `scan_orphan_rules` once and `run_netsh` three more times AFTER the subnet
+/// probe, so bounding only the probe would leave the reported symptom
+/// reproducible on the same panel.
+///
+/// Much tighter than the subnet budgets, and the asymmetry is deliberate: a
+/// false timeout here is reported honestly as a netsh failure, whereas a
+/// truncated subnet query can be *misclassified* as a fact about the user's
+/// adapters. Cheap to be strict where being wrong is loud.
+///
+/// **Two numbers worth stating rather than deriving**, because this is a fix for
+/// a window freeze:
+///
+/// 1. A single bounded call can overshoot its budget by up to
+///    `3 x KILL_GRACE` (6s). `kill_and_report` runs a bounded reap and then two
+///    sequential `recv_timeout(KILL_GRACE)` drains, which only stack in the
+///    surviving-grandchild case. So the ceiling per call is `budget + 6s`.
+/// 2. `cowork_toggle_integration` is still a SYNC command, so it stacks five
+///    such calls inline on the UI thread: the probe plus `scan_orphan_rules`
+///    plus `run_netsh` three times. Designed ceiling
+///    `15 + 4 x 5 = 35s`; pathological ceiling
+///    `(15 + 6) + 4 x (5 + 6) = 65s`.
+///
+/// That is a strict improvement on the unbounded hang it replaces, and making
+/// Enable async is tracked separately — it needs its own in-flight guard before
+/// its meta, firewall and workspace writes can safely overlap.
+const NETSH_TIMEOUT: Duration = Duration::from_secs(5);
 
 const RULE_NAME_ALLOW: &str = "Tandem Cowork";
 const RULE_NAME_DENY: &str = "Tandem Cowork \u{2014} Deny (elevation refused)";
@@ -153,7 +332,12 @@ const RULE_NAME_PREFIX: &str = "Tandem Cowork";
 ///
 /// # Returns
 /// The detected CIDR string (e.g. `"172.20.0.0/20"`) on success.
-pub fn detect_vethernet_subnet() -> Result<String, FirewallError> {
+///
+/// `budget` bounds the whole PowerShell round-trip; on expiry the process is
+/// killed and `SubnetDetectionReason::Timeout` is returned. The two call sites
+/// pass different budgets on purpose — see `SUBNET_PROBE_TIMEOUT_ADVISORY` and
+/// `SUBNET_PROBE_TIMEOUT_ENABLE`.
+pub fn detect_vethernet_subnet(budget: Duration) -> Result<String, FirewallError> {
     // `@(...)` is load-bearing, not style: it guarantees an array, so `.Count`
     // is the match count for 0, 1 and n alike — without it a zero-match
     // pipeline yields `$null` and a single match yields a bare object. Zero
@@ -171,48 +355,237 @@ foreach ($adapter in $adapters) {
 }
 "#;
 
-    let start = Instant::now();
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            ps_script,
-        ])
-        .output();
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-Command", ps_script]);
 
+    let start = Instant::now();
+    let bounded = output_with_timeout(command, budget);
     let elapsed = start.elapsed();
 
-    let output = match output {
-        Ok(o) => o,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+    let output = match bounded {
+        Ok(BoundedOutcome::Completed(o)) => o,
+        Ok(BoundedOutcome::TimedOut {
+            pid,
+            partial_stdout_len,
+            partial_stderr_len,
+        }) => {
+            // The seconds live here rather than in the user-facing copy: the two
+            // call sites pass different budgets, so the hint names the wait
+            // without quoting a number. The partial lengths separate "process
+            // start hung" (0) from "the CIM query hung after the marker line".
             log::warn!(
-                "[firewall] powershell.exe not found after {:.2}s",
+                "[firewall] vEthernet query exceeded {}s and was killed (pid {pid}, partial \
+                 stdout {partial_stdout_len}B, stderr {partial_stderr_len}B) after {:.2}s",
+                budget.as_secs(),
                 elapsed.as_secs_f64()
             );
-            return Err(FirewallError::AdapterEnumerationFailed);
+            // No diagnostics (#1372): a killed process has no exit code we can
+            // report and its stderr is by definition incomplete. The same rule
+            // `with_query_diagnostics` follows — evidence only where there is
+            // evidence — and `skip_serializing_if` keeps both off the wire.
+            return Err(FirewallError::SubnetDetectionFailed {
+                reason: SubnetDetectionReason::Timeout,
+                exit_code: None,
+                stderr_tail: String::new(),
+            });
         }
         Err(e) => {
+            // `{e}` stays in the log and off the wire: a spawn error's message
+            // carries the resolved executable path. The wire gets the kind
+            // only, mapped to our own closed enum.
             log::warn!(
                 "[firewall] PowerShell spawn failed after {:.2}s: {e}",
                 elapsed.as_secs_f64()
             );
-            return Err(FirewallError::AdapterEnumerationFailed);
+            return Err(FirewallError::AdapterEnumerationFailed {
+                reason: adapter_enumeration_reason(&e),
+            });
         }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-    log::debug!(
-        "[firewall] powershell vEthernet query: exit={}, elapsed={:.2}s, stdout={:?}, stderr={:?}",
-        output.status.code().unwrap_or(-1),
+    // Everything after the spawn is `finish_subnet_query`, which is a pure
+    // function and therefore testable. The spawn is the only part that is not,
+    // and it is now the only part left here — the redaction, the tail limit,
+    // the choice of stream, the log level and the diagnostics gate were all
+    // previously stranded in this untestable body.
+    let home = home_dir_string();
+    let outcome = finish_subnet_query(
+        output.status.success(),
+        output.status.code(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+        home.as_deref(),
         elapsed.as_secs_f64(),
-        truncate_tail(&stdout, 200),
-        truncate_tail(&stderr, 200),
+    );
+    log::log!(outcome.level, "{}", outcome.log_line);
+    outcome.result
+}
+
+/// What the subnet query produced, as data rather than as side effects.
+struct SubnetQueryOutcome {
+    level: log::Level,
+    log_line: String,
+    result: Result<String, FirewallError>,
+}
+
+/// Redact, then truncate — in that order, which is the control and not a style
+/// choice.
+///
+/// The other order looks equivalent and is not. Truncation cuts a fixed number
+/// of bytes off one end, and either end can slice through the home-directory
+/// prefix `redact_home` matches on; after that `input.contains(home)` is false,
+/// the redaction silently no-ops, and the surviving fragment still spells the
+/// username in full. Redaction would then be active only in the cases where
+/// truncation was not — i.e. never in the long outputs that most need it.
+fn redact_and_truncate(s: &str, home: Option<&str>, limit: usize) -> String {
+    let trimmed = s.trim();
+    let redacted = match home {
+        Some(h) => redact_home(trimmed, h),
+        None => std::borrow::Cow::Borrowed(trimmed),
+    };
+    truncate_head(&redacted, limit).to_string()
+}
+
+/// Turn a finished PowerShell run into a classification, a log level and a log
+/// line (#1372).
+///
+/// Three decisions live here that each looked like a detail and each produced a
+/// user-visible bug when they were made inline:
+///
+/// 1. **The log level follows the CLASSIFICATION, not the exit status.** A zero
+///    exit whose stdout carries no `TANDEM_ADAPTERS` marker is a failure we
+///    could not explain, and it was reaching `log::debug!` — filtered out of
+///    release desktop builds. That is precisely the "the one run whose
+///    diagnostics anyone would ever want logged nothing durable" complaint
+///    #1372 was filed about, still live on the path most likely to hit it.
+/// 2. **The log line carries the REDACTED tails**, the same strings that go on
+///    the wire. Logging the raw ones made the durable copy the unredacted one:
+///    the toast is ephemeral and the user chooses whether to paste it, while
+///    `TargetKind::LogDir` keeps 25 MB that users attach to bug reports.
+/// 3. **Diagnostics attach when the PROCESS failed**, never merely because the
+///    classification came out `QueryFailed`. Keying on the reason put
+///    `exit_code: Some(0)` and an empty stderr on the zero-exit path, which the
+///    client rendered as "(PowerShell exit 0: (no output))" — self-contradictory,
+///    and strictly worse than the undecorated hint it replaced.
+fn finish_subnet_query(
+    exit_ok: bool,
+    exit_code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+    home: Option<&str>,
+    elapsed_secs: f64,
+) -> SubnetQueryOutcome {
+    let stdout_tail = redact_and_truncate(stdout, home, CAPTURED_STREAM_TAIL_LIMIT);
+    let stderr_tail = redact_and_truncate(stderr, home, CAPTURED_STREAM_TAIL_LIMIT);
+
+    let classified = classify_subnet_output(exit_ok, stdout.trim());
+    let level = if classified.is_err() {
+        log::Level::Warn
+    } else {
+        log::Level::Debug
+    };
+    let log_line = format!(
+        "[firewall] powershell vEthernet query: exit={}, elapsed={elapsed_secs:.2}s, stdout={stdout_tail:?}, stderr={stderr_tail:?}",
+        exit_code.map_or_else(|| "?".to_string(), |c| c.to_string()),
     );
 
-    classify_subnet_output(output.status.success(), &stdout)
+    let result = if exit_ok {
+        classified
+    } else {
+        with_query_diagnostics(classified, exit_code, &stderr_tail)
+    };
+    SubnetQueryOutcome {
+        level,
+        log_line,
+        result,
+    }
+}
+
+/// How many bytes of a captured child-process stream survive into a log line
+/// and onto the wire.
+///
+/// One constant for every such stream, so the excerpt a user reports and the
+/// excerpt we logged cannot drift apart — and so a single number bounds the
+/// exposure. It supersedes the 400 `run_netsh` used to put on `NetshFailure`:
+/// the client re-truncates to 200 before rendering, so the extra 200 bytes were
+/// never read by anyone and only widened what crossed the wire. That surplus
+/// stopped being theoretical with #1372, which is what made those tails render
+/// at all — before it, `stderrTail` arrived `undefined` and the client fell
+/// back to raw JSON.
+///
+/// Bytes, not characters: the cap exists to bound what leaves the process, and
+/// a byte count is the thing that bounds it. Localized (CJK) output therefore
+/// yields fewer characters than an ASCII one, deliberately.
+const CAPTURED_STREAM_TAIL_LIMIT: usize = 200;
+
+/// Windows error codes that mean "you are not allowed to start this", but that
+/// Rust's `decode_error_kind` does not map to `PermissionDenied`.
+///
+/// This is the arm's whole reason for existing. The split is justified by "a
+/// refused spawn is an execution-policy or application-control problem", and
+/// the mechanisms that actually refuse one — AppLocker, WDAC, SRP — report
+/// `ERROR_ACCESS_DISABLED_BY_POLICY` (1260), not `ERROR_ACCESS_DENIED` (5).
+/// Rust has no `ErrorKind` for 1260, so it arrives as `Uncategorized` and would
+/// otherwise fall to `SpawnFailed`, whose hint never mentions policy. 740 is
+/// `ERROR_ELEVATION_REQUIRED`, the same class of refusal.
+///
+/// Checked before `kind()` because the raw code is the more specific signal;
+/// it is `None` on platforms that do not produce one, so the check is inert
+/// rather than wrong off Windows.
+const SPAWN_REFUSED_OS_ERRORS: [i32; 2] = [1260, 740];
+
+/// Map a spawn error to the closed wire enum.
+///
+/// Pure and total, so the mapping is unit-testable without a process. Note the
+/// direction of the fallback: an `ErrorKind` this build does not recognise
+/// becomes `SpawnFailed`, the least-blaming arm — `ErrorKind` is
+/// `#[non_exhaustive]` and grows between Rust releases, so a match that had to
+/// be exhaustive over it would either fail to compile on the next toolchain or
+/// force a guess about what a new kind means.
+fn adapter_enumeration_reason(err: &std::io::Error) -> AdapterEnumerationReason {
+    if err
+        .raw_os_error()
+        .is_some_and(|code| SPAWN_REFUSED_OS_ERRORS.contains(&code))
+    {
+        return AdapterEnumerationReason::PermissionDenied;
+    }
+    match err.kind() {
+        std::io::ErrorKind::NotFound => AdapterEnumerationReason::NotFound,
+        std::io::ErrorKind::PermissionDenied => AdapterEnumerationReason::PermissionDenied,
+        _ => AdapterEnumerationReason::SpawnFailed,
+    }
+}
+
+/// Attach the run's diagnostics to a `QueryFailed` classification (#1372).
+///
+/// Split out from `classify_subnet_output`, which must stay a pure function of
+/// the output shape — the entire point of #1298's split. Everything except
+/// `QueryFailed` passes through untouched.
+///
+/// **The reason is the second gate, not the first.** `finish_subnet_query` only
+/// calls this when the process actually failed, and that ordering is what the
+/// design depends on: `classify_subnet_output` returns `QueryFailed` on two
+/// paths, and the zero-exit/unparseable-stdout path has no evidence to offer.
+/// Keying on the reason alone gave it `exit_code: Some(0)` and an empty stderr,
+/// which the client rendered as "(PowerShell exit 0: (no output))" — exactly
+/// the "we looked and found nothing wrong" reading this comment used to claim
+/// was impossible.
+fn with_query_diagnostics(
+    classified: Result<String, FirewallError>,
+    exit_code: Option<i32>,
+    stderr_tail: &str,
+) -> Result<String, FirewallError> {
+    match classified {
+        Err(FirewallError::SubnetDetectionFailed {
+            reason: SubnetDetectionReason::QueryFailed,
+            ..
+        }) => Err(FirewallError::SubnetDetectionFailed {
+            reason: SubnetDetectionReason::QueryFailed,
+            exit_code,
+            stderr_tail: stderr_tail.to_string(),
+        }),
+        other => other,
+    }
 }
 
 /// Turn the detection script's output into a CIDR or a classified failure.
@@ -222,7 +595,16 @@ foreach ($adapter in $adapters) {
 /// which is why the marker's real-world shape still needs a manual check.
 fn classify_subnet_output(exit_ok: bool, stdout: &str) -> Result<String, FirewallError> {
     use SubnetDetectionReason as R;
-    let failed = |reason| Err(FirewallError::SubnetDetectionFailed { reason });
+    // No diagnostics here: this function is a pure function of the output
+    // shape, and does not see the exit code or stderr. `with_query_diagnostics`
+    // attaches them to the one reason they mean anything for.
+    let failed = |reason| {
+        Err(FirewallError::SubnetDetectionFailed {
+            reason,
+            exit_code: None,
+            stderr_tail: String::new(),
+        })
+    };
 
     // Checked before parsing anything: a failed process's stdout may be garbage,
     // so its shape carries no information about adapters.
@@ -320,12 +702,16 @@ fn looks_like_ipv4_cidr(line: &str) -> bool {
 
 /// Parse an `IPAddress/PrefixLength` string into a proper CIDR network address.
 ///
-/// Rejects prefix length < 20 per security invariant §5.
+/// Rejects prefix length < 20: a wider prefix (e.g. `/12`) would let the
+/// firewall rule span far more of the network than Cowork's VM subnet
+/// needs, so it's refused rather than silently widening the allowlisted
+/// range.
 fn parse_cidr_from_line(line: &str) -> Option<String> {
     let (ip_str, prefix_str) = line.split_once('/')?;
     let prefix: u8 = prefix_str.trim().parse().ok()?;
 
-    // Security invariant §5: reject too-broad prefixes.
+    // Reject prefixes wider than /20 so the firewall rule can never span more
+    // than Cowork's VM subnet actually needs.
     if prefix < 20 {
         log::warn!(
             "[firewall] detected vEthernet subnet has prefix /{prefix} — too broad (< /20); rejected"
@@ -422,6 +808,24 @@ pub fn add_cowork_deny_rule(cidr: &str) -> Result<(), FirewallError> {
     ])
 }
 
+/// Is this the benign "there was nothing to delete" outcome?
+///
+/// "No rules match the specified criteria." is written to stdout (not stderr) by
+/// netsh on Windows. Only exit code 1 WITH that confirmation counts — every other
+/// exit-1 failure propagates.
+///
+/// Extracted from the two `or_else` arms below so the contract is unit-testable,
+/// and because #1371 gave `run_netsh` a timeout arm that reports `exit_code: -1`:
+/// a predicate that matched on the message alone, or on any failure, would
+/// silently swallow a wedged netsh as "nothing to remove".
+fn is_no_rules_match(err: &FirewallError) -> bool {
+    matches!(
+        err,
+        FirewallError::NetshFailure { exit_code: 1, stdout_tail, .. }
+            if stdout_tail.contains("No rules match")
+    )
+}
+
 /// Remove all firewall rules whose name starts with `"Tandem Cowork"`.
 /// Covers both the allow rule and the deny-on-decline variant.
 pub fn remove_cowork_rules() -> Result<(), FirewallError> {
@@ -434,17 +838,11 @@ pub fn remove_cowork_rules() -> Result<(), FirewallError> {
         &format!("name={RULE_NAME_PREFIX}"),
     ])
     .or_else(|e| {
-        // "No rules match the specified criteria." is written to stdout (not stderr)
-        // by netsh on Windows. Only treat exit_code==1 as "nothing to do" when
-        // stdout confirms the "no match" case — all other exit-1 failures propagate.
-        match e {
-            FirewallError::NetshFailure { exit_code: 1, ref stdout_tail, .. }
-                if stdout_tail.contains("No rules match") =>
-            {
-                log::debug!("[firewall] no Tandem Cowork rules to remove (allow rule)");
-                Ok(())
-            }
-            other => Err(other),
+        if is_no_rules_match(&e) {
+            log::debug!("[firewall] no Tandem Cowork rules to remove (allow rule)");
+            Ok(())
+        } else {
+            Err(e)
         }
     })?;
 
@@ -456,40 +854,50 @@ pub fn remove_cowork_rules() -> Result<(), FirewallError> {
         "rule",
         &format!("name={RULE_NAME_DENY}"),
     ])
-    .or_else(|e| match e {
-        FirewallError::NetshFailure { exit_code: 1, ref stdout_tail, .. }
-            if stdout_tail.contains("No rules match") =>
-        {
+    .or_else(|e| {
+        if is_no_rules_match(&e) {
             log::debug!("[firewall] no Tandem Cowork rules to remove (deny rule)");
             Ok(())
+        } else {
+            Err(e)
         }
-        other => Err(other),
     })
 }
 
 /// Scan for orphan "Tandem Cowork*" firewall rules and return their names.
 ///
-/// Used by install-time orphan reconciliation (security invariant §12) to detect
-/// stale rules from a previous failed uninstall.
+/// Used by install-time orphan reconciliation, which — per the ordering
+/// contract on `reconcile_orphan_firewall_rules` in `cowork_installer.rs`
+/// (#1163) — MUST run *before* `add_cowork_allow_rule`: this scan matches by
+/// the name prefix `"Tandem Cowork"`, identical to the allow rule's own name,
+/// so scanning after the add would see the just-added rule as an orphan and
+/// delete it, leaving the enable with no allow rule.
 ///
 /// Returns `Err` on spawn failure or unexpected netsh errors so that
 /// `reconcile_orphan_firewall_rules` can distinguish "no orphans" from "scan failed".
 pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
-    let start = Instant::now();
-    let output = Command::new("netsh")
-        .args([
-            "advfirewall",
-            "firewall",
-            "show",
-            "rule",
-            &format!("name={RULE_NAME_PREFIX}"),
-        ])
-        .output();
+    let mut command = Command::new("netsh");
+    command.args([
+        "advfirewall",
+        "firewall",
+        "show",
+        "rule",
+        &format!("name={RULE_NAME_PREFIX}"),
+    ]);
 
+    let start = Instant::now();
+    let outcome = output_with_timeout(command, NETSH_TIMEOUT);
     let elapsed = start.elapsed();
 
-    let output = match output {
-        Ok(o) => o,
+    let output = match outcome {
+        Ok(BoundedOutcome::Completed(o)) => o,
+        Ok(BoundedOutcome::TimedOut { pid, .. }) => {
+            log::warn!(
+                "[firewall] scan_orphan_rules: netsh exceeded {}s and was killed (pid {pid})",
+                NETSH_TIMEOUT.as_secs()
+            );
+            return Err(netsh_timeout_error());
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             log::warn!("[firewall] scan_orphan_rules: netsh.exe not found");
             return Err(FirewallError::NetshNotFound);
@@ -507,6 +915,7 @@ pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let exit_code = output.status.code().unwrap_or(-1);
+    let home = home_dir_string();
 
     log::debug!(
         "[firewall] scan_orphan_rules: exit={exit_code}, elapsed={:.2}s",
@@ -522,8 +931,8 @@ pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
         }
         return Err(FirewallError::NetshFailure {
             exit_code,
-            stderr_tail: truncate_tail(stderr.trim(), 400).to_string(),
-            stdout_tail: truncate_tail(stdout.trim(), 400).to_string(),
+            stderr_tail: redact_and_truncate(&stderr, home.as_deref(), CAPTURED_STREAM_TAIL_LIMIT),
+            stdout_tail: redact_and_truncate(&stdout, home.as_deref(), CAPTURED_STREAM_TAIL_LIMIT),
         });
     }
 
@@ -553,12 +962,27 @@ pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
 /// Logs the invocation (argv, exit code, stdout/stderr tail, elapsed time).
 /// Never constructs a command string — each argument is passed separately.
 fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
+    let mut command = Command::new("netsh");
+    command.args(args);
+
     let start = Instant::now();
-    let output = Command::new("netsh").args(args).output();
+    let outcome = output_with_timeout(command, NETSH_TIMEOUT);
     let elapsed = start.elapsed();
 
-    let output = match output {
-        Ok(o) => o,
+    let output = match outcome {
+        Ok(BoundedOutcome::Completed(o)) => o,
+        Ok(BoundedOutcome::TimedOut { pid, .. }) => {
+            log::error!(
+                "[firewall] netsh {args:?} exceeded {}s and was killed (pid {pid})",
+                NETSH_TIMEOUT.as_secs()
+            );
+            // Returning HERE is what keeps the two exit-code heuristics below out
+            // of the picture: both live inside the `!status.success()` block,
+            // which a timeout never reaches. So a wedged netsh can never be
+            // mistaken for a UAC decline (`exit_code == 1` + empty stdout) nor
+            // swallowed by `is_no_rules_match` (`exit_code == 1`).
+            return Err(netsh_timeout_error());
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             log::error!("[firewall] netsh.exe not found after {:.2}s", elapsed.as_secs_f64());
             return Err(FirewallError::NetshNotFound);
@@ -576,13 +1000,16 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
     let exit_code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    // One lookup for both the log line and the wire, so the two cannot disagree
+    // about what was redacted (#1372).
+    let home = home_dir_string();
 
     log::debug!(
         "[firewall] netsh {:?}: exit={exit_code}, elapsed={:.2}s, stdout={:?}, stderr={:?}",
         args,
         elapsed.as_secs_f64(),
-        truncate_tail(&stdout, 200),
-        truncate_tail(&stderr, 200),
+        redact_and_truncate(&stdout, home.as_deref(), CAPTURED_STREAM_TAIL_LIMIT),
+        redact_and_truncate(&stderr, home.as_deref(), CAPTURED_STREAM_TAIL_LIMIT),
     );
 
     if !output.status.success() {
@@ -615,27 +1042,45 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
 
         return Err(FirewallError::NetshFailure {
             exit_code,
-            stderr_tail: truncate_tail(stderr.trim(), 400).to_string(),
-            stdout_tail: truncate_tail(stdout.trim(), 400).to_string(),
+            stderr_tail: redact_and_truncate(&stderr, home.as_deref(), CAPTURED_STREAM_TAIL_LIMIT),
+            stdout_tail: redact_and_truncate(&stdout, home.as_deref(), CAPTURED_STREAM_TAIL_LIMIT),
         });
     }
 
     Ok(())
 }
 
-/// Return the last `max_chars` characters of a string (UTF-8 char boundary).
-fn truncate_tail(s: &str, max_chars: usize) -> &str {
-    if s.len() <= max_chars {
-        s
-    } else {
-        let start = s.len() - max_chars;
-        // Find a valid char boundary.
-        let mut pos = start;
-        while pos < s.len() && !s.is_char_boundary(pos) {
-            pos += 1;
-        }
-        &s[pos..]
+/// The error a killed `netsh` reports (#1371).
+///
+/// `exit_code: -1` is this file's established "the process never completed"
+/// marker — the spawn-failure arms in `run_netsh` and `scan_orphan_rules` already
+/// use it — so this needs no new wire variant and no new client hint. It also
+/// keeps the timeout clear of both exit-code-1 heuristics.
+fn netsh_timeout_error() -> FirewallError {
+    FirewallError::NetshFailure {
+        exit_code: -1,
+        stderr_tail: format!("netsh timed out after {}s", NETSH_TIMEOUT.as_secs()),
+        stdout_tail: String::new(),
     }
+}
+
+/// Return the first `max_bytes` bytes of a string, cut at a UTF-8 char boundary.
+///
+/// The HEAD, not the tail, and for these streams that is the difference between
+/// evidence and boilerplate. A PowerShell `ErrorRecord` leads with the message
+/// and ends with the `+ CategoryInfo :` / `+ FullyQualifiedErrorId :` trailer;
+/// `netsh` likewise states the failure first. Keeping the last 200 bytes
+/// reliably kept the part nobody can act on — for the flagship case #1372
+/// exists to serve, the surviving excerpt was routinely pure trailer.
+fn truncate_head(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut pos = max_bytes;
+    while pos > 0 && !s.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    &s[..pos]
 }
 
 #[cfg(test)]
@@ -673,9 +1118,9 @@ mod tests {
     }
 
     #[test]
-    fn test_truncate_tail() {
-        assert_eq!(truncate_tail("hello world", 5), "world");
-        assert_eq!(truncate_tail("short", 100), "short");
+    fn test_truncate_head() {
+        assert_eq!(truncate_head("hello world", 5), "hello");
+        assert_eq!(truncate_head("short", 100), "short");
     }
 
     // -----------------------------------------------------------------------
@@ -687,16 +1132,21 @@ mod tests {
     /// built-in enum iteration. A variant added without being listed here is
     /// caught by the length assertion in the wire-shape test, which is the one
     /// place that would otherwise ship an unpinned spelling.
-    const ALL_SUBNET_REASONS: [SubnetDetectionReason; 4] = [
+    const ALL_SUBNET_REASONS: [SubnetDetectionReason; 5] = [
         SubnetDetectionReason::NoAdapter,
         SubnetDetectionReason::NoIpv4,
         SubnetDetectionReason::PrefixTooBroad,
         SubnetDetectionReason::QueryFailed,
+        SubnetDetectionReason::Timeout,
     ];
 
     fn reason_of(exit_ok: bool, stdout: &str) -> SubnetDetectionReason {
         match classify_subnet_output(exit_ok, stdout) {
-            Err(FirewallError::SubnetDetectionFailed { reason }) => reason,
+            // `..` because the variant grew diagnostics in #1372.
+            // `classify_subnet_output` never fills them — that is
+            // `with_query_diagnostics`' job, and
+            // `classification_carries_no_diagnostics_on_its_own` asserts it.
+            Err(FirewallError::SubnetDetectionFailed { reason, .. }) => reason,
             other => panic!("expected SubnetDetectionFailed, got {other:?}"),
         }
     }
@@ -847,7 +1297,12 @@ mod tests {
         // up on this machine?" inside a dialog titled "Cowork detected".
         let mut messages = Vec::new();
         for reason in ALL_SUBNET_REASONS {
-            let msg = FirewallError::SubnetDetectionFailed { reason }.to_string();
+            let msg = FirewallError::SubnetDetectionFailed {
+                reason,
+                exit_code: None,
+                stderr_tail: String::new(),
+            }
+            .to_string();
             assert!(!msg.is_empty(), "{reason:?} has no message");
             assert!(
                 !msg.contains("is Cowork set up on this machine"),
@@ -864,6 +1319,50 @@ mod tests {
             unique.len(),
             messages.len(),
             "two reasons share a message, so the reason carries no information: {messages:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #1371: a killed netsh must not be mistaken for a benign outcome.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn no_rules_match_is_only_exit_1_with_the_confirming_stdout() {
+        assert!(is_no_rules_match(&FirewallError::NetshFailure {
+            exit_code: 1,
+            stderr_tail: String::new(),
+            stdout_tail: "No rules match the specified criteria.".to_string(),
+        }));
+        // Exit 1 alone is not enough — malformed args and quota errors exit 1 too.
+        assert!(!is_no_rules_match(&FirewallError::NetshFailure {
+            exit_code: 1,
+            stderr_tail: String::new(),
+            stdout_tail: "The parameter is incorrect.".to_string(),
+        }));
+        assert!(!is_no_rules_match(&FirewallError::NetshNotFound));
+    }
+
+    #[test]
+    fn a_killed_netsh_is_not_swallowed_as_nothing_to_remove() {
+        // The regression this guards: laundering the timeout as `exit_code: 1`,
+        // or widening `is_no_rules_match` to any failure, would make a wedged
+        // netsh look like "there were no rules to delete" — so `remove_cowork_
+        // rules` would report success having removed nothing.
+        let timeout = netsh_timeout_error();
+        assert!(
+            matches!(timeout, FirewallError::NetshFailure { exit_code: -1, .. }),
+            "the timeout must use this file's -1 'never completed' marker: {timeout:?}"
+        );
+        assert!(!is_no_rules_match(&timeout));
+        // And it must not read as a UAC decline either: that heuristic needs
+        // exit_code == 1 with empty stdout, and -1 cannot match it.
+        let FirewallError::NetshFailure { exit_code, ref stderr_tail, .. } = timeout else {
+            unreachable!()
+        };
+        assert_ne!(exit_code, 1);
+        assert!(
+            stderr_tail.contains("timed out"),
+            "the tail is rendered to the user; it must say what happened: {stderr_tail:?}"
         );
     }
 
@@ -893,6 +1392,13 @@ mod tests {
                 SubnetDetectionReason::QueryFailed,
                 r#"{"kind":"subnetDetectionFailed","reason":"queryFailed"}"#,
             ),
+            // #1371. `timeout` and not `timedOut`: the client's
+            // `SUBNET_REASON_HINT` is keyed by this exact string and a miss there
+            // falls through to the generic hint, silently, in both languages.
+            (
+                SubnetDetectionReason::Timeout,
+                r#"{"kind":"subnetDetectionFailed","reason":"timeout"}"#,
+            ),
         ];
         assert_eq!(
             expected.len(),
@@ -900,9 +1406,424 @@ mod tests {
             "a reason was added without pinning its wire spelling"
         );
         for (reason, want) in expected {
-            let json = serde_json::to_string(&FirewallError::SubnetDetectionFailed { reason })
-                .unwrap();
+            let json = serde_json::to_string(&FirewallError::SubnetDetectionFailed {
+                reason,
+                exit_code: None,
+                stderr_tail: String::new(),
+            })
+            .unwrap();
             assert_eq!(json, want);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // #1372: AdapterEnumerationFailed fused two causes; QueryFailed dropped
+    // the diagnostics it had already captured.
+    // -----------------------------------------------------------------------
+
+    /// Every `AdapterEnumerationReason`, hand-maintained for the same reason
+    /// `ALL_SUBNET_REASONS` is: Rust has no built-in variant enumeration, and a
+    /// list that silently stops covering a new arm is worse than no list.
+    const ALL_ADAPTER_REASONS: [AdapterEnumerationReason; 3] = [
+        AdapterEnumerationReason::NotFound,
+        AdapterEnumerationReason::PermissionDenied,
+        AdapterEnumerationReason::SpawnFailed,
+    ];
+
+    #[test]
+    fn spawn_error_kinds_map_to_their_own_reasons() {
+        use std::io::Error;
+        use std::io::ErrorKind as K;
+        assert_eq!(
+            adapter_enumeration_reason(&Error::from(K::NotFound)),
+            AdapterEnumerationReason::NotFound
+        );
+        assert_eq!(
+            adapter_enumeration_reason(&Error::from(K::PermissionDenied)),
+            AdapterEnumerationReason::PermissionDenied
+        );
+        // Everything else falls to the least-blaming arm rather than being
+        // guessed at. `ErrorKind` is `#[non_exhaustive]`, so this arm is what
+        // makes the mapping survive a toolchain bump.
+        for other in [K::TimedOut, K::Interrupted, K::OutOfMemory, K::Other] {
+            assert_eq!(
+                adapter_enumeration_reason(&Error::from(other)),
+                AdapterEnumerationReason::SpawnFailed,
+                "{other:?} should fall to SpawnFailed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_policy_refused_spawn_is_permission_denied_not_a_generic_failure() {
+        // The whole justification for splitting `permissionDenied` out is that a
+        // REFUSED spawn is an execution-policy or application-control problem.
+        // The mechanisms that actually refuse one — AppLocker, WDAC, SRP —
+        // report ERROR_ACCESS_DISABLED_BY_POLICY (1260), which Rust has no
+        // `ErrorKind` for. Matching on `kind()` alone therefore never reached
+        // the arm it exists for: 1260 arrives as `Uncategorized` and fell to
+        // `SpawnFailed`, whose hint never mentions policy.
+        for code in [1260, 740] {
+            assert_eq!(
+                adapter_enumeration_reason(&std::io::Error::from_raw_os_error(code)),
+                AdapterEnumerationReason::PermissionDenied,
+                "raw OS error {code} should read as a refusal"
+            );
+        }
+        // And an unrelated raw code still goes through `kind()`, so the raw
+        // check is a narrowing rather than a second, looser classifier.
+        // `i32::MAX` rather than a small code on purpose: a low number is a
+        // real errno on the Linux host this module is cross-checked on (1 is
+        // EPERM there and ERROR_INVALID_FUNCTION on Windows), so it would
+        // classify differently depending on where the test ran.
+        assert_eq!(
+            adapter_enumeration_reason(&std::io::Error::from_raw_os_error(i32::MAX)),
+            AdapterEnumerationReason::SpawnFailed
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #1372 round 2: the wiring between the spawn and the wire. Everything
+    // below used to live inside `detect_vethernet_subnet`, which spawns a
+    // process and therefore has no test at all — so the redaction, the tail
+    // limit, the choice of stream and the log level were each a one-token
+    // deletion away from silently regressing.
+    // -----------------------------------------------------------------------
+
+    const HOME: &str = r"C:\Users\bryanmartin";
+
+    #[test]
+    fn redaction_runs_before_truncation_not_after() {
+        // The ordering IS the control. Truncating first cuts a fixed number of
+        // bytes off one end, and either end can slice through the prefix
+        // `redact_home` matches on; after that `contains(home)` is false, the
+        // redaction no-ops, and the username survives in full. Redaction would
+        // then be active only where truncation was not — i.e. never in the long
+        // outputs that most need it.
+        //
+        // This input is sized so the cut lands INSIDE the username: truncate
+        // first and the window keeps `C:\Users\bryanm`, after which
+        // `contains(home)` is false and the redaction no-ops on a fragment that
+        // still names the user. Asserting only on the full username would miss
+        // that — the fragment is the leak.
+        let filler = "x".repeat(CAPTURED_STREAM_TAIL_LIMIT - HOME.len() + 5);
+        let raw = format!("{filler}{HOME}\\Documents\\profile.ps1 is not signed");
+
+        let out = redact_and_truncate(&raw, Some(HOME), CAPTURED_STREAM_TAIL_LIMIT);
+        assert!(
+            !out.contains("Users"),
+            "a fragment of the home path survived: {out:?}"
+        );
+        assert!(!out.contains("bryanm"), "username fragment survived: {out:?}");
+
+        // The literal 200 rather than the constant, deliberately: an assertion
+        // written in terms of the cap widens when the cap does, so widening the
+        // cap to 100 KB would have stayed green.
+        assert!(out.len() <= 200, "excerpt exceeded its cap: {} bytes", out.len());
+
+        // The short case, where truncation never engages, must still redact —
+        // otherwise this test would pass on an implementation that only ever
+        // truncated.
+        let short = redact_and_truncate(
+            &format!("{HOME}\\Documents\\a.ps1"),
+            Some(HOME),
+            CAPTURED_STREAM_TAIL_LIMIT,
+        );
+        assert_eq!(short, r"~\Documents\a.ps1");
+    }
+
+    #[test]
+    fn the_excerpt_keeps_the_head_of_the_error_not_its_trailer() {
+        // A PowerShell ErrorRecord leads with the message and ends with the
+        // `+ CategoryInfo :` trailer. Keeping the LAST 200 bytes reliably kept
+        // the half nobody can act on — for the flagship case #1372 exists to
+        // serve, the surviving excerpt was routinely pure boilerplate.
+        let raw = format!(
+            "Get-NetIPAddress : Access is denied.{}\n    + CategoryInfo : PermissionDenied",
+            " ".repeat(CAPTURED_STREAM_TAIL_LIMIT)
+        );
+        let out = redact_and_truncate(&raw, None, CAPTURED_STREAM_TAIL_LIMIT);
+        assert!(out.starts_with("Get-NetIPAddress : Access is denied."));
+        assert!(!out.contains("CategoryInfo"));
+    }
+
+    #[test]
+    fn the_logged_excerpt_is_the_redacted_one() {
+        // The wire copy is ephemeral — a toast the user chooses whether to
+        // paste. The log copy is durable: `TargetKind::LogDir` keeps 25 MB that
+        // users attach to bug reports, and raising this branch from DEBUG to
+        // WARN is what makes it persist in release builds at all. Logging the
+        // raw tails would have made the durable copy the unredacted one.
+        let outcome = finish_subnet_query(
+            false,
+            Some(1),
+            "",
+            &format!(r"{HOME}\Documents\profile.ps1 is not signed"),
+            Some(HOME),
+            0.5,
+        );
+        assert!(
+            !outcome.log_line.contains("bryanmartin"),
+            "log line leaked the username: {}",
+            outcome.log_line
+        );
+        assert!(outcome.log_line.contains("~"));
+    }
+
+    #[test]
+    fn an_unexplained_zero_exit_logs_at_warn_and_carries_no_exit_code() {
+        // `classify_subnet_output` returns `QueryFailed` on TWO paths: a
+        // non-zero exit, and a zero exit whose stdout has no parseable marker.
+        // Keying the diagnostics on the reason gave the second path
+        // `exit_code: Some(0)` and an empty stderr, which the client rendered as
+        // "(PowerShell exit 0: (no output))" — self-contradictory, and worse
+        // than the undecorated hint. Keying on whether the PROCESS failed is the
+        // property actually wanted.
+        let outcome = finish_subnet_query(true, Some(0), "unparseable", "", None, 0.1);
+        match outcome.result {
+            Err(FirewallError::SubnetDetectionFailed {
+                reason: SubnetDetectionReason::QueryFailed,
+                exit_code,
+                ref stderr_tail,
+            }) => {
+                assert_eq!(exit_code, None, "a zero exit is not evidence of anything");
+                assert!(stderr_tail.is_empty());
+            }
+            other => panic!("expected an undecorated QueryFailed, got {other:?}"),
+        }
+        // And it must still be durable: this is the run whose diagnostics
+        // anyone would want, and it was reaching `log::debug!` — filtered out
+        // of release desktop builds, which is the complaint #1372 was filed
+        // about, still live on the path most likely to hit it.
+        assert_eq!(outcome.level, log::Level::Warn);
+    }
+
+    #[test]
+    fn a_real_process_failure_still_carries_its_evidence() {
+        // The positive control for the test above: narrowing the gate must not
+        // have turned the diagnostics off everywhere.
+        let outcome = finish_subnet_query(false, Some(1), "", "Access is denied.", None, 0.1);
+        match outcome.result {
+            Err(FirewallError::SubnetDetectionFailed {
+                reason: SubnetDetectionReason::QueryFailed,
+                exit_code,
+                ref stderr_tail,
+            }) => {
+                assert_eq!(exit_code, Some(1));
+                assert_eq!(stderr_tail, "Access is denied.");
+            }
+            other => panic!("expected a decorated QueryFailed, got {other:?}"),
+        }
+        assert_eq!(outcome.level, log::Level::Warn);
+    }
+
+    #[test]
+    fn a_successful_query_stays_at_debug_and_returns_the_subnet() {
+        let outcome = finish_subnet_query(
+            true,
+            Some(0),
+            "TANDEM_ADAPTERS:1\n172.20.0.1/20",
+            "",
+            None,
+            0.1,
+        );
+        assert_eq!(outcome.result.unwrap(), "172.20.0.0/20");
+        assert_eq!(outcome.level, log::Level::Debug);
+    }
+
+    #[test]
+    fn the_wire_reads_stderr_and_the_log_reads_both_streams() {
+        // Which stream ends up where was untestable while it lived inside the
+        // spawning function, and swapping them was a green mutation.
+        let outcome = finish_subnet_query(false, Some(1), "STDOUT-MARK", "STDERR-MARK", None, 0.1);
+        assert!(outcome.log_line.contains("STDOUT-MARK"));
+        assert!(outcome.log_line.contains("STDERR-MARK"));
+        match outcome.result {
+            Err(FirewallError::SubnetDetectionFailed {
+                ref stderr_tail, ..
+            }) => {
+                assert_eq!(stderr_tail, "STDERR-MARK");
+            }
+            other => panic!("expected SubnetDetectionFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn adapter_enumeration_messages_are_distinct_and_name_the_interpreter() {
+        // The #1372 defect in one assertion: two causes with opposite remedies
+        // shared one sentence, and that sentence claimed an enumeration had
+        // been attempted when the interpreter never launched.
+        let mut messages = Vec::new();
+        for reason in ALL_ADAPTER_REASONS {
+            let msg = FirewallError::AdapterEnumerationFailed { reason }.to_string();
+            assert!(
+                msg.contains("powershell.exe"),
+                "{reason:?} does not name the interpreter: {msg}"
+            );
+            assert!(
+                msg.contains("never ran"),
+                "{reason:?} still implies the query was attempted: {msg}"
+            );
+            messages.push(msg);
+        }
+        let unique: std::collections::HashSet<&String> = messages.iter().collect();
+        assert_eq!(
+            unique.len(),
+            messages.len(),
+            "two reasons share a message, so the reason carries no information: {messages:?}"
+        );
+    }
+
+    #[test]
+    fn adapter_reason_rides_along_as_a_sibling_field_on_the_wire() {
+        // Same shape and same stakes as the subnet pin above: the client reads
+        // `reason` off the same object it discriminates on, and a miss in its
+        // hint table degrades silently to the generic fallback.
+        let expected = [
+            (
+                AdapterEnumerationReason::NotFound,
+                r#"{"kind":"adapterEnumerationFailed","reason":"notFound"}"#,
+            ),
+            (
+                AdapterEnumerationReason::PermissionDenied,
+                r#"{"kind":"adapterEnumerationFailed","reason":"permissionDenied"}"#,
+            ),
+            (
+                AdapterEnumerationReason::SpawnFailed,
+                r#"{"kind":"adapterEnumerationFailed","reason":"spawnFailed"}"#,
+            ),
+        ];
+        assert_eq!(
+            expected.len(),
+            ALL_ADAPTER_REASONS.len(),
+            "a reason was added without pinning its wire spelling"
+        );
+        for (reason, want) in expected {
+            let json =
+                serde_json::to_string(&FirewallError::AdapterEnumerationFailed { reason }).unwrap();
+            assert_eq!(json, want);
+        }
+    }
+
+    #[test]
+    fn netsh_failure_fields_use_the_wire_spelling() {
+        // Pre-existing and silent until #1372: container `rename_all` renames
+        // variants, not struct-variant fields, so these three went out as
+        // `exit_code`/`stderr_tail`/`stdout_tail` while the client read
+        // `exitCode`/`stderrTail`/`stdoutTail`. This is the assertion that
+        // makes `rename_all_fields` load-bearing rather than decorative.
+        let json = serde_json::to_string(&FirewallError::NetshFailure {
+            exit_code: 1,
+            stderr_tail: "err".to_string(),
+            stdout_tail: "out".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"netshFailure","exitCode":1,"stderrTail":"err","stdoutTail":"out"}"#
+        );
+    }
+
+    #[test]
+    fn classification_carries_no_diagnostics_on_its_own() {
+        // `classify_subnet_output` is a pure function of the output SHAPE and
+        // never sees an exit code or a stderr. If it started minting them it
+        // would mint `Some(0)` and `""` — evidence-shaped values asserting we
+        // looked and found nothing wrong.
+        for stdout in ["", "TANDEM_ADAPTERS 0", "TANDEM_ADAPTERS 2", "TANDEM_ADAPTERS many"] {
+            match classify_subnet_output(true, stdout) {
+                Err(FirewallError::SubnetDetectionFailed {
+                    exit_code,
+                    stderr_tail,
+                    ..
+                }) => {
+                    assert_eq!(exit_code, None, "for stdout {stdout:?}");
+                    assert_eq!(stderr_tail, "", "for stdout {stdout:?}");
+                }
+                other => panic!("expected SubnetDetectionFailed, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn diagnostics_attach_to_query_failed_and_to_nothing_else() {
+        let attached = with_query_diagnostics(
+            classify_subnet_output(false, ""),
+            Some(1),
+            "Get-NetAdapter : Access is denied.",
+        );
+        match attached {
+            Err(FirewallError::SubnetDetectionFailed {
+                reason: SubnetDetectionReason::QueryFailed,
+                exit_code,
+                stderr_tail,
+            }) => {
+                assert_eq!(exit_code, Some(1));
+                assert_eq!(stderr_tail, "Get-NetAdapter : Access is denied.");
+            }
+            other => panic!("expected QueryFailed with diagnostics, got {other:?}"),
+        }
+
+        // Every other classification passes through untouched — including the
+        // success case, which must not be turned into a failure by the wrapper.
+        assert_eq!(
+            with_query_diagnostics(
+                classify_subnet_output(true, "TANDEM_ADAPTERS 1\r\n172.20.0.1/20\r\n"),
+                Some(0),
+                "noise",
+            )
+            .unwrap(),
+            "172.20.0.0/20"
+        );
+        for (stdout, want) in [
+            ("TANDEM_ADAPTERS 0", SubnetDetectionReason::NoAdapter),
+            ("TANDEM_ADAPTERS 2", SubnetDetectionReason::NoIpv4),
+            (
+                "TANDEM_ADAPTERS 1\r\n10.0.0.1/8\r\n",
+                SubnetDetectionReason::PrefixTooBroad,
+            ),
+        ] {
+            match with_query_diagnostics(classify_subnet_output(true, stdout), Some(0), "noise") {
+                Err(FirewallError::SubnetDetectionFailed {
+                    reason,
+                    exit_code,
+                    stderr_tail,
+                }) => {
+                    assert_eq!(reason, want);
+                    assert_eq!(exit_code, None, "{want:?} acquired an exit code");
+                    assert_eq!(stderr_tail, "", "{want:?} acquired a stderr tail");
+                }
+                other => panic!("expected {want:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn query_failed_diagnostics_are_omitted_from_the_wire_when_absent() {
+        // The client's union declares both fields optional so an older sidecar
+        // still parses. `skip_serializing_if` is what keeps that true in the
+        // other direction: an unpopulated diagnostic must not serialize as
+        // `null`/`""` and render as "exit null: (no output)".
+        let bare = serde_json::to_string(&FirewallError::SubnetDetectionFailed {
+            reason: SubnetDetectionReason::QueryFailed,
+            exit_code: None,
+            stderr_tail: String::new(),
+        })
+        .unwrap();
+        assert_eq!(
+            bare,
+            r#"{"kind":"subnetDetectionFailed","reason":"queryFailed"}"#
+        );
+
+        let full = serde_json::to_string(&FirewallError::SubnetDetectionFailed {
+            reason: SubnetDetectionReason::QueryFailed,
+            exit_code: Some(1),
+            stderr_tail: "boom".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            full,
+            r#"{"kind":"subnetDetectionFailed","reason":"queryFailed","exitCode":1,"stderrTail":"boom"}"#
+        );
     }
 }

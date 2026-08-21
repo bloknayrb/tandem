@@ -3,6 +3,7 @@ import { HocuspocusProvider } from "@hocuspocus/provider";
 import { onDestroy } from "svelte";
 import * as Y from "yjs";
 import Editor from "../editor/Editor.svelte";
+import { WS_URL } from "../utils/backend-ports";
 
 // Fresh Y.Doc + a no-op-ish provider for harness rendering. The provider
 // will attempt to connect; failure is fine — we only need the object so
@@ -11,7 +12,7 @@ import Editor from "../editor/Editor.svelte";
 // expect that line of console noise when a dev server is running.)
 const ydoc = new Y.Doc();
 const provider = new HocuspocusProvider({
-  url: "ws://127.0.0.1:3478",
+  url: WS_URL,
   name: "harness-doc",
   document: ydoc,
 });

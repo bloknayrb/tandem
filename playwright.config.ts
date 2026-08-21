@@ -2,7 +2,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
 import { E2E_APP_DATA_DIR } from "./scripts/e2e-paths";
-import { DEFAULT_MCP_PORT, TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "./src/shared/constants";
+import { E2E_MCP_PORT, E2E_VITE_PORT, E2E_WS_PORT } from "./scripts/test-ports";
+import { TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "./src/shared/constants";
 
 /**
  * This config's own directory, for `globalSetup` below.
@@ -20,26 +21,38 @@ import { DEFAULT_MCP_PORT, TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "./src/sha
 const CONFIG_DIR = dirname(fileURLToPath(import.meta.url));
 
 // Set before defineConfig so the tsx webServer inherits it via process.env
-// without needing an explicit `env:` key. Playwright's webServer.env REPLACES
-// (not merges) the child environment, so specifying `env:` with a spread is
-// fragile — the tsx server then cannot inherit any updates to the runner env
-// made after the config is evaluated. Mutating process.env here is simpler
-// and avoids that problem entirely.
+// without needing an explicit `env:` key. Playwright MERGES webServer.env over
+// process.env (`{ ...process.env, ...options.env }` in webServerPlugin), so no
+// `env:` block is needed to preserve inheritance — and hand-writing one as
+// `{ ...process.env, … }` would be strictly worse: that spread snapshots the
+// runner env at config-EVALUATION time, while Playwright's own merge reads it
+// at LAUNCH time. Mutating process.env here keeps the launch-time read.
 process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV] = "1";
+
+// The client half of #1492: the Vite webServer below inherits these via
+// process.env (same mechanism as the wizard var above), and
+// src/client/utils/backend-ports.ts resolves them at transform time — so the
+// served client targets the harness backend, not the product one. The wiring
+// test pins these against scripts/test-ports.ts; scripts/e2e-guard.ts verifies
+// at run time that the Vite server actually serving the suite carries them.
+process.env.VITE_TANDEM_WS_PORT = String(E2E_WS_PORT);
+process.env.VITE_TANDEM_MCP_PORT = String(E2E_MCP_PORT);
 
 export default defineConfig({
   testDir: "tests/e2e",
   timeout: 30_000,
   retries: 1,
   workers: 1, // server supports one MCP session at a time
-  // #1483: refuses to run when :3479 is held by a server whose storage dir is
-  // not the isolated E2E one. That is narrower than "a server this suite
-  // started" — an adopted STALE E2E server still passes, and skips the per-run
-  // wipe. See scripts/e2e-guard.ts for the ordering, the fail-closed rule, both
-  // residual gaps, and why this is not `reuseExistingServer: false`.
+  // #1483/#1492: defense-in-depth. The backend now runs on its own reserved
+  // pair with `reuseExistingServer: false`, so the desktop app can no longer
+  // be adopted by default — but anything answering the reserved MCP port that
+  // is not a live E2E server is still refused, fail-closed, and the guard also
+  // verifies the Vite server serving the suite was launched with the harness
+  // env (a client baked to :3479 would drive the user's REAL backend through
+  // the UI). See scripts/e2e-guard.ts for the ordering and the residual risks.
   globalSetup: resolve(CONFIG_DIR, "scripts/e2e-guard.ts"),
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: `http://127.0.0.1:${E2E_VITE_PORT}`,
     headless: true,
   },
   // Two webServer entries instead of `npm run dev:standalone`:
@@ -58,14 +71,19 @@ export default defineConfig({
   // both the watch-mode parent-process stdout-pipe deadlock on Windows AND
   // `npx`/`.bin` shim buffering issues (see issue #244 / PR #672).
   //
-  // **Spread `process.env` explicitly** in `env:` — Playwright's
-  // `webServer.env` REPLACES the child's environment rather than merging
-  // into it, so omitting the spread strips PATH/HOME/etc. and the server
-  // command can't resolve `node`.
+  // The `...process.env` spread in the backend `env:` below is redundant, not
+  // load-bearing: Playwright already builds the child env as
+  // `{ ...process.env, ...options.env }` (webServerPlugin), so PATH/HOME reach
+  // the server either way. It is kept because removing it changes nothing.
   webServer: [
     {
-      command: "npm run dev",
-      url: "http://127.0.0.1:5173",
+      // Deliberately not 5173 (nor 5174, Vite's auto-increment target): a
+      // developer's `npm run dev` — whose client targets the PRODUCT backend —
+      // must never be silently adopted (#1492; same move tests/perf made for
+      // `vite preview`). Reuse of a stale E2E Vite is safe because the guard
+      // re-verifies the served client's ports on every run.
+      command: `npm run dev -- --port ${E2E_VITE_PORT} --strictPort`,
+      url: `http://127.0.0.1:${E2E_VITE_PORT}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },
@@ -73,8 +91,16 @@ export default defineConfig({
       command: process.env.CI
         ? "node scripts/e2e-server.mjs dist/server/index.js"
         : "node scripts/e2e-server.mjs node_modules/tsx/dist/cli.mjs src/server/index.ts",
-      url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/health`,
-      reuseExistingServer: !process.env.CI,
+      url: `http://127.0.0.1:${E2E_MCP_PORT}/health`,
+      // Never adopt (#1492). Adoption of a stale E2E server skips
+      // scripts/e2e-server.mjs's per-run wipe (the cascading-failure mode its
+      // header documents), and with the backend on a reserved pair there is no
+      // legitimate server to adopt. NOTE the true residual: anything holding
+      // the reserved pair that fails the /health check is SIGKILLed by this
+      // server's own boot (`freePort`), and nothing probes the WS port at all
+      // — which is why these numbers must never collide with a documented
+      // remedy (see scripts/test-ports.ts).
+      reuseExistingServer: false,
       timeout: 120_000,
       // 3c-ii-b: the integration wizard now auto-opens on first run via
       // `GET /api/integrations/first-run-needed`. In E2E, a clean home
@@ -89,6 +115,10 @@ export default defineConfig({
         // stdio-smoke step (or any previous run) can't delay startup. Wiped
         // by scripts/e2e-server.mjs at server start — see the rationale there.
         TANDEM_APP_DATA_DIR: E2E_APP_DATA_DIR,
+        // The server half of #1492's port move; the client half is the
+        // VITE_TANDEM_* pair set at the top of this file.
+        TANDEM_PORT: String(E2E_WS_PORT),
+        TANDEM_MCP_PORT: String(E2E_MCP_PORT),
         // Skip auto-opening sample/welcome.md on startup. The onboarding-tutorial
         // spec opens it explicitly via tandem_open, and openFileByPath injects
         // tutorial annotations idempotently whenever the sample doc is opened.

@@ -28,6 +28,7 @@
   },
   "files": [
     "dist/",
+    "!dist/perf-client",
     "sample/",
     "CHANGELOG.md",
     ".claude-plugin/",
@@ -42,7 +43,7 @@
     "dev:standalone": "node scripts/dev-standalone.mjs",
     "dev:client": "vite",
     "dev:server": "tsx watch src/server/index.ts",
-    "build": "npm run typecheck && vite build && node scripts/check-font-assets.mjs && tsup",
+    "build": "npm run typecheck && node scripts/build-client.mjs && node scripts/check-font-assets.mjs && tsup",
     "build:server": "tsup",
     "check:fonts": "node scripts/check-font-assets.mjs",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc --noEmit && svelte-check --tsconfig ./tsconfig.client.json --fail-on-warnings",
@@ -53,9 +54,9 @@
     "test": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "perf:gate": "npm run build && playwright test --config=tests/perf/playwright.config.ts",
+    "perf:gate": "tsx scripts/perf-build.ts && playwright test --config=tests/perf/playwright.config.ts",
     "test:tauri-driver": "npm --prefix tests/tauri-driver test",
-    "test:acceptance-harness": "cd scripts/spikes && python -m unittest test_session_monitor_acceptance",
+    "test:acceptance-harness": "node scripts/spikes/run-acceptance-harness.mjs",
     "capture:screenshots": "cross-env SCREENSHOTS=1 playwright test --config=scripts/screenshots/playwright.config.ts",
     "capture:design-baselines": "cross-env CAPTURE_DESIGN_BASELINES=1 playwright test --config=scripts/design-baselines/playwright.config.ts",
     "preview": "vite preview",
@@ -181,6 +182,7 @@
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.57.2",
     "vite": "^8.0.16",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.0",
+    "yaml": "^2.8.2"
   }
 }

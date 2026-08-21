@@ -51,7 +51,7 @@ test("slash-menu entrance (A20a) fires once on open and does not replay while fi
   page,
 }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   const editor = page.locator(".tiptap");
   await expect(editor.locator("p").first()).toContainText("first paragraph", { timeout: 10_000 });
 

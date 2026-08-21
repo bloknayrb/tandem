@@ -26,4 +26,5 @@ const state = createChatState({
 
 <output data-testid="unread">{state.unreadCount}</output>
 <output data-testid="message-count">{state.messages.length}</output>
+<output data-testid="message-texts">{JSON.stringify(state.messages.map((m) => m.text))}</output>
 <output data-testid="document-names">{JSON.stringify(Array.from(state.documentFileNames))}</output>

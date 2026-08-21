@@ -26,7 +26,7 @@ test.afterEach(async () => {
 
 test("tab renders with filename, tooltip shows full path", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
 
   // Wait for the sample.md tab by its name content
   const tabName = page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" });
@@ -40,7 +40,7 @@ test("tab renders with filename, tooltip shows full path", async ({ page }) => {
 
 test("tab scroll container exists", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await page.waitForSelector("[data-testid='tab-scroll-container']");
 
   const container = page.locator("[data-testid='tab-scroll-container']");
@@ -50,7 +50,7 @@ test("tab scroll container exists", async ({ page }) => {
 test("multiple tabs appear", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
 
   // Both our test tabs should be present
   const sample1 = page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" });
@@ -62,7 +62,7 @@ test("multiple tabs appear", async ({ page }) => {
 test("keyboard reorder with Alt+Arrow swaps tabs", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
 
   // Wait for sample2.md tab to appear.
   const sample2Name = page.locator("[data-testid^='tab-name-']", { hasText: "sample2.md" });
@@ -92,7 +92,7 @@ test("keyboard reorder with Alt+Arrow swaps tabs", async ({ page }) => {
 test("mouse drag reorders tabs", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
 
   const tabs = page.locator("[data-testid^='tab-'][role='tab']");
   const sample1Tab = tabs.filter({ hasText: "sample.md" });
@@ -166,7 +166,7 @@ test("mouse drag reorders tabs", async ({ page }) => {
 
 test("open file button is always visible", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await page.waitForSelector("[data-testid='open-file-btn']");
 
   const openBtn = page.locator("[data-testid='open-file-btn']");
@@ -224,7 +224,7 @@ async function openFixtureTabs(page: Page, uniform: boolean) {
     ["tandem:settings", uniform],
   );
 
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await page.waitForSelector("[data-testid='tab-scroll-container']");
   await expect
     .poll(() => page.locator(".tab-flip").count(), { timeout: 10_000 })
@@ -421,7 +421,7 @@ test("adaptive mode: a newly-opened tab's enter transition targets its OWN adapt
     ["tandem:settings", false],
   );
 
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await page.waitForSelector("[data-testid='tab-scroll-container']");
   // Svelte skips intros on the initial render, so these existing tabs mount
   // without an `in:` transition — settle before opening the probe tab.

@@ -88,6 +88,18 @@ const titleAttr = $derived(
     cursor: pointer;
     transition: background 120ms, color 120ms;
   }
+  /* Reduced motion: literal 120ms tweens — no timing token to zero, so the guard
+     has to be re-declared here. Dual guard: the in-app
+     `body.tandem-reduce-motion` (class on <body>, so :global(...)) AND the OS
+     pref, media half last so it wins the specificity tie. */
+  :global(body.tandem-reduce-motion) .toolbar-btn {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .toolbar-btn {
+      transition: none;
+    }
+  }
   .toolbar-btn:hover:not(:disabled):not(.is-active) {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);

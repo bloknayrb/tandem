@@ -8,24 +8,23 @@ disable-model-invocation: true
 
 Run the Playwright end-to-end test suite for Tandem.
 
-## Critical Warning
-**E2E refuses to run while Tandem or a dev server holds :3479** (#1483). The `globalSetup` guard in `scripts/e2e-guard.ts` asks `/api/info` for the server's storage dir and aborts before the first spec unless it is the isolated E2E one — so the old hazard, silently *adopting* the desktop sidecar and running the destructive suite against real documents, now fails loudly instead. Once E2E starts its own server, `freePort()` does free :3478/:3479.
+## Ports (#1492)
+The suite runs on **reserved ports** from `scripts/test-ports.ts` — Vite on 4573, backend on 4728 (ws) / 4729 (MCP). The product's 3478/3479 are untouched, so a running Tandem or `dev:server` coexists with an E2E run; you no longer need to quit anything.
 
-So the failure mode to expect is a refusal, not a lost session. Stop `dev:server`/`dev:standalone` or quit Tandem before running.
+**The reserved pair is *reserved*, not politely refused.** Playwright raises its terse "already used" error only for something answering 200–403 on :4729. Anything else holding the pair — a wedged stale E2E server, a non-HTTP process, or *anything at all* on :4728, which no Playwright check ever probes — is SIGKILLed by the E2E server's own boot (`freePort()`). For a stale E2E server that is desirable self-healing. Two guards still run in `scripts/e2e-guard.ts` (`globalSetup`): a fail-closed identity probe of :4729 (#1483), and a check that the Vite server actually serving the suite carries the harness env — a served client still baked to :3479 would drive the destructive suite into your REAL Tandem through the UI.
 
 ## Steps
 
-1. Check for running dev servers and warn:
+1. Optionally check for a stale holder of the reserved pair:
    ```bash
-   if curl -sf http://127.0.0.1:3479/health 2>/dev/null; then
-     echo "WARNING: Something is on :3479. E2E will REFUSE to start."
-     echo "Quit Tandem or stop the dev server first."
+   if curl -sf http://127.0.0.1:4729/health 2>/dev/null; then
+     echo "Something is on :4729 (usually a stale E2E server) — the run will refuse"
+     echo "with Playwright's 'already used' error. Free it with:"
+     echo "  fuser -k 4728/tcp 4729/tcp 4573/tcp"
    fi
    ```
 
-2. Ask the user for confirmation if a server was detected.
-
-3. Run the tests:
+2. Run the tests:
    ```bash
    npm run test:e2e
    ```
@@ -35,7 +34,7 @@ So the failure mode to expect is a refusal, not a lost session. Stop `dev:server
    npm run test:e2e:ui
    ```
 
-4. If tests fail, check:
+3. If tests fail, check:
    - `data-testid` attributes are present (kebab-case convention)
    - Server started cleanly (check Playwright output for port conflicts)
    - No stale `openDocuments` entries causing phantom tab removal

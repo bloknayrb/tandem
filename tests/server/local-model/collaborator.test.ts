@@ -22,6 +22,7 @@ import type { LocalModelConfig } from "../../../src/server/local-model/config.js
 import type { LoopResult } from "../../../src/server/local-model/index.js";
 import {
   appendClaudeChatMessage,
+  finalizeClaudeChatMessage,
   updateClaudeChatMessage,
 } from "../../../src/server/mcp/awareness.js";
 import { populateYDoc } from "../../../src/server/mcp/document.js";
@@ -33,6 +34,7 @@ import { getOrCreateDocument } from "../../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
   Y_MAP_CHAT,
+  Y_MAP_CHAT_STREAM,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../../src/shared/constants.js";
@@ -141,6 +143,10 @@ function chatMap() {
   return getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT);
 }
 
+function streamMap() {
+  return getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_CHAT_STREAM);
+}
+
 function chatMessages(): ChatMessage[] {
   return [...chatMap().values()] as ChatMessage[];
 }
@@ -165,6 +171,7 @@ beforeEach(() => {
   const ctrl = getOrCreateDocument(CTRL_ROOM);
   withInternal(ctrl, () => {
     ctrl.getMap(Y_MAP_CHAT).clear();
+    ctrl.getMap(Y_MAP_CHAT_STREAM).clear();
     ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE);
   });
 });
@@ -791,15 +798,20 @@ describe("classifyFailure — bucketing + redaction", () => {
 });
 
 describe("chat write helpers — self-wake safety (load-bearing)", () => {
-  it("append + update produce ZERO chat:message events; a user write produces one", async () => {
+  it("append + update + finalize produce ZERO chat:message events; a user write produces one", async () => {
     attachCtrlObservers();
     const events: TandemEvent[] = [];
     const sub = (e: TandemEvent) => events.push(e);
     subscribe(sub, "external");
     try {
-      // Claude/local writes — both must be invisible to the channel.
+      // Claude/local writes — all three must be invisible to the channel.
+      // Updates land in the chatStream sidecar (no observer, mcp origin
+      // anyway); the finalize fold is an `update`-action re-set on the chat
+      // map, dropped at BOTH the shouldSkipChannel(mcp) gate and the
+      // `action !== "add"` gate (#1340 — pins the origin arithmetic).
       const id = appendClaudeChatMessage("streamed reply", { documentId: "d1" });
       updateClaudeChatMessage(id, "streamed reply (more)");
+      finalizeClaudeChatMessage(id);
 
       // Control: a user (browser-origin) write DOES fire one chat:message.
       const ctrl = getOrCreateDocument(CTRL_ROOM);
@@ -823,11 +835,19 @@ describe("chat write helpers — self-wake safety (load-bearing)", () => {
   });
 });
 
-describe("updateClaudeChatMessage — shape preservation", () => {
-  it("changes only text, freezing id/author/timestamp/read/documentId/replyTo", () => {
+describe("update + finalize — shape preservation across the streamed lifecycle", () => {
+  it("finalize folds the text; id/author/timestamp/read/documentId/replyTo ride through verbatim", () => {
     const id = appendClaudeChatMessage("first", { documentId: "d2", replyTo: "u9" });
     const before = chatMap().get(id) as ChatMessage;
     updateClaudeChatMessage(id, "second");
+    // #1340 NEW INVARIANT, asserted deliberately: mid-stream the chat row is
+    // STALE (untouched since append) and the chatStream sidecar is the
+    // authority — readers compose. A `chatMap.set` per update would be the
+    // O(n²) revert this test's sibling byte-guard also catches.
+    expect((chatMap().get(id) as ChatMessage).text).toBe("first");
+    expect(streamMap().has(id)).toBe(true);
+
+    finalizeClaudeChatMessage(id);
     const after = chatMap().get(id) as ChatMessage;
     expect(after.text).toBe("second");
     expect(after.id).toBe(before.id);
@@ -836,19 +856,25 @@ describe("updateClaudeChatMessage — shape preservation", () => {
     expect(after.read).toBe(before.read);
     expect(after.documentId).toBe("d2");
     expect(after.replyTo).toBe("u9");
+    expect(streamMap().has(id)).toBe(false);
   });
 
-  it("is a no-op when the message id is absent", () => {
+  it("is a no-op when the message id is absent (no chat row, no sidecar entry)", () => {
     expect(() => updateClaudeChatMessage("does-not-exist", "x")).not.toThrow();
     expect(chatMap().has("does-not-exist")).toBe(false);
+    expect(streamMap().has("does-not-exist")).toBe(false);
   });
 
-  it("#1123 M3: stamps agentIdentity on append and preserves it across a streamed update", () => {
+  it("#1123 M3: stamps agentIdentity on append and carries it through stream + fold", () => {
     const identity = { provider: "local-ollama" as const, displayName: "Qwen 2.5" };
     const id = appendClaudeChatMessage("partial", { documentId: "d3", agentIdentity: identity });
     expect((chatMap().get(id) as ChatMessage).agentIdentity).toEqual(identity);
-    // The `{...existing, text}` re-set must carry the byline through every delta.
+    // Streaming leaves the row untouched, so the byline survives every delta
+    // by construction; the fold's `{...existing}` must then carry it into the
+    // final re-set.
     updateClaudeChatMessage(id, "partial + more");
+    expect((chatMap().get(id) as ChatMessage).agentIdentity).toEqual(identity);
+    finalizeClaudeChatMessage(id);
     const after = chatMap().get(id) as ChatMessage;
     expect(after.text).toBe("partial + more");
     expect(after.agentIdentity).toEqual(identity);
@@ -1035,5 +1061,253 @@ describe("collaborator — streamed reply is bounded (#1292)", () => {
     expect(seen).toBeDefined();
     expect(seen).toBeLessThan(16 * 1024 * 1024);
     expect(seen).toBeGreaterThanOrEqual(CAP);
+  });
+});
+
+describe("collaborator — streamed lifecycle ends with an empty sidecar (#1340)", () => {
+  // dispose() runs in executeRun's finally on EVERY exit, and its finalize
+  // fold is deliberately not ownership-gated — a leaked chatStream entry would
+  // stay authoritative over the row forever (and leak a Y.Text). Each terminal
+  // path must leave the sidecar map empty and the row holding the final text.
+
+  it("clean multi-flush run: sidecar empty, row holds the full reply", async () => {
+    setupDoc("doc-fin-clean", "Body");
+    const reply = "w".repeat(300); // > STREAM_FLUSH_CHARS → real mid-stream flushes
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          opts.onContentDelta?.(reply.slice(0, 150));
+          await new Promise((r) => setTimeout(r, 0)); // let the deferred flush land
+          opts.onContentDelta?.(reply.slice(150));
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult(reply);
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-fin-clean" }));
+    await drain(collab);
+
+    expect(streamMap().size).toBe(0);
+    const msgs = chatMessages();
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].text).toBe(reply);
+  });
+
+  it("error-with-partial run: partial folded into the row, sidecar empty", async () => {
+    setupDoc("doc-fin-err", "Body");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const partial = "p".repeat(120);
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          opts.onContentDelta?.(partial); // > 80 → flush lands mid-stream
+          await new Promise((r) => setTimeout(r, 0));
+          return errorResult("local model response exceeded 4194304-byte cap");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-fin-err" }));
+    await drain(collab);
+
+    expect(streamMap().size).toBe(0);
+    expect(chatMessages()[0].text).toBe(partial);
+    errorSpy.mockRestore();
+  });
+
+  it("truncation-cap run (#1292): marker folded into the row, sidecar empty", async () => {
+    setupDoc("doc-fin-cap", "Body");
+    const CAP = 64 * 1024;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          for (let sent = 0; sent < CAP * 2; sent += 16 * 1024) {
+            opts.onContentDelta?.("x".repeat(16 * 1024));
+          }
+          await new Promise((r) => setTimeout(r, 0)); // let the cap commit+abort run
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult("unused");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-fin-cap" }));
+    await drain(collab);
+
+    expect(streamMap().size).toBe(0);
+    expect(chatMessages()[0].text).toContain("Reply truncated");
+  });
+
+  it("superseded run: its last flushed partial is folded, sidecar empty, B's reply intact", async () => {
+    setupDoc("doc-fin-super", "Body");
+    const partialA = "a".repeat(120);
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          if (opts.task === "A") {
+            opts.onContentDelta?.(partialA);
+            await new Promise((r) => setTimeout(r, 0)); // flush lands → bubble minted
+            await new Promise<void>((res) =>
+              opts.signal?.addEventListener("abort", () => res(), { once: true }),
+            );
+            return cleanResult("unused");
+          }
+          opts.onContentDelta?.("reply B is long enough to flush".repeat(4));
+          await new Promise((r) => setTimeout(r, 0));
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult("reply B");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("A", { documentId: "doc-fin-super", messageId: "a" }));
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0)); // A's flush mints its bubble
+    collab.onEvent(chatEvent("B", { documentId: "doc-fin-super", messageId: "b" }));
+    await drain(collab);
+
+    // A kept its last flushed partial (today's observable abort behaviour),
+    // folded into the durable row; nothing left in the sidecar for either run.
+    expect(streamMap().size).toBe(0);
+    const texts = chatMessages().map((m) => m.text);
+    expect(texts).toContain(partialA);
+    expect(texts).toContain("reply B is long enough to flush".repeat(4));
+  });
+});
+
+describe("collaborator — streamed write volume at the caller level (#1340)", () => {
+  it("a whole streamed run costs O(L) ctrl update bytes", async () => {
+    // Byte-shaped, never wall-clock (this box runs under heavy load). Guards a
+    // revert of the sidecar primitive as seen THROUGH the collaborator's real
+    // flush machinery: master's whole-value re-set measures ~104×L here; the
+    // sidecar fix ~2.3×L. It does NOT constrain STREAM_FLUSH_CHARS — with the
+    // linear primitive, flush fineness only adds per-transaction overhead.
+    setupDoc("doc-bytes", "Body");
+    const L = 16_384;
+    const STEP = 80;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          for (let sent = 0; sent < L; sent += STEP) {
+            opts.onContentDelta?.("x".repeat(Math.min(STEP, L - sent)));
+            // Yield a macrotask so each ≥80-char flush actually lands — the
+            // sink only ever writes from deferred timers.
+            await new Promise((r) => setTimeout(r, 0));
+          }
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult("x".repeat(L));
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    let bytes = 0;
+    const onUpdate = (u: Uint8Array) => {
+      bytes += u.byteLength;
+    };
+    ctrl.on("update", onUpdate);
+    try {
+      collab.onEvent(chatEvent("go", { documentId: "doc-bytes" }));
+      await drain(collab);
+    } finally {
+      ctrl.off("update", onUpdate);
+    }
+
+    expect(chatMessages()[0].text).toBe("x".repeat(L)); // the run really streamed L chars
+    expect(bytes).toBeGreaterThan(L); // sanity: content was transmitted
+    expect(bytes).toBeLessThanOrEqual(12 * L); // RED on master (~104×L)
+  });
+
+  it("a tool-call-looping run costs O(total content), not O(per-turn²) × turns (#1292)", async () => {
+    // The path #1292's decision comment named as unanalysed, and the one the
+    // test above cannot reach: it ends its single turn with `hadToolCalls:
+    // false`, so it never crosses a turn boundary. `onTurnEnd({ hadToolCalls:
+    // true })` resets the sink's buffer and its cap counter, so the ramp
+    // restarts on every turn and `loop.ts` defaults `maxTurns` to 12 — which
+    // under the pre-#1340 whole-value re-`set` made the run-scoped cost
+    // `turns × O(perTurn²)` rather than `O(turns × perTurn)`.
+    //
+    // Measured here: 236,110 bytes for 196,608 chars of content — 1.2×, and
+    // stable to ~70 bytes across runs. The same shape on the whole-value
+    // primitive is ~32× (each turn re-sends every prefix: 512 + 1024 + … +
+    // 32768 per turn). The 4× ceiling sits between the two with room on both
+    // sides, and is byte-shaped rather than wall-clock because this box runs
+    // under load.
+    setupDoc("doc-loop-bytes", "Body");
+    const TURNS = 6;
+    const PER_TURN = 32_768;
+    const STEP = 512;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          for (let turn = 0; turn < TURNS; turn++) {
+            for (let sent = 0; sent < PER_TURN; sent += STEP) {
+              opts.onContentDelta?.("x".repeat(STEP));
+              await new Promise((r) => setTimeout(r, 0));
+            }
+            // Every turn but the last ends WITH tool calls — the reset path.
+            opts.onTurnEnd?.({ hadToolCalls: turn < TURNS - 1 });
+          }
+          return cleanResult("");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    let bytes = 0;
+    const onUpdate = (u: Uint8Array) => {
+      bytes += u.byteLength;
+    };
+    ctrl.on("update", onUpdate);
+    try {
+      collab.onEvent(chatEvent("go", { documentId: "doc-loop-bytes" }));
+      await drain(collab);
+    } finally {
+      ctrl.off("update", onUpdate);
+    }
+
+    const content = TURNS * PER_TURN;
+    expect(bytes).toBeGreaterThan(PER_TURN); // sanity: content was transmitted
+    expect(bytes).toBeLessThanOrEqual(4 * content);
+  });
+
+  it("a tool-call turn discards its buffer, so no run-scoped budget is needed (#1292)", async () => {
+    // Why the per-turn cap reset is bounded rather than a hole, and why a
+    // run-scoped CHARACTER budget would be the wrong instrument: the content of
+    // a turn that ends in tool calls is preamble, and `onTurnEnd` throws it
+    // away so the next turn REPLACES it. The visible reply is one turn's worth
+    // whatever the turn count, and a run-scoped budget would be counting
+    // characters that were deliberately discarded — truncating a legitimate
+    // agentic run to pay for a cost the sidecar primitive already removed.
+    //
+    // Pinned because it is the load-bearing half of the argument: if a future
+    // change ever made tool-call turns ACCUMULATE, the run-scoped byte
+    // assertion above would still pass while the reply grew without a ceiling.
+    setupDoc("doc-loop-cap", "Body");
+    const PER_TURN = 40_000; // under the 64 KiB cap on its own; 3× is over it
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          for (let turn = 0; turn < 3; turn++) {
+            opts.onContentDelta?.("x".repeat(PER_TURN));
+            await new Promise((r) => setTimeout(r, 0));
+            opts.onTurnEnd?.({ hadToolCalls: turn < 2 });
+          }
+          return cleanResult("");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-loop-cap" }));
+    await drain(collab);
+
+    const text = chatMessages()[0].text;
+    // Exactly the LAST turn — not 3×, and not truncated: the cap never tripped
+    // because no single turn reached it.
+    expect(text).toBe("x".repeat(PER_TURN));
+    expect(text).not.toContain("Reply truncated");
   });
 });

@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 import path from "path";
-import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
+import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -280,7 +280,7 @@ const SURFACES: Surface[] = [
     // load-bearing and the empty-state audit quietly stops auditing the empty state.
     close: async () => {
       try {
-        await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}/api/chat`, { method: "DELETE" });
+        await fetch(`http://127.0.0.1:${E2E_MCP_PORT}/api/chat`, { method: "DELETE" });
       } catch {
         // Best-effort: a failure here must not mask the assertion that just ran.
       }

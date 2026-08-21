@@ -236,6 +236,18 @@ let { toasts, onDismiss }: Props = $props();
     place-items: center;
     transition: background 100ms, color 100ms;
   }
+  /* Reduced motion: the dismiss button still lights up on hover, it just gets
+     there instantly. Same dual mechanism as the `.toast-card` guard above; no
+     `!important` needed — the :global body selector outranks the plain one and
+     the media half wins on source order. */
+  :global(body.tandem-reduce-motion) .toast-card .dismiss {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .toast-card .dismiss {
+      transition: none;
+    }
+  }
   .toast-card .dismiss:hover {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
