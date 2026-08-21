@@ -511,6 +511,9 @@ test("01-editor-overview", async ({ page }) => {
   });
   await expect(page.getByTestId("mode-toggle")).toBeVisible();
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(screenshotsDir, "01-editor-overview.png"),
     fullPage: false,
@@ -560,6 +563,9 @@ test("02-chat-sidebar", async ({ page }) => {
   await chatInput.fill("Makes sense. Accept the suggestion and let's move on.");
   await page.waitForTimeout(300);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await chatPanel.screenshot({ path: path.join(screenshotsDir, "02-chat-sidebar.png") });
 });
 
@@ -619,6 +625,9 @@ test("03-side-panel", async ({ page }) => {
   expect(cardBox.y).toBeGreaterThanOrEqual(listBox.y - 1);
   expect(cardBox.y + cardBox.height).toBeLessThanOrEqual(listBox.y + listBox.height + 1);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await list.screenshot({ path: path.join(screenshotsDir, "03-side-panel.png") });
 });
 
@@ -683,6 +692,9 @@ test("04-toolbar-actions", async ({ page }) => {
   if (!barBox) throw new Error("formatting-bar has no bounding box");
   const viewport = page.viewportSize();
   if (!viewport) throw new Error("No viewport");
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(screenshotsDir, "04-toolbar-actions.png"),
     clip: {
@@ -728,6 +740,9 @@ test("06-claude-presence", async ({ page }) => {
   // Element screenshot. The old `{x:0, y:860, w:1400, h:40}` clip was coupled to
   // one viewport height and to the pre-floating-chrome in-flow status bar; the
   // pill is now `position: fixed` bottom-left and a fixed clip misses it.
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await pill.screenshot({ path: path.join(screenshotsDir, "06-claude-presence.png") });
 });
 
@@ -783,6 +798,9 @@ test("07-toast-notification", async ({ page }) => {
   await expect(toast).toContainText("Working directory saved.");
   await expect(page.locator("[data-testid^='toast-dismiss-']").first()).toBeVisible();
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await toast.screenshot({ path: path.join(screenshotsDir, "07-toast-notification.png") });
 });
 
@@ -805,6 +823,9 @@ test("08-onboarding-tutorial", async ({ page }) => {
   await expect(card).toBeVisible({ timeout: 10_000 });
   await page.waitForTimeout(400);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await card.screenshot({ path: path.join(screenshotsDir, "08-onboarding-tutorial.png") });
 });
 
@@ -816,6 +837,9 @@ test("09-settings-modal", async ({ page }) => {
   const modal = await openSettingsClaudeCodeTab(page);
   await expect(modal).toBeVisible({ timeout: 3_000 });
   await page.waitForTimeout(300);
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(screenshotsDir, "09-settings-modal.png"),
     fullPage: false,
@@ -835,6 +859,9 @@ test("10-solo-tandem-toggle", async ({ page }) => {
   await toggle.hover();
   await page.waitForTimeout(300);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await toggle.screenshot({ path: path.join(screenshotsDir, "10-solo-tandem-toggle.png") });
 });
 
@@ -898,6 +925,9 @@ test("11-margin-annotations", async ({ page }) => {
   expect(inFrame).toBeGreaterThanOrEqual(3);
   await page.waitForTimeout(500);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(screenshotsDir, "11-margin-annotations.png"),
     fullPage: false,
@@ -930,6 +960,9 @@ test("12-outline-rail", async ({ page }) => {
   await expect(page.getByTestId("tutorial-dismiss-btn")).toHaveCount(0);
   await page.waitForTimeout(400);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await rail.screenshot({ path: path.join(screenshotsDir, "12-outline-rail.png") });
 });
 
@@ -940,11 +973,59 @@ test("13-setup-wizard", async ({ page }) => {
   // first-run wizard would look like an unexplained timeout. The manual reopen
   // entry point is deterministic and leaves first-run state alone.
   //
-  // PRIVACY: this shot renders the real resolved config path for every client
-  // found on the capture machine, account name included. `redactAccountName`
-  // below handles it by construction and the assertion after it proves the
-  // redaction landed — do not downgrade either into a note asking a human to
-  // check, which is what this step used to rely on.
+  // PRIVACY: this shot has always rendered the capture machine's OWN config --
+  // `detectTargets` reads `os.homedir()` directly, so it is not bounded by
+  // `TANDEM_APP_DATA_DIR`, and every detected client's resolved path (account
+  // name included) landed in the PNG. That exposure predates #1422; the
+  // machine-dependence was the point of `redactAccountName` and of the
+  // assertion after it, which is a text-substitution pass over whatever
+  // happened to be on screen.
+  //
+  // #1422 is the occasion for fixing it properly, not the cause: once the card
+  // surfaces `EntryValidation.reason`, a broken entry in the capture machine's
+  // own `~/.claude.json` would put a second machine-dependent string on screen,
+  // which a redaction pass keyed on the account name would not catch at all.
+  // Route-stubbing `GET /api/integrations/existing` removes the whole class at
+  // the source: the wizard renders a fixed fixture instead of this machine's
+  // real config, on this machine and any other that ever runs this capture.
+  // `redactAccountName` and the assertion after it stay on as defense in depth
+  // for anything ELSE in the settings modal that might echo a real path -- do
+  // not downgrade either into a note asking a human to check, which is what
+  // this step relied on before the stub existed.
+  await page.route("**/api/integrations/existing", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          installs: [
+            {
+              target: {
+                label: "Claude Code",
+                configPath: "/Users/you/.claude.json",
+                kind: "claude-code",
+              },
+              status: "ok",
+              tandemEntry: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+              tandemValidation: { status: "valid" },
+            },
+            {
+              target: {
+                label: "Claude Desktop",
+                configPath:
+                  "/Users/you/Library/Application Support/Claude/claude_desktop_config.json",
+                kind: "claude-desktop",
+              },
+              status: "missing",
+            },
+          ],
+        }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+
   await openWelcome();
   await page.goto("/");
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
@@ -955,9 +1036,18 @@ test("13-setup-wizard", async ({ page }) => {
 
   const wizard = page.getByTestId("integration-wizard");
   await expect(wizard).toBeVisible({ timeout: 10_000 });
-  await expect(page.locator("[data-testid^='integration-wizard-card-']").first()).toBeVisible({
-    timeout: 10_000,
-  });
+  const cards = page.locator("[data-testid^='integration-wizard-card-']");
+  await expect(cards.first()).toBeVisible({ timeout: 10_000 });
+  // Pin the fixture's two status lines. Belt-and-suspenders alongside the
+  // stub above: if a future change to the card's status derivation ever
+  // widens what renders here, this fails loudly instead of silently shipping
+  // whatever the fixture happened to produce.
+  await expect(page.locator(".itc-status").nth(0)).toHaveText(
+    "Already connected — we'll refresh it",
+  );
+  await expect(page.locator(".itc-status").nth(1)).toHaveText(
+    "Ready to connect (settings file will be created)",
+  );
   await page.waitForTimeout(400);
 
   const plan = await redactAccountName(page);
@@ -987,6 +1077,9 @@ test("13-setup-wizard", async ({ page }) => {
   const leaks = findAccountPathLeaks(await page.locator("body").innerText(), plan);
   expect(leaks, `account name survived in rendered path(s): ${leaks.join(", ")}`).toEqual([]);
 
+  // Gate 3 (#1453 review): font barrier -- swap-loaded faces must be settled
+  // before the pixel capture, not just after a fixed sleep.
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: path.join(screenshotsDir, "13-setup-wizard.png"),
     fullPage: false,

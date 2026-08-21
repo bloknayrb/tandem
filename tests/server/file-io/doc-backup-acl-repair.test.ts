@@ -27,6 +27,7 @@ import {
   _resetDocBackupGateForTests,
   docBackupsRoot,
   snapshotBeforeFirstWrite,
+  sweepDocBackups,
 } from "../../../src/server/file-io/doc-backup.js";
 import {
   assertPre1299PoisonTook,
@@ -92,5 +93,54 @@ describe.skipIf(!WIN_ONLY)("doc-backup — recovery from a pre-#1299 poisoned in
     const written = fs.readdirSync(subdir).filter((n) => n.startsWith("welcome-"));
     expect(written).toHaveLength(1);
     expect(fs.readFileSync(path.join(subdir, written[0]), "utf8")).toBe("# original bytes\n");
+  });
+
+  /**
+   * #1433 — the same recovery, reached from the BOOT SWEEP instead of a save.
+   *
+   * This is the case the v0.21.0 fix missed: the repair hung off
+   * `snapshotBeforeFirstWrite`, so a run that never overwrote a document never
+   * reached it. On an upgrade that is guaranteed — Tandem auto-opens
+   * `CHANGELOG.md` read-only — so the sweep hit the poisoned folder on every
+   * boot, logged `EPERM … scandir`, and moved on with no route to recovery.
+   *
+   * Only the real `icacls` can prove the inheritable re-grant actually
+   * propagates into an existing empty-DACL child; the vitest suite mocks the
+   * ACL helper and can only prove the plumbing around it.
+   */
+  it("sweeps an expired snapshot out of a subdir the old grant already bricked", async () => {
+    const root = docBackupsRoot(appDataDir);
+    const subdir = path.join(root, docHash(docPath));
+    fs.mkdirSync(subdir, { recursive: true });
+
+    // Ordering is forced: the snapshot and its backdated mtime must exist
+    // BEFORE the empty DACL lands. Afterwards neither the write nor the
+    // `utimes` is permitted, so the poison cannot be applied first.
+    const expired = path.join(subdir, "old-20250101-000000-aabbccdd.md");
+    fs.writeFileSync(expired, "ancient\n");
+    fs.writeFileSync(path.join(subdir, "source.txt"), `${docPath}\n`);
+    const longAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(expired, longAgo, longAgo);
+
+    // The pre-fix state verbatim: the OLD non-inheritable grant on the root,
+    // applied while the per-path subdir already exists.
+    const sid = await currentUserSid();
+    await execFileAsync(systemBin("icacls.exe"), [root, "/inheritance:r", "/grant:r", `*${sid}:F`]);
+    // Same host-dependence as the sibling case above: on GitHub's Server 2025
+    // image `/inheritance:r` converts the inherited ACEs instead of removing
+    // them, and the converted `(OI)(CI)` entries propagate back down and
+    // un-poison the subdir (#1529). Without this the positive control below
+    // fails there for a fixture reason, on the one host the proof job runs.
+    await normalizePre1299Poison(root, sid);
+
+    // Positive control — without it this passes against a healthy tree.
+    await assertPre1299PoisonTook(root, subdir);
+    expect(() => fs.readdirSync(subdir)).toThrow(/EPERM/);
+
+    const result = await sweepDocBackups(appDataDir);
+
+    expect(result).toEqual({ cleaned: 1, failed: 0 });
+    // Emptied of live snapshots, so the sweep removed source.txt and the dir.
+    expect(fs.existsSync(subdir)).toBe(false);
   });
 });

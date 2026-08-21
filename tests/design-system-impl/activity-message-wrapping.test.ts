@@ -35,7 +35,17 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
-/** Both components that render a notification `message` string. */
+/**
+ * Every surface that renders machine-generated text into a narrow flex item.
+ *
+ * The first two are the notification `message` surfaces #1269 was filed about.
+ * The third (#1422) is the integration card's diagnostic status line, which
+ * renders an `EntryValidation.reason` — a string that ends in a command path
+ * ("command must be a Node-shaped binary or 'npx'; got '\\\\server\\share\\node.exe'")
+ * or in `install.errorMessage`, a raw `readFile` failure with the path Node was
+ * reading embedded in it. Same shape of text, same flex item with `min-width:
+ * 0`, same failure.
+ */
 const SURFACES = [
   {
     file: "src/client/components/ActivityTray.svelte",
@@ -44,6 +54,10 @@ const SURFACES = [
   {
     file: "src/client/components/ToastContainer.svelte",
     selector: ".toast-card .msg",
+  },
+  {
+    file: "src/client/components/IntegrationTargetCard.svelte",
+    selector: ".itc-status-diagnostic",
   },
 ] as const;
 
@@ -193,6 +207,20 @@ describe("notification messages can break inside a long path (#1269)", () => {
         `correct in source is not the same as shipped`,
     ).toBeDefined();
     expect(BREAKING_VALUES).toContain(value);
+  });
+
+  // #1422: the diagnostic line must not ALSO be shrunk. `.itc-path` one row
+  // below uses --tandem-text-2xs to de-emphasize a path nobody needs to read;
+  // applying the same size here would render the only explanation of why
+  // Tandem refused the user's config smaller than every generic status line
+  // beside it. The absence of a font-size is the whole point, so it needs a
+  // test — nothing else would notice it coming back.
+  it(".itc-status-diagnostic sets no font-size of its own (#1422)", () => {
+    const file = "src/client/components/IntegrationTargetCard.svelte";
+    const body = ruleBody(styleBlock(file), ".itc-status-diagnostic");
+    expect(body, `.itc-status-diagnostic rule not found in ${file}`).not.toBeNull();
+    expect(body as string).toContain("font-family");
+    expect(body as string).not.toContain("font-size");
   });
 
   it("the extractor really reads these files (positive control)", () => {

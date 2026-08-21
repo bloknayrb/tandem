@@ -15,6 +15,7 @@ import {
   formatCoworkError,
   makeDebouncer,
   type StatusTokenFamily,
+  toggleWarnings,
   undetectedDetail,
   workspaceFileStatusFamily,
   workspaceFileStatusLabel,
@@ -59,6 +60,16 @@ const coworkState = createCoworkStatus(() => true);
 const { refetch } = coworkState;
 
 let inlineToastMessage = $state<string | null>(null);
+
+/**
+ * Degraded-success caveats from the last toggle (#1438).
+ *
+ * Separate from `inlineToastMessage` because they are not errors and must not
+ * read as one: the operation committed. Cleared at the START of each toggle
+ * rather than in `withInvoke`, so a toggle that throws leaves the error banner
+ * standing alone instead of beside caveats from the previous, successful run.
+ */
+let toggleWarningList = $state<string[]>([]);
 let confirming = $state<"enable" | null>(null);
 let busy = $state(false);
 // #1298: probe the Hyper-V subnet before offering Enable, so a detection
@@ -148,8 +159,9 @@ async function handleToggleOn(): Promise<void> {
   // `readBack` stays at its initial `true`, so the confirm still closes and
   // `enableBoxChecked` correctly falls back to the unchanged, accurate status.
   let readBack = true;
+  toggleWarningList = [];
   await withInvoke(async (invoke) => {
-    await coworkToggleIntegration(invoke, true);
+    toggleWarningList = toggleWarnings(await coworkToggleIntegration(invoke, true));
     readBack = await refetch();
   }, "Failed to enable Cowork");
   if (readBack) closeEnableConfirm();
@@ -251,9 +263,16 @@ async function handleToggleOff(box: HTMLInputElement): Promise<void> {
   // fixed at its source instead of here: the enable arm's meta-persist step
   // now fails loud (`enable_persist_outcome`, `src-tauri/src/lib.rs`) rather
   // than warning and falling through to `Ok`.
+  //
+  // #1438's warnings ride alongside this, not through it: the list is cleared
+  // at the START of the attempt so a toggle that throws leaves the error
+  // standing alone rather than beside caveats from the previous, successful
+  // run. It is assigned from the resolved payload only, so a rejected invoke
+  // leaves it empty.
   let wrote = false;
+  toggleWarningList = [];
   await withInvoke(async (invoke) => {
-    await coworkToggleIntegration(invoke, false);
+    toggleWarningList = toggleWarnings(await coworkToggleIntegration(invoke, false));
     wrote = true;
   }, "Failed to disable Cowork");
   const readBack = await readBackStatus();
@@ -598,6 +617,17 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
   {#if inlineToastMessage}
     <div class="cs-error-banner" data-testid="cowork-inline-toast" role="alert">
       {inlineToastMessage}
+    </div>
+  {/if}
+
+  <!-- Degraded success (#1438). `role="status"` rather than `alert`: the
+       operation committed, so this is advisory, and a polite live region does
+       not interrupt what the user is doing to say so. -->
+  {#if toggleWarningList.length > 0}
+    <div class="cs-warning-banner" data-testid="cowork-toggle-warnings" role="status">
+      {#each toggleWarningList as warning (warning)}
+        <div>{warning}</div>
+      {/each}
     </div>
   {/if}
 </div>

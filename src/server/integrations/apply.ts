@@ -314,9 +314,14 @@ export function pathRejectionReason(err: unknown): string {
 export interface BuildMcpEntriesOptions {
   /** Include the stdio channel shim. Defaults to false, and since Track E
    *  (2026-08-07) `shouldRegisterChannelShim` no longer turns it on by default
-   *  either — the shim is opt-in via `--with-channel-shim` or the wizard's
-   *  checkbox. See that function for why a default-on inert consumer was worse
-   *  than no consumer. */
+   *  either — the CLI's `--with-channel-shim` is its ONLY opt-in. There is no wizard
+   *  checkbox and never was one: the wizard's apply route calls that function with
+   *  no override, and it returns `override ?? false`. This docblock claimed a
+   *  checkbox until #1432 — the same false claim swept out of three docs on
+   *  2026-08-09, surviving in the docblock of the function that disproves it, which
+   *  is why `tests/docs/channel-shim-optin-claims.test.ts` now guards the shape.
+   *  See that function for why a default-on inert consumer was worse than no
+   *  consumer. */
   withChannelShim?: boolean;
   /** Override the Node binary the channel shim is spawned with. Omit in
    *  production: the default resolves `process.execPath`, which is the Node

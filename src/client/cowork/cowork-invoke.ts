@@ -9,7 +9,7 @@ import {
   isTauriRuntime,
   parseFirewallErrorVariant,
 } from "../cowork/cowork-helpers";
-import type { CoworkStatus } from "../types";
+import type { CoworkStatus, CoworkToggleReport } from "../types";
 
 /**
  * The shape of `@tauri-apps/api/core` `invoke`. Kept minimal so tests can
@@ -53,8 +53,11 @@ export function coworkGetStatus(invoke: InvokeFn): Promise<CoworkStatus> {
   return invoke<CoworkStatus>("cowork_get_status");
 }
 
-export function coworkToggleIntegration(invoke: InvokeFn, enabled: boolean): Promise<{ ok: true }> {
-  return invoke<{ ok: true }>("cowork_toggle_integration", { enabled });
+export function coworkToggleIntegration(
+  invoke: InvokeFn,
+  enabled: boolean,
+): Promise<CoworkToggleReport> {
+  return invoke<CoworkToggleReport>("cowork_toggle_integration", { enabled });
 }
 
 export function coworkRescan(invoke: InvokeFn): Promise<string> {

@@ -513,3 +513,28 @@ export function makeDebouncer(ms: number): Debouncer {
     },
   };
 }
+
+/**
+ * The warnings a `cowork_toggle_integration` result carries, defensively (#1438).
+ *
+ * Returns `[]` for anything that is not an object with a `warnings` array of
+ * strings — which is not paranoia about our own Rust: a desktop shell can be
+ * talking to a **sidecar predating #1438**, whose command resolved with a bare
+ * string. Reading `.warnings.length` off that throws inside the toggle handler
+ * and turns a successful enable into a red error banner, which is a worse
+ * outcome than the silence this issue is about.
+ *
+ * Non-string entries are dropped rather than stringified: `String(x)` on an
+ * object renders "[object Object]" into a user-facing banner.
+ */
+export function toggleWarnings(result: unknown): string[] {
+  // Only null and undefined need the early return: property access on either
+  // throws, while `.warnings` on a string, number or boolean is simply
+  // `undefined` and falls through to the `Array.isArray` gate below. A
+  // `typeof result !== "object"` guard here would be unreachable — this was
+  // verified by mutation, which is why it is not present.
+  if (result === null || result === undefined) return [];
+  const raw = (result as { warnings?: unknown }).warnings;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((w): w is string => typeof w === "string" && w.length > 0);
+}

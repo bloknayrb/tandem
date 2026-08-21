@@ -150,7 +150,10 @@ describe("ScreenedOpenPath keeps its constructor private", () => {
       const abs = path.join(repoRoot, dir);
       for (const entry of readdirSync(abs, { recursive: true, withFileTypes: true })) {
         if (!entry.isFile() || !entry.name.endsWith(".rs")) continue;
-        const rel = path.join(dir, entry.name);
+        // Posix-normalised: `path.join` yields backslashes on Windows, so the
+        // positive control below (and any offender path a reader greps for) would
+        // never match on a Windows checkout — green for a host reason.
+        const rel = path.join(dir, entry.name).split(path.sep).join("/");
         const body = stripLineComments(
           readFileSync(path.join(entry.parentPath ?? abs, entry.name), "utf-8"),
         );
@@ -188,9 +191,15 @@ describe("the carriers between the screener and POST /api/open keep the newtype"
     ],
     [
       "try_queue_or_post",
-      /fn try_queue_or_post\(\s*state: &PendingOpens,\s*path: ScreenedOpenPath,\s*\)\s*->\s*Result<\(\), ScreenedOpenPath>/,
+      // #1416 replaced the `Result<(), PathBuf>` return with `OpenRoute`; the
+      // newtype claim is about the argument and the routed path, both of which
+      // this still pins.
+      /fn try_queue_or_post\(state: &PendingOpens, path: ScreenedOpenPath\) -> OpenRoute/,
     ],
-    ["post_drained_paths", /fn post_drained_paths\(\s*paths: Vec<ScreenedOpenPath>,/],
+    ["OpenRoute::PostNow", /PostNow\(ScreenedOpenPath\)/],
+    // #1416 replaced `post_drained_paths` with a generic poster; the batch it
+    // takes is the carrier that matters.
+    ["post_paths_and_surface", /paths: Vec<ScreenedOpenPath>,/],
     ["cold_start_file", /cold_start_file: Option<ScreenedOpenPath>/],
   ];
 

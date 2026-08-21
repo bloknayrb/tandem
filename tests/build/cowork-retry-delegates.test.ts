@@ -42,15 +42,19 @@ const repoRoot = path.resolve(__dirname, "../..");
 /**
  * The body of the `cfg(target_os = "windows")` arm — braces excluded.
  *
- * Anchored on the full attribute/signature triple rather than the bare `fn`
+ * Anchored on the attribute pair plus the `fn` line rather than the bare `fn`
  * line, because the `cfg(not(...))` stub two lines below has an identical
  * signature and would otherwise be a candidate match. Terminated by the first
  * column-0 `}`, which is the function's own closing brace under rustfmt.
+ *
+ * The return type is deliberately left open: it is the `cfg` attribute that
+ * distinguishes the two arms, not the type, and #1438 widened `String` to
+ * `CoworkToggleReport` without touching anything this file pins.
  */
 function windowsRetryBody(): string {
   const src = readFileSync(path.join(repoRoot, "src-tauri/src/lib.rs"), "utf8");
   const match =
-    /#\[cfg\(target_os = "windows"\)\]\n#\[tauri::command\]\nfn cowork_retry_admin_elevation\(\) -> Result<String, String> \{\n([\s\S]*?)\n\}/.exec(
+    /#\[cfg\(target_os = "windows"\)\]\n#\[tauri::command\]\nfn cowork_retry_admin_elevation\(\) -> [^{\n]+\{\n([\s\S]*?)\n\}/.exec(
       src,
     );
   expect(

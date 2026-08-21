@@ -27,7 +27,15 @@ import {
 import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
 import { coworkErrorCell, coworkStatusCell } from "../helpers/cowork-fixtures.svelte";
 
-const toggleIntegration = vi.fn(async () => ({ ok: true as const }));
+// The real command's Ok payload (#1438): a message plus zero or more
+// degraded-success warnings. `warnings: []` is the clean case, and is what the
+// default mock must be — a mock omitting the key would make `toggleWarnings()`
+// return `[]` for the WRONG reason (missing key, not empty list) and hide a
+// regression where the component stopped reading the field at all.
+const toggleIntegration = vi.fn(async () => ({
+  message: "Cowork enabled: 1 workspace(s) configured",
+  warnings: [] as string[],
+}));
 const fakeInvoke = vi.fn();
 
 const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unavailable" }));
@@ -764,5 +772,112 @@ describe("CoworkSettings — pre-flight live region (#1376)", () => {
       );
     });
     expect(q(container, "cowork-preflight-live")?.textContent ?? "").toContain("no adapter");
+  });
+});
+
+describe("CoworkSettings — degraded-success warnings (#1438)", () => {
+  // The defect: `cowork_toggle_integration` encodes a partial multi-workspace
+  // install and a leftover firewall rule in its Ok arm, and every call site
+  // awaited the invoke and threw the value away. A user with three workspaces
+  // where two failed saw "Enabled" and a check badge, with the failure existing
+  // only in a Tauri log they have no route to.
+
+  it("a clean enable shows no warning banner", async () => {
+    const { container, checkbox } = mount();
+    await setChecked(checkbox, true);
+    enableSucceeds();
+    (q(container, "cowork-enable-confirm-btn") as HTMLButtonElement).click();
+    await waitFor(() => {
+      expect(q(container, "cowork-enable-confirm")).toBeNull();
+    });
+    expect(q(container, "cowork-toggle-warnings")).toBeNull();
+  });
+
+  it("a partial enable renders every warning the command returned", async () => {
+    toggleIntegration.mockResolvedValueOnce({
+      message: "Cowork enabled: 3 workspace(s) configured",
+      warnings: ["2 of 3 Cowork workspace(s) could not be configured. Details: ws-a/vm-1: Locked"],
+    });
+    const { container, checkbox } = mount();
+    await setChecked(checkbox, true);
+    enableSucceeds();
+    (q(container, "cowork-enable-confirm-btn") as HTMLButtonElement).click();
+
+    await waitFor(() => {
+      expect(q(container, "cowork-toggle-warnings")).toBeTruthy();
+    });
+    const banner = q(container, "cowork-toggle-warnings") as HTMLElement;
+    expect(banner.textContent).toContain("2 of 3");
+    expect(banner.textContent).toContain("ws-a/vm-1: Locked");
+    // Not an error. The enable committed, and painting a caveat in the error
+    // banner's clothes is the opposite failure to the one #1438 describes.
+    expect(banner.getAttribute("role")).toBe("status");
+    expect(q(container, "cowork-inline-toast")).toBeNull();
+  });
+
+  it("renders each warning as its own line rather than one run-on string", async () => {
+    toggleIntegration.mockResolvedValueOnce({
+      message: "Cowork disabled",
+      warnings: ["A leftover firewall rule may remain.", "1 of 2 could not be cleaned up."],
+    });
+    coworkStatusCell.patch({ enabled: true });
+    const { container, checkbox } = mount();
+    await tick();
+    disableSucceeds();
+    await setChecked(checkbox, false);
+
+    await waitFor(() => {
+      expect(q(container, "cowork-toggle-warnings")).toBeTruthy();
+    });
+    const banner = q(container, "cowork-toggle-warnings") as HTMLElement;
+    expect(banner.children.length).toBe(2);
+  });
+
+  it("a failed toggle shows the error alone, not last run's caveats beside it", async () => {
+    // Why the reset lives at the top of the handler rather than in
+    // `withInvoke`: a throw skips the assignment, so warnings from a previous
+    // successful toggle would still be on screen under a red banner saying the
+    // operation failed.
+    toggleIntegration.mockResolvedValueOnce({
+      message: "Cowork enabled: 3 workspace(s) configured",
+      warnings: ["2 of 3 Cowork workspace(s) could not be configured."],
+    });
+    const { container, checkbox } = mount();
+    await setChecked(checkbox, true);
+    enableSucceeds();
+    (q(container, "cowork-enable-confirm-btn") as HTMLButtonElement).click();
+    await waitFor(() => {
+      expect(q(container, "cowork-toggle-warnings")).toBeTruthy();
+    });
+
+    // Now disable, and have it fail.
+    toggleIntegration.mockRejectedValueOnce(new Error("Access is denied. (os error 5)"));
+    await setChecked(checkbox, false);
+    await waitFor(() => {
+      expect(q(container, "cowork-inline-toast")).toBeTruthy();
+    });
+    expect(q(container, "cowork-toggle-warnings")).toBeNull();
+  });
+
+  it("survives a sidecar predating #1438, which resolves with a bare string", async () => {
+    // A desktop shell can be newer than the sidecar it launched. Reading
+    // `.warnings.length` off a string throws inside the handler and turns a
+    // successful enable into a red error banner — worse than the silence this
+    // issue is about.
+    toggleIntegration.mockResolvedValueOnce(
+      "Cowork enabled: 1 workspace(s) configured" as unknown as {
+        message: string;
+        warnings: string[];
+      },
+    );
+    const { container, checkbox } = mount();
+    await setChecked(checkbox, true);
+    enableSucceeds();
+    (q(container, "cowork-enable-confirm-btn") as HTMLButtonElement).click();
+    await waitFor(() => {
+      expect(q(container, "cowork-enable-confirm")).toBeNull();
+    });
+    expect(q(container, "cowork-toggle-warnings")).toBeNull();
+    expect(q(container, "cowork-inline-toast")).toBeNull();
   });
 });
