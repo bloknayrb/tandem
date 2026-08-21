@@ -241,9 +241,9 @@ Mechanism, ops and failure modes: [docs/licensing-explained.md](docs/licensing-e
 
 ## Status
 
-**Shipped: v0.23.0** (2026-08-18). Release history is [CHANGELOG.md](CHANGELOG.md); remaining
+**Shipped: v0.24.0** (2026-08-21). Release history is [CHANGELOG.md](CHANGELOG.md); remaining
 v1.0 work is [docs/roadmap.md](docs/roadmap.md#active--toward-v10); what the last smoke run
-settled is in [docs/release-smoke-checklist.md](docs/release-smoke-checklist.md#what-the-v0230-run-settled).
+settled is in [docs/release-smoke-checklist.md](docs/release-smoke-checklist.md#what-the-v0240-run-settled).
 **Do not re-narrate any of them here.**
 
 Core is complete — 29 active MCP tools, multi-doc tabs, CRDT-anchored annotations, chat, four

@@ -104,6 +104,43 @@ Note the outcome (platforms covered, anything skipped, anything found) in a
 comment on the release's tracking issue or the release PR. A skipped platform
 is fine when stated; an unstated skip reads as "verified" and isn't.
 
+## What the v0.24.0 run settled
+
+v0.24.0 (2026-08-21). §0 and §4 executed and passed on Windows 11 Pro (26200);
+**§1 Windows desktop was not run, and §2 macOS / §3 Linux were skipped for want of
+hardware.** The full record is on PR #1586. §1 is the consequential gap this time
+rather than §2: the updater row is the only check that can catch #1118's
+false-positive mode, where the "Tandem may not have finished updating" banner fires
+after a *successful* update. That banner is new in this release, and if it misfires
+it reaches every user at once.
+
+Three things this run established:
+
+- **The Windows signing leg is a real flake vector, and its failure carries no
+  diagnosis.** `sign.exe` (Azure Trusted Signing) failed on `tandem-reaper`
+  immediately after signing `node-sidecar` in the same job. tauri swallows the tool's
+  output, so the log says only ``failed to run …\sign.exe`` — nothing about auth,
+  quota or throttling. What made "transient" the right call rather than a guess was
+  the *diff*: nothing in `v0.23.0..HEAD` touched `tauri-release.yml`,
+  `tauri.conf.json` or the signing config, and the same leg was green at v0.23.0. A
+  single `gh run rerun --failed` passed. **A second occurrence makes "transient" the
+  wrong diagnosis** — at that point capture `sign.exe`'s own output before re-running.
+- **A failed leg leaves a partial draft that looks ordinary.** The draft sat at 13
+  assets with `release-check` red and `verify-release-manifest` *skipped* — and a
+  skipped verifier is not a failing one, so nothing in the run summary shouts. The
+  asset count is the tell, which is why the manual 1-release / 17-assets / 11-keys
+  confirmation is worth keeping even now that `create-release` made the split-draft
+  race structural.
+- **§4's boot log is worth reading, not just its exit code.** `doctor` exited 0 with
+  no FAIL while the server had already logged
+  `integrations.json schemaVersion 4 is newer than this Tandem build supports (3)`
+  and disabled the launcher supervisor. That one traced to a **paused, unmerged
+  branch** (`db14a9b`, #1265 Codex) that wrote the file on 2026-08-04 —
+  `INTEGRATIONS_SCHEMA_VERSION` has been `3` since it was introduced and no shipped
+  path writes `4` — so it is local residue and the forward-compat guard behaved
+  correctly. But `doctor` has no row for it, so the exit code alone would have
+  reported a degraded launcher as clean.
+
 ## What the v0.23.0 run settled
 
 v0.23.0 (2026-08-18). §1 and §4 executed on Windows 11 Pro (26200); §0 and §3 are
