@@ -1186,6 +1186,9 @@ $effect(() => {
 createTheme(
   () => settingsState.settings.theme,
   () => settingsState.settings.systemLightVariant,
+  // #1368: native-theme push failures the user can act on (a Windows build that
+  // cannot theme its menus) reach a toast instead of a console nothing reads.
+  notifications.push,
 );
 createAccentHue(() => settingsState.settings.accentHue);
 // #811: resolve the font from the ACTIVE tab's format so a tab switch

@@ -240,4 +240,176 @@ describe("native theme (#992) cross-boundary claims", () => {
     // comment renders nowhere, including the in-app View Changelog surface.
     expect(entry, "caveats belong in the prose, not an HTML comment").not.toMatch(/<!--/);
   });
+
+  // ------------------------------------------------------------------------
+  // #1368 — the `applied` discriminant and the structured error code. Both are
+  // strings on the wire, compared with `===` on the client, so every one of these
+  // failures is silent: nothing throws, nothing logs, the comparison is just never
+  // true again and the feature quietly does nothing.
+  // ------------------------------------------------------------------------
+
+  /** serde's `rename_all = "kebab-case"` applied to a Rust variant identifier. */
+  function kebab(variant: string): string {
+    return variant
+      .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+      .replace(/([A-Z])([A-Z][a-z])/g, "$1-$2")
+      .toLowerCase();
+  }
+
+  /** Variant identifiers of a fieldless Rust enum, skipping doc comments. */
+  function rustEnumVariants(name: string): string[] {
+    const block = RUST.match(new RegExp(`enum ${name}\\s*\\{([\\s\\S]*?)\\n\\}`));
+    expect(block, `lib.rs no longer declares enum ${name}`).not.toBeNull();
+    return [...(block?.[1] ?? "").matchAll(/^\s*([A-Z]\w*)\s*,/gm)].map((m) => m[1]);
+  }
+
+  /** String literals of a TS union alias in the client hook. */
+  function clientUnionMembers(source: string, name: string): string[] {
+    const union = source.match(new RegExp(`type ${name}\\s*=([^;]+);`));
+    expect(union, `the client no longer declares type ${name}`).not.toBeNull();
+    return [...(union?.[1] ?? "").matchAll(/"([a-z-]+)"/g)].map((m) => m[1]);
+  }
+
+  it("AppliedNativeTheme's Rust variants and the client's union are the same set", () => {
+    // Measured: adding a sixth Rust variant and forgetting the client is invisible —
+    // the payload arrives, matches no branch, and the feature silently narrows.
+    const variants = rustEnumVariants("AppliedNativeTheme");
+    expect(
+      variants.length,
+      "extracted no AppliedNativeTheme variants — the parser broke",
+    ).toBeGreaterThan(4);
+
+    const attrs = RUST.match(/((?:#\[[^\]]*\]\s*)*)enum AppliedNativeTheme\s*\{/);
+    expect(attrs?.[1] ?? "", "AppliedNativeTheme lost its kebab-case serde rename").toMatch(
+      /rename_all\s*=\s*"kebab-case"/,
+    );
+
+    const client = readFileSync(CLIENT_HOOK, "utf-8");
+    const members = clientUnionMembers(client, "AppliedNativeTheme");
+    expect([...members].sort()).toEqual([...variants.map(kebab)].sort());
+  });
+
+  it("the client READS outcome.applied, not merely the word 'applied'", () => {
+    // The camelCase test above walks the struct's fields and asserts the client
+    // "contains" each one. For `applied` that is vacuous: the word already appears in
+    // two comments in this hook, so that test passes even if nothing ever reads the
+    // field. Measured before writing this.
+    const client = readFileSync(CLIENT_HOOK, "utf-8");
+    expect(client, "nothing in the client reads outcome.applied").toMatch(/outcome\.applied/);
+  });
+
+  it("NativeThemeErrorCode's Rust variants and the client's union are the same set", () => {
+    const variants = rustEnumVariants("NativeThemeErrorCode");
+    expect(
+      variants.length,
+      "extracted no NativeThemeErrorCode variants — the parser broke",
+    ).toBeGreaterThan(2);
+
+    const enumAttrs = RUST.match(/((?:#\[[^\]]*\]\s*)*)enum NativeThemeErrorCode\s*\{/);
+    expect(enumAttrs?.[1] ?? "", "NativeThemeErrorCode lost its kebab-case serde rename").toMatch(
+      /rename_all\s*=\s*"kebab-case"/,
+    );
+
+    // The rename on the STRUCT governs FIELD names, where kebab-case would be wrong
+    // for any future multi-word field (`retryAfterMs` -> `retry-after-ms`), and where
+    // camelCase matches what every other payload in this feature uses.
+    const structAttrs = RUST.match(/((?:#\[[^\]]*\]\s*)*)struct NativeThemeError\s*\{/);
+    expect(structAttrs, "lib.rs no longer declares struct NativeThemeError").not.toBeNull();
+    expect(structAttrs?.[1] ?? "", "NativeThemeError must serialize its FIELDS camelCase").toMatch(
+      /rename_all\s*=\s*"camelCase"/,
+    );
+
+    const client = readFileSync(CLIENT_HOOK, "utf-8");
+    const members = clientUnionMembers(client, "NativeThemeErrorCode");
+    expect([...members].sort()).toEqual([...variants.map(kebab)].sort());
+  });
+
+  it("both apply_app_mode definitions have the same signature", () => {
+    // The single break on this feature that NO compiler available to this repo's
+    // developers can see: `apply_app_mode` is `#[cfg(target_os = "windows")]` with a
+    // `#[cfg(not(...))]` stub, and cfg-stripping runs before name resolution, so a
+    // Linux or macOS `cargo check` never parses the Windows body at all. Changing one
+    // signature and not the other compiles clean here and fails only on CI's
+    // windows-latest leg.
+    //
+    // The extraction is `[\s\S]`-based rather than line-oriented on purpose: rustfmt
+    // wraps one definition across four lines and leaves the other on one, so a
+    // `.*`-based regex finds a SINGLE match and "all extracted types are equal"
+    // passes trivially on a one-element array — and a later reflow drops it to zero
+    // matches, still passing.
+    const defs = [
+      ...RUST.matchAll(
+        /#\[cfg\(([^\]]*)\)\]\s*\nfn apply_app_mode\(([\s\S]*?)\)\s*->\s*([^{]+)\{/g,
+      ),
+    ];
+    expect(defs, "expected exactly two cfg-gated apply_app_mode definitions").toHaveLength(2);
+
+    const cfgs = defs.map((d) => d[1].replace(/\s+/g, " ").trim()).sort();
+    expect(cfgs, "the two definitions must be the windows/not-windows pair").toEqual([
+      'not(target_os = "windows")',
+      'target_os = "windows"',
+    ]);
+
+    // Parameters as well as the return type. Comparing only the return type let
+    // `mode: AppMode` -> `mode: u32` on ONE definition pass — precisely the break this
+    // test's own comment claims to catch. The `_`-stripping normalises the deliberate
+    // `window`/`_window` and `mode`/`_mode` difference between the real body and the
+    // never-called stub; nothing else in either parameter list starts with `_`.
+    const params = defs.map((d) =>
+      d[2]
+        .replace(/\b_(\w)/g, "$1")
+        .replace(/\s+/g, " ")
+        .trim(),
+    );
+    expect(params[0], "the two apply_app_mode definitions disagree on their parameters").toBe(
+      params[1],
+    );
+
+    const returns = defs.map((d) => d[3].replace(/\s+/g, " ").trim());
+    expect(returns[0], "the two apply_app_mode definitions disagree on their return type").toBe(
+      returns[1],
+    );
+  });
+
+  it("applied_native_theme stays exhaustive: every variant, no wildcard, no guard", () => {
+    // This function's arm SHAPE is the whole payoff of moving `AppModeOutcome` out of
+    // the Windows-gated module: with no wildcard and no guard, adding a variant is a
+    // compile error on every host rather than a silent gap on all but one. Both
+    // natural "simplifications" pass every behavioural test in lib.rs while destroying
+    // that guarantee, so they are pinned here instead.
+    const body = rustFnBody(RUST, "applied_native_theme");
+    // Comments are stripped first: the body carries a comment containing the word
+    // "if", and a naive guard check would fight the very shape this test requires.
+    const code = body.replace(/\/\/[^\n]*/g, "");
+
+    const variants = rustEnumVariants("AppModeOutcome");
+    expect(
+      variants.length,
+      "extracted no AppModeOutcome variants — the parser broke",
+    ).toBeGreaterThan(4);
+    for (const variant of variants) {
+      expect(code, `applied_native_theme no longer matches AppModeOutcome::${variant}`).toContain(
+        `AppModeOutcome::${variant}`,
+      );
+    }
+
+    // Catches a bare `_ =>` AND a `Some(_) =>`: the optional `\)?` is what reaches
+    // across the single closing paren of the latter. Without it this assertion was
+    // INERT for the `Some(_)` form — the mutation still went red, but through the
+    // containment loop above, not through here. It still does NOT match the legitimate
+    // `SetWindowTheme(Some(_)) =>`, where the `_` is followed by TWO closing parens.
+    //
+    // Worth having even though the enumeration above overlaps it: a `Some(_) =>` added
+    // ALONGSIDE the full enumeration draws only an `unreachable_patterns` warning from
+    // rustc, so nothing else here would notice it.
+    expect(code, "a wildcard arm would swallow a new variant silently").not.toMatch(
+      /[\s(|]_\s*\)?\s*=>/,
+    );
+
+    // A match GUARD stops rustc counting the arm toward exhaustiveness and forces a
+    // catch-all — the same loss by another route. An `if` in an arm BODY is fine and
+    // is where the High-Contrast disambiguation has to live, so the test is "an `if`
+    // ahead of a `=>` on the same line", not "an `if` anywhere".
+    expect(code, "a match guard would force a catch-all arm").not.toMatch(/^[^\n]*\bif\b[^\n]*=>/m);
+  });
 });

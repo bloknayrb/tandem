@@ -69,6 +69,16 @@ function callsFor(invoke: { mock: { calls: unknown[][] } }, cmd: string): unknow
 }
 
 /**
+ * The notification callback `initTauriTheme` now requires (#1368). File-level and
+ * identity-stable, like the mocks above, so every call site can pass the same one and
+ * the #1368 describe at the foot of this file can assert on it after clearing it.
+ * Every `initTauriTheme(` call in this file MUST pass a callback: `tests/` is outside
+ * every tsconfig, so a bare `initTauriTheme(pushSpy)` type-checks nowhere and would leave the
+ * module's `_notify` undefined until something tried to toast.
+ */
+const pushSpy = vi.fn();
+
+/**
  * The `matchMedia` member every `vi.stubGlobal("window", …)` below SHOULD carry — not
  * one any assertion needs. `initTauriTheme` queries `(forced-colors: active)` (#1364)
  * as unconditionally as it calls `window.addEventListener("pagehide", …)`; without the
@@ -135,7 +145,7 @@ describe("useTauriTheme", () => {
     expect(tauriTheme.current).toBeNull();
   });
 
-  it("initTauriTheme() is a no-op when isTauriRuntime() returns false", async () => {
+  it("initTauriTheme(pushSpy) is a no-op when isTauriRuntime() returns false", async () => {
     isTauri.mockReturnValue(false);
     const { invoke } = await import("@tauri-apps/api/core");
     const { initTauriTheme, _resetForTests } = await import(
@@ -143,7 +153,7 @@ describe("useTauriTheme", () => {
     );
     _resetForTests();
     vi.mocked(invoke).mockClear();
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     // invoke must not have been called — no Tauri IPC in browser mode
     expect(vi.mocked(invoke)).not.toHaveBeenCalled();
   });
@@ -202,21 +212,21 @@ describe("useTauriTheme", () => {
       __TANDEM_INITIAL_THEME__: undefined,
     });
 
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     await flushAsync();
     expect(callsFor(invoke, "get_app_theme")).toHaveLength(1);
 
-    initTauriTheme(); // guarded by _initialized — must not re-run
+    initTauriTheme(pushSpy); // guarded by _initialized — must not re-run
     await flushAsync();
     expect(callsFor(invoke, "get_app_theme")).toHaveLength(1);
 
     _resetForTests();
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     await flushAsync();
     expect(callsFor(invoke, "get_app_theme")).toHaveLength(2);
   });
 
-  it("initTauriTheme() writes through to window.__TANDEM_INITIAL_THEME__ on invoke resolve", async () => {
+  it("initTauriTheme(pushSpy) writes through to window.__TANDEM_INITIAL_THEME__ on invoke resolve", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     vi.mocked(invoke).mockImplementation(((cmd: string) => {
       if (cmd === "get_app_theme") return Promise.resolve("dark");
@@ -236,7 +246,7 @@ describe("useTauriTheme", () => {
       hasFocus: () => true,
     });
 
-    initTauriTheme();
+    initTauriTheme(pushSpy);
 
     // Flush the async chain: import(core) → invoke resolves → setTauriTheme
     await flushAsync();
@@ -273,7 +283,7 @@ describe("useTauriTheme", () => {
         matchMedia: inertMatchMedia,
       });
 
-      initTauriTheme();
+      initTauriTheme(pushSpy);
       await vi.advanceTimersByTimeAsync(0); // let the initial get_app_theme settle
       vi.mocked(invoke).mockClear();
 
@@ -445,7 +455,7 @@ describe("setNativeTheme (#992)", () => {
       if (cmd === "get_app_theme") return Promise.resolve("light");
       return Promise.resolve({ overrideActive: true, osTheme: null });
     });
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     setNativeTheme("dark"); // resolves with overrideActive: true
     await flushAsync();
 
@@ -504,7 +514,7 @@ describe("setNativeTheme (#992)", () => {
       return Promise.resolve({ overrideActive: false, osTheme: null });
     });
 
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     await flushAsync();
     expect(themeChangedCapture.current).not.toBeNull();
     expect(systemTheme()).toBe("light");
@@ -557,7 +567,7 @@ describe("setNativeTheme (#992)", () => {
         return Promise.resolve({ overrideActive: false, osTheme: null });
       });
 
-      initTauriTheme();
+      initTauriTheme(pushSpy);
       await vi.advanceTimersByTimeAsync(0); // initial get_app_theme fetch settles
       expect(systemTheme()).toBe("light");
 
@@ -616,7 +626,7 @@ describe("setNativeTheme (#992)", () => {
     vi.stubGlobal("document", { hasFocus: () => false });
     // invoke default comes from beforeEach; the two commands in play behave identically.
 
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     await flushAsync();
     expect(themeChangedCapture.current).not.toBeNull();
     expect(systemTheme()).toBe("light");
@@ -669,7 +679,7 @@ describe("setNativeTheme (#992)", () => {
       vi.stubGlobal("document", { hasFocus: () => false });
       // invoke default comes from beforeEach; the two commands in play behave identically.
 
-      initTauriTheme();
+      initTauriTheme(pushSpy);
       await vi.advanceTimersByTimeAsync(0);
       expect(themeChangedCapture.current).not.toBeNull();
       expect(systemTheme()).toBe("light");
@@ -732,7 +742,7 @@ describe("setNativeTheme (#992)", () => {
       cmd === "get_app_theme" ? Promise.resolve("dark") : new Promise(() => {}),
     );
 
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     setNativeTheme("dark"); // same tick as createTheme's effect; never settles
     await flushAsync();
 
@@ -769,7 +779,7 @@ describe("setNativeTheme (#992)", () => {
           ? Promise.resolve("light")
           : Promise.resolve({ overrideActive: true, osTheme: null }),
       );
-      initTauriTheme();
+      initTauriTheme(pushSpy);
       await vi.advanceTimersByTimeAsync(0);
       setNativeTheme("dark"); // succeeds — the override is now live
       await vi.advanceTimersByTimeAsync(0);
@@ -890,7 +900,7 @@ describe("setNativeTheme (#992)", () => {
         "../../src/client/hooks/useTauriTheme.svelte.js"
       );
       _resetForTests();
-      initTauriTheme();
+      initTauriTheme(pushSpy);
       // Let the dynamic import() of @tauri-apps/api/window resolve.
       await vi.waitFor(() => expect(themeChangedCapture.current).not.toBeNull());
       // The mock records the subscribe synchronously, one microtask BEFORE the SUT stores
@@ -914,7 +924,7 @@ describe("setNativeTheme (#992)", () => {
 
       for (let i = 0; i < 3; i++) {
         _resetForTests();
-        initTauriTheme();
+        initTauriTheme(pushSpy);
         await vi.waitFor(() => expect(subscribeCount.current).toBe(i + 1));
         await flushAsync(); // see note above: subscribe is recorded before the handle lands
       }
@@ -937,10 +947,10 @@ describe("setNativeTheme (#992)", () => {
         "../../src/client/hooks/useTauriTheme.svelte.js"
       );
       _resetForTests();
-      initTauriTheme();
+      initTauriTheme(pushSpy);
       await vi.waitFor(() => expect(subscribeCount.current).toBe(1));
       _resetForTests();
-      initTauriTheme();
+      initTauriTheme(pushSpy);
       await vi.waitFor(() => expect(subscribeCount.current).toBe(2));
       await flushAsync();
       expect(themeChangedCapture.current).not.toBeNull();
@@ -973,7 +983,7 @@ describe("setNativeTheme (#992)", () => {
       addSpy.mockClear();
       removeSpy.mockClear();
 
-      initTauriTheme();
+      initTauriTheme(pushSpy);
       expect(addSpy).toHaveBeenCalledWith("pagehide", expect.any(Function));
       expect(removeSpy).not.toHaveBeenCalledWith("pagehide", expect.any(Function));
 
@@ -1001,16 +1011,16 @@ describe("setNativeTheme (#992)", () => {
       // three registrations and zero removals, i.e. three permanent listeners. Each loop
       // iteration's leading `_resetForTests()` releases the PRIOR iteration's listener (a
       // no-op on iteration 0, since nothing is registered yet), and the trailing reset
-      // after the loop releases the third: three `initTauriTheme()` calls, three releases.
+      // after the loop releases the third: three `initTauriTheme(pushSpy)` calls, three releases.
       for (let i = 0; i < 3; i++) {
         _resetForTests();
-        initTauriTheme();
+        initTauriTheme(pushSpy);
       }
       _resetForTests();
 
       const pagehideAdds = addSpy.mock.calls.filter((c) => c[0] === "pagehide");
       const pagehideRemoves = removeSpy.mock.calls.filter((c) => c[0] === "pagehide");
-      expect(pagehideAdds).toHaveLength(3); // one per initTauriTheme() call in the loop
+      expect(pagehideAdds).toHaveLength(3); // one per initTauriTheme(pushSpy) call in the loop
       expect(pagehideRemoves).toHaveLength(3); // every registered generation must be released
 
       addSpy.mockRestore();
@@ -1033,7 +1043,7 @@ describe("setNativeTheme (#992)", () => {
         "../../src/client/hooks/useTauriTheme.svelte.js"
       );
       _resetForTests();
-      initTauriTheme();
+      initTauriTheme(pushSpy);
       const handler = addSpy.mock.calls.find((c) => c[0] === "pagehide")?.[1] as (e: {
         persisted: boolean;
       }) => void;
@@ -1049,6 +1059,182 @@ describe("setNativeTheme (#992)", () => {
       addSpy.mockRestore();
       removeSpy.mockRestore();
       _resetForTests();
+    });
+  });
+
+  // #1368 — `set_native_theme` used to serialize a successful force, a release, a
+  // High-Contrast decline and a total no-op on a pre-1903 Windows as the same two
+  // fields, so the client had nothing to react to and every failure in this module
+  // terminated at a `console.warn` that reaches nothing in a release build.
+  //
+  // These drive the RESOLVED outcome only; the rejection path belongs to #1413.
+  describe("unsupported-host notification (#1368)", () => {
+    beforeEach(() => {
+      // Load-bearing: `vi.stubGlobal("window", {...})` calls earlier in this file are
+      // only undone inside the FIRST describe, so without this the SUT would register
+      // its pagehide listener on a leftover plain object and the real poll/teardown
+      // paths would not behave as they do in the app.
+      vi.unstubAllGlobals();
+      pushSpy.mockClear();
+    });
+
+    afterEach(async () => {
+      // Every test here ends initialized (a live poll, a live subscription). The test
+      // at the top of this file exists to assert the poll does not leak across tests;
+      // do not make it a liar.
+      const { _resetForTests } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+      _resetForTests();
+    });
+
+    /** Resolve every `set_native_theme` push with this `applied` discriminant. */
+    function resolveWith(applied: string): void {
+      invoke.mockImplementation((cmd: string) => {
+        if (cmd === "set_native_theme")
+          return Promise.resolve({ overrideActive: false, osTheme: null, applied });
+        return Promise.resolve("light");
+      });
+    }
+
+    /** Calls pushed to the notification callback that carry THIS feature's dedupKey. */
+    function nativeThemeToasts(): { dedupKey?: string; severity?: string; message?: string }[] {
+      return pushSpy.mock.calls
+        .map((c) => c[0] as { dedupKey?: string; severity?: string; message?: string })
+        .filter((n) => n?.dedupKey === "native-theme-push");
+    }
+
+    it("toasts once when the host cannot apply an app mode", async () => {
+      const { initTauriTheme, setNativeTheme } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      initTauriTheme(pushSpy);
+      resolveWith("unsupported-host");
+      setNativeTheme("dark");
+      await flushAsync();
+
+      const toasts = nativeThemeToasts();
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].severity).toBe("warning");
+      expect(toasts[0].message).toMatch(/Windows/);
+    });
+
+    it("says nothing for any outcome that is not an unsupported host", async () => {
+      // `declined-high-contrast` is the user's own accessibility setting winning and
+      // `skipped-platform` is Linux, where a Windows-menu toast would be actively
+      // wrong. `applied-without-menu-flush` is the regression pin: the app mode IS
+      // set there (ordinal 135 succeeded; only ordinal 136 did not), so attaching
+      // "native menus can't follow the app theme" to it would be a false claim,
+      // permanently, in an activity tray that is a log.
+      const mod = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+      for (const applied of [
+        "forced",
+        "released",
+        "applied-without-menu-flush",
+        "declined-high-contrast",
+        "skipped-platform",
+      ]) {
+        mod._resetForTests();
+        pushSpy.mockClear();
+        mod.initTauriTheme(pushSpy);
+        resolveWith(applied);
+        mod.setNativeTheme("dark");
+        await flushAsync();
+        expect(nativeThemeToasts(), `applied=${applied}`).toHaveLength(0);
+      }
+    });
+
+    it("does not toast again for a second unsupported-host push in the same session", async () => {
+      // Two DIFFERENT preferences, so the module's own dedupe latch cannot be what
+      // suppresses the second toast — this has to be the session latch.
+      const { initTauriTheme, setNativeTheme } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      initTauriTheme(pushSpy);
+      resolveWith("unsupported-host");
+      setNativeTheme("dark");
+      await flushAsync();
+      setNativeTheme("light");
+      await flushAsync();
+
+      expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
+      expect(nativeThemeToasts()).toHaveLength(1);
+    });
+
+    it("_resetForTests() clears the latch so a later push can toast again", async () => {
+      // The trap the `disposed` latch's comment in the SUT describes: a session latch
+      // that `_resetForTests` forgets silences every subsequent test, silently.
+      const mod = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+      mod.initTauriTheme(pushSpy);
+      resolveWith("unsupported-host");
+      mod.setNativeTheme("dark");
+      await flushAsync();
+      expect(nativeThemeToasts()).toHaveLength(1);
+
+      mod._resetForTests();
+      pushSpy.mockClear();
+      mod.initTauriTheme(pushSpy);
+      mod.setNativeTheme("dark");
+      await flushAsync();
+      expect(nativeThemeToasts()).toHaveLength(1);
+    });
+
+    it("a REJECTED push produces no unsupported-host copy", async () => {
+      // Scoped to this feature's copy rather than to "no notification at all": the
+      // rejection path is #1413's, and it will add a toast there that reads no
+      // `outcome` and fabricates no resolution. What this pins is that the `applied`
+      // surfacing lives in the resolved `.then` ONLY — a failed push has no outcome,
+      // and inventing one is the #1362 class of bug.
+      const { initTauriTheme, setNativeTheme } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      initTauriTheme(pushSpy);
+      invoke.mockImplementation((cmd: string) => {
+        if (cmd === "set_native_theme") return Promise.reject(new Error("set_theme failed: boom"));
+        return Promise.resolve("light");
+      });
+      setNativeTheme("dark");
+      await flushAsync();
+
+      expect(callsFor(invoke, "set_native_theme").length).toBeGreaterThan(0);
+      expect(nativeThemeToasts()).toHaveLength(0);
+    });
+  });
+
+  // #1368 — the half of the wire contract #1413 actually consumes. `null` is a
+  // MEANINGFUL answer here ("this rejection never reached Rust"), which is exactly why
+  // a code that the narrowing function fails to recognise is so dangerous: it is
+  // indistinguishable from a client-side failure and #1413's handler would take the
+  // wrong branch forever with nothing failing.
+  describe("nativeThemeErrorCode (#1368)", () => {
+    it("recognises every code Rust can send", async () => {
+      const { nativeThemeErrorCode } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      // Listed literally rather than derived: this is the independent statement of the
+      // contract. `tests/docs/native-theme-claims.test.ts` pins these same four against
+      // the Rust enum, so the two together close the loop Rust -> union -> runtime.
+      for (const code of [
+        "high-contrast-unknown",
+        "set-theme-failed",
+        "app-mode-timeout",
+        "main-thread-unavailable",
+      ]) {
+        expect(nativeThemeErrorCode({ code, message: "x" }), `code=${code}`).toBe(code);
+      }
+    });
+
+    it("returns null for anything that is not a native rejection", async () => {
+      const { nativeThemeErrorCode } = await import(
+        "../../src/client/hooks/useTauriTheme.svelte.js"
+      );
+      // A bare string is what a sidecar older than #1368 sends, and what every one of
+      // these five causes used to arrive as.
+      expect(nativeThemeErrorCode("set_theme failed: boom")).toBeNull();
+      expect(nativeThemeErrorCode(new Error("dynamic import failed"))).toBeNull();
+      expect(nativeThemeErrorCode(null)).toBeNull();
+      expect(nativeThemeErrorCode(undefined)).toBeNull();
+      expect(nativeThemeErrorCode({})).toBeNull();
+      expect(nativeThemeErrorCode({ code: "nope" })).toBeNull();
+      expect(nativeThemeErrorCode({ code: 7 })).toBeNull();
     });
   });
 });

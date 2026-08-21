@@ -1,4 +1,5 @@
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
+import type { TandemNotification } from "@shared/types.js";
 import type { SystemLightVariant, ThemePreference } from "./useTandemSettings.js";
 import { initTauriTheme, setNativeTheme, tauriTheme } from "./useTauriTheme.svelte.js";
 import type { ResolvedTheme } from "./useTheme.js";
@@ -150,9 +151,17 @@ export function applyTheme(
 export function createTheme(
   getPref: () => ThemePreference,
   getLightVariant: () => SystemLightVariant = () => "light",
+  push: (n: TandemNotification) => void,
 ): void {
-  // Initialize the Tauri theme bridge once — no-op in browser mode
-  initTauriTheme();
+  // Initialize the Tauri theme bridge once — no-op in browser mode.
+  //
+  // `push` is threaded through rather than wired up beside `initTauriFileDrop` in
+  // App.svelte (#1368) because THIS call is what guarantees the bridge is initialised
+  // before the effect below issues its first `setNativeTheme`. Moving it out would
+  // make that ordering an unenforced convention between two statements 800 lines
+  // apart, and deleting the App.svelte line would silently kill the poll and the
+  // onThemeChanged subscription with no compile error.
+  initTauriTheme(push);
 
   $effect(() => {
     const pref = getPref();

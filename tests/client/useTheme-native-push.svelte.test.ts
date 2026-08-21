@@ -54,6 +54,12 @@ import type { ThemePreference } from "../../src/client/hooks/useTandemSettings.j
 import { _resetForTests, tauriTheme } from "../../src/client/hooks/useTauriTheme.svelte.js";
 import { createTheme } from "../../src/client/hooks/useTheme.svelte.js";
 
+// The notification callback `createTheme` forwards to `initTauriTheme` (#1368).
+// Nothing here exercises it — these tests are about the push/DOM effect — but it
+// is required, and `tests/` is outside every tsconfig, so omitting it would leave
+// the hook's `_notify` undefined rather than failing to compile.
+const pushSpy = vi.fn();
+
 /** Filters `invoke.mock.calls` to a single command — mirrors
  * useTauriTheme.svelte.test.ts so a stray poll tick can't flake a count. */
 function callsFor(invoke: { mock: { calls: unknown[][] } }, cmd: string): unknown[][] {
@@ -95,7 +101,11 @@ describe("createTheme effect wiring (#992)", () => {
 
     const pref: ThemePreference = "dark";
     cleanup = $effect.root(() => {
-      createTheme(() => pref);
+      createTheme(
+        () => pref,
+        () => "light",
+        pushSpy,
+      );
     });
     await settle();
 
@@ -105,7 +115,11 @@ describe("createTheme effect wiring (#992)", () => {
   it("also applies the theme to the DOM from the same effect", async () => {
     const pref: ThemePreference = "dark";
     cleanup = $effect.root(() => {
-      createTheme(() => pref);
+      createTheme(
+        () => pref,
+        () => "light",
+        pushSpy,
+      );
     });
     await settle();
 
@@ -115,7 +129,11 @@ describe("createTheme effect wiring (#992)", () => {
   it("re-pushes to set_native_theme when the reactive preference changes", async () => {
     let pref = $state<ThemePreference>("light");
     cleanup = $effect.root(() => {
-      createTheme(() => pref);
+      createTheme(
+        () => pref,
+        () => "light",
+        pushSpy,
+      );
     });
     await settle();
 
@@ -137,7 +155,11 @@ describe("createTheme effect wiring (#992)", () => {
 
     const pref: ThemePreference = "dark";
     cleanup = $effect.root(() => {
-      createTheme(() => pref);
+      createTheme(
+        () => pref,
+        () => "light",
+        pushSpy,
+      );
     });
     await settle();
 
@@ -154,7 +176,11 @@ describe("createTheme effect wiring (#992)", () => {
     // subscription came from.
     const pref: ThemePreference = "system";
     cleanup = $effect.root(() => {
-      createTheme(() => pref);
+      createTheme(
+        () => pref,
+        () => "light",
+        pushSpy,
+      );
     });
     await settle();
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
@@ -184,7 +210,7 @@ describe("createTheme effect wiring (#992)", () => {
       return "dark";
     };
     cleanup = $effect.root(() => {
-      createTheme(getPref);
+      createTheme(getPref, () => "light", pushSpy);
     });
     await settle();
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
