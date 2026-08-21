@@ -83,10 +83,33 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
   });
 
   it("gives every Rust wire code an explicit case in the client's message map", () => {
-    const codes = [...lib.matchAll(/const CODE_[A-Z_]+: &str = "([a-z-]+)";/g)].map((m) => m[1]);
+    const declared = [...lib.matchAll(/const (CODE_[A-Z_]+): &str = "([a-z-]+)";/g)].map((m) => ({
+      name: m[1],
+      value: m[2],
+    }));
+    // `lib.rs` also declares wire codes for OTHER surfaces — #1118's
+    // pending-update hint has its own client reader and never reaches
+    // `messageForStartupRejection`. Each exclusion has to EARN it below by
+    // being passed to that surface, and the default is inclusion: a code added
+    // tomorrow and routed nowhere obvious is still required to have a case.
+    const ROUTED_ELSEWHERE = ["CODE_UPDATE_MAY_NOT_HAVE_COMPLETED"];
+    for (const name of ROUTED_ELSEWHERE) {
+      expect(
+        new RegExp(`surface_pending_update_hint\\w*\\([^)]*${name}`).test(lib),
+        `${name} is excluded from the message-map parity check, so it must be ` +
+          "demonstrably routed to the pending-update surface instead. It is not.",
+      ).toBe(true);
+    }
+    const codes = declared
+      .filter(({ name }) => !ROUTED_ELSEWHERE.includes(name))
+      .map(({ value }) => value);
     // Sanity: the scan must actually find the constants, or this test passes vacuously.
     expect(codes.length).toBeGreaterThanOrEqual(4);
     expect(codes).toContain("open-failed");
+    // ...and the exclusion must actually exclude, or it is a no-op that would
+    // let a genuinely unrouted code through unnoticed.
+    expect(declared.map((d) => d.value)).toContain("update-may-not-have-completed");
+    expect(codes).not.toContain("update-may-not-have-completed");
 
     const client = stripTsComments(readFileSync(CLIENT_MAP, "utf8"));
     for (const code of codes) {
