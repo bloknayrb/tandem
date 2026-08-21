@@ -1948,6 +1948,64 @@ describe("setNativeTheme (#992)", () => {
       // when a site is added is free; lowering it is the deliberate act it should be.
       expect((src.match(/\blogClientWarning\s*\(/g) ?? []).length).toBeGreaterThanOrEqual(21);
     });
+
+    // -------- teardown must invalidate pushes, not just cancel armed timers --------
+
+    it("a real pagehide stops a ladder that an in-flight rejection would otherwise re-arm", async () => {
+      // `teardown()` calls `cancelRetry()`, which clears a timer that is ALREADY
+      // waiting. It cannot reach a `set_native_theme` promise still in flight, and
+      // that promise's `.catch` re-arms the ladder as soon as it passes its
+      // `seq === pushSeq` check — so without the `pushSeq++` in `teardown`, a torn-down
+      // module keeps climbing rungs and can toast on exhaustion through a `_notify`
+      // that teardown does not reset. `_resetForTests` hides this by accident (it sets
+      // `pushSeq = 0`, which makes any captured `seq >= 1` look superseded), so the
+      // test has to drive the REAL `pagehide` path to see it at all.
+      //
+      // The push is held open deliberately: an immediately-rejecting mock settles
+      // before `pagehide` can land, which is the one ordering that cannot exhibit the
+      // bug.
+      vi.useFakeTimers();
+      const addSpy = vi.spyOn(window, "addEventListener");
+      try {
+        vi.stubGlobal("document", { hasFocus: () => false });
+        const { initTauriTheme, setNativeTheme } = await import(
+          "../../src/client/hooks/useTauriTheme.svelte.js"
+        );
+        initTauriTheme(pushSpy);
+        await vi.advanceTimersByTimeAsync(0);
+        const handler = addSpy.mock.calls.find((c) => c[0] === "pagehide")?.[1] as (e: {
+          persisted: boolean;
+        }) => void;
+        expect(handler).toBeTypeOf("function");
+
+        let rejectPush: (reason: unknown) => void = () => {};
+        invoke.mockImplementation((cmd: string) =>
+          cmd === "set_native_theme"
+            ? new Promise((_resolve, reject) => {
+                rejectPush = reject;
+              })
+            : Promise.resolve("light"),
+        );
+        pushSpy.mockClear();
+
+        setNativeTheme("dark");
+        await vi.advanceTimersByTimeAsync(0);
+        const issued = callsFor(invoke, "set_native_theme").length;
+        expect(issued).toBe(1); // the push is in flight, not settled
+
+        handler({ persisted: false }); // real unload -> teardown()
+        rejectPush(new Error("set_theme failed: boom"));
+        await vi.advanceTimersByTimeAsync(8000); // past every rung of the ladder
+
+        expect(callsFor(invoke, "set_native_theme")).toHaveLength(issued);
+        expect(nativeThemeToasts()).toHaveLength(0);
+        // Superseded, not silently swallowed: the outcome still reaches the recorder.
+        expect(await entries(/superseded/)).toHaveLength(1);
+      } finally {
+        addSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
   });
 });
 

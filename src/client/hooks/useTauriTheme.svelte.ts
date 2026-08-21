@@ -1183,6 +1183,15 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
   // process-global `window.__TANDEM_INITIAL_THEME__`. It is now released on dispose
   // along with the poll and the retry (#1413).
   const teardown = (): void => {
+    // Invalidate outstanding pushes, not just armed timers. `cancelRetry()` clears a
+    // timer that is already waiting; it cannot reach a `set_native_theme` promise that
+    // is still in flight, and that promise's `.catch` re-arms the ladder unconditionally
+    // once it passes its `seq === pushSeq` check. Bumping the ticket makes every
+    // in-flight push superseded, which the existing rejected-path branch already handles
+    // correctly: record, no retry, no toast. Without this, an HMR dispose mid-push leaves
+    // the OLD module climbing the ladder — and toasting on exhaustion through a `_notify`
+    // teardown does not reset — while the new instance is pushing too.
+    pushSeq++;
     stopPoll();
     cancelRetry();
     releaseThemeListener();
