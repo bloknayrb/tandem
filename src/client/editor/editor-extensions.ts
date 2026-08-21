@@ -19,7 +19,7 @@ import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { RawMarkdownMark } from "./extensions/raw-markdown";
 import { runColumnCommandWithReindex } from "./extensions/table-align-commands";
 import { TableColumnAlignExtension } from "./extensions/table-column-align";
-import { isSafeExternalHref, isSchemelessPathHref } from "./utils/url-safety";
+import { isRenderableLinkHref, isSafeExternalHref, isSchemelessPathHref } from "./utils/url-safety";
 
 // Link mark that surfaces the destination URL on hover via a native `title`
 // tooltip (issue #996). The base `@tiptap/extension-link` renderHTML emits the
@@ -267,8 +267,8 @@ export function buildSchemaExtensions(): AnyExtension[] {
       // one `new RegExp` gets, and the naive reading flips the answer. The
       // behaviour is pinned executably in `tests/client/link-target-internal.test.ts`.)
       //
-      // The fix is a union, and it is strictly additive because `||` can only
-      // ever widen — not because of which operand runs first. Tiptap's
+      // The `||` half is a union, and it is strictly additive because `||` can
+      // only ever widen — not because of which operand runs first. Tiptap's
       // DOMPurify-derived scheme allowlist therefore stays the authority on
       // schemes and our predicate only ADDs: hrefs with no URL-hostile
       // character, no backslash, no leading `//`, and either no colon or a
@@ -284,7 +284,19 @@ export function buildSchemaExtensions(): AnyExtension[] {
       // linkify markPasteRule, which cannot be narrowed separately: pasting the
       // plain text `example.com/path` now linkifies. Accepted deliberately —
       // bare `example.com` already did.
-      isAllowedUri: (url, ctx) => ctx.defaultValidate(url) || isSchemelessPathHref(url),
+      //
+      // `isRenderableLinkHref` is the one term that NARROWS, and it was added in
+      // #1420 precisely because the paragraph above is a complete description of
+      // an expression that could only ever grow. `defaultValidate` accepts a
+      // leading `/` via its `[^a-z]` alternative WITHOUT looking at what
+      // follows, so `/\evil.com/x.md` short-circuited the `||` and rendered as a
+      // live link that `new URL()` resolves to `http://evil.com/x.md`. The
+      // rejection inside `isSchemelessPathHref` was real and inert. Read the
+      // veto's docblock before touching this line: its ordering (leading
+      // whitespace first) is load-bearing, and it deliberately does NOT use
+      // `URL_HOSTILE_CHARS`.
+      isAllowedUri: (url, ctx) =>
+        isRenderableLinkHref(url) && (ctx.defaultValidate(url) || isSchemelessPathHref(url)),
       // Autolink is the one surface held at EXACTLY today's behaviour, and only
       // this option can do it: the autolink plugin filters on the RAW TYPED
       // TEXT, not the resolved href, so widening `isAllowedUri` alone would make

@@ -21,6 +21,7 @@ import {
   sanitizeImageSrc,
   URL_HOSTILE_CHARS,
 } from "../../../shared/image-src-safety";
+import { rejectUnsafeWindowsPrefix } from "../../../shared/windows-path-safety";
 
 export { SAFE_IMAGE_PREFIXES };
 
@@ -103,6 +104,111 @@ export function isSchemelessPathHref(raw: string | null | undefined): boolean {
   // Protocol-relative is an EXTERNAL navigation, not a path.
   if (raw.startsWith("//")) return false;
   return !hasSchemePrefix(raw);
+}
+
+/**
+ * C0 control characters and DEL, checked ANYWHERE in an href.
+ *
+ * **Deliberately narrower than {@link URL_HOSTILE_CHARS}, which must not be
+ * reused here.** That set includes U+0020 and the exotic-whitespace range, and
+ * {@link isRenderableLinkHref} vetoes *every* href including allowlisted
+ * external ones — so reusing it would blank `https://example.com/a b.md`, which
+ * both `[x](<a b.md>)` and `.docx` hyperlink import legitimately produce
+ * (measured). A space is hostile only as a PREFIX, never in the middle, and the
+ * prefix case is handled by the `trimStart` comparison rather than by this set.
+ */
+const URL_CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
+
+/**
+ * The URL-spec "special" schemes Tandem treats as external. These are parsed
+ * AUTHORITY-LENIENTLY: everything after the colon up to the first non-slash is
+ * slash-insensitive, so `http:/\evil.com/x` and even `https:/evil.com/x`
+ * resolve to a cross-host authority. `ftp:` is here because it is in
+ * {@link SAFE_EXTERNAL_PREFIXES}; `file:` is special too but is refused by
+ * Tiptap's scheme allowlist and never reaches this predicate.
+ */
+const SPECIAL_EXTERNAL_SCHEME = /^(?:https?|ftp):/i;
+
+/**
+ * RENDER-TIME VETO: may this href be emitted as a live `href` attribute at all?
+ *
+ * This is the one NARROWING term of the `isAllowedUri` union in
+ * `editor-extensions.ts` (#1420). Everything else in that expression widens;
+ * without a term that can subtract, Tiptap's `defaultValidate` accepting a
+ * leading `/` without looking at what follows means every cross-host spelling
+ * below inherits acceptance and renders as a live link.
+ *
+ * Refuses, in order:
+ *
+ *  1. **Any leading whitespace.** The WHATWG URL parser strips leading C0-and-
+ *     space before resolving, and {@link isSafeExternalHref} does NOT trim — so
+ *     `" //evil.com/x"` is an EXTERNAL navigation to the browser and a
+ *     document-relative path to the click gate. This refuses the disagreement
+ *     rather than picking a side. It is also what makes step 3 sound at all:
+ *     `rejectUnsafeWindowsPrefix` is anchored at index 0, so a single leading
+ *     space would otherwise walk straight past it while `defaultValidate` still
+ *     returned true (measured: `" /\evil.com/x.md"` resolves to
+ *     `http://evil.com/x.md`). That spelling is reachable from FILE IMPORT, not
+ *     just paste — remark preserves the space inside a pointy-bracket
+ *     destination (`[x](< /\evil.com/x.md>)`) and `mdast-ydoc.ts` writes
+ *     `href: node.url` verbatim.
+ *  2. **C0 controls / DEL anywhere** — see {@link URL_CONTROL_CHARS}. JS
+ *     `trim()` does not strip U+0000 but the URL parser does, so `<NUL>//evil.com`
+ *     resolves cross-host.
+ *  3. **A special-scheme href in any spelling `isSafeExternalHref` does not
+ *     recognise.** A scheme moves the authority PAST index 0, and
+ *     `rejectUnsafeWindowsPrefix` is anchored there — it slices `[0,8)` and sees
+ *     `"http:\\e"`, which passes. So `http:/\evil.com/x` and `https:/evil.com/x`
+ *     both resolved cross-host while rendering live. The narrow rule is
+ *     RENDER/CLICK AGREEMENT: `isSafeExternalHref` is a literal `"http://"`
+ *     prefix test, so for these spellings it says *false*, which means
+ *     `LinkWithHoverTitle` strips `target="_blank"` and the click gate treats
+ *     the href as a document-relative path. A live anchor the two halves
+ *     disagree about is exactly the #1343 shape: with no `_blank`, a
+ *     middle-click that escapes `preventDefault` navigates the EDITOR FRAME to
+ *     the attacker host rather than opening a second tab.
+ *  4. **Backslash-bearing authority prefixes** — `/\host`, `\/host`, `\\host`,
+ *     `\\?\…`. Delegated to `rejectUnsafeWindowsPrefix`, the canonical copy of
+ *     that rule, rather than re-spelled here (see
+ *     `tests/shared/unc-check-duplication.test.ts`).
+ *
+ * **`//` is deliberately ACCEPTED**, in its exact untrimmed spelling only. It is
+ * a fourth cross-host form, and carving it out is what makes the sentence "this
+ * veto blanks exactly the prefixes `resolveRelativeLink` refuses" true — say
+ * that out loud when auditing. It stays live because it is in
+ * {@link SAFE_EXTERNAL_PREFIXES}: `openHref` hands it to `window.open` exactly
+ * like an `https://` URL, so it is a *declared* external link rather than a
+ * relative-looking disguise.
+ *
+ * **What this does NOT do.** It is a prefix-class veto, not a render/click
+ * unification — that is impossible here because `resolveRelativeLink` needs
+ * `currentFilePath`, which the mark renderer does not have. An href like
+ * `../../../../..///evil.com/share/x.md` still renders live and is still refused
+ * at click time. **It does not judge SCHEMES beyond the special-external family
+ * in clause 3**, and that is a real, tracked gap rather than a tidy division of
+ * labour: Tiptap's `defaultValidate` fallback alternative matches a hyphen, so
+ * `ms-msdt:`, `search-ms:`, `ms-appinstaller:`, `itms-services:` and friends
+ * satisfy the `||` and render live with the href verbatim. Closing that means
+ * moving to an allowlist posture, which also stops rendering `tel:`/`sms:`/
+ * `xmpp:`/`ftps:` — a behaviour change with its own review. Tracked as #1537.
+ * It also does not cover bidi overrides (U+202A–U+202E), which
+ * can make the hover `title` read as a different host than the anchor resolves
+ * to; navigation is unaffected (those resolve same-origin, percent-encoded), so
+ * that is tooltip spoofing and is tracked as residue, not fixed here.
+ *
+ * **Behaviour delta worth knowing:** a Word hyperlink to
+ * `\\fileserver\docs\spec.docx` used to render live and produce an explicit
+ * "Blocked a link pointing outside this document's folder" notification on
+ * click. It now renders as plain text with no href, so the refusal is silent.
+ * The security outcome is strictly better; the explanation is what is lost.
+ */
+export function isRenderableLinkHref(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  if (raw !== raw.trimStart()) return false;
+  if (URL_CONTROL_CHARS.test(raw)) return false;
+  if (raw.startsWith("//")) return true;
+  if (SPECIAL_EXTERNAL_SCHEME.test(raw)) return isSafeExternalHref(raw);
+  return rejectUnsafeWindowsPrefix(raw) === null;
 }
 
 /**
