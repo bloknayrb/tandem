@@ -327,7 +327,10 @@ export function buildSchemaExtensions(): AnyExtension[] {
       // `view-source:` and `itms-services:` all satisfied it and rendered live
       // with the href verbatim. ANDing can only subtract — measured over a
       // 68-case corpus and re-measured over 800k generated hrefs, nothing
-      // master rejects becomes accepted.
+      // master rejects becomes accepted. Those two runs predate #1420; the
+      // property was re-measured against post-#1420 master over ~14k cases
+      // (0 widened, 624 narrowed) and holds by construction anyway, since
+      // this expression is that one with a conjunct added.
       //
       // It also drops `tel:`/`sms:`/`callto:`/`cid:`/`xmpp:`/`ftps:`, which
       // Tiptap allowlists and `SAFE_EXTERNAL_PREFIXES` does not. FOLLOWING one

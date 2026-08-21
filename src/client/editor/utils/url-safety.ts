@@ -303,7 +303,7 @@ const WHATWG_SCHEME_PREFIX = /^[a-z][a-z0-9+.-]*:/i;
  *     "demonstrably works":** a protocol-relative href expands against the PAGE
  *     scheme, and on Linux the Tauri WebView origin is `tauri://localhost`, so
  *     `//example.com/x` becomes `tauri://example.com/x` there. Flagged for a
- *     product decision rather than dropped here — see PLAN.md.
+ *     product decision rather than dropped here — see the PR body.
  *  2. **A scheme-bearing href must be in {@link SAFE_EXTERNAL_PREFIXES}**,
  *     where "scheme-bearing" means {@link WHATWG_SCHEME_PREFIX} matches — the
  *     URL parser's own grammar, so this function and the browser agree on what
@@ -333,16 +333,25 @@ const WHATWG_SCHEME_PREFIX = /^[a-z][a-z0-9+.-]*:/i;
  * Windows, so the shape is rare; it is named here so nobody has to rediscover
  * it from a bug report.
  *
- * **What this deliberately does NOT close.** `/\evil.com/x.md`,
- * `\/evil.com/x.md`, `\\evil.com\share\x.md` and `" /\evil.com/x.md"` carry no
- * scheme, so clause 3 returns `true` and they still render. Those are #1420's
- * half, closed by the leading-whitespace and `rejectUnsafeWindowsPrefix`
- * clauses on `fix/1420-auxclick-link-intercept`. **When that branch lands, this
- * function collapses into `isRenderableLinkHref` as a replacement for ITS
- * clause 3 (`SPECIAL_EXTERNAL_SCHEME`), leaving its final
- * `rejectUnsafeWindowsPrefix` clause untouched.** Folding it in as the final
- * clause instead would delete that check and turn all four backslash spellings
- * back on — see PLAN.md / the PR body for the measured table.
+ * **What this predicate does NOT close, and what closes it instead.**
+ * `/\evil.com/x.md`, `\/evil.com/x.md`, `\\evil.com\share\x.md` and
+ * `" /\evil.com/x.md"` carry no scheme, so clause 3 returns `true` and this
+ * predicate does not subtract them. They are nonetheless BLANKED, because
+ * {@link isRenderableLinkHref} (#1420) is ANDed alongside this term at the
+ * `isAllowedUri` site and refuses them via its leading-whitespace and
+ * `rejectUnsafeWindowsPrefix` clauses.
+ *
+ * An earlier revision of this comment, written while #1420 was still an open
+ * branch, said they "still render" and prescribed collapsing this function
+ * into `isRenderableLinkHref` as a replacement for ITS clause 3 once that
+ * branch landed. #1420 has landed and the collapse was deliberately NOT
+ * performed: the two terms are kept separate and ANDed. The collapse is
+ * behaviourally equivalent, but separate terms keep each refusal readable at
+ * its own call site and keep the two test corpora aimed at one predicate
+ * each. What must never be done is folding this in as the FINAL clause of
+ * `isRenderableLinkHref`, which would delete the `rejectUnsafeWindowsPrefix`
+ * check and turn all four backslash spellings back on — see the PR body for
+ * the measured table.
  *
  * **Not holes, verified rather than assumed:** `ms-msdt%3a/id` and the
  * full-width-colon spelling `ms-msdt：/id` both stay live, and correctly so —

@@ -324,12 +324,15 @@ describe("isRenderableLinkHref (the render-time veto, #1420)", () => {
 
     // The truth: DOMPurify's fallback alternative matches a hyphen, so a
     // hyphenated scheme satisfies `defaultValidate`, the `||` short-circuits,
-    // and this veto does not subtract it either — these render LIVE today, with
-    // the href verbatim. `search-ms:` is an NTLM/WebDAV-share spelling reaching
+    // and this veto does not subtract it either — so on the #1420 branch alone
+    // these rendered LIVE, with the href verbatim. `search-ms:` is an NTLM/WebDAV-share spelling reaching
     // the OS from a right-click "Open link in new tab", in a codebase whose
     // `rejectUnsafeWindowsPrefix` exists to prevent exactly that class.
-    // Deliberately open, tracked as #1537: closing it means an allowlist
-    // posture that would also stop rendering `tel:`/`sms:`/`xmpp:`/`ftps:`.
+    // CLOSED by #1537, which ANDs `isRenderableLinkScheme` alongside this veto
+    // and does pay that cost: `tel:`/`sms:`/`xmpp:`/`ftps:` no longer render.
+    // The rows below are still TRUE of THIS predicate — that is the point of
+    // keeping them — but they are no longer live at the `isAllowedUri` site.
+    // `link-scheme-allowlist.test.ts` holds the composition pins.
     for (const href of [
       "ms-msdt:/id",
       "ms-appinstaller:?source=x",
@@ -346,7 +349,7 @@ describe("isRenderableLinkHref (the render-time veto, #1420)", () => {
  * DOCUMENTATION CORPUS for the render-time scheme allowlist (#1537).
  *
  * **The load-bearing pins are in `tests/client/link-scheme-allowlist.test.ts`,
- * not here.** This file is rewritten by the still-open #1545, whose own
+ * not here.** This file was rewritten by #1545 (since merged), whose own
  * predicate returns `true` for every row below and whose tests assert exactly
  * that — so a merge resolution taking that branch's side would silently delete
  * these. They are kept as the readable corpus beside the other href predicates;

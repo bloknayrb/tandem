@@ -5,7 +5,7 @@
  * that `ms-msdt:/id` is REFUSED, and the only term that refuses it is
  * `isRenderableLinkScheme`. The two files this would naturally live in —
  * `url-safety.test.ts` and `link-target-internal.test.ts` — are both rewritten
- * by the still-open `fix/1420-auxclick-link-intercept` (#1545), whose own
+ * by `fix/1420-auxclick-link-intercept` (#1545, since merged), whose own
  * predicate returns `true` for `ms-msdt:/id` and whose tests assert exactly
  * that. A merge resolution taking that branch's side would drop the new term
  * and its canary together, and the suite would go green with the hole reopened.
@@ -214,7 +214,8 @@ describe("isRenderableLinkScheme — the allowlist posture (#1537)", () => {
     // only, and these carry no scheme, so clause 3 returns true and they still
     // render on this branch. They are closed by the leading-whitespace and
     // `rejectUnsafeWindowsPrefix` clauses of `isRenderableLinkHref` on
-    // `fix/1420-auxclick-link-intercept` (#1545), which is still open.
+    // `fix/1420-auxclick-link-intercept` (#1545), since merged and ANDed
+    // alongside this term.
     //
     // A test claiming otherwise would be a lie the suite tells, and it is the
     // exact lie the naive merge produces: folding this predicate in as
