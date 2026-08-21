@@ -1177,6 +1177,11 @@ let _ctrlTestDoc: Y.Doc = new Y.Doc();
 // directly and are unaffected. If that changes, move CTRL_ROOM tests to a separate file.
 vi.mock("../../src/server/yjs/provider.js", () => ({
   getOrCreateDocument: () => _ctrlTestDoc,
+  // #1447: registerDirtyObserver publishes its mirror through getDocument, which
+  // resolves the LIVE room doc rather than the one it was handed. These tests
+  // pass Y.Docs directly and never register them as rooms, so "no live doc" is
+  // the truthful answer and the publish no-ops.
+  getDocument: () => undefined,
 }));
 
 vi.mock("../../src/server/mcp/document-service.js", () => ({
