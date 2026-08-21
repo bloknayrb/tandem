@@ -60,6 +60,21 @@
 .tandem-editor a[href] {
   cursor: pointer;
 }
+/* A link whose href the render-time guard REFUSED (#1537). The base
+ * `@tiptap/extension-link` renderHTML emits `href=""` for a disallowed scheme,
+ * and `a[href]` above matches an empty attribute too — so a refused link kept
+ * the pointer cursor and did nothing at all on click. `LinkWithHoverTitle` sets
+ * `data-tandem-link-blocked` on exactly those anchors.
+ *
+ * The affordance is deliberately styling only: no `title`, and nothing derived
+ * from the refused href reaches the DOM (see editor-extensions.ts). Tokens
+ * only — `check:tokens` runs pre-commit. */
+.tandem-editor a[data-tandem-link-blocked] {
+  cursor: default;
+  color: var(--tandem-fg-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--tandem-border-strong);
+}
 .tandem-editor ul,
 .tandem-editor ol {
   padding-left: 1.5em;

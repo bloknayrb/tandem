@@ -2530,6 +2530,7 @@ const shouldShowModelPicker = $derived(
         })}
       reduceMotion={settingsState.settings.reduceMotion}
       tandemMode={modeState.tandemMode}
+      onNotify={(n) => notifications.push(n)}
     />
 
     {#if settingsState.settings.formattingBarVisible}
@@ -2548,6 +2549,7 @@ const shouldShowModelPicker = $derived(
           ? () => void requestToggleSourceView()
           : null}
         onHide={() => settingsState.updateSettings({ formattingBarVisible: false })}
+        onNotify={(n) => notifications.push(n)}
       />
     {/if}
 

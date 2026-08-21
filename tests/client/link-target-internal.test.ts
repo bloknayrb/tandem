@@ -100,6 +100,18 @@ const DISALLOWED_SCHEME_HREFS = [
   "java\tscript:alert(1)",
   "java script:alert(1)",
   "\tjavascript:alert(1)",
+  // #1537. Tiptap's `defaultValidate` ACCEPTS every row below — the escape
+  // collapse in its template-literal regex puts the hyphen outside the negated
+  // class — so before the `isRenderableLinkScheme` term these rendered live
+  // with the href verbatim. Documentation corpus only: the load-bearing pins
+  // live in `link-scheme-allowlist.test.ts`, at a path no merge can drop.
+  "ms-msdt:/id",
+  "search-ms:crumb=location:\\\\evil.com\\share",
+  "view-source:http://evil",
+  // Never worked on click either — `openHref` refused it visibly at
+  // `resolveRelativeLink`'s `unsupported-ext`. The render was the only half
+  // that pretended otherwise.
+  "tel:+15551234",
 ];
 
 afterEach(() => {

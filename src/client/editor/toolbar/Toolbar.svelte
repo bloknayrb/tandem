@@ -9,7 +9,13 @@ import {
 } from "../../../shared/constants";
 import { withBrowser } from "../../../shared/origins";
 import { toPmPos } from "../../../shared/positions/types";
-import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
+import type {
+  Annotation,
+  AnnotationType,
+  HighlightColor,
+  TandemMode,
+  TandemNotification,
+} from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
 import { isMacPlatform } from "../../actions/keybindings";
 import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
@@ -81,6 +87,8 @@ interface Props {
    * not the hide gate.
    */
   tandemMode?: TandemMode;
+  /** Refused-link channel for the popup's format pill — see FormattingToolbar. */
+  onNotify?: (n: TandemNotification) => void;
 }
 
 let {
@@ -101,6 +109,7 @@ let {
   onToggleFormattingBar,
   reduceMotion = false,
   tandemMode = "tandem",
+  onNotify,
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
@@ -887,7 +896,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
         <!-- Capsule 1: full mark/block control set (no Undo/Redo — those stay on
              the bar + Ctrl+Z/Y) + the mirrored Decorations control + bar-swap. -->
         <div class="pill-row tandem-floating-pill" data-testid="popup-format-row">
-          <FormattingToolbar {editor} variant="popup" />
+          <FormattingToolbar {editor} variant="popup" {onNotify} />
           {#if onUpdateDecorations}
             <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
             <!-- preventDefault on mousedown keeps the editor selection alive while
