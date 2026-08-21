@@ -44,7 +44,11 @@ import { clearAllClaudePresence } from "./presence-expiry.js";
 import type { DiagnosticsHandlerDeps } from "./routes/diagnostics.js";
 import { makeHealthHandler } from "./routes/health.js";
 import { installSchemaDialectStrip } from "./schema-dialect.js";
-import { createMcpSessionRegistry, type McpSessionRegistry } from "./transport-registry.js";
+import {
+  createMcpSessionRegistry,
+  type McpSessionEntry,
+  type McpSessionRegistry,
+} from "./transport-registry.js";
 
 // Injected by tsup at build time; absent in tsx dev and vitest, where createRequire
 // reads ../../package.json. Tauri pkg has no package.json — define is the only source.
@@ -370,6 +374,31 @@ export function getMcpSessionCount(): number {
   return sessions?.size ?? 0;
 }
 
+/**
+ * Run one idle-reap pass, returning how many sessions it closed.
+ *
+ * The 5-minute interval calls this rather than `registry.reapIdle()` directly,
+ * so a test that forces a reap drives the exact same path production does. That
+ * matters more than it looks: the invariant under test is "an attached session
+ * survives a reap", and a test that instead builds its own registry is
+ * asserting something weaker about a path the route never touches.
+ *
+ * `idleTtlMsOverride` lets such a test treat a seconds-old session as stale;
+ * production omits it and gets the configured 30-minute TTL.
+ */
+export async function reapIdleMcpSessions(idleTtlMsOverride?: number): Promise<number> {
+  return (await sessions?.reapIdle(idleTtlMsOverride)) ?? 0;
+}
+
+/**
+ * How many live sessions are currently pinned by an open SSE stream. Exported
+ * for tests to assert the counter balances — a leak here would show up only as
+ * sessions that stop being reapable, which is silent until the cap is hit.
+ */
+export function getPinnedMcpSessionCount(): number {
+  return (sessions?.list() ?? []).filter((entry) => entry.openStreams > 0).length;
+}
+
 /** Start the MCP server on stdio (legacy, used as fallback via TANDEM_TRANSPORT=stdio). */
 export async function startMcpServerStdio(): Promise<void> {
   const server = createMcpServer({ version: APP_VERSION, transport: "stdio" });
@@ -461,7 +490,7 @@ export async function startMcpServerHttp(
   if (idleReaper) clearInterval(idleReaper);
   idleReaper = setInterval(
     () => {
-      void registry.reapIdle();
+      void reapIdleMcpSessions();
     },
     5 * 60 * 1000,
   );
@@ -515,12 +544,22 @@ export async function startMcpServerHttp(
    * so a future SDK that dispatches over another verb can't silently lose the
    * caller's identity. Returns the entry so callers that need post-dispatch
    * work (DELETE) can act on it; returns undefined when it already answered 404.
+   *
+   * `onEntry` runs after the resolve+touch and **before** `handleRequest`, and
+   * deliberately outside `runWithMcpContext` — the invariant that the
+   * AsyncLocalStorage run wraps the *entire awaited* `handleRequest` must not
+   * move. Before-the-await is the only placement that works for the GET route:
+   * a standalone SSE stream's `handleRequest` does not resolve until the stream
+   * closes, so anything after the await would mark the stream open exactly once
+   * it had already ended. "Simplify this to after the dispatch" is silently
+   * wrong; leave it here.
    */
   async function dispatchToSession(
     req: import("express").Request,
     res: import("express").Response,
     body: unknown,
     errorId: unknown = null,
+    onEntry?: (entry: McpSessionEntry<McpServer, StreamableHTTPServerTransport>) => void,
   ) {
     const entry = registry.get(readMcpSessionHeader(req));
     if (!entry) {
@@ -531,6 +570,7 @@ export async function startMcpServerHttp(
       return undefined;
     }
     registry.touch(entry.sessionId);
+    onEntry?.(entry);
     await runWithMcpContext(
       { claudeSessionId: entry.claudeSessionId, mcpSessionId: entry.sessionId },
       () => entry.transport.handleRequest(req, res, body),
@@ -563,8 +603,25 @@ export async function startMcpServerHttp(
     await dispatchToSession(req, res, body, jsonrpcId(body));
   });
 
+  // GET opens the standalone server→client SSE stream. While it is open the
+  // client is demonstrably attached, so the session is pinned against the idle
+  // reaper (see transport-registry.ts). The increment and the matching `close`
+  // listener must stay **adjacent and synchronous with nothing fallible between
+  // them**: anything that throws in the gap pins the session permanently, and
+  // only LRU eviction would ever reclaim it.
+  //
+  // Registering before `handleRequest` is also what balances the SDK's
+  // rejection paths (409 "one stream per session", 405, 400) — `res` is still
+  // open at that point, so `close` is guaranteed to fire and undo the pin.
   mcpApp.get("/mcp", async (req: import("express").Request, res: import("express").Response) => {
-    await dispatchToSession(req, res, req.body);
+    await dispatchToSession(req, res, req.body, null, (entry) => {
+      registry.noteStreamOpened(entry.sessionId);
+      // `once`, not `on`. A duplicate `close` would decrement a count that can
+      // legitimately be 2 mid-stream-reconnect, and `noteStreamClosed`'s floor
+      // at 0 does not catch that — it only stops the count going negative, so a
+      // double decrement from 2 would unpin a live client.
+      res.once("close", () => registry.noteStreamClosed(entry.sessionId));
+    });
   });
 
   // DELETE — on success the SDK tears the session down and fires

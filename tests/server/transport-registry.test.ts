@@ -182,3 +182,121 @@ describe("createMcpSessionRegistry", () => {
     expect(reg.list()).toHaveLength(1);
   });
 });
+
+describe("open SSE streams pin a session against the reaper", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("does not reap an idle session that still holds a stream open", async () => {
+    // The bug: `lastSeenAt` only advances on a dispatched request, so a client
+    // attached by a live GET stream and simply making no tool calls looked
+    // exactly like one that had been SIGKILLed — and got reaped after 30
+    // minutes, breaking Claude Desktop's bridge for the rest of the day.
+    const c = clock();
+    const reg = createMcpSessionRegistry({ idleTtlMs: 1_000, now: c.now });
+    await reg.add({ sessionId: "attached", server: fakeServer(), transport: {} });
+    await reg.add({ sessionId: "vanished", server: fakeServer(), transport: {} });
+    reg.noteStreamOpened("attached");
+
+    c.advance(5_000);
+    expect(await reg.reapIdle()).toBe(1);
+    expect(reg.get("attached")).toBeDefined();
+    expect(reg.get("vanished")).toBeUndefined();
+  });
+
+  it("reaps the same session once its stream closes", async () => {
+    const c = clock();
+    const reg = createMcpSessionRegistry({ idleTtlMs: 1_000, now: c.now });
+    const server = fakeServer();
+    await reg.add({ sessionId: "s1", server, transport: {} });
+    reg.noteStreamOpened("s1");
+
+    c.advance(5_000);
+    expect(await reg.reapIdle()).toBe(0);
+    reg.noteStreamClosed("s1");
+    expect(await reg.reapIdle()).toBe(1);
+    expect(server.close).toHaveBeenCalled();
+  });
+
+  it("counts streams rather than flagging them", async () => {
+    // A client reconnecting its stream can have the new open observed before
+    // the old close. A boolean wedges either at false (reaping a live client)
+    // or true (leaking the session); a counter survives the interleaving.
+    const c = clock();
+    const reg = createMcpSessionRegistry({ idleTtlMs: 1_000, now: c.now });
+    await reg.add({ sessionId: "s1", server: fakeServer(), transport: {} });
+    reg.noteStreamOpened("s1");
+    reg.noteStreamOpened("s1");
+    reg.noteStreamClosed("s1");
+
+    c.advance(5_000);
+    expect(await reg.reapIdle()).toBe(0);
+    reg.noteStreamClosed("s1");
+    expect(await reg.reapIdle()).toBe(1);
+  });
+
+  it("floors the counter at zero so a duplicate close cannot pin a session", async () => {
+    const c = clock();
+    const reg = createMcpSessionRegistry({ idleTtlMs: 1_000, now: c.now });
+    await reg.add({ sessionId: "s1", server: fakeServer(), transport: {} });
+    reg.noteStreamClosed("s1");
+    reg.noteStreamClosed("s1");
+    expect(reg.get("s1")?.openStreams).toBe(0);
+
+    reg.noteStreamOpened("s1");
+    reg.noteStreamClosed("s1");
+    c.advance(5_000);
+    expect(await reg.reapIdle()).toBe(1);
+  });
+
+  it("ignores stream notes for an unknown id", async () => {
+    const reg = createMcpSessionRegistry();
+    expect(() => reg.noteStreamOpened("ghost")).not.toThrow();
+    expect(() => reg.noteStreamClosed("ghost")).not.toThrow();
+    expect(reg.size).toBe(0);
+  });
+
+  it("seeds a fresh entry with no open streams", async () => {
+    const reg = createMcpSessionRegistry();
+    await reg.add({ sessionId: "s1", server: fakeServer(), transport: {} });
+    expect(reg.get("s1")?.openStreams).toBe(0);
+  });
+
+  it("re-adding an existing id resets its stream count", async () => {
+    // add() replaces rather than stacks, so the new entry must not inherit the
+    // old one's pin — the old transport's close will never be observed.
+    const reg = createMcpSessionRegistry();
+    await reg.add({ sessionId: "s1", server: fakeServer(), transport: {} });
+    reg.noteStreamOpened("s1");
+    await reg.add({ sessionId: "s1", server: fakeServer(), transport: {} });
+    expect(reg.get("s1")?.openStreams).toBe(0);
+  });
+
+  it("keeps LRU eviction deliberately pin-blind", async () => {
+    // `lastSeenAt` is evidence of *use*; `openStreams` only of *attachment*.
+    // Preferring streams would evict a session used a second ago to preserve
+    // one idle for 29 minutes. It is also what stops the pin locking a
+    // legitimate client out: the capacity-exceeding initialize still evicts
+    // rather than being refused, and the bridge's reconnect makes that
+    // eviction recoverable. State the pairing, and pin it.
+    const c = clock();
+    const evicted: string[] = [];
+    const reg = createMcpSessionRegistry({
+      maxSessions: 2,
+      now: c.now,
+      onEvicted: (entry, reason) => {
+        if (reason === "lru") evicted.push(entry.sessionId);
+      },
+    });
+    await reg.add({ sessionId: "pinned-but-old", server: fakeServer(), transport: {} });
+    reg.noteStreamOpened("pinned-but-old");
+    c.advance(1_000);
+    await reg.add({ sessionId: "recent", server: fakeServer(), transport: {} });
+    c.advance(1_000);
+    await reg.add({ sessionId: "newcomer", server: fakeServer(), transport: {} });
+
+    expect(evicted).toEqual(["pinned-but-old"]);
+    expect(reg.get("recent")).toBeDefined();
+  });
+});
