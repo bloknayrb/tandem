@@ -2494,21 +2494,27 @@ const shouldShowModelPicker = $derived(
         onDismiss={pendingUpdateBanner.dismiss}
       />
 
-      {#if isTauriRuntime() && updaterBanner.showBanner && updaterBanner.availableVersion}
-        <UpdaterBanner
-          version={updaterBanner.availableVersion}
-          installing={updaterBanner.installing}
-          onInstall={() => { updaterBanner.install(); }}
-          onDismiss={updaterBanner.dismiss}
-        />
-      {/if}
+      <!-- #1431: `visible` props, not `{#if}` gates. Each banner now owns a live
+           region that outlives its own message; gating from out here would put
+           the region back inside the block that creates its text, which is the
+           shape that never announces. Deliberately NOT one shared region over
+           this stack: `role="status"` is implicitly atomic, so a single host
+           would make a connection drop read out the trial countdown too — and
+           would silently promote the "Server restarted" div above into a live
+           region it was never meant to be. -->
+      <UpdaterBanner
+        visible={isTauriRuntime() && updaterBanner.showBanner}
+        version={updaterBanner.availableVersion}
+        installing={updaterBanner.installing}
+        onInstall={() => { updaterBanner.install(); }}
+        onDismiss={updaterBanner.dismiss}
+      />
 
-      {#if connectionBanner.showBanner}
-        <ConnectionBanner
-          onDismiss={connectionBanner.dismiss}
-          onRetry={() => { yjsSync.reconnect(); }}
-        />
-      {/if}
+      <ConnectionBanner
+        visible={connectionBanner.showBanner}
+        onDismiss={connectionBanner.dismiss}
+        onRetry={() => { yjsSync.reconnect(); }}
+      />
 
       <!-- #1116: trial countdown. Self-gates (renders only during an active trial;
            silent when the gate is dark or a license is active). -->

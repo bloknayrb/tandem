@@ -2,6 +2,8 @@
 import type * as Y from "yjs";
 import { Y_MAP_DOCUMENT_META, Y_MAP_FIDELITY_REPORT } from "../../shared/constants";
 import type { FidelityReport } from "../../shared/types";
+import LiveRegion from "./LiveRegion.svelte";
+import { SR_ONLY_STYLE } from "./live-region";
 import "./tandem-banner.css";
 
 /**
@@ -75,23 +77,53 @@ const hasLosses = $derived(
   !!report &&
     (report.importLosses.length > 0 || report.exportDowngrades.length > 0 || hasIntegrity),
 );
+
+/**
+ * The banner's sentence, once, so the visible copy and the sr-only announcers
+ * cannot drift (#1431).
+ */
+const integrityMessage = $derived(
+  `This save of ${fileName} may have changed more than expected — your original is backed up and can be restored.`,
+);
+const lossesMessage = $derived(
+  `Some Word features in ${fileName} aren't fully supported. Tandem imported the text and structure, but the items below won't survive a save back to .docx.`,
+);
 </script>
+
+<!-- #1431. This banner had the worst version of the defect: ONE node, created
+     with its text, whose politeness was COMPUTED (`role={hasIntegrity ? …}`).
+     Even had it been mounted first, flipping polite→assertive in the same
+     commit that delivers the text changes the region's identity at the exact
+     moment it needed to announce.
+
+     So: two permanently-mounted announcers with FIXED politeness, each fed only
+     when it owns the message, and the visible banner reduced to a visual
+     surface. Two regions rather than one because the two messages are genuinely
+     different urgencies — an integrity advisory interrupts, a fidelity notice
+     waits. `aria-hidden` goes on the message span only; the Details button must
+     stay in the accessibility tree. -->
+<LiveRegion
+  srOnly
+  message={hasLosses && !hasIntegrity ? lossesMessage : ""}
+  data-testid="fidelity-report-live-polite"
+/>
+<!-- Written out rather than routed through `LiveRegion`: that primitive is
+     deliberately polite-only, so the one assertive region in the app is visibly
+     its own decision instead of a boolean flag that invites more of them. -->
+<div
+  role="alert"
+  aria-live="assertive"
+  style={SR_ONLY_STYLE}
+  data-testid="fidelity-report-live-assertive"
+>{hasLosses && hasIntegrity ? integrityMessage : ""}</div>
 
 {#if hasLosses && report}
   <div
     class="tandem-banner {hasIntegrity ? 'tandem-banner--warning' : 'tandem-banner--info'}"
-    role={hasIntegrity ? "alert" : "status"}
-    aria-live={hasIntegrity ? "assertive" : "polite"}
     data-testid="fidelity-report-banner"
   >
-    <span class="tandem-banner__message">
-      {#if hasIntegrity}
-        This save of {fileName} may have changed more than expected — your original is backed up and
-        can be restored.
-      {:else}
-        Some Word features in {fileName} aren't fully supported. Tandem imported the text and
-        structure, but the items below won't survive a save back to .docx.
-      {/if}
+    <span class="tandem-banner__message" aria-hidden="true">
+      {hasIntegrity ? integrityMessage : lossesMessage}
     </span>
     <button
       type="button"

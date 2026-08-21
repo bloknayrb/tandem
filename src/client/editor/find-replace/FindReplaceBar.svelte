@@ -2,6 +2,7 @@
 import type { Editor } from "@tiptap/core";
 import { onDestroy } from "svelte";
 import * as Y from "yjs";
+import LiveRegion from "../../components/LiveRegion.svelte";
 import type { OpenTab } from "../../types.js";
 import { createCoalescingTick } from "../../utils/coalescing-tick";
 import {
@@ -492,12 +493,18 @@ async function handleReplaceAll() {
         </div>
       {/if}
 
-      <!-- Partial replace-all warning -->
-      {#if partialWarning}
-        <div class="fr-msg warning" role="status">
-          {partialWarning}
-        </div>
-      {/if}
+      <!-- Partial replace-all warning. #1431: the live region is the HOST, not
+           the strip — a `role="status"` on the node the `{#if}` creates is
+           inserted together with its sentence and is announced by nothing.
+           `.fr` is a flex column with no `gap`, so an empty host costs no
+           layout. -->
+      <LiveRegion data-testid="find-replace-live">
+        {#if partialWarning}
+          <div class="fr-msg warning">
+            {partialWarning}
+          </div>
+        {/if}
+      </LiveRegion>
 
       <!-- Cross-doc results (kept in-panel; restyled to fit B4) -->
       {#if scope === "tabs"}
