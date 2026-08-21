@@ -83,11 +83,13 @@ cowork-onboarding-error
 cowork-onboarding-learn-more-btn
 cowork-onboarding-learn-more-link
 cowork-onboarding-preflight-blocked
+cowork-onboarding-preflight-failed
 cowork-onboarding-preflight-live
 cowork-onboarding-preflight-retry-btn
 cowork-onboarding-skip-btn
 cowork-onboarding-step
 cowork-preflight-blocked
+cowork-preflight-failed
 cowork-preflight-live
 cowork-preflight-retry-btn
 cowork-reachability
@@ -99,6 +101,7 @@ cowork-settings-undetected
 cowork-settings-unsupported
 cowork-toggle
 cowork-toggle-checkbox
+cowork-toggle-warnings
 cowork-vethernet-cidr
 cowork-workspace-report-{*}-{*}
 cowork-workspace-row-{*}-{*}
@@ -215,6 +218,7 @@ integration-wizard-cowork-back
 integration-wizard-cowork-error
 integration-wizard-cowork-explainer
 integration-wizard-cowork-preflight-blocked
+integration-wizard-cowork-preflight-failed
 integration-wizard-cowork-preflight-live
 integration-wizard-cowork-preflight-retry-btn
 integration-wizard-cowork-setup
@@ -240,6 +244,7 @@ integration-wizard-reachability-{*}
 integration-wizard-reopen-hint
 integration-wizard-secret-input-{*}
 integration-wizard-secret-submit-{*}
+integration-wizard-settings-pointer
 integration-wizard-shim-warning
 integration-wizard-step-applying
 integration-wizard-step-detect
@@ -320,6 +325,10 @@ palette-item-{*}
 panel-edge-collapse-{*}
 peek-dot-{*}
 peek-strip-{*}
+pending-update-banner
+pending-update-banner-check
+pending-update-banner-dismiss
+pending-update-banner-live
 popup-annotate-btn
 popup-annotate-row
 popup-annotation-input
@@ -383,6 +392,8 @@ settings-modal-mcp-status
 settings-modal-narrow-hamburger
 settings-modal-open-integration-wizard
 settings-modal-open-log-folder-btn
+settings-modal-push-routes
+settings-modal-push-routes-shim
 settings-modal-replay-error
 settings-modal-replay-tutorial-btn
 settings-modal-report-bug-link

@@ -256,6 +256,30 @@ export const Y_MAP_CHAT_SEEN = "chatSeen";
 export const Y_MAP_CHAT_SEEN_INITIALIZED = "initialized";
 /** Path-free document-id → filename history used by durable chat exports. */
 export const Y_MAP_CHAT_DOCUMENT_NAMES = "chatDocumentNames";
+/**
+ * CTRL_ROOM streaming sidecar for in-flight Claude chat replies (#1340): one
+ * `Y.Text` per streamed message, keyed by message id (the same entity-id
+ * keying as `Y_MAP_CHAT` itself). Exists so token streaming costs O(delta) on
+ * the wire instead of re-`set`ting the whole `ChatMessage` per flush (O(n²)).
+ * Invariants every producer and reader inherits:
+ *  - While an entry exists it is AUTHORITATIVE over `ChatMessage.text` for the
+ *    same id — the chat row is deliberately stale mid-stream, and readers
+ *    compose (`useChatState.refresh` overlays `yText.toString()`).
+ *  - Process-transient: `finalizeClaudeChatMessage` folds the text into the
+ *    chat row and deletes the entry. Durable snapshots never carry a LIVE
+ *    entry — `persistCtrlSnapshot` folds outbound, `restoreCtrlDoc` sweeps
+ *    inbound. (Deleted-entry tombstones remain in the encoded state, as with
+ *    any Y.Map delete — the invariant is "no live entries", not byte-absence.)
+ *  - Never empty. The update path returns before minting a sidecar for empty
+ *    text, so an empty `Y.Text` here is malformed state from some other build:
+ *    both folds DROP it instead of blanking the chat row it shadows.
+ *  - Splice on code-point boundaries ONLY. `Y.Text.delete`/`insert` at a UTF-16
+ *    offset inside a surrogate pair makes Yjs substitute U+FFFD on BOTH sides
+ *    of the item split (`ContentString.splice`) — permanent CRDT corruption,
+ *    not a render glitch. Clamp the split point like `updateClaudeChatMessage`
+ *    does before writing.
+ */
+export const Y_MAP_CHAT_STREAM = "chatStream";
 export const Y_MAP_DOCUMENT_META = "documentMeta";
 export const Y_MAP_ANNOTATION_REPLIES = "annotationReplies";
 export const Y_MAP_SAVED_AT_VERSION = "savedAtVersion";
@@ -317,6 +341,33 @@ export const Y_MAP_FOOTNOTE_BODIES = "footnoteBodies";
  * client/Claude-invisible.
  */
 export const Y_MAP_LINE_ENDING = "lineEnding";
+/**
+ * Per-document mirror of the server's authoritative unsaved-edits flag (#1447).
+ * `true` while the Y.Doc body holds edits that are not yet on disk.
+ *
+ * The source of truth stays module state in `src/server/documents/dirty.ts`
+ * (`version > savedVersion`); this key is a projection of it, published ONLY on
+ * a transition of that boolean, so a keystroke stream costs at most one write
+ * per save cycle. Written via `withInternal` — this is a server metadata
+ * broadcast, the same class as `broadcastOpenDocs` (document-service.ts).
+ *
+ * Why it exists: before it, the client's tab-dirty heuristic reset to clean
+ * 500 ms after mount, so an MCP edit that landed BEFORE any browser/WebView
+ * attached was absorbed into the "clean" baseline and the tab showed no unsaved
+ * dot over genuinely unpersisted work. The client cannot derive this — the
+ * initial CRDT sync and a pre-attach edit are the same bytes to it.
+ *
+ * NOT published for `source: "upload"` docs (scratchpads/uploads): they can
+ * never be persisted to disk without a Save As promotion, so a mirrored `true`
+ * would be a dot with no code path able to clear it.
+ *
+ * Same inertness as Y_MAP_FIDELITY_REPORT / Y_MAP_LINE_ENDING: the dirty
+ * observer watches the body XmlFragment only, so this off-fragment write cannot
+ * feed back into the flag it mirrors, and there is no server-side observer on
+ * per-document documentMeta (the only documentMeta channel observer is
+ * `ctrl-meta`, on CTRL_ROOM). Server write-only, client read-only.
+ */
+export const Y_MAP_DIRTY = "dirtyState";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
 /**

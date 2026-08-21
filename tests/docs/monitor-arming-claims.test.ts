@@ -46,6 +46,13 @@ const CARRIERS = [
   "src/cli/doctor.ts",
   "src/cli/index.ts",
   "src/client/components/IntegrationWizardModal.svelte",
+  // #1432 moved the plugin paragraph OUT of the wizard into this shared
+  // component and gave it a second host. A carrier list that does not follow
+  // the prose keeps reporting green over text it no longer reads.
+  "src/client/components/PushRoutesInfo.svelte",
+  // Not a move — a gap. This tab was in neither claim-guard's carrier list, and
+  // it now carries a paragraph naming both the Monitor and the shim.
+  "src/client/components/settings-tabs/SettingsClaudeCodeTab.svelte",
 ];
 
 /**

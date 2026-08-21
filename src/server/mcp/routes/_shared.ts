@@ -37,6 +37,40 @@ export function scrubPathForCaller(req: PeerRequest, absPath: string): string {
   return isLoopbackRequest(req) ? absPath : crossBasename(absPath);
 }
 
+/**
+ * Reduce a URL to scheme + authority for non-loopback callers.
+ *
+ * The sibling of {@link scrubPathForCaller}, and per-caller for the same reason:
+ * loopback gets the real value because the local UI genuinely needs it. A twin
+ * that scrubbed harder than its sibling would reopen the drift the note above
+ * exists to close.
+ *
+ * Reduced rather than dropped. The authority is the one part a caller can act
+ * on — it is what distinguishes "this entry points off-box" from "this entry
+ * points at loopback" — while userinfo, path, query and fragment are the parts
+ * that carry credentials, tokens and layout.
+ *
+ * Built BY CONSTRUCTION from `protocol` + `host`: nothing is copied and then
+ * stripped, so there is no strip step to get wrong, and a URL component nobody
+ * anticipated cannot ride out. `host` carries the port and excludes userinfo.
+ *
+ * Returns `undefined` — meaning "drop the field" — for a string `new URL()`
+ * refuses, and for a parsed URL with no authority at all (`file:///home/alice/x`,
+ * `foo:bar`), whose `host` is `""`. Guessing at either would re-emit the path
+ * this helper exists to withhold.
+ */
+export function scrubUrlForCaller(req: PeerRequest, url: string): string | undefined {
+  if (isLoopbackRequest(req)) return url;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.host === "") return undefined;
+  return `${parsed.protocol}//${parsed.host}`;
+}
+
 /** Nullable twin of {@link scrubPathForCaller}, for optional path fields. */
 export function scrubOptionalPathForCaller(
   req: PeerRequest,

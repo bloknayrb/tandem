@@ -119,6 +119,11 @@ async function handleRetry(): Promise<void> {
 
 async function handleDisable(): Promise<void> {
   await withInvoke(async (invoke) => {
+    // Same call as the settings panel's disable, and the same reason its
+    // degraded-success warnings (#1438) are not rendered here: this modal
+    // closes on success. A leftover firewall rule is advisory by construction
+    // (the server binds 127.0.0.1), and a partial uninstall shows up as
+    // per-workspace status in the settings panel.
     await coworkToggleIntegration(invoke, false);
     await coworkState.refetch();
   }, "Failed to disable Cowork");

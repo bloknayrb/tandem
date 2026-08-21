@@ -1,13 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import * as Y from "yjs";
 import { z } from "zod";
 import {
   CTRL_ROOM,
   Y_MAP_ACTIVITY,
   Y_MAP_CHAT,
+  Y_MAP_CHAT_STREAM,
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import { withMcp } from "../../shared/origins.js";
+import { withInternal, withMcp } from "../../shared/origins.js";
 import type {
   AgentIdentity,
   Annotation,
@@ -17,6 +19,7 @@ import type {
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
+import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
 import { recordInboxPoll, resolveDeliveryRound } from "../events/delivery-state.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
 import { hideFromAI, type ModeState, readModeState, reportedMode } from "../mode.js";
@@ -103,8 +106,10 @@ export function appendClaudeChatMessage(
     ...(opts.documentId ? { documentId: opts.documentId } : {}),
     ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
     // #1123 M3: agent byline (local-model collaborator only). `tandem_reply`
-    // omits it ⇒ real-Claude chat is byte-identical. updateClaudeChatMessage's
-    // `{...existing, text}` re-set carries it through every streamed delta.
+    // omits it ⇒ real-Claude chat is byte-identical. The byline lives on the
+    // chat row, which streaming leaves untouched (#1340 — deltas go to the
+    // chatStream sidecar), and finalizeClaudeChatMessage's `{...existing}`
+    // fold carries it into the final re-set.
     ...(opts.agentIdentity ? { agentIdentity: opts.agentIdentity } : {}),
     read: true,
   };
@@ -113,22 +118,129 @@ export function appendClaudeChatMessage(
 }
 
 /**
- * Update the text of an existing Claude-authored chat message, for the
- * local-model collaborator's token streaming (#1123 M1.2). Re-`set`s a FRESH
- * object so the value read from the map is never mutated in place; ONLY `text`
- * changes — `id`, `author`, `timestamp` (deliberately NOT re-stamped: ChatPanel
- * sorts by timestamp, so a bump would re-sort the live bubble on every flush),
- * `read`, `documentId`, `replyTo` carry verbatim. No-op when the id is absent
- * (doc closed / message GC'd). The re-`set` is an `update` action, which the
- * ctrl-chat observer additionally drops at its `action !== "add"` gate — so a
- * streamed delta self-wakes even less than the initial append.
+ * Stream the text of an existing Claude-authored chat message, for the
+ * local-model collaborator's token streaming (#1123 M1.2, #1340). `text` is
+ * always the FULL text so far; the write is the minimal diff-splice into a
+ * per-message `Y.Text` in the `chatStream` sidecar map — pure append in the
+ * common case — so a stream of final length L costs O(L) update bytes on the
+ * wire instead of the old whole-value re-`set`'s O(L²). (Per-flush CPU is
+ * still O(current length) — `toString()` + the prefix scan — bounded by the
+ * producer's cap; the linearity claim is a WIRE claim.)
+ *
+ * While the sidecar entry exists it is AUTHORITATIVE over the chat row's
+ * `text` — the row is deliberately stale mid-stream and readers compose (see
+ * `Y_MAP_CHAT_STREAM` in shared/constants.ts). Callers MUST end the stream
+ * with {@link finalizeClaudeChatMessage}, which folds the text back into the
+ * row; the chat row itself is untouched here, so `id`, `author`, `timestamp`
+ * (deliberately never re-stamped: ChatPanel sorts by timestamp), `read`,
+ * `documentId`, `replyTo` and `agentIdentity` ride through streaming verbatim.
+ *
+ * No-op when the chat row is absent (doc closed / message GC'd / chat cleared
+ * mid-stream) — and in that case any orphan sidecar entry is deleted, so a
+ * `DELETE /api/chat` racing an in-flight stream converges instead of leaving
+ * an erased message's `Y.Text` behind.
+ *
+ * The splice point is clamped to a code-point boundary: `Y.Text` splices at a
+ * UTF-16 offset inside a surrogate pair make Yjs substitute U+FFFD on both
+ * sides of the split — permanently. Never remove the clamp.
  */
 export function updateClaudeChatMessage(id: string, text: string): void {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const streamMap = ctrlDoc.getMap(Y_MAP_CHAT_STREAM);
   const existing = chatMap.get(id) as ChatMessage | undefined;
-  if (!existing) return;
-  withMcp(ctrlDoc, () => chatMap.set(id, { ...existing, text }));
+  if (!existing) {
+    if (streamMap.has(id)) {
+      // Convergence cleanup after `DELETE /api/chat` raced a flush, not a
+      // Claude-authored chat write — `withInternal`'s documented
+      // "cleanup-after-failure" case (Critical Rule 2: the helper IS the
+      // contract, and `audit:origins` reads it as a census of intent).
+      withInternal(ctrlDoc, () => streamMap.delete(id));
+      clearStreamStaleness(id);
+    }
+    return;
+  }
+
+  const entry = streamMap.get(id);
+  const yText = entry instanceof Y.Text ? entry : null;
+  const current = yText ? yText.toString() : "";
+  // Covers both "unchanged text" and "no sidecar yet + empty text": no ops,
+  // no empty broadcast, and never an empty-but-authoritative sidecar entry.
+  if (current === text) return;
+  // No sidecar and the row already holds exactly this text (a flushFinal
+  // re-sending what the minting append committed): minting a sidecar just to
+  // fold it back would cost two O(L) writes for nothing.
+  if (!yText && text === existing.text) return;
+
+  // Seed only. The age CHECK runs from `foldChatStream`'s sweep, which
+  // enumerates live entries regardless of producer activity — the abandoned
+  // producer this tripwire exists for stops calling this function entirely.
+  noteStreamSidecar(id);
+
+  withMcp(ctrlDoc, () => {
+    let target = yText;
+    if (!target) {
+      target = new Y.Text();
+      // Attach BEFORE populate: a detached Y.Text reverses segment order
+      // (docs/gotchas.md, Y.js section). `set` integrates it in this txn.
+      streamMap.set(id, target);
+    }
+    // Longest common prefix of the flushed text vs the new full text.
+    let p = 0;
+    const max = Math.min(current.length, text.length);
+    while (p < max && current.charCodeAt(p) === text.charCodeAt(p)) p++;
+    // Never split a surrogate pair: if the prefix ends on a high surrogate,
+    // back off. A LOOP, not a single step — malformed input can carry a run of
+    // consecutive unpaired high surrogates, and backing off exactly one unit
+    // still lands the splice on a high surrogate ("\uD83D\uD83Dx" against a
+    // "\uD83D…" prefix). The condition stays a bare `p > 0`: adding
+    // `p < text.length` corrupts the `p === text.length` pure-shrink case.
+    // (current[0..p-1] === text[0..p-1] and p <= min(length), so
+    // charCodeAt(p-1) is in-bounds on both strings.)
+    while (p > 0) {
+      const c = text.charCodeAt(p - 1);
+      if (c >= 0xd800 && c <= 0xdbff) p--;
+      else break;
+    }
+    if (current.length > p) target.delete(p, current.length - p);
+    if (text.length > p) target.insert(p, text.slice(p));
+  });
+}
+
+/**
+ * End a streamed chat message (#1340): fold the sidecar `Y.Text` back into the
+ * plain chat row (`{...existing, text}` — one `update`-action re-`set`, which
+ * the ctrl-chat observer drops at both the `mcp` origin gate and the
+ * `action !== "add"` gate) and delete the sidecar entry. Idempotent — no-op
+ * when no sidecar entry exists. If the chat row was deleted mid-stream (chat
+ * cleared), the sidecar entry is deleted WITHOUT re-creating the row: the user
+ * erased that message, and finalize must not resurrect it.
+ *
+ * Deliberately NOT ownership-gated by callers: it appends no new content, only
+ * folds already-committed CRDT state, so even a superseded/aborted stream must
+ * finalize or its sidecar entry (and its authority over the row) leaks.
+ */
+export function finalizeClaudeChatMessage(id: string): void {
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const streamMap = ctrlDoc.getMap(Y_MAP_CHAT_STREAM);
+  const entry = streamMap.get(id);
+  // Unconditional: the sidecar entry may already be gone (clearCtrlChatDurably
+  // deletes live entries directly), but the staleness ledger is module state
+  // only this function retires.
+  clearStreamStaleness(id);
+  if (entry === undefined) return;
+  withMcp(ctrlDoc, () => {
+    const existing = chatMap.get(id) as ChatMessage | undefined;
+    // `length > 0`: an EMPTY sidecar `Y.Text` is malformed state, not a
+    // streamed empty reply (the update path returns before minting one). Folding
+    // it would blank a chat row that holds real text; falling through to the
+    // unconditional delete drops the sidecar and keeps the row.
+    if (existing && entry instanceof Y.Text && entry.length > 0) {
+      chatMap.set(id, { ...existing, text: entry.toString() });
+    }
+    streamMap.delete(id);
+  });
 }
 
 export function registerAwarenessTools(server: McpServer): void {

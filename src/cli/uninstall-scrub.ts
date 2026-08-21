@@ -20,9 +20,10 @@
  * keychain) — the scrub removes references to a binary about to disappear;
  * user data stays unless the user deletes it (docs/data-locations.md).
  *
- * **Security invariant §10 (ADR):** this runs INSIDE the already-signed
- * `tandem.exe` binary — NOT as a separate `uninstall_scrub.exe`. That
- * prevents binary-planting attacks during uninstall.
+ * **Runs inside the already-signed binary.** Invoked from `tandem.exe` itself —
+ * NOT as a separate `uninstall_scrub.exe`. A dedicated scrub executable would be
+ * an unsigned binary sitting beside the installer at uninstall time, which is a
+ * binary-planting target.
  *
  * **Failure policy:** logs every error, exits 0 on clean-or-not-installed,
  * non-zero only on unrecoverable I/O failures. NSIS logs the exit code but

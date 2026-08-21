@@ -374,7 +374,7 @@ function cycleWordMode() {
         class="status-dot"
         style="width: 7px; height: 7px; border-radius: 50%; background: {dotColor}; display: inline-block; animation: {connected && showReconnectedFlash ? 'tandem-conn-bloom 500ms var(--tandem-ease-out)' : isReconnecting ? 'tandem-conn-pulse 900ms ease-in-out infinite' : 'none'};"
       ></span>
-      <span style="color: {labelColor}; transition: color 0.3s ease;">{connLabel}</span>
+      <span class="status-label-fade" style="color: {labelColor}">{connLabel}</span>
       {#if editor}
         <button
           type="button"
@@ -442,9 +442,7 @@ function cycleWordMode() {
         class="claude-dot"
         style="width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: {AI_TONE[view.tone].dot}; animation: {aiAnimating ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none'};"
       ></span>
-      <span
-        style="transition: color 0.3s ease; color: {AI_TONE[view.tone].text};"
-      >
+      <span class="status-label-fade" style="color: {AI_TONE[view.tone].text}">
         <!-- #1287: "Solo · comments held · reviewing scratchpad…" still reads
              as two claims unless the activity is qualified — a reader can
              infer that visible activity disproves the hold. The parenthetical
@@ -551,6 +549,33 @@ function cycleWordMode() {
   .status-faint {
     opacity: 0.4;
     transition: opacity 180ms ease;
+  }
+  /* The dim/lift is state feedback on hover — under reduced motion the pill
+     just arrives at full opacity. */
+  :global(body.tandem-reduce-motion) .status-faint {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .status-faint {
+      transition: none;
+    }
+  }
+
+  /* Status labels whose colour tracks the connection / AI tone. The colour
+     itself stays inline (it is data-driven); only the cross-fade lives here,
+     so the reduce-motion guard has a rule of equal specificity to beat rather
+     than an inline declaration needing `!important` — the treatment the dots
+     just below could not have. */
+  .status-label-fade {
+    transition: color 0.3s ease;
+  }
+  :global(body.tandem-reduce-motion) .status-label-fade {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .status-label-fade {
+      transition: none;
+    }
   }
   .status-ai-indicator {
     display: inline-flex;

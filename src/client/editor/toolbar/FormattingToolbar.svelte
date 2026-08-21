@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { yUndoPluginKey } from "y-prosemirror";
+import type { TandemNotification } from "../../../shared/types.js";
 import { clickOutside } from "../../actions/clickOutside.svelte";
 import { createCoalescingTick } from "../../utils/coalescing-tick";
 import { ESCAPE_OWNER_ATTR } from "../../utils/escape-owner";
@@ -18,9 +19,17 @@ interface Props {
    * the bar + Ctrl+Z/Y; the popup mirrors only the mark/block controls).
    */
   variant?: "bar" | "popup";
+  /**
+   * Channel for a REFUSED link (#1537). `setLink` returns `false` when the
+   * render gate rejects the scheme, and without this the Link input would just
+   * close and write nothing — a silent no-op where the pre-allowlist behaviour
+   * succeeded. Optional so the harness can mount the toolbar bare; both real
+   * hosts (`Toolbar`, `FormattingBar`) thread App's `notifications.push`.
+   */
+  onNotify?: (n: TandemNotification) => void;
 }
 
-const { editor, disabled = false, variant = "bar" }: Props = $props();
+const { editor, disabled = false, variant = "bar", onNotify }: Props = $props();
 
 // $derived (not a plain const) so it tracks if `variant` ever becomes dynamic.
 const showHistory = $derived(variant === "bar");
@@ -224,7 +233,7 @@ function handleLinkMouseDown(e: MouseEvent) {
 
 function submitLinkInput() {
   if (!editor) return;
-  applyLink(editor, linkInputValue);
+  applyLink(editor, linkInputValue, onNotify);
   dismissLinkInput();
 }
 

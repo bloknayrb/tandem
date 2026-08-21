@@ -17,6 +17,7 @@ import {
   isValidDocumentId,
   scrubOptionalPathForCaller,
   scrubPathForCaller,
+  scrubUrlForCaller,
   sendApiError,
 } from "../../../src/server/mcp/routes/_shared.js";
 
@@ -60,6 +61,55 @@ describe("scrubPathForCaller", () => {
     expect(scrubOptionalPathForCaller(LAN, null)).toBeNull();
     expect(scrubOptionalPathForCaller(LAN, undefined)).toBeNull();
     expect(scrubOptionalPathForCaller(LOCAL, POSIX_PATH)).toBe(POSIX_PATH);
+  });
+});
+
+describe("scrubUrlForCaller (#1558)", () => {
+  // The canonical fixture from the issue: an entry `extractEntry` cast out of
+  // the user's own config file, which is exactly what gets flagged
+  // `invalid-url` and was served with its userinfo intact.
+  const CREDENTIALED = "http://user:s3cr3t@example.internal/mcp";
+
+  it("returns the url untouched to a loopback caller", () => {
+    // Per-caller, like its path sibling: the local UI gets the real value.
+    // It is also the only form in which a loopback caller could learn less than
+    // it already does — `scrubValidation` runs only on the LAN branch, so the
+    // whole url still reaches a local caller inside the validation `reason`.
+    expect(scrubUrlForCaller(LOCAL, CREDENTIALED)).toBe(CREDENTIALED);
+  });
+
+  it("drops userinfo, path and query for a LAN caller, keeping scheme and authority", () => {
+    const scrubbed = scrubUrlForCaller(LAN, CREDENTIALED);
+    expect(scrubbed).toBe("http://example.internal");
+    expect(scrubbed).not.toContain("s3cr3t");
+    expect(scrubbed).not.toContain("user");
+    expect(scrubbed).not.toContain("/mcp");
+  });
+
+  it("keeps the port, and drops a query string a loopback url can still carry", () => {
+    // `LoopbackUrl` checks protocol/username/password/hostname ONLY, so a
+    // token in the query survives validation and persists. The port is the half
+    // a caller can act on, so it stays.
+    expect(scrubUrlForCaller(LAN, "http://127.0.0.1:3479/mcp?token=SEKRIT")).toBe(
+      "http://127.0.0.1:3479",
+    );
+  });
+
+  it("treats an unknown peer address as remote (fail-closed)", () => {
+    expect(scrubUrlForCaller({}, CREDENTIALED)).toBe("http://example.internal");
+  });
+
+  it("returns undefined for a string that will not parse, rather than guessing", () => {
+    expect(scrubUrlForCaller(LAN, "not a url at all")).toBeUndefined();
+    expect(scrubUrlForCaller(LAN, "")).toBeUndefined();
+  });
+
+  it("returns undefined for a parseable url with no authority", () => {
+    // `new URL()` accepts these, and their `host` is "". Emitting
+    // `${protocol}//${host}` would produce "file://" while the interesting part
+    // — the path — is precisely what this helper exists to withhold.
+    expect(scrubUrlForCaller(LAN, `file://${POSIX_PATH}`)).toBeUndefined();
+    expect(scrubUrlForCaller(LAN, "foo:/home/alice/notes")).toBeUndefined();
   });
 });
 

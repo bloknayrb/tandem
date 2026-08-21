@@ -40,10 +40,13 @@ export function buildAwarenessDecorations(
     doc.forEach((node, offset) => {
       if (blockIndex === focusParagraph) {
         decorations.push(
+          // Class only, no `style`. The tint, rail and their 300ms cross-fade
+          // now live on `.tandem-claude-focus` in `editor.css` — every value
+          // here was static, and an inline `transition` is unreachable by the
+          // reduced-motion guards that file already carries for this element's
+          // `::before` (#1530).
           Decoration.node(offset, offset + node.nodeSize, {
             class: "tandem-claude-focus",
-            style:
-              "background: var(--tandem-claude-focus-bg); border-left: 3px solid var(--tandem-claude-focus-border); padding-left: 8px; transition: background 0.3s ease, border-color 0.3s ease;",
           }),
         );
       }

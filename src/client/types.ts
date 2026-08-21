@@ -88,6 +88,29 @@ export interface CoworkStatus {
 }
 
 /**
+ * The `Ok` payload of the `cowork_toggle_integration` Tauri command (#1438).
+ * Mirrors `CoworkToggleReport` in `src-tauri/src/lib.rs`.
+ *
+ * The command encodes *degraded success* — a partial multi-workspace install on
+ * enable, a leftover firewall rule or a partial uninstall on disable. Those used
+ * to live as English inside the success string, which every call site threw
+ * away, so they rendered as an unqualified green success.
+ *
+ * `warnings` is never a failure channel: a rejected invoke is still the only way
+ * the command reports one. A warning means the operation committed and something
+ * about the result is imperfect.
+ *
+ * `warnings` is optional for the same stale-sidecar tolerance the rest of this
+ * surface uses: a desktop shell talking to an older sidecar receives a bare
+ * string where this object should be, and must render something honest rather
+ * than crash on `.length`. Read it through `toggleWarnings()`.
+ */
+export interface CoworkToggleReport {
+  message: string;
+  warnings?: string[];
+}
+
+/**
  * Discriminated union mirroring the Rust `FirewallError` enum. Each variant
  * drives a distinct user-facing recovery hint — see `firewallErrorHint`.
  */
@@ -95,18 +118,45 @@ export type FirewallErrorVariant =
   | { kind: "adminDeclined" }
   | { kind: "netshNotFound" }
   | { kind: "netshFailure"; exitCode: number; stderrTail: string; stdoutTail: string }
-  | { kind: "subnetDetectionFailed"; reason?: SubnetDetectionReason }
-  | { kind: "adapterEnumerationFailed" };
+  | {
+      kind: "subnetDetectionFailed";
+      reason?: SubnetDetectionReason;
+      exitCode?: number;
+      stderrTail?: string;
+    }
+  | { kind: "adapterEnumerationFailed"; reason?: AdapterEnumerationReason };
 
 /**
  * Why vEthernet subnet detection failed (#1298). Mirrors
  * `SubnetDetectionReason` in `src-tauri/src/firewall.rs`.
  *
- * Optional on the variant above, for the same stale-sidecar tolerance the rest
- * of the Cowork surface uses: a desktop shell talking to an older sidecar gets
- * no `reason` and must still render something honest.
+ * Optional on the variant above, and NOT because of version skew: `firewall.rs`
+ * runs in the Tauri shell and the WebView loads `frontendDist`, so the Rust and
+ * this file compile into one artifact and ship together — there is no sidecar
+ * in this path at all. What optionality buys is tolerance of a Rust-side
+ * rename, which produces zero TypeScript errors because this union is
+ * hand-maintained, and which must degrade to an honest fallback rather than to
+ * an empty warning box.
  */
-export type SubnetDetectionReason = "noAdapter" | "noIpv4" | "prefixTooBroad" | "queryFailed";
+export type SubnetDetectionReason =
+  | "noAdapter"
+  | "noIpv4"
+  | "prefixTooBroad"
+  | "queryFailed"
+  | "timeout";
+
+/**
+ * Why PowerShell could not be STARTED, so adapter enumeration never ran
+ * (#1372). Mirrors `AdapterEnumerationReason` in `src-tauri/src/firewall.rs`.
+ *
+ * Optional on the variant above for the same reason `SubnetDetectionReason` is
+ * — a rename on the Rust side is invisible to TypeScript, so the absent case
+ * has to render something honest. Note this never means "the query failed" — a
+ * PowerShell
+ * that started and then failed arrives as
+ * `subnetDetectionFailed { reason: "queryFailed" }`.
+ */
+export type AdapterEnumerationReason = "notFound" | "permissionDenied" | "spawnFailed";
 
 // ---------------------------------------------------------------------------
 // App info response from GET /api/info

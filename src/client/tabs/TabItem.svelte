@@ -1,5 +1,10 @@
 <script lang="ts">
-import { Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
+import type * as Y from "yjs";
+import {
+  Y_MAP_DIRTY,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_SAVED_AT_VERSION,
+} from "../../shared/constants.js";
 import { isRenamable, type OpenTab } from "../types.js";
 import TabRenameInput from "./TabRenameInput.svelte";
 // A30 (tab reorder drag): --a30-lift / --a30-shadow / --a30-lift-shadow, plus
@@ -55,8 +60,7 @@ const canRename = $derived(isRenamable(tab));
 
 // ---- useTabDirty logic inlined (hooks can't be imported into Svelte) ----
 let dirty = $state(false);
-// These don't drive UI; plain let keeps them non-reactive
-let editCount = 0;
+// Doesn't drive UI; plain let keeps it non-reactive.
 let baseline: number | null = null;
 
 $effect(() => {
@@ -75,24 +79,60 @@ $effect(() => {
   const armTimer = setTimeout(() => {
     armed = true;
     baseline = (meta.get(Y_MAP_SAVED_AT_VERSION) as number) ?? 0;
-    editCount = 0;
-    dirty = false;
+    // #1447: the arm-time baseline is the SERVER's authoritative unsaved flag,
+    // not a hardcoded false. The reset itself is still required — without it the
+    // initial CRDT sync reads as a user edit and every tab opens dirty — but
+    // resetting to a literal made a pre-attach MCP edit indistinguishable from a
+    // clean load, because to the client they are the same bytes in the same
+    // sync. An absent key (no dirty observer, scratchpad, older server) reads as
+    // clean, i.e. exactly the pre-#1447 behaviour.
+    dirty = meta.get(Y_MAP_DIRTY) === true;
   }, 500);
 
   const onFragmentChange = () => {
     if (!armed) return;
-    editCount++;
     dirty = true;
   };
   fragment.observeDeep(onFragmentChange);
 
-  const onMetaChange = () => {
+  const onMetaChange = (event: Y.YMapEvent<unknown>) => {
     if (!armed) return;
+
+    // #1447: the server owns Y_MAP_DIRTY, so follow it in BOTH directions — but
+    // only when THIS transaction actually wrote the key. documentMeta carries
+    // several unrelated keys (externalConflict, fidelityReport, readOnly,
+    // fileName/format, openDocuments), and this observer fires on all of them;
+    // reading the key as a LEVEL on every meta write would re-assert a stale
+    // value and latch the tab. `keysChanged` makes it an edge, matching the
+    // sibling observer in hooks/yjsSync.svelte.ts.
+    //
+    // Following the `false` edge is NOT unconditionally safe, and the window is
+    // accepted rather than closed: autosave completes and publishes `false`;
+    // before it arrives the user types and `onFragmentChange` sets `dirty = true`;
+    // the in-flight `false` then lands and blanks the dot over a genuinely
+    // unsaved keystroke. It self-corrects when that keystroke reaches the server
+    // and republishes `true` — bounded by one loopback round trip — and the
+    // server's own markCleanIfUnchanged guard already covers edits that arrive
+    // before the write finishes, so nothing is lost, only briefly mis-drawn.
+    // Suppressing it would mean tracking "has the fragment observer fired since
+    // the last mirror event", which is more state than a sub-RTT blip warrants.
+    // Going one-directional instead is worse: it leaves a stale mirror
+    // unclearable and latches every scratchpad tab permanently dirty.
+    if (event.keysChanged.has(Y_MAP_DIRTY)) {
+      const mirrored = meta.get(Y_MAP_DIRTY);
+      if (typeof mirrored === "boolean") dirty = mirrored;
+    }
+
     const saved = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
     if (saved !== undefined && saved !== baseline) {
+      // Always re-baseline, but clear only if the server agrees the doc is
+      // clean. `saveDocumentToDisk` writes savedAtVersion BEFORE calling
+      // markCleanIfUnchanged, and that call keeps the doc dirty when a body edit
+      // landed during the async write — so an unconditional clear here shows a
+      // clean tab over unpersisted edits. An absent key is `undefined !== true`,
+      // so a server without the mirror clears exactly as it did before.
       baseline = saved;
-      editCount = 0;
-      dirty = false;
+      if (meta.get(Y_MAP_DIRTY) !== true) dirty = false;
     }
   };
   meta.observe(onMetaChange);
@@ -169,9 +209,15 @@ const tabStyle = $derived(
     "white-space: nowrap",
     // The target state owns the transition (the A29 convention): picking up
     // runs at --a30-lift, putting down at --a30-settle. Reduced motion zeroes
-    // both tokens but NOT --a30-shadow, so the tab still arrives instantly
-    // while the shadow keeps its crossfade.
-    `transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow var(--a30-shadow) var(--tandem-ease-out), transform ${
+    // those two and --a30-chrome, but NOT --a30-shadow, so the tab and its
+    // chrome both arrive instantly while the shadow keeps its crossfade.
+    //
+    // Every duration here is a token for a reason (#1530): this is one inline
+    // shorthand, so a `body.tandem-reduce-motion` rule could only replace it
+    // wholesale with `!important` — which would zero the shadow crossfade
+    // tabDragMotion.css deliberately keeps. Zeroing the tokens is the only way
+    // to reach some terms and not others.
+    `transition: background var(--a30-chrome), color var(--a30-chrome), border-color var(--a30-chrome), box-shadow var(--a30-shadow) var(--tandem-ease-out), transform ${
       lifted ? "var(--a30-lift)" : "var(--a30-settle)"
     } var(--tandem-ease-out)`,
     // Shrinkable so a crowded strip narrows its tabs before it starts scrolling.

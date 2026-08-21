@@ -3,6 +3,7 @@
 import type { DoctorReport, DoctorStatus } from "../../cli/doctor";
 import { TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
 import type { HostInfo } from "../../shared/diagnostics";
+import type { ClientLogEntry } from "./client-log";
 
 /**
  * Wire shape of `GET /api/diagnostics` (see `makeDiagnosticsHandler`).
@@ -22,7 +23,30 @@ export interface DiagnosticsPayload extends HostInfo {
 export interface DiagnosticsEnv {
   /** Short browser/WebView descriptor, e.g. "Chrome 141". Empty to omit. */
   browser?: string;
+  /**
+   * Recent client-side warnings (`utils/client-log.ts`), oldest first. Omitted
+   * or empty renders nothing at all — see `formatDiagnostics`.
+   */
+  clientLog?: readonly ClientLogEntry[];
 }
+
+/**
+ * Ceilings on the client-log section, overridable per call.
+ *
+ * Not cosmetic. `buildBugReportUrl` drops whole lines from the TAIL to fit
+ * `MAX_ISSUE_URL_LENGTH`, and the section sits above the check list (see
+ * `formatDiagnostics`), so an unbudgeted section evicts the doctor report line
+ * by line before it loses a single log entry. Measured: roughly 3,700 raw chars
+ * survive the cap, and an unbounded 20-entry section is 1,800–4,100 of them.
+ */
+export interface DiagnosticsFormatOptions {
+  maxClientLogLines?: number;
+  maxClientLogChars?: number;
+}
+
+export const MAX_CLIENT_LOG_LINES = 6;
+export const MAX_CLIENT_LOG_CHARS = 800;
+export const CLIENT_LOG_HEADING = "Recent client warnings (newest first):";
 
 const STATUS_TAG: Record<DoctorStatus, string> = {
   pass: "[ok]  ",
@@ -33,11 +57,24 @@ const STATUS_TAG: Record<DoctorStatus, string> = {
 /**
  * A few check messages interpolate raw file content (e.g. an unparseable
  * `store.lock`). The clipboard text gets pasted into terminals, so strip
- * control characters that could carry ANSI/OSC escape sequences.
+ * control characters that could carry ANSI/OSC escape sequences. Also strips
+ * Unicode bidi/format-override characters (U+200E/F LRM/RLM, U+202A-E
+ * embedding/override, U+2066-9 isolates, U+061C ALM) -- "Trojan Source"-style
+ * characters that visually reorder the surrounding text without any
+ * HTML-escaping catching them, since they aren't `<`/`>`/`&`.
+ *
+ * Exported: also used by `IntegrationTargetCard.svelte` to sanitize
+ * `EntryValidation.reason` strings, which originate from an unvalidated,
+ * user-editable config file (see `extractEntry`'s comment in
+ * `existing-config.ts`) rather than from this module's own doctor-report
+ * content -- the same reason this module needed the control-char strip in
+ * the first place applies there with an even less trusted source.
  */
-function stripControlChars(s: string): string {
+export function stripControlChars(s: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
-  return s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+  return s
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069\u061c]/g, "");
 }
 
 /**
@@ -120,6 +157,58 @@ function hardwareLine(payload: DiagnosticsPayload): string | null {
 }
 
 /**
+ * Render the client-log section, newest first, within a fixed budget.
+ *
+ * **Newest first is load-bearing.** `buildBugReportUrl` truncates from the tail,
+ * so oldest-first would drop precisely the entries nearest the bug the user is
+ * reporting. Same reason the section sits above the check list rather than
+ * after it: appended at the end it would be the first thing cut, and the fix
+ * would work for Copy Diagnostics while silently not working for Report a bug —
+ * the surface #1439 is actually about.
+ *
+ * The trade that buys, stated once: under the cap the report keeps client text
+ * scrubbed with no known roots over doctor text scrubbed server-side with real
+ * ones. That is the right priority for a bug report — the client evidence is
+ * the proximate cause — but it is a trade, which is why the budget exists.
+ *
+ * Returns `[]` for an empty log, so a report with no warnings is byte-identical
+ * to one produced before this section existed.
+ */
+function renderClientLog(
+  entries: readonly ClientLogEntry[],
+  opts?: DiagnosticsFormatOptions,
+): string[] {
+  if (entries.length === 0) return [];
+
+  const maxLines = opts?.maxClientLogLines ?? MAX_CLIENT_LOG_LINES;
+  const maxChars = opts?.maxClientLogChars ?? MAX_CLIENT_LOG_CHARS;
+
+  const body: string[] = [];
+  let used = 0;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (body.length >= maxLines) break;
+    const detail = entry.detail ? ` — ${entry.detail}` : "";
+    // `first` only when it says something: `at` is the newest occurrence, so a
+    // bare `(x3)` cannot distinguish a 300ms burst from three failures spread
+    // across a quarter of an hour.
+    const repeats =
+      entry.count > 1 ? ` (x${entry.count}, first +${entry.firstAt.toFixed(1)}s)` : "";
+    const line = stripControlChars(
+      `[${entry.level}] +${entry.at.toFixed(1)}s ${entry.scope}: ${entry.event}${detail}${repeats}`,
+    );
+    // Always emit at least one entry: a single pathological line is still worth
+    // more than a heading with nothing under it.
+    if (body.length > 0 && used + line.length > maxChars) break;
+    body.push(line);
+    used += line.length + 1;
+  }
+
+  if (body.length < entries.length) body.push(`(showing ${body.length} of ${entries.length})`);
+  return [CLIENT_LOG_HEADING, ...body];
+}
+
+/**
  * Format a diagnostics payload as plain text for the clipboard. Pure — the
  * "Copy diagnostics" button is thin glue over this (extract-over-mount), and
  * `buildBugReportUrl` reuses the same text for the issue body.
@@ -129,7 +218,11 @@ function hardwareLine(payload: DiagnosticsPayload): string | null {
  * That degradation is the contract: an older server, or a host where every
  * `os.*` read failed, must still format cleanly.
  */
-export function formatDiagnostics(payload: DiagnosticsPayload, env?: DiagnosticsEnv): string {
+export function formatDiagnostics(
+  payload: DiagnosticsPayload,
+  env?: DiagnosticsEnv,
+  opts?: DiagnosticsFormatOptions,
+): string {
   const lines: string[] = [
     `Tandem v${payload.version} (${payload.transport}${payload.tauriSidecar ? ", desktop" : ""})`,
     `${payload.platform}/${payload.arch}, Node ${payload.nodeVersion}`,
@@ -145,6 +238,12 @@ export function formatDiagnostics(payload: DiagnosticsPayload, env?: Diagnostics
   if (browser) lines.push(`Browser: ${stripControlChars(browser)}`);
 
   lines.push("");
+
+  // Between the existing host-block separator and its own trailing blank, so
+  // the host block still ends at the FIRST blank line — `diagnostics-format`'s
+  // `hostLines()` helper slices to exactly that and asserts with `toEqual`.
+  const clientLog = renderClientLog(env?.clientLog ?? [], opts);
+  if (clientLog.length > 0) lines.push(...clientLog, "");
 
   for (const res of payload.report.results) {
     lines.push(`${STATUS_TAG[res.status]} ${res.check} — ${stripControlChars(res.message)}`);

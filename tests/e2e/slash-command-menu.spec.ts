@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import fs from "fs";
 import path from "path";
-import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
+import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -10,7 +10,7 @@ import {
   openAnnotatePopup,
 } from "./helpers";
 
-const API_BASE = `http://127.0.0.1:${DEFAULT_MCP_PORT}/api`;
+const API_BASE = `http://127.0.0.1:${E2E_MCP_PORT}/api`;
 
 let mcp: McpTestClient;
 let tmpDir: string;

@@ -22,22 +22,50 @@
 import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { _resetClientLog, readClientLog } from "../../src/client/utils/client-log";
 
 import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../../src/shared/constants.js";
 import type { ApplyItemResult } from "../../src/shared/integrations/contract.js";
 import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
+import { wizardStepCell } from "../helpers/wizard-step-cell.svelte";
 
 // Mutable stubs the mocked hooks return; each test sets them BEFORE render.
 const wizardStub: {
   picked: unknown[];
   applyResults: ApplyItemResult[];
   channelRegistered: boolean | null;
-} = { picked: [], applyResults: [], channelRegistered: null };
+  /**
+   * Delegated to a `$state` cell (#1432). A plain field here would be read
+   * through the mock's getter without creating a reactive dependency, so
+   * changing it would re-render nothing — see `wizard-step-cell.svelte.ts` for
+   * what that hid.
+   */
+  step: string;
+} = {
+  picked: [],
+  applyResults: [],
+  channelRegistered: null,
+  get step() {
+    return wizardStepCell.value;
+  },
+  set step(next: string) {
+    wizardStepCell.set(next);
+  },
+};
 
 vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   createIntegrationWizard: () => ({
-    step: "done",
+    // A GETTER, not a frozen literal (#1432). It was `step: "done"` while the
+    // retry test below wrote `wizardStub.step` — a field nothing read, which
+    // `tests/` being outside every tsconfig let through silently. The block
+    // therefore never unmounted, so that test measured the manual
+    // `pluginCopyResult = ""` while its comment described the unmount. With the
+    // copy state now living in `PushRoutesInfo`, the unmount IS the reset, and
+    // the mock has to model `step` faithfully for the test to reach it.
+    get step() {
+      return wizardStub.step;
+    },
     detecting: false,
     existing: [],
     get picked() {
@@ -53,7 +81,10 @@ vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", async (importOrigi
     keychainUnavailable: false,
     begin: vi.fn(async () => {}),
     save: vi.fn(async () => {}),
-    reset: vi.fn(),
+    reset: vi.fn(() => {
+      // The real `reset()` sets `step = "connect"` (useIntegrationWizard.svelte.ts).
+      wizardStub.step = "connect";
+    }),
     setPicked: vi.fn(),
     submitSecret: vi.fn(async () => {}),
     cleanupUnsavedSecrets: vi.fn(async () => {}),
@@ -116,7 +147,7 @@ vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => vi.fn()),
   coworkToggleIntegration: vi.fn(async () => ({ ok: true })),
-  coworkPreflightSubnet: vi.fn(async () => ({ status: "unknown" })),
+  coworkPreflightSubnet: vi.fn(async () => ({ status: "unavailable" })),
 }));
 
 import IntegrationWizardModal from "../../src/client/components/IntegrationWizardModal.svelte";
@@ -170,6 +201,7 @@ describe("IntegrationWizardModal — per-target push support (#1299)", () => {
     wizardStub.picked = [];
     wizardStub.applyResults = [];
     wizardStub.channelRegistered = null;
+    wizardStepCell.reset();
     vi.clearAllMocks();
   });
 
@@ -251,6 +283,7 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     wizardStub.picked = [];
     wizardStub.applyResults = [];
     wizardStub.channelRegistered = null;
+    wizardStepCell.reset();
     coworkStub.status = null;
     vi.clearAllMocks();
     // Here rather than at the end of each clipboard test: `navigator` is a
@@ -417,6 +450,7 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
       },
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    _resetClientLog();
     const { container } = mountPushMode(false);
     await tick();
 
@@ -430,7 +464,23 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     // is the only thing that separates a denied permission from a missing API
     // from a CSP rejection. Without this the catch could stop logging and
     // nothing would notice.
-    expect(warn).toHaveBeenCalledWith("[wizard] clipboard write failed:", expect.any(Error));
+    // Prefix is `[push-routes]` since #1432: the same component now renders in
+    // Settings → AI Assistant, where a log blaming "[wizard]" names a surface
+    // the user never opened. The console line is emitted by `logClientWarning`
+    // itself (`[scope] event:`), so this assertion also pins the scope.
+    expect(warn).toHaveBeenCalledWith("[push-routes] clipboard write failed:", expect.any(Error));
+    // …and since #1439 it also lands in the client log, which the diagnostics
+    // report drains — the console alone is a sink with no reader in a release
+    // desktop build. The error NAME is the payload: it is what separates a
+    // denied permission from a missing API from a policy rejection.
+    expect(readClientLog()).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        scope: "push-routes",
+        event: "clipboard write failed",
+        detail: "Error: denied",
+      }),
+    ]);
   });
 
   it("does not carry a copy status back from the Cowork sub-view", async () => {
@@ -491,6 +541,90 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
       expect(q(container, "integration-wizard-plugin-copy-status")).toBeTruthy();
     });
     expect(q(container, "integration-wizard-plugin-copy-status")?.textContent?.trim()).toBe("");
+  });
+
+  /**
+   * #1432. NOTHING in the app registers the channel shim: the apply route calls
+   * `shouldRegisterChannelShim` with no override and it returns
+   * `override ?? false`, and that call site says so outright — "There is
+   * deliberately NO wizard checkbox … any docs claiming otherwise are wrong
+   * (that claim was in three places until 2026-08-09)."
+   *
+   * The unregistered arm here said "come back here and register the channel
+   * shim" until #1432 — a FOURTH instance, written four days after that sweep.
+   * The registered arm said the shim was "registered HERE", the ambiguity that
+   * makes the false one read as consistent, so both were rewritten.
+   *
+   * `tests/docs/channel-shim-optin-claims.test.ts` guards the wording across
+   * every surface by regex; this one proves the corrected copy actually reaches
+   * the screen, which the regex cannot see.
+   */
+  it("tells the user the ONLY thing that registers the shim: the CLI flag", async () => {
+    const { container } = mountPushMode(false);
+    await tick();
+    const block = q(container, "integration-wizard-push-mode") as HTMLElement;
+    const text = (block.textContent ?? "").replace(/\s+/g, " ");
+
+    expect(text).toContain("tandem setup --apply --with-channel-shim");
+    // doctor.ts's caveat. Omitting it sends a desktop user — the majority, and
+    // the reason #1390 exists — to a binary their install does not ship.
+    expect(text).toContain("which the desktop app does not install");
+    // The route it must NOT offer.
+    expect(text).not.toMatch(/come back here and register/i);
+  });
+
+  it("does not imply the wizard registered the shim when one is already there", async () => {
+    const { container } = mountPushMode(true);
+    await tick();
+    const text = (
+      (q(container, "integration-wizard-push-mode") as HTMLElement).textContent ?? ""
+    ).replace(/\s+/g, " ");
+
+    expect(text).toContain("already registered for Claude Code");
+    expect(text).not.toMatch(/registered here/i);
+  });
+
+  /**
+   * The pointer at the durable home, gated (#1432).
+   *
+   * Settings → AI Assistant renders the section on `hasIntegration` — an
+   * `integrations.json` entry with `kind === "claude-code"`. Reaching "done"
+   * implies the persist returned 200, so `picked` IS that flag one screen
+   * earlier. Unconditional, the sentence would be false for an `other-mcp`-only
+   * apply, which reaches this same block: it would point at a section that
+   * never renders.
+   */
+  it("points at Settings only when a Claude Code entry will be there", async () => {
+    wizardStub.channelRegistered = false;
+    const { container: withCode } = mountDone([pickedCode()], [applied("claude-code-1")]);
+    await tick();
+    expect(q(withCode, "integration-wizard-settings-pointer")).toBeTruthy();
+    expect(
+      (q(withCode, "integration-wizard-settings-pointer")?.textContent ?? "").replace(/\s+/g, " "),
+    ).toContain("AI Assistant");
+    cleanup();
+
+    wizardStub.channelRegistered = false;
+    const { container: otherOnly } = mountDone(
+      [
+        {
+          id: "other-1",
+          config: {
+            kind: "other-mcp",
+            id: "other-1",
+            label: "Some MCP client",
+            configPath: "/home/u/.other.json",
+            transport: "http",
+            url: "http://127.0.0.1:3479/mcp",
+          },
+          hasStoredSecret: false,
+          keychainUnavailable: false,
+        },
+      ],
+      [applied("other-1")],
+    );
+    await tick();
+    expect(q(otherOnly, "integration-wizard-settings-pointer")).toBeNull();
   });
 
   it("does not carry a copy status through a retry either", async () => {
