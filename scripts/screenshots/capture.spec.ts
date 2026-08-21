@@ -973,11 +973,59 @@ test("13-setup-wizard", async ({ page }) => {
   // first-run wizard would look like an unexplained timeout. The manual reopen
   // entry point is deterministic and leaves first-run state alone.
   //
-  // PRIVACY: this shot renders the real resolved config path for every client
-  // found on the capture machine, account name included. `redactAccountName`
-  // below handles it by construction and the assertion after it proves the
-  // redaction landed — do not downgrade either into a note asking a human to
-  // check, which is what this step used to rely on.
+  // PRIVACY: this shot has always rendered the capture machine's OWN config --
+  // `detectTargets` reads `os.homedir()` directly, so it is not bounded by
+  // `TANDEM_APP_DATA_DIR`, and every detected client's resolved path (account
+  // name included) landed in the PNG. That exposure predates #1422; the
+  // machine-dependence was the point of `redactAccountName` and of the
+  // assertion after it, which is a text-substitution pass over whatever
+  // happened to be on screen.
+  //
+  // #1422 is the occasion for fixing it properly, not the cause: once the card
+  // surfaces `EntryValidation.reason`, a broken entry in the capture machine's
+  // own `~/.claude.json` would put a second machine-dependent string on screen,
+  // which a redaction pass keyed on the account name would not catch at all.
+  // Route-stubbing `GET /api/integrations/existing` removes the whole class at
+  // the source: the wizard renders a fixed fixture instead of this machine's
+  // real config, on this machine and any other that ever runs this capture.
+  // `redactAccountName` and the assertion after it stay on as defense in depth
+  // for anything ELSE in the settings modal that might echo a real path -- do
+  // not downgrade either into a note asking a human to check, which is what
+  // this step relied on before the stub existed.
+  await page.route("**/api/integrations/existing", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          installs: [
+            {
+              target: {
+                label: "Claude Code",
+                configPath: "/Users/you/.claude.json",
+                kind: "claude-code",
+              },
+              status: "ok",
+              tandemEntry: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+              tandemValidation: { status: "valid" },
+            },
+            {
+              target: {
+                label: "Claude Desktop",
+                configPath:
+                  "/Users/you/Library/Application Support/Claude/claude_desktop_config.json",
+                kind: "claude-desktop",
+              },
+              status: "missing",
+            },
+          ],
+        }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+
   await openWelcome();
   await page.goto("/");
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
@@ -988,9 +1036,18 @@ test("13-setup-wizard", async ({ page }) => {
 
   const wizard = page.getByTestId("integration-wizard");
   await expect(wizard).toBeVisible({ timeout: 10_000 });
-  await expect(page.locator("[data-testid^='integration-wizard-card-']").first()).toBeVisible({
-    timeout: 10_000,
-  });
+  const cards = page.locator("[data-testid^='integration-wizard-card-']");
+  await expect(cards.first()).toBeVisible({ timeout: 10_000 });
+  // Pin the fixture's two status lines. Belt-and-suspenders alongside the
+  // stub above: if a future change to the card's status derivation ever
+  // widens what renders here, this fails loudly instead of silently shipping
+  // whatever the fixture happened to produce.
+  await expect(page.locator(".itc-status").nth(0)).toHaveText(
+    "Already connected — we'll refresh it",
+  );
+  await expect(page.locator(".itc-status").nth(1)).toHaveText(
+    "Ready to connect (settings file will be created)",
+  );
   await page.waitForTimeout(400);
 
   const plan = await redactAccountName(page);
