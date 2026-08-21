@@ -39,7 +39,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
-import { DEFAULT_MCP_PORT, TUTORIAL_ANNOTATION_PREFIX } from "../../src/shared/constants";
+import { TUTORIAL_ANNOTATION_PREFIX } from "../../src/shared/constants";
 import {
   cleanupAllOpenDocuments,
   McpTestClient,
@@ -47,6 +47,12 @@ import {
   setRailVisible,
   switchToAnnotationsTab,
 } from "../../tests/e2e/helpers";
+import { E2E_MCP_PORT } from "../test-ports";
+import {
+  type AccountRedactionPlan,
+  findAccountPathLeaks,
+  planAccountRedaction,
+} from "./redact-account";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -392,7 +398,8 @@ async function dismissReadOnlyBanner(page: Page): Promise<void> {
 }
 
 /**
- * Replace this machine's account name with `you` everywhere it is rendered.
+ * Replace this machine's account name with `you` wherever a rendered path
+ * carries it.
  *
  * The wizard prints the real resolved config path for every client it finds --
  * the home-directory Claude Code settings file and three more, each carrying the
@@ -401,33 +408,48 @@ async function dismissReadOnlyBanner(page: Page): Promise<void> {
  * for a human privacy check is not a control: it passes by default, and it
  * passes silently on the one run where nobody reads it.
  *
- * Redaction, not fabrication. The path shape, the drive, and every directory
- * that is actually part of the product's behaviour survive verbatim -- only the
- * account segment changes, and it changes to a placeholder that reads as one.
- * The screenshot still shows exactly which file Tandem is about to edit.
+ * The walk is body-wide on purpose and stayed that way through #1528: on
+ * loopback -- how a capture always runs -- `scrubExistingInstalls` does not
+ * scrub, so a raw `readFile` error with a path in it reaches `.itc-status` and
+ * `.iw-tech-text` too. What the shot renders is the viewport, not the wizard
+ * element, so the walk covers the viewport.
  *
- * Keyed off `os.homedir()` rather than a hardcoded name so this works on any
- * capture machine. No-ops when the basename is already generic, and refuses to
- * touch anything shorter than three characters -- a two-letter account name
- * appears as a substring of ordinary words and would corrupt the surrounding
- * copy. Slot 13's assertion then fails rather than shipping the shot, which is
- * the correct outcome: an unredactable name is a reason to stop, not to
- * publish.
+ * What changed in #1528 is the MATCH, not the scope: the old version replaced
+ * the bare account name as a substring of any text node, so a capture run under
+ * a `root` / `user` / `home` account rewrote ordinary UI copy. Rationale, the
+ * segment-anchoring rule and the boundary trade-offs are in
+ * `redact-account.ts`; it is a module so the rule is unit-testable without a
+ * browser (`tests/scripts/screenshot-redaction.test.ts`).
  */
-async function redactAccountName(page: Page): Promise<void> {
-  const account = path.basename(os.homedir());
-  if (!account || account.length < 3 || account.toLowerCase() === "you") return;
-  await page.evaluate((name) => {
+async function redactAccountName(page: Page): Promise<AccountRedactionPlan> {
+  const plan = planAccountRedaction(os.homedir());
+  // Returned, not swallowed: the caller's leak scan needs to know WHICH of the
+  // two non-redacting outcomes this was. `scan-only` still has to scan (the
+  // name is real, it just cannot be anchored); `none` must not (the account is
+  // already `you`, so every redacted path on the page would report).
+  if (plan.kind !== "redact") return plan;
+  // A Playwright evaluate callback is serialized to source and cannot reach
+  // module scope, so `redactHomePaths`'s one-line body is repeated here rather
+  // than imported. `String.replace` with a `g` regex resets `lastIndex` itself,
+  // so the shared instance is safe across nodes.
+  //
+  // Kept free of TypeScript-only syntax on purpose: the walk is the one half of
+  // the redaction that needs a DOM, and `tests/scripts/screenshot-redaction.test.ts`
+  // lifts this callback body out of this file verbatim and runs it against a
+  // happy-dom document. A type annotation or an `as` cast here would make that
+  // extraction fail (loudly — the test throws rather than skipping).
+  await page.evaluate((r) => {
+    const re = new RegExp(r.pattern, r.flags);
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    const hits: Text[] = [];
-    while (walker.nextNode()) {
-      const node = walker.currentNode as Text;
-      if (node.nodeValue?.includes(name)) hits.push(node);
-    }
+    const hits = [];
+    while (walker.nextNode()) hits.push(walker.currentNode);
     for (const node of hits) {
-      node.nodeValue = (node.nodeValue ?? "").split(name).join("you");
+      const before = node.nodeValue ?? "";
+      const after = before.replace(re, r.replacement);
+      if (after !== before) node.nodeValue = after;
     }
-  }, account);
+  }, plan.redaction);
+  return plan;
 }
 
 /** Load the app, wait for the editor + first annotation card, settle animations. */
@@ -609,7 +631,7 @@ test("04-toolbar-actions", async ({ page }) => {
   // tab is opened over the API from the page's own (loopback) context.
   const roPath = path.join(tmpDir, "reference-spec.md");
   fs.writeFileSync(roPath, "# Reference Spec\n\nRead-only reference material.\n");
-  const roRes = await page.request.post(`http://127.0.0.1:${DEFAULT_MCP_PORT}/api/open`, {
+  const roRes = await page.request.post(`http://127.0.0.1:${E2E_MCP_PORT}/api/open`, {
     data: { filePath: roPath.replace(/\\/g, "/"), readOnly: true },
   });
   if (!roRes.ok())
@@ -938,14 +960,32 @@ test("13-setup-wizard", async ({ page }) => {
   });
   await page.waitForTimeout(400);
 
-  await redactAccountName(page);
-  // Prove the redaction reached the DOM rather than trusting that it ran. The
-  // wizard is the one surface that prints a resolved path, so an empty match
-  // here would mean the paths moved out of text nodes -- a real finding, not a
-  // reason to ship the shot anyway.
-  const account = path.basename(os.homedir());
-  await expect(wizard).not.toContainText(account, { timeout: 5_000 });
-  await expect(page.locator(".itc-path").first()).toContainText("you");
+  const plan = await redactAccountName(page);
+  if (plan.kind === "redact") {
+    // Prove the redaction reached the DOM rather than trusting that it ran.
+    // `.itc-path` is the element that always prints a resolved path (the
+    // wizard's other path carriers -- `.itc-status`, `.iw-tech-text` -- only
+    // appear on an error), so an empty match here would mean the paths moved
+    // out of text nodes -- a real finding, not a reason to ship the shot
+    // anyway. Guarded because the other two outcomes rewrite nothing: on a
+    // machine whose account is already `you` there is nothing to prove, and on
+    // an unanchorable home directory the scan below is the whole control.
+    await expect(page.locator(".itc-path").first()).toContainText("you");
+  }
+  // And prove nothing leaked. This scans the whole rendered viewport -- what the
+  // shot actually captures, which is wider than the `wizard` element the old
+  // assertion checked -- for any path-shaped run of text that still carries the
+  // account name. Unlike a bare `not.toContainText` on the name, it cannot be
+  // satisfied by corrupting prose that merely uses the word -- which is exactly
+  // how #1528's over-replacement passed review. A hit is a reason to stop, not
+  // to publish.
+  //
+  // The plan goes in whole rather than a bare account name re-derived from the
+  // home directory: the scan needs the redaction's own parent prefix to avoid
+  // reporting its own output on a `/home/home` machine, and it needs `none` to
+  // mean "do not scan at all".
+  const leaks = findAccountPathLeaks(await page.locator("body").innerText(), plan);
+  expect(leaks, `account name survived in rendered path(s): ${leaks.join(", ")}`).toEqual([]);
 
   await page.screenshot({
     path: path.join(screenshotsDir, "13-setup-wizard.png"),

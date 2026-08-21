@@ -452,7 +452,9 @@ pub fn uninstall_tandem_plugin_from_workspace(
 /// `installed_plugins.json` entry.
 ///
 /// Used by `tandem rotate-token` after a successful rotation so that
-/// post-rotation Cowork sessions use the new token (security invariant §6).
+/// post-rotation Cowork sessions use the new token instead of 401ing against a
+/// token the server no longer accepts — a failure that is otherwise silent until
+/// the user next tries to use Cowork.
 ///
 /// Token is NEVER logged.
 pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
@@ -514,7 +516,7 @@ pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
 // ---------------------------------------------------------------------------
 
 /// Remove orphan `"Tandem Cowork*"` firewall rules left by a previous failed
-/// uninstall (security invariant §12). Returns the names of rules removed, or an
+/// uninstall. Returns the names of rules removed, or an
 /// empty vec on scan/remove failure.
 ///
 /// **Ordering contract (issue #1163):** on the enable path this MUST run *before*
@@ -525,7 +527,7 @@ pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
 /// leaving every enable with no allow rule. The stale-token half of the old
 /// combined reconcile is split into [`reconcile_stale_workspace_tokens`], which
 /// runs *after* a successful add so a fail-closed firewall add never reaches a
-/// workspace write (invariant §4).
+/// workspace write.
 pub fn reconcile_orphan_firewall_rules() -> Vec<String> {
     use crate::firewall;
 
@@ -558,9 +560,10 @@ pub fn reconcile_orphan_firewall_rules() -> Vec<String> {
 }
 
 /// Rewrite workspace plugin entries whose `env.TANDEM_AUTH_TOKEN` does not match
-/// the current token (security invariant §12). Returns the paths rewritten.
+/// the current token — a stale entry authenticates with a token the server has
+/// already rotated away from. Returns the paths rewritten.
 ///
-/// **Ordering contract (§4):** on the enable path this MUST run *after* a
+/// **Ordering contract:** on the enable path this MUST run *after* a
 /// successful `firewall::add_cowork_allow_rule`. A fail-closed firewall add must
 /// not be followed by any workspace write, so this is intentionally split from
 /// [`reconcile_orphan_firewall_rules`] (which runs before the add).
@@ -569,7 +572,7 @@ pub fn reconcile_stale_workspace_tokens(workspaces: &[PathBuf], current_token: &
     for ws_path in workspaces {
         // Write-time revalidation (#433): re-run the five-step path guard
         // before the per-workspace token rewrite. Per this function's ordering
-        // contract (§4), the caller has already run orphan firewall-rule cleanup
+        // contract above, the caller has already run orphan firewall-rule cleanup
         // and a successful firewall add before reaching here.
         let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
             Ok(p) => p,

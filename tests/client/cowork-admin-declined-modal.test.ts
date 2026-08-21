@@ -65,7 +65,9 @@ describe("CoworkAdminDeclinedModal visibility condition", () => {
 
 describe("CoworkAdminDeclinedModal retry action", () => {
   it("calls cowork_retry_admin_elevation with no extra args", async () => {
-    const invoke = vi.fn<InvokeFn>().mockResolvedValue({ ok: true } as unknown);
+    const invoke = vi
+      .fn<InvokeFn>()
+      .mockResolvedValue("Cowork enabled: 2 workspace(s) configured" as unknown);
     await coworkRetryAdminElevation(invoke as unknown as InvokeFn);
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith("cowork_retry_admin_elevation");

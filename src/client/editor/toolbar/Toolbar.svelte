@@ -9,7 +9,13 @@ import {
 } from "../../../shared/constants";
 import { withBrowser } from "../../../shared/origins";
 import { toPmPos } from "../../../shared/positions/types";
-import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
+import type {
+  Annotation,
+  AnnotationType,
+  HighlightColor,
+  TandemMode,
+  TandemNotification,
+} from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
 import { isMacPlatform } from "../../actions/keybindings";
 import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
@@ -81,6 +87,8 @@ interface Props {
    * not the hide gate.
    */
   tandemMode?: TandemMode;
+  /** Refused-link channel for the popup's format pill — see FormattingToolbar. */
+  onNotify?: (n: TandemNotification) => void;
 }
 
 let {
@@ -101,6 +109,7 @@ let {
   onToggleFormattingBar,
   reduceMotion = false,
   tandemMode = "tandem",
+  onNotify,
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
@@ -436,6 +445,25 @@ $effect(() => {
     pendingAffordanceFrame = 0;
     // A28: cancel pending dwell/entrance timers so they can't write $state into
     // an unmounted component (or clear `entering` into a later popup's entrance).
+    //
+    // The two bare `clearTimeout`s are NOT an oversight, and must not be
+    // "tidied" into the `clearDwell()` that wraps them. `clearDwell()` also
+    // resets `dwellSatisfied`, and this effect DEPENDS on `dwellSatisfied`:
+    // the `onSelectionUpdate()` call below runs synchronously during the
+    // effect, reaching the re-arm guard in `updateSelectionAffordance` that
+    // reads it. So the dwell timer firing — whose whole job is
+    // `dwellSatisfied = true` — invalidates this effect and re-runs it, and a
+    // teardown that reset the flag would set it straight back to false. The
+    // popup could then never appear at all: measured at 24 of 28 failures in
+    // `toolbar-redesign.spec.ts`.
+    //
+    // What the asymmetry costs is small and, as far as anyone has managed to
+    // reproduce, unreachable: the non-reactive `lastDwellFrom`/`lastDwellTo`
+    // survive into the next editor, so a replacement that mounted with the
+    // *same* non-collapsed range would fail that guard and never arm. Every
+    // real path self-heals first — a new editor mounts collapsed, and the
+    // `!next` branch of `updateSelectionAffordance` calls `clearDwell()` — which
+    // is why a tab switch mid-popup behaves correctly.
     clearTimeout(dwellTimer);
     clearTimeout(enteringTimer);
     cleanup();
@@ -868,7 +896,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
         <!-- Capsule 1: full mark/block control set (no Undo/Redo — those stay on
              the bar + Ctrl+Z/Y) + the mirrored Decorations control + bar-swap. -->
         <div class="pill-row tandem-floating-pill" data-testid="popup-format-row">
-          <FormattingToolbar {editor} variant="popup" />
+          <FormattingToolbar {editor} variant="popup" {onNotify} />
           {#if onUpdateDecorations}
             <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
             <!-- preventDefault on mousedown keeps the editor selection alive while
@@ -1385,6 +1413,19 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     transition:
       background 120ms,
       color 120ms;
+  }
+  /* Reduced motion: literal 120ms tweens with no --morph-* term, so the token
+     zeroing that flattens the A8 morph above leaves them running. Re-declare
+     `none` on the exact selector, once for the in-app
+     `body.tandem-reduce-motion` (class on <body>, so :global(...)) and once for
+     the OS pref — media half last, its specificity only ties. */
+  :global(body.tandem-reduce-motion) .composer-btn {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .composer-btn {
+      transition: none;
+    }
   }
   .composer-btn:disabled {
     cursor: not-allowed;

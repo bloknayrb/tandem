@@ -32,15 +32,15 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
  * `npm run test:e2e` runner cannot discover it, even if a future CI glob
  * change widens what the root config sweeps in.
  *
- * **Port precondition, now enforced**: this config spreads the root config, so
- * as of #1483 it also inherits its `globalSetup` — `scripts/e2e-guard.ts` —
- * which refuses the run if :3479 is held by anything whose `/api/info` storage
- * dir is not the isolated E2E one. Nothing may be running on those ports (a
- * `dev:server`, the installed desktop app) when you capture, and a capture that
- * aborts with "Refusing to run this Playwright suite…" is that guard saying so.
- * It used to be an unenforceable comment; the inheritance is free, and the
- * absolute `globalSetup` path in the root config is what makes it survive the
- * spread.
+ * **Ports**: the spread inherits #1492's reserved harness ports
+ * (`scripts/test-ports.ts`), so a running `dev:server` or desktop app on
+ * 3478/3479 no longer conflicts with a capture. It also inherits `globalSetup`
+ * — `scripts/e2e-guard.ts` (#1483), whose absolute path in the root config is
+ * what makes it survive the spread — so a capture aborting with "Refusing to
+ * run this Playwright suite…" is the guard identifying a foreign holder of the
+ * reserved MCP port, and one aborting with "…does NOT target the harness
+ * backend" is its served-client check catching a Vite launched without the
+ * harness env.
  *
  * The first-run wizard is unreachable here: the root config sets
  * `TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV=1` before `defineConfig` and the spread

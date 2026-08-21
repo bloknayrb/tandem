@@ -110,6 +110,20 @@ const { tandemMode, onModeChange }: Props = $props();
     z-index: 0;
     transition: transform 220ms var(--tandem-ease-out);
   }
+  /* Reduced motion: the thumb still positions correctly (transform is keyed to
+     the mode class) — only the slide is removed. Dual guard: the in-app
+     `body.tandem-reduce-motion` (class on <body>, so :global(...)) AND the OS
+     pref. Moved up here from a lone trailing block at the bottom of this style
+     element (#1530) so every guard sits immediately after the rule it guards;
+     nothing was dropped, only relocated. */
+  :global(body.tandem-reduce-motion) .thumb {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .thumb {
+      transition: none;
+    }
+  }
   .thumb.tandem {
     transform: translateX(100%);
   }
@@ -147,23 +161,25 @@ const { tandemMode, onModeChange }: Props = $props();
     z-index: 1;
     transition: color 140ms ease;
   }
+  /* Reduced motion: the segment label's colour crossfade is a literal 140ms tween
+     of its own — the .thumb guard above says nothing about it. Same dual guard,
+     on the full `.mode-toggle button` selector. */
+  :global(body.tandem-reduce-motion) .mode-toggle button {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mode-toggle button {
+      transition: none;
+    }
+  }
   .mode-toggle button:hover:not(.on) {
     color: var(--tandem-fg);
   }
   .mode-toggle button.on {
     color: var(--tandem-fg);
   }
-  /* Reduced motion: the thumb still positions correctly (transform is keyed to
-     the mode class) — only the slide is removed. Dual guard: OS pref AND the
-     in-app `body.tandem-reduce-motion` (class on <body>, so :global(...)). */
-  @media (prefers-reduced-motion: reduce) {
-    .thumb {
-      transition: none;
-    }
-  }
-  :global(body.tandem-reduce-motion) .thumb {
-    transition: none;
-  }
+  /* The .thumb reduced-motion guard that used to live here moved up next to the
+     .thumb rule itself, in the standard per-rule pair shape (#1530). */
   /* Not cosmetic — this is the ONLY selection indicator in forced-colors mode.
      Measured there: the thumb's background is forced to the same white as the
      track and its box-shadow to `none`, so the pill is invisible and the

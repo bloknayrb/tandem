@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
+import { PERF_MCP_PORT, PERF_WS_PORT } from "../../scripts/test-ports";
 import { CURRENT_SCHEMA_VERSION } from "../../src/client/hooks/useTandemSettings";
 import { MARGIN_TRACK_GEOMETRY } from "../../src/client/layout/editor-stage.svelte";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
@@ -135,7 +136,8 @@ async function documentText(mcp: McpTestClient, documentId: string): Promise<str
 
 test.describe("v1.0 performance gate", () => {
   test("50-page document: open, annotate, scroll", async ({ page }) => {
-    const mcp = new McpTestClient();
+    // The perf backend's own pair (#1492) — the helper's default is the E2E pair.
+    const mcp = new McpTestClient(`http://127.0.0.1:${PERF_MCP_PORT}/mcp`);
     await mcp.connect();
 
     try {
@@ -203,6 +205,19 @@ test.describe("v1.0 performance gate", () => {
       // --- Warm the app -----------------------------------------------------
       await mcp.callTool("tandem_open", { filePath: WARMUP_DOC });
       await page.goto("/");
+      // #1492: prove the SERVED client targets the perf backend BEFORE any
+      // UI-driven step. A stale dist/perf-client baked to the product ports
+      // would drive every fetch below into a real Tandem (loopback origin
+      // checks admit it) and fail confusingly here instead. This is the
+      // client-side twin of the e2e guard's Vite check — `vite preview` has
+      // no dev server to interrogate, so the page itself reports its ports
+      // via window.__TANDEM_PORTS__ (src/client/utils/backend-ports.ts).
+      const servedPorts = await page.evaluate(() => window.__TANDEM_PORTS__);
+      expect(
+        servedPorts,
+        "served client does not target the perf backend — rebuild with `npm run perf:gate` " +
+          "(scripts/perf-build.ts bakes dist/perf-client to the perf pair)",
+      ).toEqual({ ws: PERF_WS_PORT, mcp: PERF_MCP_PORT });
       await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 60_000 });
 
       // ======================================================================

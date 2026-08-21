@@ -574,6 +574,18 @@ $effect(() => subscribeAnnotationActions());
     opacity: 0.55;
     transition: opacity 140ms ease;
   }
+  /* The reveal ramp is hover feedback — under reduced motion the button just
+     appears. Both halves repeat the target selector verbatim, `:global()` and
+     all: the guard has to keep the same specificity to win on source order,
+     and the inner selector must stay global to keep piercing AnnotationCard. */
+  :global(body.tandem-reduce-motion) .margin-bubble :global([data-testid^="edit-btn-"]) {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .margin-bubble :global([data-testid^="edit-btn-"]) {
+      transition: none;
+    }
+  }
   .margin-bubble:hover :global([data-testid^="edit-btn-"]) {
     opacity: 1;
   }

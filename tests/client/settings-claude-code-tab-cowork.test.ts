@@ -43,7 +43,7 @@ vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => vi.fn()),
   coworkToggleIntegration: vi.fn(async () => ({ ok: true })),
-  coworkPreflightSubnet: vi.fn(async () => ({ status: "unknown" })),
+  coworkPreflightSubnet: vi.fn(async () => ({ status: "unavailable" })),
 }));
 
 import SettingsClaudeCodeTab from "../../src/client/components/settings-tabs/SettingsClaudeCodeTab.svelte";

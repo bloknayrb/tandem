@@ -150,12 +150,18 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   gaps)
 
 ### Banners
-- `banner-stack` — the measured wrapper around the four top-of-shell banners
-  (server-restart strip, updater, connection, license). Its bottom edge is
-  published as `--tandem-banner-stack-bottom` so the fixed formatting-bar pill
-  clears it; the selector is the hook the geometry E2E uses to inject a probe.
+- `banner-stack` — the measured wrapper around the five top-of-shell banners
+  (server-restart strip, pending-update, updater, connection, license). Its bottom
+  edge is published as `--tandem-banner-stack-bottom` so the fixed formatting-bar
+  pill clears it; the selector is the hook the geometry E2E uses to inject a probe.
 - `connection-banner`, `connection-banner-retry`
 - `updater-banner`, `updater-banner-{install,dismiss,visible}`
+- `pending-update-banner-live`, `pending-update-banner`,
+  `pending-update-banner-{check,dismiss}` (#1118 — "your update may not have
+  completed"). `pending-update-banner-live` is the **persistent** live-region host
+  and is present even when the banner is not: a live region created in the same
+  commit as its content is commonly never announced (#1431). Do not fold it inside
+  the `{#if}`; `tests/client/pending-update-banner.test.ts` pins that.
 - `review-only-banner`, `review-only-dismiss`,
   `convert-to-markdown-btn`
 - `fidelity-report-banner`, `fidelity-report-details-toggle`,
@@ -302,12 +308,24 @@ site.
   `cowork-preflight-{blocked,retry-btn}`. The retry button **replaces** the
   enable-confirm button while detection is known-failing, so a spec asserting
   `*-enable-confirm-btn` visible must first establish the probe did not block.
+- Broken-probe line (#1436): `cowork-preflight-failed`,
+  `cowork-onboarding-preflight-failed` and
+  `integration-wizard-cowork-preflight-failed`. Distinct from `-blocked`
+  because the two say opposite things: `-blocked` reports a detection failure
+  we watched happen and so **replaces** Enable with a retry, while `-failed`
+  reports that the check never ran and therefore leaves Enable exactly where it
+  was — a spec asserting `*-preflight-failed` must find no `*-retry-btn`. The
+  no-probe case renders neither — but note every surface that probes is already
+  gated on `isTauriRuntime()` and `osSupported`, so in the shipped app that case
+  is effectively unreachable and `-failed` is the arm a real session lands on.
+  Absence of all three is still not evidence the probe passed.
 - Pre-flight live regions (#1376): `cowork-preflight-live`,
   `cowork-onboarding-preflight-live` and `integration-wizard-cowork-preflight-live`.
   The `role="status"` wrapper, mounted for the life of the confirm (the wizard's
   for the life of the sub-view) so a hint arriving later is announced rather than
   inserted silently with its region. The `-blocked` testids sit INSIDE it, which
-  is why they still come and go; the wrapper never does. The wizard's carries
+  is why they still come and go; the wrapper never does — `-failed` sits there
+  for the same reason. The wizard's carries
   `display: contents` — its parent is a gapped flex column, so an empty box
   there would be a permanent gap; the other two parents are plain blocks.
   The remaining live regions that still had the pre-#1376 shape were swept in

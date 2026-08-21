@@ -81,6 +81,7 @@ import {
   isLoopbackRequest,
   type PeerRequest,
   scrubPathForCaller,
+  scrubUrlForCaller,
 } from "../mcp/routes/_shared.js";
 import {
   type ApplyOps,
@@ -281,10 +282,14 @@ export function registerIntegrationsRoutes(
  *   this machine — the one case the other two do not cover.
  *
  * The cost of making it unconditional is nil for the shipped client: `API_BASE`
- * is a hardcoded `http://127.0.0.1:3479` (`src/client/utils/fileUpload.ts`), so
- * a browser served from a LAN address resolves it to the *viewer's* machine and
- * has never been able to reach `/api` remotely. If remote `/api` access ever
- * becomes a goal, that constant is the thing to change first, deliberately.
+ * (`src/client/utils/fileUpload.ts`) is `MCP_BASE_URL` from
+ * `src/client/utils/backend-ports.ts`, whose **host is the hardcoded literal
+ * `127.0.0.1`** — only the port is configurable, and only at build time, via a
+ * `VITE_TANDEM_MCP_PORT` no shipped build ever carries (#1492;
+ * `scripts/build-client.mjs` strips it). So a browser served from a LAN address
+ * still resolves it to the *viewer's* machine and has never been able to reach
+ * `/api` remotely. If remote `/api` access ever becomes a goal, that host
+ * literal is the thing to change first, deliberately.
  *
  * Scope: this governs the routes that call it — and since #1320 that is no
  * longer the same question as whether `/api` is loopback-only. That property now
@@ -399,10 +404,22 @@ function scrubExistingInstalls(req: PeerRequest, installs: ExistingMcpInstall[])
 }
 
 /**
- * Basename `command` and every `args` element of a surfaced MCP entry.
+ * Reduce every caller-visible field of a surfaced MCP entry: `command` and each
+ * `args` element to a basename, `url` to its scheme + authority, `type` to the
+ * one literal the interface declares, and a non-string `args` element to a
+ * fixed placeholder. Every key below is both allowlisted AND type-checked, and
+ * that pairing is the point — see the last paragraph.
  *
- * `url` is deliberately left alone: it is a loopback http URL by construction
- * and carries no filesystem layout.
+ * `url` used to be passed through on the premise that it "is a loopback http URL
+ * by construction". It is not, and the next paragraph of this very comment is
+ * what refuted it (#1558): `entry` is whatever `extractEntry` CAST out of the
+ * user's config file, so `url` is arbitrary content — an entry reading
+ * `http://user:s3cr3t@example.internal/mcp` is exactly the shape that gets
+ * flagged `invalid-url`, and it was served with its userinfo intact. "By
+ * construction" describes entries Tandem WRITES (`buildMcpEntries`); this
+ * function surfaces entries it READS. The asymmetry was the sharp part:
+ * `scrubValidation` below already replaces the `reason`, which embeds the same
+ * string, while the raw url travelled in the field beside it.
  *
  * Rebuilt from an explicit field list rather than `{...entry, command, args}`,
  * because `entry` is not a validated `McpEntry` — `extractEntry` casts whatever
@@ -411,19 +428,57 @@ function scrubExistingInstalls(req: PeerRequest, installs: ExistingMcpInstall[])
  * hand-added `cwd` is an absolute path, and `env`/`headers` would come back the
  * day `extractEntry` stops stripping them). An allowlist cannot regress that
  * way; the four keys below are the whole of what any consumer reads.
+ *
+ * AN ALLOWLIST ONLY HELPS WHEN EVERY ALLOWLISTED KEY IS ALSO TYPE-CHECKED.
+ * `type` is the proof, and it was found in review of this very fix: the list
+ * had always been four keys, but `type` was copied on an `!== undefined` test
+ * alone, so `{ type: { cwd: "/home/alice/…", token: "…" } }` in the config file
+ * crossed to a LAN caller verbatim — the same disclosure as `url`, through a key
+ * the allowlist had "covered" since #1294. The interface declares one literal
+ * for it, and the only reader of it anywhere in `src/` is `validateTandemEntry`,
+ * which tests it for that same literal — so the emitted value is narrowed to it
+ * rather than merely proven to be a string. Any key added here needs the same
+ * treatment: an `in` or `!== undefined` guard proves a key exists, never what it
+ * holds.
  */
 function scrubMcpEntry(req: PeerRequest, entry: McpEntry): McpEntry {
   return {
-    ...(entry.type === undefined ? {} : { type: entry.type }),
-    ...(entry.url === undefined ? {} : { url: entry.url }),
+    ...(entry.type === "http" ? { type: "http" as const } : {}),
+    ...(typeof entry.url === "string" ? urlField(scrubUrlForCaller(req, entry.url)) : {}),
     ...(typeof entry.command === "string"
       ? { command: scrubPathForCaller(req, entry.command) }
       : {}),
     ...(Array.isArray(entry.args)
-      ? { args: entry.args.map((a) => (typeof a === "string" ? scrubPathForCaller(req, a) : a)) }
+      ? {
+          args: entry.args.map((a) =>
+            typeof a === "string" ? scrubPathForCaller(req, a) : NON_STRING_ARG,
+          ),
+        }
       : {}),
   };
 }
+
+/** `{ url }`, or nothing at all when the scrub had no authority to emit. */
+function urlField(url: string | undefined): { url?: string } {
+  return url === undefined ? {} : { url };
+}
+
+/**
+ * Stand-in for a non-string `args` element, which `extractEntry`'s cast permits
+ * (a number, an object embedding paths) and which therefore must not be
+ * serialized as-is any more than `url` may be.
+ *
+ * Substituted rather than dropped, so the emitted array keeps the length of the
+ * one in the config file. Nothing in `src/` renders an argument count today, and
+ * every reader of `args` that exists is a shape check comparing its length to an
+ * expected arity — all of them server-side, on the unscrubbed entry. The
+ * preservation is therefore for whatever reads the RESPONSE: dropping an element
+ * would hand a consumer that counts arguments an undercount, a number that is
+ * WRONG rather than one that is withheld, on the one surface this scrub exists
+ * to make honest. Separator-free, so it is inert under `crossBasename` if a
+ * future caller routes it through the path scrub.
+ */
+const NON_STRING_ARG = "[non-string]";
 
 /** Path-free replacement for an {@link EntryValidation} reason. */
 function scrubValidation(v: EntryValidation): EntryValidation {
@@ -458,6 +513,20 @@ function makeGetIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
       // claude-desktop entry carries `configPath` (and optionally
       // `workingDirectory`) as an AbsolutePath, and this handler returned the
       // stored file verbatim through a discarded `_req`.
+      //
+      // #1558: the rewrites below sit on a SPREAD, so a field nobody listed
+      // rides out whole — which is how `url` did. `LoopbackUrl` constrains only
+      // protocol/username/password/hostname, never path or query, so
+      // `http://127.0.0.1:3479/mcp?token=SEKRIT` validates on the way in,
+      // persists, and reaches a LAN peer verbatim. It gets the same authority
+      // reduction as its twin on /existing; fixing one door and not the other
+      // would leave the class half-open.
+      //
+      // `nodeBinary` joins them for the same reason `configPath` did: it is
+      // caller-supplied through POST /api/integrations, its schema is a bare
+      // `z.string().min(1)` rather than `AbsolutePath`, and `isValidNodeBinary`
+      // treats it as a path. `crossBasename` is a no-op on the bare-word forms
+      // ("node", "npx"), so basenaming is safe for both shapes.
       if (isLoopbackRequest(req)) {
         res.json(file);
         return;
@@ -471,6 +540,19 @@ function makeGetIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
             : {}),
           ...("workingDirectory" in entry && typeof entry.workingDirectory === "string"
             ? { workingDirectory: scrubPathForCaller(req, entry.workingDirectory) }
+            : {}),
+          ...("nodeBinary" in entry && typeof entry.nodeBinary === "string"
+            ? { nodeBinary: scrubPathForCaller(req, entry.nodeBinary) }
+            : {}),
+          // NOT `urlField` here: this branch sits on a spread that has ALREADY
+          // placed `url`, and an empty object cannot delete a key. Assigning the
+          // key unconditionally is what makes an undefined scrub result drop the
+          // field — `JSON.stringify` omits undefined-valued keys. (`store.read`
+          // validates through `IntegrationsFileSchema`, so a persisted `url` is
+          // a parseable `LoopbackUrl` and undefined should not arise; that is a
+          // reason to keep the branch correct, not a reason to skip it.)
+          ...("url" in entry && typeof entry.url === "string"
+            ? { url: scrubUrlForCaller(req, entry.url) }
             : {}),
         })),
       });

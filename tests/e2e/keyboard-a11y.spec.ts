@@ -236,3 +236,63 @@ test("brand menu returns focus to its trigger when dismissed from outside", asyn
   expect(parked, "focus was stranded on <body> after an outside dismiss").toBe(false);
   expect(await focusId(page)).toBe("titlebar-brand-menu");
 });
+
+// ---------------------------------------------------------------------------
+// Selected-ness of the rail's panel switcher (#1452)
+// ---------------------------------------------------------------------------
+
+/**
+ * Which rail panel you are on was conveyed by an `on` class and nothing else, so
+ * a screen reader announced two identically-shaped buttons. `aria-current` is the
+ * signal; this asserts it TRACKS the selection rather than merely existing.
+ *
+ * Both halves are load-bearing and neither implies the other: a hard-coded
+ * attribute passes the "active tab has it" check forever, and an attribute that
+ * is never set passes the "inactive tab lacks it" check forever. Asserting the
+ * pair on both tabs, before and after a switch, is what pins the binding.
+ *
+ * This deliberately does NOT assert `role="tab"`. The switcher follows the
+ * Settings sidebar's plain-button + `aria-current` shape; adopting the APG tabs
+ * pattern would oblige a roving tabindex, which is a keyboard behaviour change.
+ * If that is ever adopted, this test SHOULD fail and be rewritten — it is
+ * pinning the current contract, not forbidding a better one.
+ */
+test("the rail's panel switcher exposes which panel is selected", async ({ page }) => {
+  await boot(page);
+
+  const annotations = page.locator("[data-testid='annotations-tab']");
+  const chat = page.locator("[data-testid='chat-tab']");
+
+  // Three-panel layout renders both panels side by side with static headers and
+  // no tab buttons at all (see `switchToAnnotationsTab` in helpers.ts). Skip
+  // rather than fail, so a layout-mode default change does not read as an a11y
+  // regression.
+  if ((await annotations.count()) === 0) {
+    test.skip(true, "tabbed rail layout is not active; there is no switcher to assert on");
+  }
+
+  await expect(annotations).toBeVisible({ timeout: 5_000 });
+  await expect(chat).toBeVisible({ timeout: 5_000 });
+
+  // Which tab starts active follows the user's `primaryTab` setting, so this
+  // asserts the INVARIANT (exactly one is marked) rather than naming a winner.
+  // Both failure modes it catches are real: nothing marked leaves a screen
+  // reader with no selection at all, and both marked is worse than neither.
+  const marked = async () =>
+    await page
+      .locator(
+        "[data-testid='annotations-tab'][aria-current], [data-testid='chat-tab'][aria-current]",
+      )
+      .count();
+  expect(await marked(), "exactly one rail tab should be marked current").toBe(1);
+
+  await chat.click();
+  await expect(page.locator("[data-testid='chat-panel']")).toBeVisible({ timeout: 5_000 });
+  await expect(chat).toHaveAttribute("aria-current", "page");
+  await expect(annotations).not.toHaveAttribute("aria-current", /.*/);
+
+  // And back — a one-way binding would survive everything above.
+  await annotations.click();
+  await expect(annotations).toHaveAttribute("aria-current", "page");
+  await expect(chat).not.toHaveAttribute("aria-current", /.*/);
+});

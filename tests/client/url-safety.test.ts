@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  isRenderableLinkHref,
+  isRenderableLinkScheme,
   isSafeExternalHref,
   isSchemelessPathHref,
   SAFE_EXTERNAL_PREFIXES,
@@ -204,6 +206,195 @@ describe("isSchemelessPathHref", () => {
   it("rejects null and undefined", () => {
     expect(isSchemelessPathHref(null)).toBe(false);
     expect(isSchemelessPathHref(undefined)).toBe(false);
+  });
+});
+
+describe("isRenderableLinkHref (the render-time veto, #1420)", () => {
+  // A UNIT PIN, not before/after proof: the observable render behaviour is
+  // asserted in `link-target-internal.test.ts`, which derives its corpus from
+  // `new URL()` rather than from this predicate. What lives here is the WHY —
+  // the three rows a future "simplify" would get wrong.
+
+  it.each([
+    "/\\evil.com/x.md",
+    "\\/evil.com/x.md",
+    "\\\\evil.com\\share\\x.md",
+    "\\\\fileserver\\docs\\spec.docx",
+    "\\\\?\\C:\\x.md",
+  ])("rejects the backslash-bearing authority %j", (href) => {
+    expect(isRenderableLinkHref(href)).toBe(false);
+  });
+
+  it.each([
+    " /\\evil.com/x.md",
+    "  //evil.com/x.md",
+    " \\\\evil.com\\share\\x.md",
+    " https://evil.com/x.md",
+  ])("rejects %j — leading whitespace, the anchored-check bypass", (href) => {
+    // `rejectUnsafeWindowsPrefix` is anchored at index 0, so ONE leading space
+    // walked past it while Tiptap's `defaultValidate` still returned true and
+    // the browser still resolved the href to `http://evil.com/x.md`. Reachable
+    // from file import, not just paste: remark keeps the space inside a
+    // pointy-bracket destination and `mdast-ydoc.ts` writes `node.url` verbatim.
+    expect(isRenderableLinkHref(href)).toBe(false);
+  });
+
+  it.each([
+    NUL,
+    US,
+    ch(0x0b),
+    "\t",
+    "\n",
+  ])("rejects a control character anywhere in the href", (control) => {
+    expect(isRenderableLinkHref(`https://example.com/${control}x`)).toBe(false);
+    expect(isRenderableLinkHref(`${control}//evil.com/x.md`)).toBe(false);
+  });
+
+  it("accepts an INTERIOR space — the reason URL_HOSTILE_CHARS is not reused here", () => {
+    // `URL_HOSTILE_CHARS` contains U+0020. This veto applies to every href
+    // including allowlisted external ones, so reusing that set would blank a
+    // legitimate `[x](<a b.md>)` or an imported `.docx` hyperlink.
+    expect(isRenderableLinkHref("https://example.com/a b.md")).toBe(true);
+    expect(isRenderableLinkHref("my file.md")).toBe(true);
+  });
+
+  it("accepts `//` in its exact untrimmed spelling — a deliberate carve-out", () => {
+    // `//` is a FOURTH cross-host spelling, kept live because it is in
+    // SAFE_EXTERNAL_PREFIXES and `openHref` hands it to `window.open` like any
+    // `https://` URL. The whitespace-prefixed variant is NOT the same thing:
+    // `isSafeExternalHref` does not trim, so the click gate would treat it as a
+    // relative path while the browser treats it as an external navigation.
+    expect(isRenderableLinkHref("//example.com/x")).toBe(true);
+    expect(isRenderableLinkHref(" //example.com/x")).toBe(false);
+  });
+
+  it.each([
+    "docs/spec.md",
+    "docs\\spec.md",
+    "./spec.md",
+    "../docs/spec.md",
+    "/abs/spec.md",
+    "notes.md",
+    "#frag",
+    "https://example.com",
+    "HTTPS://example.com",
+    "mailto:a@b.c",
+    "ftp://example.com/x",
+  ])("accepts the legitimate href %j", (href) => {
+    // `docs\spec.md` is the row that catches "just reject every backslash":
+    // Windows-authored markdown produces it and `relative-link.ts` resolves it.
+    expect(isRenderableLinkHref(href)).toBe(true);
+  });
+
+  it("rejects null, undefined and empty", () => {
+    expect(isRenderableLinkHref(null)).toBe(false);
+    expect(isRenderableLinkHref(undefined)).toBe(false);
+    expect(isRenderableLinkHref("")).toBe(false);
+  });
+
+  it.each([
+    "http:/\\evil.com/x",
+    "https:/evil.com/x",
+    "https:/\\evil.com/x",
+    "http:\\\\evil.com\\x",
+    "HTTP:/\\evil.com/x",
+    "ftp:/\\evil.com/x",
+  ])("rejects %j — a scheme moves the authority past the anchored check", (href) => {
+    // `rejectUnsafeWindowsPrefix` slices [0,8) and anchors, so it sees
+    // `"http:\\e"` and passes. These resolve cross-host, and
+    // `isSafeExternalHref` says false for every one — so `target="_blank"` is
+    // stripped and the click gate treats them as document-relative paths.
+    expect(isRenderableLinkHref(href)).toBe(false);
+  });
+
+  it("does not over-reach: a sanctioned external spelling stays live", () => {
+    // `https:///evil.com/x` starts with `https://`, so `isSafeExternalHref`
+    // accepts it and `openHref` opens it via `window.open` — an ordinary
+    // external link, off-origin by design.
+    expect(isRenderableLinkHref("https:///evil.com/x")).toBe(true);
+    expect(isRenderableLinkHref("https://example.com/a b.md")).toBe(true);
+  });
+
+  it("judges schemes ONLY in the special-external family — the rest is #1537", () => {
+    // Read this row carefully: it is NOT "schemes are handled elsewhere".
+    // `javascript:` is the one scheme where Tiptap agrees, so demonstrating the
+    // division of labour with it alone reads far more reassuring than the truth.
+    expect(isRenderableLinkHref("javascript:alert(1)")).toBe(true);
+    expect(isSchemelessPathHref("javascript:alert(1)")).toBe(false);
+
+    // The truth: DOMPurify's fallback alternative matches a hyphen, so a
+    // hyphenated scheme satisfies `defaultValidate`, the `||` short-circuits,
+    // and this veto does not subtract it either — so on the #1420 branch alone
+    // these rendered LIVE, with the href verbatim. `search-ms:` is an NTLM/WebDAV-share spelling reaching
+    // the OS from a right-click "Open link in new tab", in a codebase whose
+    // `rejectUnsafeWindowsPrefix` exists to prevent exactly that class.
+    // CLOSED by #1537, which ANDs `isRenderableLinkScheme` alongside this veto
+    // and does pay that cost: `tel:`/`sms:`/`xmpp:`/`ftps:` no longer render.
+    // The rows below are still TRUE of THIS predicate — that is the point of
+    // keeping them — but they are no longer live at the `isAllowedUri` site.
+    // `link-scheme-allowlist.test.ts` holds the composition pins.
+    for (const href of [
+      "ms-msdt:/id",
+      "ms-appinstaller:?source=x",
+      "search-ms:crumb=location:\\\\evil.com\\share",
+      "itms-services://?url=http://evil",
+      "tel:+15551234",
+    ]) {
+      expect(isRenderableLinkHref(href), `${href} is NOT subtracted by this veto`).toBe(true);
+    }
+  });
+});
+
+/**
+ * DOCUMENTATION CORPUS for the render-time scheme allowlist (#1537).
+ *
+ * **The load-bearing pins are in `tests/client/link-scheme-allowlist.test.ts`,
+ * not here.** This file was rewritten by #1545 (since merged), whose own
+ * predicate returns `true` for every row below and whose tests assert exactly
+ * that — so a merge resolution taking that branch's side would silently delete
+ * these. They are kept as the readable corpus beside the other href predicates;
+ * the canary that must survive lives at a path with no merge base.
+ */
+describe("isRenderableLinkScheme (documentation corpus — see link-scheme-allowlist.test.ts)", () => {
+  it.each([
+    "ms-msdt:/id",
+    "ms-appinstaller:?source=http://evil/x.msix",
+    "search-ms:crumb=location:\\\\evil.com\\share",
+    "view-source:http://evil",
+    "itms-services://?url=http://evil",
+    "tel:+15551234",
+    "ftps://example.com/x",
+  ])("refuses %j, which Tiptap's defaultValidate accepts", (href) => {
+    expect(isRenderableLinkScheme(href)).toBe(false);
+  });
+
+  it.each(SAFE_EXTERNAL_PREFIXES)("keeps the allowlisted prefix %s", (prefix) => {
+    expect(isRenderableLinkScheme(`${prefix}example.com/x`)).toBe(true);
+  });
+
+  it.each([
+    "2024:plan.md",
+    ".hidden:note.md",
+    "12:30 notes.md",
+    "user@host:x",
+    "ms_msdt:x",
+  ])("keeps %j — a colon is not a scheme, and these opened files", (href) => {
+    // The rule cuts both ways. An earlier draft used `hasSchemePrefix` (a `:`
+    // before the first `/`, `#` or `?`) as the scheme test, which called every
+    // row here scheme-bearing and blanked it — while each in fact resolves as a
+    // relative path under the real URL parser, and the ones naming a linkable
+    // file reached `openServerPath`. Clause 2 is the WHATWG scheme grammar for
+    // exactly this reason.
+    expect(new URL(href, "http://localhost:5173/doc/a.md").protocol).toBe("http:");
+    expect(isRenderableLinkScheme(href)).toBe(true);
+  });
+
+  it("does not judge schemeless hrefs — that is the other predicates' half", () => {
+    // Contrast with `isSchemelessPathHref` directly above: that one rejects a
+    // backslash form, this one has no opinion about it. The union needs both.
+    expect(isRenderableLinkScheme("docs/spec.md")).toBe(true);
+    expect(isRenderableLinkScheme("/\\evil.com/x.md")).toBe(true);
+    expect(isSchemelessPathHref("/\\evil.com/x.md")).toBe(false);
   });
 });
 

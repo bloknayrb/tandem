@@ -50,7 +50,7 @@ async function seedRecents(page: import("@playwright/test").Page) {
 
 test("launcher opens with search, the New Scratchpad action, and Browse", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   await page.locator(OPEN_BTN).click();
@@ -65,7 +65,7 @@ test("launcher opens with search, the New Scratchpad action, and Browse", async 
 test("search filters recents and shows the no-match state", async ({ page }) => {
   await seedRecents(page);
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   await page.locator(OPEN_BTN).click();
@@ -85,7 +85,7 @@ test("search filters recents and shows the no-match state", async ({ page }) => 
 
 test("New Scratchpad action creates a scratchpad tab", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   await page.locator(OPEN_BTN).click();
@@ -98,7 +98,7 @@ test("New Scratchpad action creates a scratchpad tab", async ({ page }) => {
 
 test("Escape dismisses the launcher", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   await page.locator(OPEN_BTN).click();
@@ -113,7 +113,7 @@ test("opens to the right instead of spilling off the left edge", async ({ page }
   // tab the `+` sits near the left edge. The menu (460px) would clip off-screen growing
   // left, so the morph must flip its anchor and grow RIGHT instead.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
   await page.locator(OPEN_BTN).click();
@@ -131,7 +131,7 @@ test("opens to the right instead of spilling off the left edge", async ({ page }
 test("Reopen last closed is hidden until a real-file tab is closed", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
-  await page.goto("http://127.0.0.1:5173");
+  await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample2.md" })).toBeVisible();
 
   // Nothing closed yet → the action is absent.

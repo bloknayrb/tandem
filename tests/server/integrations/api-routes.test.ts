@@ -296,6 +296,239 @@ describe("integrations API routes", () => {
       expect(JSON.stringify(res.body)).toContain(HOME_CONFIG);
     });
 
+    // #1558 — the `url` field is the fourth thing on these two responses that
+    // was not scrubbed. Its own docblock asserted it was "a loopback http URL
+    // by construction"; `extractEntry` casts whatever the user's config file
+    // held, so it is nothing of the sort.
+    const CREDENTIALED_URL = "http://user:s3cr3t@example.internal/mcp";
+
+    function depsWithCredentialedUrl(): IntegrationsRoutesDeps {
+      return {
+        ...deps,
+        readExisting: async () =>
+          [
+            {
+              target: { kind: "claude-code", label: "Claude Code", configPath: HOME_CONFIG },
+              status: "ok",
+              tandemEntry: { type: "http", url: CREDENTIALED_URL },
+              tandemValidation: {
+                status: "invalid-url",
+                reason: `url must be loopback http; got ${CREDENTIALED_URL}`,
+              },
+            },
+          ] satisfies ExistingMcpInstall[],
+      };
+    }
+
+    it("reduces a surfaced entry url to its authority for a LAN caller", async () => {
+      const app = makeAppWithRemoteAddress(depsWithCredentialedUrl(), "192.168.1.50");
+      const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
+      const body = JSON.stringify(res.body);
+
+      expect(res.status).toBe(200);
+      expect(body).not.toContain("s3cr3t");
+      expect(body).not.toContain(CREDENTIALED_URL);
+      // Positive control, per this suite's rule: an absence assertion alone
+      // also passes against a handler that 500s or returns `installs: []`.
+      // `toEqual` pins that the entry survived AND that the authority — the one
+      // part a caller can act on — is what came back. The canned `invalid-url`
+      // reason names no host, so this is the only remaining signal that the
+      // entry points off-box at all.
+      expect(res.body.installs[0].tandemEntry).toEqual({
+        type: "http",
+        url: "http://example.internal",
+      });
+      expect(res.body.installs[0].tandemValidation.status).toBe("invalid-url");
+    });
+
+    it("still returns the whole entry url to a loopback caller", async () => {
+      // Positive control on the same fixture. It also records the reason the
+      // scrub is per-caller rather than unconditional: `scrubValidation` runs
+      // only on the LAN branch, so a loopback caller receives the same string
+      // one field over regardless.
+      const app = makeAppWithRemoteAddress(depsWithCredentialedUrl(), "127.0.0.1");
+      const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
+      expect(res.body.installs[0].tandemEntry).toEqual({
+        type: "http",
+        url: CREDENTIALED_URL,
+      });
+      expect(JSON.stringify(res.body)).toContain(CREDENTIALED_URL);
+      // This line pins the ROUTE layer, not the helper. `scrubExistingInstalls`
+      // early-returns for a loopback caller, and that early return is the only
+      // thing keeping `scrubValidation` — which has no loopback check of its own
+      // — off a local response. Delete it and every other assertion in this file
+      // still passes, because the helpers all reduce correctly; only the raw
+      // `reason` shows that the whole install went through unscrubbed.
+      expect(res.body.installs[0].tandemValidation.reason).toBe(
+        `url must be loopback http; got ${CREDENTIALED_URL}`,
+      );
+    });
+
+    it("does not re-export an allowlisted key whose value was never type-checked", async () => {
+      // #1558, found in review of the fix above. `type` sat on the same
+      // four-key allowlist as `url`, but was copied on an `!== undefined` test
+      // alone — so an allowlisted key carried arbitrary cast content out to a
+      // LAN caller exactly as the un-allowlisted ones would have. An allowlist
+      // only helps when every key on it is also type-checked.
+      const app = makeAppWithRemoteAddress(
+        {
+          ...deps,
+          readExisting: async () => [
+            {
+              target: { kind: "claude-code", label: "Claude Code", configPath: HOME_CONFIG },
+              status: "ok",
+              tandemEntry: {
+                type: { cwd: "/home/alice/projects/acquisition", token: "SEKRIT" },
+                command: NODE_BIN,
+              },
+            } as unknown as ExistingMcpInstall,
+          ],
+        },
+        "192.168.1.50",
+      );
+      const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
+      const body = JSON.stringify(res.body);
+
+      expect(res.status).toBe(200);
+      expect(body).not.toContain("alice");
+      expect(body).not.toContain("SEKRIT");
+      // Positive control: the entry survives, minus the key that could not be
+      // narrowed to the one literal `McpEntry.type` declares.
+      expect(res.body.installs[0].tandemEntry).toEqual({ command: "node" });
+    });
+
+    it("keeps a well-formed type on a LAN response", async () => {
+      // The other half of the narrowing: `type: "http"` is what
+      // `validateTandemEntry` reads, so dropping it wholesale would be a scrub
+      // that removed a field no caller could have been harmed by.
+      const app = makeAppWithRemoteAddress(depsWithCredentialedUrl(), "192.168.1.50");
+      const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
+      expect(res.body.installs[0].tandemEntry.type).toBe("http");
+    });
+
+    it("preserves args arity when an element is not a string", async () => {
+      // `extractEntry` casts, so an `args` element can be any JSON value — and
+      // an object embedding paths must not be serialized as-is. Substituted,
+      // not dropped: the emitted array keeps the length of the one in the
+      // config file, so a consumer of this response that counts arguments is
+      // not handed an undercount — a number that is wrong rather than withheld.
+      const app = makeAppWithRemoteAddress(
+        {
+          ...deps,
+          readExisting: async () => [
+            {
+              target: { kind: "claude-code", label: "Claude Code", configPath: HOME_CONFIG },
+              status: "ok",
+              tandemEntry: {
+                command: NODE_BIN,
+                args: [CHANNEL_JS, { cwd: "/home/alice/projects/acquisition" }, 7],
+              },
+            } as unknown as ExistingMcpInstall,
+          ],
+        },
+        "192.168.1.50",
+      );
+      const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
+      expect(JSON.stringify(res.body)).not.toContain("alice");
+      expect(res.body.installs[0].tandemEntry).toEqual({
+        command: "node",
+        args: ["index.js", "[non-string]", "[non-string]"],
+      });
+      expect(res.body.installs[0].tandemEntry.args).toHaveLength(3);
+    });
+
+    it(`reduces url and basenames nodeBinary for a LAN caller on ${API_INTEGRATIONS}`, async () => {
+      // The sibling route. Its non-loopback branch is a SPREAD that rewrote
+      // only configPath and workingDirectory, so `url` rode out whole — and
+      // `LoopbackUrl` constrains protocol/username/password/hostname only, so a
+      // token in the query validates on the way in and persists.
+      await deps.store.write({
+        schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+        integrations: [
+          {
+            id: "cc",
+            label: "Claude Code",
+            kind: "claude-code",
+            configPath: HOME_CONFIG,
+            transport: "http",
+            url: "http://127.0.0.1:3479/mcp?token=SEKRIT",
+          },
+          {
+            id: "cd",
+            label: "Claude Desktop",
+            kind: "claude-desktop",
+            configPath: HOME_CONFIG,
+            transport: "stdio",
+            nodeBinary: NODE_BIN,
+          },
+        ],
+      });
+
+      const lan = await request(
+        makeAppWithRemoteAddress(deps, "192.168.1.50"),
+        "GET",
+        API_INTEGRATIONS,
+      );
+      expect(lan.status).toBe(200);
+      const lanBody = JSON.stringify(lan.body);
+      expect(lanBody).not.toContain("SEKRIT");
+      expect(lanBody).not.toContain("alice");
+      expect(lanBody).not.toContain(NODE_BIN);
+      // Positive assertions on the LAN response, not absence alone: the fields
+      // survive in reduced form, so the row still renders.
+      expect(lan.body.integrations[0].url).toBe("http://127.0.0.1:3479");
+      expect(lan.body.integrations[1].nodeBinary).toBe("node");
+
+      // Loopback control on the same fixture.
+      const local = await request(
+        makeAppWithRemoteAddress(deps, "127.0.0.1"),
+        "GET",
+        API_INTEGRATIONS,
+      );
+      expect(local.body.integrations[0].url).toBe("http://127.0.0.1:3479/mcp?token=SEKRIT");
+      expect(local.body.integrations[1].nodeBinary).toBe(NODE_BIN);
+    });
+
+    it(`drops an unparseable url rather than spreading it through on ${API_INTEGRATIONS}`, async () => {
+      // The asymmetry this route's comment records, pinned. `scrubMcpEntry`
+      // uses `urlField`, which contributes NOTHING when the scrub has no
+      // authority to emit; this handler cannot, because it sits on a spread
+      // that has already placed `url` and an empty object cannot delete a key.
+      // It assigns the key unconditionally instead and lets `JSON.stringify`
+      // drop the undefined. Swap in `urlField` here and the raw value comes
+      // straight back out of the spread.
+      //
+      // `store.read()` validates through `IntegrationsFileSchema`, so an
+      // unparseable url cannot reach this handler from disk today — hence the
+      // stubbed read. That is a reason to keep the branch correct, not a reason
+      // to leave it unexercised.
+      const stored = {
+        schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+        integrations: [
+          {
+            id: "cc",
+            label: "Claude Code",
+            kind: "claude-code",
+            configPath: HOME_CONFIG,
+            transport: "http",
+            url: "not a url at all: /home/alice/projects/acquisition",
+          },
+        ],
+      };
+      const app = makeAppWithRemoteAddress(
+        { ...deps, store: { ...deps.store, read: async () => stored } } as IntegrationsRoutesDeps,
+        "192.168.1.50",
+      );
+      const res = await request(app, "GET", API_INTEGRATIONS);
+
+      expect(res.status).toBe(200);
+      expect(JSON.stringify(res.body)).not.toContain("alice");
+      // Positive control: the entry survives, minus the field that could not be
+      // reduced to an authority.
+      expect(res.body.integrations[0].label).toBe("Claude Code");
+      expect(res.body.integrations[0]).not.toHaveProperty("url");
+    });
+
     it(`basenames configPath and workingDirectory for a LAN caller on ${API_INTEGRATIONS}`, async () => {
       // This route is the one #1294 names alongside /existing and that the
       // first pass at this work dropped: its handler took `_req` and returned
