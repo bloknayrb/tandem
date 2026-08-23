@@ -183,6 +183,34 @@ mod tests {
     use std::sync::{mpsc, Barrier};
     use std::thread;
 
+    /// Block until `n` followers have provably enlisted on the registered slot.
+    ///
+    /// The witness is the registered `Arc`'s strong count read *under `inner`'s
+    /// lock* — the same lock `enlist` clones under, which is what makes this an
+    /// ordering edge rather than a relaxed peek at a counter. Holders are the
+    /// registration itself, the leader's `LeaderGuard`, and one per enlisted
+    /// follower, so the target is `n + 2`. The count cannot fall while we spin:
+    /// a follower drops its clone only after `run` returns, and `run` cannot
+    /// return until the leader publishes, which is after this call.
+    ///
+    /// Panics on timeout. Its caller asserts on the panic payload, because this
+    /// unwinds the leader thread exactly like the deliberate panic does.
+    fn wait_for_followers<T: Clone>(flight: &SingleFlight<T>, n: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let holders = lock(&flight.inner).as_ref().map_or(0, Arc::strong_count);
+            if holders >= n + 2 {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "only {holders} of the expected {} slot holders enlisted",
+                n + 2
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     /// THE test that separates this design from the rejected blocking mutex:
     /// with a mutex the counter is N, with coalescing it is exactly 1.
     #[test]
@@ -253,6 +281,12 @@ mod tests {
     /// in 5s rather than the test hanging for two minutes.
     ///
     /// The leader's panic message on stderr is expected output, not a failure.
+    ///
+    /// The leader waits on [`wait_for_followers`] rather than on a sleep. A
+    /// follower that enlists *after* the leader's `Drop` clears the registration
+    /// is a late caller by design and correctly gets its own fresh run — so a
+    /// fixed 20ms-versus-100ms margin does not test the library, it tests the
+    /// scheduler, and a macOS CI runner won it with `Some(7)` on 2026-08-21.
     #[test]
     fn a_panicking_leader_does_not_wedge_followers() {
         let flight: Arc<SingleFlight<usize>> = Arc::new(SingleFlight::new());
@@ -265,7 +299,7 @@ mod tests {
             thread::spawn(move || {
                 flight.run(|| {
                     barrier.wait();
-                    thread::sleep(Duration::from_millis(100));
+                    wait_for_followers(&flight, 3);
                     panic!("deliberate leader panic");
                 })
             })
@@ -276,9 +310,9 @@ mod tests {
             let barrier = Arc::clone(&barrier);
             let tx = tx.clone();
             thread::spawn(move || {
+                // The barrier already proves the leader is registered: it
+                // enlists before `f` runs, and `f` is what waits here.
                 barrier.wait();
-                // Give the leader time to install itself before we enlist.
-                thread::sleep(Duration::from_millis(20));
                 let _ = tx.send(flight.run(|| 7usize));
             });
         }
@@ -290,7 +324,15 @@ mod tests {
                 .unwrap_or_else(|e| panic!("follower {i} never returned: {e}"));
             assert_eq!(got, None, "an abandoned flight must not hand back a value");
         }
-        assert!(leader.join().is_err(), "the leader's panic must still propagate");
+        // Assert on the payload, not merely that *a* panic happened: a
+        // `wait_for_followers` timeout also unwinds this thread, and a bare
+        // `is_err()` would read that failure as the deliberate panic and pass.
+        let payload = leader.join().expect_err("the leader's panic must still propagate");
+        assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some("deliberate leader panic"),
+            "the leader unwound for some other reason"
+        );
 
         // And the flight is usable again afterwards.
         let runs = AtomicUsize::new(0);
