@@ -104,6 +104,48 @@ Note the outcome (platforms covered, anything skipped, anything found) in a
 comment on the release's tracking issue or the release PR. A skipped platform
 is fine when stated; an unstated skip reads as "verified" and isn't.
 
+## What the v0.24.1 run settled
+
+v0.24.1 (2026-08-23). **§0 executed and passed in full. §4 was executed in part.
+§1 Windows, §2 macOS and §3 Linux-by-hand were NOT RUN — no operator at the
+hardware.** The full record is on PR #1595.
+
+**§1 is the consequential gap, and it is the same gap as v0.24.0's.** The updater
+row is the only check that can catch #1118's false-positive mode — the "Tandem may
+not have finished updating" banner firing after a *successful* update — and that
+banner is now two releases old without ever having been exercised against a real
+upgrade. v0.24.0's record already named this as the gap; carrying it a second time
+turns "not yet verified" into a standing condition, so it now has a dated tracked
+home in [#1596](https://github.com/bloknayrb/tandem/issues/1596) rather than a
+caveat repeated each release. If it misfires it reaches every
+user at once.
+
+§4 is partial, not passed: the global install was upgraded and `tandem doctor`
+returned no `[FAIL]` with `Global tandem-editor@0.24.1 matches this build`, but the
+"`tandem` starts the server and the editor loads" row was **not** run — a v0.24.0
+instance held 3478/3479 and killing a live port holder was not worth the row.
+
+Three things this run established:
+
+- **§0's green summary is not the same as §0's evidence, and two of its rows only
+  look checked.** The macOS arm64 launch-smoke row was confirmed from the step's own
+  output (`ok: our sidecar booted + /health returned status=ok`) rather than from the
+  job's overall conclusion, and the Linux container row from `RESULT: PASS` on both
+  images **with no emitted `ENVIRONMENT` warning** — the fault mode where the mirror
+  is unreachable, the package is never evaluated, and the step still reports success.
+  Reading the conclusion instead of the output would have passed both rows either way.
+- **`tauri-webdriver.yml` is confirmed still disabled by the absence of a run**, not
+  by reading the workflow: no run exists for `v0.24.1`, the last being v0.20.1. That
+  is the only check the box's wording actually permits, and the distinction matters
+  because a re-enabled workflow that then fails would look identical from the file.
+- **A red macOS `rust-test` leg preceded this cut and was a test defect, not a
+  product one.** `single_flight::tests::a_panicking_leader_does_not_wedge_followers`
+  co-ordinated four threads with a fixed sleep; a macOS runner descheduled a follower
+  past the leader's `Drop`, so it correctly started its own flight and returned a
+  value the test forbids. Neutering the fix survives 15 of 15 runs on Windows — the
+  control cannot discriminate there, which is why only macOS ever saw it. Injecting
+  the delay the runner imposed reproduced it 5 of 5 and the fix passed 8 of 8 (#1594).
+
 ## What the v0.24.0 run settled
 
 v0.24.0 (2026-08-21). §0 and §4 executed and passed on Windows 11 Pro (26200);
