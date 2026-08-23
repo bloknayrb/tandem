@@ -242,10 +242,13 @@ Mechanism, ops and failure modes: [docs/licensing-explained.md](docs/licensing-e
 
 ## Status
 
-**Shipped: v0.24.0** (2026-08-21). Release history is [CHANGELOG.md](CHANGELOG.md); remaining
+**Shipped: v0.24.1** (2026-08-23). Release history is [CHANGELOG.md](CHANGELOG.md); remaining
 v1.0 work is [docs/roadmap.md](docs/roadmap.md#active--toward-v10); what the last smoke run
-settled is in [docs/release-smoke-checklist.md](docs/release-smoke-checklist.md#what-the-v0240-run-settled).
-**Do not re-narrate any of them here.**
+settled is in [docs/release-smoke-checklist.md](docs/release-smoke-checklist.md#what-the-v0241-run-settled).
+**Do not re-narrate any of them here.** **§1 Windows has now gone two releases unrun**, so
+#1118's post-update banner — the one whose false-positive reaches every user at once — is
+unverified against a real upgrade rather than merely untested this cycle; tracked with a
+date in #1596.
 
 Core is complete — 29 active MCP tools, multi-doc tabs, CRDT-anchored annotations, chat, four
 push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor stdin),
