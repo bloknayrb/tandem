@@ -257,10 +257,12 @@ describe("refreshMcpEntryBinary", () => {
 /**
  * The boot sweep.
  *
- * It is fired un-awaited from `server/index.ts`, where an escaping rejection
- * reaches the `unhandledRejection` handler and `process.exit(1)`s the server.
- * A best-effort config repair must never be able to do that, so "never
- * rejects" is a behavioural requirement, not a style preference.
+ * `server/index.ts` awaits it on the boot path — behind an `isStoreReadOnly()`
+ * gate and with a `.catch` that logs non-fatally — so a rejection is contained
+ * there today. It is still awaited *before the server binds*, which is why
+ * "never rejects" stays a behavioural requirement here rather than being left
+ * to that one call site: a best-effort config repair must not be one refactor
+ * of the boot sequence away from being able to fail a start.
  */
 describe("refreshAllMcpEntryBinaries", () => {
   let home: string;

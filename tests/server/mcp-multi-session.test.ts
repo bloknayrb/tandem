@@ -12,7 +12,12 @@
 
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
+import {
+  closeMcpSession,
+  getPinnedMcpSessionCount,
+  reapIdleMcpSessions,
+  startMcpServerHttp,
+} from "../../src/server/mcp/server.js";
 import { allocPort } from "../helpers/alloc-port.js";
 
 let httpServer: Server;
@@ -192,5 +197,113 @@ describe("concurrent MCP sessions", () => {
   it("accepts an initialize carrying X-Claude-Session-Id (stdio-bridge path)", async () => {
     const a = await openSession("client-a", "claude-session-uuid-1");
     expect((await toolsList(a.sessionId)).status).toBe(200);
+  });
+});
+
+describe("an open standalone stream pins its session against the reaper", () => {
+  /**
+   * Run the real reap pass with every session treated as stale. The default TTL
+   * is 30 minutes, so an un-overridden pass would reap nothing here and the
+   * assertions would pass vacuously.
+   */
+  async function forceReap(): Promise<number> {
+    // `lastSeenAt < now - 0` is a strict comparison, so give the clock a tick
+    // to move off the last request.
+    await new Promise((r) => setTimeout(r, 5));
+    return reapIdleMcpSessions(0);
+  }
+
+  /**
+   * Open a real `GET /mcp` stream and hold it. Resolves once the response
+   * headers are in, i.e. once the server has run the route and marked the
+   * stream open. The returned `close()` aborts it and waits for the server to
+   * observe the close.
+   */
+  async function openStream(
+    sessionId: string,
+  ): Promise<{ status: number; close: () => Promise<void> }> {
+    const controller = new AbortController();
+    const res = await fetch(`${baseUrl}/mcp`, {
+      method: "GET",
+      headers: { Accept: MCP_ACCEPT, "mcp-session-id": sessionId },
+      signal: controller.signal,
+    });
+    return {
+      status: res.status,
+      close: async () => {
+        controller.abort();
+        await res.body?.cancel().catch(() => {});
+        // Let the server's `res.on("close")` land before asserting on it.
+        await new Promise((r) => setTimeout(r, 250));
+      },
+    };
+  }
+
+  afterEach(() => {
+    // A leak here is silent — it shows up only as sessions that quietly stop
+    // being reapable, right up until the 16-session cap is hit.
+    expect(getPinnedMcpSessionCount()).toBe(0);
+  });
+
+  it("survives a forced reap while an unattached session does not", async () => {
+    const attached = await openSession("attached-client");
+    const quiet = await openSession("quiet-client");
+    const stream = await openStream(attached.sessionId);
+    expect(stream.status).toBe(200);
+    expect(getPinnedMcpSessionCount()).toBe(1);
+
+    // The exact pass the 5-minute interval runs, with everything treated as
+    // stale. Building a separate registry would assert something weaker about
+    // a path the route never touches.
+    expect(await forceReap()).toBe(1);
+
+    // The attached client is still usable; the quiet one is gone.
+    expect((await toolsList(attached.sessionId)).status).toBe(200);
+    expect((await toolsList(quiet.sessionId)).status).toBe(404);
+
+    await stream.close();
+  });
+
+  it("becomes reapable again once the stream closes", async () => {
+    const session = await openSession("closing-client");
+    const stream = await openStream(session.sessionId);
+    expect(await forceReap()).toBe(0);
+
+    await stream.close();
+    expect(getPinnedMcpSessionCount()).toBe(0);
+    expect(await forceReap()).toBe(1);
+    expect((await toolsList(session.sessionId)).status).toBe(404);
+  });
+
+  it("does not leave a session pinned when the SDK rejects a second stream", async () => {
+    // The SDK allows one standalone stream per session and answers 409 for the
+    // second. Registering the close listener before handleRequest is what makes
+    // that path balance: `res` is still open, so `close` is guaranteed to fire.
+    const session = await openSession("double-stream-client");
+    const first = await openStream(session.sessionId);
+    expect(first.status).toBe(200);
+
+    const second = await fetch(`${baseUrl}/mcp`, {
+      method: "GET",
+      headers: { Accept: MCP_ACCEPT, "mcp-session-id": session.sessionId },
+    });
+    await second.text();
+    expect(second.status).toBe(409);
+    // The rejected stream must not have decremented the survivor's pin.
+    expect(await forceReap()).toBe(0);
+    expect(getPinnedMcpSessionCount()).toBe(1);
+
+    await first.close();
+    expect(await forceReap()).toBe(1);
+  });
+
+  it("does not pin an unknown session id", async () => {
+    const res = await fetch(`${baseUrl}/mcp`, {
+      method: "GET",
+      headers: { Accept: MCP_ACCEPT, "mcp-session-id": "not-a-session" },
+    });
+    await res.text();
+    expect(res.status).toBe(404);
+    expect(getPinnedMcpSessionCount()).toBe(0);
   });
 });

@@ -49,7 +49,7 @@ These WILL break things if violated:
 | Licensing, the dark gate, update window | [docs/licensing-explained.md](docs/licensing-explained.md) |
 | Network posture, CORS, auth, privacy | [docs/security.md](docs/security.md) |
 | Why a hook just fired | [.claude/hooks/README.md](.claude/hooks/README.md) |
-| "Why is it like this?" — 98 numbered lessons | [docs/lessons-learned.md](docs/lessons-learned.md) |
+| "Why is it like this?" — 99 numbered lessons | [docs/lessons-learned.md](docs/lessons-learned.md) |
 | Architectural decisions, ADR-001–050 | [docs/decisions.md](docs/decisions.md) |
 | What shipped / what's left to v1.0 | [CHANGELOG.md](CHANGELOG.md), [docs/roadmap.md](docs/roadmap.md) |
 | Cutting a release | [.claude/skills/release/SKILL.md](.claude/skills/release/SKILL.md) |
@@ -180,6 +180,7 @@ code in one of these areas; the one-liner is enough to avoid the trap, not enoug
 - `APP_VERSION` / `__MCP_SDK_VERSION__` are baked at build time via tsup defines, with a `createRequire` fallback for tsx/vitest.
 - **MCP must start before Hocuspocus in stdio mode** or the init timeout fires.
 - **HTTP MCP is multi-session: one `McpServer` per transport, keyed by `Mcp-Session-Id`** (ADR-045). This is the *legacy* branch as of MCP `2026-07-28` — required while un-upgraded clients exist, but **do not key new per-client state on it**. Servers cannot be shared; register only from `onsessioninitialized`. Unknown session → 404 `-32001`, never 503.
+- **An open `GET /mcp` stream pins its session against the idle reaper, and the stdio bridge re-initializes on a 404 (#1588).** `lastSeenAt` moves only in `dispatchToSession`, so idleness alone reads an attached-but-quiet client as a crashed one — that reaped Claude Desktop's bridge after 30 minutes and broke it for the rest of the day. **LRU eviction stays pin-blind on purpose**: `openStreams` is evidence of attachment, `lastSeenAt` of use, and it is the bridge's reconnect that makes eviction recoverable. `src/cli/mcp-stdio.ts` no longer relies on being respawned — it replays the captured handshake under a private id and **fails closed if `serverInfo`/`protocolVersion` changed**, never exiting on failure.
 - **`X-Claude-Session-Id` is optional — never assume it is present.** Read it via `getCurrentSessionId()`, and the `AsyncLocalStorage.run()` must wrap the *entire awaited* `handleRequest`.
 - **Mutating integration routes need `assertOriginAllowlisted` AND `assertLoopbackForMutation` at handler top, before any state mutation.** Apply adds a nonce + mutex + schema re-parse; install-claude-code adds a mutex but deliberately **no nonce**. `GET /api/integrations/existing` must scrub `env`/`headers`; `claude-cli-status` is LAN-reachable, so its response is **enum-only**, never a resolved path.
 

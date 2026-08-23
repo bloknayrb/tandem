@@ -5,6 +5,12 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Claude Desktop's Tandem tools no longer die after half an hour of quiet (#1588).** If you left Claude Desktop alone for about 35 minutes and then asked it to do something in Tandem, every tool call failed — and kept failing for the rest of the day, until you quit and reopened the app. Two things had to go wrong together. Tandem was closing connections it judged idle, and its only measure of "idle" was how long since the last tool call — so a client that was plainly still connected, just quiet between requests, looked exactly like one that had crashed. That is the normal state of a desktop app you are not actively using. Tandem now also looks at whether the connection is still open, and leaves it alone if it is. The other half is that Tandem's server had always answered a closed connection with a specific "that session is gone, start a new one" signal, chosen years ago precisely so the other end could recover — but nothing on the other end had ever been taught to act on it, so it arrived as a generic error carrying no hint of what to do. The piece that bridges Claude Desktop to Tandem now recovers on its own: it quietly re-establishes the connection and retries what you asked for, so the call just works. It checks that it is still talking to the same Tandem before trusting the new connection, and if recovery fails it reports the one failed call and keeps trying in the background rather than shutting down.
+
 ## [0.24.0] - 2026-08-21
 
 The headline repair is that seven of Tandem's tools had gone invisible inside Claude Code. A session could not pick up your comments, check what the document was doing, read its text, list your open documents or search them — while the same calls worked fine over a raw connection, so the failure looked like the AI ignoring you. That is fixed.

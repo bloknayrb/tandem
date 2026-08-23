@@ -39,7 +39,9 @@
  * A reaper is **required, not optional** (spec §6.4): the single-transport model
  * never needed one because there was only ever one entry, but a map grows for
  * every client that vanishes without sending `DELETE /mcp` (crash, SIGKILL,
- * closed laptop).
+ * closed laptop). It reaps on idleness **and** on having no open SSE stream:
+ * idleness alone cannot tell "vanished" from "attached but quiet", and quiet is
+ * the normal state of a long-lived desktop client between tool calls.
  */
 
 /** Minimal structural type — the registry only ever closes a session's server. */
@@ -60,6 +62,17 @@ export interface McpSessionEntry<S extends ClosableServer = ClosableServer, T = 
   claudeSessionId?: string;
   createdAt: number;
   lastSeenAt: number;
+  /**
+   * How many standalone `GET /mcp` SSE streams this session currently holds
+   * open. Non-zero pins the entry against `reapIdle()` — see the reaper.
+   *
+   * A **counter, not a boolean**: a client that reconnects its stream can have
+   * the new open observed before the old close, and an unbalanced boolean
+   * wedges either at `false` (reaping a live client) or `true` (leaking the
+   * session). It lives on the entry rather than in a side map in `server.ts`
+   * so it dies with the entry instead of leaking one record per closed session.
+   */
+  openStreams: number;
 }
 
 export interface McpSessionRegistryOptions<S extends ClosableServer, T> {
@@ -84,15 +97,35 @@ export interface McpSessionRegistry<S extends ClosableServer = ClosableServer, T
    * Store a freshly-initialized session, evicting the LRU entry first if the
    * cap is reached. Async because eviction closes the evicted server.
    */
-  add(entry: Omit<McpSessionEntry<S, T>, "createdAt" | "lastSeenAt">): Promise<void>;
+  add(
+    entry: Omit<McpSessionEntry<S, T>, "createdAt" | "lastSeenAt" | "openStreams">,
+  ): Promise<void>;
   /** Look up a session without touching its idle clock. */
   get(sessionId: string | undefined): McpSessionEntry<S, T> | undefined;
   /** Mark a session as active now. Call on every request that resolves to it. */
   touch(sessionId: string): void;
+  /**
+   * Record that a standalone SSE stream opened on this session, pinning it
+   * against the idle reaper. No-op for an unknown id.
+   */
+  noteStreamOpened(sessionId: string): void;
+  /**
+   * Record that a standalone SSE stream closed. Floored at 0, so a duplicate
+   * close (or one arriving after the entry was replaced) cannot drive the
+   * count negative and pin the session forever. No-op for an unknown id.
+   */
+  noteStreamClosed(sessionId: string): void;
   /** Close and drop one session. Safe to call for an unknown id. */
   close(sessionId: string): Promise<void>;
-  /** Close and drop every session that has been idle past the TTL. */
-  reapIdle(): Promise<number>;
+  /**
+   * Close and drop every session that has been idle past the TTL and holds no
+   * open SSE stream.
+   *
+   * `idleTtlMsOverride` exists so a caller can force the pass to consider
+   * everything stale — the same reason the clock is injectable. Production
+   * always omits it.
+   */
+  reapIdle(idleTtlMsOverride?: number): Promise<number>;
   /** Close and drop everything (graceful shutdown). */
   closeAll(): Promise<void>;
   /** Live session count — backs `/health`'s `hasSession`. */
@@ -133,6 +166,9 @@ export function createMcpSessionRegistry<S extends ClosableServer, T>(
     opts.onEvicted?.(entry, reason);
   }
 
+  /** Edge-trigger for the pinned-skip log in `reapIdle` — see the comment there. */
+  let lastPinnedSkipCount = 0;
+
   function lruEntry(): McpSessionEntry<S, T> | undefined {
     let oldest: McpSessionEntry<S, T> | undefined;
     for (const entry of sessions.values()) {
@@ -152,13 +188,19 @@ export function createMcpSessionRegistry<S extends ClosableServer, T>(
         const victim = lruEntry();
         if (!victim) break;
         console.error(
-          `[Tandem] MCP session cap (${maxSessions}) reached — evicting least-recently-used session ${victim.sessionId}`,
+          `[Tandem] MCP session cap (${maxSessions}) reached — evicting least-recently-used session ` +
+            `${victim.sessionId} (${victim.openStreams} open stream(s))`,
         );
         await closeEntry(victim, "lru");
       }
 
       const stamp = now();
-      sessions.set(entry.sessionId, { ...entry, createdAt: stamp, lastSeenAt: stamp });
+      sessions.set(entry.sessionId, {
+        ...entry,
+        createdAt: stamp,
+        lastSeenAt: stamp,
+        openStreams: 0,
+      });
     },
 
     get(sessionId) {
@@ -171,14 +213,50 @@ export function createMcpSessionRegistry<S extends ClosableServer, T>(
       if (entry) entry.lastSeenAt = now();
     },
 
+    noteStreamOpened(sessionId) {
+      const entry = sessions.get(sessionId);
+      if (entry) entry.openStreams += 1;
+    },
+
+    noteStreamClosed(sessionId) {
+      const entry = sessions.get(sessionId);
+      if (entry) entry.openStreams = Math.max(0, entry.openStreams - 1);
+    },
+
     async close(sessionId) {
       const entry = sessions.get(sessionId);
       if (entry) await closeEntry(entry, "explicit");
     },
 
-    async reapIdle() {
-      const cutoff = now() - idleTtlMs;
-      const stale = [...sessions.values()].filter((e) => e.lastSeenAt < cutoff);
+    async reapIdle(idleTtlMsOverride) {
+      const cutoff = now() - (idleTtlMsOverride ?? idleTtlMs);
+      // `openStreams === 0` is load-bearing, not belt-and-braces. `lastSeenAt`
+      // only advances in `dispatchToSession`, so a client holding a live GET
+      // SSE stream and simply making no tool calls was indistinguishable from
+      // one that had been SIGKILLed — and got reaped after 30 minutes, which
+      // is what broke Claude Desktop's bridge for the rest of the day. The
+      // reaper exists for clients that vanished (crash, SIGKILL, closed
+      // laptop); an attached one is none of those.
+      const expired = [...sessions.values()].filter((e) => e.lastSeenAt < cutoff);
+      const stale = expired.filter((e) => e.openStreams === 0);
+      // Narrate the skip, but only on a change. A session that outlives its
+      // TTL now looks, from the log alone, exactly like a reaper that stopped
+      // running — and "sessions accumulate and are never reaped" is the one
+      // new failure mode the pin can produce, bounded only by `maxSessions`.
+      //
+      // Edge-triggered, not level-triggered: an attached-and-quiet desktop
+      // bridge is the *normal* steady state this fix exists to protect, and
+      // this pass runs every five minutes, so logging the condition each time
+      // would print a line every five minutes for the rest of the day.
+      const pinned = expired.length - stale.length;
+      if (pinned !== lastPinnedSkipCount) {
+        lastPinnedSkipCount = pinned;
+        if (pinned > 0) {
+          console.error(
+            `[Tandem] ${pinned} MCP session(s) past the idle TTL but pinned by an open stream — not reaping`,
+          );
+        }
+      }
       for (const entry of stale) {
         console.error(`[Tandem] Reaping idle MCP session ${entry.sessionId}`);
         await closeEntry(entry, "idle");
