@@ -456,6 +456,31 @@ export interface SessionData {
    * field existed, which is exactly the population that needs discarding.
    */
   modelRevision?: number;
+  /**
+   * True when the document was open read-only at session-save time — the
+   * upgrade changelog and Settings → View Changelog / View Documentation paths.
+   * Without it a read-only tab comes back
+   * writable after a restart, because the restore path takes the derived default
+   * (`resolveAndValidatePath` hardcodes `false`) and `writeDocMeta` deliberately
+   * tombstones any session-persisted `readOnly` in `documentMeta` so a stale Y.Map
+   * value can never outvote the caller. The flag therefore has to travel as session
+   * metadata, not as CRDT state.
+   *
+   * Unlike `dirty` and `conflict` above, this is derived inside `saveSession`
+   * rather than passed by callers; the reasoning for the asymmetry lives on
+   * that function.
+   *
+   * Persisting this deliberately makes read-only sticky. Before it, restarting
+   * silently downgraded a read-only tab to writable — which is the bug, since
+   * the autosave gates stop protecting the file — but that accident was also
+   * the only way back to editable, and read-only is otherwise a one-way door
+   * (`openFileByPath` only upgrades; `handleAlreadyOpen` never downgrades).
+   * Accepted knowingly; an explicit downgrade affordance is #1590.
+   *
+   * Absent means false — that is the shape of every record written before this
+   * field existed, and of every writable document today.
+   */
+  readOnly?: boolean;
 }
 
 /**

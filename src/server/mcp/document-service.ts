@@ -1653,9 +1653,12 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
   if (sessions.length === 0) return 0;
 
   let restoredCount = 0;
-  for (const { filePath } of sessions) {
+  for (const { filePath, readOnly } of sessions) {
     try {
-      await openFileByPath(filePath);
+      // Carry the persisted read-only flag back through: without it every
+      // restored document takes `resolveAndValidatePath`'s hardcoded `false`,
+      // and a read-only tab (View Changelog) comes back writable.
+      await openFileByPath(filePath, { readOnly });
       restoredCount++;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;

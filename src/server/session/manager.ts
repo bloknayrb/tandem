@@ -8,6 +8,8 @@ import {
   Y_MAP_CHAT,
   Y_MAP_CHAT_DOCUMENT_NAMES,
   Y_MAP_CHAT_STREAM,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_READ_ONLY,
 } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
@@ -43,6 +45,20 @@ export function sessionKey(filePath: string): string {
  * caller writes the session BEFORE clearing the flag, so a self-read would
  * persist a conflict the save just resolved and re-raise a banner on a clean,
  * in-sync document.
+ *
+ * `readOnly` is the mirror-image decision: derived HERE off `doc`, never an
+ * option — because it is a different KIND of flag from the two above. `dirty`
+ * and `conflict` are point-in-time snapshots of a save race that only the
+ * caller can take. `readOnly` is static document metadata that `writeDocMeta`
+ * already mirrors into the Y.Map in lockstep with the open-docs registry on
+ * every open path, so there is no moment at which caller and doc disagree.
+ *
+ * Given that, deriving once here is the safer half of the trade: `saveSession`
+ * rewrites the whole record with no merge, and two call sites
+ * (`document-service`'s save-all and the 60s autosave tick) are unconditional
+ * loops over every open document — so a tenth call site that forgot to pass the
+ * flag would not merely fail to set it, it would erase a correct value on a
+ * timer.
  */
 export async function saveSession(
   filePath: string,
@@ -65,6 +81,8 @@ export async function saveSession(
   const state = Y.encodeStateAsUpdate(doc);
   const ydocState = Buffer.from(state).toString("base64");
 
+  const readOnly = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_READ_ONLY) === true;
+
   const data: SessionData = {
     filePath,
     format,
@@ -74,6 +92,9 @@ export async function saveSession(
     modelRevision: DOCUMENT_MODEL_REVISION,
     ...(opts?.dirty ? { dirty: true } : {}),
     ...(opts?.conflict ? { conflict: opts.conflict } : {}),
+    // Conditional spread, not `readOnly`, so a writable document's record stays
+    // byte-identical to the shape it had before this field existed.
+    ...(readOnly ? { readOnly: true } : {}),
   };
 
   if (!sessionDirReady) {
@@ -438,12 +459,12 @@ export function restoreCtrlDoc(doc: Y.Doc, base64State: string): void {
  * Returns file paths sorted by most recently accessed first.
  */
 export async function listSessionFilePaths(): Promise<
-  Array<{ filePath: string; lastAccessed: number }>
+  Array<{ filePath: string; lastAccessed: number; readOnly: boolean }>
 > {
   try {
     await fs.mkdir(SESSION_DIR, { recursive: true });
     const files = await fs.readdir(SESSION_DIR);
-    const results: Array<{ filePath: string; lastAccessed: number }> = [];
+    const results: Array<{ filePath: string; lastAccessed: number; readOnly: boolean }> = [];
 
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
@@ -468,7 +489,17 @@ export async function listSessionFilePaths(): Promise<
           console.error(`[Tandem] Omitting session ${file} from restore list: ${unsafe}`);
           continue;
         }
-        results.push({ filePath: data.filePath, lastAccessed: data.lastAccessed ?? 0 });
+        results.push({
+          filePath: data.filePath,
+          lastAccessed: data.lastAccessed ?? 0,
+          // Strict `=== true`, same don't-trust-a-bare-`JSON.parse` rule as
+          // `narrowConflict`: this value comes off disk and decides whether the
+          // restored tab is writable, so `"true"`, `1` or `{}` must all restore
+          // writable rather than truthily locking a document the user can edit.
+          // Absent → false, which is every record written before this field
+          // existed, and every writable document today.
+          readOnly: data.readOnly === true,
+        });
       } catch (err) {
         console.error(`[Tandem] Skipping unreadable session file ${file}:`, err);
       }
