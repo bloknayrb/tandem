@@ -92,4 +92,10 @@ __pycache__/
 # the repo reads this directory. Blanket by choice: if a project-level Codex
 # config is ever worth tracking, add an explicit `!.codex/<file>` line here,
 # the way `.claude/skills/*` does above.
-.codex/
+#
+# `.codex/*`, NOT `.codex/`: git cannot re-include a file whose parent
+# DIRECTORY is excluded, so under the directory form the `!` line above would
+# silently do nothing -- `git status` stays clean and the file looks tracked
+# when it is not. The content glob is what makes the escape hatch real, and it
+# is why the `.claude/skills/*` precedent is written that way too.
+.codex/*

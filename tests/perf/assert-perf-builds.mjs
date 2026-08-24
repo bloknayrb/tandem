@@ -75,11 +75,17 @@ function newestMtimeMs(dir) {
 // timestamp of the artifact it measured, so the table in
 // docs/perf-gate-results.md can be audited after the fact. `console.error`
 // keeps it off stdout, where the Playwright reporter lives.
+// The LABELS are derived from the same argv paths the timestamps come from,
+// never hardcoded. The perf outDir has already moved once (#1492); a hardcoded
+// "dist/perf-client" would keep printing after the next move and name a path
+// the run did not measure -- in a line whose whole purpose is to be auditable
+// against docs/perf-gate-results.md after the fact.
 const clientBuiltAt = statSync(clientDist).mtimeMs;
 const serverBuiltAt = statSync(serverDist).mtimeMs;
+const label = (p) => path.relative(REPO_ROOT, path.dirname(p)).replace(/\\/g, "/");
 console.error(
-  `[perf-gate] dist/perf-client built ${new Date(clientBuiltAt).toISOString()}, ` +
-    `dist/server built ${new Date(serverBuiltAt).toISOString()}`,
+  `[perf-gate] ${label(clientDist)} built ${new Date(clientBuiltAt).toISOString()}, ` +
+    `${label(serverDist)} built ${new Date(serverBuiltAt).toISOString()}`,
 );
 
 // STALENESS is a warning, not a failure. It is a real hazard -- `npm run

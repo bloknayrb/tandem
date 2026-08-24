@@ -48,6 +48,14 @@ Do not implement this document as one change.
    reading `Not started` makes a resuming session re-run it — and a commit
    cannot record its own SHA anyway. The PR number is known at `gh pr create`
    time and the merge commit is recoverable from the PR.
+
+   **Two states, because a commit cannot know it will be merged.** The unit's
+   own PR writes `In review` with its PR number; the *next* unit's PR flips
+   that row to `Merged` after confirming it actually landed. Writing `Merged`
+   from inside the open PR is a prediction, and it fails in the one direction
+   that matters: if the PR is closed or its head rewritten, a resuming session
+   reads `Merged`, skips the unit, and the work is silently absent — exactly
+   what this item exists to prevent.
 8. Treat code examples as shape illustrations, not paste-ready implementations.
    Current types and platform behavior remain authoritative.
 
@@ -55,7 +63,7 @@ Do not implement this document as one change.
 
 | Unit | Concern | Status | PR / evidence |
 |---|---|---|---|
-| 0 | Repo hygiene: ignore `.codex/`; unblock `audit:dead-code` | Merged | #1601; tsc/vitest/cargo green |
+| 0 | Repo hygiene: ignore `.codex/`; unblock `audit:dead-code` | In review | #1601; tsc/vitest/cargo green |
 | 1 | Doctor Windows path-safety closure | Not started | — |
 | 2 | Test + `src/cli` TypeScript gate | Not started | — |
 | 3 | Honest coverage baseline | Not started | — |
