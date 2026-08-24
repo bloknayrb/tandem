@@ -84,3 +84,12 @@ piwapp_qr.png
 # Python bytecode from the spike harnesses under scripts/spikes/.
 __pycache__/
 *.pyc
+
+# Codex CLI scratch output. Untracked today only because all four files in it
+# happen to end in `.log` (the `*.log` rule above) -- the first non-log file
+# written there would become a commit candidate, which is why this repo's plan
+# documents carried a manual "do not commit .codex files" reminder. Nothing in
+# the repo reads this directory. Blanket by choice: if a project-level Codex
+# config is ever worth tracking, add an explicit `!.codex/<file>` line here,
+# the way `.claude/skills/*` does above.
+.codex/

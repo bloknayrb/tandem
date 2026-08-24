@@ -130,10 +130,15 @@ describe("#1492 — the E2E harness runs on its own reserved ports", () => {
   });
 
   it("moves the perf config onto the perf pair (source-text pin)", () => {
-    // TEXT pin, not an import: importing tests/perf/playwright.config.ts
-    // throws by design when dist artifacts are missing ("nothing to measure"),
-    // which would make this suite fail on every box that has not run
-    // `npm run perf:gate`.
+    // TEXT pin, not an import. It used to be one because importing
+    // tests/perf/playwright.config.ts threw by design when dist artifacts were
+    // missing; that throw has since moved into tests/perf/assert-perf-builds.mjs
+    // (a webServer preflight), because loading the config also broke
+    // `npm run audit:dead-code` -- knip loads every playwright.config.ts it can
+    // glob. Importing is now survivable, but the pin stays text on purpose:
+    // what is being asserted is that these exact expressions appear in the
+    // SOURCE, which an import cannot show -- a computed value that happened to
+    // equal the right path would satisfy an import-based check.
     const src = readFileSync(path.join(ROOT, "tests/perf/playwright.config.ts"), "utf8");
     expect(src).toContain("`http://127.0.0.1:${PERF_MCP_PORT}/health`");
     expect(src).toContain("TANDEM_MCP_PORT: String(PERF_MCP_PORT)");
