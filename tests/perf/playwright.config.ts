@@ -1,4 +1,3 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,58 +92,30 @@ const PREVIEW_PORT = 4318;
 const CLIENT_DIST = path.join(REPO_ROOT, "dist", "perf-client", "index.html");
 const SERVER_DIST = path.join(REPO_ROOT, "dist", "server", "index.js");
 
-// A MISSING build is fatal: there is nothing to measure. A perf gate that
-// silently measured the wrong artifact is worse than one that refuses to run.
-for (const [label, p] of [
-  ["client", CLIENT_DIST],
-  ["server", SERVER_DIST],
-] as const) {
-  if (!existsSync(p)) {
-    throw new Error(
-      `Performance gate: no production ${label} build at ${p}.\n` +
-        `Run \`npm run perf:gate\`, which builds before measuring.`,
-    );
-  }
-}
+// A MISSING build is still fatal -- there is nothing to measure, and a perf
+// gate that silently measured the wrong artifact is worse than one that
+// refuses to run. But the check no longer runs at MODULE LOAD, because knip's
+// playwright plugin globs `playwright.config.{js,ts,mjs}` at any depth and
+// LOADS every match during plugin discovery, before its own ignore filtering
+// applies. A throw here therefore took `npm run audit:dead-code` down with it
+// (exit 2, "Configuration file load error") on any machine without a prior
+// perf build, and no `knip.json` ignore entry can prevent that -- adding this
+// file, or all of `tests/perf/**`, was measured and changed nothing.
+//
+// It now runs as a preflight inside the FIRST webServer command below. NOT in
+// globalSetup: Playwright starts every webServer before globalSetup runs, so
+// a missing build would surface as a 120s `vite preview` health-check timeout
+// instead of the one-line "run npm run perf:gate" message. See
+// tests/perf/assert-perf-builds.mjs.
+const PERF_BUILD_PREFLIGHT = path.join(__dirname, "assert-perf-builds.mjs");
 
-/** Newest mtime under a directory tree, skipping node_modules and dot-dirs. */
-function newestMtimeMs(dir: string): number {
-  let newest = 0;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) newest = Math.max(newest, newestMtimeMs(full));
-    else if (entry.isFile()) newest = Math.max(newest, statSync(full).mtimeMs);
-  }
-  return newest;
-}
-
-// Provenance, printed unconditionally: a recorded run should carry the
-// timestamp of the artifact it measured, so the table in
-// docs/perf-gate-results.md can be audited after the fact. `console.error`
-// keeps it off stdout, where the Playwright reporter lives.
-const clientBuiltAt = statSync(CLIENT_DIST).mtimeMs;
-const serverBuiltAt = statSync(SERVER_DIST).mtimeMs;
-console.error(
-  `[perf-gate] dist/perf-client built ${new Date(clientBuiltAt).toISOString()}, ` +
-    `dist/server built ${new Date(serverBuiltAt).toISOString()}`,
-);
-
-// STALENESS is a warning, not a throw. It is a real hazard — `npm run perf:gate`
-// builds first, but the config is also directly runnable with
-// `playwright test --config=…`, which is exactly how someone iterating skips a
-// two-minute rebuild. It is NOT reliable enough to block on: a formatter hook,
-// or a fresh `git worktree`/checkout, restamps every file under `src/` without
-// changing a byte of what would be built. So: say it loudly, measure anyway,
-// and let the operator decide.
-const srcNewest = newestMtimeMs(path.join(REPO_ROOT, "src"));
-if (srcNewest > Math.min(clientBuiltAt, serverBuiltAt)) {
-  console.error(
-    `[perf-gate] WARNING: a file under src/ (mtime ${new Date(srcNewest).toISOString()}) is ` +
-      `newer than the dist artifacts above — this run may measure a stale build. ` +
-      `Run \`npm run perf:gate\` to rebuild first.`,
-  );
-}
+// The build-provenance print and the staleness warning moved into the same
+// preflight, for the same reason and with one extra: both called `statSync` on
+// the dist artifacts at module load, so simply deleting the `existsSync` throw
+// above would have swapped a clear error for a bare ENOENT and left the knip
+// load failure exactly where it was. They are run-time reporting about the
+// artifacts being measured, not configuration, so the preflight is also where
+// they belong.
 
 export default defineConfig({
   testDir: "./",
@@ -184,7 +155,12 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `npx vite preview --outDir dist/perf-client --host 127.0.0.1 --port ${PREVIEW_PORT} --strictPort`,
+      // The build preflight runs here, in the first webServer command, so it
+      // precedes every server start. CLIENT_DIST and SERVER_DIST are passed as
+      // argv rather than recomputed inside the script, so the two cannot drift.
+      command:
+        `node ${JSON.stringify(PERF_BUILD_PREFLIGHT)} ${JSON.stringify(CLIENT_DIST)} ${JSON.stringify(SERVER_DIST)} && ` +
+        `npx vite preview --outDir dist/perf-client --host 127.0.0.1 --port ${PREVIEW_PORT} --strictPort`,
       url: `http://127.0.0.1:${PREVIEW_PORT}`,
       reuseExistingServer: false,
       timeout: 120_000,
