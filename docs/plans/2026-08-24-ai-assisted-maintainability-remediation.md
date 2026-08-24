@@ -55,7 +55,7 @@ Do not implement this document as one change.
 
 | Unit | Concern | Status | PR / evidence |
 |---|---|---|---|
-| 0 | Repo hygiene: ignore `.codex/`; unblock `audit:dead-code` | Merged | PR pending; tsc/vitest/cargo green |
+| 0 | Repo hygiene: ignore `.codex/`; unblock `audit:dead-code` | Merged | #1601; tsc/vitest/cargo green |
 | 1 | Doctor Windows path-safety closure | Not started | — |
 | 2 | Test + `src/cli` TypeScript gate | Not started | — |
 | 3 | Honest coverage baseline | Not started | — |
