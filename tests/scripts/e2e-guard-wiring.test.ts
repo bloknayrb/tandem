@@ -158,6 +158,16 @@ describe("#1492 — the E2E harness runs on its own reserved ports", () => {
     // and in the reorder case perf-server.mjs wipes PERF_APP_DATA_DIR for a
     // run that was already doomed.
     expect(src).toContain('path.join(__dirname, "assert-perf-builds.mjs")');
+    // A text pin alone would survive deleting or renaming the script it names:
+    // the config keeps its literal, this suite stays green, and `perf:gate`
+    // dies at webServer start with `Cannot find module`. That matters more
+    // than usual because nothing ELSE in the repo sees this file either --
+    // tsconfig does not compile `.mjs` and knip's `project` glob is
+    // `tests/**/*.ts`.
+    expect(
+      existsSync(path.join(ROOT, "tests", "perf", "assert-perf-builds.mjs")),
+      "the perf config names a preflight script that does not exist",
+    ).toBe(true);
     const webServerAt = src.indexOf("webServer:");
     const preflightAt = src.indexOf("PERF_BUILD_PREFLIGHT", webServerAt);
     const vitePreviewAt = src.indexOf("npx vite preview", webServerAt);

@@ -19,7 +19,7 @@
   "files": {
     "includes": [
       "src/**/*.{ts,tsx,svelte,css,json}",
-      "tests/**/*.{ts,tsx}",
+      "tests/**/*.{ts,tsx,mjs}",
       "scripts/**/*.{ts,tsx,mjs}",
       "packages/**/*.{ts,tsx,mjs}",
       "*.{ts,json,html}",
