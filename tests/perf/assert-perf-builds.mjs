@@ -51,8 +51,15 @@ for (const [label, p] of [
   ["server", serverDist],
 ]) {
   if (!existsSync(p)) {
+    // normalize() before printing: the config passes these through
+    // JSON.stringify into a shell command, which escapes Windows backslashes,
+    // and cmd/CRT quote-parsing can hand the doubled form straight through to
+    // argv. The path still RESOLVES (Win32 collapses repeated separators), so
+    // this is presentation only -- but this one line is the entire reason the
+    // check was kept eager instead of deferred to globalSetup, and a path
+    // rendered `C:\\Users\\...` is a worse error than the one it replaced.
     console.error(
-      `Performance gate: no production ${label} build at ${p}.\n` +
+      `Performance gate: no production ${label} build at ${path.normalize(p)}.\n` +
         "Run `npm run perf:gate`, which builds before measuring.",
     );
     process.exit(1);

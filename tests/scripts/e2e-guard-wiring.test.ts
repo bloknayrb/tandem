@@ -146,6 +146,30 @@ describe("#1492 — the E2E harness runs on its own reserved ports", () => {
     expect(src).not.toContain("DEFAULT_MCP_PORT");
     // FINDING 6: the perf-baked client must never land in dist/client.
     expect(src).toContain('path.join(REPO_ROOT, "dist", "perf-client", "index.html")');
+
+    // The missing-build check is no longer an unconditional module-load throw
+    // (it broke `npm run audit:dead-code`; knip loads every playwright config
+    // it can glob). It is now a preflight in the command of the FIRST
+    // webServer entry, and nothing else pins it: knip's `project` glob is
+    // `tests/**/*.ts`, so the .mjs preflight is invisible to the dead-code
+    // audit too. Simplify the command back to a bare `npx vite preview`, or
+    // reorder the webServer array, and nothing goes red -- but a run without a
+    // build gets a 120s health-check timeout instead of a one-line message,
+    // and in the reorder case perf-server.mjs wipes PERF_APP_DATA_DIR for a
+    // run that was already doomed.
+    expect(src).toContain('path.join(__dirname, "assert-perf-builds.mjs")');
+    const webServerAt = src.indexOf("webServer:");
+    const preflightAt = src.indexOf("PERF_BUILD_PREFLIGHT", webServerAt);
+    const vitePreviewAt = src.indexOf("npx vite preview", webServerAt);
+    expect(webServerAt, "no webServer array in the perf config").toBeGreaterThan(-1);
+    expect(
+      preflightAt,
+      "PERF_BUILD_PREFLIGHT is not invoked inside the webServer array",
+    ).toBeGreaterThan(-1);
+    expect(
+      preflightAt,
+      "the build preflight must precede `vite preview` in the first webServer command",
+    ).toBeLessThan(vitePreviewAt);
   });
 
   it("keeps every harness port out of docs/troubleshooting.md", () => {

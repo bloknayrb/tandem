@@ -90,12 +90,15 @@ __pycache__/
 # written there would become a commit candidate, which is why this repo's plan
 # documents carried a manual "do not commit .codex files" reminder. Nothing in
 # the repo reads this directory. Blanket by choice: if a project-level Codex
-# config is ever worth tracking, add an explicit `!.codex/<file>` line here,
-# the way `.claude/skills/*` does above.
+# config is ever worth tracking, add an explicit `!.codex/<file>` line
+# IMMEDIATELY BELOW the glob, exactly as `.claude/skills/*` does above.
 #
-# `.codex/*`, NOT `.codex/`: git cannot re-include a file whose parent
-# DIRECTORY is excluded, so under the directory form the `!` line above would
-# silently do nothing -- `git status` stays clean and the file looks tracked
-# when it is not. The content glob is what makes the escape hatch real, and it
-# is why the `.claude/skills/*` precedent is written that way too.
+# Both halves of that sentence are load-bearing, and each fails silently:
+#   - `.codex/*`, NOT `.codex/`. Git cannot re-include a file whose parent
+#     DIRECTORY is excluded, so under the directory form a `!` line does
+#     nothing at all.
+#   - BELOW, not above. Last matching pattern wins, so a `!` line placed
+#     before the glob is re-ignored by it.
+# Either mistake looks identical from the outside: `git status` stays clean
+# and the file appears tracked when it is not.
 .codex/*
