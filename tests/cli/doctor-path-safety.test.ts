@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rejectUnsafeWindowsPrefix } from "../../src/shared/windows-path-safety.js";
 import { LOCAL_EXTENDED_PATHS, NETWORK_PATHS } from "../helpers/unc-fixtures.js";
 
 /**
@@ -23,15 +24,53 @@ import { LOCAL_EXTENDED_PATHS, NETWORK_PATHS } from "../helpers/unc-fixtures.js"
  * is not configurable, so `vi.spyOn(fs, …)` throws. Same technique as
  * `tests/server/unc-guard-ordering.test.ts`.
  */
-const { _readFileSyncSpy, _existsSyncSpy } = vi.hoisted(() => ({
+const { _readFileSyncSpy, _existsSyncSpy, _statTally } = vi.hoisted(() => ({
   _readFileSyncSpy: vi.fn(),
   _existsSyncSpy: vi.fn(),
+  /** Hostile `statSync` paths the stub below refused before any syscall. */
+  _statTally: { refused: [] as string[] },
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   _readFileSyncSpy.mockImplementation(actual.readFileSync as never);
   _existsSyncSpy.mockImplementation(actual.existsSync as never);
-  return { ...actual, readFileSync: _readFileSyncSpy, existsSync: _existsSyncSpy };
+
+  // **`statSync` is stubbed for hostile prefixes so this suite does not perform
+  // the handshake it exists to prevent.**
+  //
+  // Poisoning `homedir()` reaches further than the three checks under test:
+  // `runDoctor` also calls `detectClaudeCli`, which stats
+  // `join(homedir(), ".local", "bin")` through `path-lookup.isFile`. That site
+  // is genuinely unguarded — it is one of the three enumerated in
+  // `docs/security.md` and filed as #1609 — so on Windows this suite issued a
+  // REAL `statSync` against a `\attacker\share\...` path, twice per row,
+  // fourteen rows. Windows resolves the host `attacker` over DNS/LLMNR/NBNS:
+  // the Responder NTLM-relay vector, which is exactly what #1417 is about,
+  // fired from a developer's machine on every pre-push run.
+  //
+  // This is CONTAINMENT, not a fix; #1609 is the fix. The stub is deliberately
+  // narrow — hostile prefixes only, everything else delegates to the real
+  // implementation — so it cannot mask a genuine failure. It asserts nothing,
+  // because asserting here would require #1609 to already be closed.
+  const statSyncStub = ((p: unknown, ...rest: unknown[]) => {
+    if (typeof p === "string" && rejectUnsafeWindowsPrefix(p) !== null) {
+      _statTally.refused.push(p);
+      // `throwIfNoEntry: false` is how `path-lookup.isFile` calls it.
+      const opts = rest[0] as { throwIfNoEntry?: boolean } | undefined;
+      if (opts?.throwIfNoEntry === false) return undefined;
+      throw Object.assign(new Error("ENOENT (test stub: refused before syscall)"), {
+        code: "ENOENT",
+      });
+    }
+    return (actual.statSync as (...a: unknown[]) => unknown)(p, ...rest);
+  }) as unknown as typeof actual.statSync;
+
+  return {
+    ...actual,
+    readFileSync: _readFileSyncSpy,
+    existsSync: _existsSyncSpy,
+    statSync: statSyncStub,
+  };
 });
 
 /**
@@ -104,9 +143,6 @@ function hostileClaudeConfigCalls(hostileHome: string): string[] {
   return allPathArgs().filter((p) => p.replace(/\\/g, "/").includes(tail) && isClaudeConfigLeaf(p));
 }
 
-/** Captured through the delegating spy before any test overrides it. */
-const REAL_HOME = homedir();
-
 let dataDir: string;
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -119,21 +155,24 @@ beforeEach(() => {
   // doctor.test.ts does — it is unrelated to this file and would otherwise
   // read whatever the developer has.
   process.env.TANDEM_APP_DATA_DIR = dataDir;
-  // Default the profile to a scratch dir. Without this, every test that does
-  // not set HOME itself reads the developer's real Claude Code config — which
-  // is both a cross-machine flakiness source and a read this suite has no
-  // business performing. Tests that care override or delete these.
+  // Default the profile to a scratch dir — the env vars AND `homedir()`.
+  // Without this, every test that does not set HOME itself reads the
+  // developer's real Claude Code and Claude Desktop configs, which is both a
+  // cross-machine flakiness source and a read this suite has no business
+  // performing. Tests that care override or delete these.
   //
-  // Two characterization tests below DO delete both, because unset-in-both is
-  // the condition they exist to pin. `os.homedir()` then falls back to the real
-  // profile and doctor reads the developer's actual config. That is inherent to
-  // what those two assert and cannot be scratch-dir'd away; the assertions are
-  // over the path argument, never the file's contents, and nothing is written.
+  // `homedir()` is pinned too, not just the env vars, because the two
+  // characterization tests below DELETE both env vars: that is the condition
+  // they exist to pin, and without a pinned `homedir()` the fallback lands on
+  // the real profile. An earlier revision pinned it to the real home for
+  // exactly that reason and left the real-config read in place; the scratch
+  // dir serves the same purpose with none of the reach.
   process.env.HOME = dataDir;
   process.env.USERPROFILE = dataDir;
-  _homedirSpy.mockReturnValue(REAL_HOME);
+  _homedirSpy.mockReturnValue(dataDir);
   _readFileSyncSpy.mockClear();
   _existsSyncSpy.mockClear();
+  _statTally.refused.length = 0;
 });
 
 afterEach(() => {
@@ -168,7 +207,7 @@ describe("doctor's Claude-config home resolution (characterization)", () => {
     delete process.env.HOME;
     delete process.env.USERPROFILE;
     await runDoctor();
-    expect(allPathArgs()).toContain(join(homedir(), USER_CONFIG_LEAF));
+    expect(allPathArgs()).toContain(join(dataDir, USER_CONFIG_LEAF));
   });
 
   it("the plugin check does NOT fall back to homedir() — it returns silently", async () => {
@@ -180,7 +219,7 @@ describe("doctor's Claude-config home resolution (characterization)", () => {
     delete process.env.HOME;
     delete process.env.USERPROFILE;
     await runDoctor();
-    expect(allPathArgs()).not.toContain(join(homedir(), ".claude", SETTINGS_LEAF));
+    expect(allPathArgs()).not.toContain(join(dataDir, ".claude", SETTINGS_LEAF));
   });
 });
 
@@ -218,11 +257,14 @@ describe("doctor screens hostile home paths before reading any Claude config (#1
   // load-bearing". That was wrong in the worse direction — they asserted
   // something FALSE. `posix.join` collapses those four to a path the guard
   // accepts, the read happens, and the derived path still carries the marker,
-  // so the block was red on ubuntu CI while green on this machine. Note also
-  // that on posix `homedir()` returns `$HOME`, so the block ABOVE reaches the
-  // desktop leaf too and failed the same way. The desktop check now screens
-  // its inputs the same way the home-derived checks screen theirs, which is
-  // what makes all fourteen rows load-bearing on both platforms.
+  // so the block was red on ubuntu CI while green on this machine.
+  //
+  // That comment also claimed the block ABOVE reached the desktop leaf on
+  // posix, via `homedir()` returning `$HOME`. It does not: `beforeEach` pins
+  // `homedir()` to the scratch dir, so the desktop check is never handed a
+  // hostile path there on any platform. THIS block, driving `homeOverride`, is
+  // the only thing that exercises the desktop input screen — which is why it
+  // exists rather than being folded into the one above.
   it.each([
     ...NETWORK_PATHS,
     ...LOCAL_EXTENDED_PATHS,
@@ -380,5 +422,39 @@ describe("desktopScreenInput mirrors claudeDesktopConfigPath's precedence", () =
         homeDir: HOME_DIR,
       }),
     ).toBe("/ad");
+  });
+});
+
+/**
+ * The containment this file installs on its own `node:fs` mock, pinned.
+ *
+ * Poisoning `homedir()` reaches past the three checks under test:
+ * `detectClaudeCli` stats `~/.local/bin`, through a site that is still
+ * unguarded (#1609). Unstubbed, running this suite fires a real SMB probe at
+ * the hostile host from a developer's machine on every pre-push — the
+ * Responder NTLM-relay vector, which is the thing #1417 exists to prevent.
+ *
+ * Pinned here rather than inside the corpus blocks because that probe is
+ * CONDITIONAL: `detectClaudeCli` returns `INSTALLED_ON_PATH` before reaching
+ * `~/.local/bin`, so on a machine with `claude` on PATH the stub is never
+ * exercised, and an assertion demanding otherwise fails for a reason unrelated
+ * to the guard under test. This asserts the containment exists; the corpus
+ * blocks rely on it.
+ */
+describe("this suite does not perform the handshake it tests for", () => {
+  it.each([...NETWORK_PATHS, ...LOCAL_EXTENDED_PATHS])("%s", (_label, hostile) => {
+    _statTally.refused.length = 0;
+
+    // `throwIfNoEntry: false` is how `path-lookup.isFile` calls it, so this is
+    // the exact shape `detectClaudeCli` would produce.
+    expect(statSync(hostile, { throwIfNoEntry: false })).toBeUndefined();
+    expect(_statTally.refused, "a hostile statSync reached the real filesystem").toContain(hostile);
+  });
+
+  it("still stats an ordinary local path for real", () => {
+    // Positive control: a stub that refused everything would satisfy the rows
+    // above and quietly break every other check in the file.
+    expect(statSync(dataDir, { throwIfNoEntry: false })?.isDirectory()).toBe(true);
+    expect(_statTally.refused).toEqual([]);
   });
 });

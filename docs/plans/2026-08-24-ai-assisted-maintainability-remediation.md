@@ -64,7 +64,7 @@ Do not implement this document as one change.
 | Unit | Concern | Status | PR / evidence |
 |---|---|---|---|
 | 0 | Repo hygiene: ignore `.codex/`; unblock `audit:dead-code` | Merged | #1601; 15/15 CI green |
-| 1 | Doctor Windows path-safety closure | In review | #1608; tsc clean, 9020/0 vitest, cargo green |
+| 1 | Doctor Windows path-safety closure | In review | #1608; tsc clean, 9070/0 vitest, cargo green, 15/15 CI |
 | 2 | Test + `src/cli` TypeScript gate | Not started | — |
 | 3 | Honest coverage baseline | Not started | — |
 | 4 | Config-race acceptance: track, bound, document | Issue filed | Accepted 2026-08-24; #1599 |
