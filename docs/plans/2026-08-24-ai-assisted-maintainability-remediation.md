@@ -65,7 +65,7 @@ Do not implement this document as one change.
 |---|---|---|---|
 | 0 | Repo hygiene: ignore `.codex/`; unblock `audit:dead-code` | Merged | #1601; 15/15 CI green |
 | 1 | Doctor Windows path-safety closure | Merged | #1608 (merged 2026-08-25); tsc clean, 9085/0 vitest, cargo green, CI green. 3x `/code-review high` (13 findings) + 6-agent `review-pr` (14 findings); all real, all fixed |
-| 2 | Test + `src/cli` TypeScript gate | In review | #1616; 895 test-only type errors -> 0 across three configs. typecheck:tests, typecheck, 557 files / 9099 vitest green. Gate hardened after adversarial review (10 findings, 9 named mutations). Out-of-scope findings filed: #1612 #1613 #1614 #1615 |
+| 2 | Test + `src/cli` TypeScript gate | Merged | #1616; 895 test-only type errors -> 0 across three configs. typecheck:tests, typecheck, 557 files / 9103 vitest green; all 15 CI checks green. Gate hardened after adversarial review (10 findings, 16 named mutations). Five review agents then found a mutation guard this branch had DISARMED (`event-queue.test.ts` fed the delivery-state check the same subscriber count the wiring under test manipulates), eight false explanatory comments, four latent annotation fixtures the gate structurally cannot see, and a CodeQL ReDoS whose fix exposed a bare-`echo` hole in the guard's own tsc matcher. All addressed and mutation-proved. Out-of-scope findings filed: #1612 #1613 #1614 #1615 |
 | 3 | Honest coverage baseline | Not started | — |
 | 4 | Config-race acceptance: track, bound, document | Issue filed | Accepted 2026-08-24; #1599 |
 | 5 | Complete ADR-033 registry lifecycle | Not started | — |
