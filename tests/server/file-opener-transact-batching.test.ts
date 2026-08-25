@@ -59,6 +59,11 @@ import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { INTERNAL_ORIGIN } from "../../src/shared/origins.js";
 import { UPLOAD_PREFIX } from "../../src/shared/paths.js";
 import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
+import {
+  asChangedKey,
+  listenForTransactions,
+  type TxnRecord,
+} from "../helpers/yjs-transactions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOCX_FIXTURE = path.resolve(__dirname, "../e2e/fixtures/single-paragraph.docx");
@@ -108,41 +113,15 @@ function buildStressMarkdown(sectionCount: number): string {
   return sections.join("\n");
 }
 
-interface UpdateRecord {
-  origin: unknown;
-  // Captures the type *instance refs* from txn.changed.keys() so callers can
-  // identity-test against a specific Y.AbstractType (e.g. the doc's
-  // XmlFragment) rather than name-comparing (which can't distinguish YMap
-  // variants ANNOTATIONS/REPLIES/AWARENESS — all have constructor.name "YMap").
-  changedTypes: Set<Y.AbstractType<Y.YEvent<any>>>;
-}
-
-// AbstractType is invariant in its event-type param, so a concrete type like
-// YXmlFragment (AbstractType<YXmlEvent>) or YMap<unknown> (AbstractType<YMapEvent<unknown>>)
-// doesn't structurally match Set<AbstractType<YEvent<any>>> even though at runtime it's
-// the exact same object txn.changed.keys() would have yielded.
-function asChangedKey(type: Y.AbstractType<any>): Y.AbstractType<Y.YEvent<any>> {
-  return type as unknown as Y.AbstractType<Y.YEvent<any>>;
-}
-
-function listenForUpdates(doc: Y.Doc): { updates: UpdateRecord[]; detach: () => void } {
-  const updates: UpdateRecord[] = [];
-  const listener = (txn: Y.Transaction) => {
-    updates.push({ origin: txn.origin, changedTypes: new Set(txn.changed.keys()) });
-  };
-  doc.on("afterTransaction", listener);
-  return { updates, detach: () => doc.off("afterTransaction", listener) };
-}
-
 // Pre-subscribe to the Y.Doc that openFileByPath will reuse, so we capture every
 // update event during the open. getOrCreateDocument returns the same instance
 // the opener later picks up via the same docId.
 async function captureUpdatesDuringOpen(
   filePath: string,
-): Promise<{ updates: UpdateRecord[]; doc: Y.Doc }> {
+): Promise<{ updates: TxnRecord[]; doc: Y.Doc }> {
   const docId = docIdFromPath(filePath);
   const doc = getOrCreateDocument(docId);
-  const { updates, detach } = listenForUpdates(doc);
+  const { records: updates, detach } = listenForTransactions(doc);
   try {
     await openFileByPath(filePath);
   } finally {
@@ -156,13 +135,13 @@ async function captureUpdatesDuringOpen(
 async function captureUpdatesDuringOpenFromContent(
   fileName: string,
   content: string | Buffer,
-): Promise<{ updates: UpdateRecord[]; doc: Y.Doc }> {
+): Promise<{ updates: TxnRecord[]; doc: Y.Doc }> {
   const uuid = "test-uuid-batching";
   cryptoMocks.randomUUID.mockImplementation(() => uuid);
   const syntheticPath = `${UPLOAD_PREFIX}${uuid}/${fileName}`;
   const docId = docIdFromPath(syntheticPath);
   const doc = getOrCreateDocument(docId);
-  const { updates, detach } = listenForUpdates(doc);
+  const { records: updates, detach } = listenForTransactions(doc);
   try {
     await openFileFromContent(fileName, content);
   } finally {
@@ -186,7 +165,7 @@ async function captureUpdatesDuringOpenFromContent(
 // cleanup), so use the per-update origin loop instead.
 // ---------------------------------------------------------------------------
 
-function assertSingleBatchedPopulate(doc: Y.Doc, updates: UpdateRecord[]): void {
+function assertSingleBatchedPopulate(doc: Y.Doc, updates: TxnRecord[]): void {
   const fragment = doc.getXmlFragment("default");
   const fragmentTouches = updates.filter((u) => u.changedTypes.has(asChangedKey(fragment)));
   expect(fragmentTouches.length).toBe(1);

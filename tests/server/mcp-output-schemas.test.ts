@@ -58,21 +58,9 @@ import { makeDiagnosticsHandler } from "../../src/server/mcp/routes/diagnostics.
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
-import type { AnchoredRangeResult } from "../../src/shared/positions/index.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 import { toFlatOffset } from "../../src/shared/types.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
-
-/**
- * `rangeOf`'s inferred return type also covers its no-`ydoc` branch (a bare
- * `{ range }` with no `ok` field), because that branch is a separate return
- * statement in the shared helper. Every call in this file passes `ydoc`, so
- * the `ok: true` branch is what always runs; this wrapper narrows the type
- * to match, with no change to what's actually returned at runtime.
- */
-function anchoredOf(from: number, to: number, ydoc: Parameters<typeof rangeOf>[2]) {
-  return rangeOf(from, to, ydoc) as AnchoredRangeResult;
-}
 
 let client: Client;
 
@@ -319,7 +307,7 @@ describe("tandem_getAnnotations structured output", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
     // Claude comment with a suggestion + a reply thread
-    const annId = createAnnotation(map, ydoc, "comment", anchoredOf(8, 13, ydoc), "Tighten this", {
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(8, 13, ydoc), "Tighten this", {
       suggestedText: "Hi",
       textSnapshot: "Hello",
     });
@@ -415,14 +403,7 @@ describe("tandem_checkInbox structured output (no channel shim attached)", () =>
       timestamp: Date.now(),
     };
     // Claude annotation the user accepted (a user response)
-    const acceptedId = createAnnotation(
-      map,
-      ydoc,
-      "comment",
-      anchoredOf(14, 23, ydoc),
-      "Trim?",
-      {},
-    );
+    const acceptedId = createAnnotation(map, ydoc, "comment", rangeOf(14, 23, ydoc), "Trim?", {});
     withInternal(ydoc, () => {
       map.set(userComment.id, userComment);
       const accepted = map.get(acceptedId) as Annotation;

@@ -42,22 +42,10 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
-import type { AnchoredRangeResult } from "../../src/shared/positions/index.js";
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { range } from "../helpers/positions.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
-
-/**
- * `rangeOf`'s inferred return type also covers its no-`ydoc` branch (a bare
- * `{ range }` with no `ok` field), because that branch is a separate return
- * statement in the shared helper. Every call in this file passes `ydoc`, so
- * the `ok: true` branch is what always runs; this wrapper narrows the type
- * to match, with no change to what's actually returned at runtime.
- */
-function anchoredOf(from: number, to: number, ydoc: Parameters<typeof rangeOf>[2]) {
-  return rangeOf(from, to, ydoc) as AnchoredRangeResult;
-}
 
 let client: Client;
 const sidecarTempFiles: string[] = [];
@@ -537,8 +525,8 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
     // A Claude comment (should appear) and a user-private note (must NOT appear).
-    createAnnotation(map, ydoc, "comment", anchoredOf(0, 5, ydoc), "A public comment");
-    createAnnotation(map, ydoc, "note", anchoredOf(6, 11, ydoc), "A private reminder");
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "A public comment");
+    createAnnotation(map, ydoc, "note", rangeOf(6, 11, ydoc), "A private reminder");
 
     const result = await client.callTool({
       name: "tandem_exportAnnotations",
@@ -569,8 +557,8 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
 
     const ydoc = setupDocAtPath("mcp-export-md", "Hello world test content", docPath);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", anchoredOf(0, 5, ydoc), "A public comment");
-    createAnnotation(map, ydoc, "note", anchoredOf(6, 11, ydoc), "A private reminder");
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "A public comment");
+    createAnnotation(map, ydoc, "note", rangeOf(6, 11, ydoc), "A private reminder");
 
     const result = await client.callTool({
       name: "tandem_exportAnnotations",
@@ -596,7 +584,7 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
 
     const ydoc = setupDocAtPath("mcp-export-custom", "Hello world", docPath);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", anchoredOf(0, 5, ydoc), "Custom path comment");
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Custom path comment");
 
     const result = await client.callTool({
       name: "tandem_exportAnnotations",
@@ -617,7 +605,7 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
       "upload",
     );
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", anchoredOf(0, 5, ydoc), "Some comment");
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Some comment");
 
     const result = await client.callTool({
       name: "tandem_exportAnnotations",
@@ -634,7 +622,7 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
 
     const ydoc = setupDocAtPath("mcp-export-nodisk", "Hello world", docPath);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", anchoredOf(0, 5, ydoc), "A comment");
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "A comment");
 
     const result = await client.callTool({
       name: "tandem_exportAnnotations",
@@ -660,7 +648,7 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
     const docPath = uniqueDocPath();
     const ydoc = setupDocAtPath("mcp-export-relative", "Hello world", docPath);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", anchoredOf(0, 5, ydoc), "x");
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
 
     const result = await client.callTool({
       name: "tandem_exportAnnotations",
@@ -682,7 +670,7 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
 
     const ydoc = setupDocAtPath("mcp-export-dir", "Hello world", docPath);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", anchoredOf(0, 5, ydoc), "dir-target comment");
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "dir-target comment");
 
     try {
       const result = await client.callTool({
@@ -709,7 +697,7 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
     const docPath = uniqueDocPath();
     const ydoc = setupDocAtPath("mcp-export-unc1", "Hello world", docPath);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", anchoredOf(0, 5, ydoc), "x");
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
 
     const result = await client.callTool({
       name: "tandem_exportAnnotations",
@@ -727,7 +715,7 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
     const docPath = uniqueDocPath();
     const ydoc = setupDocAtPath("mcp-export-unc2", "Hello world", docPath);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", anchoredOf(0, 5, ydoc), "x");
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
 
     const result = await client.callTool({
       name: "tandem_exportAnnotations",
@@ -745,7 +733,7 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
     const docPath = uniqueDocPath();
     const ydoc = setupDocAtPath("mcp-export-unc3", "Hello world", docPath);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", anchoredOf(0, 5, ydoc), "x");
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
 
     const result = await client.callTool({
       name: "tandem_exportAnnotations",
@@ -876,7 +864,7 @@ describe("MCP tool integration — tandem_appendContent (#979)", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     // "Second block" occupies flat offsets [13, 25] (see extractText layout).
     expect(extractText(ydoc).slice(13, 25)).toBe("Second block");
-    const annId = createAnnotation(map, ydoc, "comment", anchoredOf(13, 25, ydoc), "on last block");
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(13, 25, ydoc), "on last block");
 
     await client.callTool({
       name: "tandem_appendContent",
@@ -898,7 +886,7 @@ describe("MCP tool integration — tandem_appendContent (#979)", () => {
     authMap.set("user-pre", {
       id: "user-pre",
       author: "user",
-      range: anchoredOf(0, 13, ydoc).range,
+      range: rangeOf(0, 13, ydoc).range,
       timestamp: Date.now(),
     });
 

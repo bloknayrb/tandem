@@ -23,7 +23,6 @@ import {
 import { getDocumentStore, YDocStore } from "../../src/server/mcp/document-store.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
-import type { AnchoredRangeResult } from "../../src/shared/positions/types.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
@@ -35,18 +34,6 @@ beforeEach(() => {
 
 const FILE_PATH = "/tmp/doc.md";
 
-/**
- * `rangeOf`'s inferred return type is a union of the anchored branch and its
- * own 2-arg (no-ydoc) shape. Every call site here passes `ydoc`, which always
- * takes `rangeOf`'s `if (ydoc)` branch (it throws on `!result.ok`), so the
- * runtime value is always `AnchoredRangeResult` — this narrows the static
- * type to match without touching the shared helper (out of scope for this
- * unit).
- */
-function anchoredRangeOf(from: number, to: number, ydoc: Y.Doc): AnchoredRangeResult {
-  return rangeOf(from, to, ydoc) as AnchoredRangeResult;
-}
-
 describe("YDocStore.createAnnotation parity", () => {
   it("writes the same Y.Map record the standalone helper writes", () => {
     // Drive both the store method and the standalone helper against the SAME
@@ -56,19 +43,12 @@ describe("YDocStore.createAnnotation parity", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, "create-1");
 
-    const idStore = store.createAnnotation("comment", anchoredRangeOf(0, 5, ydoc), "needs work", {
+    const idStore = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "needs work", {
       suggestedText: "Hi",
     });
-    const idHelper = createAnnotation(
-      map,
-      ydoc,
-      "comment",
-      anchoredRangeOf(0, 5, ydoc),
-      "needs work",
-      {
-        suggestedText: "Hi",
-      },
-    );
+    const idHelper = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "needs work", {
+      suggestedText: "Hi",
+    });
 
     const recStore = map.get(idStore) as Annotation;
     const recHelper = map.get(idHelper) as Annotation;
@@ -88,7 +68,7 @@ describe("YDocStore.createAnnotation parity", () => {
     ydoc.on("afterTransaction", (tr) => {
       origin = tr.origin;
     });
-    store.createAnnotation("comment", anchoredRangeOf(0, 5, ydoc), "x");
+    store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
     expect(origin).toBe(MCP_ORIGIN);
   });
 });
@@ -99,9 +79,9 @@ describe("YDocStore.listAnnotations parity", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, "list-1");
 
-    createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "one");
-    createAnnotation(map, ydoc, "highlight", anchoredRangeOf(6, 11, ydoc), "", { color: "yellow" });
-    createAnnotation(map, ydoc, "note", anchoredRangeOf(0, 5, ydoc), "private");
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "one");
+    createAnnotation(map, ydoc, "highlight", rangeOf(6, 11, ydoc), "", { color: "yellow" });
+    createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private");
 
     expect(store.listAnnotations()).toEqual(collectAnnotations(map, store.docHash));
     expect(store.listAnnotations()).toHaveLength(3);
@@ -110,7 +90,7 @@ describe("YDocStore.listAnnotations parity", () => {
   it("getAnnotation returns the sanitized record, undefined when absent", () => {
     const ydoc = setupDoc("get-1", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "get-1");
-    const id = store.createAnnotation("comment", anchoredRangeOf(0, 5, ydoc), "hi");
+    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "hi");
     expect(store.getAnnotation(id)?.content).toBe("hi");
     expect(store.getAnnotation("missing")).toBeUndefined();
   });
@@ -120,7 +100,7 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
   it("updates content + suggestedText and bumps rev/editedAt", () => {
     const ydoc = setupDoc("edit-ok", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "edit-ok");
-    const id = store.createAnnotation("comment", anchoredRangeOf(0, 5, ydoc), "old");
+    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "old");
     const before = store.getAnnotation(id)!;
 
     const result = store.editAnnotation(id, { content: "new", suggestedText: "Hi" });
@@ -144,7 +124,7 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
   it("rejects editing a note (ADR-027) before any other guard", () => {
     const ydoc = setupDoc("edit-note", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "edit-note");
-    const id = store.createAnnotation("note", anchoredRangeOf(0, 5, ydoc), "private");
+    const id = store.createAnnotation("note", rangeOf(0, 5, ydoc), "private");
     // Even with an empty patch, the note guard wins (it precedes empty-patch).
     expect(store.editAnnotation(id, {})).toEqual({ kind: "invalid-note" });
   });
@@ -153,7 +133,7 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
     const ydoc = setupDoc("edit-np", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, "edit-np");
-    const id = store.createAnnotation("comment", anchoredRangeOf(0, 5, ydoc), "x");
+    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
     acceptPending(id, ydoc, map);
     expect(store.editAnnotation(id, { content: "y" })).toEqual({
       kind: "not-pending",
@@ -164,14 +144,14 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
   it("returns empty-patch when no fields are supplied (pending comment)", () => {
     const ydoc = setupDoc("edit-empty", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "edit-empty");
-    const id = store.createAnnotation("comment", anchoredRangeOf(0, 5, ydoc), "x");
+    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
     expect(store.editAnnotation(id, {})).toEqual({ kind: "empty-patch" });
   });
 
   it("rejects suggestedText on a non-comment after the empty-patch guard", () => {
     const ydoc = setupDoc("edit-sugg", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "edit-sugg");
-    const id = store.createAnnotation("highlight", anchoredRangeOf(0, 5, ydoc), "", {
+    const id = store.createAnnotation("highlight", rangeOf(0, 5, ydoc), "", {
       color: "yellow",
     });
     expect(store.editAnnotation(id, { suggestedText: "Hi" })).toEqual({
@@ -186,14 +166,8 @@ describe("YDocStore lifecycle parity", () => {
     const a = setupDoc("acc-a", "Hello world");
     const b = setupDoc("acc-b", "Hello world");
     const storeA = new YDocStore(a, FILE_PATH, "acc-a");
-    const idA = storeA.createAnnotation("comment", anchoredRangeOf(0, 5, a), "x");
-    const idB = createAnnotation(
-      b.getMap(Y_MAP_ANNOTATIONS),
-      b,
-      "comment",
-      anchoredRangeOf(0, 5, b),
-      "x",
-    );
+    const idA = storeA.createAnnotation("comment", rangeOf(0, 5, a), "x");
+    const idB = createAnnotation(b.getMap(Y_MAP_ANNOTATIONS), b, "comment", rangeOf(0, 5, b), "x");
 
     const resA = storeA.acceptAnnotation(idA);
     const resB = acceptPending(idB, b, b.getMap(Y_MAP_ANNOTATIONS));
@@ -205,14 +179,8 @@ describe("YDocStore lifecycle parity", () => {
     const a = setupDoc("dis-a", "Hello world");
     const b = setupDoc("dis-b", "Hello world");
     const storeA = new YDocStore(a, FILE_PATH, "dis-a");
-    const idA = storeA.createAnnotation("comment", anchoredRangeOf(0, 5, a), "x");
-    const idB = createAnnotation(
-      b.getMap(Y_MAP_ANNOTATIONS),
-      b,
-      "comment",
-      anchoredRangeOf(0, 5, b),
-      "x",
-    );
+    const idA = storeA.createAnnotation("comment", rangeOf(0, 5, a), "x");
+    const idB = createAnnotation(b.getMap(Y_MAP_ANNOTATIONS), b, "comment", rangeOf(0, 5, b), "x");
 
     storeA.dismissAnnotation(idA);
     dismissPending(idB, b, b.getMap(Y_MAP_ANNOTATIONS));
@@ -226,7 +194,7 @@ describe("YDocStore.removeAnnotation parity", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, "rm-1");
 
-    const id = store.createAnnotation("comment", anchoredRangeOf(0, 5, ydoc), "x");
+    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
     store.addReply(id, "a reply", "claude");
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(1);
 
@@ -249,7 +217,7 @@ describe("YDocStore replies parity", () => {
   it("addReply writes the same record as addReplyToAnnotation (claude author)", () => {
     const ydoc = setupDoc("rep-1", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "rep-1");
-    const id = store.createAnnotation("comment", anchoredRangeOf(0, 5, ydoc), "x");
+    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
 
     const r = store.addReply(id, "agreed", "claude");
     expect(r.ok).toBe(true);
@@ -265,7 +233,7 @@ describe("YDocStore replies parity", () => {
   it("addReply rejects a non-comment parent (ADR-027), matching the helper", () => {
     const ydoc = setupDoc("rep-2", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "rep-2");
-    const id = store.createAnnotation("highlight", anchoredRangeOf(0, 5, ydoc), "", {
+    const id = store.createAnnotation("highlight", rangeOf(0, 5, ydoc), "", {
       color: "yellow",
     });
     const r = store.addReply(id, "nope", "claude");
@@ -281,7 +249,7 @@ describe("YDocStore.listAnnotationsRefreshed", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, "refresh-1");
     // Anchor a comment on "world" (offsets 6..11).
-    const id = store.createAnnotation("comment", anchoredRangeOf(6, 11, ydoc), "on world");
+    const id = store.createAnnotation("comment", rangeOf(6, 11, ydoc), "on world");
 
     // Insert text before the anchor so the flat offset must shift.
     const frag = ydoc.getXmlFragment("default");

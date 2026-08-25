@@ -62,6 +62,7 @@ import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN, RELOAD_ORIGIN, shouldSkipDurableSync } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { asChangedKey, listenForTransactions } from "../helpers/yjs-transactions.js";
 
 let tmpDir: string;
 
@@ -81,28 +82,6 @@ afterAll(async () => {
   if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
   delete process.env.TANDEM_APP_DATA_DIR;
 });
-
-interface TxnRecord {
-  origin: unknown;
-  changedTypes: Set<Y.AbstractType<Y.YEvent<any>>>;
-}
-
-// AbstractType is invariant in its event-type param, so a concrete type like
-// YMap<unknown> (AbstractType<YMapEvent<unknown>>) doesn't structurally match
-// Set<AbstractType<YEvent<any>>> even though at runtime it's the exact same
-// object txn.changed.keys() would have yielded.
-function asChangedKey(type: Y.AbstractType<any>): Y.AbstractType<Y.YEvent<any>> {
-  return type as unknown as Y.AbstractType<Y.YEvent<any>>;
-}
-
-function listenForTransactions(doc: Y.Doc): { records: TxnRecord[]; detach: () => void } {
-  const records: TxnRecord[] = [];
-  const listener = (txn: Y.Transaction) => {
-    records.push({ origin: txn.origin, changedTypes: new Set(txn.changed.keys()) });
-  };
-  doc.on("afterTransaction", listener);
-  return { records, detach: () => doc.off("afterTransaction", listener) };
-}
 
 async function setupOpenedFile(initialText: string): Promise<{
   filePath: string;

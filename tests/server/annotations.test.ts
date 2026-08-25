@@ -7,23 +7,10 @@ import {
   sanitizeAnnotation,
 } from "../../src/server/mcp/annotations.js";
 import { extractText, getOrCreateXmlText } from "../../src/server/mcp/document.js";
-import type { AnchoredRangeResult } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { generateAnnotationId } from "../../src/shared/utils.js";
 import { anchored } from "../helpers/positions.js";
 import { getAnnotationsMap, getFragment, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
-
-/**
- * `rangeOf(from, to, doc)`'s inferred return type is a union of the anchored
- * branch and its own no-doc `{ range }` shape. Every 3-arg call site here
- * passes `doc`, which always takes `rangeOf`'s `if (ydoc)` branch (it throws
- * on `!result.ok`), so the runtime value is always `AnchoredRangeResult` with
- * a real `relRange` — this narrows the static type to match without touching
- * the shared helper (out of scope for this unit).
- */
-function anchoredRangeOf(from: number, to: number, doc: Y.Doc): AnchoredRangeResult {
-  return rangeOf(from, to, doc) as AnchoredRangeResult;
-}
 
 let doc: Y.Doc;
 const DOC_HASH = "sha256:annotations-test";
@@ -217,7 +204,7 @@ describe("createAnnotation with ydoc (relRange)", () => {
   it("stores relRange when ydoc is provided", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(0, 5, doc), "note");
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "note");
 
     const stored = map.get(id) as Annotation;
     expect(stored.relRange).toBeDefined();
@@ -238,7 +225,7 @@ describe("createAnnotation with ydoc (relRange)", () => {
     doc = makeDoc("## Title");
     const map = getAnnotationsMap(doc);
     // from=0 is inside "## " prefix → anchoredRange still succeeds but relRange is undefined
-    const id = createAnnotation(map, doc, "highlight", anchoredRangeOf(0, 3, doc), "");
+    const id = createAnnotation(map, doc, "highlight", rangeOf(0, 3, doc), "");
 
     const stored = map.get(id) as Annotation;
     expect(stored.relRange).toBeUndefined();
@@ -268,7 +255,7 @@ describe("refreshRange", () => {
   it("updates stale flat offsets from relRange", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(6, 11, doc), "note");
+    const id = createAnnotation(map, doc, "comment", rangeOf(6, 11, doc), "note");
 
     // Verify initial range
     const ann = map.get(id) as Annotation;
@@ -296,7 +283,7 @@ describe("refreshRange", () => {
   it("returns kind: 'ok' when offsets are unchanged", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(0, 5, doc), "note");
+    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "note");
 
     const ann = map.get(id) as Annotation;
     const refreshed = refreshRange(ann, doc);
@@ -307,7 +294,7 @@ describe("refreshRange", () => {
   it("returns kind: 'repaired' when relRange resolves to null (deleted content) and can re-anchor from flat", () => {
     doc = makeDoc("first\nsecond");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(6, 12, doc), "note");
+    const id = createAnnotation(map, doc, "comment", rangeOf(6, 12, doc), "note");
 
     const ann = map.get(id) as Annotation;
     expect(ann.relRange).toBeDefined();
