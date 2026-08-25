@@ -39,7 +39,7 @@ import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
 import { isAppTranslocatedPath } from "../shared/integrations/app-translocation.js";
 import {
   claudeCodeConfigPath,
-  claudeDesktopConfigPath,
+  claudeDesktopConfigTarget,
 } from "../shared/integrations/client-config-paths.js";
 import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
@@ -542,8 +542,11 @@ function readJson(path: string): JsonRead {
 type ClaudeConfigRead =
   | { kind: "unsafe-path" }
   | { kind: "absent" }
+  /** The open or read failed — EACCES, EISDIR, ELOOP. Nothing is known about the contents. */
   | { kind: "unreadable" }
-  | { kind: "ok"; value: unknown };
+  /** Read fine, but it is not a JSON object: a parse error, or a literal `null`/array/scalar. */
+  | { kind: "malformed" }
+  | { kind: "ok"; value: Record<string, unknown> };
 
 /**
  * The one way doctor reads a Claude client config (#1417).
@@ -554,20 +557,30 @@ type ClaudeConfigRead =
  * Doctor is the one command whose whole job is to read these files, so it is
  * also the one most likely to be pointed at a redirected profile.
  *
- * Existing behavior preserved exactly: no `existsSync` pre-flight (the read
- * has to be in a `try` regardless, so a separate stat is a second syscall
- * answering a question this one already answers, plus a TOCTOU window), and
- * ENOENT is the only failure distinguished from the rest.
+ * No `existsSync` pre-flight: the read has to be in a `try` regardless, so a
+ * separate stat is a second syscall answering a question this one already
+ * answers, plus a TOCTOU window. This adopts `checkDesktopMcpConfig`'s prior
+ * shape for all three callers; `checkUserMcpConfig` **did** have such a
+ * pre-flight and loses it here. The report is unchanged (ENOENT reaches the
+ * same "not found" branch) except when the file exists but its parent
+ * directory is unreadable, where the old code said "not found" and this says
+ * "could not be read" — the more accurate of the two.
  *
  * **Its screen is a backstop, and it is exported so that backstop is covered
- * rather than merely asserted.** Every caller today also screens its raw
- * input, and no safe input can `path.join` into an unsafe path -- so nothing
- * reachable through `runDoctor` can make this branch fire, and deleting it
- * left the whole suite green on both platforms. That is the definition of an
- * untested claim. The branch earns its place anyway: it is what makes the NEXT
- * check that reads a Claude config safe by construction even if its author
+ * rather than merely asserted.** Every caller also screens its raw input, and
+ * on Windows that makes this branch unreachable — `path.win32.join` preserves
+ * every hostile prefix, so the input screen catches all fourteen corpus rows
+ * first. It is *not* unreachable in general: on POSIX a `$HOME` of a single
+ * backslash passes the input screen (no leading `\\`) and then `path.posix.join`
+ * derives `\/.claude/settings.json`, which this rejects. An earlier revision of
+ * this comment asserted the branch could not fire at all; that was measured
+ * wrong. Deleting the screen still leaves every *integration* assertion green,
+ * which is why the corpus is also driven through this function directly.
+ *
+ * The branch earns its place beyond the backstop argument: it is what makes the
+ * NEXT check that reads a Claude config safe by construction even if its author
  * forgets the input screen, which is exactly how `checkTandemPlugin` became
- * #1417's eighth site. So it is tested directly instead of deleted.
+ * #1417's eighth site.
  */
 export function readClaudeConfig(path: string): ClaudeConfigRead {
   if (rejectUnsafeWindowsPrefix(path) !== null) return { kind: "unsafe-path" };
@@ -578,11 +591,21 @@ export function readClaudeConfig(path: string): ClaudeConfigRead {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return { kind: "absent" };
     return { kind: "unreadable" };
   }
+  let parsed: unknown;
   try {
-    return { kind: "ok", value: JSON.parse(raw) };
+    parsed = JSON.parse(raw);
   } catch {
-    return { kind: "unreadable" };
+    return { kind: "malformed" };
   }
+  // A literal `null`, an array or a scalar parses fine and then answers every
+  // `?.mcpServers` lookup with `undefined` — indistinguishable, at the call
+  // site, from a well-formed config with nothing registered. Callers would
+  // report "tandem is not registered" and prescribe `setup --apply` for a file
+  // that is corrupt, so the narrowing happens here rather than at each of them.
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { kind: "malformed" };
+  }
+  return { kind: "ok", value: parsed as Record<string, unknown> };
 }
 
 /**
@@ -602,49 +625,22 @@ export function readClaudeConfig(path: string): ClaudeConfigRead {
  *
  * The two *mixed*-separator forms are NOT among them, and the distinction is
  * the whole reason to measure with the real predicate rather than a stand-in:
- * `posix.join` leaves their backslashes intact, and this guard normalises `/`
- * to `\` across its first eight characters, so it still rejects them. A first
- * pass at this measurement used a hand-written `/^(\\\\|\/\/)/` and reported
- * six.
+ * `posix.join` leaves their backslashes intact, and `rejectUnsafeWindowsPrefix`
+ * normalises `/` to `\` across the first eight characters of what it is given,
+ * so it still rejects them. A first pass at this measurement used a
+ * hand-written `/^(\\\\|\/\/)/` and reported six.
  *
  * Screening the untrusted input keeps all fourteen load-bearing on any runner.
  * It is also simply the earlier point.
+ *
+ * Note the converse, because it changes how a green local run should be read:
+ * on Windows this screen is redundant with the loader's, since
+ * `path.win32.join` preserves every hostile prefix. Only three corpus rows
+ * discriminate it, and only on POSIX. Its evidence is CI and the posix
+ * simulation, not this machine.
  */
 function homeIsUnsafe(home: string): boolean {
   return home !== "" && rejectUnsafeWindowsPrefix(home) !== null;
-}
-
-/**
- * The single input `claudeDesktopConfigPath` will actually derive its path
- * from, so {@link homeIsUnsafe} screens that one rather than every candidate.
- *
- * **This is a correspondence with another module, which is the whole reason it
- * is a named exported function.** Screening every candidate instead is not the
- * safe simplification it looks like: under enterprise redirection
- * `%USERPROFILE%` sits on a share while `%APPDATA%` stays local, so refusing
- * on either would print "on a network path Tandem will not read" about an
- * ordinary local file and drop the only check reporting whether tandem is
- * registered with Claude Desktop.
- *
- * The branch is on `homeOverride`'s **truthiness**, matching
- * `claudeDesktopConfigPath`'s own `opts.homeOverride ? … : …`. An
- * `=== undefined` test drifts on the empty string: the resolver would take the
- * `%APPDATA%` route while this screened `""`, a no-op.
- *
- * `platform` and `appData` are parameters rather than reads of `os.platform()`
- * and `process.env` so both branches are reachable from any runner. A
- * win32-gated spec is skipped forever on this repo's ubuntu-only vitest job
- * and reads exactly like a pass (#1529).
- */
-export function desktopScreenInput(opts: {
-  homeOverride?: string;
-  platform: NodeJS.Platform;
-  appData?: string;
-  homeDir?: string;
-}): string {
-  const home = opts.homeOverride || (opts.homeDir ?? homedir());
-  if (opts.platform !== "win32" || opts.homeOverride) return home;
-  return opts.appData ?? home;
 }
 
 /** The warning both home-derived config checks emit when the profile is on a share. */
@@ -1116,7 +1112,14 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
     return;
   }
 
-  if (read.kind === "unreadable") {
+  if (read.kind === "unreadable" || read.kind === "malformed") {
+    // Two outcomes, one branch, but two statements — the earlier single
+    // "is malformed JSON" asserted a fact that is false for the commoner of
+    // them. A $HOME left mode 0700 under another uid, or a config that is a
+    // directory, throws EACCES/EISDIR: the file parses fine, and the remedy
+    // offered (rewrite it) fails the same way. Now each says only what is
+    // known.
+    //
     // Deliberately no parse detail: V8 SyntaxErrors embed a snippet of the
     // source text, and ~/.claude.json carries bearer tokens / API keys. This
     // check survives the /api/diagnostics filter, so its message reaches the
@@ -1129,14 +1132,20 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
     // hop here, not the sibling's two: `DESKTOP_RESTART_NOTE` doesn't apply to
     // Claude Code's config, only to Claude Desktop's.
     r.warn(
-      "~/.claude.json is malformed JSON",
-      withSuffix(setupApplyRemedy(cliAvailable()), "Tandem backs the file up before rewriting it."),
+      read.kind === "malformed"
+        ? "~/.claude.json is not valid JSON"
+        : "~/.claude.json could not be read",
+      read.kind === "malformed"
+        ? withSuffix(
+            setupApplyRemedy(cliAvailable()),
+            "Tandem backs the file up before rewriting it.",
+          )
+        : "Check the file's permissions and that it is a regular file, then re-run doctor.",
     );
     return;
   }
 
-  const config = read.value as { mcpServers?: Record<string, unknown> } | null;
-  const servers = config?.mcpServers ?? {};
+  const servers = (read.value as { mcpServers?: Record<string, unknown> }).mcpServers ?? {};
   if (!servers.tandem) {
     r.warn("tandem not registered in ~/.claude.json", setupApplyRemedy(cliAvailable()));
   } else {
@@ -1432,7 +1441,7 @@ function checkDesktopMcpConfig(
   cliAvailable: CliAvailability,
   homeOverride?: string,
 ): void {
-  const desktopPath = claudeDesktopConfigPath({ homeOverride });
+  const { screenInput, path: desktopPath } = claudeDesktopConfigTarget({ homeOverride });
 
   // (#1417), same reason as `checkUserMcpConfig`. Warned rather than silent —
   // the surrounding convention is to stay quiet when Claude Desktop is simply
@@ -1454,14 +1463,16 @@ function checkDesktopMcpConfig(
   // read", which is false, and dropped the only check that reports whether
   // tandem is registered with Claude Desktop.
   //
-  // So this mirrors `claudeDesktopConfigPath`'s own precedence, in
-  // {@link desktopScreenInput} — a named exported function rather than an
-  // inline expression, because the correspondence is the fragile part and an
-  // inline one could only be pinned by a win32-gated integration test, which
-  // CI never runs (#1529).
-  const read = homeIsUnsafe(
-    desktopScreenInput({ homeOverride, platform: platform(), appData: process.env.APPDATA }),
-  )
+  // Which input that is depends on the branch the resolver took, so the
+  // resolver returns it (`screenInput`) rather than doctor recomputing it.
+  // An earlier revision did recompute it here, and reproduced only one of the
+  // resolver's two caller-supplied inputs: `appDataOverride` BEATS
+  // `homeOverride` while `%APPDATA%` LOSES to it, and the mirror implemented
+  // the losing precedence for both. Harmless at this call site, which passes no
+  // `appDataOverride` — and precisely the kind of correspondence that is
+  // correct on the day it is written and wrong after someone edits the module
+  // it mirrors.
+  const read = homeIsUnsafe(screenInput)
     ? ({ kind: "unsafe-path" } as const)
     : readClaudeConfig(desktopPath);
   if (read.kind === "unsafe-path") {
@@ -1481,7 +1492,10 @@ function checkDesktopMcpConfig(
   // to be in a `try` regardless, so a separate stat would be a second syscall
   // answering a question this one already answers — plus a TOCTOU window.
   if (read.kind === "absent") return;
-  if (read.kind === "unreadable") {
+  // Unlike the Claude Code sibling, one branch covers both: "could not be read
+  // as JSON" is true whether the open failed or the parse did, so there is no
+  // false assertion to split apart.
+  if (read.kind === "unreadable" || read.kind === "malformed") {
     // No parse detail, same rule as `~/.claude.json`: V8 SyntaxErrors embed a
     // snippet of the source, and this file holds `env.TANDEM_AUTH_TOKEN`. This
     // message reaches the Copy Diagnostics clipboard and public issues.
@@ -1505,8 +1519,7 @@ function checkDesktopMcpConfig(
     return;
   }
 
-  const config = read.value as { mcpServers?: Record<string, unknown> } | null;
-  const tandem = config?.mcpServers?.tandem;
+  const tandem = (read.value as { mcpServers?: Record<string, unknown> }).mcpServers?.tandem;
   if (!tandem) {
     // The restart note belongs here as much as on the entry branches below, and
     // this is the branch a *fresh* desktop install actually lands on — no
@@ -1908,28 +1921,40 @@ function checkTandemPlugin(r: Recorder): void {
     return;
   }
 
-  let enabledPlugins: Record<string, unknown> | null = null;
   const settingsRead = readClaudeConfig(join(home, ".claude", "settings.json"));
-  if (settingsRead.kind === "ok") {
-    const settings = settingsRead.value as { enabledPlugins?: Record<string, unknown> } | null;
-    enabledPlugins = settings?.enabledPlugins ?? {};
-  }
-  // Every other outcome leaves `enabledPlugins` null. Absent or malformed is
-  // not evidence, and a parse failure is `checkUserMcpConfig`'s story to tell —
-  // this file carries permissions, so no detail escapes here either. The
-  // `unsafe-path` case cannot reach here: the home screen above returned.
-
   // `homeOverride: home`, not `home || undefined`: the early return above
   // proves `home` is non-empty here, and the fallback spelling — correct in
   // `checkUserMcpConfig`, which has no such guard — implies a case that cannot
   // occur.
   const wizardRead = readClaudeConfig(claudeCodeConfigPath({ homeOverride: home }));
+
+  // The home screen above is NOT exhaustive, so this is not dead. On POSIX a
+  // `$HOME` of a single backslash has no leading `\\` and passes it, then
+  // `path.posix.join` derives `\/.claude/settings.json`, which the loader
+  // rejects. An earlier revision asserted this branch was unreachable and
+  // folded it into `enabledPlugins === null` — which is exactly the silence the
+  // paragraph above argues against, three lines after arguing it.
+  if (settingsRead.kind === "unsafe-path" || wizardRead.kind === "unsafe-path") {
+    r.warn(
+      "Your Claude Code profile is on a network or device path Tandem will not read",
+      NETWORK_HOME_FIX,
+    );
+    return;
+  }
+
+  // Every other outcome leaves `enabledPlugins` null. Absent, unreadable or
+  // malformed is not evidence, and naming the cause is `checkUserMcpConfig`'s
+  // story to tell — this file carries permissions, so no detail escapes here.
+  let enabledPlugins: Record<string, unknown> | null = null;
+  if (settingsRead.kind === "ok") {
+    enabledPlugins =
+      (settingsRead.value as { enabledPlugins?: Record<string, unknown> }).enabledPlugins ?? {};
+  }
+
   // Anything but `ok` is already reported by `checkUserMcpConfig`.
-  const wizardConfig =
-    wizardRead.kind === "ok"
-      ? (wizardRead.value as { mcpServers?: Record<string, unknown> } | null)
-      : null;
-  const wizardTandemEntry = wizardConfig?.mcpServers?.tandem !== undefined;
+  const wizardTandemEntry =
+    wizardRead.kind === "ok" &&
+    (wizardRead.value as { mcpServers?: Record<string, unknown> }).mcpServers?.tandem !== undefined;
 
   for (const outcome of evaluateTandemPlugin({ enabledPlugins, wizardTandemEntry })) {
     recordEvaluation(r, outcome);
