@@ -1,0 +1,30 @@
+{
+  // Client/Vitest tests. Extends the CLIENT config, so these get `lib.dom` and
+  // the browser-ish surface the components under test assume.
+  //
+  // `tests/helpers` appears here AND in the node config, deliberately and for
+  // the same reason `src/shared` appears in both production configs: the
+  // directory mixes plain Node fixture builders with Svelte-flavoured
+  // `*.svelte.ts` cells that only make sense under DOM. Checking it twice is
+  // the point -- a helper that compiles only with DOM in scope would otherwise
+  // reach the node suites untyped.
+  //
+  // KNOWN GAP, stated rather than papered over: bare `tsc` resolves
+  // `import ... from "./Foo.svelte"` through an ambient module declaration and
+  // never reads the component's own <script> block. The three harness
+  // components under `tests/client/fixtures/` are therefore NOT typechecked by
+  // this config. Only `svelte-check` would cover them, and it is scoped to
+  // `src/client` today. Do not describe this config as covering them.
+  "extends": "./tsconfig.client.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/client/**/*.ts",
+    "src/shared/**/*.ts",
+    "tests/client/**/*.ts",
+    "tests/design-system-impl/**/*.ts",
+    "tests/helpers/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,45 @@
+{
+  // Node/Vitest tests, plus the doc- and wiring-guard suites that run in the
+  // same environment.
+  //
+  // **Extends the ROOT config, not the server config, and that is deliberate.**
+  // The obvious choice is `tsconfig.server.json`, so these files are checked
+  // against the same DOM-free lib the server ships with. It does not work and
+  // should not: suites under `tests/build`, `tests/docs` and `tests/scripts`
+  // import client modules by design (`e2e-guard`, `check-semantic-tokens` and
+  // friends read and exercise `src/client/**`), which drags `src/client` into
+  // the program and produces a wall of `Cannot find name 'window'` that says
+  // nothing about the test. The server's DOM-freeness is a real invariant, but
+  // `tsconfig.server.json` already owns and proves it, and CI runs that check
+  // directly -- duplicating it here would buy nothing and cost the coverage.
+  //
+  // Directories are included WHOLE, never by `*.test.ts` glob. A suffix glob
+  // silently skips every helper, fixture-builder and standalone entry point
+  // that no matched file happens to import -- and skipping is indistinguishable
+  // from passing. `tests/scripts/typecheck-tests-coverage.test.ts` pins that.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/server/**/*.ts",
+    "src/shared/**/*.ts",
+    "src/channel/**/*.ts",
+    "src/monitor/**/*.ts",
+    "src/cli/**/*.ts",
+    "src/stdio-bridge/**/*.ts",
+    "tests/build/**/*.ts",
+    "tests/channel/**/*.ts",
+    "tests/cli/**/*.ts",
+    "tests/crdt/**/*.ts",
+    "tests/docs/**/*.ts",
+    "tests/helpers/**/*.ts",
+    "tests/monitor/**/*.ts",
+    "tests/plugin/**/*.ts",
+    "tests/scripts/**/*.ts",
+    "tests/server/**/*.ts",
+    "tests/shared/**/*.ts",
+    "tests/*.test.ts"
+  ],
+  "exclude": ["node_modules", "dist", "tests/tauri-driver"]
+}

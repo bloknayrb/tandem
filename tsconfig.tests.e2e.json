@@ -1,0 +1,27 @@
+{
+  // Playwright: the primary E2E suite, the perf suite, and the two capture
+  // harnesses under `scripts/`. These share one config because they share one
+  // runner and one type surface (`@playwright/test`), not because they run
+  // together -- they are invoked by four different commands.
+  //
+  // The config files and `global-setup`/`global-teardown` modules are included
+  // explicitly. Nothing imports them -- Playwright loads them by path -- so a
+  // `*.spec.ts` glob would leave them unchecked while looking complete. That is
+  // the exact shape of the gap this unit exists to close.
+  //
+  // Extends the ROOT config, not client: these drive a real browser through
+  // Playwright's own API rather than importing client modules, so they need
+  // DOM in `lib` but none of the client config's include set.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "tests/e2e/**/*.ts",
+    "tests/perf/**/*.ts",
+    "scripts/screenshots/**/*.ts",
+    "scripts/design-baselines/**/*.ts",
+    "playwright.config.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}
