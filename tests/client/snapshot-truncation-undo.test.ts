@@ -50,14 +50,12 @@ function acceptedAnnotation(over: Partial<Annotation>): Annotation {
     type: "comment",
     author: "claude",
     status: "accepted",
-    text: "why",
     content: "why",
     suggestedText: "SHORT",
-    createdAt: 0,
     timestamp: 0,
     range: { from: 0, to: 5 },
     ...over,
-  } as unknown as Annotation;
+  } as Annotation;
 }
 
 function setup(html: string, ann: Annotation) {

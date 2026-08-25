@@ -18,9 +18,9 @@ const ann = (id: string, from: number, to = from + 5, timestamp = 0): Annotation
     status: "pending",
     audience: "outbound",
     timestamp,
-    body: "",
+    content: "",
     textSnapshot: "",
-  }) as unknown as Annotation;
+  }) as Annotation;
 
 describe("sortAnnotationsByPosition", () => {
   it("orders by range.from ascending", () => {

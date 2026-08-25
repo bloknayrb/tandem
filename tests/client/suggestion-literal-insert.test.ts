@@ -49,11 +49,11 @@ function suggestion(from: number, to: number, suggestedText: string): Annotation
     type: "comment",
     author: "claude",
     status: "pending",
-    text: "why",
+    content: "why",
     suggestedText,
-    createdAt: 0,
+    timestamp: 0,
     range: { from, to },
-  } as unknown as Annotation;
+  } as Annotation;
 }
 
 /** Inline shape of the first block, with hardBreak distinguishable from text. */
@@ -269,13 +269,13 @@ describe("#1477: undoing an accept restores the breaks it recorded", () => {
       type: "comment",
       author: "claude",
       status: "accepted",
-      text: "why",
+      content: "why",
       suggestedText: "one\ntwo",
       textSnapshot: "alpha\nbravo",
       textSnapshotBreaks: [{ at: 5, kind: "hard" as const }],
-      createdAt: 0,
+      timestamp: 0,
       range: { from: 0, to: 7 },
-    } as unknown as Annotation;
+    } as Annotation;
     const { editor, review } = setup("<p>one<br>two</p>", ann);
 
     expect(review.undoResolveAnnotation("u1")).toBe(true);
@@ -292,12 +292,12 @@ describe("#1477: undoing an accept restores the breaks it recorded", () => {
       type: "comment",
       author: "claude",
       status: "accepted",
-      text: "why",
+      content: "why",
       suggestedText: "one\ntwo",
       textSnapshot: "alpha\nbravo",
-      createdAt: 0,
+      timestamp: 0,
       range: { from: 0, to: 7 },
-    } as unknown as Annotation;
+    } as Annotation;
     const { editor, review } = setup("<p>one<br>two</p>", ann);
 
     expect(review.undoResolveAnnotation("u1")).toBe(true);
@@ -316,12 +316,12 @@ describe("#1477: undoing an accept restores the breaks it recorded", () => {
       type: "comment",
       author: "claude",
       status: "accepted",
-      text: "why",
+      content: "why",
       suggestedText: "one\ntwo",
       textSnapshot: "alpha\nbravo",
-      createdAt: 0,
+      timestamp: 0,
       range: { from: 0, to: 7 },
-    } as unknown as Annotation;
+    } as Annotation;
     const { editor, review } = setup("<p>edited since</p>", ann);
 
     expect(review.undoResolveAnnotation("u2")).toBe(false);
@@ -334,12 +334,12 @@ describe("#1477: undoing an accept restores the breaks it recorded", () => {
       type: "comment",
       author: "claude",
       status: "accepted",
-      text: "why",
+      content: "why",
       suggestedText: "one",
       textSnapshot: "",
-      createdAt: 0,
+      timestamp: 0,
       range: { from: 0, to: 3 },
-    } as unknown as Annotation;
+    } as Annotation;
     const { editor, review } = setup("<p>one</p>", ann);
 
     expect(review.undoResolveAnnotation("u3")).toBe(true);

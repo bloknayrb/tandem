@@ -48,18 +48,25 @@ function docPair(markdown: string) {
 
 /** An annotation anchored the way the server anchors one, over [from, to). */
 function anchor(ydoc: Y.Doc, from: number, to: number): Annotation {
-  const range = anchoredRange(ydoc, off(from), off(to));
-  if (!range) throw new Error(`anchoredRange returned null for ${from}..${to}`);
+  // `anchoredRange` returns `AnchoredRangeResult | (RangeValidation & {ok:false})`
+  // -- always an object, never null. The guard here used to be `if (!range)`,
+  // which can never fire, so a range that failed to anchor produced a garbage
+  // fixture silently instead of failing the test. `.ok` is the real discriminant.
+  const anchored = anchoredRange(ydoc, off(from), off(to));
+  if (!anchored.ok) throw new Error(`anchoredRange failed for ${from}..${to}`);
   return {
     id: "a1",
     type: "comment",
     author: "claude",
     status: "pending",
-    text: "suggestion",
+    content: "suggestion",
     suggestedText: "REPLACED",
-    createdAt: 0,
-    ...range,
-  } as unknown as Annotation;
+    timestamp: 0,
+    // Named rather than spread: `...anchored` also carried `ok` and
+    // `fullyAnchored` onto the annotation, which are result metadata, not fields.
+    range: anchored.range,
+    ...(anchored.relRange ? { relRange: anchored.relRange } : {}),
+  } as Annotation;
 }
 
 /**

@@ -576,10 +576,10 @@ describe("authorship stamp path", () => {
       status: "pending",
       // Flat offsets: "world" in "hello world".
       range: { from: 6, to: 11 },
-      text: "reword this",
+      content: "reword this",
       suggestedText: "planet",
       timestamp: Date.now(),
-    } as unknown as Annotation;
+    } as Annotation;
 
     expect(applySuggestion(ann, editor, ydoc)).toBe(true);
     expect(editor.getText()).toBe("hello planet");

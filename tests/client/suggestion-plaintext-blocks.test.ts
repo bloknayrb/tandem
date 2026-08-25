@@ -42,11 +42,11 @@ function suggestion(from: number, to: number, suggestedText: string): Annotation
     type: "comment",
     author: "claude",
     status: "pending",
-    text: "why",
+    content: "why",
     suggestedText,
-    createdAt: 0,
+    timestamp: 0,
     range: { from, to },
-  } as unknown as Annotation;
+  } as Annotation;
 }
 
 /**
@@ -301,13 +301,13 @@ describe("#1460: undo still recognises what accept wrote", () => {
       type: "comment",
       author: "claude",
       status: "accepted",
-      text: "why",
+      content: "why",
       suggestedText: "one\ntwo",
       textSnapshot: "hello world",
-      createdAt: 0,
+      timestamp: 0,
       // Flat offsets include the `## ` prefix; the accepted text is `one two`.
       range: { from: 3, to: 10 },
-    } as unknown as Annotation;
+    } as Annotation;
     const { editor, review } = setup("<h2>one two</h2>", ann, "txt");
 
     expect(review.undoResolveAnnotation("a1"), "undo succeeded").toBe(true);
@@ -324,12 +324,12 @@ describe("#1460: undo still recognises what accept wrote", () => {
       type: "comment",
       author: "claude",
       status: "accepted",
-      text: "why",
+      content: "why",
       suggestedText: "one\r\ntwo",
       textSnapshot: "hello world",
-      createdAt: 0,
+      timestamp: 0,
       range: { from: 0, to: 7 },
-    } as unknown as Annotation;
+    } as Annotation;
     const { editor, review } = setup("<p>one</p><p>two</p>", ann, "txt");
 
     expect(review.undoResolveAnnotation("a1"), "undo succeeded").toBe(true);
@@ -349,12 +349,12 @@ describe("#1460: undo still recognises what accept wrote", () => {
       type: "comment",
       author: "claude",
       status: "accepted",
-      text: "why",
+      content: "why",
       suggestedText: "MERGED",
       textSnapshot: "first line\nsecond line",
-      createdAt: 0,
+      timestamp: 0,
       range: { from: 0, to: 6 },
-    } as unknown as Annotation;
+    } as Annotation;
     const { editor, review } = setup("<p>MERGED</p>", ann, "txt");
 
     expect(review.undoResolveAnnotation("a1")).toBe(true);
@@ -372,12 +372,12 @@ describe("#1460: undo still recognises what accept wrote", () => {
       type: "comment",
       author: "claude",
       status: "accepted",
-      text: "why",
+      content: "why",
       suggestedText: "MERGED",
       textSnapshot: "first line\nsecond line",
-      createdAt: 0,
+      timestamp: 0,
       range: { from: 0, to: 6 },
-    } as unknown as Annotation;
+    } as Annotation;
     const { editor, review } = setup("<p>MERGED</p>", ann, "md");
 
     expect(review.undoResolveAnnotation("a1")).toBe(true);
@@ -393,12 +393,12 @@ describe("#1460: undo still recognises what accept wrote", () => {
       type: "comment",
       author: "claude",
       status: "accepted",
-      text: "why",
+      content: "why",
       suggestedText: "one\ntwo",
       textSnapshot: "hello world",
-      createdAt: 0,
+      timestamp: 0,
       range: { from: 3, to: 10 },
-    } as unknown as Annotation;
+    } as Annotation;
     const { editor, review } = setup("<h2>edited since</h2>", ann, "txt");
 
     expect(review.undoResolveAnnotation("a1")).toBe(false);
