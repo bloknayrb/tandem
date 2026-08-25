@@ -347,6 +347,25 @@ pub const SUBNET_PROBE_TIMEOUT_ENABLE: Duration = Duration::from_secs(15);
 /// its meta, firewall and workspace writes can safely overlap.
 const NETSH_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The `exit_code` a timed-out `netsh` reports, kept distinct from the `-1`
+/// that means the process never started.
+///
+/// #1371 gave the timeout `-1`, reusing this file's established "never
+/// completed" marker. That is right about what they share (no exit status was
+/// ever produced) and wrong about what separates them: a timeout is
+/// ENVIRONMENTAL, while a spawn failure or a path resolving to a directory is
+/// a real defect in the anchoring. Sharing one code made them
+/// indistinguishable, and `the_anchored_netsh_is_reachable_and_runs`
+/// consequently failed a CI run on a docs-only commit, reporting "netsh never
+/// started from its anchored path" when netsh was merely slow on a loaded
+/// runner. That test's own docblock had claimed a slow runner could not flake
+/// it.
+///
+/// Still negative, which is the property #1371 actually needed: it keeps the
+/// timeout clear of both exit-code-1 heuristics (`is_no_rules_match` and the
+/// UAC-decline inference), neither of which can match a negative code.
+const NETSH_TIMEOUT_EXIT_CODE: i32 = -2;
+
 const RULE_NAME_ALLOW: &str = "Tandem Cowork";
 const RULE_NAME_DENY: &str = "Tandem Cowork \u{2014} Deny (elevation refused)";
 const RULE_NAME_PREFIX: &str = "Tandem Cowork";
@@ -869,7 +888,7 @@ pub fn add_cowork_deny_rule(cidr: &str) -> Result<(), FirewallError> {
 /// exit-1 failure propagates.
 ///
 /// Extracted from the two `or_else` arms below so the contract is unit-testable,
-/// and because #1371 gave `run_netsh` a timeout arm that reports `exit_code: -1`:
+/// and because #1371 gave `run_netsh` a timeout arm with a negative exit code:
 /// a predicate that matched on the message alone, or on any failure, would
 /// silently swallow a wedged netsh as "nothing to remove".
 fn is_no_rules_match(err: &FirewallError) -> bool {
@@ -1120,13 +1139,14 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
 
 /// The error a killed `netsh` reports (#1371).
 ///
-/// `exit_code: -1` is this file's established "the process never completed"
+/// [`NETSH_TIMEOUT_EXIT_CODE`], not `-1`: see that constant. `-1` remains this
+/// file's "the process never completed"
 /// marker — the spawn-failure arms in `run_netsh` and `scan_orphan_rules` already
 /// use it — so this needs no new wire variant and no new client hint. It also
 /// keeps the timeout clear of both exit-code-1 heuristics.
 fn netsh_timeout_error() -> FirewallError {
     FirewallError::NetshFailure {
-        exit_code: -1,
+        exit_code: NETSH_TIMEOUT_EXIT_CODE,
         stderr_tail: format!("netsh timed out after {}s", NETSH_TIMEOUT.as_secs()),
         stdout_tail: String::new(),
     }
@@ -1155,6 +1175,63 @@ fn truncate_head(s: &str, max_bytes: usize) -> &str {
 mod tests {
     use super::*;
 
+    /// How an anchored-probe test should read a `netsh` failure.
+    ///
+    /// Extracted for the same reason [`is_no_rules_match`] was: the contract is
+    /// then unit-testable. The probe tests below can only ever observe whatever
+    /// the host happens to do, so the arm that classifies a timeout as
+    /// environmental would otherwise be an untested claim on every machine where
+    /// netsh answers promptly — which is every machine except the loaded CI
+    /// runner this existed to survive.
+    #[derive(Debug, PartialEq, Eq)]
+    enum AnchorProbe {
+        /// A real defect in the anchoring — the thing the probe exists to catch.
+        Broken,
+        /// The host or its firewall service was uncooperative. Not our bug.
+        Environmental,
+    }
+
+    fn classify_netsh_probe(err: &FirewallError) -> AnchorProbe {
+        match err {
+            // Resolution produced a path with no binary at it.
+            FirewallError::NetshNotFound => AnchorProbe::Broken,
+            // Slow host. Must be tested BEFORE the -1 arm, and must not share
+            // its code — that collision is the bug this classifier fixes.
+            FirewallError::NetshFailure { exit_code: NETSH_TIMEOUT_EXIT_CODE, .. } => {
+                AnchorProbe::Environmental
+            }
+            // Never completed: a failed spawn, or a path resolving to a directory.
+            FirewallError::NetshFailure { exit_code: -1, .. } => AnchorProbe::Broken,
+            // netsh ran and said something; that is all the probe needs.
+            _ => AnchorProbe::Environmental,
+        }
+    }
+
+    /// The distinction the probe depends on, tested without needing a slow host.
+    ///
+    /// Mutation check: restoring `netsh_timeout_error()`'s original `-1` turns
+    /// the first assertion red. Nothing else in this file can detect that
+    /// change, which is why a timeout silently read as "netsh never started"
+    /// for as long as it did.
+    #[test]
+    fn a_timeout_is_classified_apart_from_a_failed_spawn() {
+        assert_eq!(
+            classify_netsh_probe(&netsh_timeout_error()),
+            AnchorProbe::Environmental,
+            "a slow host must not read as a broken anchor"
+        );
+        assert_eq!(
+            classify_netsh_probe(&FirewallError::NetshFailure {
+                exit_code: -1,
+                stderr_tail: "spawn failed".to_string(),
+                stdout_tail: String::new(),
+            }),
+            AnchorProbe::Broken,
+            "a process that never started is still a real defect"
+        );
+        assert_eq!(classify_netsh_probe(&FirewallError::NetshNotFound), AnchorProbe::Broken);
+    }
+
     /// The anchored `netsh` actually runs.
     ///
     /// Every other test in this module is a pure function over captured text, so
@@ -1170,22 +1247,29 @@ mod tests {
     /// `NetshNotFound` (resolution produced a path with no binary at it) and
     /// `NetshFailure { exit_code: -1 }`, which is this file's marker for "the
     /// process never completed" and is what a path pointing at a *directory*
-    /// would produce. A timeout is deliberately not in that set: it also reports
+    /// would produce.
+    ///
+    /// A timeout is environmental and is excluded — now by construction rather
+    /// than by assertion. This docblock previously said a timeout "reports
     /// `NetshFailure`, but via `netsh_timeout_error()` with a real exit code, so
-    /// a slow runner cannot flake this.
+    /// a slow runner cannot flake this". That was false about the code sixty
+    /// lines above it: `netsh_timeout_error()` returned the same `-1`, so the
+    /// arm below could not tell "never started" from "took longer than five
+    /// seconds". A CI runner that spent fourteen seconds on the sibling
+    /// PowerShell test duly failed this one, on a commit whose entire diff was
+    /// one markdown file, reporting that netsh was unreachable when it was
+    /// merely slow. See [`NETSH_TIMEOUT_EXIT_CODE`].
     #[test]
     fn the_anchored_netsh_is_reachable_and_runs() {
         match scan_orphan_rules() {
             Ok(_) => {}
-            Err(FirewallError::NetshNotFound) => {
-                panic!("netsh could not be resolved at its anchored System32 path");
-            }
-            Err(FirewallError::NetshFailure { exit_code: -1, stderr_tail, .. }) => {
-                panic!("netsh never started from its anchored path: {stderr_tail}");
-            }
-            Err(other) => {
-                // netsh ran and said something; that is all this test needs.
-                eprintln!("[test] anchored netsh ran and returned: {other:?}");
+            Err(err) => {
+                assert_eq!(
+                    classify_netsh_probe(&err),
+                    AnchorProbe::Environmental,
+                    "the anchored netsh is broken, not merely uncooperative: {err:?}"
+                );
+                eprintln!("[test] anchored netsh ran and returned: {err:?}");
             }
         }
     }
@@ -1485,8 +1569,17 @@ mod tests {
         // rules` would report success having removed nothing.
         let timeout = netsh_timeout_error();
         assert!(
-            matches!(timeout, FirewallError::NetshFailure { exit_code: -1, .. }),
-            "the timeout must use this file's -1 'never completed' marker: {timeout:?}"
+            matches!(
+                timeout,
+                FirewallError::NetshFailure { exit_code: NETSH_TIMEOUT_EXIT_CODE, .. }
+            ),
+            "the timeout must use its own sentinel: {timeout:?}"
+        );
+        // And it must NOT be the never-started marker. The absence of this
+        // assertion is what let a slow runner report "netsh never started".
+        assert_ne!(
+            NETSH_TIMEOUT_EXIT_CODE, -1,
+            "a timeout and a failed spawn must stay distinguishable"
         );
         assert!(!is_no_rules_match(&timeout));
         // And it must not read as a UAC decline either: that heuristic needs
