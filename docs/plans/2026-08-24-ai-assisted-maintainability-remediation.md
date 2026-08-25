@@ -63,8 +63,8 @@ Do not implement this document as one change.
 
 | Unit | Concern | Status | PR / evidence |
 |---|---|---|---|
-| 0 | Repo hygiene: ignore `.codex/`; unblock `audit:dead-code` | In review | #1601; tsc/vitest/cargo green |
-| 1 | Doctor Windows path-safety closure | Not started | — |
+| 0 | Repo hygiene: ignore `.codex/`; unblock `audit:dead-code` | Merged | #1601; 15/15 CI green |
+| 1 | Doctor Windows path-safety closure | In review | #1608; tsc clean, 9085/0 vitest, cargo green, CI green. 3x `/code-review high` (13 findings) + 6-agent `review-pr` (14 findings); all real, all fixed |
 | 2 | Test + `src/cli` TypeScript gate | Not started | — |
 | 3 | Honest coverage baseline | Not started | — |
 | 4 | Config-race acceptance: track, bound, document | Issue filed | Accepted 2026-08-24; #1599 |
@@ -844,6 +844,41 @@ before the rejection is returned?
 
 **Rollback:** Revert the loader and its call-site migration together. Do not
 retain a mix of direct and guarded reads.
+
+**Divergence, as shipped in #1608:** the loader landed and all three checks
+consume it, but **home resolution was NOT unified** and no check's resolution
+moved. `checkTandemPlugin`'s `if (!home) return;` makes the whole check vanish
+where `checkUserMcpConfig` falls back to `homedir()`; unifying that un-silences
+a check — a product change with no security value, invisible to the existing
+wiring tests, which filter by check name. Three characterization tests pin the
+current behaviour so the unification can be done as its own PR. Both pre-code
+reviewers recommended this split independently.
+
+**Two defects the six-agent review found in the unit's own gate**, both
+worth carrying forward because the later units reuse these patterns. The
+corpus marker was derived from the raw hostile home, but `path.posix.join`
+collapses `/./`, so one row filtered to `[]` on Linux no matter what doctor
+read — a zero-of-zero inside the file written to prevent zero-of-zero. The
+fix derives the marker *through* `join` and adds a per-row positive control;
+it also recovered a real corpus row, so the input screen discriminates four
+rows on POSIX rather than three. Separately, all three refusal warnings were
+asserted by nothing: replacing any `r.warn` body with a bare `return` left
+the suite green. **Assert the report, not only the absence of a syscall.**
+
+A correspondence was also deleted rather than documented. `doctor.ts` had
+mirrored `claudeDesktopConfigPath`'s precedence so it could screen the right
+input, and reproduced only one of that resolver's two caller-supplied inputs
+— they have opposite precedence. `claudeDesktopConfigTarget` now returns
+`{ screenInput, path }` so the two cannot drift. Any later unit tempted to
+mirror a resolver should return the value from the resolver instead.
+
+Scope also grew in one direction and was held in another. Grew: the Claude
+Desktop check gained an input screen it never had, because screening only the
+resolved path leaves four of the fourteen corpus spellings unguarded under
+`path.posix.join` — and CI is ubuntu-only. Held: `checkAnnotationStore` (Unit
+12) and three sites in no unit at all — `TANDEM_CLAUDE_CMD`, the
+`homedir()`-derived `~/.local/bin` probe, and the `PATH`-walk `statSync` — are
+enumerated in `docs/security.md` rather than fixed here.
 
 ### Unit 2 — Typecheck the tests, and the untyped half of src/
 

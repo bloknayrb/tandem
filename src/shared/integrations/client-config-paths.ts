@@ -51,19 +51,75 @@ export function claudeCodeConfigPath(opts: ClientConfigPathOptions = {}): string
  * copy must not relearn it.
  */
 export function claudeDesktopConfigPath(opts: ClientConfigPathOptions = {}): string {
+  return claudeDesktopConfigTarget(opts).path;
+}
+
+/** Where the Claude Desktop config lives, and the untrusted value it derives from. */
+export interface ClaudeDesktopConfigTarget {
+  /**
+   * The caller-influenced value `path` is built from, **before any `join`** —
+   * the thing a path-safety screen must be pointed at.
+   *
+   * A screen applied to `path` instead is not equivalent, and the difference is
+   * silent. `path.posix.join` collapses a leading `//` to `/`, so on a Linux
+   * runner four of the fourteen hostile spellings in
+   * `tests/helpers/unc-fixtures.ts` derive a path that
+   * `rejectUnsafeWindowsPrefix` then *accepts* — a guard on the derivative
+   * cannot fire for them, and the test passes because the path stopped being
+   * dangerous rather than because anything screened it (#1529's shape).
+   *
+   * Which value this is depends on the branch `path` took, and the two
+   * caller-supplied inputs have OPPOSITE precedence: `appDataOverride` beats
+   * `homeOverride`, while `%APPDATA%` loses to it. That is exactly why this is
+   * returned from the resolver rather than recomputed by the caller — a mirror
+   * maintained next to a consumer drifts from the branch it is mirroring, and
+   * `doctor.ts` shipped such a mirror that reproduced only the `%APPDATA%` half.
+   */
+  screenInput: string;
+  /** The config file itself. */
+  path: string;
+}
+
+/**
+ * Claude Desktop's MCP config for this platform, paired with the unjoined value
+ * it derives from. See {@link claudeDesktopConfigPath} for the precedence
+ * rationale and {@link ClaudeDesktopConfigTarget.screenInput} for why a caller
+ * that wants to screen the path must screen this instead.
+ */
+export function claudeDesktopConfigTarget(
+  opts: ClientConfigPathOptions = {},
+): ClaudeDesktopConfigTarget {
   const platform = opts.platformOverride ?? process.platform;
   const home = opts.homeOverride ?? homedir();
 
   if (platform === "win32") {
-    const appdata =
-      opts.appDataOverride ??
-      (opts.homeOverride
-        ? join(opts.homeOverride, "AppData", "Roaming")
-        : (process.env.APPDATA ?? join(home, "AppData", "Roaming")));
-    return join(appdata, "Claude", "claude_desktop_config.json");
+    // Each branch returns the value it actually consumed, so `screenInput`
+    // cannot fall out of step with the branch `path` took.
+    if (opts.appDataOverride !== undefined) {
+      return { screenInput: opts.appDataOverride, path: desktopUnder(opts.appDataOverride) };
+    }
+    if (opts.homeOverride) {
+      return {
+        screenInput: opts.homeOverride,
+        path: desktopUnder(join(opts.homeOverride, "AppData", "Roaming")),
+      };
+    }
+    const appData = process.env.APPDATA;
+    if (appData !== undefined) {
+      return { screenInput: appData, path: desktopUnder(appData) };
+    }
+    return { screenInput: home, path: desktopUnder(join(home, "AppData", "Roaming")) };
   }
   if (platform === "darwin") {
-    return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+    return { screenInput: home, path: desktopUnder(join(home, "Library", "Application Support")) };
   }
-  return join(home, ".config", "claude", "claude_desktop_config.json");
+  return {
+    screenInput: home,
+    path: join(home, ".config", "claude", "claude_desktop_config.json"),
+  };
+}
+
+/** The `Claude/claude_desktop_config.json` leaf, under an already-resolved base. */
+function desktopUnder(base: string): string {
+  return join(base, "Claude", "claude_desktop_config.json");
 }

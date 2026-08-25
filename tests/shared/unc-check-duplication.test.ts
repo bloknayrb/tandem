@@ -158,6 +158,13 @@ describe("UNC prefix checks are not duplicated (#1417, invariant §3)", () => {
       "src/server/session/manager.ts",
       "src/server/integrations/apply.ts",
       "src/server/integrations/node-binary.ts",
+      // Not converted by #1417 — missed by it. `checkTandemPlugin` landed in
+      // b045045, before the sweep, so the sweep never saw it and two reads ran
+      // unscreened until the doctor loader. Listed here for the same reason as
+      // the four above: the static detector is a SPELLING check, so a file that
+      // delegates correctly is invisible to it and needs no `ALLOWED` entry —
+      // which also means nothing notices if the delegation is unwound.
+      "src/cli/doctor.ts",
     ]) {
       const body = readFileSync(path.join(ROOT, file), "utf8");
       expect(body, `${file} should CALL the shared guard`).toMatch(/rejectUnsafeWindowsPrefix\(/);
