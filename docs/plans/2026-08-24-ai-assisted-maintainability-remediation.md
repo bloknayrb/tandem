@@ -63,8 +63,8 @@ Do not implement this document as one change.
 
 | Unit | Concern | Status | PR / evidence |
 |---|---|---|---|
-| 0 | Repo hygiene: ignore `.codex/`; unblock `audit:dead-code` | In review | #1601; tsc/vitest/cargo green |
-| 1 | Doctor Windows path-safety closure | Not started | — |
+| 0 | Repo hygiene: ignore `.codex/`; unblock `audit:dead-code` | Merged | #1601; 15/15 CI green |
+| 1 | Doctor Windows path-safety closure | In review | #1608; tsc clean, 9020/0 vitest, cargo green |
 | 2 | Test + `src/cli` TypeScript gate | Not started | — |
 | 3 | Honest coverage baseline | Not started | — |
 | 4 | Config-race acceptance: track, bound, document | Issue filed | Accepted 2026-08-24; #1599 |
@@ -844,6 +844,23 @@ before the rejection is returned?
 
 **Rollback:** Revert the loader and its call-site migration together. Do not
 retain a mix of direct and guarded reads.
+
+**Divergence, as shipped in #1608:** the loader landed and all three checks
+consume it, but **home resolution was NOT unified** and no check's resolution
+moved. `checkTandemPlugin`'s `if (!home) return;` makes the whole check vanish
+where `checkUserMcpConfig` falls back to `homedir()`; unifying that un-silences
+a check — a product change with no security value, invisible to the existing
+wiring tests, which filter by check name. Three characterization tests pin the
+current behaviour so the unification can be done as its own PR. Both pre-code
+reviewers recommended this split independently.
+
+Scope also grew in one direction and was held in another. Grew: the Claude
+Desktop check gained an input screen it never had, because screening only the
+resolved path leaves four of the fourteen corpus spellings unguarded under
+`path.posix.join` — and CI is ubuntu-only. Held: `checkAnnotationStore` (Unit
+12) and three sites in no unit at all — `TANDEM_CLAUDE_CMD`, the
+`homedir()`-derived `~/.local/bin` probe, and the `PATH`-walk `statSync` — are
+enumerated in `docs/security.md` rather than fixed here.
 
 ### Unit 2 — Typecheck the tests, and the untyped half of src/
 
