@@ -1195,8 +1195,14 @@ mod tests {
         match err {
             // Resolution produced a path with no binary at it.
             FirewallError::NetshNotFound => AnchorProbe::Broken,
-            // Slow host. Must be tested BEFORE the -1 arm, and must not share
-            // its code — that collision is the bug this classifier fixes.
+            // Slow host. Not sharing the -1 arm's code is the whole fix; the
+            // relative order of these two arms is NOT load-bearing, because -2
+            // and -1 are disjoint literals. What does matter is that both stay
+            // ahead of the wildcard below, which reads everything as
+            // environmental. A real netsh that somehow exited -2 would land
+            // here rather than in the wildcard — both answer Environmental, so
+            // the sentinel is inert against that collision rather than immune
+            // to it.
             FirewallError::NetshFailure { exit_code: NETSH_TIMEOUT_EXIT_CODE, .. } => {
                 AnchorProbe::Environmental
             }
@@ -1209,10 +1215,15 @@ mod tests {
 
     /// The distinction the probe depends on, tested without needing a slow host.
     ///
-    /// Mutation check: restoring `netsh_timeout_error()`'s original `-1` turns
-    /// the first assertion red. Nothing else in this file can detect that
-    /// change, which is why a timeout silently read as "netsh never started"
-    /// for as long as it did.
+    /// Mutation check, measured rather than reasoned: restoring
+    /// `netsh_timeout_error()`'s original `-1` fails this test and
+    /// `a_killed_netsh_is_not_swallowed_as_nothing_to_remove`.
+    ///
+    /// It is the SECOND assertion that goes red, not the first — with both
+    /// codes at `-1` the sentinel arm matches first, so a timeout still reads
+    /// as environmental and the genuine spawn failure below is what gets
+    /// misclassified. That asymmetry is the shape of the original bug: the
+    /// collision was only ever visible from the *other* side.
     #[test]
     fn a_timeout_is_classified_apart_from_a_failed_spawn() {
         assert_eq!(
@@ -1252,8 +1263,9 @@ mod tests {
     /// A timeout is environmental and is excluded — now by construction rather
     /// than by assertion. This docblock previously said a timeout "reports
     /// `NetshFailure`, but via `netsh_timeout_error()` with a real exit code, so
-    /// a slow runner cannot flake this". That was false about the code sixty
-    /// lines above it: `netsh_timeout_error()` returned the same `-1`, so the
+    /// a slow runner cannot flake this". That was false about
+    /// `netsh_timeout_error()` earlier in this file: it returned the same
+    /// `-1`, so the
     /// arm below could not tell "never started" from "took longer than five
     /// seconds". A CI runner that spent fourteen seconds on the sibling
     /// PowerShell test duly failed this one, on a commit whose entire diff was
