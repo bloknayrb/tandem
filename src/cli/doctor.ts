@@ -558,8 +558,18 @@ type ClaudeConfigRead =
  * has to be in a `try` regardless, so a separate stat is a second syscall
  * answering a question this one already answers, plus a TOCTOU window), and
  * ENOENT is the only failure distinguished from the rest.
+ *
+ * **Its screen is a backstop, and it is exported so that backstop is covered
+ * rather than merely asserted.** Every caller today also screens its raw
+ * input, and no safe input can `path.join` into an unsafe path -- so nothing
+ * reachable through `runDoctor` can make this branch fire, and deleting it
+ * left the whole suite green on both platforms. That is the definition of an
+ * untested claim. The branch earns its place anyway: it is what makes the NEXT
+ * check that reads a Claude config safe by construction even if its author
+ * forgets the input screen, which is exactly how `checkTandemPlugin` became
+ * #1417's eighth site. So it is tested directly instead of deleted.
  */
-function readClaudeConfig(path: string): ClaudeConfigRead {
+export function readClaudeConfig(path: string): ClaudeConfigRead {
   if (rejectUnsafeWindowsPrefix(path) !== null) return { kind: "unsafe-path" };
   let raw: string;
   try {
@@ -602,6 +612,39 @@ function readClaudeConfig(path: string): ClaudeConfigRead {
  */
 function homeIsUnsafe(home: string): boolean {
   return home !== "" && rejectUnsafeWindowsPrefix(home) !== null;
+}
+
+/**
+ * The single input `claudeDesktopConfigPath` will actually derive its path
+ * from, so {@link homeIsUnsafe} screens that one rather than every candidate.
+ *
+ * **This is a correspondence with another module, which is the whole reason it
+ * is a named exported function.** Screening every candidate instead is not the
+ * safe simplification it looks like: under enterprise redirection
+ * `%USERPROFILE%` sits on a share while `%APPDATA%` stays local, so refusing
+ * on either would print "on a network path Tandem will not read" about an
+ * ordinary local file and drop the only check reporting whether tandem is
+ * registered with Claude Desktop.
+ *
+ * The branch is on `homeOverride`'s **truthiness**, matching
+ * `claudeDesktopConfigPath`'s own `opts.homeOverride ? … : …`. An
+ * `=== undefined` test drifts on the empty string: the resolver would take the
+ * `%APPDATA%` route while this screened `""`, a no-op.
+ *
+ * `platform` and `appData` are parameters rather than reads of `os.platform()`
+ * and `process.env` so both branches are reachable from any runner. A
+ * win32-gated spec is skipped forever on this repo's ubuntu-only vitest job
+ * and reads exactly like a pass (#1529).
+ */
+export function desktopScreenInput(opts: {
+  homeOverride?: string;
+  platform: NodeJS.Platform;
+  appData?: string;
+  homeDir?: string;
+}): string {
+  const home = opts.homeOverride || (opts.homeDir ?? homedir());
+  if (opts.platform !== "win32" || opts.homeOverride) return home;
+  return opts.appData ?? home;
 }
 
 /** The warning both home-derived config checks emit when the profile is on a share. */
@@ -1411,16 +1454,14 @@ function checkDesktopMcpConfig(
   // read", which is false, and dropped the only check that reports whether
   // tandem is registered with Claude Desktop.
   //
-  // So this mirrors `claudeDesktopConfigPath`'s own precedence. That is a
-  // correspondence, and correspondences drift — `unc-guard-ordering` and
-  // `doctor-path-safety` both pin it, and `client-config-paths.ts` documents
-  // why `homeOverride` wins over `%APPDATA%` rather than the reverse.
-  const desktopHome = homeOverride ?? homedir();
-  const desktopInput =
-    platform() === "win32" && homeOverride === undefined
-      ? (process.env.APPDATA ?? desktopHome)
-      : desktopHome;
-  const read = homeIsUnsafe(desktopInput)
+  // So this mirrors `claudeDesktopConfigPath`'s own precedence, in
+  // {@link desktopScreenInput} — a named exported function rather than an
+  // inline expression, because the correspondence is the fragile part and an
+  // inline one could only be pinned by a win32-gated integration test, which
+  // CI never runs (#1529).
+  const read = homeIsUnsafe(
+    desktopScreenInput({ homeOverride, platform: platform(), appData: process.env.APPDATA }),
+  )
     ? ({ kind: "unsafe-path" } as const)
     : readClaudeConfig(desktopPath);
   if (read.kind === "unsafe-path") {

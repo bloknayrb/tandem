@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,7 +54,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, execFile: vi.fn() };
 });
 
-const { runDoctor } = await import("../../src/cli/doctor.js");
+const { desktopScreenInput, readClaudeConfig, runDoctor } = await import("../../src/cli/doctor.js");
 
 /**
  * Assembled rather than written out, exactly as `doctor.ts` does for the same
@@ -272,10 +272,10 @@ describe("doctor screens hostile home paths before reading any Claude config (#1
       delete process.env.HOME;
       try {
         await runDoctor();
-        expect(allPathArgs()).toContain(
-          join(appData, "Claude", DESKTOP_LEAF),
+        expect(
+          allPathArgs(),
           "the desktop check refused a local %APPDATA% because the profile was on a share",
-        );
+        ).toContain(join(appData, "Claude", DESKTOP_LEAF));
       } finally {
         if (savedAppData === undefined) delete process.env.APPDATA;
         else process.env.APPDATA = savedAppData;
@@ -306,5 +306,79 @@ describe("doctor screens hostile home paths before reading any Claude config (#1
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * The loader's own screen, tested directly because nothing reachable through
+ * `runDoctor` can make it fire: every caller screens its raw input first, and
+ * no safe input can `path.join` into an unsafe path. Deleting the screen left
+ * all 47 integration assertions green on both platforms — an untested claim.
+ * It is a deliberate backstop for the NEXT check that reads a Claude config,
+ * which is exactly the role `checkTandemPlugin` needed and did not have.
+ */
+describe("readClaudeConfig screens the path it is handed", () => {
+  it.each([...NETWORK_PATHS, ...LOCAL_EXTENDED_PATHS])("%s", (_label, hostile) => {
+    _readFileSyncSpy.mockClear();
+    expect(readClaudeConfig(hostile)).toEqual({ kind: "unsafe-path" });
+    expect(_readFileSyncSpy).not.toHaveBeenCalled();
+  });
+
+  it("still reads an ordinary local path", () => {
+    // Positive control: without it, `return { kind: "unsafe-path" }` for every
+    // input passes every assertion above.
+    const file = join(dataDir, "cfg.json");
+    writeFileSync(file, JSON.stringify({ mcpServers: {} }), "utf-8");
+    expect(readClaudeConfig(file)).toEqual({ kind: "ok", value: { mcpServers: {} } });
+  });
+});
+
+/**
+ * The desktop precedence mirror. Both platform branches run on every runner:
+ * the same property as an `it.runIf(win32)` integration test, minus the part
+ * where CI's ubuntu-only vitest job skips it forever and reports a pass
+ * (#1529).
+ */
+describe("desktopScreenInput mirrors claudeDesktopConfigPath's precedence", () => {
+  const HOME_DIR = "/home/alice";
+
+  it("uses homeOverride when set, on every platform", () => {
+    for (const platform of ["win32", "darwin", "linux"] as const) {
+      expect(
+        desktopScreenInput({ homeOverride: "/ov", platform, appData: "/ad", homeDir: HOME_DIR }),
+      ).toBe("/ov");
+    }
+  });
+
+  it("uses %APPDATA% on win32 when homeOverride is absent", () => {
+    expect(desktopScreenInput({ platform: "win32", appData: "/ad", homeDir: HOME_DIR })).toBe(
+      "/ad",
+    );
+  });
+
+  it("ignores %APPDATA% off win32", () => {
+    // The bug this replaced: screening %APPDATA% unconditionally refused a
+    // local desktop config whenever the profile was redirected.
+    expect(desktopScreenInput({ platform: "linux", appData: "/ad", homeDir: HOME_DIR })).toBe(
+      HOME_DIR,
+    );
+  });
+
+  it("falls back to the home dir on win32 with no %APPDATA%", () => {
+    expect(desktopScreenInput({ platform: "win32", homeDir: HOME_DIR })).toBe(HOME_DIR);
+  });
+
+  it("treats an empty homeOverride the way the resolver does", () => {
+    // `claudeDesktopConfigPath` branches on truthiness, so `homeOverride: ""`
+    // takes the %APPDATA% route. An `=== undefined` test here screened "",
+    // a no-op, while the resolver derived from %APPDATA%.
+    expect(
+      desktopScreenInput({
+        homeOverride: "",
+        platform: "win32",
+        appData: "/ad",
+        homeDir: HOME_DIR,
+      }),
+    ).toBe("/ad");
   });
 });
