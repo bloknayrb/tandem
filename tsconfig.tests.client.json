@@ -1,13 +1,17 @@
 {
-  // Client/Vitest tests. Extends the CLIENT config, so these get `lib.dom` and
-  // the browser-ish surface the components under test assume.
+  // Client/Vitest tests. Extends the CLIENT config for its narrower `include`.
   //
-  // `tests/helpers` appears here AND in the node config, deliberately and for
-  // the same reason `src/shared` appears in both production configs: the
-  // directory mixes plain Node fixture builders with Svelte-flavoured
-  // `*.svelte.ts` cells that only make sense under DOM. Checking it twice is
-  // the point -- a helper that compiles only with DOM in scope would otherwise
-  // reach the node suites untyped.
+  // It does NOT differ from the node config on `lib`: the root config already
+  // sets `["ES2022","DOM","DOM.Iterable"]` and `tsconfig.client.json` adds no
+  // `compilerOptions` at all, so the two resolved option sets are identical
+  // apart from `allowJs`. Do not write a comment here claiming this config is
+  // what puts DOM in scope -- an earlier version did, describing a protection
+  // that cannot fire, because there is no configuration under which the node
+  // program lacks DOM.
+  //
+  // What the overlap on `tests/helpers` actually buys is the `*.svelte.ts`
+  // split: those rune cells are excluded from the node config and owned here,
+  // because only this program pulls in Svelte's ambient `$state`.
   //
   // KNOWN GAP, stated rather than papered over: bare `tsc` resolves
   // `import ... from "./Foo.svelte"` through an ambient module declaration and
@@ -22,6 +26,14 @@
   "include": [
     "src/client/**/*.ts",
     "src/shared/**/*.ts",
+    // Express 5 ships no usable types, so `src/server/express.d.ts` is a
+    // hand-written `declare module "express"`. An ambient declaration only
+    // applies to programs that INCLUDE the file declaring it -- and client
+    // tests reach server route modules transitively, which then lose the
+    // declaration and report `express` as implicitly `any` (TS7016) in ~29
+    // files that are not what these tests are about. Included by path rather
+    // than by pulling in all of `src/server`.
+    "src/server/express.d.ts",
     "tests/client/**/*.ts",
     "tests/design-system-impl/**/*.ts",
     "tests/helpers/**/*.ts"

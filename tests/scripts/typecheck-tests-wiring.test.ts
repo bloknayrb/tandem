@@ -46,6 +46,7 @@ type Step = {
 type Defaults = { run?: { shell?: unknown } };
 type Job = {
   "runs-on"?: unknown;
+  needs?: unknown;
   if?: unknown;
   "continue-on-error"?: unknown;
   defaults?: Defaults;
@@ -63,6 +64,22 @@ const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf-8")) a
 };
 
 const COMMAND = "npm run typecheck:tests";
+
+/**
+ * The script the CI step delegates to, pinned by EXACT equality.
+ *
+ * Pinning only the `ci.yml` step is not enough, and a review caught this: the
+ * step's whole body is `npm run typecheck:tests`, so appending `|| true` to the
+ * script below leaves `step.run` byte-identical and every CI-level assertion
+ * green while the gate reports success unconditionally. That is #1229's exact
+ * shape, reachable by the edit most likely to be made under pressure. Three
+ * `toContain` checks on the config filenames -- what this used to be -- are
+ * satisfied by `echo tsconfig.tests.node.json ...` too.
+ */
+const SCRIPT =
+  "tsc -p tsconfig.tests.node.json --noEmit && " +
+  "tsc -p tsconfig.tests.client.json --noEmit && " +
+  "tsc -p tsconfig.tests.e2e.json --noEmit";
 
 const TEST_CONFIGS = [
   "tsconfig.tests.node.json",
@@ -100,6 +117,13 @@ function resolvedFiles(configName: string): string[] {
   const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, ROOT, undefined, configPath);
   expect(parsed.errors.filter((e) => e.code !== 18003)).toEqual([]);
   return parsed.fileNames.map((f) => path.relative(ROOT, f).replace(/\\/g, "/"));
+}
+
+/** Resolve a tsconfig to the compiler options `tsc` would actually apply. */
+function resolvedOptions(configName: string): ts.CompilerOptions {
+  const configPath = path.join(ROOT, configName);
+  const read = ts.readConfigFile(configPath, ts.sys.readFile);
+  return ts.parseJsonConfigFileContent(read.config, ts.sys, ROOT, undefined, configPath).options;
 }
 
 describe("typecheck:tests CI wiring", () => {
@@ -145,12 +169,25 @@ describe("typecheck:tests CI wiring", () => {
     expect(check).toBeGreaterThan(install);
   });
 
-  it("checks every test config, so none can be dropped from the script", () => {
+  it("delegates to a script that cannot mask its own exit code", () => {
     const script = pkg.scripts["typecheck:tests"];
     expect(script, "package.json has no typecheck:tests script").toBeTruthy();
+    // Exact equality, for the reason on SCRIPT above. A `toContain` per config
+    // name is satisfied by `... || true` and by `echo <the three names>`.
+    expect(script?.trim()).toBe(SCRIPT);
+    // Kept as a readable failure message when the exact match goes red.
     for (const config of TEST_CONFIGS) {
       expect(script, `${config} is not checked by typecheck:tests`).toContain(config);
     }
+  });
+
+  it("does not let the job be skipped by a failing dependency", () => {
+    // A skipped job's check-run conclusion counts as passing for required status
+    // checks, so `needs: <anything that can fail>` silently disarms the gate.
+    // windows-acl-proof-wiring.test.ts pins exactly this; the first version of
+    // this file, modelled on it, dropped the line.
+    const [, job] = typecheckJob();
+    expect(job.needs, "a `needs:` makes this job skip when its dependency fails").toBeUndefined();
   });
 });
 
@@ -166,11 +203,36 @@ describe("the test configs actually reach the test tree", () => {
   it("every executable .ts under tests/ belongs to at least one config", () => {
     const owned = new Set(TEST_CONFIGS.flatMap((c) => resolvedFiles(c)));
     const all = ts.sys
-      .readDirectory(path.join(ROOT, "tests"), [".ts"], undefined, undefined)
+      // Deliberately WIDER than the configs' `**/*.ts` globs. If this swept only
+      // `.ts`, a file renamed to `.mts`/`.cts`/`.tsx` would drop out of every
+      // config AND out of this check at the same moment -- a coverage guard whose
+      // blind spot is identical to the thing it guards catches nothing. Sweeping
+      // wider means such a rename surfaces here as an orphan.
+      //
+      // `node_modules` is excluded for speed and correctness: without it this
+      // walks tauri-driver's 3,441 vendored files, and a node_modules appearing
+      // anywhere else under tests/ would turn the guard spuriously red.
+      .readDirectory(
+        path.join(ROOT, "tests"),
+        [".ts", ".mts", ".cts", ".tsx"],
+        ["node_modules"],
+        undefined,
+      )
       .map((f) => path.relative(ROOT, f).replace(/\\/g, "/"))
       // `tests/tauri-driver` is a self-contained WebdriverIO project with its own
-      // package.json, node_modules and tsconfig, run by `npm run
-      // test:tauri-driver`. It is checked, just not by these configs.
+      // package.json, node_modules and tsconfig.
+      //
+      // This carve-out used to claim "It is checked, just not by these configs."
+      // That was false and a review measured it: its package.json runs only
+      // `wdio run` (transpile-only, no tsc), nothing in package.json, ci.yml or
+      // .husky invokes `tsc -p tests/tauri-driver/tsconfig.json`, and
+      // tauri-webdriver.yml is `workflow_dispatch` only. Running that config by
+      // hand reports a real TS2353 in `wdio.conf.ts` that has been sitting there
+      // unseen -- an unrun tsconfig, which is #1399's shape.
+      //
+      // It stays excluded here because folding it into `typecheck:tests` needs CI
+      // to install its separate node_modules, which is a bigger change than this
+      // unit. The exclusion is correct; only its old justification was not.
       .filter((f) => !f.startsWith("tests/tauri-driver/"));
 
     const orphans = all.filter((f) => !owned.has(f));
@@ -182,20 +244,72 @@ describe("the test configs actually reach the test tree", () => {
     ).toEqual([]);
   });
 
-  it("covers file kinds a suffix glob would have missed", () => {
+  it("covers named files the orphan sweep cannot see", () => {
     const owned = new Set(TEST_CONFIGS.flatMap((c) => resolvedFiles(c)));
-    // Positive control with named representatives, one per kind. Without this a
-    // config narrowed to `**/*.test.ts` still passes every assertion above:
-    // the set is non-empty, and the orphan check would go red only if someone
-    // noticed. These are the kinds that carry no `.test.ts` suffix and that
-    // nothing necessarily imports.
+    // The orphan check above walks `tests/` ONLY, so everything these configs
+    // pull in from elsewhere is undefended by it. A review measured that:
+    // narrowing the e2e config's include to just its two `tests/**` lines drops
+    // 10 files and leaves every other assertion in this file green.
+    //
+    // So the representatives that earn their place are the ones OUTSIDE
+    // `tests/`. The in-tree ones below are kept only as readable failure
+    // messages -- if `orphans` is empty they are owned unconditionally, which is
+    // why an earlier version of this list proved nothing.
     for (const representative of [
+      // Outside tests/ — the half the orphan sweep is blind to.
+      "playwright.config.ts", // a standalone config, loaded by path
+      "scripts/screenshots/playwright.config.ts",
+      "scripts/design-baselines/playwright.config.ts",
+      "src/client/utils/backend-ports.ts", // client module the e2e program needs
+      "src/server/express.d.ts", // ambient decl, included by path in the client config
+      // Inside tests/ — kinds that carry no `.test.ts` suffix.
       "tests/helpers/positions.ts", // a helper module, imported
       "tests/perf/global-setup.ts", // loaded by path by Playwright, imported by nothing
       "tests/e2e/helpers.ts", // a harness, imported
       "tests/build/dangling-citations.ts", // a script that carries no describe/it
+      "tests/helpers/wizard-progress-cell.svelte.ts", // a rune cell, client config only
     ]) {
       expect(owned.has(representative), `${representative} is unchecked`).toBe(true);
     }
+  });
+});
+
+describe("the test configs check as hard as they appear to", () => {
+  // Every assertion above is about WHICH files are in the program. None is about
+  // how hard they are checked -- and a review measured that setting
+  // `strict: false` in all three configs changes no resolved file set, leaves
+  // orphans empty, and passes every other test here.
+  //
+  // That is the likeliest real regression: this unit exists because ~900 type
+  // errors were sitting in `tests/`, and loosening a compiler option is by far
+  // the cheapest way to drive that count to zero without fixing anything.
+  //
+  // All three `extends` the root config, so ONE `"strict": false` there guts
+  // this gate and `Typecheck (root|client|server)` in the same edit.
+  it("resolves to strict options in every config", () => {
+    for (const config of TEST_CONFIGS) {
+      const options = resolvedOptions(config);
+      expect(options.strict, `${config} is not strict`).toBe(true);
+      expect(options.noImplicitAny, `${config} allows implicit any`).not.toBe(false);
+      expect(options.strictNullChecks, `${config} has null checks off`).not.toBe(false);
+    }
+  });
+});
+
+describe("docs match the wiring", () => {
+  // Both predecessor guards end with a block like this, and the first version of
+  // this file had none. That mattered more here than usual: `typecheck:tests`
+  // appeared in ZERO tracked docs, so deleting this file and the CI step would
+  // have turned nothing red, left no claim dangling, and told no future reader
+  // the gate had ever existed. #1399 was a doc claiming less coverage than
+  // existed; an undocumented gate is the same failure with no paper trail at all.
+  const claudeMd = readFileSync(path.join(ROOT, "CLAUDE.md"), "utf-8");
+
+  it("CLAUDE.md names the script that typechecks the test tree", () => {
+    expect(claudeMd).toMatch(/typecheck:tests/);
+  });
+
+  it("CLAUDE.md names this guard", () => {
+    expect(claudeMd).toMatch(/typecheck-tests-wiring/);
   });
 });

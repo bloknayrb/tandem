@@ -16,10 +16,16 @@
   // Directories are included WHOLE, never by `*.test.ts` glob. A suffix glob
   // silently skips every helper, fixture-builder and standalone entry point
   // that no matched file happens to import -- and skipping is indistinguishable
-  // from passing. `tests/scripts/typecheck-tests-coverage.test.ts` pins that.
+  // from passing. `tests/scripts/typecheck-tests-wiring.test.ts` pins that.
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "noEmit": true
+    "noEmit": true,
+    // `tests/cli/dev-standalone.test.ts` imports `scripts/dev-standalone.mjs`
+    // directly. `allowJs` lets tsc infer that module's exports from its real
+    // source rather than from a hand-written `.d.mts` that would drift from it
+    // silently. `checkJs` stays off: the .mjs itself is not this unit's to fix,
+    // and only files something under `include` actually imports are pulled in.
+    "allowJs": true
   },
   "include": [
     "src/server/**/*.ts",
@@ -41,5 +47,10 @@
     "tests/shared/**/*.ts",
     "tests/*.test.ts"
   ],
-  "exclude": ["node_modules", "dist", "tests/tauri-driver"]
+  // `**/*.svelte.ts` is excluded here and owned by `tsconfig.tests.client.json`
+  // instead: rune files need Svelte's ambient `$state` declarations, which only
+  // the client program pulls in. They stay covered — the orphan check in
+  // tests/scripts/typecheck-tests-wiring.test.ts goes red if a config drops a
+  // file without another picking it up.
+  "exclude": ["node_modules", "dist", "tests/tauri-driver", "**/*.svelte.ts"]
 }
