@@ -47,6 +47,7 @@
     "build:server": "tsup",
     "check:fonts": "node scripts/check-font-assets.mjs",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc --noEmit && svelte-check --tsconfig ./tsconfig.client.json --fail-on-warnings",
+    "typecheck:tests": "tsc -p tsconfig.tests.node.json --noEmit && tsc -p tsconfig.tests.client.json --noEmit && tsc -p tsconfig.tests.e2e.json --noEmit",
     "server": "tsx src/server/index.ts",
     "start:server": "node dist/server/index.js",
     "channel": "tsx src/channel/index.ts",
