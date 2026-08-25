@@ -32,7 +32,7 @@ In Tandem the arbitrary caller data is **the user's document**. Which makes this
 - **#1534** — an all-decimal hex in prose (`label: "Toggle authorship colors (#1364)"`) reported as a raw color by the token scanner. Fixed *position*-gated, not value-gated. `scripts/check-semantic-tokens.ts` carries the reasoning in full, including that adding `border`/`background`/`color` to `CSS_VALUE_WORDS` would re-open it, and that `CSS_KEYWORDS` and `CSS_VALUE_WORDS` "must not be merged."
 - **Critical Rule 1** — Y.Map keys from constants only. A raw string literal is this collision pre-empted.
 - **`tandem_edit` rejects heading markup ranges** — user text vs. structural markup, the same boundary.
-- **`CTRL_ROOM` is reserved as a document ID.**
+- **`CTRL_ROOM` is reserved — never use it as a document ID.**
 - **The file-watcher self-write fingerprint must be a content hash, not size+mtime** (`src/server/file-watcher.ts`) — a false match silently drops a real external edit.
 - **`tandem_applyChanges` is deliberately *not* fingerprinted**, because its reload is semantic rather than an identical-bytes echo. A blanket rule would have been wrong.
 
@@ -48,7 +48,7 @@ Two recursive name-keyed transforms exist today. They differ only in whether the
 
 That sentence is the study's entire prescription, already discharged. It is the reference form.
 
-**`src/server/integrations/storage.ts` — `normalizeLocalhostUrls()`.** Rewrites any key named `url` at any depth. Not a bug today: `IntegrationsFileSchema` is closed — `schemaVersion`, `integrations[]`, `defaultIntegrationId`, and integration records with no free-form nested object. But the function runs **before** Zod validation, on raw parsed JSON from disk, so the closed schema is not what protects it *at the moment it runs*; and the rewrite is semantically live rather than cosmetic, since `localhost` and `127.0.0.1` differ under IPv6. Nothing in the file records any of this, so the next free-form field added to that schema arrives with no warning attached.
+**`src/server/integrations/storage.ts` — `normalizeLocalhostUrls()`.** Rewrites any key named `url` at any depth. Not a bug today: `IntegrationsFileSchema` is closed — `schemaVersion`, `integrations[]`, `defaultIntegrationId`, and integration records with no free-form nested object. But the function runs **before** Zod validation, on raw parsed JSON from disk, so the closed schema is not what protects it *at the moment it runs*; and the rewrite is semantically live rather than cosmetic, since `localhost` and `127.0.0.1` differ under IPv6. The file does record the *ordering* — at the call site, and in the function's own doc comment ("Operates on the raw unknown post-migration shape so it runs before Zod validation"). What it does not record is the half that matters here: **why walking every depth is safe** — that no caller-supplied key named `url` can reach it. That is exactly the sentence `stripSchemaDialect` carries and this one lacks, and its absence is what leaves the next free-form field added to that schema arriving unwarned.
 
 Tracked as **#1603**, which also asks for a sweep of the shape across `src/` and a triage note for the docx walkers (structurally similar, but keyed on OOXML element names inside a closed vocabulary).
 
@@ -62,17 +62,17 @@ The study's sharpest result is not 0/12. It is the single pipeline run where the
 
 and then approved the merge — reasoning that the collision was unlikely in practice, that the coupling was a pre-existing class of problem, and that a clean fix needed a broader refactor. Ship it, note a follow-up. Every clause is defensible. The verdict was still wrong.
 
-**Detection worked. Judgment shipped it.** In 12 runs the failure surfaced exactly once, and the process converted that one catch into a merge.
+**Detection worked. Judgment shipped it.** And this was not the only run to see it. Under the structured-investigation workflow another run raised the same nested-`retry` collision, checked ky's option types, found no `limit` field among them, and dismissed it (Finding 3 below). So across the 12 runs the hazard surfaced at least **twice** — and the process converted both catches into merges: once on a wrong test, once on a discretionary verdict.
 
-Tandem is exposed at the same joint. All four reviewer agents — `.claude/agents/security-reviewer.md`, `crdt-reviewer.md`, `annotation-model-reviewer.md`, `svelte-migration-reviewer.md` — end with an identical block:
+Tandem is exposed at the same joint. All four reviewer agents — `.claude/agents/security-reviewer.md`, `crdt-reviewer.md`, `annotation-model-reviewer.md`, `svelte-migration-reviewer.md` — carry an `## Output Format` section of the same shape. They are not byte-identical, and the differences matter to anyone implementing #1602: each opens with
 
 ```
-For each finding:
 - **Severity**: Critical / High / Medium / Low / Info
-- Location / Description / Proof / Recommendation
 ```
 
-Severity, no disposition. `CLAUDE.md`'s workflow says to "spawn adversarial agents to review the plan from multiple angles before writing any code" and then proceeds to "implement"; what a Critical finding *obliges* is written nowhere. The ship decision falls back to the orchestrating session's judgment, unconstrained — which is precisely the layer the study watched fail.
+and then runs `Location` / `Description` / `Proof` / `Recommendation`, with `crdt-` and `annotation-model-` inserting an `**Invariant**` line and `svelte-migration-` a `**Pattern**` line. Nor is the section the end of the file — all four close with their own "Start by reading…" instruction, so `## Output Format` is the insertion point, not the last line.
+
+What is common to all four is the part that matters: severity, no disposition. `CLAUDE.md`'s workflow says to "spawn adversarial agents to review the plan from multiple angles before writing any code" and then proceeds to "implement"; what a Critical finding *obliges* is written nowhere. The ship decision falls back to the orchestrating session's judgment, unconstrained — which is precisely the layer the study watched fail.
 
 The fix is a rule, not a better model: a finding in the blocking set stops the change, with no weighing of likelihood and no "pre-existing class." `CLAUDE.md` already holds the general form for dated gates — *"a gate that can be deferred indefinitely is not a gate."* Tracked as **#1602**.
 
@@ -97,7 +97,9 @@ Tandem already owns this test, for a different purpose. From the dated-gates rul
 Same criterion, applied at gate-review time only. Applied at routing time it sorts the work:
 
 - **Derivable from tracked files** — CRDT coordinate math, `src/server/positions.ts` range invariants, the docx walkers, schema and migration work. The 16/16 result is evidence to trust agents here *more* than the current workflow's caution implies.
-- **Depends on the world** — and the current v1.0 blockers all live here, unmarked as a class: **#1596** (verify #1118's post-update banner against a real upgrade; §1 Windows unrun for two releases), **#316** (Cowork macOS/Linux), the cross-platform install matrix. None is *hard*; each is unknowable from inside the repo.
+- **Depends on the world** — where the *hardware-gated* half of `CLAUDE.md`'s v1.0 blocker list lives, unmarked as a class: **#316** (Cowork macOS/Linux) and the cross-platform install matrix. **#1596** (verify #1118's post-update banner against a real upgrade; §1 Windows unrun for two releases) belongs with them by this criterion, though it is a dated verification gate rather than one of the listed blockers. None is *hard*; each is unknowable from inside the repo.
+
+The sort is not blocker-versus-not. The remaining v1.0 blockers — the `LICENSE_GATE_ENABLED` and `BYO_MODELS_ENABLED` flag flips, and the v1.0 exit gates — are derivable from tracked files and belong in the first bucket. Two items of equal release-urgency can land in opposite buckets; that is the point of sorting by information rather than by priority.
 
 The corollary matters more than the sort: when work lands in the second bucket, the first move is to make the missing fact tracked, not to attempt the change with better prompting. That is what converts a 12/12-failure shape into a 16/16 one. Tracked as **#1606**.
 
@@ -118,7 +120,7 @@ The study is evidence that this investment pays. It is not an argument for more 
 
 Less than the numbers suggest, and the author says so plainly:
 
-- The headline 12/12 rests on **one bug**. Three model tiers and three workflows make it notable, not general.
+- The headline — 12 of 12 runs *failing* — rests on **one bug**. Three model tiers and three workflows make it notable, not general.
 - Hard/easy labels were assigned by the author's intuition before the runs, not by an independent measure. "Discoverable from the code" may partly reflect patterns the models had already seen.
 - Sample sizes are 1–3 seeds per configuration; Haiku was never run against the two hard bugs.
 - The scoring is asymmetric: for `immer` and `decimal.js` the hidden test fails before the fix, while for `ky` the decisive hidden test detects damage the agent's own fix introduced.
