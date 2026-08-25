@@ -366,6 +366,33 @@ const NETSH_TIMEOUT: Duration = Duration::from_secs(5);
 /// UAC-decline inference), neither of which can match a negative code.
 const NETSH_TIMEOUT_EXIT_CODE: i32 = -2;
 
+/// The `exit_code` reported when the OS refused to *start* `netsh`, distinct
+/// from both the `-1` that means the spawn failed for an unknown reason and
+/// the `-2` above.
+///
+/// `PermissionDenied` is what an AppLocker / WDAC / SRP machine reports (OS
+/// errors 1260 and 740) when policy blocks execution of a binary. That is a
+/// property of the host, not of our anchoring: the path resolved correctly
+/// and a binary is sitting at it. `the_anchored_powershell_is_reachable_and_runs`
+/// already treats the equivalent condition as a pass, on the reasoning that
+/// panicking there would wedge a developer's pre-push hook over a policy the
+/// test has no business asserting -- but netsh had no way to say it, because
+/// this case shared the generic `-1` spawn-failure code with the genuinely
+/// broken ones.
+///
+/// Negative for the same reason as [`NETSH_TIMEOUT_EXIT_CODE`]: it keeps this
+/// case clear of both exit-code-1 heuristics.
+const NETSH_SPAWN_DENIED_EXIT_CODE: i32 = -3;
+
+/// The error a refused `netsh` spawn reports.
+fn netsh_spawn_denied_error(e: &std::io::Error) -> FirewallError {
+    FirewallError::NetshFailure {
+        exit_code: NETSH_SPAWN_DENIED_EXIT_CODE,
+        stderr_tail: e.to_string(),
+        stdout_tail: String::new(),
+    }
+}
+
 const RULE_NAME_ALLOW: &str = "Tandem Cowork";
 const RULE_NAME_DENY: &str = "Tandem Cowork \u{2014} Deny (elevation refused)";
 const RULE_NAME_PREFIX: &str = "Tandem Cowork";
@@ -979,6 +1006,10 @@ pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
             log::warn!("[firewall] scan_orphan_rules: netsh.exe not found");
             return Err(FirewallError::NetshNotFound);
         }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            log::warn!("[firewall] scan_orphan_rules: policy refused to start netsh: {e}");
+            return Err(netsh_spawn_denied_error(&e));
+        }
         Err(e) => {
             log::warn!("[firewall] scan_orphan_rules spawn failed: {e}");
             return Err(FirewallError::NetshFailure {
@@ -1068,6 +1099,13 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             log::error!("[firewall] netsh.exe not found after {:.2}s", elapsed.as_secs_f64());
             return Err(FirewallError::NetshNotFound);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            log::error!(
+                "[firewall] policy refused to start netsh after {:.2}s: {e}",
+                elapsed.as_secs_f64()
+            );
+            return Err(netsh_spawn_denied_error(&e));
         }
         Err(e) => {
             log::error!("[firewall] netsh spawn error after {:.2}s: {e}", elapsed.as_secs_f64());
@@ -1206,6 +1244,12 @@ mod tests {
             FirewallError::NetshFailure { exit_code: NETSH_TIMEOUT_EXIT_CODE, .. } => {
                 AnchorProbe::Environmental
             }
+            // Policy refused to start it. The anchor resolved to a real binary;
+            // the host declined to run it. Same verdict the PowerShell probe
+            // reaches for the same condition.
+            FirewallError::NetshFailure { exit_code: NETSH_SPAWN_DENIED_EXIT_CODE, .. } => {
+                AnchorProbe::Environmental
+            }
             // Never completed: a failed spawn, or a path resolving to a directory.
             FirewallError::NetshFailure { exit_code: -1, .. } => AnchorProbe::Broken,
             // netsh ran and said something; that is all the probe needs.
@@ -1241,6 +1285,47 @@ mod tests {
             "a process that never started is still a real defect"
         );
         assert_eq!(classify_netsh_probe(&FirewallError::NetshNotFound), AnchorProbe::Broken);
+    }
+
+    /// A host that refuses to run netsh has not told us anything about netsh.
+    ///
+    /// The three spawn outcomes below are the ones a managed Windows machine
+    /// actually produces, and before this they were two: `PermissionDenied`
+    /// shared the generic `-1` with the unknown-reason arm, so an AppLocker /
+    /// WDAC policy read as a broken anchor and would have failed a developer's
+    /// pre-push hook over something they cannot change.
+    ///
+    /// Mutation check: returning the plain `-1` failure from
+    /// `netsh_spawn_denied_error` turns the first assertion red, and nothing
+    /// else in this file notices -- which is exactly how the condition stayed
+    /// invisible.
+    #[test]
+    fn a_policy_refused_spawn_is_not_a_broken_anchor() {
+        let denied = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "program blocked by policy (os error 1260)",
+        );
+        assert_eq!(
+            classify_netsh_probe(&netsh_spawn_denied_error(&denied)),
+            AnchorProbe::Environmental,
+            "a policy that blocks execution is the host's verdict, not ours"
+        );
+        // The two spawn failures it must stay distinct from.
+        assert_eq!(
+            classify_netsh_probe(&FirewallError::NetshFailure {
+                exit_code: -1,
+                stderr_tail: "spawn failed".to_string(),
+                stdout_tail: String::new(),
+            }),
+            AnchorProbe::Broken
+        );
+        assert_eq!(classify_netsh_probe(&FirewallError::NetshNotFound), AnchorProbe::Broken);
+        // Three distinct codes, or one of these cases is being read as another.
+        let codes = [NETSH_SPAWN_DENIED_EXIT_CODE, NETSH_TIMEOUT_EXIT_CODE, -1];
+        let mut distinct = codes.to_vec();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), codes.len(), "spawn outcomes must not share a code");
     }
 
     /// The anchored `netsh` actually runs.
