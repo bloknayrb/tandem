@@ -16,5 +16,12 @@ if [ "$only_deletes" -eq 1 ]; then
 fi
 
 npx biome check src/ tests/
+# The test tree's typecheck had no local runner at all: this hook did not run
+# it, `npm run typecheck` does not chain it, and CLAUDE.md's verification
+# recipe names neither -- so the CI step was the only thing that ever ran the
+# gate, and an agent following the documented workflow would push test-tree
+# type errors and learn about it from CI. It costs ~40s against a hook that
+# already runs the full vitest suite and cargo test.
+npm run typecheck:tests
 npm test -- --run --reporter=dot
 cargo test --manifest-path src-tauri/Cargo.toml

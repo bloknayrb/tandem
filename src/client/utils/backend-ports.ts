@@ -1,9 +1,11 @@
 /// <reference types="vite/client" />
 // ^ This file reads `import.meta.env`, so it declares the types for it rather
 // than inheriting them from whichever sibling happens to share its program.
-// Until the test tree gained tsconfigs, the only program containing this file
-// was the root one, which also contains `hooks/useTauriTheme.svelte.ts` and its
-// identical reference -- so this file typechecked on a neighbour's declaration.
+// Until the test tree gained tsconfigs, the only programs containing this file
+// were the root one and `tsconfig.client.json` (which `svelte-check` runs), and
+// both also contain `hooks/useTauriTheme.svelte.ts` and its identical
+// reference -- so this file typechecked on a neighbour's declaration. Those two
+// are the only such references in `src/`.
 // Any narrower program (a test config that pulls it in transitively) got
 // `Property 'env' does not exist on type 'ImportMeta'` instead.
 

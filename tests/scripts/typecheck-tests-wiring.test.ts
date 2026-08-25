@@ -209,13 +209,17 @@ describe("the test configs actually reach the test tree", () => {
       // blind spot is identical to the thing it guards catches nothing. Sweeping
       // wider means such a rename surfaces here as an orphan.
       //
-      // `node_modules` is excluded for speed and correctness: without it this
-      // walks tauri-driver's 3,441 vendored files, and a node_modules appearing
-      // anywhere else under tests/ would turn the guard spuriously red.
+      // The exclude MUST be `**/node_modules`, not a bare `node_modules`.
+      // `ts.sys.readDirectory` resolves exclude patterns against the root, so
+      // the bare form matches only `<root>/node_modules` and does nothing here.
+      // Measured over `tests/`: bare form 4,389 files, `**/` form 640, no
+      // exclude 4,389 -- the vendored tauri-driver tree was being removed purely
+      // by the prefix filter below, and a `node_modules` appearing anywhere else
+      // under tests/ would have turned the guard spuriously red.
       .readDirectory(
         path.join(ROOT, "tests"),
         [".ts", ".mts", ".cts", ".tsx"],
-        ["node_modules"],
+        ["**/node_modules"],
         undefined,
       )
       .map((f) => path.relative(ROOT, f).replace(/\\/g, "/"))
@@ -272,6 +276,65 @@ describe("the test configs actually reach the test tree", () => {
       expect(owned.has(representative), `${representative} is unchecked`).toBe(true);
     }
   });
+
+  it("sweeps the harness directories, not just a representative from each", () => {
+    // A representative list cannot see a narrowing that KEEPS the
+    // representative. Measured: replacing `scripts/screenshots/**/*.ts` with
+    // `scripts/screenshots/playwright.config.ts` (and the same for
+    // design-baselines) in tsconfig.tests.e2e.json silently drops six files --
+    // capture.spec.ts, redact-account.ts, combine.ts, global-setup.ts,
+    // global-teardown.ts -- while every named representative stays owned. That
+    // is MUT-4's own failure mode relocated, so these two directories get a real
+    // sweep rather than a spot check.
+    const owned = new Set(TEST_CONFIGS.flatMap((c) => resolvedFiles(c)));
+    for (const dir of ["scripts/screenshots", "scripts/design-baselines"]) {
+      const all = ts.sys
+        .readDirectory(path.join(ROOT, dir), [".ts", ".mts", ".cts", ".tsx"], ["**/node_modules"])
+        .map((f) => path.relative(ROOT, f).replace(/\\/g, "/"));
+      expect(all.length, `${dir} resolved no files — has it moved?`).toBeGreaterThan(0);
+      expect(
+        all.filter((f) => !owned.has(f)),
+        `these ${dir} files are in no test config`,
+      ).toEqual([]);
+    }
+  });
+});
+
+describe("the test configs cannot be narrowed by a suffix glob", () => {
+  it("includes whole directories, never a suffix glob", () => {
+    // The configs' own comments state this as an absolute, and a review
+    // measured that nothing enforced it: narrowing `"tests/server/**/*.ts"` to
+    // `"tests/server/**/*.test.ts"` leaves every other assertion in this file
+    // green, because every file under `tests/server` already ends `.test.ts`.
+    // The orphan sweep is a real backstop for a file that exists TODAY, but it
+    // cannot object to a glob that is merely waiting to skip the next helper
+    // someone adds -- and skipping is indistinguishable from passing.
+    //
+    // The one sanctioned exception is `tests/*.test.ts`, which exists so the
+    // two suites at the root of `tests/` are covered without dragging every
+    // sibling directory in twice. It is spelled out here rather than pattern-
+    // matched, so adding a second exception is a deliberate edit to this test.
+    const ALLOWED_SUFFIX_GLOBS = new Set(["tests/*.test.ts"]);
+
+    for (const config of TEST_CONFIGS) {
+      const configPath = path.join(ROOT, config);
+      const read = ts.readConfigFile(configPath, ts.sys.readFile);
+      const include = (read.config as { include?: string[] }).include ?? [];
+      expect(include.length, `${config} has no include list`).toBeGreaterThan(0);
+
+      for (const pattern of include) {
+        if (ALLOWED_SUFFIX_GLOBS.has(pattern)) continue;
+        // A single named file (`src/server/express.d.ts`) is not a glob and is
+        // not what this guards against.
+        if (!pattern.includes("*")) continue;
+        expect(
+          pattern.endsWith("/**/*.ts"),
+          `${config}: include "${pattern}" is a suffix glob, not a whole directory. ` +
+            "It silently skips every helper and fixture-builder no matched file imports.",
+        ).toBe(true);
+      }
+    }
+  });
 });
 
 describe("the test configs check as hard as they appear to", () => {
@@ -287,16 +350,75 @@ describe("the test configs check as hard as they appear to", () => {
   // All three `extends` the root config, so ONE `"strict": false` there guts
   // this gate and `Typecheck (root|client|server)` in the same edit.
   it("resolves to strict options in every config", () => {
+    // Every flag in the strict family, via the compiler's own resolver rather
+    // than three by hand. A re-review measured that `strict: true` stays true
+    // while `strictFunctionTypes`, `strictBindCallApply`,
+    // `strictPropertyInitialization`, `noImplicitThis`,
+    // `useUnknownInCatchVariables` or `alwaysStrict` are individually turned
+    // off. `strictFunctionTypes` is the one that matters most here: it is
+    // parameter-variance checking, which is where the signature-drift cluster
+    // this unit fixed actually lived.
+    const STRICT_FAMILY = [
+      "strict",
+      "noImplicitAny",
+      "strictNullChecks",
+      "strictFunctionTypes",
+      "strictBindCallApply",
+      "strictPropertyInitialization",
+      "noImplicitThis",
+      "useUnknownInCatchVariables",
+      "alwaysStrict",
+    ] as const;
+
+    // `ts.getStrictOptionValue` is the compiler's own resolver for exactly this
+    // and it exists at runtime, but it is NOT in TypeScript's public typings --
+    // so calling it is TS2339 under the very gate this file installs. Inlined
+    // instead. The rule it implements: a member of the family is on when set
+    // explicitly, and otherwise inherits `strict`.
+    const strictOptionValue = (options: ts.CompilerOptions, flag: (typeof STRICT_FAMILY)[number]) =>
+      options[flag] ?? options.strict ?? false;
+
     for (const config of TEST_CONFIGS) {
       const options = resolvedOptions(config);
-      expect(options.strict, `${config} is not strict`).toBe(true);
-      expect(options.noImplicitAny, `${config} allows implicit any`).not.toBe(false);
-      expect(options.strictNullChecks, `${config} has null checks off`).not.toBe(false);
+      for (const flag of STRICT_FAMILY) {
+        expect(strictOptionValue(options, flag), `${config}: ${flag} is off`).toBe(true);
+      }
+      // Earned coverage nothing else defends: the test tree passes with these,
+      // and they are what surfaced the dead imports and directives in this unit.
+      expect(options.noUnusedLocals, `${config} allows unused locals`).not.toBe(false);
+      expect(options.noUnusedParameters, `${config} allows unused params`).not.toBe(false);
+    }
+  });
+
+  it("is not silenced wholesale by noCheck", () => {
+    // `noCheck: true` is a TOTAL kill switch and it is one word. TS honours it
+    // from tsconfig, alongside `--noEmit`, and reports nothing at all -- while
+    // `strict` and every flag above stay true, every file set is unchanged, and
+    // every other assertion in this file passes. Measured against this repo's
+    // TypeScript: a tsconfig with strict + noEmit + noCheck compiles
+    // `const x: number = "nope"` to exit 0; drop noCheck and it is TS2322.
+    //
+    // Checked on the root config too, since all five programs extend it and one
+    // word there disarms `Typecheck (tests|root|client|server)` together.
+    for (const config of [...TEST_CONFIGS, "tsconfig.json"]) {
+      expect(resolvedOptions(config).noCheck, `${config} sets noCheck`).not.toBe(true);
+    }
+  });
+
+  it("keeps the production configs strict too", () => {
+    // The comment above is right that one `strict: false` in the ROOT config
+    // guts everything -- but `tsconfig.server.json` and `tsconfig.client.json`
+    // can each set it locally, and nothing here reads their options. The `src/`
+    // block below resolves their file NAMES only, so `Typecheck (server)` could
+    // go soft over src/server, src/shared, src/channel and src/monitor with all
+    // of this green.
+    for (const config of ["tsconfig.json", "tsconfig.server.json", "tsconfig.client.json"]) {
+      expect(resolvedOptions(config).strict, `${config} is not strict`).toBe(true);
     }
   });
 });
 
-describe("every source directory is checked by something CI runs", () => {
+describe("no file under src/ escapes every CI-invoked config", () => {
   /**
    * The unit's own instruction asks for this, and it is a different question
    * from the one above: not "is `tests/` covered" but "can a file under `src/`
@@ -307,9 +429,16 @@ describe("every source directory is checked by something CI runs", () => {
    * asserting against a config nothing invokes, which is the failure this whole
    * file exists to prevent.
    */
-  function configsCiInvokes(): string[] {
+  /**
+   * Returns the configs, and separately how many came from a REAL parsed tsc
+   * invocation rather than from the `typecheck:tests` fan-out. The split
+   * matters: see the control test below.
+   */
+  function configsCiInvokes(): { configs: string[]; parsedTscSteps: number } {
     const [, job] = typecheckJob();
     const found = new Set<string>();
+    let parsedTscSteps = 0;
+
     for (const step of job.steps ?? []) {
       const run = typeof step.run === "string" ? step.run : "";
       if (!/(^|\s)(npx\s+)?tsc(\s|$)/.test(run) && !run.includes("typecheck:tests")) continue;
@@ -318,29 +447,58 @@ describe("every source directory is checked by something CI runs", () => {
         for (const c of TEST_CONFIGS) found.add(c);
         continue;
       }
-      const project = run.match(/-p\s+(\S+)/);
-      // A bare `tsc --noEmit` with no -p resolves the root config.
-      found.add(project ? project[1] : "tsconfig.json");
+
+      // Both spellings, and EVERY occurrence -- a multi-line `run:` can hold
+      // more than one, and taking only the first silently drops the rest.
+      const projects = [...run.matchAll(/(?:-p|--project)\s+(\S+)/g)].map((m) => m[1]);
+      if (projects.length > 0) {
+        for (const p of projects) found.add(p);
+        continue;
+      }
+
+      // A BARE `tsc --noEmit` resolves the root config -- but only a bare one.
+      // This used to fall back to "tsconfig.json" for any unparsed tsc-ish run,
+      // which was the hole: root's `include: ["src"]` covers every file under
+      // src/, so the check below reduces to "is the string tsconfig.json in the
+      // list", and the fallback MANUFACTURED that string. A re-review showed
+      // `run: echo npx tsc --noEmit` scoring identically to the real step.
+      if (/(^|\s)(npx\s+)?tsc(\s+--?[\w-]+)*\s*$/.test(run.trim())) {
+        found.add("tsconfig.json");
+        parsedTscSteps++;
+        continue;
+      }
+
+      throw new Error(
+        `.github/workflows/ci.yml: step ${JSON.stringify(step.name ?? run)} looks like a tsc ` +
+          `invocation but no project could be resolved from it. Refusing to guess -- see ` +
+          `tests/scripts/typecheck-tests-wiring.test.ts.`,
+      );
     }
-    return [...found];
+    parsedTscSteps += found.size - TEST_CONFIGS.length - (found.has("tsconfig.json") ? 1 : 0);
+    return { configs: [...found], parsedTscSteps };
   }
 
   it("derives its config list from ci.yml rather than trusting one", () => {
-    const configs = configsCiInvokes();
-    // Positive control: if the regex above stops matching, this describe would
-    // otherwise pass vacuously against an empty set.
-    expect(configs.length, "no tsc invocation found in the CI job").toBeGreaterThan(2);
+    const { configs, parsedTscSteps } = configsCiInvokes();
+    // The real control, and the reason it counts PARSED steps rather than
+    // `configs.length`: the `typecheck:tests` branch adds three configs with no
+    // regex match at all, so a length check is satisfied by that fan-out alone
+    // and stays green after every `Typecheck (client|server|root)` step is
+    // deleted. An earlier version claimed to guard this and did not.
+    expect(parsedTscSteps, "no directly-parsed tsc step found in the CI job").toBeGreaterThan(0);
     expect(configs).toContain("tsconfig.json");
+    expect(configs).toContain("tsconfig.client.json");
+    expect(configs).toContain("tsconfig.server.json");
     for (const c of TEST_CONFIGS) expect(configs).toContain(c);
   });
 
   it("leaves no file under src/ unchecked", () => {
-    const owned = new Set(configsCiInvokes().flatMap((c) => resolvedFiles(c)));
+    const owned = new Set(configsCiInvokes().configs.flatMap((c) => resolvedFiles(c)));
     const all = ts.sys
       .readDirectory(
         path.join(ROOT, "src"),
         [".ts", ".mts", ".cts", ".tsx"],
-        ["node_modules"],
+        ["**/node_modules"],
         undefined,
       )
       .map((f) => path.relative(ROOT, f).replace(/\\/g, "/"));

@@ -159,13 +159,14 @@ jobs:
 
       # The root config covers `src/` -- including `src/cli`, which neither the
       # client nor the server config includes. It already ran, but only inside
-      # the `Build` step nine steps below, so a type error in the 2,688-line
-      # doctor.ts surfaced ~10 minutes in, behind unrelated failures. This is
-      # about WHEN it fails, not whether it runs.
+      # the `Build` step five steps below, so a type error in the 2,905-line
+      # doctor.ts surfaced behind `Test`, the tag fetch and the acceptance
+      # harness rather than here. This is about WHEN it fails, not whether it
+      # runs.
       - name: Typecheck (root)
         run: npx tsc --noEmit
 
-      # `tests/` was in no tsconfig at all until #1602, so no type-checker had
+      # `tests/` was in no tsconfig at all until #1616, so no type-checker had
       # ever read a line of it. Pinned by tests/scripts/typecheck-tests-wiring.test.ts,
       # which parses this file and fails if the step is removed, made
       # conditional, or allowed to continue-on-error.

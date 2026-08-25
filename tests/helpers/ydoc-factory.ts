@@ -37,10 +37,12 @@ export function getAnnotationsMap(doc: Y.Doc): Y.Map<unknown> {
 
 /** Create a test annotation with sensible defaults and optional overrides. */
 export function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
-  // `Partial<Annotation>` decorrelates the discriminant from `color`/`suggestedText`
-  // (each becomes independently optional across the union), so spreading it back in
-  // no longer type-checks as any single member of the union even though callers only
-  // ever pass a coherent combination. Same shape as `makeImportNote` below.
+  // `Annotation` is a discriminated union on `type`, and `Partial<Annotation>`
+  // makes `type` itself optional. Spreading an optional `type?: "highlight" |
+  // "comment" | "note"` over the required one widens the discriminant back to
+  // the full union, so the object literal no longer narrows to any single
+  // member -- even though every caller passes a coherent combination. The cast
+  // asserts that coherence. Same shape as `makeImportNote` below.
   return {
     id: "ann_test_001",
     author: "claude",
@@ -83,10 +85,13 @@ export function makeImportNote(overrides: Record<string, unknown> = {}): Annotat
  * on purpose.** This helper used to take an optional `ydoc` and fall back to a
  * bare `{ range }`, which widened its inferred return type to a union of that
  * shape and `AnchoredRangeResult`. Passing the result to anything expecting an
- * `AnchoredRangeResult` therefore did not type-check, and ten test files each
- * independently wrote the *same* `anchoredRangeOf` wrapper casting the union
- * back down. Narrowing here deletes all ten wrappers and all ten casts. The
- * no-ydoc branch had no remaining callers — `anchored()` in
+ * `AnchoredRangeResult` therefore did not type-check. The first pass at this
+ * unit answered that by writing the *same* `anchoredRangeOf` wrapper into
+ * EIGHT test files, each casting the union back down -- so the duplication was
+ * this branch's own, introduced at `210085c` and deleted at `f191f58`, not
+ * pre-existing debt (`anchoredRangeOf` appears nowhere on master). Narrowing
+ * here is what removed the need for all eight. The
+ * no-ydoc branch had no remaining callers — `unanchored()` in
  * `tests/helpers/positions.ts` is the fixture for a range with no CRDT anchor.
  */
 export function rangeOf(from: number, to: number, ydoc: Y.Doc): AnchoredRangeResult {

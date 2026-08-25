@@ -795,6 +795,7 @@ describe("injectCommentsAsAnnotations", () => {
       status: "pending",
       rev: 1,
       importSource: { author: "A", file: "f.docx", commentId: "1" },
+      timestamp: 1000,
     } as Annotation);
     map.set("promoted-key", {
       id: "promoted-key",
@@ -807,6 +808,7 @@ describe("injectCommentsAsAnnotations", () => {
       status: "pending",
       rev: 2,
       importSource: { author: "A", file: "f.docx", commentId: "1" },
+      timestamp: 1000,
     } as Annotation);
 
     // Drift the comment. The index must deterministically pick the PROMOTED
@@ -841,6 +843,7 @@ describe("injectCommentsAsAnnotations", () => {
       audience: "outbound",
       promotedFrom: "note",
       rev: (note.rev ?? 0) + 1,
+      timestamp: 1000,
     } as Annotation);
 
     // User adds a reply in Word, then the comment drifts and re-imports.

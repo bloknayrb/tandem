@@ -17,7 +17,7 @@ import {
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { useTmpAnnotationsEnvWithFlag } from "../helpers/annotation-store-env.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
-import { anchored } from "../helpers/positions.js";
+import { unanchored } from "../helpers/positions.js";
 
 useTmpAnnotationsEnvWithFlag("tandem-remove-annotation-test-");
 
@@ -53,7 +53,7 @@ describe("removeAnnotationById", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const filePath = "/tmp/rm-fn-1.md";
     bindObserver(ydoc, filePath);
-    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "test note");
+    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "test note");
 
     const result = removeAnnotationById(ydoc, map, filePath, id);
 
@@ -68,7 +68,7 @@ describe("removeAnnotationById", () => {
   it("cleans up orphaned replies", () => {
     const ydoc = setupDoc("rm-fn-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "noted");
+    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "noted");
 
     addReplyToAnnotation(ydoc, map, id, "reply 1", "user");
     addReplyToAnnotation(ydoc, map, id, "reply 2", "claude");
@@ -96,8 +96,8 @@ describe("removeAnnotationById", () => {
   it("does not delete replies belonging to other annotations", () => {
     const ydoc = setupDoc("rm-fn-4", "Hello world test");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id1 = createAnnotation(map, ydoc, "comment", anchored(0, 5), "first");
-    const id2 = createAnnotation(map, ydoc, "comment", anchored(6, 11), "second");
+    const id1 = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "first");
+    const id2 = createAnnotation(map, ydoc, "comment", unanchored(6, 11), "second");
 
     addReplyToAnnotation(ydoc, map, id1, "reply to first", "user");
     addReplyToAnnotation(ydoc, map, id2, "reply to second", "user");

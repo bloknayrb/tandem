@@ -3,8 +3,11 @@
  *
  * Two suites — the file-opener batching contract and the reload-from-disk
  * persistence contract — independently grew the same recorder, the same record
- * shape and the same `asChangedKey` cast, comment for comment. This is that
- * helper, written once.
+ * shape under different names (`UpdateRecord`/`listenForUpdates` in one,
+ * `TxnRecord`/`listenForTransactions` in the other). This is that helper,
+ * written once. `asChangedKey` is NOT part of that story -- it does not exist
+ * on master; this unit introduced it into both files at once, and hoisting it
+ * here is just where it belongs.
  */
 import type * as Y from "yjs";
 
@@ -31,7 +34,7 @@ export interface TxnRecord {
  * object `txn.changed.keys()` would have yielded.
  */
 export function asChangedKey(type: Y.AbstractType<any>): Y.AbstractType<Y.YEvent<any>> {
-  return type as unknown as Y.AbstractType<Y.YEvent<any>>;
+  return type as Y.AbstractType<Y.YEvent<any>>;
 }
 
 /** Record every transaction on `doc` until `detach()` is called. */

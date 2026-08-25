@@ -219,12 +219,25 @@ test.describe("reduced motion", () => {
 
 test.describe("forced colors / high contrast", () => {
   test.use({ contextOptions: { forcedColors: "active" } });
-  // Same discard as above, and here it mattered: nothing in these two tests
-  // compensated for it, so both have been running in NORMAL colors while
-  // asserting behaviour 'in forced-colors mode'. Their assertions -- a card is
-  // visible with non-zero width and height -- pass identically either way, so
-  // the suite could not tell. With the option now actually applied, these are
-  // exercising forced-colors for the first time.
+  // Same discard as above: the bare `test.use({ forcedColors })` form is not a
+  // top-level Playwright option and was thrown away, so routing it through
+  // `contextOptions` is strictly more correct than what was here.
+  //
+  // **It does NOT follow that these tests now exercise forced colors, and an
+  // earlier version of this comment claimed exactly that.** They still do not.
+  // `tests/e2e/forced-colors.spec.ts:43` records the measurement, with a
+  // negative control on this same toolchain: under Playwright 1.58 with
+  // bundled Chromium 145, `forcedColors: "active"` leaves
+  // `matchMedia("(forced-colors: active)")` reporting false however it is
+  // passed, and only CDP `Emulation.setEmulatedMedia` drives it. So both tests
+  // below still run in normal colors, and their assertions -- a card is
+  // visible with non-zero width and height -- pass identically either way.
+  //
+  // Left inert deliberately. Driving it over CDP is what
+  // `tests/e2e/forced-colors.spec.ts` already does for the Windows High
+  // Contrast criterion, and duplicating that here is a coverage change, not a
+  // type fix. Do not restore the "exercising forced-colors for the first time"
+  // line without a `matchMedia` assertion proving it.
 
   test("annotation cards remain visible in forced-colors mode", async ({ page }) => {
     await openSample(page);

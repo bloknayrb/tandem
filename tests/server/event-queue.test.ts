@@ -13,7 +13,6 @@ import {
   emitModeReleaseWake,
   getAnnotationEditedChannelKey,
   getBufferedSelection,
-  getSubscriberCount,
   reattachObservers,
   replaySince,
   resetForTesting,
@@ -1764,12 +1763,31 @@ describe("delivery-state forward recording (pushEvent)", () => {
 
   /**
    * `getDeliveryState` takes `now` and the live external-consumer count as of
-   * the production call site (`server.ts`) rather than closing over them, so
-   * tests reproduce that call shape with the real current values instead of a
-   * fixed guess.
+   * the production call site (`server.ts`) rather than closing over them.
+   *
+   * **The count is HARD-CODED to 1 and must stay that way. Do not pass
+   * `getSubscriberCount()` here.** Production reads
+   * `stranded = outstanding && (pendingAbandoned || externalConsumerCount === 0)`
+   * (`src/server/events/delivery-state.ts:322`), and `getSubscriberCount()`
+   * returns `externalSubscribers.size` -- the *same* quantity that gates the
+   * wiring these tests exist to pin (`queue.ts`: `if (externalSubscribers.size
+   * === 0) noteExternalConsumersGone()`). Feeding it in makes the
+   * `externalConsumerCount === 0` disjunct a perfect proxy for
+   * `pendingAbandoned`, so deleting that `noteExternalConsumersGone()` call
+   * breaks nothing -- which is precisely the mutation the two tests below were
+   * written to catch, and which an earlier draft of this helper re-armed.
+   * Measured: with `getSubscriberCount()`, deleting the production call leaves
+   * this file 67/67 green; with the hard-coded 1, it fails
+   * `stops claiming a poll is owed...` and `keeps waiting while a SECOND...`.
+   *
+   * A constant 1 also reproduces what master effectively passed: the call was
+   * argument-less, so `externalConsumerCount` was `undefined` and the `=== 0`
+   * disjunct was permanently false, leaving `pendingAbandoned` the only route
+   * to `consumer-detached`. `Date.now()` is real because master's `undefined`
+   * `now` computed `waitingMs` as `NaN` on every call.
    */
   function currentDeliveryState() {
-    return getDeliveryState(Date.now(), getSubscriberCount());
+    return getDeliveryState(Date.now(), 1);
   }
 
   function createUserComment(id: string) {

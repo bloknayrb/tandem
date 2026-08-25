@@ -152,14 +152,24 @@ function chatEvent(): TandemEvent {
     type: "chat:message",
     timestamp: Date.now(),
     documentId: "d1",
-    // This fixture's payload shape has drifted from the real `ChatMessagePayload`
-    // (`text`/`replyTo`/`anchor`, not `content`/`author`) — harmless here because
-    // the wake path this test exercises never reads the payload (the wake turn
-    // deliberately carries no event payload; see the supervisor.ts doc comment),
-    // only `event.type`. Not fixing the fixture's shape to avoid guessing at a
-    // change with no test coverage to verify against.
-    payload: { messageId: `msg_${eventSeq}`, content: "are you there?", author: "user" },
-  } as unknown as TandemEvent;
+    // The real `ChatMessagePayload` (`src/shared/events/types.ts`). An earlier
+    // draft left this as `{ messageId, content, author }` -- fields that do not
+    // exist on it, with the required `text`/`replyTo`/`anchor` absent -- and
+    // widened the cast to `as unknown as TandemEvent` to keep it compiling.
+    // That converts a mismatch tsc had just CAUGHT back into a silent one,
+    // which is the opposite of what bringing `tests/` into a typechecked
+    // program is for. It is inert while the supervisor reads only `event.type`
+    // (the wake turn deliberately carries no payload; see supervisor.ts), but
+    // #438's payload-aware dispatch would consume a shape no producer emits.
+    // No guessing was involved: the three required fields have obvious values
+    // for a top-level chat message.
+    payload: {
+      messageId: `msg_${eventSeq}`,
+      text: "are you there?",
+      replyTo: null,
+      anchor: null,
+    },
+  } as TandemEvent;
 }
 
 beforeEach(() => {

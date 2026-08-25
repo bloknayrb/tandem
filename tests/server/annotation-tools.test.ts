@@ -17,7 +17,7 @@ import {
 } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
-import { anchored } from "../helpers/positions.js";
+import { unanchored } from "../helpers/positions.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
 const DOC_HASH = "sha256:annotation-tools";
@@ -121,7 +121,7 @@ describe("tandem_getAnnotations tool logic", () => {
     createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "comment 1", {
       author: "claude",
     });
-    createAnnotation(map, ydoc, "highlight", anchored(0, 5), "", {
+    createAnnotation(map, ydoc, "highlight", unanchored(0, 5), "", {
       author: "user",
       color: "yellow",
     });
@@ -188,7 +188,7 @@ describe("tandem_resolveAnnotation tool logic", () => {
   it("accepts an annotation", () => {
     const ydoc = setupDoc("ra-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "review me");
+    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "review me");
 
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "accepted" as const });
@@ -200,7 +200,7 @@ describe("tandem_resolveAnnotation tool logic", () => {
   it("dismisses an annotation", () => {
     const ydoc = setupDoc("ra-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "review me");
+    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "review me");
 
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "dismissed" as const });
@@ -221,7 +221,7 @@ describe("tandem_removeAnnotation tool logic", () => {
   it("removes annotation from map", () => {
     const ydoc = setupDoc("rm-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "to remove");
+    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "to remove");
 
     expect(map.has(id)).toBe(true);
     map.delete(id);
@@ -336,7 +336,7 @@ describe("annotation CRDT-anchored positions", () => {
   it("annotations without relRange get it lazily attached", () => {
     const ydoc = setupDoc("crdt-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "note"); // no ydoc in rangeOf
+    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "note"); // no ydoc in rangeOf
 
     const ann = map.get(id) as Annotation;
     expect(ann.relRange).toBeUndefined();
@@ -354,8 +354,8 @@ describe("annotation on multi-document", () => {
     const map1 = ydoc1.getMap(Y_MAP_ANNOTATIONS);
     const map2 = ydoc2.getMap(Y_MAP_ANNOTATIONS);
 
-    createAnnotation(map1, ydoc1, "comment", anchored(0, 3), "on doc 1");
-    createAnnotation(map2, ydoc2, "highlight", anchored(0, 3), "", { color: "yellow" });
+    createAnnotation(map1, ydoc1, "comment", unanchored(0, 3), "on doc 1");
+    createAnnotation(map2, ydoc2, "highlight", unanchored(0, 3), "", { color: "yellow" });
 
     expect(collectAnnotations(map1, DOC_HASH)).toHaveLength(1);
     expect(collectAnnotations(map2, DOC_HASH)).toHaveLength(1);
@@ -386,7 +386,7 @@ describe("tandem_exportAnnotations — Solo hold", () => {
   it("withholds user annotations in Solo and DISCLOSES the count", () => {
     const ydoc = seedDoc("export-solo");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", anchored(0, 5), "user note", { author: "user" });
+    createAnnotation(map, ydoc, "comment", unanchored(0, 5), "user note", { author: "user" });
     setMode("solo");
 
     const all = collectAnnotations(map, "sha256:export-solo");
@@ -414,10 +414,10 @@ describe("tandem_exportAnnotations — Solo hold", () => {
   it("in indeterminate mode withholds only persisted heldInSolo records", () => {
     const ydoc = seedDoc("export-indet");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const plainId = createAnnotation(map, ydoc, "comment", anchored(0, 5), "plain", {
+    const plainId = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "plain", {
       author: "user",
     });
-    const heldId = createAnnotation(map, ydoc, "comment", anchored(6, 11), "held", {
+    const heldId = createAnnotation(map, ydoc, "comment", unanchored(6, 11), "held", {
       author: "user",
     });
     const held = map.get(heldId) as Annotation;

@@ -7,7 +7,7 @@ import {
 } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { isSnapshotTruncated, SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
-import { anchored as makeResult } from "../helpers/positions.js";
+import { unanchored as makeResult } from "../helpers/positions.js";
 
 const DOC_HASH = "sha256:annotation-text-snapshot";
 
