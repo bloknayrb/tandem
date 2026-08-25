@@ -347,6 +347,73 @@ pub const SUBNET_PROBE_TIMEOUT_ENABLE: Duration = Duration::from_secs(15);
 /// its meta, firewall and workspace writes can safely overlap.
 const NETSH_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The `exit_code` a timed-out `netsh` reports, kept distinct from the `-1`
+/// that means the process never started.
+///
+/// #1371 gave the timeout `-1`, reusing this file's established "never
+/// completed" marker. That is right about what they share (no exit status was
+/// ever produced) and wrong about what separates them: a timeout is
+/// ENVIRONMENTAL, while a spawn failure or a path resolving to a directory is
+/// a real defect in the anchoring. Sharing one code made them
+/// indistinguishable, and `the_anchored_netsh_is_reachable_and_runs`
+/// consequently failed a CI run on a docs-only commit, reporting "netsh never
+/// started from its anchored path" when netsh was merely slow on a loaded
+/// runner. That test's own docblock had claimed a slow runner could not flake
+/// it.
+///
+/// Still negative, which is the property #1371 actually needed: it keeps the
+/// timeout clear of both exit-code-1 heuristics (`is_no_rules_match` and the
+/// UAC-decline inference), neither of which can match a negative code.
+const NETSH_TIMEOUT_EXIT_CODE: i32 = -2;
+
+/// The `exit_code` reported when the OS refused to *start* `netsh`, distinct
+/// from both the `-1` that means the spawn failed for an unknown reason and
+/// the `-2` above.
+///
+/// An AppLocker / WDAC / SRP machine refuses to start a binary with OS error
+/// 1260, and an elevation-required refusal with 740. That is a property of
+/// the host, not of our anchoring: the path resolved correctly and a binary
+/// is sitting at it. `the_anchored_powershell_is_reachable_and_runs` already
+/// treats the equivalent condition as a pass, on the reasoning that panicking
+/// there would wedge a developer's pre-push hook over a policy the test has
+/// no business asserting -- but netsh had no way to say it, because this case
+/// shared the generic `-1` spawn-failure code with the genuinely broken ones.
+///
+/// **Detected by raw OS code, not by `ErrorKind`.** Neither 1260 nor 740
+/// decodes to `ErrorKind::PermissionDenied` on this toolchain -- both come
+/// back `Uncategorized`, and only OS error 5 maps to `PermissionDenied`. A
+/// guard written over the kind alone would therefore miss the exact machines
+/// it names while silently looking correct. That is why
+/// [`SPAWN_REFUSED_OS_ERRORS`] exists and why `adapter_enumeration_reason`
+/// consults it before falling back to the kind; this path now does the same.
+/// `a_refusal_is_recognised_by_os_code_not_by_kind` pins the decode facts so
+/// the assumption cannot quietly come back.
+///
+/// Negative for the same reason as [`NETSH_TIMEOUT_EXIT_CODE`]: it keeps this
+/// case clear of both exit-code-1 heuristics.
+const NETSH_SPAWN_DENIED_EXIT_CODE: i32 = -3;
+
+/// Whether the OS refused to *start* the binary, as opposed to failing for a
+/// reason that implicates our anchoring.
+///
+/// Same shape and same constant as `adapter_enumeration_reason`: raw OS code
+/// first, `ErrorKind` only as a fallback. See [`NETSH_SPAWN_DENIED_EXIT_CODE`]
+/// for why the kind alone is not enough.
+fn is_spawn_refusal(e: &std::io::Error) -> bool {
+    e.raw_os_error()
+        .is_some_and(|code| SPAWN_REFUSED_OS_ERRORS.contains(&code))
+        || e.kind() == std::io::ErrorKind::PermissionDenied
+}
+
+/// The error a refused `netsh` spawn reports.
+fn netsh_spawn_denied_error(e: &std::io::Error) -> FirewallError {
+    FirewallError::NetshFailure {
+        exit_code: NETSH_SPAWN_DENIED_EXIT_CODE,
+        stderr_tail: e.to_string(),
+        stdout_tail: String::new(),
+    }
+}
+
 const RULE_NAME_ALLOW: &str = "Tandem Cowork";
 const RULE_NAME_DENY: &str = "Tandem Cowork \u{2014} Deny (elevation refused)";
 const RULE_NAME_PREFIX: &str = "Tandem Cowork";
@@ -869,7 +936,7 @@ pub fn add_cowork_deny_rule(cidr: &str) -> Result<(), FirewallError> {
 /// exit-1 failure propagates.
 ///
 /// Extracted from the two `or_else` arms below so the contract is unit-testable,
-/// and because #1371 gave `run_netsh` a timeout arm that reports `exit_code: -1`:
+/// and because #1371 gave `run_netsh` a timeout arm with a negative exit code:
 /// a predicate that matched on the message alone, or on any failure, would
 /// silently swallow a wedged netsh as "nothing to remove".
 fn is_no_rules_match(err: &FirewallError) -> bool {
@@ -959,6 +1026,10 @@ pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             log::warn!("[firewall] scan_orphan_rules: netsh.exe not found");
             return Err(FirewallError::NetshNotFound);
+        }
+        Err(e) if is_spawn_refusal(&e) => {
+            log::warn!("[firewall] scan_orphan_rules: host refused to start netsh: {e}");
+            return Err(netsh_spawn_denied_error(&e));
         }
         Err(e) => {
             log::warn!("[firewall] scan_orphan_rules spawn failed: {e}");
@@ -1050,6 +1121,13 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
             log::error!("[firewall] netsh.exe not found after {:.2}s", elapsed.as_secs_f64());
             return Err(FirewallError::NetshNotFound);
         }
+        Err(e) if is_spawn_refusal(&e) => {
+            log::error!(
+                "[firewall] host refused to start netsh after {:.2}s: {e}",
+                elapsed.as_secs_f64()
+            );
+            return Err(netsh_spawn_denied_error(&e));
+        }
         Err(e) => {
             log::error!("[firewall] netsh spawn error after {:.2}s: {e}", elapsed.as_secs_f64());
             return Err(FirewallError::NetshFailure {
@@ -1120,13 +1198,14 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
 
 /// The error a killed `netsh` reports (#1371).
 ///
-/// `exit_code: -1` is this file's established "the process never completed"
+/// [`NETSH_TIMEOUT_EXIT_CODE`], not `-1`: see that constant. `-1` remains this
+/// file's "the process never completed"
 /// marker — the spawn-failure arms in `run_netsh` and `scan_orphan_rules` already
 /// use it — so this needs no new wire variant and no new client hint. It also
 /// keeps the timeout clear of both exit-code-1 heuristics.
 fn netsh_timeout_error() -> FirewallError {
     FirewallError::NetshFailure {
-        exit_code: -1,
+        exit_code: NETSH_TIMEOUT_EXIT_CODE,
         stderr_tail: format!("netsh timed out after {}s", NETSH_TIMEOUT.as_secs()),
         stdout_tail: String::new(),
     }
@@ -1155,6 +1234,163 @@ fn truncate_head(s: &str, max_bytes: usize) -> &str {
 mod tests {
     use super::*;
 
+    /// How an anchored-probe test should read a `netsh` failure.
+    ///
+    /// Extracted for the same reason [`is_no_rules_match`] was: the contract is
+    /// then unit-testable. The probe tests below can only ever observe whatever
+    /// the host happens to do, so the arm that classifies a timeout as
+    /// environmental would otherwise be an untested claim on every machine where
+    /// netsh answers promptly — which is every machine except the loaded CI
+    /// runner this existed to survive.
+    #[derive(Debug, PartialEq, Eq)]
+    enum AnchorProbe {
+        /// A real defect in the anchoring — the thing the probe exists to catch.
+        Broken,
+        /// The host or its firewall service was uncooperative. Not our bug.
+        Environmental,
+    }
+
+    fn classify_netsh_probe(err: &FirewallError) -> AnchorProbe {
+        match err {
+            // Resolution produced a path with no binary at it.
+            FirewallError::NetshNotFound => AnchorProbe::Broken,
+            // Slow host. Not sharing the -1 arm's code is the whole fix; the
+            // relative order of these two arms is NOT load-bearing, because -2
+            // and -1 are disjoint literals. What does matter is that both stay
+            // ahead of the wildcard below, which reads everything as
+            // environmental. A real netsh that somehow exited -2 would land
+            // here rather than in the wildcard — both answer Environmental, so
+            // the sentinel is inert against that collision rather than immune
+            // to it.
+            FirewallError::NetshFailure { exit_code: NETSH_TIMEOUT_EXIT_CODE, .. } => {
+                AnchorProbe::Environmental
+            }
+            // Policy refused to start it. The anchor resolved to a real binary;
+            // the host declined to run it. Same verdict the PowerShell probe
+            // reaches for the same condition.
+            FirewallError::NetshFailure { exit_code: NETSH_SPAWN_DENIED_EXIT_CODE, .. } => {
+                AnchorProbe::Environmental
+            }
+            // Never completed: a failed spawn, or a path resolving to a directory.
+            FirewallError::NetshFailure { exit_code: -1, .. } => AnchorProbe::Broken,
+            // netsh ran and said something; that is all the probe needs.
+            _ => AnchorProbe::Environmental,
+        }
+    }
+
+    /// The distinction the probe depends on, tested without needing a slow host.
+    ///
+    /// Mutation check, measured rather than reasoned: restoring
+    /// `netsh_timeout_error()`'s original `-1` fails this test and
+    /// `a_killed_netsh_is_not_swallowed_as_nothing_to_remove`.
+    ///
+    /// It is the SECOND assertion that goes red, not the first — with both
+    /// codes at `-1` the sentinel arm matches first, so a timeout still reads
+    /// as environmental and the genuine spawn failure below is what gets
+    /// misclassified. That asymmetry is the shape of the original bug: the
+    /// collision was only ever visible from the *other* side.
+    #[test]
+    fn a_timeout_is_classified_apart_from_a_failed_spawn() {
+        assert_eq!(
+            classify_netsh_probe(&netsh_timeout_error()),
+            AnchorProbe::Environmental,
+            "a slow host must not read as a broken anchor"
+        );
+        assert_eq!(
+            classify_netsh_probe(&FirewallError::NetshFailure {
+                exit_code: -1,
+                stderr_tail: "spawn failed".to_string(),
+                stdout_tail: String::new(),
+            }),
+            AnchorProbe::Broken,
+            "a process that never started is still a real defect"
+        );
+        assert_eq!(classify_netsh_probe(&FirewallError::NetshNotFound), AnchorProbe::Broken);
+    }
+
+    /// A host that refuses to run netsh has not told us anything about netsh.
+    ///
+    /// The three spawn outcomes below are the ones a managed Windows machine
+    /// actually produces, and before this they were two: `PermissionDenied`
+    /// shared the generic `-1` with the unknown-reason arm, so an AppLocker /
+    /// WDAC policy read as a broken anchor and would have failed a developer's
+    /// pre-push hook over something they cannot change.
+    ///
+    /// Mutation check: returning the plain `-1` failure from
+    /// `netsh_spawn_denied_error` turns the first assertion red, and nothing
+    /// else in this file notices -- which is exactly how the condition stayed
+    /// invisible.
+    ///
+    /// This test goes through `is_spawn_refusal` deliberately rather than
+    /// constructing the error directly: the first version of this fix guarded
+    /// on `ErrorKind::PermissionDenied` alone, which does not match the
+    /// machines it named. See `a_refusal_is_recognised_by_os_code_not_by_kind`.
+    #[test]
+    fn a_policy_refused_spawn_is_not_a_broken_anchor() {
+        let denied = std::io::Error::from_raw_os_error(1260);
+        assert!(is_spawn_refusal(&denied), "os error 1260 is a refusal");
+        assert_eq!(
+            classify_netsh_probe(&netsh_spawn_denied_error(&denied)),
+            AnchorProbe::Environmental,
+            "a policy that blocks execution is the host's verdict, not ours"
+        );
+        // The two spawn failures it must stay distinct from.
+        assert_eq!(
+            classify_netsh_probe(&FirewallError::NetshFailure {
+                exit_code: -1,
+                stderr_tail: "spawn failed".to_string(),
+                stdout_tail: String::new(),
+            }),
+            AnchorProbe::Broken
+        );
+        assert_eq!(classify_netsh_probe(&FirewallError::NetshNotFound), AnchorProbe::Broken);
+        // Three distinct codes, or one of these cases is being read as another.
+        let codes = [NETSH_SPAWN_DENIED_EXIT_CODE, NETSH_TIMEOUT_EXIT_CODE, -1];
+        let mut distinct = codes.to_vec();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), codes.len(), "spawn outcomes must not share a code");
+    }
+
+    /// The decode facts the refusal guard depends on, measured not assumed.
+    ///
+    /// The first version of this guard matched `ErrorKind::PermissionDenied`
+    /// and a comment claiming that is "what an AppLocker / WDAC / SRP machine
+    /// reports (OS errors 1260 and 740)". It is not. On rustc 1.94 both of
+    /// those decode to `Uncategorized`; only OS error 5 becomes
+    /// `PermissionDenied`. So the guard would have missed every machine it was
+    /// written for while reading as a correct fix -- and no test would have
+    /// noticed, because the two assertions above pass just as happily on an
+    /// error hand-built with the wrong kind.
+    ///
+    /// `ErrorKind` is `#[non_exhaustive]` and its mapping is a std
+    /// implementation detail that can change between toolchains. If a future
+    /// rustc starts decoding 1260 to `PermissionDenied`, the first assertion
+    /// here goes red -- which is the point: it forces someone to re-read the
+    /// guard rather than letting the comment drift back into being wrong.
+    #[test]
+    fn a_refusal_is_recognised_by_os_code_not_by_kind() {
+        for code in SPAWN_REFUSED_OS_ERRORS {
+            let e = std::io::Error::from_raw_os_error(code);
+            assert_ne!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "os error {code} decoding to PermissionDenied would make the kind \n                 fallback sufficient -- re-read is_spawn_refusal before relaxing it"
+            );
+            assert!(is_spawn_refusal(&e), "os error {code} must read as a refusal");
+        }
+        // The one code that does decode to the kind, so the fallback is not dead.
+        let access_denied = std::io::Error::from_raw_os_error(5);
+        assert_eq!(access_denied.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(is_spawn_refusal(&access_denied));
+        // A spawn failure that implicates the anchor must NOT read as a refusal.
+        assert!(!is_spawn_refusal(&std::io::Error::from_raw_os_error(87)));
+        assert!(!is_spawn_refusal(&std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "absent"
+        )));
+    }
+
     /// The anchored `netsh` actually runs.
     ///
     /// Every other test in this module is a pure function over captured text, so
@@ -1170,22 +1406,30 @@ mod tests {
     /// `NetshNotFound` (resolution produced a path with no binary at it) and
     /// `NetshFailure { exit_code: -1 }`, which is this file's marker for "the
     /// process never completed" and is what a path pointing at a *directory*
-    /// would produce. A timeout is deliberately not in that set: it also reports
+    /// would produce.
+    ///
+    /// A timeout is environmental and is excluded — now by construction rather
+    /// than by assertion. This docblock previously said a timeout "reports
     /// `NetshFailure`, but via `netsh_timeout_error()` with a real exit code, so
-    /// a slow runner cannot flake this.
+    /// a slow runner cannot flake this". That was false about
+    /// `netsh_timeout_error()` earlier in this file: it returned the same
+    /// `-1`, so the
+    /// arm below could not tell "never started" from "took longer than five
+    /// seconds". A CI runner that spent fourteen seconds on the sibling
+    /// PowerShell test duly failed this one, on a commit whose entire diff was
+    /// one markdown file, reporting that netsh was unreachable when it was
+    /// merely slow. See [`NETSH_TIMEOUT_EXIT_CODE`].
     #[test]
     fn the_anchored_netsh_is_reachable_and_runs() {
         match scan_orphan_rules() {
             Ok(_) => {}
-            Err(FirewallError::NetshNotFound) => {
-                panic!("netsh could not be resolved at its anchored System32 path");
-            }
-            Err(FirewallError::NetshFailure { exit_code: -1, stderr_tail, .. }) => {
-                panic!("netsh never started from its anchored path: {stderr_tail}");
-            }
-            Err(other) => {
-                // netsh ran and said something; that is all this test needs.
-                eprintln!("[test] anchored netsh ran and returned: {other:?}");
+            Err(err) => {
+                assert_eq!(
+                    classify_netsh_probe(&err),
+                    AnchorProbe::Environmental,
+                    "the anchored netsh is broken, not merely uncooperative: {err:?}"
+                );
+                eprintln!("[test] anchored netsh ran and returned: {err:?}");
             }
         }
     }
@@ -1485,8 +1729,17 @@ mod tests {
         // rules` would report success having removed nothing.
         let timeout = netsh_timeout_error();
         assert!(
-            matches!(timeout, FirewallError::NetshFailure { exit_code: -1, .. }),
-            "the timeout must use this file's -1 'never completed' marker: {timeout:?}"
+            matches!(
+                timeout,
+                FirewallError::NetshFailure { exit_code: NETSH_TIMEOUT_EXIT_CODE, .. }
+            ),
+            "the timeout must use its own sentinel: {timeout:?}"
+        );
+        // And it must NOT be the never-started marker. The absence of this
+        // assertion is what let a slow runner report "netsh never started".
+        assert_ne!(
+            NETSH_TIMEOUT_EXIT_CODE, -1,
+            "a timeout and a failed spawn must stay distinguishable"
         );
         assert!(!is_no_rules_match(&timeout));
         // And it must not read as a UAC decline either: that heuristic needs
