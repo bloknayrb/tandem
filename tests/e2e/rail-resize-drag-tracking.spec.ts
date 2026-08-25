@@ -36,7 +36,15 @@ import {
  * it is stated explicitly here so a future global override cannot quietly void the spec.
  */
 
-test.use({ reducedMotion: "no-preference" });
+test.use({ contextOptions: { reducedMotion: "no-preference" } });
+// ^ Routed through `contextOptions`, not passed to `test.use` directly.
+// `reducedMotion` is a BrowserContextOption, NOT a PlaywrightTestOption --
+// it appears zero times in playwright/lib/index.js, where `colorScheme`
+// appears seven -- so the bare form was silently discarded by the runner.
+// This is behaviour-neutral here: Playwright's default is already
+// no-preference, so the option was a no-op that happened to agree with the
+// default. The comment above it claiming Playwright suppresses motion by
+// default was wrong; the assertions were never vacuous for that reason.
 
 let mcp: McpTestClient;
 let tmpDir: string;

@@ -21,7 +21,13 @@
     "tests/perf/**/*.ts",
     "scripts/screenshots/**/*.ts",
     "scripts/design-baselines/**/*.ts",
-    "playwright.config.ts"
+    "playwright.config.ts",
+    // The perf harness reads `window.__TANDEM_PORTS__`, whose `declare global`
+    // lives with the code that SETS it (`backend-ports.ts:49`). Included by
+    // path so that declaration keeps one home rather than being duplicated into
+    // an ambient stub that can drift from the writer. This file imports only
+    // `shared/constants`, so it pulls in nothing else.
+    "src/client/utils/backend-ports.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

@@ -175,7 +175,14 @@ test.describe("reduced motion — baseline", () => {
 });
 
 test.describe("reduced motion", () => {
-  test.use({ reducedMotion: "reduce" });
+  test.use({ contextOptions: { reducedMotion: "reduce" } });
+  // `reducedMotion` is a BrowserContextOption, not a PlaywrightTestOption, so
+  // the bare `test.use({ reducedMotion })` form was silently discarded by the
+  // runner -- which is very likely what the note below actually observed when
+  // it concluded the option 'doesn't reliably drive matchMedia'. The seeding
+  // workaround is left in place deliberately: it is what this test has
+  // actually been exercising, and removing it in the same change that makes
+  // the option real would swap the mechanism under the assertion.
 
   test("annotation flash is suppressed under prefers-reduced-motion", async ({ page }) => {
     // Playwright's reducedMotion context option doesn't reliably drive matchMedia().matches
@@ -211,7 +218,13 @@ test.describe("reduced motion", () => {
 // ---------------------------------------------------------------------------
 
 test.describe("forced colors / high contrast", () => {
-  test.use({ forcedColors: "active" });
+  test.use({ contextOptions: { forcedColors: "active" } });
+  // Same discard as above, and here it mattered: nothing in these two tests
+  // compensated for it, so both have been running in NORMAL colors while
+  // asserting behaviour 'in forced-colors mode'. Their assertions -- a card is
+  // visible with non-zero width and height -- pass identically either way, so
+  // the suite could not tell. With the option now actually applied, these are
+  // exercising forced-colors for the first time.
 
   test("annotation cards remain visible in forced-colors mode", async ({ page }) => {
     await openSample(page);
