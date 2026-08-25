@@ -34,6 +34,18 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, readFileSync: _readFileSyncSpy, existsSync: _existsSyncSpy };
 });
 
+/**
+ * `os.homedir()` is the fallback both HOME-reading checks reach when the
+ * environment is empty, so it is an input in its own right — and the only way
+ * to poison it is to mock it.
+ */
+const { _homedirSpy } = vi.hoisted(() => ({ _homedirSpy: vi.fn() }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  _homedirSpy.mockImplementation(actual.homedir as never);
+  return { ...actual, homedir: _homedirSpy };
+});
+
 // __TANDEM_VERSION__ is a tsup define and never set under vitest, so
 // checkStaleGlobal short-circuits and runDoctor spawns nothing. Mocked anyway
 // so a future change to that guard cannot turn this file into a process-spawner.
@@ -54,13 +66,28 @@ const SETTINGS_LEAF = "settings.json";
 const DESKTOP_LEAF = "claude_desktop_config.json";
 
 /**
- * Every hostile path in the corpus names one of these two. Asserting on the
- * marker rather than on the poisoned `home` string is deliberate: `path.join`
- * rewrites separators differently per platform, so the exact derived path is
- * not predictable from the input, but the hostname/username inside it survives
- * every spelling.
+ * The recognisable tail of one corpus row, derived from the row itself.
+ *
+ * **Derived, not hardcoded, and that is the whole point.** The first version
+ * of this file matched a literal `/attacker|someone/`, which works only
+ * because every row happens to name one of those two today. `unc-fixtures.ts`
+ * exists to be extended — its docblock says "add a newly-found spelling HERE
+ * and every guard's test picks it up" — and a new row spelling its host
+ * anything else (say `\\?\GLOBALROOT\Device\HarddiskVolume1\x`) would filter
+ * to `[]` no matter what doctor read, and pass. A zero-of-zero satisfying a
+ * zero check, in the file whose entire job is to be the gate the eighth site
+ * slipped past.
+ *
+ * Separators are normalised and leading ones dropped, so the tail survives
+ * both `path.win32.join` (which preserves the UNC prefix) and
+ * `path.posix.join` (which collapses it). `\\attacker\share\x` and
+ * `//?/C:/Users/someone/x` become `attacker/share/x` and
+ * `?/C:/Users/someone/x`, each of which appears in every platform's
+ * derivation of that row.
  */
-const HOSTILE_MARKER = /attacker|someone/i;
+function hostileTail(hostileHome: string): string {
+  return hostileHome.replace(/\\/g, "/").replace(/^\/+/, "");
+}
 
 /** The two leaves this unit owns. Scoping keeps an unguarded read elsewhere in
  *  doctor from failing an assertion that is about these three checks. */
@@ -72,9 +99,13 @@ function allPathArgs(): string[] {
   return [..._readFileSyncSpy.mock.calls, ..._existsSyncSpy.mock.calls].map(([p]) => String(p));
 }
 
-function hostileClaudeConfigCalls(): string[] {
-  return allPathArgs().filter((p) => HOSTILE_MARKER.test(p) && isClaudeConfigLeaf(p));
+function hostileClaudeConfigCalls(hostileHome: string): string[] {
+  const tail = hostileTail(hostileHome);
+  return allPathArgs().filter((p) => p.replace(/\\/g, "/").includes(tail) && isClaudeConfigLeaf(p));
 }
+
+/** Captured through the delegating spy before any test overrides it. */
+const REAL_HOME = homedir();
 
 let dataDir: string;
 const savedEnv: Record<string, string | undefined> = {};
@@ -100,6 +131,7 @@ beforeEach(() => {
   // over the path argument, never the file's contents, and nothing is written.
   process.env.HOME = dataDir;
   process.env.USERPROFILE = dataDir;
+  _homedirSpy.mockReturnValue(REAL_HOME);
   _readFileSyncSpy.mockClear();
   _existsSyncSpy.mockClear();
 });
@@ -170,7 +202,7 @@ describe("doctor screens hostile home paths before reading any Claude config (#1
 
     await runDoctor();
 
-    expect(hostileClaudeConfigCalls()).toEqual([]);
+    expect(hostileClaudeConfigCalls(hostileHome)).toEqual([]);
   });
 
   // The desktop check reads `%APPDATA%` and `homedir()` rather than HOME or
@@ -196,8 +228,61 @@ describe("doctor screens hostile home paths before reading any Claude config (#1
     ...LOCAL_EXTENDED_PATHS,
   ])("%s — no read of a Claude Desktop config derived from it", async (_label, hostileHome) => {
     await runDoctor({ homeOverride: hostileHome });
-    expect(hostileClaudeConfigCalls()).toEqual([]);
+    expect(hostileClaudeConfigCalls(hostileHome)).toEqual([]);
   });
+
+  // The env-less case, which the block above cannot reach because it SETS
+  // HOME/USERPROFILE rather than clearing them. With both unset,
+  // `claudeCodeConfigPath` falls back to `homedir()` — and `homeIsUnsafe("")`
+  // is false, so screening the env value alone left exactly the launchd/service
+  // configuration this guard exists for behind the derived-path screen that
+  // posix collapse defeats. Screening the EFFECTIVE home closes it.
+  it.each([
+    ...NETWORK_PATHS,
+    ...LOCAL_EXTENDED_PATHS,
+  ])("%s — no read derived from a hostile homedir() when the environment is empty", async (_label, hostileHome) => {
+    delete process.env.HOME;
+    delete process.env.USERPROFILE;
+    _homedirSpy.mockReturnValue(hostileHome);
+
+    await runDoctor();
+
+    expect(hostileClaudeConfigCalls(hostileHome)).toEqual([]);
+  });
+
+  // The input screen must screen the input that actually FEEDS the derivation.
+  // A first pass refused the desktop check whenever `homeOverride ?? homedir()`
+  // OR `%APPDATA%` was hostile, which inverts the cost: under enterprise
+  // redirection `%USERPROFILE%` sits on a share while `%APPDATA%` stays local,
+  // so the desktop config is an ordinary local file — and doctor printed "on a
+  // network path Tandem will not read" (false) and dropped the only check that
+  // reports whether tandem is registered with Claude Desktop. A guard that
+  // manufactures the failure it exists to prevent.
+  //
+  // win32-only because that is the only platform where `%APPDATA%` enters the
+  // derivation at all. It asserts a READ HAPPENED rather than a message, so it
+  // fails if the check silently returns.
+  it.runIf(process.platform === "win32")(
+    "does not refuse a local %APPDATA% just because the profile is redirected",
+    async () => {
+      const appData = mkdtempSync(join(tmpdir(), "tandem-doctor-appdata-"));
+      const savedAppData = process.env.APPDATA;
+      process.env.APPDATA = appData;
+      process.env.USERPROFILE = "\\\\fileserver\\profiles\\alice";
+      delete process.env.HOME;
+      try {
+        await runDoctor();
+        expect(allPathArgs()).toContain(
+          join(appData, "Claude", DESKTOP_LEAF),
+          "the desktop check refused a local %APPDATA% because the profile was on a share",
+        );
+      } finally {
+        if (savedAppData === undefined) delete process.env.APPDATA;
+        else process.env.APPDATA = savedAppData;
+        rmSync(appData, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("still reads an ordinary local home", async () => {
     // The guard must not have become a blanket refusal — without this, deleting
@@ -210,6 +295,14 @@ describe("doctor screens hostile home paths before reading any Claude config (#1
       const touched = allPathArgs();
       expect(touched).toContain(join(home, USER_CONFIG_LEAF));
       expect(touched).toContain(join(home, ".claude", SETTINGS_LEAF));
+
+      // And the FILTER itself must be able to return non-empty. Both `it.each`
+      // blocks above assert `toEqual([])`, which a filter that never matches
+      // anything satisfies perfectly — so run it here, over a home that really
+      // was read, and require a hit. Without this the whole ordering suite
+      // could be silently disarmed by a change to `hostileTail` or
+      // `isClaudeConfigLeaf`, and every row would still be green.
+      expect(hostileClaudeConfigCalls(home).length).toBeGreaterThan(0);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

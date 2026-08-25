@@ -1044,7 +1044,14 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
   //
   // Screened twice, at the input and again inside the loader — see
   // `homeIsUnsafe` for why the derived path alone is not enough.
-  const read = homeIsUnsafe(home)
+  // Screen the EFFECTIVE home, not the env value. `claudeCodeConfigPath` falls
+  // back to `homedir()` when both env vars are unset — a launchd/service start
+  // — and `homeIsUnsafe("")` is false, so screening `home` alone left exactly
+  // the configuration this guard exists for behind the derived-path screen
+  // that posix collapse defeats. The sibling desktop check screens its
+  // `homedir()` half; this one has to as well or the thesis is asymmetric.
+  const effectiveHome = home || homedir();
+  const read = homeIsUnsafe(effectiveHome)
     ? ({ kind: "unsafe-path" } as const)
     : readClaudeConfig(claudeCodePath);
   if (read.kind === "unsafe-path") {
@@ -1389,16 +1396,33 @@ function checkDesktopMcpConfig(
   // absent, but "I refused to look" is not the same fact as "not installed",
   // and this is the surface that explains the wizard's silence.
   //
-  // Screened at the inputs as well as the resolved path, for the same reason
-  // as the home-derived checks — see `homeIsUnsafe`. This branch needs it
-  // MORE, not less: it has two inputs rather than one (the effective home, and
-  // `%APPDATA%` on Windows), and on posix `homedir()` returns `$HOME`, so a
-  // redirected profile reaches the desktop path here too. Screening only the
-  // resolved path left four corpus spellings unguarded on a Linux runner,
-  // which is where CI's only `check` job runs.
+  // Screened at the input as well as the resolved path, for the same reason as
+  // the home-derived checks — see `homeIsUnsafe`. It matters here too: on posix
+  // `homedir()` returns `$HOME`, so a redirected profile reaches this path as
+  // well, and screening only the resolved path left four corpus spellings
+  // unguarded on a Linux runner — which is where CI's only `check` job runs.
+  //
+  // **Screen the input that actually feeds the derivation, not every input
+  // that might.** A first pass refused on `homeOverride ?? homedir()` OR
+  // `%APPDATA%` unconditionally, which is wrong in the direction that costs a
+  // user a real answer: under enterprise redirection `%USERPROFILE%` is on a
+  // share while `%APPDATA%` stays local, so `desktopPath` is an ordinary local
+  // file — and doctor would have printed "on a network path Tandem will not
+  // read", which is false, and dropped the only check that reports whether
+  // tandem is registered with Claude Desktop.
+  //
+  // So this mirrors `claudeDesktopConfigPath`'s own precedence. That is a
+  // correspondence, and correspondences drift — `unc-guard-ordering` and
+  // `doctor-path-safety` both pin it, and `client-config-paths.ts` documents
+  // why `homeOverride` wins over `%APPDATA%` rather than the reverse.
   const desktopHome = homeOverride ?? homedir();
-  const inputUnsafe = homeIsUnsafe(desktopHome) || homeIsUnsafe(process.env.APPDATA ?? "");
-  const read = inputUnsafe ? ({ kind: "unsafe-path" } as const) : readClaudeConfig(desktopPath);
+  const desktopInput =
+    platform() === "win32" && homeOverride === undefined
+      ? (process.env.APPDATA ?? desktopHome)
+      : desktopHome;
+  const read = homeIsUnsafe(desktopInput)
+    ? ({ kind: "unsafe-path" } as const)
+    : readClaudeConfig(desktopPath);
   if (read.kind === "unsafe-path") {
     // Not `NETWORK_HOME_FIX`, though the first sentence is identical: this one
     // names Claude Desktop, and the remedy differs accordingly.
