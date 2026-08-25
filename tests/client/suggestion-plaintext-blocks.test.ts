@@ -46,7 +46,7 @@ function suggestion(from: number, to: number, suggestedText: string): Annotation
     suggestedText,
     createdAt: 0,
     range: { from, to },
-  } as Annotation;
+  } as unknown as Annotation;
 }
 
 /**

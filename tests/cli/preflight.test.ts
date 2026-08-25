@@ -41,7 +41,7 @@ describe("ensureTandemServer", () => {
       ExitSignal,
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
-    const writes = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    const writes = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
     expect(writes).toContain("Tandem server preflight failed at http://localhost:55999");
     expect(writes).toContain("ECONNREFUSED");
     expect(writes).toContain("tandem start");
@@ -53,22 +53,24 @@ describe("ensureTandemServer", () => {
       ExitSignal,
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
-    const writes = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    const writes = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
     expect(writes).toContain("HTTP 500");
   });
 
   it("exits 1 when the request times out (AbortError)", async () => {
-    fetchSpy.mockImplementation(async (_url, opts) => {
-      // Simulate a fetch that aborts when its signal fires.
-      return new Promise((_resolve, reject) => {
-        const signal = (opts as { signal?: AbortSignal })?.signal;
-        if (signal) {
-          signal.addEventListener("abort", () => {
-            reject(new Error("The operation was aborted."));
-          });
-        }
-      });
-    });
+    fetchSpy.mockImplementation(
+      async (_url: unknown, opts: { signal?: AbortSignal } | undefined) => {
+        // Simulate a fetch that aborts when its signal fires.
+        return new Promise((_resolve, reject) => {
+          const signal = opts?.signal;
+          if (signal) {
+            signal.addEventListener("abort", () => {
+              reject(new Error("The operation was aborted."));
+            });
+          }
+        });
+      },
+    );
     await expect(
       ensureTandemServer({ url: "http://127.0.0.1:3479", timeoutMs: 10 }),
     ).rejects.toBeInstanceOf(ExitSignal);

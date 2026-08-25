@@ -355,9 +355,11 @@ describe("rotateToken CLI", () => {
 
   it("exits with code 1 and names the source when TANDEM_AUTH_TOKEN env is set", async () => {
     process.env.TANDEM_AUTH_TOKEN = "some-env-token";
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((_code?: number) => {
-      throw new Error("process.exit called");
-    });
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((_code?: string | number | null) => {
+        throw new Error("process.exit called");
+      });
     const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const { rotateToken } = await import("../../src/cli/rotate-token.js");
@@ -373,9 +375,11 @@ describe("rotateToken CLI", () => {
 
   it("exits with code 1 and names the source when CLAUDE_PLUGIN_OPTION_AUTH_TOKEN env is set", async () => {
     process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN = "some-plugin-token";
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((_code?: number) => {
-      throw new Error("process.exit called");
-    });
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((_code?: string | number | null) => {
+        throw new Error("process.exit called");
+      });
     const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const { rotateToken } = await import("../../src/cli/rotate-token.js");
@@ -391,9 +395,11 @@ describe("rotateToken CLI", () => {
 
   it("exits with code 1 when no token file exists", async () => {
     _readTokenSpy.mockResolvedValue(null);
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((_code?: number) => {
-      throw new Error("process.exit called");
-    });
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((_code?: string | number | null) => {
+        throw new Error("process.exit called");
+      });
 
     const { rotateToken } = await import("../../src/cli/rotate-token.js");
     await expect(rotateToken()).rejects.toThrow("process.exit called");

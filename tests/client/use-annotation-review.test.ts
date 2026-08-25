@@ -91,7 +91,7 @@ describe("useAnnotationReview — onApplyFailed (B2)", () => {
     render(UseAnnotationReviewHarness, {
       props: {
         params,
-        onReady: (returned) => {
+        onReady: (returned: ReturnType<typeof useAnnotationReview>) => {
           api = returned;
         },
       },

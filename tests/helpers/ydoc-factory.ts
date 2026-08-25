@@ -37,6 +37,10 @@ export function getAnnotationsMap(doc: Y.Doc): Y.Map<unknown> {
 
 /** Create a test annotation with sensible defaults and optional overrides. */
 export function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
+  // `Partial<Annotation>` decorrelates the discriminant from `color`/`suggestedText`
+  // (each becomes independently optional across the union), so spreading it back in
+  // no longer type-checks as any single member of the union even though callers only
+  // ever pass a coherent combination. Same shape as `makeImportNote` below.
   return {
     id: "ann_test_001",
     author: "claude",
@@ -46,7 +50,7 @@ export function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation 
     status: "pending",
     timestamp: Date.now(),
     ...overrides,
-  };
+  } as Annotation;
 }
 
 /**

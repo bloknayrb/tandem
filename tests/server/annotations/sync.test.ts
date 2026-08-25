@@ -23,6 +23,7 @@ vi.mock("../../../src/server/notifications.js", async (importOriginal) => {
 import { resetMigrationLog } from "../../../src/server/annotations/migration-log.js";
 import {
   type AnnotationRecordV1,
+  type AnnotationReplyRecordV1,
   parseAnnotationDoc,
   SCHEMA_VERSION,
 } from "../../../src/server/annotations/schema.js";
@@ -62,7 +63,7 @@ import { useTmpAnnotationsEnvWithFlag } from "../../helpers/annotation-store-env
  * #483 and assert the count of the legacy-type umbrella line specifically.
  */
 function legacyTypeLogs(errorSpy: ReturnType<typeof vi.spyOn>): unknown[][] {
-  return errorSpy.mock.calls.filter((args) =>
+  return errorSpy.mock.calls.filter((args: unknown[]) =>
     String(args[0]).includes("legacy migration: legacy-type"),
   );
 }

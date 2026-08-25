@@ -128,7 +128,9 @@ async function runAction(id: string): Promise<void> {
   await new Promise((r) => setTimeout(r, 0));
 }
 
-let notify: ReturnType<typeof vi.fn>;
+let notify: ReturnType<
+  typeof vi.fn<(severity: "info" | "warning" | "error", message: string) => void>
+>;
 
 beforeEach(() => {
   notify = vi.fn();
@@ -170,6 +172,11 @@ function wireDeps(activeDocumentPath: string | null): void {
     annotationDismiss: vi.fn(),
     selectBlock: vi.fn(),
     toggleAuthorship: vi.fn(),
+    toggleFormattingBar: vi.fn(),
+    toggleSourceView: vi.fn(),
+    focusChat: vi.fn(),
+    save: vi.fn(async () => {}),
+    saveAs: vi.fn(async () => {}),
   });
 }
 

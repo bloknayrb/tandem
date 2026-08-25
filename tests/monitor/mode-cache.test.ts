@@ -245,7 +245,7 @@ describe("background mode refresh", () => {
     // used to push: the emit gate now drops non-wake-worthy types, so a
     // `document:*` fixture would assert an empty stdout and go green whether or
     // not the mode fetch blocked delivery.
-    const stdoutWrites = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+    const stdoutWrites = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
     // Whole line, not `toContain` plus a list of absences: the fixture's own
     // literals are the only thing an absence list can refuse, so a leak of a
     // field this fixture does not happen to carry would pass it.

@@ -42,7 +42,7 @@ import type { Annotation, AnnotationReply, ChatMessage } from "../../src/shared/
 import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
-import { rangeOf } from "../helpers/ydoc-factory.js";
+import { anchored, range } from "../helpers/positions.js";
 
 const DOC_HASH = "sha256:awareness-tools";
 // Ledger keys are document-scoped (see `surfacedIds`); tests share one id
@@ -123,12 +123,12 @@ describe("processInboxAnnotations", () => {
   it("buckets user comment annotations into userActions (not highlights/notes)", () => {
     const ydoc = setupDoc("inbox-1", "Hello world test");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "highlight", rangeOf(0, 5), "", {
+    createAnnotation(map, ydoc, "highlight", anchored(0, 5), "", {
       author: "user",
       color: "yellow",
     });
-    createAnnotation(map, ydoc, "comment", rangeOf(6, 11), "Nice", { author: "user" });
-    createAnnotation(map, ydoc, "note", rangeOf(0, 3), "private", { author: "user" });
+    createAnnotation(map, ydoc, "comment", anchored(6, 11), "Nice", { author: "user" });
+    createAnnotation(map, ydoc, "note", anchored(0, 3), "private", { author: "user" });
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
@@ -145,7 +145,7 @@ describe("processInboxAnnotations", () => {
   it("buckets resolved Claude annotations into userResponses", () => {
     const ydoc = setupDoc("inbox-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "", {
+    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "", {
       suggestedText: "Hi",
     });
     const ann = map.get(id) as Annotation;
@@ -163,7 +163,7 @@ describe("processInboxAnnotations", () => {
   it("ignores pending Claude annotations", () => {
     const ydoc = setupDoc("inbox-3", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "A comment"); // author=claude, status=pending
+    createAnnotation(map, ydoc, "comment", anchored(0, 5), "A comment"); // author=claude, status=pending
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
@@ -177,7 +177,7 @@ describe("processInboxAnnotations", () => {
   it("deduplicates via surfacedIds — second call returns empty", () => {
     const ydoc = setupDoc("inbox-4", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "test", { author: "user" });
+    createAnnotation(map, ydoc, "comment", anchored(0, 5), "test", { author: "user" });
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
@@ -199,7 +199,7 @@ describe("processInboxAnnotations", () => {
   it("discloses rather than suppresses a channel-pushed edit", () => {
     const ydoc = setupDoc("inbox-edit-channel", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "before", {
+    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "before", {
       author: "user",
     });
 
@@ -246,7 +246,7 @@ describe("processInboxAnnotations", () => {
         content: "please look at this",
         status: "pending",
         textSnapshot: "Hello",
-        range: rangeOf(0, 5).range,
+        range: anchored(0, 5).range,
         timestamp: 1000,
         rev: 1,
       }),
@@ -339,7 +339,7 @@ describe("processInboxAnnotations", () => {
   it("marks polling-discovered edits when no channel event has delivered them", () => {
     const ydoc = setupDoc("inbox-edit-poll", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "before", {
+    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "before", {
       author: "user",
     });
 
@@ -371,24 +371,30 @@ describe("processInboxAnnotations", () => {
   it("calls refreshFn on each unsurfaced annotation", () => {
     const ydoc = setupDoc("inbox-5", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "test", { author: "user" });
+    createAnnotation(map, ydoc, "comment", anchored(0, 5), "test", { author: "user" });
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
     let refreshCalled = 0;
-    processInboxAnnotations(allAnns, fullText, surfaced, (ann) => {
-      refreshCalled++;
-      return ann;
-    });
+    processInboxAnnotations(
+      allAnns,
+      fullText,
+      surfaced,
+      (ann) => {
+        refreshCalled++;
+        return ann;
+      },
+      DOC_KEY,
+    );
     expect(refreshCalled).toBe(1);
   });
 
   it("includes text snippets from annotation ranges", () => {
     const ydoc = setupDoc("inbox-6", "The quick brown fox");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", rangeOf(4, 9), "Note", { author: "user" });
+    createAnnotation(map, ydoc, "comment", anchored(4, 9), "Note", { author: "user" });
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
@@ -408,7 +414,7 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
   it("holds a user comment in Solo — no surface, no ledger write", () => {
     const ydoc = setupDoc("inbox-solo-hold", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "held", {
+    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "held", {
       author: "user",
     });
 
@@ -425,7 +431,7 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
   it("releases the held comment on the Solo→Tandem flip (surfaces on next poll)", () => {
     const ydoc = setupDoc("inbox-solo-release", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "held", {
+    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "held", {
       author: "user",
     });
 
@@ -458,7 +464,7 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
   it("does not hold Claude responses in Solo (only user-authored records are held)", () => {
     const ydoc = setupDoc("inbox-solo-claude", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "claude note", {
+    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "claude note", {
       author: "claude",
     });
     const ann = map.get(id) as Annotation;
@@ -475,11 +481,11 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
   it("indeterminate mode holds ONLY the persisted heldInSolo marker (fail-closed restart)", () => {
     const ydoc = setupDoc("inbox-indeterminate", "Hello world again");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const heldId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "was held", {
+    const heldId = createAnnotation(map, ydoc, "comment", anchored(0, 5), "was held", {
       author: "user",
       heldInSolo: true,
     });
-    const freshId = createAnnotation(map, ydoc, "comment", rangeOf(6, 11), "not held", {
+    const freshId = createAnnotation(map, ydoc, "comment", anchored(6, 11), "not held", {
       author: "user",
     });
 
@@ -508,12 +514,21 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     id: "parent-comment",
     author: "user",
     type: "comment",
-    range: { from: 0, to: 5 },
+    range: range(0, 5),
     content: "parent",
     status: "pending",
     timestamp: 1000,
   };
-  const noteParent: Annotation = { ...commentParent, id: "parent-note", type: "note" };
+  // `commentParent`'s declared type is the full `Annotation` union (not narrowed
+  // to the "comment" member), so spreading it into a "note" override picks up
+  // the other members' `color`/`suggestedText` shapes too. The `as Annotation`
+  // reflects that the actual runtime object — no `color`, no `suggestedText` —
+  // already matches the "note" member exactly.
+  const noteParent: Annotation = {
+    ...commentParent,
+    id: "parent-note",
+    type: "note",
+  } as Annotation;
   const fullText = "Hello world";
 
   function reply(over: Partial<AnnotationReply>): AnnotationReply {
@@ -972,7 +987,7 @@ describe("inbox ledgers are document-scoped", () => {
       id: "parent-comment",
       author: "user",
       type: "comment",
-      range: { from: 0, to: 5 },
+      range: range(0, 5),
       content: "parent",
       status: "pending",
       timestamp: 1000,

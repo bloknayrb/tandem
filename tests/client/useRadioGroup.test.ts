@@ -57,7 +57,7 @@ describe("useRadioGroup — handleKeyDown", () => {
       currentTarget: {
         querySelectorAll: () => [] as unknown as NodeListOf<HTMLButtonElement>,
       },
-    } as unknown as React.KeyboardEvent<HTMLDivElement>;
+    } as unknown as KeyboardEvent;
     return { evt, prevented: () => prevented };
   }
 

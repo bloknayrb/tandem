@@ -11,6 +11,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it } from "vitest";
+import type * as Y from "yjs";
 import { createAnnotation, registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import {
@@ -22,8 +23,21 @@ import {
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
+import type { AnchoredRangeResult } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
+
+/**
+ * `rangeOf(from, to, ydoc)`'s inferred return type is a union of the anchored
+ * branch and its own no-doc `{ range }` shape. Every call site here passes
+ * `ydoc`, which always takes `rangeOf`'s `if (ydoc)` branch (it throws on
+ * `!result.ok`), so the runtime value is always `AnchoredRangeResult` with a
+ * real `relRange` — this narrows the static type to match without touching
+ * the shared helper (out of scope for this unit).
+ */
+function anchoredRangeOf(from: number, to: number, ydoc: Y.Doc): AnchoredRangeResult {
+  return rangeOf(from, to, ydoc) as AnchoredRangeResult;
+}
 
 let client: Client;
 
@@ -87,7 +101,7 @@ describe("tandem_resolveAnnotation precondition (issue #694)", () => {
   it("rejects re-accept on an already-accepted annotation without bumping rev", async () => {
     const ydoc = setupDoc("resolve-pre-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "Original");
 
     await client.callTool({
       name: "tandem_resolveAnnotation",
@@ -114,7 +128,7 @@ describe("tandem_resolveAnnotation precondition (issue #694)", () => {
   it("rejects re-dismiss on an already-dismissed annotation without bumping rev", async () => {
     const ydoc = setupDoc("resolve-pre-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "Original");
 
     const ann = map.get(id) as Annotation;
     ydoc.transact(() => map.set(id, { ...ann, status: "dismissed" as const }), MCP_ORIGIN);
@@ -136,7 +150,7 @@ describe("tandem_resolveAnnotation precondition (issue #694)", () => {
   it("rejects accept on an already-dismissed annotation (cross-action)", async () => {
     const ydoc = setupDoc("resolve-pre-3", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "Original");
 
     const ann = map.get(id) as Annotation;
     ydoc.transact(() => map.set(id, { ...ann, status: "dismissed" as const }), MCP_ORIGIN);

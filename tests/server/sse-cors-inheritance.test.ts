@@ -41,7 +41,10 @@ beforeAll(async () => {
   const app = express();
   app.use(createApiMiddleware());
   app.get("/api/events", sseHandler);
-  server = http.createServer(app);
+  // src/server/express.d.ts's ambient `Application` is deliberately minimal (no
+  // call signature), so it isn't structurally a `http.RequestListener` even
+  // though express's real Application is callable as (req, res) => void.
+  server = http.createServer(app as unknown as http.RequestListener);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   port = (server.address() as AddressInfo).port;
 });

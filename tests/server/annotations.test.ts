@@ -7,9 +7,23 @@ import {
   sanitizeAnnotation,
 } from "../../src/server/mcp/annotations.js";
 import { extractText, getOrCreateXmlText } from "../../src/server/mcp/document.js";
+import type { AnchoredRangeResult } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { generateAnnotationId } from "../../src/shared/utils.js";
+import { anchored } from "../helpers/positions.js";
 import { getAnnotationsMap, getFragment, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
+
+/**
+ * `rangeOf(from, to, doc)`'s inferred return type is a union of the anchored
+ * branch and its own no-doc `{ range }` shape. Every 3-arg call site here
+ * passes `doc`, which always takes `rangeOf`'s `if (ydoc)` branch (it throws
+ * on `!result.ok`), so the runtime value is always `AnchoredRangeResult` with
+ * a real `relRange` — this narrows the static type to match without touching
+ * the shared helper (out of scope for this unit).
+ */
+function anchoredRangeOf(from: number, to: number, doc: Y.Doc): AnchoredRangeResult {
+  return rangeOf(from, to, doc) as AnchoredRangeResult;
+}
 
 let doc: Y.Doc;
 const DOC_HASH = "sha256:annotations-test";
@@ -35,7 +49,7 @@ describe("createAnnotation", () => {
   it("stores annotation with correct default fields", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "nice text");
+    const id = createAnnotation(map, doc, "comment", anchored(0, 4), "nice text");
 
     const stored = map.get(id) as Annotation;
     expect(stored.id).toBe(id);
@@ -50,7 +64,7 @@ describe("createAnnotation", () => {
   it("extras override defaults", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "highlight", rangeOf(0, 4), "", { color: "yellow" });
+    const id = createAnnotation(map, doc, "highlight", anchored(0, 4), "", { color: "yellow" });
 
     const stored = map.get(id) as Annotation;
     expect(stored.color).toBe("yellow");
@@ -67,8 +81,8 @@ describe("collectAnnotations", () => {
   it("returns all stored annotations", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    createAnnotation(map, doc, "comment", rangeOf(0, 2), "first");
-    createAnnotation(map, doc, "highlight", rangeOf(2, 4), "second");
+    createAnnotation(map, doc, "comment", anchored(0, 2), "first");
+    createAnnotation(map, doc, "highlight", anchored(2, 4), "second");
 
     const all = collectAnnotations(map, DOC_HASH);
     expect(all).toHaveLength(2);
@@ -77,9 +91,9 @@ describe("collectAnnotations", () => {
   it("returns annotations of different types", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    createAnnotation(map, doc, "comment", rangeOf(0, 2), "c");
-    createAnnotation(map, doc, "highlight", rangeOf(0, 2), "h");
-    createAnnotation(map, doc, "note", rangeOf(0, 2), "n");
+    createAnnotation(map, doc, "comment", anchored(0, 2), "c");
+    createAnnotation(map, doc, "highlight", anchored(0, 2), "h");
+    createAnnotation(map, doc, "note", anchored(0, 2), "n");
 
     const types = collectAnnotations(map, DOC_HASH).map((a) => a.type);
     expect(types).toContain("comment");
@@ -92,9 +106,9 @@ describe("filter logic", () => {
   function setupAnnotations() {
     doc = makeDoc("test content here");
     const map = getAnnotationsMap(doc);
-    createAnnotation(map, doc, "comment", rangeOf(0, 4), "a comment");
-    createAnnotation(map, doc, "highlight", rangeOf(0, 4), "", { color: "yellow" });
-    createAnnotation(map, doc, "comment", rangeOf(5, 12), "clarity", {
+    createAnnotation(map, doc, "comment", anchored(0, 4), "a comment");
+    createAnnotation(map, doc, "highlight", anchored(0, 4), "", { color: "yellow" });
+    createAnnotation(map, doc, "comment", anchored(5, 12), "clarity", {
       suggestedText: "stuff",
     });
     return map;
@@ -134,7 +148,7 @@ describe("suggestion fields on comment type", () => {
   it("comment with suggestedText stores replacement and reason separately", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "better wording", {
+    const id = createAnnotation(map, doc, "comment", anchored(0, 4), "better wording", {
       suggestedText: "replacement",
     });
 
@@ -147,7 +161,7 @@ describe("suggestion fields on comment type", () => {
   it("comment with suggestedText and empty reason", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "", {
+    const id = createAnnotation(map, doc, "comment", anchored(0, 4), "", {
       suggestedText: "x",
     });
 
@@ -161,7 +175,7 @@ describe("resolve and remove", () => {
   it("resolve changes status to accepted", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "text");
+    const id = createAnnotation(map, doc, "comment", anchored(0, 4), "text");
 
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "accepted" as const });
@@ -173,7 +187,7 @@ describe("resolve and remove", () => {
   it("resolve changes status to dismissed", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "text");
+    const id = createAnnotation(map, doc, "comment", anchored(0, 4), "text");
 
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "dismissed" as const });
@@ -185,7 +199,7 @@ describe("resolve and remove", () => {
   it("remove deletes from map", () => {
     doc = makeDoc("test");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 4), "text");
+    const id = createAnnotation(map, doc, "comment", anchored(0, 4), "text");
     expect(map.has(id)).toBe(true);
 
     map.delete(id);
@@ -203,7 +217,7 @@ describe("createAnnotation with ydoc (relRange)", () => {
   it("stores relRange when ydoc is provided", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "note");
+    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(0, 5, doc), "note");
 
     const stored = map.get(id) as Annotation;
     expect(stored.relRange).toBeDefined();
@@ -214,7 +228,7 @@ describe("createAnnotation with ydoc (relRange)", () => {
   it("omits relRange when ydoc is not provided", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5), "note");
+    const id = createAnnotation(map, doc, "comment", anchored(0, 5), "note");
 
     const stored = map.get(id) as Annotation;
     expect(stored.relRange).toBeUndefined();
@@ -224,7 +238,7 @@ describe("createAnnotation with ydoc (relRange)", () => {
     doc = makeDoc("## Title");
     const map = getAnnotationsMap(doc);
     // from=0 is inside "## " prefix → anchoredRange still succeeds but relRange is undefined
-    const id = createAnnotation(map, doc, "highlight", rangeOf(0, 3, doc), "");
+    const id = createAnnotation(map, doc, "highlight", anchoredRangeOf(0, 3, doc), "");
 
     const stored = map.get(id) as Annotation;
     expect(stored.relRange).toBeUndefined();
@@ -235,7 +249,7 @@ describe("refreshRange", () => {
   it("lazily attaches relRange to annotations missing it", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5), "note"); // no ydoc → no relRange
+    const id = createAnnotation(map, doc, "comment", anchored(0, 5), "note"); // no ydoc → no relRange
 
     const ann = map.get(id) as Annotation;
     expect(ann.relRange).toBeUndefined();
@@ -254,7 +268,7 @@ describe("refreshRange", () => {
   it("updates stale flat offsets from relRange", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(6, 11, doc), "note");
+    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(6, 11, doc), "note");
 
     // Verify initial range
     const ann = map.get(id) as Annotation;
@@ -282,7 +296,7 @@ describe("refreshRange", () => {
   it("returns kind: 'ok' when offsets are unchanged", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "note");
+    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(0, 5, doc), "note");
 
     const ann = map.get(id) as Annotation;
     const refreshed = refreshRange(ann, doc);
@@ -293,7 +307,7 @@ describe("refreshRange", () => {
   it("returns kind: 'repaired' when relRange resolves to null (deleted content) and can re-anchor from flat", () => {
     doc = makeDoc("first\nsecond");
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(6, 12, doc), "note");
+    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(6, 12, doc), "note");
 
     const ann = map.get(id) as Annotation;
     expect(ann.relRange).toBeDefined();
@@ -372,7 +386,9 @@ describe("sanitizeAnnotation", () => {
     const legacy = { ...base, type: "question" };
     const result = sanitizeAnnotation(legacy as unknown as Annotation, () => {});
     expect(result.type).toBe("comment");
-    expect(result.directedAt).toBeUndefined();
+    // `directedAt` is fully removed from the `Annotation` type (ADR-027); this
+    // still asserts sanitizeAnnotation strips it at runtime if present.
+    expect((result as unknown as { directedAt?: unknown }).directedAt).toBeUndefined();
   });
 
   it("strips stray color from non-highlight entries", () => {
@@ -401,7 +417,7 @@ describe("sanitizeAnnotation", () => {
     const comment = { ...base, type: "comment", directedAt: "claude" as const };
     const result = sanitizeAnnotation(comment as unknown as Annotation, () => {});
     expect(result.type).toBe("comment");
-    expect(result.directedAt).toBeUndefined();
+    expect((result as unknown as { directedAt?: unknown }).directedAt).toBeUndefined();
   });
 
   it("migrates flag to note (ADR-027)", () => {

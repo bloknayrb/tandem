@@ -13,6 +13,7 @@ import {
   emitModeReleaseWake,
   getAnnotationEditedChannelKey,
   getBufferedSelection,
+  getSubscriberCount,
   reattachObservers,
   replaySince,
   resetForTesting,
@@ -187,11 +188,13 @@ describe("origin filtering", () => {
     });
 
     expect(events).toHaveLength(1);
-    expect(events[0].type).toBe("annotation:created");
-    expect(events[0].payload.annotationId).toBe("ann_1");
+    const event = events[0];
+    expect(event.type).toBe("annotation:created");
+    if (event.type !== "annotation:created") throw new Error("expected annotation:created event");
+    expect(event.payload.annotationId).toBe("ann_1");
     // ADR-027: directedAt is removed from the payload type. Defense-in-depth
     // assertion against a future spread regression on AnnotationCreatedPayload.
-    expect(events[0].payload).not.toHaveProperty("directedAt");
+    expect(event.payload).not.toHaveProperty("directedAt");
     cleanup();
   });
 
@@ -867,7 +870,11 @@ describe("reattachObservers", () => {
       range: { from: 0, to: 5 },
     });
     expect(events).toHaveLength(2);
-    expect(events[1].payload.annotationId).toBe("ann_new");
+    const newEvent = events[1];
+    if (newEvent.type !== "annotation:created") {
+      throw new Error("expected annotation:created event");
+    }
+    expect(newEvent.payload.annotationId).toBe("ann_new");
 
     detachObservers("swap-doc");
     oldDoc.destroy();
@@ -1494,9 +1501,8 @@ describe("WS-A2 Solo privacy hold (pushEvent)", () => {
   it("holds a user reply in Solo", () => {
     setMode("solo");
     // Parent comment seeded via MCP origin so it emits nothing itself.
-    doc.getMap(Y_MAP_ANNOTATIONS).set(
-      "parent",
-      {
+    doc.transact(() => {
+      doc.getMap(Y_MAP_ANNOTATIONS).set("parent", {
         id: "parent",
         type: "comment",
         author: "user",
@@ -1504,9 +1510,8 @@ describe("WS-A2 Solo privacy hold (pushEvent)", () => {
         status: "pending",
         textSnapshot: "hello",
         range: { from: 0, to: 5 },
-      },
-      MCP_ORIGIN,
-    );
+      });
+    }, MCP_ORIGIN);
     const { events, cleanup } = collectEvents();
 
     doc.getMap(Y_MAP_ANNOTATION_REPLIES).set("reply_solo", {
@@ -1532,9 +1537,8 @@ describe("WS-A2 Solo privacy hold (pushEvent)", () => {
     setMode("solo");
     // Seed a Claude annotation via MCP (no event), then the user accepts it.
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
-    map.set(
-      "claude_ann",
-      {
+    doc.transact(() => {
+      map.set("claude_ann", {
         id: "claude_ann",
         type: "comment",
         author: "claude",
@@ -1542,9 +1546,8 @@ describe("WS-A2 Solo privacy hold (pushEvent)", () => {
         status: "pending",
         textSnapshot: "hello",
         range: { from: 0, to: 5 },
-      },
-      MCP_ORIGIN,
-    );
+      });
+    }, MCP_ORIGIN);
     const { events, cleanup } = collectEvents("internal");
 
     // User accepts (browser-origin status flip) — must still be buffered and
@@ -1759,6 +1762,16 @@ describe("delivery-state forward recording (pushEvent)", () => {
     _ctrlTestDoc.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, mode);
   }
 
+  /**
+   * `getDeliveryState` takes `now` and the live external-consumer count as of
+   * the production call site (`server.ts`) rather than closing over them, so
+   * tests reproduce that call shape with the real current values instead of a
+   * fixed guess.
+   */
+  function currentDeliveryState() {
+    return getDeliveryState(Date.now(), getSubscriberCount());
+  }
+
   function createUserComment(id: string) {
     doc.getMap(Y_MAP_ANNOTATIONS).set(id, {
       id,
@@ -1777,7 +1790,7 @@ describe("delivery-state forward recording (pushEvent)", () => {
 
     createUserComment("ann_delivery_1");
 
-    expect(getDeliveryState()).toMatchObject({ state: "awaiting-poll", forwardCount: 1 });
+    expect(currentDeliveryState()).toMatchObject({ state: "awaiting-poll", forwardCount: 1 });
     cleanup();
   });
 
@@ -1791,7 +1804,7 @@ describe("delivery-state forward recording (pushEvent)", () => {
 
     createUserComment("ann_delivery_none");
 
-    expect(getDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
+    expect(currentDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
   });
 
   it("records nothing for an INTERNAL subscriber", () => {
@@ -1803,7 +1816,7 @@ describe("delivery-state forward recording (pushEvent)", () => {
 
     createUserComment("ann_delivery_internal");
 
-    expect(getDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
+    expect(currentDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
     cleanup();
   });
 
@@ -1816,7 +1829,7 @@ describe("delivery-state forward recording (pushEvent)", () => {
 
     createUserComment("ann_delivery_solo");
 
-    expect(getDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
+    expect(currentDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
     cleanup();
   });
 
@@ -1843,11 +1856,12 @@ describe("delivery-state forward recording (pushEvent)", () => {
       id: "evt_solo_accept",
       type: "annotation:accepted",
       timestamp: Date.now(),
-      payload: { annotationId: "ann_claude_1", documentId: "delivery-doc" },
-    } as TandemEvent);
+      documentId: "delivery-doc",
+      payload: { annotationId: "ann_claude_1", textSnippet: "test" },
+    });
 
     expect(events).toHaveLength(0); // withheld from the external consumer...
-    expect(getDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
+    expect(currentDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
     cleanup();
   });
 
@@ -1862,10 +1876,11 @@ describe("delivery-state forward recording (pushEvent)", () => {
       id: "evt_doc_switch",
       type: "document:switched",
       timestamp: Date.now(),
-      payload: { documentId: "delivery-doc" },
-    } as TandemEvent);
+      documentId: "delivery-doc",
+      payload: { fileName: "delivery-doc.md" },
+    });
 
-    expect(getDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
+    expect(currentDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
     cleanup();
   });
 
@@ -1880,7 +1895,7 @@ describe("delivery-state forward recording (pushEvent)", () => {
       payload: { messageId: "msg_1", text: "are you there?" },
     } as TandemEvent);
 
-    expect(getDeliveryState()).toMatchObject({ state: "awaiting-poll", forwardCount: 1 });
+    expect(currentDeliveryState()).toMatchObject({ state: "awaiting-poll", forwardCount: 1 });
     cleanup();
   });
 
@@ -1899,11 +1914,11 @@ describe("delivery-state forward recording (pushEvent)", () => {
     const { cleanup } = collectEvents("external");
 
     createUserComment("ann_delivery_detach");
-    expect(getDeliveryState().state).toBe("awaiting-poll");
+    expect(currentDeliveryState().state).toBe("awaiting-poll");
 
     cleanup(); // the consumer goes away
 
-    expect(getDeliveryState().state).toBe("consumer-detached");
+    expect(currentDeliveryState().state).toBe("consumer-detached");
   });
 
   it("keeps waiting while a SECOND consumer is still attached", () => {
@@ -1917,9 +1932,9 @@ describe("delivery-state forward recording (pushEvent)", () => {
     createUserComment("ann_delivery_two_consumers");
     first.cleanup();
 
-    expect(getDeliveryState().state).toBe("awaiting-poll");
+    expect(currentDeliveryState().state).toBe("awaiting-poll");
     second.cleanup();
-    expect(getDeliveryState().state).toBe("consumer-detached");
+    expect(currentDeliveryState().state).toBe("consumer-detached");
   });
 
   it("counts the supervisor's subscription, which never speaks SSE", () => {
@@ -1935,7 +1950,7 @@ describe("delivery-state forward recording (pushEvent)", () => {
     createUserComment("ann_delivery_supervisor");
 
     expect(seen).toHaveLength(1);
-    expect(getDeliveryState()).toMatchObject({ state: "awaiting-poll", forwardCount: 1 });
+    expect(currentDeliveryState()).toMatchObject({ state: "awaiting-poll", forwardCount: 1 });
     unsub();
   });
 });

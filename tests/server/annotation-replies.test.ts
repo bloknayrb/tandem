@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type * as Y from "yjs";
 import {
   addReplyToAnnotation,
   collectRepliesForAnnotation,
@@ -14,9 +15,22 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { MCP_ORIGIN, withInternal, withMcp } from "../../src/shared/origins.js";
+import type { AnchoredRangeResult } from "../../src/shared/positions/types.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
+
+/**
+ * `rangeOf(from, to, ydoc)`'s inferred return type is a union of the anchored
+ * branch and its own no-doc `{ range }` shape. Every call site here passes
+ * `ydoc`, which always takes `rangeOf`'s `if (ydoc)` branch (it throws on
+ * `!result.ok`), so the runtime value is always `AnchoredRangeResult` with a
+ * real `relRange` — this narrows the static type to match without touching
+ * the shared helper (out of scope for this unit).
+ */
+function anchoredRangeOf(from: number, to: number, ydoc: Y.Doc): AnchoredRangeResult {
+  return rangeOf(from, to, ydoc) as AnchoredRangeResult;
+}
 
 function setMode(mode: string | undefined) {
   const ctrl = getOrCreateDocument(CTRL_ROOM);
@@ -36,7 +50,13 @@ describe("addReplyToAnnotation", () => {
   it("adds a reply to a pending annotation (happy path)", () => {
     const ydoc = setupDoc("reply-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test comment");
+    const annId = createAnnotation(
+      map,
+      ydoc,
+      "comment",
+      anchoredRangeOf(0, 5, ydoc),
+      "test comment",
+    );
 
     const result = addReplyToAnnotation(ydoc, map, annId, "I agree", "user");
     expect(result.ok).toBe(true);
@@ -64,7 +84,7 @@ describe("addReplyToAnnotation", () => {
   it("rejects reply to a resolved annotation (409 / ANNOTATION_RESOLVED)", () => {
     const ydoc = setupDoc("reply-3", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
+    const annId = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "test");
 
     // Resolve the annotation
     const ann = map.get(annId) as Annotation;
@@ -80,7 +100,7 @@ describe("addReplyToAnnotation", () => {
   it("rejects reply to a dismissed annotation", () => {
     const ydoc = setupDoc("reply-4", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
+    const annId = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "test");
 
     const ann = map.get(annId) as Annotation;
     map.set(annId, { ...ann, status: "dismissed" });
@@ -96,7 +116,7 @@ describe("event emission on reply", () => {
   it("emits event for user reply (no MCP_ORIGIN)", () => {
     const ydoc = setupDoc("evt-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
+    const annId = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "test");
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     const events: Array<{ action: string; origin: unknown }> = [];
@@ -115,7 +135,7 @@ describe("event emission on reply", () => {
   it("suppresses event for Claude reply (MCP_ORIGIN)", () => {
     const ydoc = setupDoc("evt-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
+    const annId = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "test");
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     const mcpEvents: Array<{ action: string; origin: unknown }> = [];
@@ -140,7 +160,13 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
   it("stamps heldInSolo on a user reply to a COMMENT while in Solo", () => {
     const ydoc = setupDoc("held-reply-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent comment");
+    const annId = createAnnotation(
+      map,
+      ydoc,
+      "comment",
+      anchoredRangeOf(0, 5, ydoc),
+      "parent comment",
+    );
     setMode("solo");
 
     const result = addReplyToAnnotation(ydoc, map, annId, "held reply", "user");
@@ -156,7 +182,7 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
   it("does NOT stamp heldInSolo on a user reply to a NOTE (private, never sent to Claude)", () => {
     const ydoc = setupDoc("held-reply-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "parent note");
+    const annId = createAnnotation(map, ydoc, "note", anchoredRangeOf(0, 5, ydoc), "parent note");
     setMode("solo");
 
     const result = addReplyToAnnotation(ydoc, map, annId, "note reply", "user");
@@ -175,7 +201,13 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
   it("does NOT stamp heldInSolo on a comment reply in Tandem mode", () => {
     const ydoc = setupDoc("held-reply-3", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent comment");
+    const annId = createAnnotation(
+      map,
+      ydoc,
+      "comment",
+      anchoredRangeOf(0, 5, ydoc),
+      "parent comment",
+    );
     setMode("tandem");
 
     const result = addReplyToAnnotation(ydoc, map, annId, "live reply", "user");
@@ -199,7 +231,13 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
   it("stamps heldInSolo on a user reply to a COMMENT while mode is indeterminate (restart), and hideFromAI withholds it", () => {
     const ydoc = setupDoc("held-reply-4", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent comment");
+    const annId = createAnnotation(
+      map,
+      ydoc,
+      "comment",
+      anchoredRangeOf(0, 5, ydoc),
+      "parent comment",
+    );
     setMode(undefined); // absent CTRL_ROOM mode key === indeterminate
 
     const result = addReplyToAnnotation(ydoc, map, annId, "mid-restart reply", "user");
@@ -218,7 +256,7 @@ describe("collectRepliesForAnnotation", () => {
   it("collects and sorts replies chronologically", () => {
     const ydoc = setupDoc("collect-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
+    const annId = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "test");
 
     addReplyToAnnotation(ydoc, map, annId, "first", "user");
     addReplyToAnnotation(ydoc, map, annId, "second", "claude", withMcp);
@@ -247,7 +285,7 @@ describe("tandem_removeAnnotation cleans up replies", () => {
   it("deletes orphaned replies when annotation is removed", () => {
     const ydoc = setupDoc("cleanup-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
+    const annId = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "test");
 
     // Add replies to the annotation
     addReplyToAnnotation(ydoc, map, annId, "reply 1", "user");
@@ -274,8 +312,14 @@ describe("tandem_removeAnnotation cleans up replies", () => {
   it("does not delete replies belonging to other annotations", () => {
     const ydoc = setupDoc("cleanup-2", "Hello world test");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId1 = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "comment 1");
-    const annId2 = createAnnotation(map, ydoc, "comment", rangeOf(6, 11, ydoc), "comment 2");
+    const annId1 = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "comment 1");
+    const annId2 = createAnnotation(
+      map,
+      ydoc,
+      "comment",
+      anchoredRangeOf(6, 11, ydoc),
+      "comment 2",
+    );
 
     addReplyToAnnotation(ydoc, map, annId1, "reply to 1", "user");
     addReplyToAnnotation(ydoc, map, annId2, "reply to 2", "user");

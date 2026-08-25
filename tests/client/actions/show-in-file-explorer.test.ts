@@ -39,11 +39,17 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeSpy }));
 const ACTION_ID = "show-in-file-explorer";
 
 /** Build the full ActionDeps bag. `docPath` drives the enable/disable gate. */
-function depsBag(docPath: string | null, notify: ReturnType<typeof vi.fn>) {
+function depsBag(
+  docPath: string | null,
+  notify: ReturnType<
+    typeof vi.fn<(severity: "info" | "warning" | "error", message: string) => void>
+  >,
+) {
   return {
     getActiveTabId: () => "doc-1",
     getActiveDocumentPath: () => docPath,
     notify,
+    afterLauncherAction: vi.fn(),
     openSettings: vi.fn(),
     toggleSoloMode: vi.fn(),
     openFindBar: vi.fn(),
@@ -61,6 +67,10 @@ function depsBag(docPath: string | null, notify: ReturnType<typeof vi.fn>) {
     annotationDismiss: vi.fn(),
     selectBlock: vi.fn(),
     toggleAuthorship: vi.fn(),
+    toggleFormattingBar: vi.fn(),
+    toggleSourceView: vi.fn(),
+    focusChat: vi.fn(),
+    save: vi.fn(async () => {}),
     saveAs: vi.fn(async () => {}),
   };
 }
@@ -99,7 +109,7 @@ describe("show-in-file-explorer — run behavior", () => {
   });
 
   it("invokes show_in_file_manager with the active document path", async () => {
-    const notify = vi.fn();
+    const notify = vi.fn<(severity: "info" | "warning" | "error", message: string) => void>();
     wireActionDeps(depsBag("/home/user/project/notes.md", notify));
 
     const action = getActionsMap().get(ACTION_ID) as Action;
@@ -113,7 +123,7 @@ describe("show-in-file-explorer — run behavior", () => {
   });
 
   it("notifies and does NOT invoke when the doc has no on-disk path", async () => {
-    const notify = vi.fn();
+    const notify = vi.fn<(severity: "info" | "warning" | "error", message: string) => void>();
     wireActionDeps(depsBag(null, notify));
 
     const action = getActionsMap().get(ACTION_ID) as Action;
@@ -127,7 +137,7 @@ describe("show-in-file-explorer — run behavior", () => {
 
   it("notifies an error when the native invoke rejects", async () => {
     invokeSpy.mockRejectedValueOnce(new Error("explorer not found"));
-    const notify = vi.fn();
+    const notify = vi.fn<(severity: "info" | "warning" | "error", message: string) => void>();
     wireActionDeps(depsBag("/home/user/project/notes.md", notify));
 
     const action = getActionsMap().get(ACTION_ID) as Action;

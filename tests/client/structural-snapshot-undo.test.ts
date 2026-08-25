@@ -36,6 +36,7 @@ import { extractText } from "../../src/server/mcp/document.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants";
 import type { Annotation } from "../../src/shared/types";
+import { off, range } from "../helpers/positions";
 
 /**
  * A live `EditorView` leaves a `DOMObserver` flush pending on a timer. Left
@@ -230,7 +231,7 @@ describe("#1486: block restore geometry", () => {
       suggestedText: "MERGED",
       textSnapshot: "alpha\nbravo",
       textSnapshotBreaks: [{ at: 5, kind: "block" }],
-      range: { from: 3, to: 9 },
+      range: range(3, 9),
     });
     const { editor, review } = setup("<p>preMERGEDpost</p>", ann);
 
@@ -306,7 +307,7 @@ describe("#1486: block restore geometry", () => {
       textSnapshotBreaks: [{ at: 5, kind: "block-opaque" }],
       // Past the heading's "## " prefix, which occupies flat offsets 0-2 and has
       // no position in the editor.
-      range: { from: 3, to: 9 },
+      range: range(3, 9),
     });
     const { editor, declined, review } = setup("<h2>MERGED</h2>", ann);
 
@@ -401,7 +402,7 @@ describe("#1486 follow-up: a neighboring annotation's relRange survives a struct
     const stableFrom = flat.indexOf("STABLE");
     expect(stableFrom, "fixture text must contain the anchor target").toBeGreaterThanOrEqual(0);
     const stableTo = stableFrom + "STABLE".length;
-    const anchored = anchoredRange(ydoc, stableFrom, stableTo);
+    const anchored = anchoredRange(ydoc, off(stableFrom), off(stableTo));
     if (!anchored.ok || !anchored.relRange) {
       throw new Error("failed to anchor the neighbor annotation");
     }

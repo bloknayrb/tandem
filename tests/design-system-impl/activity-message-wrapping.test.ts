@@ -104,7 +104,9 @@ let targets: Record<string, number>;
 beforeAll(async () => {
   const config = await resolveConfig({ root: ROOT }, "build");
   expect(config.configFile, "resolveConfig must actually find vite.config.ts").toBeDefined();
-  targets = convertTargets(config.build.cssTarget);
+  const { cssTarget } = config.build;
+  if (cssTarget === false) throw new Error("cssTarget must be set for this contract to hold");
+  targets = convertTargets(cssTarget);
 });
 
 /** The component's `<style>` block, which is what the bundler compiles. */

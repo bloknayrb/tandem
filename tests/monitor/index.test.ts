@@ -77,7 +77,7 @@ describe("monitor: per-event stdout delivery", () => {
     stream.end();
     await promise.catch(() => {});
 
-    const writes = stdoutSpy.mock.calls.map((c) => String(c[0]));
+    const writes: string[] = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0]));
     const matched = writes.find((w) => w.includes("chat:message"));
     expect(matched).toBe("Tandem: chat:message — call tandem_checkInbox for details\n");
   });
@@ -161,7 +161,7 @@ describe("monitor: per-event stdout delivery", () => {
     stream.end();
     await promise.catch(() => {});
 
-    const all = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+    const all = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
     for (const sentinel of sentinels) {
       expect(all, `${sentinel} reached stdout`).not.toContain(sentinel);
     }
@@ -195,7 +195,7 @@ describe("monitor: per-event stdout delivery", () => {
     stream.end();
     await promise.catch(() => {});
 
-    const writes = stdoutSpy.mock.calls.map((c) => String(c[0]));
+    const writes: string[] = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0]));
     const matched = writes.find((w) => w.includes("chat:message"));
     expect(matched).toBeDefined();
     // No internal newlines (only the trailing one).
@@ -345,7 +345,7 @@ describe("monitor: mode is stale-preserving across /api/mode failure", () => {
     // push satisfies "non-chat" but is no longer emitted at all, so the
     // assertion would have been measuring the emit gate while claiming to
     // measure the Solo one.
-    const writes = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+    const writes = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
     expect(writes).toContain("annotation:created");
     expect(writes).not.toContain("x.md");
     expect(getModeSync()).toBe("tandem");
@@ -502,7 +502,7 @@ describe("monitor: retry exhaustion -> MONITOR_CONNECT_FAILED + stdout notice", 
     expect(errorReports[0]!.error).toBe("MONITOR_CONNECT_FAILED");
     expect(exitSpy).toHaveBeenCalledWith(1);
 
-    const stdoutWrites = stdoutSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    const stdoutWrites = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
     expect(stdoutWrites).not.toMatch(/disconnected/i);
   });
 
@@ -527,7 +527,7 @@ describe("monitor: retry exhaustion -> MONITOR_CONNECT_FAILED + stdout notice", 
 
     expect(attempts).toBeGreaterThan(1);
     expect(exitSpy).toHaveBeenCalledWith(1);
-    const stdoutWrites = stdoutSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    const stdoutWrites = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
     expect(stdoutWrites).toMatch(/disconnected/i);
   });
 });

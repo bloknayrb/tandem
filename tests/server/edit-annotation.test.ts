@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it } from "vitest";
+import type * as Y from "yjs";
 import { createAnnotation, registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import {
@@ -18,8 +19,21 @@ import {
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
+import type { AnchoredRangeResult } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
+
+/**
+ * `rangeOf(from, to, ydoc)`'s inferred return type is a union of the anchored
+ * branch and its own no-doc `{ range }` shape. Every call site here passes
+ * `ydoc`, which always takes `rangeOf`'s `if (ydoc)` branch (it throws on
+ * `!result.ok`), so the runtime value is always `AnchoredRangeResult` with a
+ * real `relRange` — this narrows the static type to match without touching
+ * the shared helper (out of scope for this unit).
+ */
+function anchoredRangeOf(from: number, to: number, ydoc: Y.Doc): AnchoredRangeResult {
+  return rangeOf(from, to, ydoc) as AnchoredRangeResult;
+}
 
 let client: Client;
 
@@ -57,7 +71,13 @@ describe("tandem_editAnnotation", () => {
   it("edits a comment's content", async () => {
     const ydoc = setupDoc("edit-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original comment");
+    const id = createAnnotation(
+      map,
+      ydoc,
+      "comment",
+      anchoredRangeOf(0, 5, ydoc),
+      "Original comment",
+    );
 
     const result = await client.callTool({
       name: "tandem_editAnnotation",
@@ -77,7 +97,7 @@ describe("tandem_editAnnotation", () => {
   it("edits a suggestion's newText, preserving reason", async () => {
     const ydoc = setupDoc("edit-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "brevity", {
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "brevity", {
       suggestedText: "Hi",
     });
 
@@ -97,7 +117,7 @@ describe("tandem_editAnnotation", () => {
   it("edits a suggestion's reason only", async () => {
     const ydoc = setupDoc("edit-3", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "brevity", {
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "brevity", {
       suggestedText: "Hi",
     });
 
@@ -114,7 +134,7 @@ describe("tandem_editAnnotation", () => {
   it("rejects edit on a resolved annotation", async () => {
     const ydoc = setupDoc("edit-4", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "Original");
 
     // Accept the annotation
     const ann = map.get(id) as Annotation;
@@ -136,7 +156,7 @@ describe("tandem_editAnnotation", () => {
   it("rejects edit on a dismissed annotation", async () => {
     const ydoc = setupDoc("edit-4-dismissed", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "Original");
 
     const ann = map.get(id) as Annotation;
     ydoc.transact(() => map.set(id, { ...ann, status: "dismissed" as const }), MCP_ORIGIN);
@@ -156,7 +176,7 @@ describe("tandem_editAnnotation", () => {
   it("rejects edit on a user note (ADR-027 — notes are user-private)", async () => {
     const ydoc = setupDoc("edit-4-note", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
+    const id = createAnnotation(map, ydoc, "note", anchoredRangeOf(0, 5, ydoc), "private note");
 
     const result = await client.callTool({
       name: "tandem_editAnnotation",
@@ -178,7 +198,7 @@ describe("tandem_editAnnotation", () => {
   it("rejects edit on a non-pending note with INVALID_ARGUMENT (not ANNOTATION_RESOLVED)", async () => {
     const ydoc = setupDoc("edit-4-note-resolved", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
+    const id = createAnnotation(map, ydoc, "note", anchoredRangeOf(0, 5, ydoc), "private note");
 
     const ann = map.get(id) as Annotation;
     ydoc.transact(() => map.set(id, { ...ann, status: "accepted" as const }), MCP_ORIGIN);
@@ -198,7 +218,7 @@ describe("tandem_editAnnotation", () => {
   it("rejects when no editable fields provided for non-suggestion", async () => {
     const ydoc = setupDoc("edit-5", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "Original");
 
     const result = await client.callTool({ name: "tandem_editAnnotation", arguments: { id } });
     const parsed = parseResult(result as any);
@@ -209,7 +229,7 @@ describe("tandem_editAnnotation", () => {
   it("rejects when no editable fields provided for comment with suggestedText", async () => {
     const ydoc = setupDoc("edit-6", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "brevity", {
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "brevity", {
       suggestedText: "Hi",
     });
 
@@ -233,7 +253,7 @@ describe("tandem_editAnnotation", () => {
   it("preserves immutable fields when editing", async () => {
     const ydoc = setupDoc("edit-8", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original", {
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "Original", {
       textSnapshot: "Hello",
     });
 
@@ -251,7 +271,7 @@ describe("tandem_editAnnotation", () => {
   it("edits suggestedText on a comment that already has it", async () => {
     const ydoc = setupDoc("edit-9", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "reason", {
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "reason", {
       suggestedText: "Old",
     });
 
@@ -270,7 +290,7 @@ describe("tandem_editAnnotation", () => {
   it("rejects newText on a highlight annotation", async () => {
     const ydoc = setupDoc("edit-10", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "highlight", rangeOf(0, 5, ydoc), "note", {
+    const id = createAnnotation(map, ydoc, "highlight", anchoredRangeOf(0, 5, ydoc), "note", {
       color: "yellow",
     });
 

@@ -7,6 +7,7 @@ import {
   mergeInlineTail,
   replaceFlatRangeInElement,
 } from "../../src/server/mcp/document-model.js";
+import { off } from "../helpers/positions.js";
 import { makeDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -25,8 +26,8 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
   if (from > to) return `Invalid range: from (${from}) must be <= to (${to}).`;
 
   const fragment = doc.getXmlFragment("default");
-  const startPos = resolveOffset(fragment, from);
-  const endPos = resolveOffset(fragment, to);
+  const startPos = resolveOffset(fragment, off(from));
+  const endPos = resolveOffset(fragment, off(to));
 
   if (!startPos || !endPos) return `Cannot resolve offset range [${from}, ${to}].`;
 

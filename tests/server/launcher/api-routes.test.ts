@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import express, { type Express } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -29,7 +29,9 @@ import {
 } from "../../../src/shared/launcher/contract.js";
 import { withEnvOverride } from "../../helpers/env-override.js";
 
-const passthrough: import("express").Handler = (_req, _res, next) => next();
+const passthrough = (_req: Request, _res: Response, next: NextFunction) => next();
+
+type WrittenIntegrationsFile = { integrations: Array<{ workingDirectory?: string }> };
 
 interface FakeSupervisorOpts {
   running?: boolean;
@@ -70,7 +72,7 @@ function makeApp(
   app.use(express.json());
   if (options.remoteAddress !== undefined) {
     const addr = options.remoteAddress;
-    app.use((req, _res, next) => {
+    app.use((req: Request, _res: Response, next: NextFunction) => {
       Object.defineProperty(req.socket, "remoteAddress", {
         value: addr,
         configurable: true,
@@ -181,7 +183,7 @@ describe("GET /api/launcher/status", () => {
     const { app } = makeApp(baseDeps(sup));
     const res = await request(app, "GET", "/api/launcher/status");
     expect(res.status).toBe(200);
-    const body = res.body as LauncherStatus & { running: true };
+    const body = res.body as Extract<LauncherStatus, { running: true }>;
     expect(body.available).toBe(true);
     expect(body.running).toBe(true);
     expect(body.reaperPid).toBe(12345);
@@ -509,7 +511,7 @@ describe("POST /api/launcher/working-directory", () => {
   });
 
   it("clears workingDirectory when body is { workingDirectory: null }", async () => {
-    let writtenFile: { integrations: Array<{ workingDirectory?: string }> } | null = null;
+    let writtenFile: WrittenIntegrationsFile | null = null;
     const store = {
       read: async () => ({
         schemaVersion: 3 as const,
@@ -528,7 +530,7 @@ describe("POST /api/launcher/working-directory", () => {
         ],
       }),
       write: async (file: unknown) => {
-        writtenFile = file as typeof writtenFile;
+        writtenFile = file as WrittenIntegrationsFile;
       },
     } as unknown as LauncherRoutesDeps["store"];
     const { app } = makeApp(baseDeps(makeFakeSupervisor(), "stdio-mode", store));
@@ -536,12 +538,17 @@ describe("POST /api/launcher/working-directory", () => {
       workingDirectory: null,
     });
     expect(res.status).toBe(200);
-    expect(writtenFile).not.toBeNull();
-    expect(writtenFile?.integrations[0].workingDirectory).toBeUndefined();
+    // `writtenFile` is reassigned only inside the `store.write` closure, so TS's
+    // control-flow analysis (which doesn't reason across closure boundaries)
+    // still sees it as the narrow type `null` here and would otherwise narrow
+    // `.integrations` access to `never` — hence the re-widening cast.
+    const result = writtenFile as WrittenIntegrationsFile | null;
+    expect(result).not.toBeNull();
+    expect(result?.integrations[0].workingDirectory).toBeUndefined();
   });
 
   it("persists the canonical resolved path on happy path", async () => {
-    let writtenFile: { integrations: Array<{ workingDirectory?: string }> } | null = null;
+    let writtenFile: WrittenIntegrationsFile | null = null;
     const store = {
       read: async () => ({
         schemaVersion: 3 as const,
@@ -559,7 +566,7 @@ describe("POST /api/launcher/working-directory", () => {
         ],
       }),
       write: async (file: unknown) => {
-        writtenFile = file as typeof writtenFile;
+        writtenFile = file as WrittenIntegrationsFile;
       },
     } as unknown as LauncherRoutesDeps["store"];
     const { app } = makeApp(baseDeps(makeFakeSupervisor(), "stdio-mode", store));
@@ -570,7 +577,8 @@ describe("POST /api/launcher/working-directory", () => {
         workingDirectory: inside,
       });
       expect(res.status).toBe(200);
-      expect(writtenFile?.integrations[0].workingDirectory).toBe(fs.realpathSync(inside));
+      const result = writtenFile as WrittenIntegrationsFile | null;
+      expect(result?.integrations[0].workingDirectory).toBe(fs.realpathSync(inside));
     } finally {
       fs.rmSync(inside, { recursive: true, force: true });
     }
@@ -1060,14 +1068,14 @@ describe("POST /api/launcher/cwd-preview (#1282)", () => {
         entered,
         "more probes entered the counted region than the cap allows",
       ).toBeLessThanOrEqual(3);
-      release?.();
+      (release as (() => void) | null)?.();
       const results = await Promise.all(inFlight);
       for (const r of results) expect(r.status).toBe(200);
       // The cap releases: a later request still gets a real answer.
       const after = await request(app, "POST", "/api/launcher/cwd-preview", { cwd: dir });
       expect((after.body as { drifted: boolean }).drifted).toBe(true);
     } finally {
-      release?.();
+      (release as (() => void) | null)?.();
       cleanup();
     }
   });

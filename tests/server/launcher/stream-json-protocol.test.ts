@@ -152,8 +152,14 @@ function chatEvent(): TandemEvent {
     type: "chat:message",
     timestamp: Date.now(),
     documentId: "d1",
+    // This fixture's payload shape has drifted from the real `ChatMessagePayload`
+    // (`text`/`replyTo`/`anchor`, not `content`/`author`) — harmless here because
+    // the wake path this test exercises never reads the payload (the wake turn
+    // deliberately carries no event payload; see the supervisor.ts doc comment),
+    // only `event.type`. Not fixing the fixture's shape to avoid guessing at a
+    // change with no test coverage to verify against.
     payload: { messageId: `msg_${eventSeq}`, content: "are you there?", author: "user" },
-  } as TandemEvent;
+  } as unknown as TandemEvent;
 }
 
 beforeEach(() => {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import express, { type Express } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -27,7 +27,7 @@ import {
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
   TAURI_HOSTNAME,
 } from "../../../src/shared/constants.js";
-import { API_MODELS } from "../../../src/shared/models/contract.js";
+import { API_MODELS, type ModelsFile } from "../../../src/shared/models/contract.js";
 import { withEnvOverride } from "../../helpers/env-override.js";
 
 /**
@@ -40,7 +40,7 @@ import { withEnvOverride } from "../../helpers/env-override.js";
  * with inbound MCP-client tokens.
  */
 
-const passthrough: import("express").Handler = (_req, _res, next) => next();
+const passthrough = (_req: Request, _res: Response, next: NextFunction) => next();
 
 function memoryBackend(): KeychainBackend & { entries: Map<string, string> } {
   const entries = new Map<string, string>();
@@ -69,7 +69,7 @@ function makeApp(deps: ModelsRoutesDeps): Express {
 function makeAppWithRemoteAddress(deps: ModelsRoutesDeps, addr: string): Express {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
+  app.use((req: Request, _res: Response, next: NextFunction) => {
     Object.defineProperty(req.socket, "remoteAddress", {
       value: addr,
       configurable: true,
@@ -230,7 +230,7 @@ describe(`POST ${API_MODELS} (ETag write-through, #1123 M1a/M2)`, () => {
   let tmpDir: string;
   let deps: ModelsRoutesDeps;
 
-  const validFile = {
+  const validFile: ModelsFile = {
     schemaVersion: 1,
     models: [
       {

@@ -114,15 +114,20 @@ interface UpdateRecord {
   // identity-test against a specific Y.AbstractType (e.g. the doc's
   // XmlFragment) rather than name-comparing (which can't distinguish YMap
   // variants ANNOTATIONS/REPLIES/AWARENESS — all have constructor.name "YMap").
-  changedTypes: Set<Y.AbstractType<unknown>>;
+  changedTypes: Set<Y.AbstractType<Y.YEvent<any>>>;
+}
+
+// AbstractType is invariant in its event-type param, so a concrete type like
+// YXmlFragment (AbstractType<YXmlEvent>) or YMap<unknown> (AbstractType<YMapEvent<unknown>>)
+// doesn't structurally match Set<AbstractType<YEvent<any>>> even though at runtime it's
+// the exact same object txn.changed.keys() would have yielded.
+function asChangedKey(type: Y.AbstractType<any>): Y.AbstractType<Y.YEvent<any>> {
+  return type as unknown as Y.AbstractType<Y.YEvent<any>>;
 }
 
 function listenForUpdates(doc: Y.Doc): { updates: UpdateRecord[]; detach: () => void } {
   const updates: UpdateRecord[] = [];
-  const listener = (txn: {
-    origin: unknown;
-    changed: Map<Y.AbstractType<unknown>, Set<string | null>>;
-  }) => {
+  const listener = (txn: Y.Transaction) => {
     updates.push({ origin: txn.origin, changedTypes: new Set(txn.changed.keys()) });
   };
   doc.on("afterTransaction", listener);
@@ -183,7 +188,7 @@ async function captureUpdatesDuringOpenFromContent(
 
 function assertSingleBatchedPopulate(doc: Y.Doc, updates: UpdateRecord[]): void {
   const fragment = doc.getXmlFragment("default");
-  const fragmentTouches = updates.filter((u) => u.changedTypes.has(fragment));
+  const fragmentTouches = updates.filter((u) => u.changedTypes.has(asChangedKey(fragment)));
   expect(fragmentTouches.length).toBe(1);
   for (const u of fragmentTouches) {
     expect(u.origin).toBe(INTERNAL_ORIGIN);
@@ -239,13 +244,13 @@ describe("loadContentIntoDoc — batching contract (#609)", () => {
 
     const fragment = doc.getXmlFragment("default");
     const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
-    const fragmentTouch = updates.find((u) => u.changedTypes.has(fragment));
+    const fragmentTouch = updates.find((u) => u.changedTypes.has(asChangedKey(fragment)));
     expect(fragmentTouch).toBeDefined();
     // Inner-transact flatten: the same transaction that touched the fragment
     // also touched the annotations map. A refactor that hoisted
     // injectCommentsAsAnnotations OUT of the outer transact (or that no-op'd
     // it) would fail this assertion.
-    expect(fragmentTouch?.changedTypes.has(annotations)).toBe(true);
+    expect(fragmentTouch?.changedTypes.has(asChangedKey(annotations))).toBe(true);
 
     // 3 comments actually landed as annotations.
     expect(annotations.size).toBe(3);

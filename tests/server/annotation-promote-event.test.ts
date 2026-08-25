@@ -67,6 +67,7 @@ describe("AR5 channel emit — note→comment promotion", () => {
 
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("annotation:created");
+    if (events[0].type !== "annotation:created") throw new Error("unreachable");
     expect(events[0].payload.annotationId).toBe("imp1");
     expect(events[0].payload.annotationType).toBe("comment");
     cleanup();

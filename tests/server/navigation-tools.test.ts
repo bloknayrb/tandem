@@ -13,6 +13,7 @@ import {
   searchText,
 } from "../../src/server/mcp/navigation.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { off } from "../helpers/positions.js";
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
@@ -146,7 +147,12 @@ describe("countOccurrences", () => {
 
 describe("extractContext", () => {
   it("returns context window around a range", () => {
-    const result = extractContext("The quick brown fox jumps over the lazy dog", 10, 19, 5);
+    const result = extractContext(
+      "The quick brown fox jumps over the lazy dog",
+      off(10),
+      off(19),
+      5,
+    );
     expect(result.selection).toBe("brown fox");
     expect(result.context).toContain("brown fox");
     expect(result.context.length).toBeGreaterThan(result.selection.length);
@@ -155,21 +161,21 @@ describe("extractContext", () => {
   });
 
   it("clamps at document boundaries", () => {
-    const result = extractContext("Hello", 0, 5, 500);
+    const result = extractContext("Hello", off(0), off(5), 500);
     expect(result.contextRange.from).toBe(0);
     expect(result.contextRange.to).toBe(5);
     expect(result.context).toBe("Hello");
   });
 
   it("handles zero windowSize", () => {
-    const result = extractContext("Hello world", 0, 5, 0);
+    const result = extractContext("Hello world", off(0), off(5), 0);
     expect(result.context).toBe("Hello");
     expect(result.selection).toBe("Hello");
   });
 
   it("uses default windowSize of 500", () => {
     const text = "x".repeat(2000);
-    const result = extractContext(text, 1000, 1010);
+    const result = extractContext(text, off(1000), off(1010));
     expect(result.contextRange.from).toBe(500);
     expect(result.contextRange.to).toBe(1510);
   });

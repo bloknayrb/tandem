@@ -109,7 +109,9 @@ describe("createTheme effect wiring (#992)", () => {
     });
     await settle();
 
-    expect(callsFor(invoke, "set_native_theme")).toEqual([["set_native_theme", { theme: "dark" }]]);
+    expect(callsFor(vi.mocked(invoke), "set_native_theme")).toEqual([
+      ["set_native_theme", { theme: "dark" }],
+    ]);
   });
 
   it("also applies the theme to the DOM from the same effect", async () => {
@@ -144,7 +146,9 @@ describe("createTheme effect wiring (#992)", () => {
     flushSync();
     await settle();
 
-    expect(callsFor(invoke, "set_native_theme")).toEqual([["set_native_theme", { theme: "dark" }]]);
+    expect(callsFor(vi.mocked(invoke), "set_native_theme")).toEqual([
+      ["set_native_theme", { theme: "dark" }],
+    ]);
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
   });
 
@@ -163,7 +167,7 @@ describe("createTheme effect wiring (#992)", () => {
     });
     await settle();
 
-    expect(callsFor(invoke, "set_native_theme")).toHaveLength(0);
+    expect(callsFor(vi.mocked(invoke), "set_native_theme")).toHaveLength(0);
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
   });
 

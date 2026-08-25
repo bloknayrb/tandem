@@ -13,8 +13,21 @@ import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { acceptPending, dismissPending } from "../../src/server/annotations/lifecycle.js";
 import { createAnnotation } from "../../src/server/mcp/annotations.js";
+import type { AnchoredRangeResult } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { getAnnotationsMap, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
+
+/**
+ * `rangeOf(from, to, doc)`'s inferred return type is a union of the anchored
+ * branch and its own no-doc `{ range }` shape. Every call site here passes
+ * `doc`, which always takes `rangeOf`'s `if (ydoc)` branch (it throws on
+ * `!result.ok`), so the runtime value is always `AnchoredRangeResult` with a
+ * real `relRange` — this narrows the static type to match without touching
+ * the shared helper (out of scope for this unit).
+ */
+function anchoredRangeOf(from: number, to: number, doc: Y.Doc): AnchoredRangeResult {
+  return rangeOf(from, to, doc) as AnchoredRangeResult;
+}
 
 let doc: Y.Doc;
 
@@ -25,7 +38,7 @@ beforeEach(() => {
 describe("acceptPending", () => {
   it("returns kind: 'ok' for a pending annotation, transitions to accepted, bumps rev", () => {
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test");
+    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(0, 5, doc), "test");
     const before = map.get(id) as Annotation;
 
     const result = acceptPending(id, doc, map);
@@ -47,7 +60,7 @@ describe("acceptPending", () => {
 
   it("returns kind: 'not-pending' for an already-accepted annotation; rev unchanged", () => {
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test");
+    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(0, 5, doc), "test");
     acceptPending(id, doc, map); // first accept
     const acceptedRev = (map.get(id) as Annotation).rev;
 
@@ -64,7 +77,7 @@ describe("acceptPending", () => {
 
   it("returns kind: 'not-pending' for an already-dismissed annotation", () => {
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test");
+    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(0, 5, doc), "test");
     dismissPending(id, doc, map);
 
     const result = acceptPending(id, doc, map);
@@ -77,7 +90,7 @@ describe("acceptPending", () => {
 describe("dismissPending", () => {
   it("returns kind: 'ok' for a pending annotation, transitions to dismissed", () => {
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test");
+    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(0, 5, doc), "test");
 
     const result = dismissPending(id, doc, map);
     expect(result.kind).toBe("ok");
@@ -87,7 +100,7 @@ describe("dismissPending", () => {
 
   it("returns kind: 'not-pending' for an already-resolved annotation", () => {
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test");
+    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(0, 5, doc), "test");
     acceptPending(id, doc, map);
 
     const result = dismissPending(id, doc, map);
@@ -103,7 +116,7 @@ describe("transactions are tagged with MCP_ORIGIN (channel-event skip)", () => {
     ["dismissPending", (id: string, d: Y.Doc, m: Y.Map<unknown>) => dismissPending(id, d, m)],
   ])("%s fires under MCP_ORIGIN", (_label, op) => {
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test");
+    const id = createAnnotation(map, doc, "comment", anchoredRangeOf(0, 5, doc), "test");
 
     const origins: unknown[] = [];
     doc.on("beforeTransaction", (tr: Y.Transaction) => origins.push(tr.origin));

@@ -132,12 +132,12 @@ describe("messageForStartupRejection", () => {
 });
 
 describe("wireStartupRejection", () => {
-  let push: ReturnType<typeof vi.fn>;
-  let warn: ReturnType<typeof vi.fn>;
+  let push: ReturnType<typeof vi.fn<(message: string, code: string) => void>>;
+  let warn: ReturnType<typeof vi.fn<(message: string, err: unknown) => void>>;
 
   beforeEach(() => {
-    push = vi.fn();
-    warn = vi.fn();
+    push = vi.fn<(message: string, code: string) => void>();
+    warn = vi.fn<(message: string, err: unknown) => void>();
   });
 
   it("toasts a code buffered before the client existed", async () => {

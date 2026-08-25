@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyConfig,
   assertPathSafe,
+  type McpEntry,
   MSIX_PACKAGE_PATTERN,
   PathRejectedError,
   resolveChannelDist,
@@ -387,7 +388,7 @@ describe("applyConfig — backup-before-overwrite (#644)", () => {
   it("does NOT back up when the new entry matches the existing entry byte-for-byte", async () => {
     // Identity-rewrite case — the apply is a no-op on content terms.
     // No churn.
-    const same = { type: "http", url: "http://127.0.0.1:3479/mcp" };
+    const same: McpEntry = { type: "http", url: "http://127.0.0.1:3479/mcp" };
     fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { tandem: same } }));
     const calls: string[] = [];
     await applyConfig(configPath, {

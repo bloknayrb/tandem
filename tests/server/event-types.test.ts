@@ -13,7 +13,10 @@ function makeEvent(
     timestamp: Date.now(),
     documentId,
     payload,
-  };
+    // A deliberately loose builder: these tests exercise the two format
+    // functions against many payload shapes, so pinning each to its own arm of
+    // the payload union would be the test rewriting itself as the production type.
+  } as unknown as TandemEvent;
 }
 
 describe("formatEventContent", () => {

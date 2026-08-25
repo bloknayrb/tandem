@@ -763,7 +763,7 @@ describe("createIntegrationWizard", () => {
   it("save(): failure cleans up secrets already stored via DELETE", async () => {
     const deleted: string[] = [];
     const wizard = createIntegrationWizard({
-      fetchFn: (async (input, init) => {
+      fetchFn: (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.toString();
         if ((init?.method ?? "GET") === "DELETE") {
           const match = url.match(/\/secrets\/([^/?]+)/);
@@ -807,7 +807,7 @@ describe("createIntegrationWizard", () => {
   it("setPicked(): unchecking a card with a stored token deletes its keychain ref", async () => {
     const deleted: string[] = [];
     const wizard = createIntegrationWizard({
-      fetchFn: (async (input, init) => {
+      fetchFn: (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.toString();
         if ((init?.method ?? "GET") === "DELETE") {
           const match = url.match(/\/secrets\/([^/?]+)/);

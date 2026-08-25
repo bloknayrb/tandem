@@ -639,7 +639,7 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     // again" while the push-routes block is still on screen.
     const { container } = mountDone(
       [pickedCode(), pickedDesktop()],
-      [applied("claude-code-1"), { id: "claude-desktop-1", status: "error", error: "nope" }],
+      [applied("claude-code-1"), { id: "claude-desktop-1", status: "error", message: "nope" }],
     );
     await tick();
 

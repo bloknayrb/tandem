@@ -26,7 +26,7 @@ let root: HTMLDivElement;
 let anchor: HTMLAnchorElement;
 let inner: HTMLSpanElement;
 let plain: HTMLParagraphElement;
-let openHref: ReturnType<typeof vi.fn>;
+let openHref: ReturnType<typeof vi.fn<(href: string) => void>>;
 
 beforeEach(() => {
   document.body.innerHTML = "";

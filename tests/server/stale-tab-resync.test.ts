@@ -1,5 +1,5 @@
 import net from "node:net";
-import { HocuspocusProvider } from "@hocuspocus/provider";
+import { HocuspocusProvider, type HocuspocusProviderConfiguration } from "@hocuspocus/provider";
 import type { Hocuspocus } from "@hocuspocus/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
@@ -82,13 +82,18 @@ function populateServerDoc(roomName: string, text: string): Y.Doc {
 }
 
 function makeClient(port: number, roomName: string, token: string | null, ydoc?: Y.Doc) {
-  return new HocuspocusProvider({
-    url: `ws://127.0.0.1:${port}`,
-    name: roomName,
-    document: ydoc ?? new Y.Doc(),
-    token,
-    WebSocketPolyfill: LoopbackOriginWebSocket as unknown as typeof globalThis.WebSocket,
-  });
+  return new HocuspocusProvider(
+    // WebSocketPolyfill forwards to the internal `new HocuspocusProviderWebsocket(configuration)`
+    // at runtime (same pattern as yjsSync.svelte.ts's `withBackoff`), but the
+    // provider's `url`-branch type only advertises `url`/`preserveTrailingSlash`.
+    {
+      url: `ws://127.0.0.1:${port}`,
+      name: roomName,
+      document: ydoc ?? new Y.Doc(),
+      token,
+      WebSocketPolyfill: LoopbackOriginWebSocket as unknown as typeof globalThis.WebSocket,
+    } as HocuspocusProviderConfiguration,
+  );
 }
 
 describe("stale-tab generation gate", () => {
@@ -190,8 +195,9 @@ describe("stale-tab generation gate", () => {
       name: "room-evil-origin",
       document: makeDoc("evil content"),
       token: "gen-current",
+      // See makeClient() above for why WebSocketPolyfill needs this cast.
       WebSocketPolyfill: EvilOriginWebSocket as unknown as typeof globalThis.WebSocket,
-    });
+    } as HocuspocusProviderConfiguration);
     clients.push(evil);
 
     // Either gate may win the race (onAuthenticate → authenticationFailed,

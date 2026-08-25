@@ -1,5 +1,6 @@
 import { type AnyExtension, Editor } from "@tiptap/core";
 import Typography from "@tiptap/extension-typography";
+import type { EditorProps } from "@tiptap/pm/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import { makeEditorProps } from "../../src/client/editor/editor-props";
@@ -22,7 +23,7 @@ import { makeEditorProps } from "../../src/client/editor/editor-props";
 
 const mounted: Array<{ editor: Editor; container: HTMLDivElement }> = [];
 
-function mount(extensions: AnyExtension[], editorProps?: Record<string, unknown>): Editor {
+function mount(extensions: AnyExtension[], editorProps?: EditorProps): Editor {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const editor = new Editor({

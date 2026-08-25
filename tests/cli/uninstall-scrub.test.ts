@@ -153,7 +153,13 @@ describe("rewriteJson", () => {
     _readFileSpy.mockRejectedValue(makeNotFoundError());
 
     const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), close: async () => {} };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      warnings: vi.fn(() => 0),
+      close: async () => {},
+    };
     const result = await rewriteJson("/fake/path.json", () => true, logger);
     expect(result).toBe(false);
     expect(_writeFileSpy).not.toHaveBeenCalled();
@@ -166,7 +172,13 @@ describe("rewriteJson", () => {
     _readFileSpy.mockResolvedValue('{"mcpServers": {"tandem": {"env": {"SECRET_TOKEN_VALUE"');
 
     const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), close: async () => {} };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      warnings: vi.fn(() => 0),
+      close: async () => {},
+    };
     const result = await rewriteJson("/fake/installed_plugins.json", () => true, logger);
     expect(result).toBe(false);
     expect(_writeFileSpy).not.toHaveBeenCalled();
@@ -182,7 +194,13 @@ describe("rewriteJson", () => {
     _readFileSpy.mockResolvedValue(initial);
 
     const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), close: async () => {} };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      warnings: vi.fn(() => 0),
+      close: async () => {},
+    };
     const result = await rewriteJson(
       "/fake/installed_plugins.json",
       (obj) => {

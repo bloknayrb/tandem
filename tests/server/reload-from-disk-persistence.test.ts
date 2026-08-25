@@ -84,15 +84,20 @@ afterAll(async () => {
 
 interface TxnRecord {
   origin: unknown;
-  changedTypes: Set<Y.AbstractType<unknown>>;
+  changedTypes: Set<Y.AbstractType<Y.YEvent<any>>>;
+}
+
+// AbstractType is invariant in its event-type param, so a concrete type like
+// YMap<unknown> (AbstractType<YMapEvent<unknown>>) doesn't structurally match
+// Set<AbstractType<YEvent<any>>> even though at runtime it's the exact same
+// object txn.changed.keys() would have yielded.
+function asChangedKey(type: Y.AbstractType<any>): Y.AbstractType<Y.YEvent<any>> {
+  return type as unknown as Y.AbstractType<Y.YEvent<any>>;
 }
 
 function listenForTransactions(doc: Y.Doc): { records: TxnRecord[]; detach: () => void } {
   const records: TxnRecord[] = [];
-  const listener = (txn: {
-    origin: unknown;
-    changed: Map<Y.AbstractType<unknown>, Set<string | null>>;
-  }) => {
+  const listener = (txn: Y.Transaction) => {
     records.push({ origin: txn.origin, changedTypes: new Set(txn.changed.keys()) });
   };
   doc.on("afterTransaction", listener);
@@ -189,7 +194,7 @@ describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
     // constructor.name (all YMap variants share name).
     const annMapRef = doc.getMap(Y_MAP_ANNOTATIONS);
     const reloadAnnotationWrites = reloadRecords.filter(
-      (r) => r.origin === RELOAD_ORIGIN && r.changedTypes.has(annMapRef),
+      (r) => r.origin === RELOAD_ORIGIN && r.changedTypes.has(asChangedKey(annMapRef)),
     );
     expect(reloadAnnotationWrites.length).toBeGreaterThanOrEqual(1);
 
@@ -263,7 +268,7 @@ describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
 
     const annMapRef = doc.getMap(Y_MAP_ANNOTATIONS);
     const reloadAnnotationWrites = records.filter(
-      (r) => r.origin === RELOAD_ORIGIN && r.changedTypes.has(annMapRef),
+      (r) => r.origin === RELOAD_ORIGIN && r.changedTypes.has(asChangedKey(annMapRef)),
     );
 
     expect(reloadAnnotationWrites).toHaveLength(1);

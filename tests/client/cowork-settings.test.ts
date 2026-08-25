@@ -90,7 +90,7 @@ describe("undetectedDetail", () => {
 
   it("returns 'noClaude' when the field is absent (stale pre-field sidecar)", () => {
     const status = makeStatus({ coworkDetected: false });
-    delete (status as Record<string, unknown>).claudeDesktopDetected;
+    delete (status as unknown as Record<string, unknown>).claudeDesktopDetected;
     expect(undetectedDetail(status)).toBe("noClaude");
   });
 
@@ -104,7 +104,7 @@ describe("undetectedDetail", () => {
 
   it("returns 'noWorkspacesYet' when workspacesBlocked is absent (stale sidecar)", () => {
     const status = makeStatus({ coworkDetected: false, claudeDesktopDetected: true });
-    delete (status as Record<string, unknown>).workspacesBlocked;
+    delete (status as unknown as Record<string, unknown>).workspacesBlocked;
     expect(undetectedDetail(status)).toBe("noWorkspacesYet");
   });
 
@@ -481,7 +481,7 @@ describe("firewallErrorHint", () => {
   });
 
   it("returns a generic hint including the kind for an unknown variant", () => {
-    const hint = firewallErrorHint({ kind: "unknownFuture" } as FirewallErrorVariant);
+    const hint = firewallErrorHint({ kind: "unknownFuture" } as unknown as FirewallErrorVariant);
     expect(hint).toContain("unknownFuture");
     expect(hint).toContain("Unexpected");
   });

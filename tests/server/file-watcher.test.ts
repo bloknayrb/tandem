@@ -238,7 +238,7 @@ describe("recordSelfWrite / self-write echo guard", () => {
   // `fs.promises.readFile` is mocked so the whole path resolves on the
   // microtask queue (no real I/O, no wall-clock waits → no flake under load).
   const file = "/tmp/echo.md";
-  let onChanged: ReturnType<typeof vi.fn>;
+  let onChanged: ReturnType<typeof vi.fn<(filePath: string) => Promise<void>>>;
   let watcher: MockWatcher;
   let readFile: ReturnType<typeof vi.spyOn>;
 
@@ -248,7 +248,7 @@ describe("recordSelfWrite / self-write echo guard", () => {
       watcher.changeHandler = cb;
       return watcher;
     });
-    onChanged = vi.fn().mockResolvedValue(undefined);
+    onChanged = vi.fn<(filePath: string) => Promise<void>>().mockResolvedValue(undefined);
     readFile = vi.spyOn(fs.promises, "readFile");
   });
 

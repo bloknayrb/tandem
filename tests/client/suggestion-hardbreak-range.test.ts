@@ -34,6 +34,7 @@ import { annotationToPmRange } from "../../src/client/positions";
 import { loadMarkdown } from "../../src/server/file-io/markdown";
 import { anchoredRange } from "../../src/server/positions";
 import type { Annotation } from "../../src/shared/types";
+import { off } from "../helpers/positions";
 import { productionSchema, yDocToPmNode } from "./editor-roundtrip-harness.js";
 
 type PMNode = ReturnType<typeof yDocToPmNode>;
@@ -47,7 +48,7 @@ function docPair(markdown: string) {
 
 /** An annotation anchored the way the server anchors one, over [from, to). */
 function anchor(ydoc: Y.Doc, from: number, to: number): Annotation {
-  const range = anchoredRange(ydoc, from, to);
+  const range = anchoredRange(ydoc, off(from), off(to));
   if (!range) throw new Error(`anchoredRange returned null for ${from}..${to}`);
   return {
     id: "a1",
@@ -58,7 +59,7 @@ function anchor(ydoc: Y.Doc, from: number, to: number): Annotation {
     suggestedText: "REPLACED",
     createdAt: 0,
     ...range,
-  } as Annotation;
+  } as unknown as Annotation;
 }
 
 /**

@@ -26,6 +26,7 @@ import {
   subscribeAnnotationActions,
 } from "../../src/client/panels/annotation-context-menu-host.js";
 import type { Annotation, AnnotationStatus } from "../../src/shared/types.js";
+import { range } from "../helpers/positions.js";
 
 function ann(
   type: Annotation["type"],
@@ -36,7 +37,7 @@ function ann(
   return {
     id: "a1",
     author,
-    range: { start: 0, end: 1 },
+    range: range(0, 1),
     content,
     status,
     timestamp: 0,

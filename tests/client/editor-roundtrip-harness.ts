@@ -126,8 +126,11 @@ export function reparseThroughDom(node: PMNode, schema: Schema, docSpanning: boo
     : node.child(0).type.whitespace;
   return PMDOMParser.fromSchema(schema).parse(holder, {
     preserveWhitespace: parentWhitespace === "pre" ? "full" : true,
-    ruleFromNode: ruleFromNode as never,
-  });
+    // `ruleFromNode` is an undocumented prosemirror-view internal option not
+    // declared on `ParseOptions` — the object as a whole needs the escape
+    // hatch, not just this value.
+    ruleFromNode,
+  } as unknown as Parameters<ReturnType<typeof PMDOMParser.fromSchema>["parse"]>[1]);
 }
 
 export interface RoundTripResult {

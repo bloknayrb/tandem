@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import express, { type Express } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -51,9 +51,7 @@ import {
 import { useEnvOverride, withEnvOverride } from "../../helpers/env-override.js";
 
 /** No-op pass-through used for the `mw` parameter (DNS-rebinding middleware is not in scope). */
-const passthrough: IntegrationsRoutesDeps["store"] extends infer _T
-  ? import("express").Handler
-  : never = (_req, _res, next) => next();
+const passthrough = (_req: Request, _res: Response, next: NextFunction) => next();
 
 function makeApp(deps: IntegrationsRoutesDeps): Express {
   const app = express();
@@ -73,7 +71,7 @@ function makeApp(deps: IntegrationsRoutesDeps): Express {
 function makeAppWithRemoteAddress(deps: IntegrationsRoutesDeps, addr: string): Express {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
+  app.use((req: Request, _res: Response, next: NextFunction) => {
     Object.defineProperty(req.socket, "remoteAddress", {
       value: addr,
       configurable: true,
@@ -107,7 +105,8 @@ async function request(
   url: string,
   body?: unknown,
   extraHeaders?: Record<string, string>,
-): Promise<{ status: number; body: unknown }> {
+  // biome-ignore lint/suspicious/noExplicitAny: response shape varies per route; tests assert on ad-hoc properties
+): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const server = app.listen(0, "127.0.0.1", async () => {
       const address = server.address();

@@ -89,7 +89,7 @@ describe("loadSettings — migration chain", () => {
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.editorMeasure).toBe("full");
     // Legacy field is deleted, not round-tripped.
-    expect((s as Record<string, unknown>).editorWidthPercent).toBeUndefined();
+    expect((s as unknown as Record<string, unknown>).editorWidthPercent).toBeUndefined();
   });
 
   it("v11→v12: customized width maps to editorMeasure=comfortable", () => {
@@ -191,12 +191,12 @@ describe("loadSettings — migration chain", () => {
       leftRailTabs: ["chat", "annotations"],
       rightRailTabs: ["outline"],
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s._readOnly).toBe(true);
     // Both names are stripped — neither stays as a typed field nor leaks
     // through the future-field passthrough.
-    expect(s.leftRailTabs).toBeUndefined();
-    expect(s.rightRailTabs).toBeUndefined();
+    expect((s as unknown as Record<string, unknown>).leftRailTabs).toBeUndefined();
+    expect((s as unknown as Record<string, unknown>).rightRailTabs).toBeUndefined();
   });
 
   it("v5→v6 idempotency: an already-v6 blob loads without re-running migrations", () => {
@@ -205,7 +205,7 @@ describe("loadSettings — migration chain", () => {
       theme: "dark",
       models: [],
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.theme).toBe("dark");
     // The migration chain's `=== N` gates are exclusive — re-running on
@@ -225,10 +225,10 @@ describe("loadSettings — migration chain", () => {
       leftPanelVisible: true,
       rightPanelVisible: true,
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
-    expect(s.leftRailTabs).toBeUndefined();
-    expect(s.rightRailTabs).toBeUndefined();
+    expect((s as unknown as Record<string, unknown>).leftRailTabs).toBeUndefined();
+    expect((s as unknown as Record<string, unknown>).rightRailTabs).toBeUndefined();
     expect(s._readOnly).toBeUndefined();
   });
 
@@ -245,8 +245,8 @@ describe("loadSettings — migration chain", () => {
     });
     const s = loadSettings();
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
-    expect(s.leftRailTabs).toBeUndefined();
-    expect(s.rightRailTabs).toBeUndefined();
+    expect((s as unknown as Record<string, unknown>).leftRailTabs).toBeUndefined();
+    expect((s as unknown as Record<string, unknown>).rightRailTabs).toBeUndefined();
   });
 
   it("v3 with corrupt rightRailTabs migrates fully without crashing", () => {
@@ -258,8 +258,8 @@ describe("loadSettings — migration chain", () => {
     });
     const s = loadSettings();
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
-    expect(s.leftRailTabs).toBeUndefined();
-    expect(s.rightRailTabs).toBeUndefined();
+    expect((s as unknown as Record<string, unknown>).leftRailTabs).toBeUndefined();
+    expect((s as unknown as Record<string, unknown>).rightRailTabs).toBeUndefined();
   });
 
   it("v4 blobs migrate fully stripping rail-tab fields", () => {
@@ -272,8 +272,8 @@ describe("loadSettings — migration chain", () => {
     });
     const s = loadSettings();
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
-    expect(s.leftRailTabs).toBeUndefined();
-    expect(s.rightRailTabs).toBeUndefined();
+    expect((s as unknown as Record<string, unknown>).leftRailTabs).toBeUndefined();
+    expect((s as unknown as Record<string, unknown>).rightRailTabs).toBeUndefined();
     expect(s.theme).toBe("dark");
     // Not _readOnly — climbed cleanly to CURRENT.
     expect(s._readOnly).toBeUndefined();
@@ -323,7 +323,7 @@ describe("loadSettings — migration chain", () => {
       showIntegrationWizard: true,
       theme: "dark",
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
     expect(s.theme).toBe("dark");
@@ -337,7 +337,7 @@ describe("loadSettings — migration chain", () => {
       schemaVersion: 99,
       showIntegrationWizard: true,
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s._readOnly).toBe(true);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
@@ -352,7 +352,7 @@ describe("loadSettings — migration chain", () => {
       sidecarRetryStrategy: "manual",
       theme: "dark",
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.holdAnnotationsWhileOffline).toBeUndefined();
     expect(s.sidecarRetryStrategy).toBe("exponential");
@@ -367,7 +367,7 @@ describe("loadSettings — migration chain", () => {
       schemaVersion: 15,
       sidecarRetryStrategy: "constant-2s",
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.sidecarRetryStrategy).toBe("constant-2s");
   });
@@ -378,7 +378,7 @@ describe("loadSettings — migration chain", () => {
       holdAnnotationsWhileOffline: true,
       sidecarRetryStrategy: "manual",
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.holdAnnotationsWhileOffline).toBeUndefined();
     expect(s.sidecarRetryStrategy).toBe("exponential");
@@ -389,7 +389,7 @@ describe("loadSettings — migration chain", () => {
       schemaVersion: 99,
       holdAnnotationsWhileOffline: true,
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s._readOnly).toBe(true);
     expect(s.holdAnnotationsWhileOffline).toBeUndefined();
   });
@@ -400,7 +400,7 @@ describe("loadSettings — migration chain", () => {
       layout: "tabbed",
       showIntegrationWizard: true,
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
@@ -411,7 +411,7 @@ describe("loadSettings — migration chain", () => {
       leftPanelVisible: true,
       showIntegrationWizard: true,
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
@@ -422,7 +422,7 @@ describe("loadSettings — migration chain", () => {
       models: [],
       showIntegrationWizard: true,
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
@@ -437,7 +437,7 @@ describe("loadSettings — migration chain", () => {
     { why: "old=true → all three per-type flags on", old: true, expected: true },
   ])("v8→v9: $why", ({ old, expected }) => {
     writeRaw({ schemaVersion: 8, showAnnotationDecorations: old, theme: "dark" });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showComments).toBe(expected);
     expect(s.showHighlights).toBe(expected);
@@ -452,7 +452,7 @@ describe("loadSettings — migration chain", () => {
 
   it("v8→v9: old flag absent → per-type flags default on", () => {
     writeRaw({ schemaVersion: 8, theme: "warm" });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showComments).toBe(true);
     expect(s.showHighlights).toBe(true);
@@ -464,7 +464,7 @@ describe("loadSettings — migration chain", () => {
     // A future-blob carrying the retired field must not leak it through the
     // forward-compat passthrough into a schema that re-uses the name.
     writeRaw({ schemaVersion: 99, showAnnotationDecorations: false });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s._readOnly).toBe(true);
     expect(s.showAnnotationDecorations).toBeUndefined();
   });
@@ -473,7 +473,7 @@ describe("loadSettings — migration chain", () => {
   // a v9 blob with no formattingBarVisible defaults to true (today's behavior).
   it("v9→v10: formattingBarVisible defaults true when absent", () => {
     writeRaw({ schemaVersion: 9, theme: "dark" });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.formattingBarVisible).toBe(true);
     expect(s.theme).toBe("dark");
@@ -485,7 +485,7 @@ describe("loadSettings — migration chain", () => {
     { why: "explicit true survives the bump", val: true, expected: true },
   ])("v9→v10: formattingBarVisible=$val — $why", ({ val, expected }) => {
     writeRaw({ schemaVersion: 9, formattingBarVisible: val });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.formattingBarVisible).toBe(expected);
   });
@@ -495,7 +495,7 @@ describe("loadSettings — migration chain", () => {
   // (Renumbered from v13→v14 when #993's systemLightVariant claimed v14.)
   it("v14→v15: railHoverReveal defaults true when absent", () => {
     writeRaw({ schemaVersion: 14, theme: "dark" });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.railHoverReveal).toBe(true);
     expect(s.theme).toBe("dark");
@@ -507,7 +507,7 @@ describe("loadSettings — migration chain", () => {
     { why: "explicit true survives the bump", val: true, expected: true },
   ])("v14→v15: railHoverReveal=$val — $why", ({ val, expected }) => {
     writeRaw({ schemaVersion: 14, railHoverReveal: val });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.railHoverReveal).toBe(expected);
   });
@@ -591,7 +591,7 @@ describe("loadSettings — migration chain", () => {
       customShortcuts: {},
       theme: "dark",
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showComments).toBe(expected);
     expect(s.showHighlights).toBe(expected);
@@ -611,7 +611,7 @@ describe("loadSettings — migration chain", () => {
       showHighlights: true,
       showNotes: true,
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showComments).toBe(false);
     expect(s.showHighlights).toBe(true);
@@ -673,7 +673,7 @@ describe("loadSettings — migration chain", () => {
   // defaulting fontByExtension — the exact path the master/umbrella fold-in risks.
   it("master-line v10 blob converts editorWidthPercent and gains fontByExtension", () => {
     writeRaw({ schemaVersion: 10, editorWidthPercent: 60, fontByExtension: { md: "serif" } });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.editorMeasure).toBe("comfortable");
     expect(s.editorWidthPercent).toBeUndefined();

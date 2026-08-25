@@ -227,7 +227,13 @@ describe("dirty.ts — Y_MAP_DIRTY mirror (#1447)", () => {
     const origins: unknown[] = [];
     doc.on("afterTransaction", (txn: Y.Transaction) => {
       for (const [type, evt] of txn.changed) {
-        if (type === doc.getMap(Y_MAP_DOCUMENT_META) && evt.has(Y_MAP_DIRTY)) {
+        // txn.changed keys are AbstractType<YEvent<any>>; doc.getMap returns the same
+        // runtime object typed AbstractType<YMapEvent<unknown>>. Only the event-type
+        // parameter differs, so comparing through `unknown` is a sound identity check.
+        if (
+          (type as unknown) === (doc.getMap(Y_MAP_DOCUMENT_META) as unknown) &&
+          evt.has(Y_MAP_DIRTY)
+        ) {
           origins.push(txn.origin);
         }
       }
@@ -248,7 +254,12 @@ describe("dirty.ts — Y_MAP_DIRTY mirror (#1447)", () => {
     let mirrorWrites = 0;
     doc.on("afterTransaction", (txn: Y.Transaction) => {
       for (const [type, evt] of txn.changed) {
-        if (type === doc.getMap(Y_MAP_DOCUMENT_META) && evt.has(Y_MAP_DIRTY)) mirrorWrites++;
+        // Same sound identity cast as S3 above: differing YEvent type params only.
+        if (
+          (type as unknown) === (doc.getMap(Y_MAP_DOCUMENT_META) as unknown) &&
+          evt.has(Y_MAP_DIRTY)
+        )
+          mirrorWrites++;
       }
     });
 

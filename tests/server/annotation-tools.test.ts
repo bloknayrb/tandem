@@ -15,11 +15,25 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
+import type { AnchoredRangeResult } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
+import { anchored } from "../helpers/positions.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
 const DOC_HASH = "sha256:annotation-tools";
+
+/**
+ * `rangeOf(from, to, ydoc)`'s inferred return type is a union of the anchored
+ * branch and its own no-doc `{ range }` shape. Every 3-arg call site here
+ * passes `ydoc`, which always takes `rangeOf`'s `if (ydoc)` branch (it throws
+ * on `!result.ok`), so the runtime value is always `AnchoredRangeResult` with
+ * a real `relRange` — this narrows the static type to match without touching
+ * the shared helper (out of scope for this unit).
+ */
+function anchoredRangeOf(from: number, to: number, ydoc: Y.Doc): AnchoredRangeResult {
+  return rangeOf(from, to, ydoc) as AnchoredRangeResult;
+}
 
 beforeEach(() => {
   clearOpenDocs();
@@ -29,7 +43,7 @@ describe("createAnnotation supports highlight type for editor-created highlights
   it("createAnnotation still supports highlight type for user-created highlights", () => {
     const ydoc = setupDoc("hl-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "highlight", rangeOf(0, 5, ydoc), "", {
+    const id = createAnnotation(map, ydoc, "highlight", anchoredRangeOf(0, 5, ydoc), "", {
       color: "yellow",
     });
 
@@ -45,7 +59,9 @@ describe("createAnnotation supports highlight type for editor-created highlights
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
     for (const color of ["yellow", "green", "blue", "pink"] as const) {
-      const id = createAnnotation(map, ydoc, "highlight", rangeOf(0, 5, ydoc), "", { color });
+      const id = createAnnotation(map, ydoc, "highlight", anchoredRangeOf(0, 5, ydoc), "", {
+        color,
+      });
       const stored = map.get(id) as Annotation;
       expect(stored.color).toBe(color);
     }
@@ -56,7 +72,13 @@ describe("tandem_comment tool logic", () => {
   it("creates comment with text content", () => {
     const ydoc = setupDoc("cm-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "This needs revision");
+    const id = createAnnotation(
+      map,
+      ydoc,
+      "comment",
+      anchoredRangeOf(0, 5, ydoc),
+      "This needs revision",
+    );
 
     const stored = map.get(id) as Annotation;
     expect(stored.type).toBe("comment");
@@ -68,7 +90,7 @@ describe("tandem_comment with suggestedText", () => {
   it("creates comment with suggestedText", () => {
     const ydoc = setupDoc("sg-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "more concise", {
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "more concise", {
       suggestedText: "Hi",
     });
 
@@ -81,7 +103,7 @@ describe("tandem_comment with suggestedText", () => {
   it("handles empty reason", () => {
     const ydoc = setupDoc("sg-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "", {
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "", {
       suggestedText: "Hi",
     });
 
@@ -95,7 +117,7 @@ describe("tandem_note tool logic (via createAnnotation)", () => {
   it("creates note annotation", () => {
     const ydoc = setupDoc("nt-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "Needs review");
+    const id = createAnnotation(map, ydoc, "note", anchoredRangeOf(0, 5, ydoc), "Needs review");
 
     const stored = map.get(id) as Annotation;
     expect(stored.type).toBe("note");
@@ -105,7 +127,7 @@ describe("tandem_note tool logic (via createAnnotation)", () => {
   it("note with no content has empty content", () => {
     const ydoc = setupDoc("nt-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "");
+    const id = createAnnotation(map, ydoc, "note", anchoredRangeOf(0, 5, ydoc), "");
 
     const stored = map.get(id) as Annotation;
     expect(stored.content).toBe("");
@@ -115,17 +137,19 @@ describe("tandem_note tool logic (via createAnnotation)", () => {
 describe("tandem_getAnnotations tool logic", () => {
   function populateAnnotations(ydoc: Y.Doc) {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "comment 1", { author: "claude" });
-    createAnnotation(map, ydoc, "highlight", rangeOf(0, 5), "", {
+    createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "comment 1", {
+      author: "claude",
+    });
+    createAnnotation(map, ydoc, "highlight", anchored(0, 5), "", {
       author: "user",
       color: "yellow",
     });
-    createAnnotation(map, ydoc, "comment", rangeOf(6, 11, ydoc), "", {
+    createAnnotation(map, ydoc, "comment", anchoredRangeOf(6, 11, ydoc), "", {
       author: "claude",
       suggestedText: "x",
     });
     // One accepted
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "old comment", {
+    const id = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "old comment", {
       author: "claude",
     });
     const ann = map.get(id) as Annotation;
@@ -183,7 +207,7 @@ describe("tandem_resolveAnnotation tool logic", () => {
   it("accepts an annotation", () => {
     const ydoc = setupDoc("ra-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "review me");
+    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "review me");
 
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "accepted" as const });
@@ -195,7 +219,7 @@ describe("tandem_resolveAnnotation tool logic", () => {
   it("dismisses an annotation", () => {
     const ydoc = setupDoc("ra-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "review me");
+    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "review me");
 
     const ann = map.get(id) as Annotation;
     map.set(id, { ...ann, status: "dismissed" as const });
@@ -216,7 +240,7 @@ describe("tandem_removeAnnotation tool logic", () => {
   it("removes annotation from map", () => {
     const ydoc = setupDoc("rm-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "to remove");
+    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "to remove");
 
     expect(map.has(id)).toBe(true);
     map.delete(id);
@@ -234,9 +258,9 @@ describe("tandem_exportAnnotations tool logic", () => {
   it("exports markdown summary", () => {
     const ydoc = setupDoc("ex-1", "Hello world test content");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Nice intro");
-    createAnnotation(map, ydoc, "highlight", rangeOf(6, 11, ydoc), "", { color: "yellow" });
-    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "simpler", {
+    createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "Nice intro");
+    createAnnotation(map, ydoc, "highlight", anchoredRangeOf(6, 11, ydoc), "", { color: "yellow" });
+    createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "simpler", {
       suggestedText: "Hi",
     });
 
@@ -258,7 +282,7 @@ describe("tandem_exportAnnotations tool logic", () => {
   it("exports JSON format with text snippets", () => {
     const ydoc = setupDoc("ex-3", "Hello world test content");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Note");
+    createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "Note");
 
     const annotations = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
@@ -300,7 +324,7 @@ describe("annotation stale range detection", () => {
 
     const result = verifyAndResolveRange(ydoc, 0, 5, "Hello");
     expect(result.valid).toBe(false);
-    if (!result.gone) {
+    if (!result.valid && !result.gone) {
       expect(result.resolvedFrom).toBe(3);
       expect(result.resolvedTo).toBe(8);
     }
@@ -311,7 +335,13 @@ describe("annotation CRDT-anchored positions", () => {
   it("annotations with relRange survive edits", () => {
     const ydoc = setupDoc("crdt-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(6, 11, ydoc), "note on world");
+    const id = createAnnotation(
+      map,
+      ydoc,
+      "comment",
+      anchoredRangeOf(6, 11, ydoc),
+      "note on world",
+    );
 
     const ann = map.get(id) as Annotation;
     expect(ann.relRange).toBeDefined();
@@ -331,7 +361,7 @@ describe("annotation CRDT-anchored positions", () => {
   it("annotations without relRange get it lazily attached", () => {
     const ydoc = setupDoc("crdt-2", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "note"); // no ydoc in rangeOf
+    const id = createAnnotation(map, ydoc, "comment", anchored(0, 5), "note"); // no ydoc in rangeOf
 
     const ann = map.get(id) as Annotation;
     expect(ann.relRange).toBeUndefined();
@@ -349,8 +379,8 @@ describe("annotation on multi-document", () => {
     const map1 = ydoc1.getMap(Y_MAP_ANNOTATIONS);
     const map2 = ydoc2.getMap(Y_MAP_ANNOTATIONS);
 
-    createAnnotation(map1, ydoc1, "comment", rangeOf(0, 3), "on doc 1");
-    createAnnotation(map2, ydoc2, "highlight", rangeOf(0, 3), "", { color: "yellow" });
+    createAnnotation(map1, ydoc1, "comment", anchored(0, 3), "on doc 1");
+    createAnnotation(map2, ydoc2, "highlight", anchored(0, 3), "", { color: "yellow" });
 
     expect(collectAnnotations(map1, DOC_HASH)).toHaveLength(1);
     expect(collectAnnotations(map2, DOC_HASH)).toHaveLength(1);
@@ -381,7 +411,7 @@ describe("tandem_exportAnnotations — Solo hold", () => {
   it("withholds user annotations in Solo and DISCLOSES the count", () => {
     const ydoc = seedDoc("export-solo");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "user note", { author: "user" });
+    createAnnotation(map, ydoc, "comment", anchored(0, 5), "user note", { author: "user" });
     setMode("solo");
 
     const all = collectAnnotations(map, "sha256:export-solo");
@@ -409,10 +439,10 @@ describe("tandem_exportAnnotations — Solo hold", () => {
   it("in indeterminate mode withholds only persisted heldInSolo records", () => {
     const ydoc = seedDoc("export-indet");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const plainId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "plain", {
+    const plainId = createAnnotation(map, ydoc, "comment", anchored(0, 5), "plain", {
       author: "user",
     });
-    const heldId = createAnnotation(map, ydoc, "comment", rangeOf(6, 11), "held", {
+    const heldId = createAnnotation(map, ydoc, "comment", anchored(6, 11), "held", {
       author: "user",
     });
     const held = map.get(heldId) as Annotation;

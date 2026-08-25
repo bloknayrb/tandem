@@ -315,22 +315,34 @@ describe("useTandemSettings — updateSettings write path", () => {
     reduceMotion: false,
     textSize: "m",
     theme: "system",
+    systemLightVariant: "light",
     accentHue: 275,
     editorFont: "sans",
     fontByExtension: {},
+    defaultSaveDirectory: null,
     density: "cozy",
     defaultMode: "tandem",
     highContrast: false,
     annotationPatterns: false,
     selectionToolbar: true,
+    formattingBarVisible: true,
+    railHoverReveal: true,
     soloRailHidden: true,
     degradedBannerDelayMs: 30000,
     sidecarRetryStrategy: "exponential",
     marginView: false,
-    showAnnotationDecorations: true,
+    showComments: true,
+    showHighlights: true,
+    showNotes: true,
+    showRawMarkdown: true,
+    decorationsMuted: false,
     models: [],
     defaultModelId: null,
     customShortcuts: {},
+    smartTypography: false,
+    spellcheck: true,
+    uniformTabWidth: true,
+    scrollPill: true,
   } as TandemSettings;
 
   it("merges a new editorMeasure preset through write", () => {
@@ -609,7 +621,7 @@ describe("v4→v5 picker teardown migration", () => {
       leftRailTabs: ["outline"],
       rightRailTabs: ["annotations", "chat"],
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
@@ -621,7 +633,7 @@ describe("v4→v5 picker teardown migration", () => {
       leftRailTabs: ["chat", "outline"],
       rightRailTabs: ["annotations"],
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftRailTabs).toBeUndefined();
     expect(s.rightRailTabs).toBeUndefined();
@@ -632,7 +644,7 @@ describe("v4→v5 picker teardown migration", () => {
       schemaVersion: 5,
       showIntegrationWizard: true,
     });
-    const s = loadSettings() as Record<string, unknown>;
+    const s = loadSettings() as unknown as Record<string, unknown>;
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });

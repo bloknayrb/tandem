@@ -139,7 +139,13 @@ describe("getVisibleReplies — client display filter", () => {
   });
 
   it("returns replies for notes (private threads display to the owning user, #1000)", () => {
-    expect(getVisibleReplies({ ...baseAnn, type: "note" }, [baseReply])).toEqual([baseReply]);
+    // Overriding the discriminant via spread on a union type produces a shape
+    // TS can't verify against any single `Annotation` variant (it merges the
+    // optional fields of every member); the cast reflects that this is a
+    // valid "note" annotation at runtime, not a behavior change.
+    expect(getVisibleReplies({ ...baseAnn, type: "note" } as Annotation, [baseReply])).toEqual([
+      baseReply,
+    ]);
   });
 
   it("displays imported Word reply threads on a note", () => {
@@ -150,11 +156,15 @@ describe("getVisibleReplies — client display filter", () => {
       private: true,
       importAuthor: "Jane Reviewer",
     };
-    expect(getVisibleReplies({ ...baseAnn, type: "note" }, [importReply])).toEqual([importReply]);
+    expect(getVisibleReplies({ ...baseAnn, type: "note" } as Annotation, [importReply])).toEqual([
+      importReply,
+    ]);
   });
 
   it("returns [] for highlights", () => {
-    expect(getVisibleReplies({ ...baseAnn, type: "highlight" }, [baseReply])).toEqual([]);
+    expect(getVisibleReplies({ ...baseAnn, type: "highlight" } as Annotation, [baseReply])).toEqual(
+      [],
+    );
   });
 
   it("handles undefined reply list", () => {

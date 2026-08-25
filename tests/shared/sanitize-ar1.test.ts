@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SanitizationEvent } from "../../src/shared/sanitize";
+import type { RawAnnotation, SanitizationEvent } from "../../src/shared/sanitize";
 import { sanitizeAnnotation } from "../../src/shared/sanitize";
 import type { Annotation } from "../../src/shared/types";
 
@@ -214,7 +214,10 @@ describe("AR1: suggestion path emits no audience-derived event", () => {
         ...baseAnn,
         type: "suggestion",
         content: JSON.stringify({ newText: "x", reason: "y" }),
-      } as Annotation,
+        // RawAnnotation, not Annotation: "suggestion" is a legacy AR1 type that
+        // the current union no longer names, and it is exactly what the
+        // migration branch under test consumes.
+      } as RawAnnotation,
       (e) => events.push(e),
     );
     // No audience-derived event, no other events for valid suggestion
@@ -228,7 +231,7 @@ describe("AR1: suggestion path emits no audience-derived event", () => {
         ...baseAnn,
         type: "suggestion",
         content: "not-json",
-      } as Annotation,
+      } as RawAnnotation,
       (e) => events.push(e),
     );
     expect(events.some((e) => e.kind === "malformed-suggestion-json")).toBe(true);

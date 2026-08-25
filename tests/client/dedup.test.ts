@@ -3,7 +3,14 @@ import { deduplicateDocList } from "../../src/client/hooks/useYjsSync";
 import type { DocListEntry } from "../../src/client/types";
 
 function entry(id: string): DocListEntry {
-  return { id, filePath: `/test/${id}.md`, fileName: `${id}.md`, format: "md", readOnly: false };
+  return {
+    id,
+    filePath: `/test/${id}.md`,
+    fileName: `${id}.md`,
+    format: "md",
+    readOnly: false,
+    source: "file",
+  };
 }
 
 describe("deduplicateDocList", () => {

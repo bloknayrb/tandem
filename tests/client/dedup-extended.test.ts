@@ -9,6 +9,7 @@ function makeEntry(id: string): DocListEntry {
     fileName: `${id}.md`,
     format: "md",
     readOnly: false,
+    source: "file",
   };
 }
 
@@ -64,6 +65,7 @@ describe("deduplicateDocList — extended edge cases", () => {
       fileName: "report.md",
       format: "md",
       readOnly: true,
+      source: "file",
     };
     const result = deduplicateDocList([entry], new Set(), new Set());
     expect(result[0]).toEqual(entry);

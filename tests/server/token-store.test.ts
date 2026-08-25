@@ -149,7 +149,9 @@ describe("token-store", () => {
       let exclAttempted = false;
 
       vi.spyOn(fs.promises, "open").mockImplementation(
-        async (fp: fs.PathLike | fs.promises.FileHandle, flags: fs.OpenMode, ...rest) => {
+        // `fp`/`flags` match the overload `vi.spyOn` resolves to; widening them
+        // makes the implementation fail contravariantly against that signature.
+        async (fp: fs.PathLike, flags?: string | number, ...rest: unknown[]) => {
           if (!exclAttempted && flags === "wx") {
             exclAttempted = true;
             // Simulate the racing process: persist its token, then surface EEXIST.

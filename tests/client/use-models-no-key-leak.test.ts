@@ -101,11 +101,12 @@ describe("createModels — error messages never leak apiKey or endpoint values",
       },
       LEAKY_KEY,
     );
+    expect(id, "the add must have committed for this test to exercise anything").not.toBeNull();
 
     let caught: unknown = null;
     try {
       await models.updateModel(
-        id,
+        id as string,
         {
           // @ts-expect-error — runtime guard under test.
           provider: "invalid",

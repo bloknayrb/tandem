@@ -14,6 +14,7 @@ import {
   AuthorshipExtension,
   authorshipPluginKey,
   buildAuthorshipDecorations,
+  type StructuralCapture,
 } from "../../src/client/editor/extensions/authorship";
 import { loadMarkdown } from "../../src/server/file-io/markdown";
 import { Y_MAP_AUTHORSHIP } from "../../src/shared/constants";
@@ -112,7 +113,8 @@ function seedUserText(editor: Editor) {
 }
 
 function captureOf(editor: Editor) {
-  return (authorshipPluginKey.getState(editor.state) as { capture?: unknown } | undefined)?.capture;
+  return (authorshipPluginKey.getState(editor.state) as { capture?: StructuralCapture } | undefined)
+    ?.capture;
 }
 
 function isStructural(step: unknown): boolean {

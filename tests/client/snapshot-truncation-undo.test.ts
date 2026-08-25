@@ -57,7 +57,7 @@ function acceptedAnnotation(over: Partial<Annotation>): Annotation {
     timestamp: 0,
     range: { from: 0, to: 5 },
     ...over,
-  } as Annotation;
+  } as unknown as Annotation;
 }
 
 function setup(html: string, ann: Annotation) {

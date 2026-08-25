@@ -6,6 +6,7 @@ import {
   relRangeToPmPositions,
 } from "../../src/client/positions";
 import { flatOffsetToRelPos } from "../../src/server/positions";
+import { off, pm as pmPos, range } from "../helpers/positions";
 import { getFragment, makeAnnotation, makeDoc } from "../helpers/ydoc-factory";
 
 // Minimal ProseMirror-compatible mock.
@@ -93,24 +94,24 @@ describe("flatOffsetToPmPos", () => {
   it("single paragraph", () => {
     const doc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
     // Flat: "Hello" (length 5). PM: para open at 0, text at 1–5, close at 6. content.size=7
-    expect(flatOffsetToPmPos(doc as any, 0)).toBe(1);
-    expect(flatOffsetToPmPos(doc as any, 2)).toBe(3);
-    expect(flatOffsetToPmPos(doc as any, 4)).toBe(5);
+    expect(flatOffsetToPmPos(doc as any, off(0))).toBe(1);
+    expect(flatOffsetToPmPos(doc as any, off(2))).toBe(3);
+    expect(flatOffsetToPmPos(doc as any, off(4))).toBe(5);
     // End of the text, NOT `doc.content.size` (7). Changed by #1485: 7 is the
     // position after the paragraph's close token, whose parent is the doc node,
     // so an insert there appends a stray sibling paragraph instead of extending
     // this one. This assertion pinned that defect — note it is a MOCK doc, the
     // same instrument that let #1450 through.
-    expect(flatOffsetToPmPos(doc as any, 5)).toBe(6);
+    expect(flatOffsetToPmPos(doc as any, off(5))).toBe(6);
   });
 
   it('H1 heading — prefix "# " (length 2) clamps to text start', () => {
     const doc = makeMockDoc([{ type: "heading", level: 1, text: "Hello" }]);
     // Flat: "# Hello" — prefix at 0-1, text at 2-6
-    expect(flatOffsetToPmPos(doc as any, 0)).toBe(1); // inside prefix → clamp
-    expect(flatOffsetToPmPos(doc as any, 1)).toBe(1); // inside prefix → clamp
-    expect(flatOffsetToPmPos(doc as any, 2)).toBe(1); // first text char 'H'
-    expect(flatOffsetToPmPos(doc as any, 3)).toBe(2); // second text char 'e'
+    expect(flatOffsetToPmPos(doc as any, off(0))).toBe(1); // inside prefix → clamp
+    expect(flatOffsetToPmPos(doc as any, off(1))).toBe(1); // inside prefix → clamp
+    expect(flatOffsetToPmPos(doc as any, off(2))).toBe(1); // first text char 'H'
+    expect(flatOffsetToPmPos(doc as any, off(3))).toBe(2); // second text char 'e'
   });
 
   it("H2 heading + paragraph", () => {
@@ -121,30 +122,30 @@ describe("flatOffsetToPmPos", () => {
     // Flat: "## Title\nBody"
     // Prefix "## " at 0-2 (len=3), "Title" at 3-7, separator at 8, "Body" at 9-12
     // PM: heading node start=1; para node start=8 (heading nodeSize=7, para childStart=7+1=8)
-    expect(flatOffsetToPmPos(doc as any, 0)).toBe(1); // prefix → clamp
-    expect(flatOffsetToPmPos(doc as any, 1)).toBe(1); // prefix → clamp
-    expect(flatOffsetToPmPos(doc as any, 2)).toBe(1); // prefix → clamp
+    expect(flatOffsetToPmPos(doc as any, off(0))).toBe(1); // prefix → clamp
+    expect(flatOffsetToPmPos(doc as any, off(1))).toBe(1); // prefix → clamp
+    expect(flatOffsetToPmPos(doc as any, off(2))).toBe(1); // prefix → clamp
     // PM pos 1 = "start of heading text content" — the heading prefix has no PM representation
-    expect(flatOffsetToPmPos(doc as any, 3)).toBe(1); // first char 'T', textOffset = max(0, 3-3) = 0
-    expect(flatOffsetToPmPos(doc as any, 5)).toBe(3); // 't' in Title
-    expect(flatOffsetToPmPos(doc as any, 7)).toBe(5); // last char 'e'
-    expect(flatOffsetToPmPos(doc as any, 8)).toBe(6); // separator → end of heading (childStart+textLen = 1+5)
-    expect(flatOffsetToPmPos(doc as any, 9)).toBe(8); // first char of para
-    expect(flatOffsetToPmPos(doc as any, 12)).toBe(11); // last char of para
+    expect(flatOffsetToPmPos(doc as any, off(3))).toBe(1); // first char 'T', textOffset = max(0, 3-3) = 0
+    expect(flatOffsetToPmPos(doc as any, off(5))).toBe(3); // 't' in Title
+    expect(flatOffsetToPmPos(doc as any, off(7))).toBe(5); // last char 'e'
+    expect(flatOffsetToPmPos(doc as any, off(8))).toBe(6); // separator → end of heading (childStart+textLen = 1+5)
+    expect(flatOffsetToPmPos(doc as any, off(9))).toBe(8); // first char of para
+    expect(flatOffsetToPmPos(doc as any, off(12))).toBe(11); // last char of para
   });
 
   it('H3 heading — prefix "### " (length 4) clamps to text start', () => {
     const doc = makeMockDoc([{ type: "heading", level: 3, text: "Test" }]);
     // Flat: "### Test" — prefix at 0-3, text at 4-7
-    expect(flatOffsetToPmPos(doc as any, 0)).toBe(1); // prefix → clamp
-    expect(flatOffsetToPmPos(doc as any, 3)).toBe(1); // last prefix char → clamp
-    expect(flatOffsetToPmPos(doc as any, 4)).toBe(1); // first text char 'T', textOffset = max(0, 4-4) = 0
-    expect(flatOffsetToPmPos(doc as any, 5)).toBe(2); // 'e'
+    expect(flatOffsetToPmPos(doc as any, off(0))).toBe(1); // prefix → clamp
+    expect(flatOffsetToPmPos(doc as any, off(3))).toBe(1); // last prefix char → clamp
+    expect(flatOffsetToPmPos(doc as any, off(4))).toBe(1); // first text char 'T', textOffset = max(0, 4-4) = 0
+    expect(flatOffsetToPmPos(doc as any, off(5))).toBe(2); // 'e'
   });
 
   it("empty doc", () => {
     const doc = makeMockDoc([]);
-    expect(flatOffsetToPmPos(doc as any, 0)).toBe(0); // doc.content.size = 0
+    expect(flatOffsetToPmPos(doc as any, off(0))).toBe(0); // doc.content.size = 0
   });
 });
 
@@ -152,11 +153,11 @@ describe("pmPosToFlatOffset", () => {
   it("single paragraph", () => {
     const doc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
     // nodeStart=1, textLen=5, nodeEnd=6
-    expect(pmPosToFlatOffset(doc as any, 0)).toBe(0); // pmPos <= nodeStart → flatOffset+0 = 0
-    expect(pmPosToFlatOffset(doc as any, 1)).toBe(0); // pmPos <= nodeStart → 0
-    expect(pmPosToFlatOffset(doc as any, 3)).toBe(2); // offsetInNode=2
-    expect(pmPosToFlatOffset(doc as any, 5)).toBe(4); // offsetInNode=4
-    expect(pmPosToFlatOffset(doc as any, 6)).toBe(5); // past end → loop exhausted
+    expect(pmPosToFlatOffset(doc as any, pmPos(0))).toBe(0); // pmPos <= nodeStart → flatOffset+0 = 0
+    expect(pmPosToFlatOffset(doc as any, pmPos(1))).toBe(0); // pmPos <= nodeStart → 0
+    expect(pmPosToFlatOffset(doc as any, pmPos(3))).toBe(2); // offsetInNode=2
+    expect(pmPosToFlatOffset(doc as any, pmPos(5))).toBe(4); // offsetInNode=4
+    expect(pmPosToFlatOffset(doc as any, pmPos(6))).toBe(5); // past end → loop exhausted
   });
 
   it("H2 heading + paragraph", () => {
@@ -166,17 +167,17 @@ describe("pmPosToFlatOffset", () => {
     ]);
     // Heading: nodeStart=1, prefixLen=3, textLen=5, nodeEnd=6
     // Para: nodeStart=8 (pmOffset=7 after heading), prefixLen=0, textLen=4
-    expect(pmPosToFlatOffset(doc as any, 0)).toBe(3); // pmPos=0 <= nodeStart=1 → 0+3=3
-    expect(pmPosToFlatOffset(doc as any, 1)).toBe(3); // pmPos=1 <= nodeStart=1 → 0+3=3
-    expect(pmPosToFlatOffset(doc as any, 3)).toBe(5); // offsetInNode=2 → 0+3+2=5
-    expect(pmPosToFlatOffset(doc as any, 6)).toBe(8); // offsetInNode=5 → 0+3+5=8 (separator)
-    expect(pmPosToFlatOffset(doc as any, 8)).toBe(9); // para: pmPos=8 <= nodeStart=8 → 9+0=9
-    expect(pmPosToFlatOffset(doc as any, 11)).toBe(12);
+    expect(pmPosToFlatOffset(doc as any, pmPos(0))).toBe(3); // pmPos=0 <= nodeStart=1 → 0+3=3
+    expect(pmPosToFlatOffset(doc as any, pmPos(1))).toBe(3); // pmPos=1 <= nodeStart=1 → 0+3=3
+    expect(pmPosToFlatOffset(doc as any, pmPos(3))).toBe(5); // offsetInNode=2 → 0+3+2=5
+    expect(pmPosToFlatOffset(doc as any, pmPos(6))).toBe(8); // offsetInNode=5 → 0+3+5=8 (separator)
+    expect(pmPosToFlatOffset(doc as any, pmPos(8))).toBe(9); // para: pmPos=8 <= nodeStart=8 → 9+0=9
+    expect(pmPosToFlatOffset(doc as any, pmPos(11))).toBe(12);
   });
 
   it("empty doc", () => {
     const doc = makeMockDoc([]);
-    expect(pmPosToFlatOffset(doc as any, 0)).toBe(0);
+    expect(pmPosToFlatOffset(doc as any, pmPos(0))).toBe(0);
   });
 });
 
@@ -189,8 +190,8 @@ describe("round-trip: pmPosToFlatOffset(flatOffsetToPmPos(offset)) === offset", 
     // Flat: "## Title\nBody" — text starts at offset 3
     const identityOffsets = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
     for (const offset of identityOffsets) {
-      const pm = flatOffsetToPmPos(doc as any, offset);
-      expect(pmPosToFlatOffset(doc as any, pm)).toBe(offset);
+      const pos = flatOffsetToPmPos(doc as any, off(offset));
+      expect(pmPosToFlatOffset(doc as any, pos)).toBe(offset);
     }
   });
 
@@ -202,9 +203,9 @@ describe("round-trip: pmPosToFlatOffset(flatOffsetToPmPos(offset)) === offset", 
     // Prefix positions (0, 1, 2) have no PM representation — they all map to PM 1,
     // and PM 1 maps back to flat offset 3 (first text char, after "## ").
     for (const prefixOffset of [0, 1, 2]) {
-      const pm = flatOffsetToPmPos(doc as any, prefixOffset);
-      expect(pm).toBe(1);
-      expect(pmPosToFlatOffset(doc as any, pm)).toBe(3);
+      const pos = flatOffsetToPmPos(doc as any, off(prefixOffset));
+      expect(pos).toBe(1);
+      expect(pmPosToFlatOffset(doc as any, pos)).toBe(3);
     }
   });
 });
@@ -228,11 +229,11 @@ describe("container node (list) support", () => {
     // Flat text: "Alpha\nBeta" (5 + 1 + 4 = 10 chars)
     // PM structure: list(open=1) > item1(open=2) > para(open=3) > "Alpha" > para(close=8) > item1(close=9) > item2(open=10) > para(open=11) > "Beta" > para(close=15) > item2(close=16) > list(close=17)
     // Offset 0 ("A") → should resolve inside first paragraph
-    const pos0 = flatOffsetToPmPos(doc as any, 0);
+    const pos0 = flatOffsetToPmPos(doc as any, off(0));
     expect(pos0).toBeGreaterThanOrEqual(3); // inside first paragraph content
 
     // Offset 6 ("B" in "Beta") → should resolve inside second paragraph
-    const pos6 = flatOffsetToPmPos(doc as any, 6);
+    const pos6 = flatOffsetToPmPos(doc as any, off(6));
     expect(pos6).toBeGreaterThan(pos0); // must be after first item
   });
 
@@ -250,7 +251,7 @@ describe("container node (list) support", () => {
       isTextblock: false,
     };
     // If length calculation is wrong, offset 9 ("a" in Beta) would throw or resolve incorrectly
-    const pos9 = flatOffsetToPmPos(doc as any, 9);
+    const pos9 = flatOffsetToPmPos(doc as any, off(9));
     expect(pos9).toBeGreaterThan(0);
   });
 
@@ -266,8 +267,8 @@ describe("container node (list) support", () => {
     };
     // Test offsets within text content (skip separator at offset 5)
     for (const offset of [0, 1, 2, 3, 4, 6, 7, 8, 9, 10]) {
-      const pm = flatOffsetToPmPos(doc as any, offset);
-      const back = pmPosToFlatOffset(doc as any, pm);
+      const pos = flatOffsetToPmPos(doc as any, off(offset));
+      const back = pmPosToFlatOffset(doc as any, pos);
       expect(back).toBe(offset);
     }
   });
@@ -283,10 +284,10 @@ describe("annotationToPmRange", () => {
     const ydoc = makeDoc("Hello");
     const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
 
-    const fromRel = flatOffsetToRelPos(ydoc, 0, 0);
-    const toRel = flatOffsetToRelPos(ydoc, 5, -1);
+    const fromRel = flatOffsetToRelPos(ydoc, off(0), 0);
+    const toRel = flatOffsetToRelPos(ydoc, off(5), -1);
     const ann = makeAnnotation({
-      range: { from: 0, to: 5 },
+      range: range(0, 5),
       relRange: { fromRel: fromRel!, toRel: toRel! },
     });
 
@@ -299,7 +300,7 @@ describe("annotationToPmRange", () => {
 
   it("flat fallback returns method 'flat' when no relRange", () => {
     const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
-    const ann = makeAnnotation({ range: { from: 0, to: 5 } });
+    const ann = makeAnnotation({ range: range(0, 5) });
 
     const result = annotationToPmRange(ann, pmDoc as any, null);
     expect(result).not.toBeNull();
@@ -309,10 +310,10 @@ describe("annotationToPmRange", () => {
   it("flat fallback when ydoc is null", () => {
     const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
     const ydoc = makeDoc("Hello");
-    const fromRel = flatOffsetToRelPos(ydoc, 0, 0);
-    const toRel = flatOffsetToRelPos(ydoc, 5, -1);
+    const fromRel = flatOffsetToRelPos(ydoc, off(0), 0);
+    const toRel = flatOffsetToRelPos(ydoc, off(5), -1);
     const ann = makeAnnotation({
-      range: { from: 0, to: 5 },
+      range: range(0, 5),
       relRange: { fromRel: fromRel!, toRel: toRel! },
     });
 
@@ -337,11 +338,11 @@ describe("annotationToPmRange", () => {
     const ydoc = makeDoc("ABCDE");
     const pmDoc = makeMockDoc([{ type: "paragraph", text: "ABCDE" }]);
 
-    const fromRel = flatOffsetToRelPos(ydoc, 3, 0); // points to 'D'
-    const toRel = flatOffsetToRelPos(ydoc, 1, -1); // points to 'B'
+    const fromRel = flatOffsetToRelPos(ydoc, off(3), 0); // points to 'D'
+    const toRel = flatOffsetToRelPos(ydoc, off(1), -1); // points to 'B'
     // Construct an inverted relRange (from > to)
     const ann = makeAnnotation({
-      range: { from: 1, to: 3 },
+      range: range(1, 3),
       relRange: { fromRel: fromRel!, toRel: toRel! },
     });
 
@@ -355,8 +356,10 @@ describe("annotationToPmRange", () => {
     const ydoc = makeDoc("Hello");
     const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
     const ann = makeAnnotation({
-      range: { from: 0, to: 5 },
-      relRange: { fromRel: "garbage", toRel: "garbage" },
+      range: range(0, 5),
+      // Deliberately malformed — not a valid SerializedRelPos — to exercise the
+      // internal catch. Cast, not `off`/`pm`: the value under test IS the bad string.
+      relRange: { fromRel: "garbage" as any, toRel: "garbage" as any },
     });
 
     // Should fall back to flat (malformed relRange caught internally)
@@ -375,8 +378,8 @@ describe("relRangeToPmPositions", () => {
     const ydoc = makeDoc("Hello");
     const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
 
-    const fromRel = flatOffsetToRelPos(ydoc, 1, 0)!;
-    const toRel = flatOffsetToRelPos(ydoc, 4, -1)!;
+    const fromRel = flatOffsetToRelPos(ydoc, off(1), 0)!;
+    const toRel = flatOffsetToRelPos(ydoc, off(4), -1)!;
 
     const result = relRangeToPmPositions(ydoc, pmDoc as any, { fromRel, toRel });
     expect(result).not.toBeNull();
@@ -387,8 +390,8 @@ describe("relRangeToPmPositions", () => {
 
   it("returns null for deleted content", () => {
     const ydoc = makeDoc("Hello");
-    const fromRel = flatOffsetToRelPos(ydoc, 0, 0)!;
-    const toRel = flatOffsetToRelPos(ydoc, 5, -1)!;
+    const fromRel = flatOffsetToRelPos(ydoc, off(0), 0)!;
+    const toRel = flatOffsetToRelPos(ydoc, off(5), -1)!;
 
     // Delete all content — RelativePositions now point to deleted items
     const fragment = getFragment(ydoc);
@@ -403,9 +406,11 @@ describe("relRangeToPmPositions", () => {
     const ydoc = makeDoc("Hello");
     const pmDoc = makeMockDoc([{ type: "paragraph", text: "Hello" }]);
 
+    // Deliberately malformed — neither value is a valid SerializedRelPos — to
+    // exercise the internal catch. Cast, not `off`/`pm`: the bad shape IS the subject.
     const result = relRangeToPmPositions(ydoc, pmDoc as any, {
-      fromRel: { bogus: true },
-      toRel: 42,
+      fromRel: { bogus: true } as any,
+      toRel: 42 as any,
     });
     expect(result).toBeNull();
   });

@@ -148,7 +148,7 @@ describe("createCwdDrift", () => {
   });
 
   it("does not let a slow superseded response overwrite a fresher one", async () => {
-    let releaseFirst: ((v: unknown) => void) | null = null;
+    let releaseFirst: ((v: unknown) => void) | undefined;
     const r = recorder([
       () =>
         new Promise((res) => {
@@ -323,7 +323,7 @@ describe("createCwdDrift", () => {
     // The abort case above drives the `catch`; this drives the `!res.ok` branch,
     // which an abort never reaches. Same failure either way: a probe the user has
     // already moved past returns 403 late and blanks the answer on screen.
-    let releaseFirst: ((v: Response) => void) | null = null;
+    let releaseFirst: ((v: Response) => void) | undefined;
     let call = 0;
     const fetchFn = (async () => {
       call += 1;
@@ -349,7 +349,7 @@ describe("createCwdDrift", () => {
   });
 
   it("writes nothing after unmount", async () => {
-    let release: ((v: unknown) => void) | null = null;
+    let release: ((v: unknown) => void) | undefined;
     const r = recorder([
       () =>
         new Promise((res) => {

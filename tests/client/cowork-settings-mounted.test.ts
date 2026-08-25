@@ -32,14 +32,14 @@ import { coworkErrorCell, coworkStatusCell } from "../helpers/cowork-fixtures.sv
 // default mock must be — a mock omitting the key would make `toggleWarnings()`
 // return `[]` for the WRONG reason (missing key, not empty list) and hide a
 // regression where the component stopped reading the field at all.
-const toggleIntegration = vi.fn(async () => ({
+const toggleIntegration = vi.fn(async (..._args: unknown[]) => ({
   message: "Cowork enabled: 1 workspace(s) configured",
   warnings: [] as string[],
 }));
 const fakeInvoke = vi.fn();
 
 const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unavailable" }));
-const setLanIpOverride = vi.fn(async () => {});
+const setLanIpOverride = vi.fn(async (..._args: unknown[]) => {});
 
 // Spread `importOriginal` rather than re-declaring the module: `cowork-invoke`
 // exports nine symbols and each suite's mock used to name a different subset,
@@ -152,7 +152,10 @@ function mount() {
 beforeEach(() => {
   coworkStatusCell.reset();
   toggleIntegration.mockClear();
-  toggleIntegration.mockImplementation(async () => ({ ok: true as const }));
+  toggleIntegration.mockImplementation(async () => ({
+    message: "Cowork enabled: 1 workspace(s) configured",
+    warnings: [] as string[],
+  }));
   fakeInvoke.mockClear();
   coworkErrorCell.reset();
   refetch.mockReset();

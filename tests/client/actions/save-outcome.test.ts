@@ -28,6 +28,7 @@ function fetchFail() {
 
 const baseDeps = {
   getActiveTabId: () => "doc-1",
+  afterLauncherAction: () => {},
   openSettings: () => {},
   toggleSoloMode: () => {},
   openFindBar: () => {},

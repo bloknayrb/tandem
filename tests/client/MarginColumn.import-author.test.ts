@@ -4,6 +4,7 @@ import { render } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
 import MarginColumn from "../../src/client/panels/MarginColumn.svelte";
 import type { Annotation } from "../../src/shared/types";
+import { range } from "../helpers/positions";
 
 // Closes the gap from the V2 plan §4.1b — `leaderColorForAuthor` is unit-tested
 // in marginLeaderGeometry.test.ts, but pure-function correctness can't prove
@@ -18,7 +19,7 @@ function importComment(id: string): Annotation {
     id,
     author: "import",
     type: "comment",
-    range: { from: 0, to: 5 },
+    range: range(0, 5),
     content: "Word comment text",
     status: "pending",
     timestamp: 1_700_000_000_000,

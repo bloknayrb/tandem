@@ -67,7 +67,9 @@ describe("takeWakeAdvisory", () => {
     // Matches every other push-path gate: a lost or not-yet-broadcast mode key
     // means "we may have been in Solo and no longer know", so the speak branch
     // is the one it must never take.
-    setCtrlMode(undefined);
+    // `null` is this helper's "indeterminate": it DELETES the mode key, which is
+    // the lost/not-yet-broadcast state the comment above describes.
+    setCtrlMode(null);
     expect(takeWakeAdvisory(0)).toBeNull();
   });
 

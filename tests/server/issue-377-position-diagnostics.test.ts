@@ -198,12 +198,12 @@ describe("Phase 2: resolveToElement vs resolveOffset implementation parity", () 
       // Test every offset from 0 to flat.length + 2 (including past-end)
       for (let offset = 0; offset <= flat.length + 2; offset++) {
         const fromPositions = resolveToElement(fragment, toFlatOffset(offset));
-        const fromDocModel = resolveOffset(fragment, offset);
+        const fromDocModel = resolveOffset(fragment, toFlatOffset(offset));
 
-        expect(fromPositions).toEqual(
-          fromDocModel,
+        expect(
+          fromPositions,
           `Divergence at offset ${offset} in "${content.slice(0, 40)}"`,
-        );
+        ).toEqual(fromDocModel);
       }
     });
   }
@@ -216,8 +216,8 @@ describe("Phase 2: resolveToElement vs resolveOffset implementation parity", () 
 
     for (let offset = 0; offset <= flat.length + 2; offset++) {
       const fromPositions = resolveToElement(fragment, toFlatOffset(offset));
-      const fromDocModel = resolveOffset(fragment, offset);
-      expect(fromPositions).toEqual(fromDocModel, `Divergence at offset ${offset}`);
+      const fromDocModel = resolveOffset(fragment, toFlatOffset(offset));
+      expect(fromPositions, `Divergence at offset ${offset}`).toEqual(fromDocModel);
     }
   });
 
@@ -230,9 +230,9 @@ describe("Phase 2: resolveToElement vs resolveOffset implementation parity", () 
 
     for (let offset = 0; offset < 200; offset++) {
       const fromPositions = resolveToElement(fragment, toFlatOffset(offset));
-      const fromDocModel = resolveOffset(fragment, offset);
+      const fromDocModel = resolveOffset(fragment, toFlatOffset(offset));
 
-      expect(fromPositions).toEqual(fromDocModel, `Divergence at offset ${offset} in roadmap.md`);
+      expect(fromPositions, `Divergence at offset ${offset} in roadmap.md`).toEqual(fromDocModel);
     }
   });
 });

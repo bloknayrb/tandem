@@ -21,6 +21,7 @@
  * client-side `getVisibleReplies` mirror).
  */
 import { beforeEach, describe, expect, it } from "vitest";
+import type * as Y from "yjs";
 import {
   addReplyToAnnotation,
   channelVisibleReplies,
@@ -29,9 +30,22 @@ import {
 } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
+import type { AnchoredRangeResult } from "../../src/shared/positions/types.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
+
+/**
+ * `rangeOf(from, to, ydoc)`'s inferred return type is a union of the anchored
+ * branch and its own no-doc `{ range }` shape. Every call site here passes
+ * `ydoc`, which always takes `rangeOf`'s `if (ydoc)` branch (it throws on
+ * `!result.ok`), so the runtime value is always `AnchoredRangeResult` with a
+ * real `relRange` — this narrows the static type to match without touching
+ * the shared helper (out of scope for this unit).
+ */
+function anchoredRangeOf(from: number, to: number, ydoc: Y.Doc): AnchoredRangeResult {
+  return rangeOf(from, to, ydoc) as AnchoredRangeResult;
+}
 
 beforeEach(() => {
   clearOpenDocs();
@@ -41,7 +55,13 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
   it("(a) accepts reply on a comment parent and does NOT mark it private", () => {
     const ydoc = setupDoc("rw-comment", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "comment-content");
+    const annId = createAnnotation(
+      map,
+      ydoc,
+      "comment",
+      anchoredRangeOf(0, 5, ydoc),
+      "comment-content",
+    );
 
     const result = addReplyToAnnotation(ydoc, map, annId, "ack", "user");
     expect(result.ok).toBe(true);
@@ -56,7 +76,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
   it("(b) accepts reply on a note parent and stamps it private", () => {
     const ydoc = setupDoc("rw-note", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
+    const annId = createAnnotation(map, ydoc, "note", anchoredRangeOf(0, 5, ydoc), "private note");
 
     const result = addReplyToAnnotation(ydoc, map, annId, "my private thought", "user");
     expect(result.ok).toBe(true);
@@ -76,7 +96,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
   it("(b2) rejects a CLAUDE reply on a note parent (ADR-027: Claude never touches notes)", () => {
     const ydoc = setupDoc("rw-note-claude", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
+    const annId = createAnnotation(map, ydoc, "note", anchoredRangeOf(0, 5, ydoc), "private note");
 
     // The MCP tool path passes author "claude"; user replies (author "user")
     // are accepted by case (b) above.
@@ -90,7 +110,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
   it("(c) rejects reply on a highlight parent with INVALID_ARGUMENT", () => {
     const ydoc = setupDoc("rw-highlight", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "highlight", rangeOf(0, 5, ydoc), "");
+    const annId = createAnnotation(map, ydoc, "highlight", anchoredRangeOf(0, 5, ydoc), "");
 
     const result = addReplyToAnnotation(ydoc, map, annId, "should fail", "user");
     expect(result.ok).toBe(false);
@@ -104,7 +124,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
   it("(d) rejects reply when parent annotation is missing (NOT_FOUND)", () => {
     const ydoc = setupDoc("rw-orphan", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "comment");
+    const annId = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "comment");
 
     // Delete the parent first.
     ydoc.transact(() => map.delete(annId), MCP_ORIGIN);
@@ -120,7 +140,7 @@ describe("ADR-027 + #1000 reply privacy (Claude read path: channelVisibleReplies
   it("comment parent: returns non-private replies, strips private ones", () => {
     const ydoc = setupDoc("read-comment", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "c");
+    const annId = createAnnotation(map, ydoc, "comment", anchoredRangeOf(0, 5, ydoc), "c");
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
     const visible: AnnotationReply = {
@@ -153,7 +173,7 @@ describe("ADR-027 + #1000 reply privacy (Claude read path: channelVisibleReplies
   it("note parent: returns nothing even with replies present", () => {
     const ydoc = setupDoc("read-note", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
+    const annId = createAnnotation(map, ydoc, "note", anchoredRangeOf(0, 5, ydoc), "private note");
     addReplyToAnnotation(ydoc, map, annId, "thought", "user");
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
@@ -166,7 +186,7 @@ describe("ADR-027 + #1000 reply privacy (Claude read path: channelVisibleReplies
   it("(e) PROMOTION LEAK: a note's private replies stay hidden after note→comment promotion", () => {
     const ydoc = setupDoc("read-promote", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
+    const annId = createAnnotation(map, ydoc, "note", anchoredRangeOf(0, 5, ydoc), "private note");
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
     // A user reply authored while it was a note (→ private), plus an imported

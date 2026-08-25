@@ -147,7 +147,9 @@ describe("read-only survives a session restore", () => {
 
     await saveOpenedSession(filePath, opened);
 
-    const record = (await readSessionRecord(filePath)) as Record<string, unknown>;
+    // Deliberately widened to inspect the raw on-disk key set, independent of
+    // the SessionData interface shape.
+    const record = (await readSessionRecord(filePath)) as unknown as Record<string, unknown>;
     // Absent, not `false`: the conditional spread is what keeps clean records
     // identical to what shipped before the field existed.
     expect("readOnly" in record).toBe(false);

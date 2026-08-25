@@ -104,7 +104,13 @@ describe("withTypingPresence", () => {
         observed = readWorking(doc);
       },
     );
-    expect(observed?.annotationId).toBe("ann_comment");
+    // TS narrows `observed` to `never` here: it's a `let` only ever reassigned
+    // inside a nested async closure, and TS's CFA doesn't see that write as
+    // reaching this point. Re-asserting the declared type is a sound fix for
+    // this known TS limitation (github.com/microsoft/TypeScript#9998-adjacent).
+    expect((observed as NonNullable<ClaudeAwareness["working"]> | null)?.annotationId).toBe(
+      "ann_comment",
+    );
   });
 
   it("ADR-027: never broadcasts annotationId for a note", () => {
@@ -256,7 +262,10 @@ describe("withTypingPresence", () => {
       workingDuringStatus = readWorking(doc);
     });
     // Marker survived the status write...
-    expect(workingDuringStatus?.tool).toBe("tandem_comment");
+    // Same closure-narrowing limitation as `observed` above.
+    expect((workingDuringStatus as NonNullable<ClaudeAwareness["working"]> | null)?.tool).toBe(
+      "tandem_comment",
+    );
     // ...and was cleared on handler exit (startedAt matched).
     expect(readWorking(doc)).toBeNull();
   });

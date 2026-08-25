@@ -1199,7 +1199,7 @@ describe("mcp-stdio token forwarding integration", () => {
   }, 30_000);
 
   it("does NOT add Authorization header when TANDEM_AUTH_TOKEN is not set", async () => {
-    const env = { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}` };
+    const env: NodeJS.ProcessEnv = { ...process.env, TANDEM_URL: `http://127.0.0.1:${port}` };
     delete env.TANDEM_AUTH_TOKEN;
     const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
     child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {

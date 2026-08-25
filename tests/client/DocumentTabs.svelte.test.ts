@@ -15,6 +15,7 @@ function makeTab(id: string): OpenTab {
     filePath: `/tmp/${id}.md`,
     format: "md",
     readOnly: false,
+    source: "file",
     ydoc: new Y.Doc(),
     // provider isn't read by DocumentTabs or TabItem on the paths these tests exercise
     provider: {} as unknown as OpenTab["provider"],

@@ -58,7 +58,7 @@ describe("Y.Doc structure probe for list items", () => {
     expect(pwaIdx).toBeGreaterThan(-1);
     if (pwaIdx >= 0) {
       // resolveOffset should return a result (even if in wrong element due to Bug A)
-      const resolved = resolveOffset(frag, pwaIdx);
+      const resolved = resolveOffset(frag, toFlatOffset(pwaIdx));
       expect(resolved).toBeDefined();
     }
   });

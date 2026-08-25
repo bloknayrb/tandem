@@ -6,6 +6,7 @@ import {
   getOrCreateXmlText,
   relPosToFlatOffset,
 } from "../../src/server/mcp/document.js";
+import { off } from "../helpers/positions.js";
 import { getFragment, makeDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -17,7 +18,7 @@ afterEach(() => {
 describe("flatOffsetToRelPos", () => {
   it("returns JSON-serializable RelativePosition for paragraph text", () => {
     doc = makeDoc("hello world");
-    const relPos = flatOffsetToRelPos(doc, 6, 0);
+    const relPos = flatOffsetToRelPos(doc, off(6), 0);
     expect(relPos).not.toBeNull();
     expect(typeof relPos).toBe("object");
   });
@@ -25,15 +26,15 @@ describe("flatOffsetToRelPos", () => {
   it("returns null for offset inside heading prefix", () => {
     doc = makeDoc("## Title");
     // Offset 0-2 are inside "## " prefix
-    expect(flatOffsetToRelPos(doc, 0, 0)).toBeNull();
-    expect(flatOffsetToRelPos(doc, 1, 0)).toBeNull();
-    expect(flatOffsetToRelPos(doc, 2, 0)).toBeNull();
+    expect(flatOffsetToRelPos(doc, off(0), 0)).toBeNull();
+    expect(flatOffsetToRelPos(doc, off(1), 0)).toBeNull();
+    expect(flatOffsetToRelPos(doc, off(2), 0)).toBeNull();
   });
 
   it("works for text after heading prefix", () => {
     doc = makeDoc("## Title");
     // "## " is 3 chars, so offset 3 = start of "Title"
-    const relPos = flatOffsetToRelPos(doc, 3, 0);
+    const relPos = flatOffsetToRelPos(doc, off(3), 0);
     expect(relPos).not.toBeNull();
   });
 });
@@ -62,7 +63,7 @@ describe("round-trip: flatOffset → relPos → flatOffset", () => {
   it("is identity for single paragraph", () => {
     doc = makeDoc("hello world");
     for (const offset of [0, 5, 11]) {
-      const relPos = flatOffsetToRelPos(doc, offset, 0);
+      const relPos = flatOffsetToRelPos(doc, off(offset), 0);
       expect(relPos).not.toBeNull();
       const back = relPosToFlatOffset(doc, relPos!);
       expect(back).toBe(offset);
@@ -73,7 +74,7 @@ describe("round-trip: flatOffset → relPos → flatOffset", () => {
     doc = makeDoc("first\nsecond\nthird");
     // "first" is offsets 0-4, "\n" is 5, "second" is 6-11, "\n" is 12, "third" is 13-17
     for (const offset of [0, 4, 6, 11, 13, 17]) {
-      const relPos = flatOffsetToRelPos(doc, offset, 0);
+      const relPos = flatOffsetToRelPos(doc, off(offset), 0);
       expect(relPos).not.toBeNull();
       const back = relPosToFlatOffset(doc, relPos!);
       expect(back).toBe(offset);
@@ -84,7 +85,7 @@ describe("round-trip: flatOffset → relPos → flatOffset", () => {
     doc = makeDoc("## Title\nBody text");
     // "## " = 3 chars, "Title" starts at 3, "\n" at 8, "Body text" starts at 9
     for (const offset of [3, 7, 9, 17]) {
-      const relPos = flatOffsetToRelPos(doc, offset, 0);
+      const relPos = flatOffsetToRelPos(doc, off(offset), 0);
       expect(relPos).not.toBeNull();
       const back = relPosToFlatOffset(doc, relPos!);
       expect(back).toBe(offset);
@@ -93,8 +94,8 @@ describe("round-trip: flatOffset → relPos → flatOffset", () => {
 
   it("preserves assoc parameter", () => {
     doc = makeDoc("hello world");
-    const relStart = flatOffsetToRelPos(doc, 5, 0);
-    const relEnd = flatOffsetToRelPos(doc, 5, -1);
+    const relStart = flatOffsetToRelPos(doc, off(5), 0);
+    const relEnd = flatOffsetToRelPos(doc, off(5), -1);
     expect(relStart).not.toBeNull();
     expect(relEnd).not.toBeNull();
     // Both should resolve to the same flat offset
@@ -107,7 +108,7 @@ describe("edit survival", () => {
   it("relPos tracks forward when text is inserted before it", () => {
     doc = makeDoc("hello world");
     // Create relPos at offset 6 (start of "world")
-    const relPos = flatOffsetToRelPos(doc, 6, 0);
+    const relPos = flatOffsetToRelPos(doc, off(6), 0);
     expect(relPos).not.toBeNull();
 
     // Insert "big " before "world" → "hello big world"
@@ -127,7 +128,7 @@ describe("edit survival", () => {
   it("relPos tracks backward when text is deleted before it", () => {
     doc = makeDoc("hello world");
     // Create relPos at offset 6 (start of "world")
-    const relPos = flatOffsetToRelPos(doc, 6, 0);
+    const relPos = flatOffsetToRelPos(doc, off(6), 0);
     expect(relPos).not.toBeNull();
 
     // Delete "hel" (0-3) → "lo world"
@@ -145,7 +146,7 @@ describe("edit survival", () => {
   it("returns null when the containing element is deleted", () => {
     doc = makeDoc("first\nsecond");
     // Create relPos in "second" (offset 6)
-    const relPos = flatOffsetToRelPos(doc, 6, 0);
+    const relPos = flatOffsetToRelPos(doc, off(6), 0);
     expect(relPos).not.toBeNull();
 
     // Delete the second element entirely
@@ -160,8 +161,8 @@ describe("edit survival", () => {
 
   it("annotation range survives insert between from and to", () => {
     doc = makeDoc("abcdefghij");
-    const fromRel = flatOffsetToRelPos(doc, 2, 0); // after "ab"
-    const toRel = flatOffsetToRelPos(doc, 8, -1); // before "ij"
+    const fromRel = flatOffsetToRelPos(doc, off(2), 0); // after "ab"
+    const toRel = flatOffsetToRelPos(doc, off(8), -1); // before "ij"
     expect(fromRel).not.toBeNull();
     expect(toRel).not.toBeNull();
 
@@ -184,12 +185,12 @@ describe("separator boundary", () => {
   it("offset at separator position between elements resolves correctly", () => {
     doc = makeDoc("abc\ndef");
     // Offset 3 = end of "abc" (last char index)
-    const relAtEnd = flatOffsetToRelPos(doc, 3, 0);
+    const relAtEnd = flatOffsetToRelPos(doc, off(3), 0);
     expect(relAtEnd).not.toBeNull();
     expect(relPosToFlatOffset(doc, relAtEnd!)).toBe(3);
 
     // Offset 4 = start of "def"
-    const relAtStart = flatOffsetToRelPos(doc, 4, 0);
+    const relAtStart = flatOffsetToRelPos(doc, off(4), 0);
     expect(relAtStart).not.toBeNull();
     expect(relPosToFlatOffset(doc, relAtStart!)).toBe(4);
   });

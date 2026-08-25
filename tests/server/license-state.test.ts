@@ -11,6 +11,7 @@ import {
 } from "../../src/server/license/license-state.js";
 import type {
   LicenseMetadata,
+  LicenseState,
   SignatureVerified,
   SignedLicense,
 } from "../../src/server/license/license-types.js";
@@ -23,6 +24,17 @@ import {
 import { canonicalize } from "../../src/server/license/verifier.js";
 
 const DAY = 86_400_000;
+
+/**
+ * Narrows the `LicenseState` discriminated union to its `gateActive: true`
+ * arm. Every call site here passes `gateEnabled: true`, so the runtime value
+ * is always narrowed already — this only makes that fact visible to the type
+ * checker (see `LicenseState`'s discriminated-union doc comment).
+ */
+function assertGateActive(s: LicenseState): Extract<LicenseState, { gateActive: true }> {
+  if (!s.gateActive) throw new Error("expected gateActive license state");
+  return s;
+}
 
 function tmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "lic-"));
@@ -110,25 +122,31 @@ describe("resolveLicenseState", () => {
   });
 
   it("no trial.json yet ⇒ trial at day 0", () => {
-    const s = resolveLicenseState({ appDataDir: tmp(), now: () => 0, gateEnabled: true });
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: tmp(), now: () => 0, gateEnabled: true }),
+    );
     expect(s.status).toBe("trial");
-    expect(s.trial?.daysRemaining).toBe(TRIAL_DAYS);
+    expect(s.status === "trial" && s.trial.daysRemaining).toBe(TRIAL_DAYS);
   });
 
   it("trial active within 14 days", () => {
     const dir = tmp();
     const t0 = 1_700_000_000_000;
     writeTrial(dir, t0);
-    const s = resolveLicenseState({ appDataDir: dir, now: () => t0 + 5 * DAY, gateEnabled: true });
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => t0 + 5 * DAY, gateEnabled: true }),
+    );
     expect(s.status).toBe("trial");
-    expect(s.trial?.daysRemaining).toBe(9);
+    expect(s.status === "trial" && s.trial.daysRemaining).toBe(9);
   });
 
   it("restricted after 14 days with no license", () => {
     const dir = tmp();
     const t0 = 1_700_000_000_000;
     writeTrial(dir, t0);
-    const s = resolveLicenseState({ appDataDir: dir, now: () => t0 + 15 * DAY, gateEnabled: true });
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => t0 + 15 * DAY, gateEnabled: true }),
+    );
     expect(s.status).toBe("restricted");
   });
 
@@ -138,15 +156,17 @@ describe("resolveLicenseState", () => {
     const t0 = 1_700_000_000_000;
     const blob = signBlob(privateKey, meta({ expiresAt: new Date(t0 + 365 * DAY).toISOString() }));
     fs.writeFileSync(licenseFilePath(dir), JSON.stringify({ version: 1, blob }));
-    const s = resolveLicenseState({
-      appDataDir: dir,
-      now: () => t0,
-      gateEnabled: true,
-      verify: makeVerify(publicKey),
-    });
+    const s = assertGateActive(
+      resolveLicenseState({
+        appDataDir: dir,
+        now: () => t0,
+        gateEnabled: true,
+        verify: makeVerify(publicKey),
+      }),
+    );
     expect(s.status).toBe("licensed");
-    expect(s.updateWindowCurrent).toBe(true);
-    expect(s.licenseId).toBeDefined();
+    expect(s.status === "licensed" && s.updateWindowCurrent).toBe(true);
+    expect(s.status === "licensed" && s.licenseId).toBeDefined();
   });
 
   it("grandfathered license never expires the run-right or update window", () => {
@@ -154,14 +174,16 @@ describe("resolveLicenseState", () => {
     const { publicKey, privateKey } = tempKeyPair();
     const blob = signBlob(privateKey, meta({ type: "grandfathered", expiresAt: null }));
     fs.writeFileSync(licenseFilePath(dir), JSON.stringify({ version: 1, blob }));
-    const s = resolveLicenseState({
-      appDataDir: dir,
-      now: () => 9_999_999_999_999,
-      gateEnabled: true,
-      verify: makeVerify(publicKey),
-    });
+    const s = assertGateActive(
+      resolveLicenseState({
+        appDataDir: dir,
+        now: () => 9_999_999_999_999,
+        gateEnabled: true,
+        verify: makeVerify(publicKey),
+      }),
+    );
     expect(s.status).toBe("licensed");
-    expect(s.updateWindowCurrent).toBe(true);
+    expect(s.status === "licensed" && s.updateWindowCurrent).toBe(true);
   });
 
   it("licensed but past update window ⇒ still licensed, updateWindowCurrent false", () => {
@@ -170,14 +192,16 @@ describe("resolveLicenseState", () => {
     const t0 = 1_700_000_000_000;
     const blob = signBlob(privateKey, meta({ expiresAt: new Date(t0 - DAY).toISOString() }));
     fs.writeFileSync(licenseFilePath(dir), JSON.stringify({ version: 1, blob }));
-    const s = resolveLicenseState({
-      appDataDir: dir,
-      now: () => t0,
-      gateEnabled: true,
-      verify: makeVerify(publicKey),
-    });
+    const s = assertGateActive(
+      resolveLicenseState({
+        appDataDir: dir,
+        now: () => t0,
+        gateEnabled: true,
+        verify: makeVerify(publicKey),
+      }),
+    );
     expect(s.status).toBe("licensed");
-    expect(s.updateWindowCurrent).toBe(false);
+    expect(s.status === "licensed" && s.updateWindowCurrent).toBe(false);
   });
 
   it("tampered signature ⇒ not licensed (falls through to trial)", () => {
@@ -188,12 +212,14 @@ describe("resolveLicenseState", () => {
     signed.metadata.name = "Tampered";
     const tampered = Buffer.from(JSON.stringify(signed)).toString("base64");
     fs.writeFileSync(licenseFilePath(dir), JSON.stringify({ version: 1, blob: tampered }));
-    const s = resolveLicenseState({
-      appDataDir: dir,
-      now: () => 0,
-      gateEnabled: true,
-      verify: makeVerify(publicKey),
-    });
+    const s = assertGateActive(
+      resolveLicenseState({
+        appDataDir: dir,
+        now: () => 0,
+        gateEnabled: true,
+        verify: makeVerify(publicKey),
+      }),
+    );
     expect(s.status).not.toBe("licensed");
   });
 
@@ -202,12 +228,14 @@ describe("resolveLicenseState", () => {
     const { publicKey, privateKey } = tempKeyPair();
     const blob = signBlob(privateKey, meta({ version: "2.0" }));
     fs.writeFileSync(licenseFilePath(dir), JSON.stringify({ version: 1, blob }));
-    const s = resolveLicenseState({
-      appDataDir: dir,
-      now: () => 0,
-      gateEnabled: true,
-      verify: makeVerify(publicKey),
-    });
+    const s = assertGateActive(
+      resolveLicenseState({
+        appDataDir: dir,
+        now: () => 0,
+        gateEnabled: true,
+        verify: makeVerify(publicKey),
+      }),
+    );
     expect(s.status).not.toBe("licensed");
   });
 });
@@ -218,14 +246,18 @@ describe("resolveLicenseState — fail-closed on corrupt files", () => {
   it("corrupt license.json ⇒ not licensed (falls through to trial)", () => {
     const dir = tmp();
     fs.writeFileSync(licenseFilePath(dir), "{not valid json");
-    const s = resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true });
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true }),
+    );
     expect(s.status).toBe("trial");
   });
 
   it("corrupt trial.json ⇒ treated as a fresh day-0 trial (soft by design)", () => {
     const dir = tmp();
     fs.writeFileSync(trialFilePath(dir), "{not valid json");
-    const s = resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true });
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true }),
+    );
     expect(s.status).toBe("trial");
     expect(s.status === "trial" && s.trial.daysRemaining).toBe(TRIAL_DAYS);
   });
@@ -233,11 +265,13 @@ describe("resolveLicenseState — fail-closed on corrupt files", () => {
   it("non-date firstRunAt ⇒ restricted (NaN window resolves closed, never open)", () => {
     const dir = tmp();
     fs.writeFileSync(trialFilePath(dir), JSON.stringify({ version: 1, firstRunAt: "not-a-date" }));
-    const s = resolveLicenseState({
-      appDataDir: dir,
-      now: () => 1_700_000_000_000,
-      gateEnabled: true,
-    });
+    const s = assertGateActive(
+      resolveLicenseState({
+        appDataDir: dir,
+        now: () => 1_700_000_000_000,
+        gateEnabled: true,
+      }),
+    );
     // new Date("not-a-date").getTime() === NaN ⇒ expiresAt NaN ⇒ nowMs < NaN is
     // false ⇒ restricted. Pin it so a refactor can't silently flip it open.
     expect(s.status).toBe("restricted");
@@ -251,17 +285,21 @@ describe("resolveLicenseState — trial boundary", () => {
   it("exactly at expiry ⇒ restricted", () => {
     const dir = tmp();
     writeTrial(dir, t0);
-    const s = resolveLicenseState({ appDataDir: dir, now: () => t0 + TRIAL_MS, gateEnabled: true });
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => t0 + TRIAL_MS, gateEnabled: true }),
+    );
     expect(s.status).toBe("restricted");
   });
   it("one ms before expiry ⇒ trial with 1 day remaining", () => {
     const dir = tmp();
     writeTrial(dir, t0);
-    const s = resolveLicenseState({
-      appDataDir: dir,
-      now: () => t0 + TRIAL_MS - 1,
-      gateEnabled: true,
-    });
+    const s = assertGateActive(
+      resolveLicenseState({
+        appDataDir: dir,
+        now: () => t0 + TRIAL_MS - 1,
+        gateEnabled: true,
+      }),
+    );
     expect(s.status).toBe("trial");
     expect(s.status === "trial" && s.trial.daysRemaining).toBe(1);
   });
@@ -292,7 +330,7 @@ describe("activateLicense", () => {
     const dir = tmp();
     const { publicKey, privateKey } = tempKeyPair();
     const blob = signBlob(privateKey, meta({ name: "Paid User" }));
-    const state = await activateLicense(dir, blob, makeVerify(publicKey));
+    const state = assertGateActive(await activateLicense(dir, blob, makeVerify(publicKey)));
     expect(state.status).toBe("licensed");
     expect(state.status === "licensed" && state.license.name).toBe("Paid User");
     // license.json persisted with the exact blob (so the next resolve re-verifies).

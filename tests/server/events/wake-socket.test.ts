@@ -207,7 +207,9 @@ describe("the wake socket end to end", () => {
       type: "document:switched",
       timestamp: Date.now(),
       payload: { documentId: "d1" },
-    } as TandemEvent);
+      // The wake path never reads a payload — it gates on `type` alone — so this
+      // fixture is deliberately minimal rather than a full DocumentSwitchedPayload.
+    } as unknown as TandemEvent);
 
     await new Promise((r) => setTimeout(r, 50));
     expect(got).toBe(0);

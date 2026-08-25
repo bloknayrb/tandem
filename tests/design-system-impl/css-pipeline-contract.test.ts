@@ -147,7 +147,9 @@ beforeAll(async () => {
   // "reads Tandem's real Vite config" below.
   const config = await resolveConfig({ root: ROOT }, "build");
   expect(config.configFile, "resolveConfig must actually find vite.config.ts").toBeDefined();
-  targets = convertTargets(config.build.cssTarget);
+  const { cssTarget } = config.build;
+  if (cssTarget === false) throw new Error("cssTarget must be set for this contract to hold");
+  targets = convertTargets(cssTarget);
 });
 
 /** Minify one snippet exactly the way the real build's `minifyCSS` would. */
