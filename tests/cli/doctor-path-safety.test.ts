@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -628,6 +628,53 @@ describe("a refused profile is reported rather than silently skipped", () => {
       .filter((x) => ["user-mcp-config", "desktop-mcp-config", "tandem-plugin"].includes(x.check))
       .map((x) => x.message);
     expect(messages.join(" | ")).not.toMatch(/network or device path/);
+  });
+});
+
+/**
+ * `readJson` stays away from the credential configs.
+ *
+ * `readClaudeConfig` is the fenced reader, but the unfenced one is still in the
+ * same file, sixty lines up, and it carries a `reason` field a caller can
+ * print. For a lockfile that is right -- the errno and "not valid JSON" are the
+ * whole diagnosis. For ~/.claude.json it is a V8 `SyntaxError` embedding a
+ * snippet of a file holding bearer tokens, on its way to the Copy Diagnostics
+ * clipboard and `tandem_diagnostics` (which applies no redaction at all).
+ *
+ * Nothing in the type system stops the next author from pointing `readJson` at
+ * one, and no runtime test can catch a call that has not been written yet. So
+ * this reads the source -- the same technique as
+ * `tests/shared/unc-check-duplication.test.ts` -- and fails on the call rather
+ * than on its consequence.
+ */
+describe("the unfenced JSON reader is not pointed at a Claude config", () => {
+  const SOURCE = readFileSync(new URL("../../src/cli/doctor.ts", import.meta.url), "utf-8");
+
+  it("every readJson call site names a lockfile or package.json", () => {
+    const args = [...SOURCE.matchAll(/\breadJson\(([^)]*)\)/g)]
+      .map((m) => m[1].trim())
+      .filter((a) => !a.startsWith("path: string"));
+
+    // Positive control: a regex that matched nothing would satisfy the loop
+    // below perfectly -- the failure mode this whole file exists to refuse.
+    expect(args.length, "found no readJson call sites, so the scan is broken").toBeGreaterThan(0);
+
+    for (const arg of args) {
+      for (const needle of [
+        "claudeCodeConfigPath",
+        "claudeDesktopConfigTarget",
+        "claudeDesktopConfigPath",
+        SETTINGS_LEAF,
+        USER_CONFIG_LEAF,
+        DESKTOP_LEAF,
+      ]) {
+        expect(
+          arg,
+          `readJson(${arg}) reads a Claude config -- use readClaudeConfig, which ` +
+            `carries no reason field`,
+        ).not.toContain(needle);
+      }
+    }
   });
 });
 

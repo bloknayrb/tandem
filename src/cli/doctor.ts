@@ -581,6 +581,15 @@ type ClaudeConfigRead =
  * NEXT check that reads a Claude config safe by construction even if its author
  * forgets the input screen, which is exactly how `checkTandemPlugin` became
  * #1417's eighth site.
+ *
+ * **Not written as `screen-then-delegate-to-readJson`, though the bodies look
+ * alike.** `readJson` collapses an IO failure and a parse failure into one
+ * `unreadable`, and separating them is the point here: the caller printed "is
+ * malformed JSON" for `EACCES`, asserting as fact something it could not know
+ * and prescribing a rewrite that fails the same way. Delegating would put that
+ * distinction back behind `reason`, the field this type deliberately lacks.
+ * `tests/cli/doctor-path-safety.test.ts` fences `readJson` away from these
+ * files at the source level, so the two readers stay separate on purpose.
  */
 export function readClaudeConfig(path: string): ClaudeConfigRead {
   if (rejectUnsafeWindowsPrefix(path) !== null) return { kind: "unsafe-path" };
