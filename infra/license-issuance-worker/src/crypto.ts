@@ -31,7 +31,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /** Decode standard base64 to bytes. Throws on invalid input (callers catch). */
-export function base64ToBytes(b64: string): Uint8Array {
+export function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(b64);
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
@@ -94,7 +94,10 @@ export function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
 // HMAC-SHA256 via WebCrypto (works on Workers + Node 22).
 // ---------------------------------------------------------------------------
 
-async function hmacSha256(keyBytes: Uint8Array, msg: Uint8Array): Promise<Uint8Array> {
+async function hmacSha256(
+  keyBytes: Uint8Array<ArrayBuffer>,
+  msg: Uint8Array<ArrayBuffer>,
+): Promise<Uint8Array<ArrayBuffer>> {
   const key = await globalThis.crypto.subtle.importKey(
     "raw",
     keyBytes,
@@ -140,7 +143,7 @@ export async function verifyStandardWebhook(
   // Strip the `whsec_` prefix, then base64-DECODE the remainder to key bytes.
   // Feeding the raw string (or the whole `whsec_...`) as the key is the classic
   // integration bug — it computes a stable-but-wrong MAC that never matches.
-  let keyBytes: Uint8Array;
+  let keyBytes: Uint8Array<ArrayBuffer>;
   try {
     keyBytes = base64ToBytes(secret.startsWith("whsec_") ? secret.slice(6) : secret);
   } catch {
@@ -189,7 +192,7 @@ export async function importPkcs8Ed25519(pem: string): Promise<CryptoKey> {
 }
 
 /** A function that produces a raw 64-byte Ed25519 signature over `data`. */
-export type SignBytes = (data: Uint8Array) => Promise<Uint8Array>;
+export type SignBytes = (data: Uint8Array<ArrayBuffer>) => Promise<Uint8Array<ArrayBuffer>>;
 
 /** Production signer bound to an imported Ed25519 CryptoKey. */
 export function webCryptoSigner(key: CryptoKey): SignBytes {
