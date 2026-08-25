@@ -462,7 +462,19 @@ describe("no file under src/ escapes every CI-invoked config", () => {
       // src/, so the check below reduces to "is the string tsconfig.json in the
       // list", and the fallback MANUFACTURED that string. A re-review showed
       // `run: echo npx tsc --noEmit` scoring identically to the real step.
-      if (/(^|\s)(npx\s+)?tsc(\s+--?[\w-]+)*\s*$/.test(run.trim())) {
+      //
+      // Anchored at `^`, not `(^|\s)`: with the looser opening, a literal
+      // `run: echo npx tsc --noEmit` matched from the space before `npx` and
+      // scored as a real invocation. Only a trailing word made it fail, which
+      // is why the mutation that caught this used one.
+      //
+      // The flag repetition is `--?[A-Za-z][\w-]*`, and the letter is what
+      // makes it safe. `--?[\w-]+` lets a `-` be consumed by either the `--?`
+      // or the character class, so `-- -- --` has exponentially many parses:
+      // CodeQL flagged it as js/redos on this very file. The input is a
+      // tracked workflow rather than anything hostile, but an ambiguity this
+      // cheap to remove is not worth arguing about.
+      if (/^(npx\s+)?tsc(\s+--?[A-Za-z][\w-]*)*\s*$/.test(run.trim())) {
         found.add("tsconfig.json");
         parsedTscSteps++;
         continue;
