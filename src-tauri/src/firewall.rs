@@ -370,19 +370,40 @@ const NETSH_TIMEOUT_EXIT_CODE: i32 = -2;
 /// from both the `-1` that means the spawn failed for an unknown reason and
 /// the `-2` above.
 ///
-/// `PermissionDenied` is what an AppLocker / WDAC / SRP machine reports (OS
-/// errors 1260 and 740) when policy blocks execution of a binary. That is a
-/// property of the host, not of our anchoring: the path resolved correctly
-/// and a binary is sitting at it. `the_anchored_powershell_is_reachable_and_runs`
-/// already treats the equivalent condition as a pass, on the reasoning that
-/// panicking there would wedge a developer's pre-push hook over a policy the
-/// test has no business asserting -- but netsh had no way to say it, because
-/// this case shared the generic `-1` spawn-failure code with the genuinely
-/// broken ones.
+/// An AppLocker / WDAC / SRP machine refuses to start a binary with OS error
+/// 1260, and an elevation-required refusal with 740. That is a property of
+/// the host, not of our anchoring: the path resolved correctly and a binary
+/// is sitting at it. `the_anchored_powershell_is_reachable_and_runs` already
+/// treats the equivalent condition as a pass, on the reasoning that panicking
+/// there would wedge a developer's pre-push hook over a policy the test has
+/// no business asserting -- but netsh had no way to say it, because this case
+/// shared the generic `-1` spawn-failure code with the genuinely broken ones.
+///
+/// **Detected by raw OS code, not by `ErrorKind`.** Neither 1260 nor 740
+/// decodes to `ErrorKind::PermissionDenied` on this toolchain -- both come
+/// back `Uncategorized`, and only OS error 5 maps to `PermissionDenied`. A
+/// guard written over the kind alone would therefore miss the exact machines
+/// it names while silently looking correct. That is why
+/// [`SPAWN_REFUSED_OS_ERRORS`] exists and why `adapter_enumeration_reason`
+/// consults it before falling back to the kind; this path now does the same.
+/// `a_refusal_is_recognised_by_os_code_not_by_kind` pins the decode facts so
+/// the assumption cannot quietly come back.
 ///
 /// Negative for the same reason as [`NETSH_TIMEOUT_EXIT_CODE`]: it keeps this
 /// case clear of both exit-code-1 heuristics.
 const NETSH_SPAWN_DENIED_EXIT_CODE: i32 = -3;
+
+/// Whether the OS refused to *start* the binary, as opposed to failing for a
+/// reason that implicates our anchoring.
+///
+/// Same shape and same constant as `adapter_enumeration_reason`: raw OS code
+/// first, `ErrorKind` only as a fallback. See [`NETSH_SPAWN_DENIED_EXIT_CODE`]
+/// for why the kind alone is not enough.
+fn is_spawn_refusal(e: &std::io::Error) -> bool {
+    e.raw_os_error()
+        .is_some_and(|code| SPAWN_REFUSED_OS_ERRORS.contains(&code))
+        || e.kind() == std::io::ErrorKind::PermissionDenied
+}
 
 /// The error a refused `netsh` spawn reports.
 fn netsh_spawn_denied_error(e: &std::io::Error) -> FirewallError {
@@ -1006,8 +1027,8 @@ pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
             log::warn!("[firewall] scan_orphan_rules: netsh.exe not found");
             return Err(FirewallError::NetshNotFound);
         }
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            log::warn!("[firewall] scan_orphan_rules: policy refused to start netsh: {e}");
+        Err(e) if is_spawn_refusal(&e) => {
+            log::warn!("[firewall] scan_orphan_rules: host refused to start netsh: {e}");
             return Err(netsh_spawn_denied_error(&e));
         }
         Err(e) => {
@@ -1100,9 +1121,9 @@ fn run_netsh(args: &[&str]) -> Result<(), FirewallError> {
             log::error!("[firewall] netsh.exe not found after {:.2}s", elapsed.as_secs_f64());
             return Err(FirewallError::NetshNotFound);
         }
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+        Err(e) if is_spawn_refusal(&e) => {
             log::error!(
-                "[firewall] policy refused to start netsh after {:.2}s: {e}",
+                "[firewall] host refused to start netsh after {:.2}s: {e}",
                 elapsed.as_secs_f64()
             );
             return Err(netsh_spawn_denied_error(&e));
@@ -1299,12 +1320,15 @@ mod tests {
     /// `netsh_spawn_denied_error` turns the first assertion red, and nothing
     /// else in this file notices -- which is exactly how the condition stayed
     /// invisible.
+    ///
+    /// This test goes through `is_spawn_refusal` deliberately rather than
+    /// constructing the error directly: the first version of this fix guarded
+    /// on `ErrorKind::PermissionDenied` alone, which does not match the
+    /// machines it named. See `a_refusal_is_recognised_by_os_code_not_by_kind`.
     #[test]
     fn a_policy_refused_spawn_is_not_a_broken_anchor() {
-        let denied = std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "program blocked by policy (os error 1260)",
-        );
+        let denied = std::io::Error::from_raw_os_error(1260);
+        assert!(is_spawn_refusal(&denied), "os error 1260 is a refusal");
         assert_eq!(
             classify_netsh_probe(&netsh_spawn_denied_error(&denied)),
             AnchorProbe::Environmental,
@@ -1326,6 +1350,45 @@ mod tests {
         distinct.sort_unstable();
         distinct.dedup();
         assert_eq!(distinct.len(), codes.len(), "spawn outcomes must not share a code");
+    }
+
+    /// The decode facts the refusal guard depends on, measured not assumed.
+    ///
+    /// The first version of this guard matched `ErrorKind::PermissionDenied`
+    /// and a comment claiming that is "what an AppLocker / WDAC / SRP machine
+    /// reports (OS errors 1260 and 740)". It is not. On rustc 1.94 both of
+    /// those decode to `Uncategorized`; only OS error 5 becomes
+    /// `PermissionDenied`. So the guard would have missed every machine it was
+    /// written for while reading as a correct fix -- and no test would have
+    /// noticed, because the two assertions above pass just as happily on an
+    /// error hand-built with the wrong kind.
+    ///
+    /// `ErrorKind` is `#[non_exhaustive]` and its mapping is a std
+    /// implementation detail that can change between toolchains. If a future
+    /// rustc starts decoding 1260 to `PermissionDenied`, the first assertion
+    /// here goes red -- which is the point: it forces someone to re-read the
+    /// guard rather than letting the comment drift back into being wrong.
+    #[test]
+    fn a_refusal_is_recognised_by_os_code_not_by_kind() {
+        for code in SPAWN_REFUSED_OS_ERRORS {
+            let e = std::io::Error::from_raw_os_error(code);
+            assert_ne!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "os error {code} decoding to PermissionDenied would make the kind \n                 fallback sufficient -- re-read is_spawn_refusal before relaxing it"
+            );
+            assert!(is_spawn_refusal(&e), "os error {code} must read as a refusal");
+        }
+        // The one code that does decode to the kind, so the fallback is not dead.
+        let access_denied = std::io::Error::from_raw_os_error(5);
+        assert_eq!(access_denied.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(is_spawn_refusal(&access_denied));
+        // A spawn failure that implicates the anchor must NOT read as a refusal.
+        assert!(!is_spawn_refusal(&std::io::Error::from_raw_os_error(87)));
+        assert!(!is_spawn_refusal(&std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "absent"
+        )));
     }
 
     /// The anchored `netsh` actually runs.
