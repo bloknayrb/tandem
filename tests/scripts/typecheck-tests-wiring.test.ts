@@ -296,6 +296,65 @@ describe("the test configs check as hard as they appear to", () => {
   });
 });
 
+describe("every source directory is checked by something CI runs", () => {
+  /**
+   * The unit's own instruction asks for this, and it is a different question
+   * from the one above: not "is `tests/` covered" but "can a file under `src/`
+   * sit in no program any CI step invokes".
+   *
+   * The config list is DERIVED from `ci.yml`, never hardcoded. A hardcoded list
+   * keeps passing after the step that ran one of them is deleted -- it would be
+   * asserting against a config nothing invokes, which is the failure this whole
+   * file exists to prevent.
+   */
+  function configsCiInvokes(): string[] {
+    const [, job] = typecheckJob();
+    const found = new Set<string>();
+    for (const step of job.steps ?? []) {
+      const run = typeof step.run === "string" ? step.run : "";
+      if (!/(^|\s)(npx\s+)?tsc(\s|$)/.test(run) && !run.includes("typecheck:tests")) continue;
+      // `npm run typecheck:tests` fans out to the three test configs.
+      if (run.includes("typecheck:tests")) {
+        for (const c of TEST_CONFIGS) found.add(c);
+        continue;
+      }
+      const project = run.match(/-p\s+(\S+)/);
+      // A bare `tsc --noEmit` with no -p resolves the root config.
+      found.add(project ? project[1] : "tsconfig.json");
+    }
+    return [...found];
+  }
+
+  it("derives its config list from ci.yml rather than trusting one", () => {
+    const configs = configsCiInvokes();
+    // Positive control: if the regex above stops matching, this describe would
+    // otherwise pass vacuously against an empty set.
+    expect(configs.length, "no tsc invocation found in the CI job").toBeGreaterThan(2);
+    expect(configs).toContain("tsconfig.json");
+    for (const c of TEST_CONFIGS) expect(configs).toContain(c);
+  });
+
+  it("leaves no file under src/ unchecked", () => {
+    const owned = new Set(configsCiInvokes().flatMap((c) => resolvedFiles(c)));
+    const all = ts.sys
+      .readDirectory(
+        path.join(ROOT, "src"),
+        [".ts", ".mts", ".cts", ".tsx"],
+        ["node_modules"],
+        undefined,
+      )
+      .map((f) => path.relative(ROOT, f).replace(/\\/g, "/"));
+
+    const unchecked = all.filter((f) => !owned.has(f));
+    expect(
+      unchecked,
+      "these source files are in no config any CI step invokes. `src/cli` was " +
+        "the historical instance -- reachable only through the root `tsc` inside " +
+        "`npm run build`, ten minutes into the job and behind unrelated failures.",
+    ).toEqual([]);
+  });
+});
+
 describe("docs match the wiring", () => {
   // Both predecessor guards end with a block like this, and the first version of
   // this file had none. That mattered more here than usual: `typecheck:tests`
