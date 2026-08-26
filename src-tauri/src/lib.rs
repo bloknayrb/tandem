@@ -589,7 +589,6 @@ fn autostart_seen_and_mark(dir: &std::path::Path) -> bool {
     false
 }
 
-
 /// Tauri command — the pending-update banner's "Check for updates" CTA.
 ///
 /// `async fn`, mirroring `install_update`: Tauri runs async commands on the

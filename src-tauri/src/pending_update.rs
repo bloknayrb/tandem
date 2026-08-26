@@ -1,6 +1,4 @@
-//! Pending-update boot marker.
-//!
-//! Pending-update boot marker (#1118, the ADR-043 deferred follow-up)
+//! Pending-update boot marker (#1118, the ADR-043 deferred follow-up).
 //!
 //! `AppHandle::restart()` is divergent, and on Windows the updater plugin does
 //! not even reach it: `install_inner` ends in an unconditional
@@ -18,9 +16,15 @@
 //! ungated helpers that take `&Path` / `&str` is what makes `cargo test` on any
 //! one host actually mean something.
 //!
-//! **Extracted from `lib.rs` (Unit 11a).** Only the two items `lib.rs` still
-//! calls are `pub`; everything else stays private to this module, and the
-//! test module is a descendant so it keeps its access to
+//! **Extracted from `lib.rs` (Unit 11a).** The four items `lib.rs` still calls
+//! are `pub(crate)` -- `evaluate_pending_update_marker`,
+//! `get_pending_update_hint`, `record_pending_update` and
+//! `clear_pending_update`. That is what the move requires and no wider:
+//! `mod pending_update;` is declared bare rather than `pub`, so nothing here
+//! is reachable from `src-tauri/tests/*.rs` either way -- matching
+//! `autostart.rs`, and unlike `keychain.rs`, which needs `pub mod` for its
+//! own external integration test. Everything else stays private to this
+//! module, and the test module is a descendant so it keeps its access to
 //! `PendingUpdateMarker`'s private fields without widening anything.
 //!
 //! `check_for_update_now` deliberately did NOT move. Its body is a single call
@@ -32,7 +36,6 @@
 use std::sync::Mutex;
 
 use tauri::{Emitter, Manager};
-
 
 /// Marker file recording an in-flight update, written beside the `autostart-seen`
 /// marker at the app-data root.
@@ -242,14 +245,14 @@ fn surface_pending_update_hint(app: &tauri::AppHandle, code: &'static str) {
 /// Client-drained accessor. TAKES, so a WebView reload cannot replay a banner
 /// the user already saw.
 #[tauri::command]
-pub fn get_pending_update_hint() -> Option<String> {
+pub(crate) fn get_pending_update_hint() -> Option<String> {
     with_pending_hint("take", |slot| slot.take())
 }
 
 /// Record that an update install is in flight. Returns `()` — there is nothing
 /// for the caller to inspect, propagate or `?`, which is what makes
 /// "best-effort" a type-level property rather than a convention.
-pub fn record_pending_update(app: &tauri::AppHandle, target_version: &str) {
+pub(crate) fn record_pending_update(app: &tauri::AppHandle, target_version: &str) {
     // NB: no `strip_win_prefix()` here, and that is deliberate. That rule
     // governs paths handed to the Node sidecar, which cannot resolve `\\?\`.
     // `std::fs` handles the extended-length prefix correctly, so stripping it
@@ -272,7 +275,7 @@ pub fn record_pending_update(app: &tauri::AppHandle, target_version: &str) {
 /// The `Err` arm already shows the user a native error dialog, so a surviving
 /// marker would nag on the next boot about something they were told to their
 /// face.
-pub fn clear_pending_update(app: &tauri::AppHandle) {
+pub(crate) fn clear_pending_update(app: &tauri::AppHandle) {
     match app.path().app_data_dir() {
         Ok(dir) => {
             clear_pending_update_marker(&dir);
@@ -355,7 +358,7 @@ fn evaluate_pending_update_at(
 ///
 /// Everything decidable without Tauri lives in `evaluate_pending_update_at`;
 /// what is left here is dir resolution, logging and the emit.
-pub fn evaluate_pending_update_marker(app: &tauri::AppHandle) {
+pub(crate) fn evaluate_pending_update_marker(app: &tauri::AppHandle) {
     let dir = match app.path().app_data_dir() {
         Ok(d) => d,
         Err(e) => {
