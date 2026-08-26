@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -36,8 +36,73 @@ import { describe, expect, it } from "vitest";
  */
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
-const LIB_RS = join(REPO_ROOT, "src-tauri", "src", "lib.rs");
+const RUST_SRC = join(REPO_ROOT, "src-tauri", "src");
+const LIB_RS = join(RUST_SRC, "lib.rs");
 const CLIENT_MAP = join(REPO_ROOT, "src", "client", "utils", "startup-rejection.ts");
+
+/**
+ * Every Rust source file, **derived from disk rather than named here**.
+ *
+ * The wire-code half of this test used to read `lib.rs` alone. That was correct
+ * only while every `CODE_*` constant lived there, and it stopped being correct
+ * the moment one was extracted into a module (Unit 11a moved
+ * `CODE_UPDATE_MAY_NOT_HAVE_COMPLETED` into `pending_update.rs`). A hardcoded
+ * scope does not follow the code: the constant simply left the scan, and the
+ * parity check would have gone quiet about it.
+ *
+ * Re-pointing at a fixed pair of files would have reproduced the same bug one
+ * extraction later — `lib.rs` is mid-way through being split into six modules.
+ * Deriving the set is what makes this survive the rest of that split, and
+ * `scans every Rust source file` below is the positive control on the set
+ * itself, because a walk that silently returns nothing satisfies every
+ * assertion built on it.
+ */
+function rustSources(): Array<{ rel: string; text: string }> {
+  return readdirSync(RUST_SRC, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith(".rs"))
+    .map((e) => {
+      const abs = join(e.parentPath, e.name);
+      return {
+        rel: abs.slice(REPO_ROOT.length + 1).replace(/\\/g, "/"),
+        text: readFileSync(abs, "utf8"),
+      };
+    });
+}
+
+/**
+ * Drop `#[cfg(test)] mod ... { ... }` blocks.
+ *
+ * **A test satisfied this file's production-routing claim.** The exclusion
+ * check asks whether `CODE_UPDATE_MAY_NOT_HAVE_COMPLETED` is genuinely passed
+ * to the pending-update surface -- and `pending_update_tests` calls
+ * `surface_pending_update_hint_with(CODE_UPDATE_MAY_NOT_HAVE_COMPLETED, ...)`,
+ * which matched. Rewriting the real call site to pass a literal instead left
+ * this file green; found by mutation, not by reading. The hole predates the
+ * Unit 11a extraction -- the test module was previously in `lib.rs` and equally
+ * in scope -- but the widened scan is what made it worth closing here.
+ *
+ * Brace-counted rather than regex-bounded, and "strips test modules without
+ * eating production code" is the control on it: a stripper that removed too
+ * much would make every assertion below pass by finding nothing.
+ */
+function stripRustTestModules(src: string): string {
+  let out = "";
+  let i = 0;
+  for (;;) {
+    const at = src.indexOf("#[cfg(test)]", i);
+    if (at === -1) return out + src.slice(i);
+    const open = src.indexOf("{", at);
+    if (open === -1) return out + src.slice(i);
+    let depth = 0;
+    let j = open;
+    for (; j < src.length; j++) {
+      if (src[j] === "{") depth++;
+      else if (src[j] === "}" && --depth === 0) break;
+    }
+    out += src.slice(i, at);
+    i = j + 1;
+  }
+}
 
 /** Drop `//` and `/* *\/` comments, so prose about a call is not read as the call. */
 function stripRustComments(src: string): string {
@@ -82,8 +147,43 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     ).toBe(true);
   });
 
+  it("scans every Rust source file, not a list written here", () => {
+    // The control on the scan itself. `rustSources()` feeding the parity check
+    // means an empty or truncated walk satisfies it silently: zero declared
+    // codes is zero unhandled codes. This is what makes the walk falsifiable.
+    const rel = rustSources().map((f) => f.rel);
+    expect(rel.length, "the Rust source walk found almost nothing").toBeGreaterThan(10);
+    expect(rel).toContain("src-tauri/src/lib.rs");
+    expect(
+      rel,
+      "the module holding the excluded wire code must be in scope, or its " +
+        "exclusion is asserted against text the scan never read",
+    ).toContain("src-tauri/src/pending_update.rs");
+  });
+
+  it("strips test modules without eating production code", () => {
+    // The control on the stripper. It runs before every scan below, so one that
+    // removed too much would make each of them pass by finding nothing, and one
+    // that removed nothing would reinstate the hole it exists to close.
+    const pu = readFileSync(join(RUST_SRC, "pending_update.rs"), "utf8");
+    const stripped = stripRustTestModules(stripRustComments(pu));
+    expect(stripped, "the production declaration must survive stripping").toContain(
+      "const CODE_UPDATE_MAY_NOT_HAVE_COMPLETED",
+    );
+    expect(
+      stripped,
+      "the test module's own call must not survive, or a test can satisfy a claim " +
+        "about production routing",
+    ).not.toContain("surface_pending_update_hint_with(CODE_UPDATE_MAY_NOT_HAVE_COMPLETED");
+    expect(pu, "the fixture this control relies on has moved").toContain(
+      "surface_pending_update_hint_with(CODE_UPDATE_MAY_NOT_HAVE_COMPLETED",
+    );
+  });
+
   it("gives every Rust wire code an explicit case in the client's message map", () => {
-    const declared = [...lib.matchAll(/const (CODE_[A-Z_]+): &str = "([a-z-]+)";/g)].map((m) => ({
+    const sources = rustSources();
+    const rust = sources.map((f) => stripRustTestModules(stripRustComments(f.text))).join("\n");
+    const declared = [...rust.matchAll(/const (CODE_[A-Z_]+): &str = "([a-z-]+)";/g)].map((m) => ({
       name: m[1],
       value: m[2],
     }));
@@ -95,7 +195,7 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     const ROUTED_ELSEWHERE = ["CODE_UPDATE_MAY_NOT_HAVE_COMPLETED"];
     for (const name of ROUTED_ELSEWHERE) {
       expect(
-        new RegExp(`surface_pending_update_hint\\w*\\([^)]*${name}`).test(lib),
+        new RegExp(`surface_pending_update_hint\\w*\\([^)]*${name}`).test(rust),
         `${name} is excluded from the message-map parity check, so it must be ` +
           "demonstrably routed to the pending-update surface instead. It is not.",
       ).toBe(true);
@@ -110,6 +210,19 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     // let a genuinely unrouted code through unnoticed.
     expect(declared.map((d) => d.value)).toContain("update-may-not-have-completed");
     expect(codes).not.toContain("update-may-not-have-completed");
+    // ...and it must be earned in a file the scan actually reached. Without
+    // this, re-pointing the scan back at `lib.rs` alone after some future move
+    // leaves the exclusion asserting nothing about a constant that is no longer
+    // there — the exact hollowing this widening exists to prevent.
+    const routedIn = sources.filter(({ text }) =>
+      /const CODE_UPDATE_MAY_NOT_HAVE_COMPLETED: &str/.test(
+        stripRustTestModules(stripRustComments(text)),
+      ),
+    );
+    expect(
+      routedIn.map((f) => f.rel),
+      "the excluded wire code must be declared in exactly one scanned Rust file",
+    ).toHaveLength(1);
 
     const client = stripTsComments(readFileSync(CLIENT_MAP, "utf8"));
     for (const code of codes) {
