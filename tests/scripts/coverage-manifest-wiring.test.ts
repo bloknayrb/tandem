@@ -139,13 +139,23 @@ describe("the coverage baseline measures what it claims", () => {
     //
     // That is this unit's own failure class one level of granularity down, so
     // the derivation is what gets pinned, not the resulting list.
-    expect(manifestScript, "the area list must be derived from the src/ walk").toMatch(
-      /onDisk\.map\(\(f\) => f\.match\(\/\^src\\\/\(\[\^\/\]\+\)/,
+    expect(manifestScript, "the area list must be derived from the src/ walk").toContain(
+      "const areaIds = [...new Set(onDisk.map(areaOf).filter(Boolean))]",
     );
     expect(
       manifestScript,
       "an enumerated area list only guards the directories someone remembered",
     ).not.toContain("const REQUIRED_AREAS");
+  });
+
+  it("accounts for every file under src/, including loose ones", () => {
+    // The area check keys on the first path segment under `src/`, so a file
+    // sitting directly in `src/` belongs to no area and is guarded by nothing.
+    // Deriving the area list closed the enumerated-list hole; this closes the
+    // one the derivation itself opens. Nothing is loose there today, which is
+    // exactly when it is cheap to refuse.
+    expect(manifestScript).toContain("belong to no area");
+    expect(manifestScript).toMatch(/const unassigned = onDisk\.filter\(\(f\) => !areaOf\(f\)\)/);
   });
 
   it("makes a known-untested exemption expire on its own", () => {

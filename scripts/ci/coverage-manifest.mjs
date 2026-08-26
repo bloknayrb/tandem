@@ -262,9 +262,22 @@ if (emptyFamilies.length > 0) {
 // so an area that vanishes from the report entirely is still listed here at
 // zero files -- absent and uncovered are different, and the artifact should be
 // able to say which.
-const areaIds = [
-  ...new Set(onDisk.map((f) => f.match(/^src\/([^/]+)\//)?.[1]).filter(Boolean)),
-].sort();
+const areaOf = (f) => f.match(/^src\/([^/]+)\//)?.[1];
+const areaIds = [...new Set(onDisk.map(areaOf).filter(Boolean))].sort();
+
+// A file sitting directly in `src/` belongs to no area, so the derivation that
+// just closed the enumerated-list hole would step straight over it. Nothing is
+// loose there today; this refuses rather than letting the first one be the
+// exception that proves nobody was watching.
+const unassigned = onDisk.filter((f) => !areaOf(f));
+if (unassigned.length > 0) {
+  fail(
+    `files sit directly in src/ and belong to no area: ${unassigned.join(", ")}`,
+    "The area check is keyed on the first path segment under src/, so a loose " +
+      "file is guarded by nothing. Move it into an area directory, or teach this " +
+      "script how to account for it.",
+  );
+}
 
 const areas = areaIds.map((id) => {
   const prefix = `src/${id}/`;
