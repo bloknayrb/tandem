@@ -52,6 +52,7 @@ test-results/
 !.claude/skills/e2e-debug/
 !.claude/skills/release/
 !.claude/skills/screenshots/
+!.claude/skills/ui-inspector/
 
 # Developer-local Claude project memory (per its own header: "Gitignored.
 # Local-only context"). Was accidentally committed in 76949f8; untracked in
@@ -109,3 +110,14 @@ __pycache__/
 # tracked copy would be a number that drifts from the code it describes with
 # nothing to notice, which is the same trap as the testid manifest.
 coverage/
+
+# UI element inspector store (`cargo tauri dev --features ui-inspector`).
+# Holds one directory per `@ui_<ULID>` reference: reference.json plus a full
+# native window screenshot and an element crop. TREAT AS SENSITIVE -- the
+# picker captures whatever document was open, and no redaction setting can
+# scrub pixels. The plugin pins the store to the repo root, so this normally
+# matches here -- but no leading slash on purpose: the plugin's own default is
+# CWD-relative, and anyone who drops the explicit `storage_dir` in src/lib.rs
+# would silently start writing screenshots to `src-tauri/.ui-inspector/`. An
+# anchored rule would leave those untracked-but-committable.
+.ui-inspector/
