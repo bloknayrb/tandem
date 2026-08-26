@@ -535,7 +535,9 @@ export async function applyTrackedChanges(
 
   for (const s of sorted) {
     // textSnapshot check — has the text under this range changed since the
-    // suggestion was accepted? The capped-snapshot-is-a-prefix rule (#1486)
+    // suggestion was WRITTEN? (`captureSnapshot` runs at annotation creation,
+    // and everything here is already accepted, so the snapshot always predates
+    // acceptance.) The capped-snapshot-is-a-prefix rule (#1486)
     // lives in the predicate, which the editor's accept path shares (#1629);
     // it also absorbs the "no snapshot ⇒ nothing to contradict" case that used
     // to be an outer guard here.

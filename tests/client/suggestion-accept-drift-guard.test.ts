@@ -156,6 +156,77 @@ describe("#1629: accept verifies the target text before mutating", () => {
     });
   });
 
+  describe("shapes where the client and server projections disagree (#1631)", () => {
+    // These are POSITIVE controls on documents nobody edited. The guard's first
+    // implementation compared `textBetween(from, to, "\n", "\n")` against a
+    // server-captured snapshot; each shape below made every suggestion touching
+    // it permanently unacceptable, with a toast blaming the user for an edit
+    // that never happened.
+    //
+    // The general form of this is `flat-projection-equivalence.test.ts`. These
+    // stay because they pin the guard's BEHAVIOUR — a projection can be right
+    // and still be wired into the guard wrongly.
+
+    it("accepts across a heading prefix the flat text contains and PM does not", () => {
+      // `validateRange` checks heading prefixes only at the two ENDPOINTS
+      // (`positions.ts`), so a range legally runs from one block through the
+      // next block's "## " — which `tandem_suggest` will happily create.
+      const editor = new Editor({
+        extensions: buildSchemaExtensions(),
+        content: "<p>alpha beta</p><h2>Title Here</h2>",
+      });
+      const ydoc = new Y.Doc();
+      const ann = suggestion(6, 19, "replaced", { textSnapshot: "beta\n## Title" });
+
+      expect(applySuggestion(ann, editor, ydoc)).toBe(true);
+      editor.destroy();
+      ydoc.destroy();
+    });
+
+    it("accepts a heading whose hard break is a SPACE in flat text", () => {
+      // `flattenHeadingText` is a 1:1 substitution, so the offsets match and
+      // only the character differs — invisible to every length-based check.
+      const editor = new Editor({
+        extensions: buildSchemaExtensions(),
+        content: "<h2>one<br>two</h2>",
+      });
+      const ydoc = new Y.Doc();
+      const ann = suggestion(3, 10, "merged", { textSnapshot: "one two" });
+
+      expect(applySuggestion(ann, editor, ydoc)).toBe(true);
+      editor.destroy();
+      ydoc.destroy();
+    });
+
+    it("accepts across a block leaf, which contributes no flat characters", () => {
+      const editor = new Editor({
+        extensions: buildSchemaExtensions(),
+        content: "<p>alpha</p><hr><p>beta</p>",
+      });
+      const ydoc = new Y.Doc();
+      const ann = suggestion(0, 11, "replaced", { textSnapshot: "alpha\n\nbeta" });
+
+      expect(applySuggestion(ann, editor, ydoc)).toBe(true);
+      editor.destroy();
+      ydoc.destroy();
+    });
+
+    it("still DECLINES a real drift on one of those shapes", () => {
+      // Without this the three cases above could pass because the guard stopped
+      // checking anything on multi-block ranges.
+      const editor = new Editor({
+        extensions: buildSchemaExtensions(),
+        content: "<p>alpha beta</p><h2>Different</h2>",
+      });
+      const ydoc = new Y.Doc();
+      const ann = suggestion(6, 19, "replaced", { textSnapshot: "beta\n## Title" });
+
+      expect(applySuggestion(ann, editor, ydoc)).toBe(false);
+      editor.destroy();
+      ydoc.destroy();
+    });
+  });
+
   it("compares in the server's projection, so a hard break is not read as drift", () => {
     // `textSnapshot` spells a hard break "\n" (the `extractText` convention).
     // A guard built on a bare `textBetween(from, to)` — no separators — reads
