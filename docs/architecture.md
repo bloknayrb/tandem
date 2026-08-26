@@ -154,8 +154,8 @@ User types in the editor
 Claude calls tandem_open("report.md")
     → docIdFromPath("report.md") → "report-a1b2c3"
     → Y.Doc created for Hocuspocus room "report-a1b2c3"
-    → activeDocId = "report-a1b2c3"
-    → broadcastOpenDocs() writes doc list to Y.Map('documentMeta')
+    → registry.openDocument(...) tracks it, makes it active, and publishes
+      the doc list to Y.Map('documentMeta') in ONE broadcast (ADR-033)
     → Browser receives list, creates tab + provider for room "report-a1b2c3"
 
 Claude calls tandem_open("invoice.docx")
@@ -176,7 +176,8 @@ User clicks "+" in DocumentTabs or drops a file on the editor
     → FileOpenDialog sends POST /api/open { filePath } or POST /api/upload { fileName, content }
     → Express route calls openFileByPath() or openFileFromContent() in file-opener.ts
     → Same logic as tandem_open: format detection, session restore, adapter load
-    → addDoc() registers in openDocs, broadcastOpenDocs() writes to Y.Map
+    → registry.openDocumentWhenReady(...) tracks + activates, wires the doc
+      meta / baseline / annotation store, THEN publishes to Y.Map
     → Browser's useYjsSync observes Y.Map change, creates new tab
     → For uploads: synthetic upload:// path, readOnly=true, no disk save
 ```
@@ -890,12 +891,12 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `notifications.ts` -- Toast notification system: ring buffer of `NotificationPayload` objects, `pushNotification()` + `subscribe()`/`unsubscribe()` for SSE consumers
 - `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API; `openScratchpad()` for ephemeral in-memory docs via `source:"upload"`), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`, `broadcastStoreReadOnly()`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`, `snapshotToolCount()` for diagnostic tool census, `findRepoFile()` for locating bundled docs), `transport-registry.ts` (live MCP sessions keyed by `Mcp-Session-Id` — one `McpServer` per session, LRU cap + idle reaper; ADR-045), `../sessions/context.ts` (`AsyncLocalStorage` carrying the calling Claude session id into tool handlers), `api-routes.ts` (REST API: `GET /api/info`, `/api/open`, `/api/upload`, `/api/close`, `POST /api/scratchpad`, `GET /api/notify-stream`), `routes/info.ts` (`makeInfoHandler()` factory for `GET /api/info` — loopback-gated fields, token mtime, `changelogPath`, `workflowsPath`), `routes/diagnostics.ts` (`makeDiagnosticsHandler()` factory for `GET /api/diagnostics` — embedded `runDoctor()` report for the About tab's Copy Diagnostics button; loopback-only, cwd-dependent checks filtered, single-flight), `routes/scratchpad.ts` (handler for `POST /api/scratchpad`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer + subscriber-gated payload tracking), `sse.ts` (SSE endpoint handler), `push-liveness.ts` (consumer heartbeat counters — diagnostics only, never Claude's presence), `observers/` (per-map event derivation), `file-sync-registry.ts` (durable-annotation file-watcher binding), `wake-socket.ts` (the self-armed `ws://…/api/wake` transport — ADR-049), `delivery-state.ts` (per-item surfaced/pushed bookkeeping)
-- `yjs/` -- Y.Doc management, the authoritative document state
+- `yjs/` -- Y.Doc management, the authoritative document state. `lifecycle.ts` is the named `HocuspocusLifecycle` seam (ADR-033) — a leaf module, so `provider.ts` can depend on it with no cycle — assembled and installed by `bootstrap/hocuspocus-lifecycle.ts` before every bind.
 - `mode.ts` -- Solo/Tandem authority (CTRL_ROOM `Y_MAP_MODE`), read by `shouldForwardExternally`
 - `chat-stream-staleness.ts` -- Abandoned-`chatStream`-entry tripwire (#1340): the ledger + warn-once sweep shared by `mcp/awareness.ts` (seeds) and `session/manager.ts`'s `foldChatStream` (checks). A leaf module with no project imports — `session/manager.ts` cannot import `mcp/awareness.ts` without a cycle
 - `startup-file.ts` -- `maybeOpenStartupFile()`; consumes `TANDEM_OPEN_FILE` before HTTP bind
 - `bind-check.ts` -- Bind-host policy: `TANDEM_BIND_HOST`, `TANDEM_LAN_IP`, wildcard handling, the token-provisioned refusal
-- `documents/` -- Per-document state helpers
+- `documents/` -- Per-document state helpers. `registry.ts` owns `openDocs`, `activeDocId`, the activation epoch and `broadcastOpenDocs` (ADR-033); its whole mutating surface is `openDocument` / `openDocumentWhenReady` / `activateDocument` / `updateDocument` / `closeDocument`, each ending in exactly one `documentMeta` broadcast, with the primitives private. `registry-testing.ts` is the test-only seam onto those primitives and is banned from `src/`.
 - `integrations/` -- `IntegrationConfig` schema, atomic storage, keychain, `apply.ts` (writes the MCP entries), HTTP routes, the Claude CLI installer
 - `launcher/` -- Auto-launcher and `supervisor.ts` (writes wake turns on the child's stdin)
 - `license/`, `local-model/` -- both ship dark; see CLAUDE.md

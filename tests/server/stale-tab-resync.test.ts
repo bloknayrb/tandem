@@ -10,6 +10,7 @@ import {
   getDocument,
   getOrCreateDocument,
   installHocuspocusLifecycle,
+  resetHocuspocusLifecycleForTesting,
   startHocuspocus,
 } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM } from "../../src/shared/constants.js";
@@ -231,6 +232,40 @@ describe("stale-tab generation gate", () => {
     clients.push(client);
     await waitForEvent(client, "authenticationFailed");
     expect(client.isAuthenticated).toBe(false);
+  });
+
+  it("rejects everything when the lifecycle was never installed (ADR-033)", async () => {
+    // What binding before installing actually costs. The generation gate reads
+    // its expected token through the installed lifecycle, so with none there is
+    // no token to match and every client is refused — including one presenting
+    // the correct one, and logged with the same line as a legitimate stale-tab
+    // rejection, which is what makes it hard to diagnose from the logs alone.
+    //
+    // The source-order check in `lifecycle-precedes-bind.test.ts` is what keeps
+    // this from happening; this is the consequence it is protecting against,
+    // over a real socket rather than as a claim.
+    resetHocuspocusLifecycleForTesting();
+    try {
+      const refused = makeClient(port, "room-uninstalled", currentGen);
+      clients.push(refused);
+      await waitForEvent(refused, "authenticationFailed");
+      expect(refused.isAuthenticated).toBe(false);
+    } finally {
+      installHocuspocusLifecycle({
+        shouldKeepDocument: () => false,
+        onDocSwapped: () => {},
+        onDocUnloaded: () => {},
+        expectedGenerationToken: () => currentGen,
+      });
+    }
+
+    // Control: the SAME token on the SAME server admits once the lifecycle is
+    // back, so the rejection above was the missing lifecycle and not a stale
+    // token, a bad origin, or a dead port.
+    const admitted = makeClient(port, "room-uninstalled-retry", currentGen);
+    clients.push(admitted);
+    await waitForEvent(admitted, "synced");
+    expect(admitted.isAuthenticated).toBe(true);
   });
 
   it("admits a re-created client after the generation rotates (the rebuild path)", async () => {
