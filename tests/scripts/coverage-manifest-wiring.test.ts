@@ -132,13 +132,35 @@ describe("the coverage baseline measures what it claims", () => {
     // reduction in what the coverage run verifies, so the artifact has to name
     // the sites -- and this asserts the named set IS the actual set, so a fourth
     // call site cannot appear and go unmentioned.
+    // Two files match this grep without being suspended sites, and both are
+    // excluded by DERIVING their paths rather than writing them as literals --
+    // a literal is itself a match, which is the trap this went through twice.
+    //
+    //   - `tests/helpers/timing.ts` declares the helper. Its definition line is
+    //     a call-shaped match; it is the module referenced, never a site.
+    //   - THIS file, whose grep argument and failure message both contain the
+    //     name. Narrowing the pattern to the call form `expectWithinMs(` did not
+    //     help: that string then appears here too, one level deeper.
+    //
+    // Worth recording why the original defect survived every run of this test
+    // and all eight mutation proofs. `git grep` searches TRACKED files, and this
+    // file was untracked until the commit that introduced it -- so it passed by
+    // being invisible to its own search. A green result is only evidence if a
+    // broken version would have looked different, and before `git add` no
+    // version of this could have looked different. Any self-scanning check has
+    // that blind spot for exactly as long as it is new.
+    const SELF = path.relative(ROOT, fileURLToPath(import.meta.url)).replace(/\\/g, "/");
+    const HELPER = path
+      .relative(ROOT, fileURLToPath(new URL("../helpers/timing.ts", import.meta.url)))
+      .replace(/\\/g, "/");
+
     const found = execFileSync("git", ["grep", "-l", "expectWithinMs", "--", "tests/"], {
       cwd: ROOT,
       encoding: "utf-8",
     })
       .split("\n")
       .filter(Boolean)
-      .filter((f) => f !== "tests/helpers/timing.ts")
+      .filter((f) => f !== HELPER && f !== SELF)
       .sort();
 
     const declared = [
