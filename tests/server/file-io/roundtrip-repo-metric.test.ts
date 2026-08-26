@@ -22,6 +22,7 @@ import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { loadMarkdown, mdParser, saveMarkdown } from "../../../src/server/file-io/markdown.js";
+import { timeoutMs } from "../../helpers/timing.js";
 
 /**
  * Kinds of render-affecting change we already know about, each tied to a defect
@@ -189,41 +190,47 @@ function classify(before: unknown, after: unknown): string {
 // Hoisted out of the per-test budget: this walks the whole repo once. Doing it
 // inside each `it` blew the 15s timeout on a comparable docs-scanning suite
 // and surfaced as an unrelated-looking assertion failure (#1434).
-beforeAll(() => {
-  const files = execFileSync("git", ["ls-files", "--", "*.md"], { encoding: "utf-8" })
-    .split("\n")
-    .filter(Boolean);
+beforeAll(
+  () => {
+    const files = execFileSync("git", ["ls-files", "--", "*.md"], { encoding: "utf-8" })
+      .split("\n")
+      .filter(Boolean);
 
-  for (const file of files) {
-    let source: string;
-    try {
-      source = readFileSync(file, "utf-8");
-    } catch {
-      continue; // listed but absent (submodule, sparse checkout)
+    for (const file of files) {
+      let source: string;
+      try {
+        source = readFileSync(file, "utf-8");
+      } catch {
+        continue; // listed but absent (submodule, sparse checkout)
+      }
+      scanned++;
+
+      const doc = new Y.Doc();
+      let output: string;
+      try {
+        loadMarkdown(doc, source);
+        output = saveMarkdown(doc);
+      } catch {
+        renderDifferent.push({ file, kind: "threw" });
+        continue;
+      } finally {
+        doc.destroy();
+      }
+
+      if (output === source || output === `${source}\n` || `${output}\n` === source) continue;
+      byteDifferent.push(file);
+
+      const before = strip(mdParser.parse(source));
+      const after = strip(mdParser.parse(output));
+      if (JSON.stringify(before) === JSON.stringify(after)) continue;
+      renderDifferent.push({ file, kind: classify(before, after) });
     }
-    scanned++;
-
-    const doc = new Y.Doc();
-    let output: string;
-    try {
-      loadMarkdown(doc, source);
-      output = saveMarkdown(doc);
-    } catch {
-      renderDifferent.push({ file, kind: "threw" });
-      continue;
-    } finally {
-      doc.destroy();
-    }
-
-    if (output === source || output === `${source}\n` || `${output}\n` === source) continue;
-    byteDifferent.push(file);
-
-    const before = strip(mdParser.parse(source));
-    const after = strip(mdParser.parse(output));
-    if (JSON.stringify(before) === JSON.stringify(after)) continue;
-    renderDifferent.push({ file, kind: classify(before, after) });
-  }
-}, 120_000);
+    // 120s normally. Under coverage this hook is measured at 175s -- it parses and
+    // re-renders every tracked `.md` in the repo -- and `--hookTimeout` does not
+    // raise an explicit ceiling like this one. Its duration is not asserted.
+  },
+  timeoutMs(120_000, 600_000),
+);
 
 describe("repo-wide round-trip metric", () => {
   it("scans a corpus worth scanning", () => {
