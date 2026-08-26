@@ -4,7 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { KNOWN_UNTESTED_AREAS } from "../../scripts/ci/coverage-manifest.mjs";
+import {
+  KNOWN_UNTESTED_AREAS,
+  MAX_EXEMPT_STATEMENTS,
+} from "../../scripts/ci/coverage-manifest.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -163,6 +166,28 @@ describe("the coverage baseline measures what it claims", () => {
     }
   });
 
+  it("keeps the exemption ceiling small enough to mean something", () => {
+    // Pinned to its LITERAL value, deliberately. Every behavioural test around
+    // this constant reads it dynamically (`MAX_EXEMPT_STATEMENTS + 1`), which
+    // is right for testing the boundary and useless for bounding it: raising
+    // the constant to 10_000 keeps all of them green, and the hatch it exists
+    // to narrow quietly opens. Widening it should be a decision someone makes
+    // here, not a number someone edits.
+    expect(MAX_EXEMPT_STATEMENTS).toBe(25);
+  });
+
+  it("keeps vitest isolation on, which the timing warning depends on", () => {
+    // `expectWithinMs`'s "suspended" warning fires once per module instance,
+    // and that is once per FILE only because Vitest's default `isolate: true`
+    // gives each test file a fresh module registry. Turn isolation off as a
+    // perf tuning and the three suspended sites share one module: the first
+    // prints, the other two suspend their bounds in silence -- which is the
+    // condition the warning exists to make visible.
+    expect(vitestConfig, "isolation disabled -- see tests/helpers/timing.ts").not.toMatch(
+      /isolate:\s*false/,
+    );
+  });
+
   it("sets TANDEM_COVERAGE in exactly one place", () => {
     // `expectWithinMs` disables three wall-clock assertions when this is set,
     // and nothing about that suspension is visible in ordinary test output. So
@@ -260,6 +285,7 @@ describe("the coverage baseline measures what it claims", () => {
             uses?: string;
             with?: Record<string, unknown>;
             if?: string;
+            "continue-on-error"?: boolean;
           }[];
           "continue-on-error"?: boolean;
         }
@@ -277,7 +303,15 @@ describe("the coverage baseline measures what it claims", () => {
     // measure. Those are different questions and #1229 is what conflating them
     // costs.
     expect(run?.run).not.toContain("|| true");
-    expect(run?.run).not.toContain("continue-on-error");
+
+    // `continue-on-error` is a YAML attribute on the step and on the job -- a
+    // SIBLING of `run:`, never text inside the shell command. Asserting
+    // `run.run` does not contain the string, as this did, is close to
+    // unconditionally true: nobody writes those words in a bash line, so the
+    // check passed whether or not the attribute was actually set. Both places
+    // it can appear are now read as the parsed fields they are.
+    expect(run?.["continue-on-error"], "the measurement step swallows its own failure").toBeFalsy();
+    expect(job["continue-on-error"], "the coverage job swallows its own failure").toBeFalsy();
 
     const upload = steps.find((s) => s.uses?.startsWith("actions/upload-artifact"));
     expect(upload, "the coverage job produces no artifact").toBeDefined();

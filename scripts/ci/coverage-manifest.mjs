@@ -356,6 +356,11 @@ export function buildManifest({
     );
   }
 
+  // Files V8 could instrument, as opposed to everything under `src/`. An area
+  // holding nothing but `.css` is legitimately absent from the report; one
+  // holding `.ts` is not.
+  const measurable = onDisk.filter((f) => MEASURED_FAMILIES.some((fam) => fam.matches(f)));
+
   const areas = areaIds.map((id) => {
     const prefix = `src/${id}/`;
     const files = [...byRepoPath.keys()].filter((f) => f.startsWith(prefix));
@@ -365,12 +370,59 @@ export function buildManifest({
       id,
       prefix,
       ranBy: AREA_PROJECTS[id],
+      measurableFilesOnDisk: measurable.filter((f) => f.startsWith(prefix)).length,
       filesInReport: files.length,
       coveredStatements: sum((s) => s.covered),
       totalStatements: sum((s) => s.total),
       ...(known ? { knownUntested: true, reason: known.reason } : {}),
     };
   });
+
+  // ABSENT is not the same as zero, and the dark check below cannot see it: it
+  // requires `filesInReport > 0`, so an area with no keys in the report at all
+  // reports 0/0 and passes.
+  //
+  // Review found this by reproducing it: delete every node-project area's
+  // entries from the summary and the old code returned ok:true. That is the
+  // whole `node` project failing to run, published as a successful baseline --
+  // the exact failure class this file's docstring claims to eliminate, hiding
+  // inside the fix for it. The family check does not cover it either, because
+  // the other areas' `.ts` files keep the `ts` family above zero; there was no
+  // per-area analogue.
+  //
+  // A KNOWN_UNTESTED exemption deliberately does NOT excuse absence. An
+  // exemption is a claim about coverage LEVEL -- "nothing tests this" -- not a
+  // claim that the file should be missing from a report. `src/stdio-bridge/` is
+  // exempt and is still present, at 0/3.
+  const absent = areas.filter((a) => a.measurableFilesOnDisk > 0 && a.filesInReport === 0);
+  if (absent.length > 0) {
+    return refuse(
+      `source areas have instrumentable files on disk but NOTHING in the report: ` +
+        absent.map((a) => `${a.prefix} (${a.measurableFilesOnDisk} files, ${a.ranBy})`).join(", "),
+      "Absent from the report and measured-at-zero are different failures and " +
+        "look identical in a percentage. This is what a project that did not run " +
+        "at all looks like -- not one that ran and covered nothing.",
+    );
+  }
+
+  // An exemption that stops being true is worse than no exemption: it holds the
+  // door open for the exact failure the check exists to catch. So the list has
+  // to shrink on its own when the area gets tested.
+  //
+  // Checked BEFORE the size ceiling below, because an area can trip both and
+  // only one of the two messages is useful then. "Too large to be plausibly
+  // untested" is actively misleading about an area that turns out to BE tested;
+  // "remove it, it has coverage" is the thing to do either way.
+  const staleExemptions = areas.filter((a) => a.knownUntested && a.coveredStatements > 0);
+  if (staleExemptions.length > 0) {
+    return refuse(
+      `KNOWN_UNTESTED_AREAS lists an area that now HAS coverage: ` +
+        staleExemptions.map((a) => `${a.prefix} (${a.coveredStatements} covered)`).join(", "),
+      "Good news, and it has to be removed from that list -- while it sits there, " +
+        "the area is exempt from the zero-coverage check and could go dark again " +
+        "without failing anything.",
+    );
+  }
 
   // An exemption is only honoured for a small area. A large one reporting zero
   // is far more likely a run that failed to reach it than something nobody ever
@@ -400,20 +452,6 @@ export function buildManifest({
         "suite (`npm run test:coverage`). If an area genuinely has no tests at all, " +
         "add it to KNOWN_UNTESTED_AREAS in this script with a reason -- and only if " +
         "it is untested, never to silence a run that failed to reach it.",
-    );
-  }
-
-  // An exemption that stops being true is worse than no exemption: it holds the
-  // door open for the exact failure the check exists to catch. So the list has
-  // to shrink on its own when the area gets tested.
-  const staleExemptions = areas.filter((a) => a.knownUntested && a.coveredStatements > 0);
-  if (staleExemptions.length > 0) {
-    return refuse(
-      `KNOWN_UNTESTED_AREAS lists an area that now HAS coverage: ` +
-        staleExemptions.map((a) => `${a.prefix} (${a.coveredStatements} covered)`).join(", "),
-      "Good news, and it has to be removed from that list -- while it sits there, " +
-        "the area is exempt from the zero-coverage check and could go dark again " +
-        "without failing anything.",
     );
   }
 
@@ -494,6 +532,7 @@ function main() {
       "Run `npm run test:coverage` first. If that command exited 0 and still " +
         "produced no summary, the `json-summary` reporter is not configured.",
     );
+    return;
   }
 
   // Read and parse are separate on purpose. Folded together, an EACCES or an
@@ -504,6 +543,7 @@ function main() {
     raw = readFileSync(SUMMARY, "utf-8");
   } catch (err) {
     die(`coverage summary could not be read: ${toRepoPath(SUMMARY)}`, String(err));
+    return;
   }
 
   let summary;
@@ -511,6 +551,7 @@ function main() {
     summary = JSON.parse(raw);
   } catch (err) {
     die("coverage summary is not valid JSON", String(err));
+    return;
   }
 
   const result = buildManifest({

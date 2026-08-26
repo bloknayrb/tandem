@@ -237,6 +237,47 @@ describe("coverage baseline: refusals", () => {
     expect(r.message).toContain("monitor");
   });
 
+  it("refuses an area whose files are ABSENT from the report, not merely at zero", () => {
+    // The gap review reproduced. The dark check requires `filesInReport > 0`,
+    // so an area with no keys in the report reports 0/0 and passes -- absence
+    // and zero look identical in a percentage and are opposite failures.
+    const input = validInput();
+    const summary = clone(input.summary) as Record<string, unknown>;
+    delete summary[key("src/monitor/index.ts")];
+    const r = refused(buildManifest({ ...input, summary }));
+    expect(r.message).toContain("NOTHING in the report");
+    expect(r.message).toContain("src/monitor/");
+  });
+
+  it("refuses when a whole vitest project's areas are missing from the report", () => {
+    // The scenario that makes the above critical rather than tidy: if the node
+    // project fails to run entirely, every area it covers vanishes from the
+    // summary at once. The family check does not catch it -- client's files
+    // keep the `ts` family above zero -- so before this, a baseline measuring
+    // only one of two projects published successfully.
+    const input = validInput();
+    const summary = clone(input.summary) as Record<string, unknown>;
+    for (const area of ["server", "cli", "channel", "monitor", "shared", "stdio-bridge"]) {
+      delete summary[key(`src/${area}/index.ts`)];
+    }
+    const r = refused(buildManifest({ ...input, summary }));
+    expect(r.message).toContain("NOTHING in the report");
+    expect(r.message).toContain("src/server/");
+  });
+
+  it("does not let a known-untested exemption excuse absence", () => {
+    // An exemption is a claim about coverage LEVEL -- "nothing tests this" --
+    // never a licence for the file to be missing from a report. src/stdio-bridge/
+    // is exempt and is still present at 0/3. Without this, the one area allowed
+    // to read zero would also be the one area allowed to vanish.
+    const input = validInput();
+    const summary = clone(input.summary) as Record<string, unknown>;
+    delete summary[key("src/stdio-bridge/index.ts")];
+    const r = refused(buildManifest({ ...input, summary }));
+    expect(r.message).toContain("NOTHING in the report");
+    expect(r.message).toContain("src/stdio-bridge/");
+  });
+
   it("refuses an area with zero covered statements", () => {
     // THE anti-partial-run check, and the one that had no automated anchor
     // until this file existed. Deleting the block left the suite green.
@@ -280,6 +321,20 @@ describe("coverage baseline: refusals", () => {
     summary[key("src/stdio-bridge/index.ts")].statements = counts(MAX_EXEMPT_STATEMENTS + 1, 0);
     const r = refused(buildManifest({ ...input, summary }));
     expect(r.message).toContain("too large to be plausibly untested");
+  });
+
+  it("reports the useful message when an exemption is both stale and oversized", () => {
+    // An area can trip both checks at once, and only one of the two messages
+    // helps then. "Too large to be plausibly untested" is actively misleading
+    // about an area that turns out to BE tested. Pinning the order, because it
+    // is the kind of thing a later reader reshuffles without noticing that one
+    // arrangement gives the wrong advice.
+    const input = validInput();
+    const summary = clone(input.summary) as Record<string, { statements: Counts }>;
+    summary[key("src/stdio-bridge/index.ts")].statements = counts(MAX_EXEMPT_STATEMENTS + 10, 5);
+    const r = refused(buildManifest({ ...input, summary }));
+    expect(r.message).toContain("now HAS coverage");
+    expect(r.message).not.toContain("too large");
   });
 
   it("still honours an exemption at exactly the ceiling", () => {
