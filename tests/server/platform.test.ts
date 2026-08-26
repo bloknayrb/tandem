@@ -10,6 +10,7 @@ import {
   SESSION_DIR,
   waitForPort,
 } from "../../src/server/platform";
+import { expectWithinMs } from "../helpers/timing.js";
 
 describe("platform", () => {
   describe("SESSION_DIR", () => {
@@ -184,7 +185,7 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
       const port = await findFreePort();
       const start = Date.now();
       await waitForPort(port);
-      expect(Date.now() - start).toBeLessThan(500);
+      expectWithinMs(Date.now() - start, 500, "waitForPort does not poll when the port is free");
     });
 
     it("resolves when occupied port is released mid-poll", async () => {

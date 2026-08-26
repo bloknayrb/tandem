@@ -102,3 +102,10 @@ __pycache__/
 # Either mistake looks identical from the outside: `git status` stays clean
 # and the file appears tracked when it is not.
 .codex/*
+
+# Vitest coverage output. `npm run test:coverage` writes the V8 report, the
+# json-summary the manifest script reads, and an HTML browser here. The
+# baseline that MATTERS is published as a CI artifact, never committed -- a
+# tracked copy would be a number that drifts from the code it describes with
+# nothing to notice, which is the same trap as the testid manifest.
+coverage/

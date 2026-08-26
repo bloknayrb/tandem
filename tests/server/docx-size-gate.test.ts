@@ -11,6 +11,7 @@ import {
   MAX_DOCX_TOTAL_BYTES,
 } from "../../src/server/file-io/docx-size-gate.js";
 import { rawDocx } from "../helpers/docx-corpus.js";
+import { expectWithinMs } from "../helpers/timing.js";
 
 /**
  * #1310 — the decompressed-size ceiling.
@@ -148,7 +149,7 @@ describe("docx size gate", () => {
     await expect(
       assertDocxWithinSizeLimits(buf, { maxPartBytes: 1024 * 1024, maxTotalBytes: 1024 * 1024 }),
     ).rejects.toBeInstanceOf(DocxTooLargeError);
-    expect(Date.now() - started).toBeLessThan(5_000);
+    expectWithinMs(Date.now() - started, 5_000, "destroy() actually stops JSZip inflating");
   });
 
   it("stays silent on corrupt or non-ZIP input, leaving the real parser to report it", async () => {

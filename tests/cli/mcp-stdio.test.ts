@@ -16,6 +16,7 @@ import {
   parseTimeoutMs,
   readAndValidateAuthToken,
 } from "../../src/cli/mcp-stdio.js";
+import { expectWithinMs } from "../helpers/timing.js";
 
 async function readOneLine(
   child: ChildProcessWithoutNullStreams,
@@ -2215,6 +2216,6 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     const started = Date.now();
     c.stdin.end();
     await new Promise<void>((r) => c.once("exit", () => r()));
-    expect(Date.now() - started).toBeLessThan(3_000);
+    expectWithinMs(Date.now() - started, 3_000, "the bridge exits promptly on stdin end");
   }, 120_000);
 });

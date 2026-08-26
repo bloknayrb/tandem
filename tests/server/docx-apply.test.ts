@@ -955,18 +955,39 @@ describe("applyChangesCore — write guards", () => {
     expect(await onDisk()).toEqual(before);
   });
 
-  it("allows an unsaved-restore conflict over an UNCHANGED disk", async () => {
-    // Mirrors saveDocumentToDisk exactly: `diskChanged` is the discriminator,
-    // not the flag's presence. A blanket block here would refuse every apply
-    // after an ordinary restart-with-unsaved-edits.
-    getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_EXTERNAL_CONFLICT, {
-      kind: "unsaved-restore",
-      diskChanged: false,
-      detectedAt: Date.now(),
-    });
+  // The two tests in this block that expect applyChangesCore to RESOLVE get
+  // explicit headroom over the project's 15s default. They are the only ones
+  // here that perform a real .docx apply -- measured in isolation at 1977ms and
+  // 463ms, against 20-24ms for the refusals, which return before doing any
+  // work. Under the full suite's worker parallelism a 7.6x slowdown crosses the
+  // ceiling, and it did: three of four full-suite runs on one branch failed
+  // here, twice on the same test, including the fastest run of the four with
+  // nothing else on the machine. CI is green throughout, so this is wall-clock
+  // headroom, not a defect.
+  //
+  // Safe because duration is NOT the property under test -- these assert
+  // `applied: 1`. Where duration IS the assertion, raising the ceiling turns a
+  // real gate into a slower real gate that catches nothing; see
+  // `tests/helpers/timing.ts`. Proved honoured rather than ignored: set to 1ms,
+  // both tests fail with "timed out in 1ms".
+  const REAL_APPLY_TIMEOUT_MS = 60_000;
 
-    await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
-  });
+  it(
+    "allows an unsaved-restore conflict over an UNCHANGED disk",
+    async () => {
+      // Mirrors saveDocumentToDisk exactly: `diskChanged` is the discriminator,
+      // not the flag's presence. A blanket block here would refuse every apply
+      // after an ordinary restart-with-unsaved-edits.
+      getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_EXTERNAL_CONFLICT, {
+        kind: "unsaved-restore",
+        diskChanged: false,
+        detectedAt: Date.now(),
+      });
+
+      await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
 
   it("refuses when the file was modified outside Tandem since our last write", async () => {
     const before = await onDisk();
@@ -979,13 +1000,19 @@ describe("applyChangesCore — write guards", () => {
     expect(await onDisk()).toEqual(before);
   });
 
-  it("does not refuse on mtime drift within the tolerance", async () => {
-    // Positive control for the guard above: without this, a guard that always
-    // threw would satisfy the FILE_MODIFIED test.
-    getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_SAVED_AT_VERSION, Date.now());
+  it(
+    "does not refuse on mtime drift within the tolerance",
+    async () => {
+      // Positive control for the guard above: without this, a guard that always
+      // threw would satisfy the FILE_MODIFIED test.
+      getOrCreateDocument(DOC_ID)
+        .getMap(Y_MAP_DOCUMENT_META)
+        .set(Y_MAP_SAVED_AT_VERSION, Date.now());
 
-    await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
-  });
+      await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
 
   it("leaves savedAtVersion STALE so a save before the reload is refused", async () => {
     // The inverse of every other write path, and deliberate. What lands on disk is
