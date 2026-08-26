@@ -1,13 +1,13 @@
 ---
 name: ui-inspector
-description: Resolve a durable @ui_ reference from the Tandem desktop element picker into source, metadata and screenshots. Use when a request names @ui_…, ui_…, "the element I picked", "this button/panel", or an inspector screenshot.
+description: Resolve a durable @ui_ reference from the Tandem desktop element picker into its source location, DOM/ARIA metadata and locators. Use when a request names @ui_…, ui_…, "the element I picked", or "this button/panel".
 ---
 
 # UI inspector references
 
 Bryan picked an element in the running Tandem desktop app and it was recorded as
 `@ui_<ULID>` — DOM + ARIA metadata, ranked locators, the `.svelte` source
-location, a full native window screenshot and an element crop.
+location. (Screenshots are disabled in Tandem — see "Pixels are OFF" below.)
 
 **Use the recorded reference. Never infer the element from the description when
 an `@ui_` id is available.** The whole point of the reference is that it removes
@@ -31,7 +31,8 @@ Three failure modes look identical from the CLI (a timeout, or exit 3):
 |---|---|
 | exit 3, no `.ui-inspector/run/instance.json` | app not running, or built without `--features ui-inspector` |
 | bridge installed, every capture rejected | cargo feature off — the ACL has no `ui-inspector:default` grant. The WebView console says so |
-| `pick` hangs to timeout | wrong `--window`, or another pick/resolve is already active |
+| `pick` hangs to timeout | wrong `--window`, or another pick/resolve is already active. Also seen on the very first `pick` after `npm install`: Vite re-optimizes the two `@tauri-ui-inspector/*` deps on first import and force-reloads the page, which tears down the bridge that had just installed. Retry once |
+| `no native window matched the Tauri process and window title` | someone re-enabled `capture_screenshots`. See "Pixels are OFF" below |
 
 The store is pinned to the **repo root** (`<repo>/.ui-inspector/`), so the CLI
 works from anywhere in the tree — it walks *up* looking for a directory that
@@ -48,30 +49,32 @@ ui-inspector get @ui_01... --json
 Never scrape the human-readable format.
 
 Read these fields first: `summary`, `element.role`, `element.accessibleName`,
-`source.location`, `source.component`, `element.locators`, `screenshots.element`,
-`screenshots.window`, `dom.ancestry`.
+`source.location`, `source.component`, `element.locators`, `dom.ancestry`.
+`screenshots` is always empty here.
 
 Exit 2 means the reference is absent — **stop and ask** for the right project or
 id. Do not substitute a similar reference.
 
-## Inspect the pixels
+## Pixels are OFF — do not offer them
 
-```sh
-ui-inspector screenshot @ui_01... --json
-```
+**Tandem sets `capture_screenshots(false)`, so there are no `element.png` /
+`window.png` files and `ui-inspector screenshot` has nothing to return.** This is
+not a setting anyone should flip casually: native capture is broken on Windows
+(`xcap::Window::all()` omits the calling process's own windows, so the plugin's
+pid filter never matches), and with capture ON a failure aborts the *entire*
+capture — no reference is written at all. Off is what makes the tool work.
 
-Read `element.png` before editing. Read `window.png` when the request is about
-spacing, alignment, layering or consistency with neighbouring controls — Tandem's
-rail/panel invariants are usually a *relationship* between elements, not a
-property of one.
+So when a request is about spacing, alignment, layering, or how an element
+relates to its neighbours, **say plainly that you cannot see it** and work from
+`dom.ancestry`, the computed metadata, and the source file. Do not guess at
+appearance from a component name, and do not describe pixels you have not seen.
+If seeing it genuinely matters, ask Bryan for a screenshot.
 
-If the screenshot fields are null, work from the structured metadata and say
-plainly that pixels were unavailable.
-
-**Never publish or upload the screenshots or the reference JSON.** They are
-pictures of whatever document Bryan had open. `redactText` is on for the JSON
-record; nothing can redact pixels. `.ui-inspector/` is gitignored — keep it that
-way, and never attach one of these images to an issue or PR.
+**Never publish or upload the reference JSON.** Even with `redactText` on and
+screenshots off, the record still carries a compact HTML fragment, parent
+context and accessible names taken from whatever document Bryan had open.
+`.ui-inspector/` is gitignored — keep it that way, and never paste a
+`reference.json` into an issue or PR.
 
 ## Locate the source
 

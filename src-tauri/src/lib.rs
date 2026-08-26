@@ -1667,15 +1667,45 @@ pub fn run() {
     // machine are the same machine. If that ever stops being true, this
     // baked-in path is the first thing that breaks.
     //
-    // Treat the store as sensitive: it holds screenshots of whatever document
-    // was open. Gitignored; never attach one to an issue or PR.
+    // Treat the store as sensitive: it holds whatever document was open.
+    // Gitignored; never attach a reference to an issue or PR.
+    //
+    // `capture_screenshots(false)` is NOT a preference — native capture is
+    // broken on Windows and leaving it on makes the whole plugin unusable
+    // here, because a failed capture fails the ENTIRE capture: no reference is
+    // written at all, and every `ui-inspector pick` returns
+    // "no native window matched the Tauri process and window title".
+    //
+    // Root cause, measured on this machine (#1633) against the same live pid,
+    // the same moment, and the same xcap 0.9.8:
+    //
+    //   called from OUTSIDE tandem-desktop -> 15 windows, both Tandem windows present
+    //   called from INSIDE  tandem-desktop -> 13 windows, ZERO matching self pid
+    //
+    // `xcap::Window::all()` omits the calling process's own windows on
+    // Windows. The plugin's `find_window` filters that list by
+    // `std::process::id()` and returns `WindowNotFound` when the result is
+    // empty, so the pid filter can never match from in-process. Nothing at the
+    // integration layer can fix it — it needs an upstream capture path that
+    // works on the app's own HWND. Upstream's E2E evidence is macOS-only, which
+    // is consistent with this never having been exercised on Windows.
+    //
+    // Everything else works with it off, verified end to end: DOM/ARIA
+    // metadata, ranked locators (`data-testid` first at confidence 1.0), the
+    // Svelte source location and component ancestry, persistence, and live
+    // `ui-inspector resolve`. That is the bulk of the value for an agent; the
+    // pixels are the part we lose.
+    //
+    // Flip this back to the upstream default (screenshots on) once the capture
+    // path is fixed, and delete this comment with it.
     #[cfg(feature = "ui-inspector")]
     {
         let mut inspector = tauri_plugin_ui_inspector::Builder::new();
         inspector
             .storage_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.ui-inspector"))
             .max_history(100)
-            .crop_padding(8);
+            .crop_padding(8)
+            .capture_screenshots(false);
         builder = builder.plugin(inspector.build());
     }
 

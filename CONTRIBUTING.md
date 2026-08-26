@@ -99,7 +99,16 @@ Three things about it that are easy to get wrong:
   npm global install serves the same client into a plain browser). A `cargo tauri dev` *without*
   the feature still installs the frontend bridge, so every capture is then rejected by the ACL and
   the CLI reports only a timeout — the WebView console names the flag.
-- **The reference store is sensitive.** `.ui-inspector/` at the repo root holds screenshots of
+- **Screenshots are off, and that is what makes it work.** `capture_screenshots(false)` is set in
+  `src/lib.rs`. Native capture is broken on Windows: measured against the same live pid at the same
+  moment with the same xcap 0.9.8, `xcap::Window::all()` returns Tandem's windows when called from
+  *outside* the process and returns **zero** windows matching the pid when called from *inside* it.
+  The plugin's `find_window` filters that list by `std::process::id()`, so the match set is always
+  empty and every capture fails with `no native window matched the Tauri process and window title`
+  — and a failed capture aborts the whole capture, writing no reference at all. Everything else
+  (metadata, locators, Svelte source, persistence, live `resolve`) works with it off. Tracked in
+  #1633; upstream's E2E evidence is macOS-only.
+- **The reference store is sensitive.** `.ui-inspector/` at the repo root holds a record of
   whatever document was open. It is gitignored; never attach one to an issue or PR. The path is
   pinned to the repo root via `CARGO_MANIFEST_DIR` rather than left at the plugin's CWD-relative
   default — the CLI finds a store by walking *up* from where you invoke it, and the app's CWD under
