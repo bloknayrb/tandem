@@ -115,6 +115,58 @@ jobs:
         run: node scripts/ci/windows-acl-proof.mjs
         timeout-minutes: 10
 
+  # Publishes the coverage BASELINE as an artifact. Separate from `check` on
+  # purpose: instrumentation roughly doubles the suite's wall clock (measured
+  # locally: `tests` 765s uninstrumented against 982s), and `check` is already
+  # this repo's longest job.
+  #
+  # NOT a threshold gate. Unit 3 of the maintainability programme publishes a
+  # baseline; per-module floors are Unit 13's, seeded from these numbers with at
+  # most a one-point rounding allowance. Nothing here fails for coverage being
+  # low.
+  #
+  # It DOES fail when the measurement did not happen, and there is no `|| true`
+  # anywhere for that reason. "No repository-wide threshold" is a statement
+  # about the coverage level; it is not a licence for the job to report success
+  # when it could not evaluate, which is the #1229 failure mode this repo has
+  # now produced three times. `scripts/ci/coverage-manifest.mjs` refuses to
+  # write an artifact when zero statements were measured, when a family the
+  # config claims to measure has no files in the report, or when a source area
+  # sits at uniformly zero covered statements (what a single-project run looks
+  # like from the outside).
+  #
+  # The artifact uploads with `if: always()` because the manifest is most worth
+  # reading on the run where something went wrong.
+  #
+  # tests/scripts/coverage-manifest-wiring.test.ts parses this job and fails --
+  # inside `check` -- if any of the above changes or the job is removed.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Coverage baseline
+        run: npm run test:coverage
+        timeout-minutes: 30
+
+      - name: Upload coverage baseline
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: coverage-baseline
+          path: |
+            coverage/baseline-manifest.json
+            coverage/coverage-summary.json
+            coverage/index.html
+            coverage/**/*.html
+
   check:
     runs-on: ubuntu-latest
     steps:
