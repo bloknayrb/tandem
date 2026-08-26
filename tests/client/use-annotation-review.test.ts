@@ -7,6 +7,7 @@ import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions
 import { useAnnotationReview } from "../../src/client/panels/useAnnotationReview.svelte.js";
 import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { isReviewTarget } from "../../src/shared/types.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
@@ -164,7 +165,7 @@ describe("useAnnotationReview — onApplyFailed (B2)", () => {
       type: "comment",
       status: "pending",
       suggestedText: "replacement text",
-      range: { from: 0, to: 11 },
+      range: { from: toFlatOffset(0), to: toFlatOffset(11) },
       // The document says something else entirely at those offsets.
       textSnapshot: "hello world",
     });
