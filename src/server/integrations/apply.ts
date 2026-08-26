@@ -883,6 +883,19 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+/**
+ * **Callers of this helper race each other across processes, and that is an
+ * ACCEPTED risk, not an oversight.** The read-modify-write cycles around it
+ * take no cross-process lock, so a concurrent `tandem setup --apply`,
+ * `tandem rotate-token` or boot sweep can silently revert another's change.
+ * Accepted by Bryan on 2026-08-24, tracked as #1599, with the full bound (it
+ * differs between the rotation and uninstall cases) and the conditions that
+ * void the acceptance in `docs/security.md` under "Accepted (bounded)".
+ *
+ * Adding another caller widens that accepted scope, and
+ * `tests/docs/config-writer-set-claims.test.ts` will fail until you say so
+ * deliberately. Do not add a lock here without reopening the decision first.
+ */
 async function atomicWrite(
   content: string,
   dest: string,
