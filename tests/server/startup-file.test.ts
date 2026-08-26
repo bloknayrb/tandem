@@ -1,9 +1,13 @@
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { removeDoc } from "../../src/server/documents/registry-testing.js";
-import { getActiveDocId, getOpenDocs } from "../../src/server/mcp/document-service.js";
+import {
+  getActiveDocEpoch,
+  getActiveDocId,
+  getOpenDocs,
+} from "../../src/server/mcp/document-service.js";
 import { maybeOpenStartupFile } from "../../src/server/startup-file.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import {
@@ -11,18 +15,6 @@ import {
   Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_DOCUMENT_META,
 } from "../../src/shared/constants.js";
-
-// Spy on activateDocument so a single test can simulate a programming-bug
-// throw and verify the narrowed catch lets it propagate. vi.hoisted is
-// required: vi.mock factories are hoisted above all top-level statements,
-// so the spy must be declared in a hoisted block too. Defaults to the
-// real implementation; tests that don't override it see normal behavior.
-const { activateDocumentSpy } = vi.hoisted(() => ({ activateDocumentSpy: vi.fn() }));
-vi.mock("../../src/server/mcp/document-service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/server/mcp/document-service.js")>();
-  activateDocumentSpy.mockImplementation(actual.activateDocument);
-  return { ...actual, activateDocument: activateDocumentSpy };
-});
 
 let tmpDir: string | null = null;
 
@@ -73,11 +65,12 @@ describe("maybeOpenStartupFile", () => {
     expect(openDoc.filePath).toBe(filePath);
     expect(getActiveDocId()).toBe(openDoc.id);
 
-    // …and PUBLISHES it. Before ADR-033 this activated with a bare
-    // `setActiveDocId`: openFileByPath had already broadcast, but with the
-    // previous active id, so module state and published state disagreed until
-    // some unrelated broadcast happened to fire. Asserting module state alone
-    // could not see that — it was the half that was already right.
+    // …and PUBLISHES it. `maybeOpenStartupFile` does not activate at all now
+    // (ADR-033) — `openFileByPath` already did, in the same broadcast that
+    // registered the doc. So this is the assertion that would catch the open
+    // path quietly dropping its activation: module state alone cannot, because
+    // `getActiveDocId()` above reads the half that was already right before
+    // any of this and would agree either way.
     const published = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_DOCUMENT_META);
     expect(published.get(Y_MAP_ACTIVE_DOCUMENT_ID)).toBe(openDoc.id);
   });
@@ -106,37 +99,25 @@ describe("maybeOpenStartupFile", () => {
     expect(getOpenDocs().size).toBe(1);
   });
 
-  it("propagates activateDocument failures (narrowed-catch contract)", async () => {
-    // The catch in maybeOpenStartupFile wraps openFileByPath ONLY. A throw
-    // from activateDocument — which would indicate a programming bug, not an
-    // expected I/O error — must surface to the caller.
+  it("advances the activation epoch exactly once for one startup gesture", async () => {
+    // `maybeOpenStartupFile` used to re-activate the document `openFileByPath`
+    // had just activated. Harmless-looking, and it was there before ADR-033 —
+    // but the client reads an epoch advance as an intentional focus event, so
+    // one startup gesture publishing two is the exact double-advance the
+    // registry's composite surface exists to make unrepresentable.
     //
-    // This used to arm on the SECOND call, because openFileByPath activated
-    // the newly-opened doc through the same exported function. Since ADR-033
-    // it activates through the registry's private primitive inside
-    // `openDocumentWhenReady`, so the only call this spy ever sees is the one
-    // in maybeOpenStartupFile — asserted below rather than assumed, because a
-    // stale `>= 2` guard would simply never fire and the test would pass by
-    // never throwing at all.
+    // Pinned as a delta rather than an absolute, because the epoch is
+    // module-global and every earlier test in this file has already moved it.
     const dir = await makeTmpDir();
-    const filePath = path.join(dir, "valid.md");
-    await fs.writeFile(filePath, "# valid\n");
+    const filePath = path.join(dir, "one-gesture.md");
+    await fs.writeFile(filePath, "# one gesture\n");
 
-    let callCount = 0;
-    const realImpl = activateDocumentSpy.getMockImplementation();
-    activateDocumentSpy.mockImplementation((_id: string | null) => {
-      callCount += 1;
-      throw new Error("simulated activateDocument bug");
-    });
+    const before = getActiveDocEpoch();
+    const ok = await maybeOpenStartupFile(filePath);
 
-    try {
-      await expect(maybeOpenStartupFile(filePath)).rejects.toThrow(
-        "simulated activateDocument bug",
-      );
-    } finally {
-      // Restore the default-passthrough impl so afterEach cleanup works.
-      if (realImpl) activateDocumentSpy.mockImplementation(realImpl);
-    }
-    expect(callCount, "maybeOpenStartupFile activates exactly once").toBe(1);
+    // Control: an open that failed would advance nothing and pass the delta
+    // check below by doing nothing at all.
+    expect(ok, "control: the open actually succeeded").toBe(true);
+    expect(getActiveDocEpoch() - before, "one gesture, one focus event").toBe(1);
   });
 });

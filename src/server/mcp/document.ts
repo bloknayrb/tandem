@@ -127,7 +127,7 @@ export {
   saveCurrentSession,
   saveDocumentToDisk,
   toDocListEntry,
-  updateDocument,
+  updateDocumentWhenReady,
   writeGenerationId,
 } from "./document-service.js";
 export type { OpenFileResult } from "./file-opener.js";

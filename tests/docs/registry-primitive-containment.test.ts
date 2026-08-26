@@ -13,7 +13,7 @@
  * compiled fine and every caller looked correct in isolation. So the
  * containment is the check.
  *
- * Two independent halves, because either alone is defeatable:
+ * Three halves, because each catches what the others cannot:
  *
  *   1. A **runtime** assertion that the production barrels do not export the
  *      primitives. Immune to text games — renamed re-exports, `export *`,
@@ -23,6 +23,16 @@
  *      seam. This catches what the runtime check cannot: a production module
  *      importing `registry.js` directly and calling `unsafeAddDoc` without ever
  *      passing through a barrel.
+ *   3. An **exact pin on `registry.ts`'s exported surface**. Halves 1 and 2 are
+ *      both keyed to a fixed vocabulary — the three `unsafe*` spellings and the
+ *      three old primitive names — and `registry.ts` is necessarily exempt from
+ *      the sweep, being the owner. So a NEW export from `registry.ts` that hands
+ *      out the same capability under a name neither list has heard of satisfies
+ *      every assertion in halves 1 and 2 while reintroducing exactly what this
+ *      file exists to prevent. A name list cannot see a rename; an exact set
+ *      can. The cost is that any addition to `registry.ts` — read accessor
+ *      included — turns this red until someone writes the name down, which is
+ *      the point: that edit is the review moment.
  */
 
 import { readdirSync, readFileSync } from "fs";
@@ -127,5 +137,43 @@ describe("registry primitives stay out of production code", () => {
         expect(keys, `${name} must not re-export ${primitive}`).not.toContain(primitive);
       }
     }
+  });
+
+  it("exports exactly the surface ADR-033 sanctions, and nothing else", async () => {
+    // Pinned deliberately as an exact set rather than an absence check. See
+    // half 3 in this file's header: an absence check keyed to known names is
+    // defeated by a new name, and the one file that can introduce a new
+    // primitive is the one file the source sweep cannot police.
+    //
+    // Adding a legitimate export here is a one-line edit. If the export you are
+    // adding writes `openDocs` or `activeDocId` WITHOUT ending in exactly one
+    // `broadcastOpenDocs()`, it belongs behind `registry-testing.ts` with an
+    // `unsafe` prefix instead — that is what this pin is asking you to notice.
+    const SANCTIONED = [
+      // Reads.
+      "docCount",
+      "getActiveDocEpoch",
+      "getActiveDocId",
+      "getCurrentDoc",
+      "getOpenDocs",
+      "hasDoc",
+      "isDirtyMirrorEligible",
+      "requireDocument",
+      "toDocListEntry",
+      // The publish, and the composites that each end in exactly one.
+      "activateDocument",
+      "broadcastOpenDocs",
+      "closeDocument",
+      "openDocument",
+      "openDocumentWhenReady",
+      "updateDocumentWhenReady",
+      // The declared escape hatch, reachable only through registry-testing.ts.
+      "unsafeAddDoc",
+      "unsafeRemoveDoc",
+      "unsafeSetActiveDocId",
+    ].sort();
+
+    const mod = await import("../../src/server/documents/registry.js");
+    expect(Object.keys(mod).sort()).toEqual(SANCTIONED);
   });
 });

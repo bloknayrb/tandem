@@ -440,6 +440,21 @@ async function main() {
     console.error("[Tandem] Failed to compact stale tombstones:", err);
   }
 
+  // Install the Hocuspocus lifecycle (ADR-033) — the keep-alive predicate, the
+  // doc swap/unload hooks, the generation gate's token source, and the
+  // dirty-mirror eligibility predicate, as one named seam.
+  //
+  // Two separate reasons it sits HERE and not later, and only the first is
+  // obvious: it must precede both `startHocuspocus` call sites below, because a
+  // doc that loads before installation silently gets no server-side observers
+  // for its lifetime. It must also precede `restoreOpenDocuments`, because until
+  // it runs the dirty-mirror predicate is unset and `dirty.ts` defaults to
+  // mirroring everything. That default happens to agree with the real predicate
+  // for the only thing restore produces today (`source: "file"` docs), so the
+  // gap is currently unobservable — which is exactly why it would survive a
+  // future restore path that produced an upload-sourced doc.
+  installTandemLifecycle();
+
   // Must complete before Hocuspocus starts to prevent browsers seeing stale openDocuments
   const previousActiveDocId = await restoreCtrlSession().catch((err) => {
     console.error("[Tandem] Failed to restore chat history:", err);
@@ -483,13 +498,6 @@ async function main() {
   // Wire the local-model collaborator (#1123 M1.2). DARK: this is a no-op while
   // BYO_MODELS_ENABLED is false (it never subscribes) — the gate lives inside.
   startLocalModelCollaborator();
-
-  // Install the Hocuspocus lifecycle (ADR-033) — the keep-alive predicate, the
-  // doc swap/unload hooks, the generation gate's token source, and the
-  // dirty-mirror eligibility predicate, as one named seam. MUST precede both
-  // `startHocuspocus` call sites below; a doc that loads before installation
-  // silently gets no server-side observers for its lifetime.
-  installTandemLifecycle();
 
   // ── Bind-host selection (MCP only — Hocuspocus always stays loopback) ────────
   const bindHost = process.env.TANDEM_BIND_HOST ?? DEFAULT_BIND_HOST;

@@ -54,7 +54,7 @@ import {
   type OpenDoc,
   openDocument,
   openDocumentWhenReady,
-  updateDocument,
+  updateDocumentWhenReady,
 } from "../../src/server/mcp/document-service.js";
 import {
   getOrCreateDocument,
@@ -375,23 +375,44 @@ describe("Y.Doc swap versus unload", () => {
 });
 
 describe("the composite mutators", () => {
+  /** The filePath the CTRL_ROOM doc list currently publishes for `id`. */
+  function readPublishedPath(id: string): string | undefined {
+    const published = getOrCreateDocument(CTRL_ROOM)
+      .getMap(Y_MAP_DOCUMENT_META)
+      .get(Y_MAP_OPEN_DOCUMENTS) as Array<{ id: string; filePath: string }> | undefined;
+    return published?.find((d) => d.id === id)?.filePath;
+  }
+
   // Added because a mutation battery found both of these unasserted: the module
   // doc claimed each property, and every suite stayed green with it broken.
 
-  it("updateDocument publishes metadata without stealing focus", () => {
+  it("updateDocumentWhenReady publishes metadata without stealing focus", async () => {
     openDocument(makeOpenDoc("focus-holder"));
     openDocument(makeOpenDoc("renamed-doc"));
     activateDocument("focus-holder");
     const epochBefore = getActiveDocEpoch();
     expect(readMeta(CTRL_ROOM).activeId, "control: focus starts elsewhere").toBe("focus-holder");
 
-    updateDocument({
-      id: "renamed-doc",
-      filePath: "/tmp/renamed-doc-NEW.md",
-      format: "md",
-      readOnly: false,
-      source: "file",
-    });
+    let publishedDuringPrepare: string | undefined;
+    await updateDocumentWhenReady(
+      {
+        id: "renamed-doc",
+        filePath: "/tmp/renamed-doc-NEW.md",
+        format: "md",
+        readOnly: false,
+        source: "file",
+      },
+      () => {
+        // Save-As re-wires the annotation store here and rename awaits an
+        // `fs.stat`; publishing at the mutation point would show clients the
+        // new identity across that gap.
+        publishedDuringPrepare = readPublishedPath("renamed-doc");
+      },
+    );
+
+    expect(publishedDuringPrepare, "not published until prepare finishes").toBe(
+      "/tmp/renamed-doc.md",
+    );
 
     // A rename or a Save-As promotion changes what a tab *is*, not which tab is
     // focused. Routing either through `openDocument` would advance the epoch,
@@ -401,13 +422,37 @@ describe("the composite mutators", () => {
     expect(getActiveDocEpoch(), "and no focus event was published").toBe(epochBefore);
     expect(readMeta(CTRL_ROOM).activeId).toBe("focus-holder");
 
-    const published = getOrCreateDocument(CTRL_ROOM)
-      .getMap(Y_MAP_DOCUMENT_META)
-      .get(Y_MAP_OPEN_DOCUMENTS) as Array<{ id: string; filePath: string }>;
-    expect(
-      published.find((d) => d.id === "renamed-doc")?.filePath,
-      "…while the new path IS published",
-    ).toBe("/tmp/renamed-doc-NEW.md");
+    expect(readPublishedPath("renamed-doc"), "…while the new path IS published").toBe(
+      "/tmp/renamed-doc-NEW.md",
+    );
+  });
+
+  it("updateDocumentWhenReady still publishes when prepare throws", async () => {
+    // The deliberate asymmetry with openDocumentWhenReady. A failed OPEN must
+    // not add a tab, so that one skips its broadcast. An update's entry is
+    // already tracked and already on screen — skipping here would leave clients
+    // showing the pre-update entry forever while the registry holds the new one,
+    // trading a transient inconsistency for a permanent one.
+    openDocument(makeOpenDoc("half-renamed"));
+
+    await expect(
+      updateDocumentWhenReady(
+        {
+          id: "half-renamed",
+          filePath: "/tmp/half-renamed-NEW.md",
+          format: "md",
+          readOnly: false,
+          source: "file",
+        },
+        () => {
+          throw new Error("post-commit bookkeeping failed");
+        },
+      ),
+    ).rejects.toThrow("post-commit bookkeeping failed");
+
+    expect(readPublishedPath("half-renamed"), "the registry's state was published anyway").toBe(
+      "/tmp/half-renamed-NEW.md",
+    );
   });
 
   it("openDocumentWhenReady publishes only after its prepare step finishes", async () => {

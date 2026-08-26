@@ -234,14 +234,41 @@ export function activateDocument(id: string | null): void {
 }
 
 /**
- * Replace a tracked document's metadata and publish it, without touching
- * activation. For a rename, a Save-As promotion, or a read-only upgrade —
- * changes to what a tab *is*, not to which tab is focused. Going through
- * `openDocument` instead would advance the epoch and steal focus.
+ * Change a tracked document's entry, publishing after `prepare` resolves.
+ *
+ * Two properties, each of which a caller got wrong before this existed.
+ *
+ * **It does not activate.** A rename or a Save-As promotion changes what a tab
+ * *is*, not which tab is focused. Routing either through {@link openDocument}
+ * would advance the activation epoch, and the client reads an advance as an
+ * intentional focus event — so the user's tab would jump under them when a
+ * background file was renamed.
+ *
+ * **It publishes late, but unconditionally.** The registry write cannot always
+ * be deferred (Save-As runs `markClean`, which reads this entry's `source`),
+ * yet the publish should still wait for the work that finishes the change:
+ * Save-As re-wires the annotation store and re-attaches channel observers after
+ * the entry flips to `source: "file"`, and rename awaits an `fs.stat` before
+ * writing the document's own `fileName`. Publishing at the mutation point shows
+ * clients the new identity across those gaps.
+ *
+ * The broadcast is in a `finally`, which is where this DELIBERATELY diverges
+ * from {@link openDocumentWhenReady}. A failed open must not add a tab, so that
+ * one skips its broadcast. An update's entry is already tracked and already on
+ * screen, so skipping would leave clients showing the pre-update entry forever
+ * while the registry holds the new one — trading a transient inconsistency for
+ * a permanent one.
  */
-export function updateDocument(entry: OpenDoc): void {
+export async function updateDocumentWhenReady(
+  entry: OpenDoc,
+  prepare: () => void | Promise<void>,
+): Promise<void> {
   openDocs.set(entry.id, entry);
-  broadcastOpenDocs();
+  try {
+    await prepare();
+  } finally {
+    broadcastOpenDocs();
+  }
 }
 
 /**

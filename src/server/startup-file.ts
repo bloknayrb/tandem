@@ -1,4 +1,3 @@
-import { activateDocument } from "./mcp/document-service.js";
 import { openFileByPath } from "./mcp/file-opener.js";
 
 /**
@@ -22,9 +21,8 @@ import { openFileByPath } from "./mcp/file-opener.js";
 export async function maybeOpenStartupFile(envPath: string | undefined): Promise<boolean> {
   if (!envPath || envPath.trim() === "") return false;
 
-  let result: Awaited<ReturnType<typeof openFileByPath>>;
   try {
-    result = await openFileByPath(envPath);
+    await openFileByPath(envPath);
   } catch (err) {
     console.error(
       `[Tandem] TANDEM_OPEN_FILE failed (${envPath}): ${
@@ -34,16 +32,18 @@ export async function maybeOpenStartupFile(envPath: string | undefined): Promise
     return false;
   }
 
-  // Intentionally outside the catch — a failure here indicates a programming
-  // bug (e.g. an invalid documentId from a broken openFileByPath contract) and
-  // must surface to the top-level startup error handler rather than be
-  // swallowed alongside expected I/O errors.
+  // No activation call here, deliberately. `openFileByPath` has already
+  // registered the document, made it active and published all of that in one
+  // broadcast — `finalizeDocOpen` through `openDocumentWhenReady`, and the
+  // already-open branch through `activateDocument`. Re-activating would advance
+  // the activation epoch a SECOND time for one startup gesture and emit a second
+  // `documentMeta` broadcast, which is the exact double-advance the registry's
+  // composite surface exists to make unrepresentable (ADR-033).
   //
-  // This used to be a bare `setActiveDocId`, with no broadcast: `openFileByPath`
-  // had already published, but with the PREVIOUS active id, so module state and
-  // published state disagreed until some unrelated broadcast happened to fire.
-  // `activateDocument` closes that by construction.
-  activateDocument(result.documentId);
+  // This was a bare `setActiveDocId` before ADR-033 and was already redundant
+  // then; it only looked harmless because it emitted no broadcast of its own.
+  // `startup-file.test.ts` pins the outcome rather than the call: exactly one
+  // epoch advance, and CTRL_ROOM's published active id equal to the opened doc.
   console.error(`[Tandem] Opened TANDEM_OPEN_FILE on startup: ${envPath}`);
   return true;
 }

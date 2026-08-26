@@ -15,6 +15,12 @@
  *      bind sites is derived from the source, so a THIRD transport added later
  *      is covered without anyone remembering to extend this file. The stdio
  *      branch has no runtime coverage anywhere in the suite; this is what it has.
+ *
+ *      The bind sites are found through the LOCAL BINDING, read out of the
+ *      import statement, not through the literal text `startHocuspocus(`. An
+ *      aliased import (`startHocuspocus as bindWs`) would make a third call site
+ *      contribute nothing to a literal scan, leaving two genuine sites found,
+ *      correctly ordered, and the test green beside a real early bind.
  *   2. **Runtime consequence**, in `stale-tab-resync.test.ts`: with the
  *      lifecycle uninstalled, a real client over a real socket presenting the
  *      CORRECT token is still refused. That is what this ordering is protecting
@@ -38,7 +44,23 @@ describe("installation precedes every Hocuspocus bind", () => {
       "exactly one install site — two would mean two mechanisms again",
     ).toBe(-1);
 
-    const bindSites = [...src.matchAll(/startHocuspocus\(/g)].map((m) => m.index as number);
+    // Resolve what `startHocuspocus` is called locally before scanning for it.
+    const imported = src.match(/import\s*\{([^}]*)\}\s*from\s*["'][^"']*yjs\/provider\.js["']/);
+    expect(imported, "index.ts must import from yjs/provider.js").not.toBeNull();
+    const bindings = (imported as RegExpMatchArray)[1]
+      .split(",")
+      .map((spec) => spec.trim())
+      .filter((spec) => /^startHocuspocus\b/.test(spec))
+      .map((spec) => spec.split(/\s+as\s+/)[1]?.trim() ?? "startHocuspocus");
+    // Exactly one, because `{ startHocuspocus, startHocuspocus as bindWs }` is
+    // legal ES: taking the first spec would leave the scan reading one name
+    // while the early call site used the other.
+    expect(bindings, "index.ts must import startHocuspocus under exactly one name").toHaveLength(1);
+    const binding = bindings[0];
+
+    const bindSites = [...src.matchAll(new RegExp(`\\b${binding}\\(`, "g"))].map(
+      (m) => m.index as number,
+    );
 
     // Control. The assertion below is a "every element of X satisfies P" check,
     // which an empty X passes silently — and a rename of `startHocuspocus`

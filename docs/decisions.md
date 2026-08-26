@@ -567,12 +567,23 @@ named `HocuspocusLifecycle`, replacing all four free callback slots (`setShouldK
    mint — and freeze at `null`, which the provider treats as fail-closed. Every connection for the
    whole run would be rejected, logging the same line as a legitimate stale-tab rejection.
 3. **Five mutators, not three.** `setActive` in the sketch conflated two different operations, and
-   the split is load-bearing: `updateDocument` (rename, Save-As promotion, read-only upgrade) must
-   NOT advance the activation epoch, because the client reads an advance as an intentional focus
-   event and the user's tab would jump when a background file was renamed. `openDocumentWhenReady`
-   exists because most opens are unfinished at the moment the registry changes — the doc meta,
-   saved baseline and annotation store are still being wired — so it takes that work and publishes
-   after it, rather than moving the broadcast earlier than the code it replaced.
+   the split is load-bearing: `updateDocumentWhenReady` (rename, Save-As promotion) must NOT
+   advance the activation epoch, because the client reads an advance as an intentional focus event
+   and the user's tab would jump when a background file was renamed.
+
+   Both `…WhenReady` composites exist for the same reason — a change is not finished at the moment
+   the registry entry changes, and publishing at the mutation point moves the broadcast EARLIER
+   than the code it replaced. For an open, the doc meta, saved baseline and annotation store are
+   still being wired. For a Save-As promotion the entry must flip to `source: "file"` before
+   `markClean` reads it, while the annotation store and channel observers are still wired for an
+   upload doc; for a rename the publish would cross an `await fs.stat` before the document's own
+   `fileName` agrees with it.
+
+   They differ in one way, deliberately: the update variant broadcasts in a `finally`. A failed
+   open must not add a tab, so `openDocumentWhenReady` skips its broadcast — but an update's entry
+   is already tracked and already on screen, so skipping would leave clients showing the pre-update
+   entry indefinitely while the registry holds the new one. A transient inconsistency is
+   recoverable; a permanent one is not.
 4. **`getYDoc` and `eachOpen` were not added.** `requireDocument` already resolves the Y.Doc fresh
    per call (the property `getYDoc`'s doc comment was there to warn about), and `getOpenDocs()`
    returns a `ReadonlyMap`, which covers iteration without a second accessor.
