@@ -1,17 +1,16 @@
 /**
  * Regression pin: the UI element inspector must stay out of everything we ship.
  *
- * WHAT THIS IS: a pin on three one-line mistakes that each produce a shipped
- * artifact nobody asked for, with no other signal — no type error, no failing
- * behaviour test, no lint. Every assertion here corresponds to a decision made
- * deliberately when the plugin was added, not to a bug that was found.
+ * WHAT THIS IS: a pin on four one-line mistakes that each break something with
+ * no other signal — no type error, no failing behaviour test, no lint. The first
+ * three ship an artifact nobody asked for; the fourth breaks the tool outright.
  *
  * WHAT THIS IS NOT: proof the inspector is absent from a built bundle. That is
  * a property of the actual build output, and the only real check for it is
  * `npm run build` followed by grepping `dist/client/` — which this suite does
  * not run. This file guards the *inputs* that make that build come out right.
  *
- * The three mistakes, and why each is silent:
+ * The four mistakes, and why each is silent:
  *
  *  1. Dropping `optional = true` from the Cargo dependency, or adding the
  *     `ui-inspector` feature to a `default` feature list. Cargo cannot gate a
@@ -27,6 +26,9 @@
  *     production build only if nothing outside the branch pulls the module in;
  *     a static import defeats that while the dev experience stays identical,
  *     so the regression is invisible until someone greps a shipped bundle.
+ *  4. Removing `capture_screenshots(false)`. Native capture is broken on
+ *     Windows and a failed capture aborts the whole capture, so re-enabling it
+ *     makes every `pick` fail with no reference written. See #1633.
  *
  * See CONTRIBUTING.md ("UI element inspector") for the developer-facing half.
  */
@@ -83,6 +85,25 @@ describe("ui-inspector stays development-only", () => {
     const feature = /^\s*ui-inspector\s*=\s*\[(.*?)\]/ms.exec(cargoToml);
     expect(feature, "the `ui-inspector` feature is no longer declared").not.toBeNull();
     expect(feature?.[1]).toContain("tauri/dynamic-acl");
+  });
+
+  it("screenshot capture stays disabled", () => {
+    // Not a preference — a regression pin. Native capture is broken on Windows:
+    // `xcap::Window::all()` omits the calling process's own windows, so the
+    // plugin's `find_window` pid filter is always empty and returns
+    // WindowNotFound. A failed capture aborts the ENTIRE capture, so turning
+    // this back on writes no reference at all and makes the plugin unusable.
+    //
+    // This is a source-text check, which is weaker than it looks: it proves the
+    // call is written, not that it runs. It exists because the real failure is
+    // silent at build time and only shows up as a CLI timeout at the far end.
+    // Re-enable only once upstream's capture path works on the app's own HWND
+    // (#1633), and delete this test with it.
+    const libRs = readFileSync(join(repoRoot, "src-tauri/src/lib.rs"), "utf8");
+    expect(
+      libRs,
+      "capture_screenshots(false) was removed — see #1633 before re-enabling",
+    ).toContain(".capture_screenshots(false)");
   });
 
   it.each(NPM_PACKAGES)("%s is a devDependency, not a dependency", (name) => {
