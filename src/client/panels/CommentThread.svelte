@@ -2,6 +2,7 @@
 import type { AnnotationReply } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { agentTintColor } from "../utils/agent-color";
+import AnnotationBody from "./AnnotationBody.svelte";
 import { formatRelativeTime } from "./annotation-card-helpers";
 
 interface Props {
@@ -57,7 +58,7 @@ const agentLabel = createAgentLabel();
             {formatRelativeTime(reply.timestamp)}
           </span>
         </div>
-        <p class="ct-body">{reply.text}</p>
+        <div class="ct-body"><AnnotationBody text={reply.text} author={reply.author} /></div>
       </div>
     {/each}
   </div>

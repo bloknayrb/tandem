@@ -28,10 +28,11 @@ function escapeHtml(text: string): string {
  * is one of this function's own literals, and each is closed before any
  * input-derived text.**
  *
- * **Do not read the caller's `author` as a security boundary.** The one caller
- * (`ChatPanel.svelte`, `msg.author === "claude"`) renders markdown for
- * Claude-authored text only, but that is a SEMANTIC choice — a user typing `*`
- * should not silently italicize. It is not a trust boundary: Claude's output is
+ * **Do not read the caller's `author` as a security boundary.** Both callers
+ * (`ChatPanel.svelte` on `msg.author`, `AnnotationBody.svelte` on an annotation
+ * or reply author) render markdown for Claude-authored text only, but that is a
+ * SEMANTIC choice — a user typing `*` should not silently italicize. It is not a
+ * trust boundary: Claude's output is
  * influenced by document and `.docx` content that may come from outside the
  * project, so `author: "claude"` text is as untrusted as any other. The escaping
  * is what makes this safe, for every author.

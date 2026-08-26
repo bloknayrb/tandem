@@ -194,6 +194,29 @@ function handleKeyDown(e: KeyboardEvent) {
     handleCancel();
   }
 }
+/**
+ * Card activation, declining clicks that started on a link.
+ *
+ * A rendered Claude body (#1626) can contain anchors. Without this, following a
+ * link both navigates AND scrolls the document to the annotation.
+ *
+ * The check lives HERE, on the element that owns `onClick`, rather than as a
+ * `stopPropagation` in `AnnotationBody`. That version worked, but only because
+ * Svelte 5 delegates `click` and its simulated walk breaks on `cancelBubble` —
+ * so converting either handler to a `use:` action or an explicit
+ * `addEventListener` would silently disable the guard with no type error and no
+ * failing test. Reading the target is order-independent. It also avoids
+ * re-adding the `a11y_click_events_have_key_events` suppression that #1184
+ * deliberately removed project-wide.
+ *
+ * The keyboard path needs no equivalent: `activationKeydown(..., {selfOnly:
+ * true})` already declines when the event target is an inner element, and
+ * activating a focused anchor synthesizes a click that lands here.
+ */
+function onCardClick(event: MouseEvent) {
+  if ((event.target as HTMLElement | null)?.closest("a")) return;
+  onClick?.();
+}
 </script>
 
 <!-- Keyboard activation on the card root uses plain tabindex, not roving —
@@ -211,7 +234,7 @@ function handleKeyDown(e: KeyboardEvent) {
   class:is-density-stub={resolvedDensity === "stub"}
   in:cardEnter={{ enabled: lifecycleMotion, reduceMotion }}
   out:cardExit={{ enabled: lifecycleMotion, reduceMotion, id: annotation.id, modes: exitModes }}
-  onclick={onClick}
+  onclick={onCardClick}
   onkeydown={activationKeydown(() => onClick?.(), { selfOnly: true })}
   tabindex={onClick ? 0 : undefined}
   data-testid="annotation-card-{annotation.id}"
@@ -473,6 +496,35 @@ function handleKeyDown(e: KeyboardEvent) {
     line-clamp: 1;
     overflow: clip;
   }
+  /* Markdown bodies (#1626) render BLOCK children — `<p>`, `<pre>`, `<li>` —
+     and each one opens its own line box, so the `-webkit-line-clamp: 1` above
+     collapses to one line per block rather than one line total. A two-paragraph
+     Claude comment would show two lines in a card sized for one, overflowing the
+     clamped band. Flattening the descendants to inline is what makes the teaser
+     single-line again; formatting is irrelevant at this size, and the full
+     rendering returns as soon as the card expands. */
+  .is-density-clamped :global(.aca-body .tandem-markdown *),
+  .is-density-compact :global(.aca-body .tandem-markdown *) {
+    display: inline;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    /* `<pre>` carries `white-space: pre-wrap`, which keeps honouring the
+       literal newlines in a fenced block even once the box is inline — so
+       without this a code block still renders one line per line of code. */
+    white-space: normal;
+  }
+  /* `<br>` is the other half, and the more common one: `renderMarkdown` turns
+     every single newline into one, so a bullet list — the likeliest thing
+     Claude writes into a comment — emits a `<br>` between every item. `display:
+     inline` is a `<br>`'s NORMAL value and does not stop it breaking the line;
+     `none` is what does. */
+  .is-density-clamped :global(.aca-body .tandem-markdown br),
+  .is-density-compact :global(.aca-body .tandem-markdown br) {
+    display: none;
+  }
+
   .is-density-clamped :global([data-testid^="annotation-snippet-"]),
   .is-density-clamped :global(.art-root),
   .is-density-compact :global([data-testid^="annotation-snippet-"]),
