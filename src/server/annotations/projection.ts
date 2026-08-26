@@ -65,6 +65,7 @@ export type ChannelEligible = Annotation & { readonly [CHANNEL_ELIGIBLE]: true }
 /** What `narrowForChannel` refused, for the caller's log line. */
 export type ProjectionRefusal =
   | { reason: "unsanitizable" }
+  | { reason: "unknown-type"; rawType: unknown }
   | { reason: "note" }
   | { reason: "private"; audience: string | undefined };
 
@@ -80,10 +81,16 @@ export type ProjectionRefusal =
  * `false` and an unsanitized legacy comment would otherwise be dropped forever.
  *
  * **Fails toward dropping, never toward emitting.** Anything that cannot be
- * sanitized, cannot be read, or does not clearly satisfy both halves of the
- * predicate returns `null`. Silence is the safe direction for a privacy
- * control, and it matches how `shouldForwardExternally` treats an
- * indeterminate mode.
+ * sanitized, cannot be read, carries a type sanitize does not recognize, or
+ * does not clearly satisfy both halves of the predicate returns `null`.
+ * Silence is the safe direction for a privacy control, and it matches how
+ * `shouldForwardExternally` treats an indeterminate mode.
+ *
+ * The unrecognized-type clause is not hypothetical tidiness: without it this
+ * function did the opposite of what that paragraph claims, because
+ * `sanitizeAnnotation` coerces an unknown type to `comment` and the coerced
+ * comment then derives `audience: "outbound"`. See the comment at the sanitize
+ * call below.
  *
  * **Never throws.** `makePerKeyChangeObserver` loops over every changed key in
  * one Y.Map transaction with no per-key try/catch, so a throw here would abort
@@ -99,24 +106,48 @@ export function narrowForChannel(
 ): ChannelEligible | null {
   if (!raw) return null;
 
+  // `sanitizeAnnotation` does NOT reject a record whose type it fails to
+  // recognize — `sanitize.ts:213` coerces one to `type: "comment"` and, since
+  // `derivedAudience` keys off the type it no longer has, that comment derives
+  // `audience: "outbound"`. So `sanitizeAnnotation({})` returns a projectable
+  // comment with every other field `undefined`, and a note whose `type` was
+  // dropped or corrupted — by a stale-tab CRDT merge or a legacy envelope,
+  // the two cases this module exists for — would project its content.
+  //
+  // Refusing on a type *denylist* is what let that through: `!== "note"`
+  // bounds one name, and the coercion composes what survives it. Sanitize
+  // announces the case as a `unknown-type` lossy event, so that signal is the
+  // check. It is deliberately narrower than "anything sanitize migrated":
+  // `suggestion`/`question` → `comment` are recognized legacy types with their
+  // own events and must keep projecting.
+  let sawUnknownType: { rawType: unknown } | undefined;
+
   let ann: Annotation;
   try {
     // `raw` is unknown by design: this is the boundary where unvalidated Y.Map
     // content is checked, and validating it is exactly `sanitizeAnnotation`'s
-    // job. The cast hands it the input, it does the work, and it throws on
-    // anything it cannot make sense of.
-    ann = sanitizeAnnotation(
-      raw as Parameters<typeof sanitizeAnnotation>[0],
-      // `onLossy` is required by sanitize, but a caller with nowhere to relay
-      // migration events to (today: `replies.ts`) must still be able to
-      // sanitize. Dropping the event is correct there — it is a migration
-      // record, not a privacy decision.
-      opts.onLossy ?? (() => {}),
-    );
+    // job. The cast hands it the input and it does the work.
+    ann = sanitizeAnnotation(raw as Parameters<typeof sanitizeAnnotation>[0], (event) => {
+      if (event.kind === "unknown-type") sawUnknownType = { rawType: event.rawType };
+      // Relay regardless: the refusal is ours, but the migration record is the
+      // caller's and swallowing it would hide the corruption from the log that
+      // exists to catch it. `onLossy` is required by sanitize, but a caller
+      // with nowhere to relay to (today: `replies.ts`) must still be able to
+      // sanitize — dropping it there is correct, it is a migration record, not
+      // a privacy decision.
+      opts.onLossy?.(event);
+    });
   } catch {
     // The error object can embed the annotation's own content; never widen this
     // to log it. The caller gets the key, which is enough to find the record.
     opts.onRefused?.({ reason: "unsanitizable" }, undefined);
+    return null;
+  }
+
+  if (sawUnknownType) {
+    // Report the coerced record, not `undefined`: its `id` usually survived and
+    // is the only way to find the row. `describeRefusal` still prints no text.
+    opts.onRefused?.({ reason: "unknown-type", rawType: sawUnknownType.rawType }, ann);
     return null;
   }
 
@@ -212,6 +243,13 @@ export function describeRefusal(refusal: ProjectionRefusal, id: string | undefin
   switch (refusal.reason) {
     case "unsanitizable":
       return `${who}: could not be sanitized`;
+    case "unknown-type":
+      // Only a string `rawType` is printed. A corrupted record can carry
+      // anything in that slot, including an object holding annotation text,
+      // and this string reaches stderr.
+      return `${who}: unrecognized type=${
+        typeof refusal.rawType === "string" ? refusal.rawType : `<${typeof refusal.rawType}>`
+      }`;
     case "note":
       return `${who}: type=note (ADR-027)`;
     case "private":
