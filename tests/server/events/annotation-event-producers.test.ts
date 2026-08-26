@@ -143,7 +143,12 @@ describe("who can produce an annotation:* channel event", () => {
 
   it.each(MUST_NARROW)("%s builds its payloads through the narrow", (path) => {
     const text = FILES.find((f) => f.path === path)?.text ?? "";
-    expect(text).toContain("narrowForChannel");
+    // `\b` on both ends, not `toContain`. A substring check passes for
+    // `narrowForChannelX` — which is exactly how the mutation battery for this
+    // file defeated the first version of this assertion. Renaming a guard's
+    // anchor to a longer name is the cheapest possible bypass and it does not
+    // even look like one in a diff.
+    expect(text, "the narrow must be called, not merely resembled").toMatch(/\bnarrowForChannel\b/);
     expect(text, "payload builders must come from projection.js, not be inlined").toMatch(
       /from "\.\.\/\.\.\/annotations\/projection\.js"/,
     );
@@ -190,6 +195,10 @@ describe("the arbitrary-event seam", () => {
     // A rename turns the test above into a zero-of-zero check that passes
     // forever. #1399 is this project's standing instance of that failure.
     const queue = FILES.find((f) => f.path === "src/server/events/queue.ts")?.text ?? "";
-    expect(queue).toContain("export function _pushEventForTests");
+    // `\b` at the end matters: `toContain("export function _pushEventForTests")`
+    // is satisfied by `_pushEventForTestsRenamed`, so the rename this test
+    // exists to notice would sail past it. Demonstrated, not theorised — it is
+    // how the mutation battery beat the first version.
+    expect(queue).toMatch(/export function _pushEventForTests\b/);
   });
 });

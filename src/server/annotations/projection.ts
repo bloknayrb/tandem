@@ -14,17 +14,37 @@
  *   against `type` (`schema.ts`), `sanitizeAnnotation` demotes only
  *   user-authored note/highlight/flag and never demotes a comment, and stale-tab
  *   CRDT merges and legacy envelopes both produce records nobody sanitized on
- *   the way in. Before this module, such a record reached Claude.
- *   `file-io/docx-comment-export.ts` already treated type and audience as two
- *   separately-required gates; the channel path now agrees with it.
+ *   the way in. Before this module, such a record reached Claude over the
+ *   channel. `file-io/docx-comment-export.ts` already treated type and
+ *   audience as two separately-required gates; the channel path now agrees.
+ *
+ *   **This closes the push half only, and the pull half is the authoritative
+ *   one.** Every MCP read still gates on `type` and never on `audience` —
+ *   `tandem_getAnnotations`, `tandem_exportAnnotations`, `tandem_checkInbox`,
+ *   and `channelVisibleReplies`. CLAUDE.md makes `tandem_checkInbox`
+ *   authoritative over all four push paths, so such a record still reaches
+ *   Claude one poll later. Do not read this module as having closed the
+ *   audience hole; it closed it on one surface. Tracked in #1619.
  *
  * **Why `type !== "note"` and not ADR-035's literal `type === "comment"`.**
- * The ADR's text would additionally drop Claude-authored highlights, which the
- * accept/dismiss path emits today — the tutorial seeds one on
- * `sample/welcome.md`. Narrowing that path buys no privacy (a highlight is not
- * private data; `audience` already governs that) and would change first-run
- * behaviour for type-system tidiness alone. Decided 2026-08-26; ADR-035 is
- * amended to match rather than this module diverging silently from it.
+ * The type half exists to state ADR-027, and ADR-027 is about notes. Bounding
+ * it to exactly that keeps the two halves doing separable jobs: type carries
+ * the note rule, audience carries privacy. `type === "comment"` would fold a
+ * second, unrelated policy — "only comments are conversational" — into the
+ * privacy predicate, where nobody would find it.
+ *
+ * **An earlier version of this comment defended the choice on the grounds that
+ * it keeps Claude-authored highlights emitting. That argument does not
+ * survive: the audience half drops them anyway.** Every highlight without a
+ * stored `audience` derives `private` (`sanitize.ts:79-87`), the tutorial seed
+ * is one, and no product path creates a Claude highlight WITH a stored
+ * audience — `tandem_highlight` is a deprecated stub and nothing else passes
+ * `"highlight"` to a creator. So the two predicates are observably identical
+ * today and the choice rests on where each rule belongs, not on behaviour.
+ * `tests/server/events/channel-projection-characterization.test.ts` pins both
+ * branches so that stays true by measurement rather than by this paragraph.
+ * Decided 2026-08-26; ADR-035 is amended to match rather than this module
+ * diverging silently from it.
  *
  * **What this module does NOT do.** It does not decide *which event* an
  * annotation produces — add, edit, promotion, accept and dismiss are distinct
@@ -131,10 +151,11 @@ export function narrowForChannel(
       if (event.kind === "unknown-type") sawUnknownType = { rawType: event.rawType };
       // Relay regardless: the refusal is ours, but the migration record is the
       // caller's and swallowing it would hide the corruption from the log that
-      // exists to catch it. `onLossy` is required by sanitize, but a caller
-      // with nowhere to relay to (today: `replies.ts`) must still be able to
-      // sanitize — dropping it there is correct, it is a migration record, not
-      // a privacy decision.
+      // exists to catch it. `onLossy` is required by sanitize but optional
+      // here: both observers relay today, and a future caller with no relay
+      // sink must still be able to narrow. Dropping the event there is
+      // correct — it is a migration record, not a privacy decision, and the
+      // refusal above does not depend on the caller having listened.
       opts.onLossy?.(event);
     });
   } catch {
@@ -179,8 +200,28 @@ export function narrowReplyForChannel(
   reply: AnnotationReply | undefined,
   parent: ChannelEligible,
 ): (AnnotationReply & { readonly [CHANNEL_ELIGIBLE]: true }) | null {
-  if (!reply || reply.author !== "user" || reply.private === true) return null;
-  void parent;
+  if (!reply || reply.author !== "user") return null;
+
+  // Fails closed on anything that is not literally `false`.
+  //
+  // `private === true` would be the natural spelling and it fails OPEN: a
+  // `private` stored as the string "true", or as 1, is not `=== true`, so the
+  // reply would project and carry its text. The reply is the one value on this
+  // path that nothing sanitizes — there is no `sanitizeReply`, and
+  // `makePerKeyChangeObserver` hands it over as a bare `map.get(key) as T`.
+  // Every writer stamps a real boolean today (`mcp/annotations.ts`,
+  // `file-io/docx-comments.ts`, and the zod-gated durable restore), so this is
+  // defence against the same stale-tab-merge and legacy-envelope cases the
+  // parent narrow exists for. Leaving the reply outside that model while
+  // sanitizing the parent was an asymmetry, not a decision.
+  if (reply.private !== false && reply.private !== undefined) return null;
+
+  // The parent being eligible must be a statement about THIS reply's parent.
+  // Nothing in `replies.ts` can violate this — it fetches the parent by
+  // `reply.annotationId` — but the signature otherwise invites a future caller
+  // to pass any eligible parent and launder an ineligible reply past the gate.
+  if (reply.annotationId !== parent.id) return null;
+
   return reply as AnnotationReply & { readonly [CHANNEL_ELIGIBLE]: true };
 }
 

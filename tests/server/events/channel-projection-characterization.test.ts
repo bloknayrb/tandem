@@ -116,6 +116,26 @@ describe("channel projection — user edit and promotion", () => {
     h.dispose();
   });
 
+  it("DELTA (was: emitted nothing): promoting a legacy flag now emits annotation:created", () => {
+    // A bug on master, fixed here because the branch was in this code anyway.
+    // The client promoter sanitizes before deciding something is a note, and
+    // sanitize maps `flag` to `note` — so the user CAN promote a stored flag.
+    // The observer compared the RAW old type against "note", saw "flag", fell
+    // through to the edit branch, found `editedAt` unmoved (promotion does not
+    // touch it) and emitted nothing at all. A "Send to Claude" click that
+    // reached Claude never.
+    const h = harness();
+    const old = annotation("a1", { author: "user", type: "note" });
+    (old as { type?: unknown }).type = "flag";
+    h.annotations.set("a1", old);
+    h.annotations.set(
+      "a1",
+      annotation("a1", { author: "user", type: "comment", promotedFrom: "note" }),
+    );
+    expect(h.types()).toEqual(["annotation:created"]);
+    h.dispose();
+  });
+
   it("note -> comment promotion emits annotation:created", () => {
     const h = harness();
     add(h, "a1", { author: "user", type: "note" });
@@ -151,24 +171,68 @@ describe("channel projection — claude accept and dismiss", () => {
     h.dispose();
   });
 
-  it("DELTA (was: emitted): a claude HIGHLIGHT now emits nothing", () => {
+  it("DELTA (was: emitted): a claude highlight with NO stored audience now emits nothing", () => {
     // The `type !== "note"` gate admits highlights, and the tutorial seeds a
     // Claude-authored highlight on sample/welcome.md
     // (`mcp/tutorial-annotations.ts` — `type: "highlight"`, author assigned
-    // "claude" for everything that is not a note). So this fires on first run.
+    // "claude" for everything that is not a note, and **no `audience` field**).
+    // So this fires on first run.
     //
-    // The brand requires `audience === "outbound"`, and `sanitize.ts:79-87`
-    // derives `"private"` for ANY highlight regardless of author, so this is
-    // now zero events. Decided deliberately (2026-08-26): highlights are
-    // user-only markup with nothing for Claude to act on, and the delta comes
-    // from the audience axis rather than the type axis — widening the type
-    // check to `!== "note"` does not bring it back.
+    // **The no-audience half of the title is load-bearing, and an earlier
+    // version of this test got it wrong.** It claimed sanitize derives
+    // "private" for ANY highlight regardless of author. It does not:
+    // `sanitize.ts:79-87` short-circuits on a stored `audience` and only
+    // derives when there is none. This fixture omits `audience`, so it
+    // exercises the tutorial seed and nothing else — the classic
+    // build-your-own-input blind spot, caught by two independent reviewers.
+    // The companion test below pins the branch this one cannot see.
     const h = harness();
     add(h, "a1", { author: "claude", type: "highlight" });
     h.annotations.set(
       "a1",
       annotation("a1", { author: "claude", type: "highlight", status: "accepted" }),
     );
+    expect(h.events).toEqual([]);
+    h.dispose();
+  });
+
+  it("a claude highlight with a STORED outbound audience still emits", () => {
+    // Not a delta — the behaviour master had, preserved. It is here because
+    // the test above reads like it covers all Claude highlights and does not.
+    //
+    // No product path creates this record today: `createAnnotation` would
+    // stamp `audience: "outbound"` on it (`mcp/annotations.ts:383`), but
+    // `tandem_highlight` is a deprecated stub that errors before reaching it
+    // and nothing else passes "highlight" to a creator. So the accepted delta
+    // really is scoped to the tutorial seed. If a Claude-highlight creator is
+    // ever reintroduced, this test is what says its events still flow, and the
+    // decision to withhold highlights would then need making for real.
+    const h = harness();
+    add(h, "a1", { author: "claude", type: "highlight", audience: "outbound" });
+    h.annotations.set(
+      "a1",
+      annotation("a1", {
+        author: "claude",
+        type: "highlight",
+        audience: "outbound",
+        status: "accepted",
+      }),
+    );
+    expect(h.types()).toEqual(["annotation:accepted"]);
+    h.dispose();
+  });
+
+  it("DELTA (was: emitted): an unrecognized type is dropped, not coerced to comment", () => {
+    // Fourth delta. `sanitizeAnnotation` coerces an unknown type to `comment`
+    // (`sanitize.ts:213`) and the coerced comment derives `audience:
+    // "outbound"`, so master emitted a real `annotation:created` for a record
+    // it could not identify. The narrow refuses on sanitize's own
+    // `unknown-type` signal. Fires for corruption and for any future or legacy
+    // type name sanitize does not enumerate.
+    const h = harness();
+    const ann = annotation("a1", { author: "user", type: "comment" });
+    (ann as { type?: unknown }).type = "sticky-note";
+    h.annotations.set("a1", ann);
     expect(h.events).toEqual([]);
     h.dispose();
   });
@@ -192,6 +256,66 @@ describe("channel projection — replies", () => {
     add(h, "a1", { author: "user", type });
     h.replies.set("r1", reply("a1", "user"));
     expect(h.events).toEqual([]);
+    h.dispose();
+  });
+
+  it("DELTA (was: dropped): a reply on a legacy suggestion parent now emits", () => {
+    // The only delta in the EMITTING direction, and the one nobody predicted
+    // in either direction — I had recorded three, all narrowing.
+    //
+    // Master read the parent raw and required `type === "comment"`, so a
+    // parent stored as `suggestion` or `question` silently dropped its
+    // replies. Sanitize maps both to `comment` (`sanitize.ts:164-181`), so the
+    // narrow admits them. This is a fix, not a regression: `addReplyToAnnotation`
+    // sanitizes the parent before stamping `private`, so the MCP layer already
+    // accepted these replies as non-private — master then swallowed the event
+    // the user's reply should have produced. The two halves now agree.
+    for (const legacy of ["suggestion", "question"]) {
+      const h = harness();
+      const parent = annotation("a1", { author: "user", type: "comment", content: "{}" });
+      (parent as { type?: unknown }).type = legacy;
+      h.annotations.set("a1", parent);
+      h.replies.set("r1", reply("a1", "user"));
+      expect(h.types(), `${legacy} parent`).toContain("annotation:reply");
+      h.dispose();
+    }
+  });
+
+  it("a reply whose parent id does not match the annotation it is filed under emits nothing", () => {
+    const h = harness();
+    add(h, "a1", { author: "user", type: "comment" });
+    // Filed under a1 but claiming a different parent. `replies.ts` fetches by
+    // `reply.annotationId`, so this misses and drops on that route too — the
+    // assertion is that `narrowReplyForChannel` refuses it independently.
+    h.replies.set("r1", {
+      id: "r1",
+      annotationId: "ghost",
+      author: "user",
+      text: "t",
+      timestamp: 1,
+    });
+    expect(h.types()).toEqual(["annotation:created"]);
+    h.dispose();
+  });
+
+  it.each([
+    ["true"],
+    [1],
+    ["yes"],
+  ])("a reply whose private flag is the non-boolean %p is withheld", (value) => {
+    // `private === true` fails open on every one of these. The reply is the
+    // one value on this path nothing sanitizes.
+    const h = harness();
+    add(h, "a1", { author: "user", type: "comment" });
+    h.replies.set("r1", {
+      id: "r1",
+      annotationId: "a1",
+      author: "user",
+      text: "t",
+      timestamp: 1,
+      private: value as unknown as boolean,
+    });
+    expect(h.types()).toEqual(["annotation:created"]);
     h.dispose();
   });
 

@@ -1,5 +1,6 @@
 import type * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
+import { sanitizeAnnotation } from "../../../shared/sanitize.js";
 import type { Annotation } from "../../../shared/types.js";
 import { relaySanitizationEvent } from "../../annotations/migration-log.js";
 import {
@@ -13,6 +14,23 @@ import {
 import type { TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 import { makePerKeyChangeObserver } from "./factory.js";
+
+/**
+ * The previous value's type as sanitize would see it, or `undefined` if it
+ * cannot be read.
+ *
+ * `undefined` is the safe answer: it means "not a promotion", which routes to
+ * the edit branch, which needs `editedAt` to have advanced. That fails toward
+ * emitting nothing.
+ */
+function sanitizeOldType(oldRaw: Annotation | undefined): Annotation["type"] | undefined {
+  if (!oldRaw) return undefined;
+  try {
+    return sanitizeAnnotation(oldRaw, () => {}).type;
+  } catch {
+    return undefined;
+  }
+}
 
 export function makeAnnotationsObserver(deps: {
   docName: string;
@@ -59,7 +77,16 @@ export function makeAnnotationsObserver(deps: {
       }
 
       if (action === "update" && ann.author === "user" && ann.type === "comment") {
-        if (oldRaw?.type === "note") {
+        // Sanitized, not raw. The client's promoter sanitizes before deciding
+        // something is a note (`panels/annotation-actions.ts`), and sanitize
+        // maps a legacy `flag` to `note` — so a stored `flag` IS promotable and
+        // the user can promote one. Comparing the RAW old type against the
+        // literal "note" missed that: the promotion fell through to the edit
+        // branch, `editedAt` had not moved (promotion does not touch it), and
+        // the user got no channel event at all from a "Send to Claude" click.
+        // Not narrowed: `narrowForChannel` refuses notes, which is precisely
+        // the value this branch is looking for.
+        if (sanitizeOldType(oldRaw) === "note") {
           // Note promoted to comment via "Send to Claude" — surface it to the channel
           // so real-time subscribers see it as a new comment event.
           return {
