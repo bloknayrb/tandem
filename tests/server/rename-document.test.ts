@@ -45,8 +45,10 @@ const fsReal = await import("node:fs/promises");
 const { renameDocument, closeDocumentById } = await import(
   "../../src/server/mcp/document-service.js"
 );
-const { addDoc, removeDoc } = await import("../../src/server/documents/registry.js");
-const { getOpenDocs, setActiveDocId } = await import("../../src/server/mcp/document-service.js");
+const { addDoc, removeDoc, setActiveDocId } = await import(
+  "../../src/server/documents/registry-testing.js"
+);
+const { getOpenDocs } = await import("../../src/server/mcp/document-service.js");
 const { getOrCreateDocument } = await import("../../src/server/yjs/provider.js");
 const { docHash } = await import("../../src/server/annotations/doc-hash.js");
 const {

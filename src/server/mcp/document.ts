@@ -40,7 +40,7 @@ import {
 } from "./document-model.js";
 // Document service (state management)
 import {
-  broadcastOpenDocs,
+  activateDocument,
   closeDocumentById,
   docCount,
   getActiveDocId,
@@ -51,7 +51,6 @@ import {
   renameDocument,
   requireDocument,
   saveDocumentToDisk,
-  setActiveDocId,
   toDocListEntry,
 } from "./document-service.js";
 import { openFileByPath, openScratchpad } from "./file-opener.js";
@@ -113,21 +112,22 @@ export {
 } from "./document-model.js";
 export type { OpenDoc } from "./document-service.js";
 export {
-  addDoc,
+  activateDocument,
   autoSaveAllToDisk,
+  closeDocument,
   docCount,
   getActiveDocId,
   getCurrentDoc,
   getOpenDocs,
   hasDoc,
-  removeDoc,
+  openDocument,
   requireDocument,
   restoreCtrlSession,
   restoreOpenDocuments,
   saveCurrentSession,
   saveDocumentToDisk,
-  setActiveDocId,
   toDocListEntry,
+  updateDocument,
   writeGenerationId,
 } from "./document-service.js";
 export type { OpenFileResult } from "./file-opener.js";
@@ -1035,8 +1035,7 @@ export function registerDocumentTools(server: McpServer): void {
       if (!hasDoc(documentId)) {
         return mcpError("NO_DOCUMENT", `Document ${documentId} is not open.`);
       }
-      setActiveDocId(documentId);
-      broadcastOpenDocs();
+      activateDocument(documentId);
       return mcpSuccess({
         activeDocumentId: documentId,
         ...toDocListEntry(openDocs.get(documentId)!),

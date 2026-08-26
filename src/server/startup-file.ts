@@ -1,4 +1,4 @@
-import { setActiveDocId } from "./mcp/document-service.js";
+import { activateDocument } from "./mcp/document-service.js";
 import { openFileByPath } from "./mcp/file-opener.js";
 
 /**
@@ -34,11 +34,16 @@ export async function maybeOpenStartupFile(envPath: string | undefined): Promise
     return false;
   }
 
-  // setActiveDocId is intentionally outside the catch — a failure here
-  // indicates a programming bug (e.g. invalid documentId from a broken
-  // openFileByPath contract) and must surface to the top-level startup
-  // error handler rather than be swallowed alongside expected I/O errors.
-  setActiveDocId(result.documentId);
+  // Intentionally outside the catch — a failure here indicates a programming
+  // bug (e.g. an invalid documentId from a broken openFileByPath contract) and
+  // must surface to the top-level startup error handler rather than be
+  // swallowed alongside expected I/O errors.
+  //
+  // This used to be a bare `setActiveDocId`, with no broadcast: `openFileByPath`
+  // had already published, but with the PREVIOUS active id, so module state and
+  // published state disagreed until some unrelated broadcast happened to fire.
+  // `activateDocument` closes that by construction.
+  activateDocument(result.documentId);
   console.error(`[Tandem] Opened TANDEM_OPEN_FILE on startup: ${envPath}`);
   return true;
 }

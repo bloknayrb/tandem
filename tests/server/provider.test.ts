@@ -1,12 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { createHocuspocusLifecycle } from "../../src/server/bootstrap/hocuspocus-lifecycle.js";
-import {
-  addDoc,
-  getOpenDocs,
-  removeDoc,
-  setActiveDocId,
-} from "../../src/server/documents/registry.js";
+import { getOpenDocs } from "../../src/server/documents/registry.js";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { getGenerationId, writeGenerationId } from "../../src/server/mcp/document-service.js";
 import {
   assertAllowedOrigin,

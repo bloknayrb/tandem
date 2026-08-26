@@ -2,20 +2,26 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getActiveDocId, getOpenDocs, removeDoc } from "../../src/server/mcp/document-service.js";
+import { removeDoc } from "../../src/server/documents/registry-testing.js";
+import { getActiveDocId, getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { maybeOpenStartupFile } from "../../src/server/startup-file.js";
-import { removeDocument } from "../../src/server/yjs/provider.js";
+import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ACTIVE_DOCUMENT_ID,
+  Y_MAP_DOCUMENT_META,
+} from "../../src/shared/constants.js";
 
-// Spy on setActiveDocId so a single test can simulate a programming-bug
+// Spy on activateDocument so a single test can simulate a programming-bug
 // throw and verify the narrowed catch lets it propagate. vi.hoisted is
 // required: vi.mock factories are hoisted above all top-level statements,
 // so the spy must be declared in a hoisted block too. Defaults to the
 // real implementation; tests that don't override it see normal behavior.
-const { setActiveDocIdSpy } = vi.hoisted(() => ({ setActiveDocIdSpy: vi.fn() }));
+const { activateDocumentSpy } = vi.hoisted(() => ({ activateDocumentSpy: vi.fn() }));
 vi.mock("../../src/server/mcp/document-service.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/mcp/document-service.js")>();
-  setActiveDocIdSpy.mockImplementation(actual.setActiveDocId);
-  return { ...actual, setActiveDocId: setActiveDocIdSpy };
+  activateDocumentSpy.mockImplementation(actual.activateDocument);
+  return { ...actual, activateDocument: activateDocumentSpy };
 });
 
 let tmpDir: string | null = null;
@@ -66,6 +72,14 @@ describe("maybeOpenStartupFile", () => {
     const [openDoc] = [...getOpenDocs().values()];
     expect(openDoc.filePath).toBe(filePath);
     expect(getActiveDocId()).toBe(openDoc.id);
+
+    // …and PUBLISHES it. Before ADR-033 this activated with a bare
+    // `setActiveDocId`: openFileByPath had already broadcast, but with the
+    // previous active id, so module state and published state disagreed until
+    // some unrelated broadcast happened to fire. Asserting module state alone
+    // could not see that — it was the half that was already right.
+    const published = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_DOCUMENT_META);
+    expect(published.get(Y_MAP_ACTIVE_DOCUMENT_ID)).toBe(openDoc.id);
   });
 
   it("returns false (does not throw) when env var points to a missing file", async () => {
@@ -92,34 +106,37 @@ describe("maybeOpenStartupFile", () => {
     expect(getOpenDocs().size).toBe(1);
   });
 
-  it("propagates setActiveDocId failures (narrowed-catch contract)", async () => {
+  it("propagates activateDocument failures (narrowed-catch contract)", async () => {
     // The catch in maybeOpenStartupFile wraps openFileByPath ONLY. A throw
-    // from setActiveDocId — which would indicate a programming bug, not an
+    // from activateDocument — which would indicate a programming bug, not an
     // expected I/O error — must surface to the caller.
     //
-    // openFileByPath itself calls setActiveDocId internally (to mark the
-    // newly-opened doc active), so we let the first call execute the real
-    // implementation and only throw on the SECOND call (the one inside
-    // maybeOpenStartupFile after openFileByPath returns).
+    // This used to arm on the SECOND call, because openFileByPath activated
+    // the newly-opened doc through the same exported function. Since ADR-033
+    // it activates through the registry's private primitive inside
+    // `openDocumentWhenReady`, so the only call this spy ever sees is the one
+    // in maybeOpenStartupFile — asserted below rather than assumed, because a
+    // stale `>= 2` guard would simply never fire and the test would pass by
+    // never throwing at all.
     const dir = await makeTmpDir();
     const filePath = path.join(dir, "valid.md");
     await fs.writeFile(filePath, "# valid\n");
 
     let callCount = 0;
-    const realImpl = setActiveDocIdSpy.getMockImplementation();
-    setActiveDocIdSpy.mockImplementation((id: string | null) => {
+    const realImpl = activateDocumentSpy.getMockImplementation();
+    activateDocumentSpy.mockImplementation((_id: string | null) => {
       callCount += 1;
-      if (callCount >= 2) {
-        throw new Error("simulated setActiveDocId bug");
-      }
-      return realImpl?.(id);
+      throw new Error("simulated activateDocument bug");
     });
 
     try {
-      await expect(maybeOpenStartupFile(filePath)).rejects.toThrow("simulated setActiveDocId bug");
+      await expect(maybeOpenStartupFile(filePath)).rejects.toThrow(
+        "simulated activateDocument bug",
+      );
     } finally {
       // Restore the default-passthrough impl so afterEach cleanup works.
-      if (realImpl) setActiveDocIdSpy.mockImplementation(realImpl);
+      if (realImpl) activateDocumentSpy.mockImplementation(realImpl);
     }
+    expect(callCount, "maybeOpenStartupFile activates exactly once").toBe(1);
   });
 });

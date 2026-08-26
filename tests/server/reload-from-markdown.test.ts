@@ -38,8 +38,9 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
   return { ...actual, pushNotification: vi.fn() };
 });
 
+import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
-import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import {
   openFileByPath,
   openScratchpad,

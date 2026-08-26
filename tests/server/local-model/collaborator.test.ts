@@ -1,12 +1,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getOpenDocs } from "../../../src/server/documents/registry.js";
 import {
   addDoc,
-  getOpenDocs,
   removeDoc,
   setActiveDocId,
-} from "../../../src/server/documents/registry.js";
+} from "../../../src/server/documents/registry-testing.js";
 import {
   attachCtrlObservers,
   resetForTesting as resetQueue,

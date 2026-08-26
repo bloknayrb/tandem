@@ -72,18 +72,18 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 // Save / auto-save / broadcast / session-restore concerns stay here for now.
 
 import {
-  addDoc,
+  activateDocument,
+  closeDocument,
   docCount,
-  getActiveDocEpoch,
   getActiveDocId,
   getOpenDocs,
-  type OpenDoc,
-  removeDoc,
-  setActiveDocId,
+  updateDocument,
 } from "../documents/registry.js";
 
 export {
-  addDoc,
+  activateDocument,
+  broadcastOpenDocs,
+  closeDocument,
   docCount,
   getActiveDocEpoch,
   getActiveDocId,
@@ -91,9 +91,11 @@ export {
   getOpenDocs,
   hasDoc,
   type OpenDoc,
-  removeDoc,
+  openDocument,
+  openDocumentWhenReady,
   requireDocument,
-  setActiveDocId,
+  toDocListEntry,
+  updateDocument,
 } from "../documents/registry.js";
 
 /** Internal alias for the registry's view of open docs — used by closures below. */
@@ -814,7 +816,11 @@ export async function saveDocumentAsToDisk(
 
     // Promote in place — keep the Hocuspocus room ID, swap source/filePath/format.
     const fileName = path.basename(resolved);
-    addDoc(docId, {
+    // Publishes the new basename + format in the same step. The registry write
+    // cannot be deferred to where the broadcast used to sit: `markClean` below
+    // reads this entry's `source` via `isDirtyMirrorEligible`, and a stale
+    // "upload" would silently suppress the dirty mirror for a now-real file.
+    updateDocument({
       id: docId,
       filePath: resolved,
       format,
@@ -865,10 +871,6 @@ export async function saveDocumentAsToDisk(
     // immediately re-write it (#851). attachObservers re-registered the body
     // observer above (preserving the version counter), so mark clean here.
     markClean(docId);
-
-    // Broadcast the new openDocuments list so every connected tab bar reflects
-    // the new basename + format.
-    broadcastOpenDocs();
 
     // Emit a synthetic `document:opened` so Claude can read/edit the now-real
     // file by path. Because promote keeps the same documentId, the ctrl-meta
@@ -944,57 +946,6 @@ export async function autoSaveAllToDisk(): Promise<void> {
       }
     } catch (err) {
       console.error("[AutoSave] Unexpected error saving %s:", state.filePath, err);
-    }
-  }
-}
-
-/** Build the document list entry for a single OpenDoc */
-export function toDocListEntry(d: OpenDoc) {
-  return {
-    id: d.id,
-    filePath: d.filePath,
-    fileName: path.basename(d.filePath),
-    format: d.format,
-    readOnly: d.readOnly,
-    // `source` distinguishes on-disk files ("file") from ephemeral
-    // scratchpads/uploads ("upload"). The client uses it to gate the rename
-    // affordance (only "file" docs are renamable); see #1017.
-    source: d.source,
-  };
-}
-
-/** Broadcast the open documents list to connected clients.
- *  Writes to both the bootstrap room (CTRL_ROOM) so new clients discover
- *  docs, and to the active document's room so tab-switching clients stay in sync. */
-export function broadcastOpenDocs(): void {
-  const docList = Array.from(openDocs.values()).map(toDocListEntry);
-  const id = getActiveDocId();
-  const epoch = getActiveDocEpoch();
-
-  try {
-    const ctrl = getOrCreateDocument(CTRL_ROOM);
-    const ctrlMeta = ctrl.getMap(Y_MAP_DOCUMENT_META);
-    withInternal(ctrl, () => {
-      ctrlMeta.set(Y_MAP_OPEN_DOCUMENTS, docList);
-      ctrlMeta.set(Y_MAP_ACTIVE_DOCUMENT_ID, id);
-      ctrlMeta.set(Y_MAP_ACTIVE_DOCUMENT_EPOCH, epoch);
-    });
-  } catch (err) {
-    console.error("[Tandem] broadcastOpenDocs: failed to update CTRL_ROOM:", err);
-  }
-
-  // Update ALL open doc rooms so no per-doc Y.Doc ever has a stale list.
-  for (const [docId] of openDocs) {
-    try {
-      const ydoc = getOrCreateDocument(docId);
-      const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
-      withInternal(ydoc, () => {
-        meta.set(Y_MAP_OPEN_DOCUMENTS, docList);
-        meta.set(Y_MAP_ACTIVE_DOCUMENT_ID, id);
-        meta.set(Y_MAP_ACTIVE_DOCUMENT_EPOCH, epoch);
-      });
-    } catch (err) {
-      console.error("[Tandem] broadcastOpenDocs: failed to update doc %s:", docId, err);
     }
   }
 }
@@ -1382,8 +1333,10 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       // edit arriving within the TTL.
       wireFileWatcher(docId, newPath, format);
 
-      // Update the registry entry: same id/room, new path. addDoc overwrites by id.
-      addDoc(docId, { id: docId, filePath: newPath, format, readOnly: false, source: "file" });
+      // Update the registry entry and publish the new basename: same id/room,
+      // new path, overwritten by id. Activation is untouched — a rename must
+      // not steal focus.
+      updateDocument({ id: docId, filePath: newPath, format, readOnly: false, source: "file" });
 
       // Update the tab's fileName + savedAt baseline. withFileSync is the right
       // origin per ADR-031 (post-rename bookkeeping — a file-writer echo, not user
@@ -1399,8 +1352,6 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
         meta.set("fileName", fileName);
         if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
       });
-
-      broadcastOpenDocs();
     } catch (err) {
       console.error("[Rename] post-commit bookkeeping failed for %s:", docId, err);
     }
@@ -1513,7 +1464,10 @@ export async function closeDocumentById(
   // Drop dirty-tracking state + detach its body observer (#851).
   clearDirtyState(id);
 
-  removeDoc(id);
+  // The registry's slice of the close: untrack, reassign the active id when the
+  // closed doc held it, publish once. The store flush, file-sync context and
+  // dirty teardown above stay here — their ordering is load-bearing.
+  closeDocument(id);
 
   // Delete the session file so this document doesn't reopen on restart —
   // unless the block above just wrote it as the surviving copy of unpersisted
@@ -1532,16 +1486,9 @@ export async function closeDocumentById(
     }
   }
 
-  if (getActiveDocId() === id) {
-    const remaining = Array.from(openDocs.keys());
-    setActiveDocId(remaining.length > 0 ? remaining[0] : null);
-  }
-
   if (docCount() === 0) {
     stopAutoSave();
   }
-
-  broadcastOpenDocs();
 
   return { success: true, closedPath, activeDocumentId: getActiveDocId() };
 }
@@ -1674,8 +1621,7 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
 
   // Restore the previously active document if it was successfully reopened
   if (previousActiveDocId && openDocs.has(previousActiveDocId)) {
-    setActiveDocId(previousActiveDocId);
-    broadcastOpenDocs();
+    activateDocument(previousActiveDocId);
   }
 
   if (restoredCount > 0) {

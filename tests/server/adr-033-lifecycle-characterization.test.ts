@@ -35,6 +35,7 @@ import {
   createHocuspocusLifecycle,
   installTandemLifecycle,
 } from "../../src/server/bootstrap/hocuspocus-lifecycle.js";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   clearFileSyncContext,
   getAllFileSyncContexts,
@@ -44,14 +45,16 @@ import {
 } from "../../src/server/events/file-sync-registry.js";
 import { attachObservers, detachObservers } from "../../src/server/events/queue.js";
 import {
-  addDoc,
+  activateDocument,
   broadcastOpenDocs,
+  closeDocument,
   getActiveDocEpoch,
   getActiveDocId,
   getOpenDocs,
   type OpenDoc,
-  removeDoc,
-  setActiveDocId,
+  openDocument,
+  openDocumentWhenReady,
+  updateDocument,
 } from "../../src/server/mcp/document-service.js";
 import {
   getOrCreateDocument,
@@ -368,5 +371,101 @@ describe("Y.Doc swap versus unload", () => {
     expect(cleanups, 'the swap tears the old observer down with the "swap" phase').toEqual([
       "swap",
     ]);
+  });
+});
+
+describe("the composite mutators", () => {
+  // Added because a mutation battery found both of these unasserted: the module
+  // doc claimed each property, and every suite stayed green with it broken.
+
+  it("updateDocument publishes metadata without stealing focus", () => {
+    openDocument(makeOpenDoc("focus-holder"));
+    openDocument(makeOpenDoc("renamed-doc"));
+    activateDocument("focus-holder");
+    const epochBefore = getActiveDocEpoch();
+    expect(readMeta(CTRL_ROOM).activeId, "control: focus starts elsewhere").toBe("focus-holder");
+
+    updateDocument({
+      id: "renamed-doc",
+      filePath: "/tmp/renamed-doc-NEW.md",
+      format: "md",
+      readOnly: false,
+      source: "file",
+    });
+
+    // A rename or a Save-As promotion changes what a tab *is*, not which tab is
+    // focused. Routing either through `openDocument` would advance the epoch,
+    // and the client reads an advance as an intentional focus event — so the
+    // user's tab would jump under them when a background file was renamed.
+    expect(getActiveDocId(), "the active document is unchanged").toBe("focus-holder");
+    expect(getActiveDocEpoch(), "and no focus event was published").toBe(epochBefore);
+    expect(readMeta(CTRL_ROOM).activeId).toBe("focus-holder");
+
+    const published = getOrCreateDocument(CTRL_ROOM)
+      .getMap(Y_MAP_DOCUMENT_META)
+      .get(Y_MAP_OPEN_DOCUMENTS) as Array<{ id: string; filePath: string }>;
+    expect(
+      published.find((d) => d.id === "renamed-doc")?.filePath,
+      "…while the new path IS published",
+    ).toBe("/tmp/renamed-doc-NEW.md");
+  });
+
+  it("openDocumentWhenReady publishes only after its prepare step finishes", async () => {
+    openDocument(makeOpenDoc("already-open"));
+
+    let publishedDuringPrepare: string[] | null = null;
+    await openDocumentWhenReady(makeOpenDoc("opening"), async () => {
+      // An open is not finished here: the document meta, saved baseline and
+      // annotation store are still being wired. Publishing the tab now would
+      // show clients a document that is not ready.
+      publishedDuringPrepare = readMeta(CTRL_ROOM).docIds;
+      await Promise.resolve();
+    });
+
+    expect(publishedDuringPrepare, "control: prepare actually ran").not.toBeNull();
+    expect(publishedDuringPrepare, "the opening document is not published yet").toEqual([
+      "already-open",
+    ]);
+    expect(readMeta(CTRL_ROOM).docIds, "…and is, once prepare resolves").toContain("opening");
+  });
+
+  it("openDocumentWhenReady does not publish a tab whose open failed", async () => {
+    openDocument(makeOpenDoc("survivor"));
+    const before = readMeta(CTRL_ROOM).docIds;
+
+    await expect(
+      openDocumentWhenReady(makeOpenDoc("doomed"), () => {
+        throw new Error("wiring the annotation store failed");
+      }),
+    ).rejects.toThrow("wiring the annotation store failed");
+
+    // Matches the hand-rolled sequences this replaced: the throw escaped before
+    // their broadcast, so a failed open never reached the tab bar. The registry
+    // still holds the entry — cleanup is the caller's, and `file-opener.ts` has
+    // its own failure path for that.
+    expect(readMeta(CTRL_ROOM).docIds, "the failed open was never published").toEqual(before);
+  });
+
+  it("closeDocument reassigns the active id and publishes once", () => {
+    openDocument(makeOpenDoc("close-a"));
+    openDocument(makeOpenDoc("close-b"));
+    activateDocument("close-b");
+
+    const ctrl = watchTransactions(getOrCreateDocument(CTRL_ROOM));
+    closeDocument("close-b");
+
+    expect(ctrl.count(), "one publish for the removal AND the reassignment").toBe(1);
+    expect(getActiveDocId(), "focus falls to the first surviving document").toBe("close-a");
+    expect(readMeta(CTRL_ROOM).activeId).toBe("close-a");
+    expect(readMeta(CTRL_ROOM).docIds).toEqual(["close-a"]);
+  });
+
+  it("closeDocument clears the active id when nothing survives", () => {
+    openDocument(makeOpenDoc("last-one"));
+    closeDocument("last-one");
+
+    expect(getActiveDocId()).toBeNull();
+    expect(readMeta(CTRL_ROOM).activeId).toBeNull();
+    expect(readMeta(CTRL_ROOM).docIds).toEqual([]);
   });
 });

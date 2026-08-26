@@ -12,7 +12,8 @@ import {
   setDirtyMirrorEligibility,
   snapshotDirtyVersion,
 } from "../../src/server/documents/dirty.js";
-import { addDoc, isDirtyMirrorEligible, removeDoc } from "../../src/server/documents/registry.js";
+import { isDirtyMirrorEligible } from "../../src/server/documents/registry.js";
+import { addDoc, removeDoc } from "../../src/server/documents/registry-testing.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_DIRTY, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
 
