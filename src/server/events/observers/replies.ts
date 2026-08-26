@@ -1,6 +1,12 @@
 import type * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
-import type { Annotation, AnnotationReply } from "../../../shared/types.js";
+import type { AnnotationReply } from "../../../shared/types.js";
+import { relaySanitizationEvent } from "../../annotations/migration-log.js";
+import {
+  narrowForChannel,
+  narrowReplyForChannel,
+  replyPayload,
+} from "../../annotations/projection.js";
 import type { TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 import { makePerKeyChangeObserver } from "./factory.js";
@@ -18,32 +24,37 @@ export function makeRepliesObserver(deps: {
     map: repliesMap,
     pushEvent,
     derive: ({ key, action, value: reply }) => {
-      if (action !== "add" || !reply || reply.author !== "user") return undefined;
+      if (action !== "add") return undefined;
 
-      // Look up the parent annotation for the text snippet.
-      const parentAnn = annotationsMap.get(reply.annotationId) as Annotation | undefined;
-      // ADR-027: notes are user-private; highlights are user-only UI markup.
-      // Only replies on comments surface to the channel (Claude). Since #1000
-      // notes CAN carry replies (user-authored + imported Word threads), so
-      // this type check is now load-bearing privacy, not just an impossible
-      // case: it keeps note/highlight reply text + textSnapshot off the SSE
-      // wire. (The `reply.author !== "user"` guard above also blocks the
-      // `import`-authored replies independently.) Do not weaken either gate.
-      if (!parentAnn || parentAnn.type !== "comment") return undefined;
-      const textSnippet = parentAnn.textSnapshot ?? "";
+      // ADR-035: the parent goes through the same narrow the annotations
+      // observer uses. This file previously read it with a bare
+      // `as Annotation | undefined` and never sanitized it, so the parent's
+      // type was trusted exactly as stored — a legacy or CRDT-merged record
+      // could carry a raw type the rest of the system would have migrated. The
+      // narrow now sanitizes first and then applies both privacy halves, which
+      // also closes the case where an UNTRIAGED imported comment's replies
+      // reached the channel: imports derive `audience: "private"` until the
+      // user triages them, and nothing here used to look.
+      const parent = narrowForChannel(annotationsMap.get(reply?.annotationId ?? ""), {
+        onLossy: (event) => relaySanitizationEvent(docName, event),
+      });
+      if (!parent) return undefined;
+
+      // The parent being eligible says nothing about the reply.
+      // `AnnotationReply.private` is stamped at creation from the parent's type
+      // AT THAT INSTANT and is permanent, so a reply written while the parent
+      // was a note stays private after a promotion. This file never read that
+      // field — it was safe only because its parent-type check happened to
+      // agree, which is one invariant encoded twice. Now it is read.
+      const eligible = narrowReplyForChannel(reply, parent);
+      if (!eligible) return undefined;
 
       return {
         id: generateEventId(),
         type: "annotation:reply",
         timestamp: Date.now(),
         documentId: docName,
-        payload: {
-          annotationId: reply.annotationId,
-          replyId: key,
-          replyText: reply.text,
-          replyAuthor: reply.author,
-          textSnippet,
-        },
+        payload: replyPayload(eligible, parent, key),
       };
     },
   });

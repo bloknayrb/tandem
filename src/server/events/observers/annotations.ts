@@ -1,8 +1,15 @@
 import type * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
-import { sanitizeAnnotation } from "../../../shared/sanitize.js";
 import type { Annotation } from "../../../shared/types.js";
 import { relaySanitizationEvent } from "../../annotations/migration-log.js";
+import {
+  acceptedPayload,
+  createdPayload,
+  describeRefusal,
+  dismissedPayload,
+  editedPayload,
+  narrowForChannel,
+} from "../../annotations/projection.js";
 import type { TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 import { makePerKeyChangeObserver } from "./factory.js";
@@ -19,35 +26,35 @@ export function makeAnnotationsObserver(deps: {
     map: annotationsMap,
     pushEvent,
     derive: ({ key, action, value: raw, oldValue: oldRaw }): TandemEvent | undefined => {
-      if (!raw) return undefined;
+      // ADR-035: the single narrow. Sanitizes, then requires
+      // `audience === "outbound" && type !== "note"`. Everything below builds
+      // its payload from `ann`, and the builders take `ChannelEligible` — so a
+      // branch that forgets to narrow is a compile error, not a silent leak.
+      const ann = narrowForChannel(raw, {
+        onLossy: (event) => relaySanitizationEvent(docName, event),
+        onRefused: (refusal, refused) => {
+          if (refusal.reason !== "unsanitizable") return;
+          console.warn(
+            `[EventQueue] sanitizeAnnotation failed for key=${key}: ${describeRefusal(refusal, refused?.id)}`,
+          );
+        },
+      });
+      if (!ann) return undefined;
 
-      let ann: Annotation;
-      try {
-        ann = sanitizeAnnotation(raw, (event) => relaySanitizationEvent(docName, event));
-      } catch (err) {
-        console.warn(`[EventQueue] sanitizeAnnotation failed for key=${key}:`, err);
-        return undefined;
-      }
-
+      // The narrow says whether this annotation MAY be projected. It cannot say
+      // which transition happened — only the action/author/status cascade below
+      // can tell an add from an edit from an accept, so each keeps its own gate.
       if (action === "add" && ann.author === "user") {
-        // ADR-027: notes are user-private; highlights are user-only UI markup.
-        // Only comments surface to the channel (Claude). The early return
-        // makes this privacy invariant structurally explicit — a future
-        // refactor that drops the type check breaks visibly here, not by
-        // silently leaking notes.
+        // Comments only on the add path. Kept alongside the narrow rather than
+        // folded into it: this is a product rule about which of the user's own
+        // annotations start a conversation, not the privacy rule.
         if (ann.type !== "comment") return undefined;
         return {
           id: generateEventId(),
           type: "annotation:created",
           timestamp: Date.now(),
           documentId: docName,
-          payload: {
-            annotationId: ann.id,
-            annotationType: ann.type,
-            content: ann.content,
-            textSnippet: ann.textSnapshot ?? "",
-            ...(ann.suggestedText !== undefined ? { hasSuggestedText: true } : {}),
-          },
+          payload: createdPayload(ann),
         };
       }
 
@@ -60,12 +67,7 @@ export function makeAnnotationsObserver(deps: {
             type: "annotation:created",
             timestamp: Date.now(),
             documentId: docName,
-            payload: {
-              annotationId: ann.id,
-              annotationType: ann.type,
-              content: ann.content,
-              textSnippet: ann.textSnapshot ?? "",
-            },
+            payload: createdPayload(ann),
           };
         }
         // Comment edited by user — surface edit to channel if editedAt advanced.
@@ -77,31 +79,21 @@ export function makeAnnotationsObserver(deps: {
           type: "annotation:edited",
           timestamp: Date.now(),
           documentId: docName,
-          payload: {
-            annotationId: ann.id,
-            content: ann.content,
-            textSnippet: ann.textSnapshot ?? "",
-            editedAt: newEditedAt,
-          },
+          payload: editedPayload(ann, newEditedAt),
         };
       }
 
       if (action === "update" && ann.author === "claude") {
-        // ADR-027 defense-in-depth: a Claude-authored note is structurally
-        // impossible today, but file-sync echoes or future schema drift
-        // could produce one. Mirror the `add` branch's type guard above so
-        // the privacy invariant is locally explicit on both surfaces.
-        if (ann.type === "note") return undefined;
+        // No `type` check here any more: the narrow already refused notes, and
+        // it refused them against the SANITIZED value rather than the raw one,
+        // which is strictly stronger than the guard this replaces.
         if (ann.status === "accepted") {
           return {
             id: generateEventId(),
             type: "annotation:accepted",
             timestamp: Date.now(),
             documentId: docName,
-            payload: {
-              annotationId: ann.id,
-              textSnippet: ann.textSnapshot ?? "",
-            },
+            payload: acceptedPayload(ann),
           };
         }
         if (ann.status === "dismissed") {
@@ -110,10 +102,7 @@ export function makeAnnotationsObserver(deps: {
             type: "annotation:dismissed",
             timestamp: Date.now(),
             documentId: docName,
-            payload: {
-              annotationId: ann.id,
-              textSnippet: ann.textSnapshot ?? "",
-            },
+            payload: dismissedPayload(ann),
           };
         }
       }
