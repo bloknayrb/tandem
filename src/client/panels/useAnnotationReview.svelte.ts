@@ -7,7 +7,7 @@ import { withBrowser } from "../../shared/origins";
 import { isPlaintextFormat } from "../../shared/plaintext-format";
 import type { SanitizationEvent } from "../../shared/sanitize";
 import { sanitizeAnnotation } from "../../shared/sanitize";
-import { isSnapshotTruncated } from "../../shared/snapshot";
+import { isSnapshotTruncated, snapshotContradicts } from "../../shared/snapshot";
 import type { Annotation } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship";
@@ -295,6 +295,29 @@ export function applySuggestion(
   const resolved = annotationToPmRange(ann, editor.state.doc, ydoc);
   if (!resolved) {
     console.warn("[SidePanel] Could not resolve range for suggestion", ann.id);
+    return false;
+  }
+
+  // #1629: verify the target still reads as what the suggestion was written
+  // against, BEFORE deleting it.
+  //
+  // Resolvability is not that check, and on its own it barely gates anything:
+  // `annotationToPmRange` does not fail when the CRDT anchor dies, it warns and
+  // falls back to the stale flat offsets — and `range` is required on
+  // `AnnotationBase`. The fallback is right for RENDERING (that is what
+  // `buildDecorations`' warn is for) and wrong as the only gate on a delete.
+  // Without this, accepting after the target moved delete-replaced whatever
+  // text had arrived at those offsets, silently.
+  //
+  // `rangeText`, not a bare `textBetween`: `snapshotContradicts` compares
+  // against the SERVER's flat-text projection, which is what `textSnapshot` was
+  // sliced from. The truncated-prefix rule and the absent-snapshot carve-out
+  // both live in that predicate, alongside the `.docx` apply guard that has
+  // asked the same question since #1486.
+  if (snapshotContradicts(ann, rangeText(editor, resolved.from, resolved.to))) {
+    console.warn(
+      `[SidePanel] Text changed since the suggestion was written, refusing to apply ${ann.id}`,
+    );
     return false;
   }
 

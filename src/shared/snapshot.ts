@@ -96,3 +96,39 @@ export function snapshotSearchPrefix(ann: SnapshotBearing): string {
   if (ann.textSnapshotTruncated === true) return snapshot;
   return snapshot.slice(0, -LEGACY_ELLIPSIS.length);
 }
+
+/**
+ * Does `actual` — the text now under this record's range — CONTRADICT what its
+ * snapshot captured? Both write paths that can destroy user text gate on this:
+ * the `.docx` tracked-changes apply, and accepting a suggestion in the editor.
+ *
+ * **Phrased as a contradiction on purpose, and the name is the contract.** A
+ * record with no snapshot captured nothing, so nothing can contradict it and
+ * this returns `false`. Read that as *no evidence of drift*, never as
+ * *verified* — an affirmative `snapshotMatches` would return `true` for exactly
+ * the records it knows least about, and it would be gating a delete.
+ *
+ * Composing the two predicates above is the whole job, and it has to be done in
+ * one place: a truncated snapshot is a real, contiguous PREFIX (#1486), so it
+ * can only ever be prefix-matched, while demanding equality would decline every
+ * suggestion over a span longer than {@link SNAPSHOT_CAP}. That turns a
+ * silent-overwrite bug into a cannot-accept-anything bug. The two call sites
+ * spelled this out separately once and had already drifted on which value they
+ * compared against.
+ *
+ * `actual` must be in the SERVER's flat-text projection — the same one
+ * `captureSnapshot` slices from — or this compares unlike with unlike. On the
+ * client that means `rangeText`, not a bare `textBetween`.
+ *
+ * Note the direction of failure, which is chosen rather than incidental:
+ * wherever the projections disagree, this reports a contradiction and the
+ * caller declines a write that would have been fine. That is strictly safer
+ * than the silent overwrite it exists to prevent.
+ */
+export function snapshotContradicts(ann: SnapshotBearing, actual: string): boolean {
+  // Absent, NOT empty: `snapshotSearchPrefix` collapses both to `""`, and a
+  // stored empty snapshot is a real claim that the range held no text.
+  if (typeof ann.textSnapshot !== "string") return false;
+  const expected = snapshotSearchPrefix(ann);
+  return isSnapshotTruncated(ann) ? !actual.startsWith(expected) : actual !== expected;
+}
