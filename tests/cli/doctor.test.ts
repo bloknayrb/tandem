@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ANNOTATION_SCAN_MAX_FILES } from "../../src/cli/annotation-store-scan.js";
 import {
   CWD_DEPENDENT_CHECKS,
   evaluateAbsentChannelEntry,
@@ -156,6 +157,88 @@ describe("runDoctor", () => {
     // Schema version is surfaced from the sampled file.
     const schemaResult = storeResults.find((r) => r.data && "schemaVersion" in r.data);
     expect(schemaResult?.data?.schemaVersion).toBe(3);
+  });
+
+  /**
+   * The headline result must carry the verdict.
+   *
+   * Before this, an annotation store whose active files were all unparseable
+   * reported `pass` — `Annotation store: N doc(s)` with `corruptCount: 0`,
+   * because `corruptCount` was a filename filter and the loop's own parse
+   * failures went into an empty catch whose comment claimed, wrongly, that they
+   * were counted below. An operator reads the summary line; a warning that only
+   * appeared elsewhere in the report would not have been enough either.
+   */
+  it("warns instead of passing when an active annotation file cannot be read", async () => {
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(join(annDir, "broken.json"), "{ not json");
+
+    const report = await runDoctor();
+    const summary = report.results.find(
+      (r) => r.check === "annotation-store" && r.data && "docCount" in r.data,
+    );
+
+    expect(summary?.status).toBe("warn");
+    expect(summary?.data?.unreadableActive).toBe(1);
+    expect(summary?.data?.unreadableSample).toEqual(["broken.json"]);
+  });
+
+  /**
+   * The bound has to be visible in the report, not just enforced in the code.
+   * A scan that silently stopped at its cap would publish a doc count it never
+   * validated — the same class of dishonesty as the filename-only corrupt
+   * count, one level up.
+   *
+   * Written against the REAL cap rather than a test override, because the
+   * override exists for the scanner's own suite and cannot prove the check
+   * wired the reporting to it.
+   */
+  it("warns that a scan stopped at its file cap", async () => {
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    const doc = JSON.stringify({
+      schemaVersion: 1,
+      docHash: "h",
+      meta: { filePath: "/tmp/d.md", lastUpdated: 0 },
+      annotations: [],
+      tombstones: [],
+      replies: [],
+    });
+    for (let i = 0; i <= ANNOTATION_SCAN_MAX_FILES; i++) {
+      writeFileSync(join(annDir, `doc-${i}.json`), doc);
+    }
+
+    const report = await runDoctor();
+    // Two results carry `scan: "incomplete"`: the headline and the dedicated
+    // detail line. Both must warn — a passing headline over a partial scan is
+    // the failure this check exists to stop.
+    const carrying = report.results.filter(
+      (r) => r.check === "annotation-store" && r.data?.scan === "incomplete",
+    );
+    expect(carrying).toHaveLength(2);
+    expect(carrying.map((r) => r.status)).toEqual(["warn", "warn"]);
+    const incomplete = carrying.find((r) => "limit" in (r.data ?? {}));
+    expect(incomplete?.status).toBe("warn");
+    expect(incomplete?.data?.limit).toBe("files");
+    expect(incomplete?.data?.examined).toBe(ANNOTATION_SCAN_MAX_FILES);
+    expect(incomplete?.data?.docCount).toBe(ANNOTATION_SCAN_MAX_FILES + 1);
+  });
+
+  it("surfaces annotation files parked as .future by a newer Tandem", async () => {
+    // Neither `.json` nor `.corrupt.`, so the previous check saw nothing at
+    // all: a downgraded install got no signal that its annotations had stopped
+    // loading.
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(join(annDir, "abc.json.future"), "{}");
+
+    const report = await runDoctor();
+    const parked = report.results.find(
+      (r) => r.check === "annotation-store" && r.data && "parkedFuture" in r.data,
+    );
+    expect(parked?.status).toBe("warn");
+    expect(parked?.data?.parkedFuture).toBe(1);
   });
 
   it("reports a zeroed data block when the store dir does not exist", async () => {

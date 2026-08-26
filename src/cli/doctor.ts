@@ -24,7 +24,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { request } from "node:http";
 import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
@@ -45,6 +45,12 @@ import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
 import { isOnPath, resolveManyOnPath } from "../shared/integrations/path-lookup.js";
 import { rejectUnsafeWindowsPrefix } from "../shared/windows-path-safety.js";
+import {
+  ANNOTATION_SCAN_MAX_FILE_BYTES,
+  ANNOTATION_SCAN_MAX_FILES,
+  ANNOTATION_SCAN_MAX_TOTAL_BYTES,
+  scanAnnotationStore,
+} from "./annotation-store-scan.js";
 import { nodeVersionError } from "./node-version.js";
 
 // Injected by tsup into dist/cli. Absent in tsx dev / vitest (typeof-guarded at
@@ -2409,19 +2415,39 @@ function checkSseEndpoint(r: Recorder, mcpPort: number): Promise<void> {
 
 // ── Check: annotation store health ──────────────────────────────────
 
-/** Mirror of `env-paths("tandem").data` for the current OS. */
-function resolveAppDataDir(): string {
+/**
+ * Mirror of `env-paths("tandem").data` for the current OS, **with the raw
+ * inputs it was derived from**.
+ *
+ * The inputs are returned rather than recomputed by a sibling helper because
+ * they have to be screened for hostile Windows prefixes and a second copy of
+ * this precedence chain would drift from this one silently. Screening the raw
+ * input is not redundant with screening the derived path: of the fourteen
+ * spellings in `tests/helpers/unc-fixtures.ts`, the four pure forward-slash
+ * forms collapse to something `posix.join` renders harmless, so on a Linux
+ * runner a derived-path-only guard never fires for them and its test passes
+ * because the path stopped being dangerous rather than because anything
+ * screened it. That is the #1529 shape, and CI's `check` job is ubuntu-only.
+ * Same argument, and the same measurement, as {@link homeIsUnsafe}.
+ */
+function resolveAppDataDir(): { dir: string; inputs: string[] } {
   const override = process.env.TANDEM_APP_DATA_DIR;
-  if (override && override.length > 0) return override;
+  if (override && override.length > 0) return { dir: override, inputs: [override] };
 
   const home = homedir();
   switch (platform()) {
-    case "win32":
-      return join(process.env.LOCALAPPDATA || join(home, "AppData", "Local"), "tandem", "Data");
+    case "win32": {
+      const local = process.env.LOCALAPPDATA;
+      const root = local || join(home, "AppData", "Local");
+      return { dir: join(root, "tandem", "Data"), inputs: [local || home] };
+    }
     case "darwin":
-      return join(home, "Library", "Application Support", "tandem");
-    default:
-      return join(process.env.XDG_DATA_HOME || join(home, ".local", "share"), "tandem");
+      return { dir: join(home, "Library", "Application Support", "tandem"), inputs: [home] };
+    default: {
+      const xdg = process.env.XDG_DATA_HOME;
+      const root = xdg || join(home, ".local", "share");
+      return { dir: join(root, "tandem"), inputs: [xdg || home] };
+    }
   }
 }
 
@@ -2441,9 +2467,56 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function checkAnnotationStore(r: Recorder): void {
-  const dir = join(resolveAppDataDir(), "annotations");
-  if (!existsSync(dir)) {
+/** The fix both app-data path refusals emit. */
+const UNSAFE_APP_DATA_FIX =
+  "Tandem refuses network and extended-length paths because reading one can leak a " +
+  "Windows credential hash. Point TANDEM_APP_DATA_DIR (or your local app-data location) " +
+  "at a local drive.";
+
+/**
+ * Annotation-store health.
+ *
+ * **This check reports what it actually examined.** Its predecessor emitted a
+ * `pass` line reading `Annotation store: N doc(s)` together with a
+ * `corruptCount` derived purely from filenames, while its own parse failures
+ * were swallowed by an empty `catch` whose comment claimed they were "counted
+ * under corruptFiles check below" — they were not, and could not be, because
+ * that count was computed before the loop from names that by construction
+ * exclude the failing file. A store in which every active annotation file was
+ * unparseable therefore reported PASS with a healthy-looking doc count and no
+ * warning at all.
+ *
+ * The scan behind it is bounded and asynchronous; see
+ * `annotation-store-scan.ts` for why a bounded full scan is not a regression on
+ * the request-led work this unit is also asked to cap.
+ */
+async function checkAnnotationStore(r: Recorder): Promise<void> {
+  const { dir: base, inputs } = resolveAppDataDir();
+  // Screen the raw inputs BEFORE deriving a path or touching the filesystem.
+  for (const input of inputs) {
+    if (input !== "" && rejectUnsafeWindowsPrefix(input) !== null) {
+      r.fail(
+        "Annotation store location resolves to a network or extended-length path; refusing to read it",
+        UNSAFE_APP_DATA_FIX,
+        { unsafePath: true },
+      );
+      return;
+    }
+  }
+
+  const dir = join(base, "annotations");
+  const scan = await scanAnnotationStore(dir);
+
+  if (scan.kind === "unsafe-path") {
+    r.fail(
+      `Annotation store dir is a network or extended-length path; refusing to read it: ${scan.reason}`,
+      UNSAFE_APP_DATA_FIX,
+      { dir, unsafePath: true },
+    );
+    return;
+  }
+
+  if (scan.kind === "absent") {
     r.pass(`Annotation store dir not yet created (${dir}) — first open will create it`, undefined, {
       dir,
       docCount: 0,
@@ -2454,79 +2527,100 @@ function checkAnnotationStore(r: Recorder): void {
     return;
   }
 
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch (err) {
-    r.fail(`Annotation store dir unreadable: ${errMsg(err)}`, `Check permissions on ${dir}`);
+  if (scan.kind === "unreadable-dir") {
+    r.fail(`Annotation store dir unreadable: ${scan.error}`, `Check permissions on ${dir}`);
     return;
   }
 
-  const jsonFiles = entries.filter((f) => f.endsWith(".json") && !f.endsWith(".corrupt.json"));
-  const corruptFiles = entries.filter((f) => f.includes(".corrupt."));
-
-  let totalBytes = 0;
-  let newest: { name: string | null; mtime: number } = { name: null, mtime: 0 };
-  let sampleSchemaVersion: number | null = null;
-
-  for (const f of jsonFiles) {
-    try {
-      const s = statSync(join(dir, f));
-      totalBytes += s.size;
-      if (s.mtimeMs > newest.mtime) {
-        newest = { name: f, mtime: s.mtimeMs };
-      }
-      if (sampleSchemaVersion === null) {
-        try {
-          const parsed = JSON.parse(readFileSync(join(dir, f), "utf-8"));
-          if (typeof parsed?.schemaVersion === "number") {
-            sampleSchemaVersion = parsed.schemaVersion;
-          }
-        } catch {
-          // malformed individual file — counted under corruptFiles check below
-        }
-      }
-    } catch {
-      // file vanished between readdir and stat — ignore
-    }
+  const summary = `Annotation store: ${scan.docCount} doc(s), ${formatBytes(scan.totalBytes)} total`;
+  const summaryData = {
+    dir,
+    docCount: scan.docCount,
+    examined: scan.examined,
+    totalBytes: scan.totalBytes,
+    corruptCount: scan.quarantined,
+    unreadableActive: scan.unreadableActive,
+    scan: scan.scan,
+  };
+  // The headline itself carries the verdict. A `warn` line elsewhere in the
+  // report does not undo a `pass` an operator reads as the summary — and an
+  // INCOMPLETE scan degrades it too, because `docCount` is then a number the
+  // check did not validate. Passing on a partial scan is the same lie as the
+  // filename-only corrupt count, one level up.
+  if (scan.unreadableActive > 0) {
+    r.warn(
+      `${summary} — ${scan.unreadableActive} of ${scan.examined} examined file(s) could not be read or did not validate`,
+      "Those annotations will not load. Inspect the named files; Tandem quarantines a file it fails to parse at startup.",
+      { ...summaryData, unreadableSample: scan.unreadableSample },
+    );
+  } else if (scan.scan === "incomplete") {
+    r.warn(`${summary} — only ${scan.examined} of them examined`, undefined, summaryData);
+  } else {
+    r.pass(summary, undefined, summaryData);
   }
 
-  r.pass(
-    `Annotation store: ${jsonFiles.length} doc(s), ${formatBytes(totalBytes)} total`,
-    undefined,
-    {
-      dir,
-      docCount: jsonFiles.length,
-      totalBytes,
-      corruptCount: corruptFiles.length,
-    },
-  );
+  if (scan.scan === "incomplete") {
+    const cap =
+      scan.limit === "files"
+        ? `${ANNOTATION_SCAN_MAX_FILES} file(s)`
+        : `${formatBytes(ANNOTATION_SCAN_MAX_TOTAL_BYTES)} read in total`;
+    r.warn(
+      `Annotation store scan stopped after ${scan.examined} of ${scan.docCount} file(s) at the ${scan.limit} limit — this report covers only what was examined`,
+      `The scan is bounded at ${cap} so a diagnostics request cannot stall the server.`,
+      { scan: "incomplete", limit: scan.limit, examined: scan.examined, docCount: scan.docCount },
+    );
+  }
 
-  if (newest.name) {
-    const ageMs = Date.now() - newest.mtime;
+  if (scan.oversize > 0) {
+    r.warn(
+      `${scan.oversize} annotation file(s) exceed ${formatBytes(ANNOTATION_SCAN_MAX_FILE_BYTES)} and were not validated`,
+      "An annotation file this large is unusual; check the document it belongs to.",
+      { oversize: scan.oversize },
+    );
+  }
+
+  if (scan.futureActive > 0) {
+    r.warn(
+      `${scan.futureActive} active annotation file(s) carry a newer schema than this build understands`,
+      "Update Tandem. Until then those annotations are left on disk untouched rather than loaded.",
+      { futureActive: scan.futureActive },
+    );
+  }
+
+  if (scan.newest) {
+    const ageMs = Date.now() - scan.newest.mtimeMs;
     const ageStr =
       ageMs < 60_000 ? `${Math.floor(ageMs / 1000)}s` : `${Math.floor(ageMs / 60_000)}m`;
-    r.pass(`Most recent annotation write: ${newest.name} (${ageStr} ago)`, undefined, {
-      name: newest.name,
-      mtimeMs: newest.mtime,
+    r.pass(`Most recent annotation write: ${scan.newest.name} (${ageStr} ago)`, undefined, {
+      name: scan.newest.name,
+      mtimeMs: scan.newest.mtimeMs,
       ageMs,
     });
   }
 
-  if (sampleSchemaVersion !== null) {
-    r.pass(`Annotation schema version: ${sampleSchemaVersion}`, undefined, {
-      schemaVersion: sampleSchemaVersion,
+  if (scan.schemaVersion !== null) {
+    r.pass(`Annotation schema version: ${scan.schemaVersion}`, undefined, {
+      schemaVersion: scan.schemaVersion,
     });
   }
 
-  if (corruptFiles.length > 0) {
+  if (scan.quarantined > 0) {
     r.warn(
-      `${corruptFiles.length} quarantined annotation file(s) in ${dir}`,
+      `${scan.quarantined} quarantined annotation file(s) in ${dir}`,
       "Safe to delete after inspection; kept 7d by design.",
-      {
-        corruptCount: corruptFiles.length,
-        dir,
-      },
+      { corruptCount: scan.quarantined, dir },
+    );
+  }
+
+  // `<hash>.json.future` files were parked by a NEWER Tandem than the one
+  // running now. The previous check matched neither `.json` nor `.corrupt.`,
+  // so a downgraded install saw no evidence its annotations had stopped
+  // loading.
+  if (scan.parkedFuture > 0) {
+    r.warn(
+      `${scan.parkedFuture} annotation file(s) parked as .future in ${dir}`,
+      "Written by a newer Tandem. Update, and they load again; they are never deleted.",
+      { parkedFuture: scan.parkedFuture, dir },
     );
   }
 
