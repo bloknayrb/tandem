@@ -17,20 +17,24 @@
  *     obligation for that module (Critical Rule 2); switching to `withBrowser`
  *     would start emitting channel events for server bookkeeping.
  *   - broadcasting between two primitives publishes an inconsistent snapshot.
- *   - the keep-alive predicate is registered at registry module-import time,
- *     and CTRL_ROOM's retention rides on it.
+ *   - the keep-alive predicate is armed by installing the lifecycle, and
+ *     CTRL_ROOM's retention rides on it alone.
  *   - Y.Doc **unload** does not clear the file-sync context; only an explicit
  *     close does. Consolidating close-and-broadcast makes unload look like the
  *     natural mirror of swap, and moving `clearFileSyncContext` there would
  *     strand a tombstone ledger.
- *   - the generation token is registered as a live *function*, never a captured
+ *   - the generation token is read through a live *method*, never a captured
  *     string, so installing the lifecycle before the id is minted still works.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type { DocStore } from "../../src/server/annotations/store.js";
 import type { SyncContext } from "../../src/server/annotations/sync.js";
+import {
+  createHocuspocusLifecycle,
+  installTandemLifecycle,
+} from "../../src/server/bootstrap/hocuspocus-lifecycle.js";
 import {
   clearFileSyncContext,
   getAllFileSyncContexts,
@@ -49,7 +53,10 @@ import {
   removeDoc,
   setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import {
+  getOrCreateDocument,
+  resetHocuspocusLifecycleForTesting,
+} from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
   Y_MAP_ACTIVE_DOCUMENT_EPOCH,
@@ -229,77 +236,63 @@ describe("the two known asymmetries (pinned before the registry owns broadcast)"
   });
 });
 
-describe("registry module-load registrations", () => {
-  it("registers the keep-alive predicate at import time, retaining CTRL_ROOM", async () => {
-    vi.resetModules();
-    let predicate: ((name: string) => boolean) | null = null;
-    vi.doMock("../../src/server/yjs/provider.js", async (importOriginal) => {
-      const actual = await importOriginal<Record<string, unknown>>();
-      return {
-        ...actual,
-        setShouldKeepDocument: (fn: (name: string) => boolean) => {
-          predicate = fn;
-        },
-      };
-    });
+describe("lifecycle installation (was: registry module-load registrations)", () => {
+  // These two used to pin the OPPOSITE contract: that importing `registry.ts`
+  // was enough to arm the keep-alive predicate, and that `writeGenerationId()`
+  // armed the generation gate as a side effect. ADR-033 retired both — an
+  // import-time registration makes "is it installed?" depend on whether
+  // something happened to import a file, which is not a fact a test can state.
+  // They are rewritten rather than deleted: the behaviour they protect is
+  // unchanged, only its owner moved, and the rewrite is the record of the move.
 
-    const registry = await import("../../src/server/documents/registry.js");
-
-    expect(
-      predicate,
-      "importing the registry must register the predicate, with no explicit call",
-    ).not.toBeNull();
-    const keep = predicate as unknown as (name: string) => boolean;
+  it("arms the keep-alive predicate only once the lifecycle is installed", () => {
+    resetHocuspocusLifecycleForTesting();
+    const lifecycle = createHocuspocusLifecycle();
 
     // CTRL_ROOM holds persistent chat history and is never an OpenDoc — ADR-033
     // rejected modelling it as one, so its retention rides on this predicate
     // alone. An untracked room is the negative control.
-    expect(keep(CTRL_ROOM), "CTRL_ROOM is retained even with nothing open").toBe(true);
-    expect(keep("never-opened"), "an untracked room is evictable").toBe(false);
+    expect(lifecycle.shouldKeepDocument(CTRL_ROOM), "CTRL_ROOM is retained").toBe(true);
+    expect(lifecycle.shouldKeepDocument("never-opened"), "an untracked room is not").toBe(false);
 
-    registry.addDoc("keep-me", makeOpenDoc("keep-me"));
-    expect(keep("keep-me"), "a tracked doc is retained").toBe(true);
-    registry.removeDoc("keep-me");
-    expect(keep("keep-me"), "and stops being retained the moment it is untracked").toBe(false);
+    addDoc("keep-me", makeOpenDoc("keep-me"));
+    expect(lifecycle.shouldKeepDocument("keep-me"), "a tracked doc is retained").toBe(true);
+    removeDoc("keep-me");
+    expect(lifecycle.shouldKeepDocument("keep-me"), "and stops being once untracked").toBe(false);
 
-    vi.doUnmock("../../src/server/yjs/provider.js");
-    vi.resetModules();
+    installTandemLifecycle();
   });
 
-  it("registers the generation token as a live function, not a captured string", async () => {
-    vi.resetModules();
-    let source: (() => string | null) | null = null;
-    vi.doMock("../../src/server/yjs/provider.js", async (importOriginal) => {
-      const actual = await importOriginal<Record<string, unknown>>();
-      return {
-        ...actual,
-        setGenerationTokenSource: (fn: () => string | null) => {
-          source = fn;
-        },
-      };
-    });
-
+  it("reads the generation token through a live method, not a captured value", async () => {
     const svc = await import("../../src/server/mcp/document-service.js");
-    expect(source, "control: nothing is registered before the first mint").toBeNull();
+    const lifecycle = createHocuspocusLifecycle();
 
     svc.writeGenerationId();
-    expect(source, "writeGenerationId arms the gate").not.toBeNull();
-    const read = source as unknown as () => string | null;
-    const first = read();
-    expect(typeof first).toBe("string");
+    const first = lifecycle.expectedGenerationToken();
+    expect(typeof first, "control: a token is readable after the first mint").toBe("string");
 
-    // The load-bearing property: the provider holds a getter, so a later mint is
-    // visible through the SAME registered reference. A shape that captured the
-    // string — or captured `null` because the lifecycle installed before the
-    // first mint — would freeze, and `provider.ts` treats a null expected token
-    // as fail-closed: every connection for the whole run rejected, with the same
-    // log line as a legitimate stale-tab rejection.
+    // The load-bearing property: the lifecycle holds a *method*, so a later mint
+    // is visible through the SAME object. A `string | null` field would be
+    // captured at construction — and the composition root is exactly the place a
+    // future change would move ahead of the first mint. It would freeze at null,
+    // and `provider.ts` treats a null expected token as fail-closed: every
+    // connection for the whole run rejected, with the same log line as a
+    // legitimate stale-tab rejection.
     svc.writeGenerationId();
-    expect(read(), "a second mint is visible through the original reference").not.toBe(first);
-    expect(source, "and the reference itself was not re-registered by value").toBe(read);
+    expect(
+      lifecycle.expectedGenerationToken(),
+      "a second mint is visible through the same lifecycle object",
+    ).not.toBe(first);
+  });
 
-    vi.doUnmock("../../src/server/yjs/provider.js");
-    vi.resetModules();
+  it("survives being built before any generation id exists", () => {
+    // Installation moving ahead of minting is the direction ADR-033 pushes, so
+    // the case is pinned rather than left to source order: building the
+    // lifecycle must not latch whatever the token happened to be at the time.
+    const lifecycle = createHocuspocusLifecycle();
+    expect(typeof lifecycle.expectedGenerationToken(), "control: a token exists by now").toBe(
+      "string",
+    );
   });
 });
 

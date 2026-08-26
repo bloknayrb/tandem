@@ -21,9 +21,7 @@
  */
 
 import type * as Y from "yjs";
-import { CTRL_ROOM } from "../../shared/constants.js";
-import { getOrCreateDocument, setShouldKeepDocument } from "../yjs/provider.js";
-import { setDirtyMirrorEligibility } from "./dirty.js";
+import { getOrCreateDocument } from "../yjs/provider.js";
 
 export interface OpenDoc {
   id: string;
@@ -46,10 +44,6 @@ let activeDocId: string | null = null;
 // of unchanged state, which must not clobber a local (keyboard/click) tab switch.
 let activeDocEpoch = 0;
 
-// Prevent Hocuspocus from evicting Y.Docs that MCP still tracks as open,
-// or the bootstrap channel (CTRL_ROOM) which holds persistent chat history.
-setShouldKeepDocument((name) => openDocs.has(name) || name === CTRL_ROOM);
-
 /**
  * #1447: a scratchpad/upload can never reach disk without a Save As promotion,
  * so its dirty flag must NOT be mirrored into documentMeta — the tab would show
@@ -58,15 +52,15 @@ setShouldKeepDocument((name) => openDocs.has(name) || name === CTRL_ROOM);
  * — source flips upload→file on the same docId/room — starts mirroring at its
  * post-promote markClean.
  *
- * Exported so tests can reinstall the production predicate after
- * `dirty.resetForTesting()` clears the injected one; the registration below is
- * the only caller in `src/`.
+ * Registered by `bootstrap/hocuspocus-lifecycle.ts` alongside the Hocuspocus
+ * lifecycle (ADR-033). It used to be registered here, at module-import time;
+ * that made "is it registered?" depend on whether anything had happened to
+ * import this file, which is not a fact any test could state. Tests that call
+ * `dirty.resetForTesting()` reinstall it through the same export.
  */
 export function isDirtyMirrorEligible(id: string): boolean {
   return openDocs.get(id)?.source !== "upload";
 }
-
-setDirtyMirrorEligibility(isDirtyMirrorEligible);
 
 export function getOpenDocs(): ReadonlyMap<string, OpenDoc> {
   return openDocs;

@@ -4,13 +4,11 @@ import path from "path";
 import { fileURLToPath } from "url";
 import {
   BYO_MODELS_ENABLED,
-  CTRL_ROOM,
   DEFAULT_BIND_HOST,
   DEFAULT_MCP_PORT,
   DEFAULT_WS_PORT,
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
 } from "../shared/constants.js";
-import { isUploadPath } from "../shared/paths.js";
 import { docHash } from "./annotations/doc-hash.js";
 import {
   acquireStoreLock,
@@ -20,13 +18,9 @@ import {
 } from "./annotations/store.js";
 import { loadOrCreateToken, readTokenFromFile } from "./auth/token-store.js";
 import { checkBindConfig, isNonLoopback } from "./bind-check.js";
+import { installTandemLifecycle } from "./bootstrap/hocuspocus-lifecycle.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
-import {
-  attachCtrlObservers,
-  detachObservers,
-  reattachCtrlObservers,
-  reattachObservers,
-} from "./events/queue.js";
+import { attachCtrlObservers } from "./events/queue.js";
 import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
 import { unwatchAll } from "./file-watcher.js";
@@ -71,7 +65,7 @@ import {
 } from "./session/manager.js";
 import { maybeOpenStartupFile } from "./startup-file.js";
 import { checkVersionChange } from "./version-check.js";
-import { setDocLifecycleCallbacks, startHocuspocus } from "./yjs/provider.js";
+import { startHocuspocus } from "./yjs/provider.js";
 
 // stdout is exclusively reserved for the MCP JSON-RPC wire protocol (stdio mode).
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
@@ -490,22 +484,12 @@ async function main() {
   // BYO_MODELS_ENABLED is false (it never subscribes) — the gate lives inside.
   startLocalModelCollaborator();
 
-  // Register doc lifecycle callbacks so the event queue reattaches observers
-  // when Hocuspocus swaps Y.Doc instances (avoids circular import).
-  setDocLifecycleCallbacks(
-    (docName, newDoc) => {
-      if (docName === CTRL_ROOM) {
-        reattachCtrlObservers();
-      } else {
-        const openDoc = getOpenDocs().get(docName);
-        const uploadDoc = openDoc ? isUploadPath(openDoc.filePath) : false;
-        reattachObservers(docName, newDoc, { uploadDoc });
-      }
-    },
-    (docName) => {
-      detachObservers(docName);
-    },
-  );
+  // Install the Hocuspocus lifecycle (ADR-033) — the keep-alive predicate, the
+  // doc swap/unload hooks, the generation gate's token source, and the
+  // dirty-mirror eligibility predicate, as one named seam. MUST precede both
+  // `startHocuspocus` call sites below; a doc that loads before installation
+  // silently gets no server-side observers for its lifetime.
+  installTandemLifecycle();
 
   // ── Bind-host selection (MCP only — Hocuspocus always stays loopback) ────────
   const bindHost = process.env.TANDEM_BIND_HOST ?? DEFAULT_BIND_HOST;

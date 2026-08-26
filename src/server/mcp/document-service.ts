@@ -62,7 +62,7 @@ import {
   saveSession,
   stopAutoSave,
 } from "../session/manager.js";
-import { getOrCreateDocument, setGenerationTokenSource } from "../yjs/provider.js";
+import { getOrCreateDocument } from "../yjs/provider.js";
 
 // --- Multi-document state (ADR-033: moved to src/server/documents/registry.ts) ---
 //
@@ -1612,10 +1612,9 @@ export function getGenerationId(): string | null {
  */
 export function writeGenerationId(): void {
   currentGenerationId = randomUUID();
-  // Arm the Hocuspocus onAuthenticate gate (callback registration — provider
-  // must not import document-service back). Runs before Hocuspocus binds in
-  // both transports (index.ts boot order), so no connection ever races it.
-  setGenerationTokenSource(getGenerationId);
+  // The Hocuspocus onAuthenticate gate reads this through the installed
+  // lifecycle's `expectedGenerationToken()` method, so it needs no arming call
+  // here and no longer depends on minting happening before installation.
   console.error(`[Tandem] Server generationId: ${currentGenerationId}`);
 }
 

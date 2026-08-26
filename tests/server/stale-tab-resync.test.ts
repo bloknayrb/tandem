@@ -9,7 +9,7 @@ import { populateYDoc } from "../../src/server/mcp/document.js";
 import {
   getDocument,
   getOrCreateDocument,
-  setGenerationTokenSource,
+  installHocuspocusLifecycle,
   startHocuspocus,
 } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM } from "../../src/shared/constants.js";
@@ -104,7 +104,17 @@ describe("stale-tab generation gate", () => {
 
   beforeEach(async () => {
     currentGen = "gen-current";
-    setGenerationTokenSource(() => currentGen);
+    // Install the WHOLE lifecycle, not just the token source. This suite used
+    // to register the generation source alone, so every `onLoadDocument` in it
+    // hit the provider's unregistered-swap warning — a real bind path running
+    // with a half-installed lifecycle, silently, on every run. One named seam
+    // is what makes that impossible to do by accident.
+    installHocuspocusLifecycle({
+      shouldKeepDocument: () => false,
+      onDocSwapped: () => {},
+      onDocUnloaded: () => {},
+      expectedGenerationToken: () => currentGen,
+    });
     port = await freeEphemeralPort();
     hp = await startHocuspocus(port);
   });
