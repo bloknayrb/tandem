@@ -84,3 +84,46 @@ describe("ChatPanel per-agent author color (#1123 M4)", () => {
     expect(button?.disabled).toBe(true);
   });
 });
+
+/**
+ * `ChatPanel.svelte:367` is the ONLY `{@html}` in the entire client, and
+ * `renderMarkdown` exists solely to make it safe. Nothing else pins that the
+ * sink still routes through it — a refactor to `{@html msg.text}` keeps every
+ * test in `chat-markdown.test.ts` green while shipping an XSS, because those
+ * tests exercise the function directly and never assert that anyone calls it.
+ *
+ * This is the wiring test. It asserts the rendered DOM, so it fails on the
+ * refactor regardless of how the markup is spelled.
+ */
+describe("ChatPanel — the {@html} sink is routed through renderMarkdown", () => {
+  it("does not build a script element from a claude message", () => {
+    const view = renderChat([claudeMsg({ text: "<script>alert(1)</script>" })]);
+
+    expect(view.container.querySelectorAll("script")).toHaveLength(0);
+    expect(view.container.textContent).toContain("<script>alert(1)</script>");
+  });
+
+  it("does not build an event-handler attribute from a claude message", () => {
+    const view = renderChat([claudeMsg({ text: '<img src=x onerror="alert(1)">' })]);
+
+    expect(view.container.querySelectorAll("img")).toHaveLength(0);
+    for (const el of Array.from(view.container.querySelectorAll("*"))) {
+      expect(el.getAttributeNames().filter((n) => n.toLowerCase().startsWith("on"))).toEqual([]);
+    }
+  });
+
+  it("still renders markdown for a claude message, so the sink is genuinely live", () => {
+    // Without this arm the two above would also pass on a plain-text render,
+    // which is the wrong fix for the right reason.
+    const view = renderChat([claudeMsg({ text: "**bold**" })]);
+
+    expect(view.container.querySelector(".chat-markdown strong")?.textContent).toBe("bold");
+  });
+
+  it("renders a user message as plain text, markup and all", () => {
+    const view = renderChat([claudeMsg({ id: "u1", author: "user", text: "**not bold**" })]);
+
+    expect(view.container.querySelector("strong")).toBeNull();
+    expect(view.container.textContent).toContain("**not bold**");
+  });
+});

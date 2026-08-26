@@ -67,10 +67,58 @@ a `dev:server` restart and then `/mcp` in Claude Code.
 | `npm run dev` / `npm run dev:client` | Vite only |
 | `npm run build` | typecheck + vite build + font-asset check + tsup |
 | `cargo tauri dev` | The desktop shell |
+| `cargo tauri dev --features ui-inspector` | Desktop shell + the element picker (see below) |
 | `npm run doctor` | Diagnose ports, Node version, MCP config, server health |
 
 See [docs/cli.md](docs/cli.md#npm-run-scripts-source-checkouts-only) for the full list of npm
 scripts.
+
+### UI element inspector (optional, dev-only)
+
+[`tauri-plugin-ui-inspector`](https://github.com/mathematic-inc/tauri-plugin-ui-inspector) turns a
+clicked element in the running desktop app into a durable `@ui_<ULID>` reference — DOM/ARIA
+metadata, ranked locators, the `.svelte` source location, and a native window + element screenshot.
+Hand the id to an agent and it works from the recorded element instead of your description of it.
+`.claude/skills/ui-inspector/SKILL.md` is the agent-facing half.
+
+One-time, per machine:
+
+```sh
+cargo install tauri-ui-inspector    # the CLI; not a repo dependency
+rustup update stable                # the plugin needs rustc >= 1.97
+```
+
+Then `cargo tauri dev --features ui-inspector`, and either press `Ctrl+Shift+C` (`Cmd+Shift+C` on
+macOS) or run `ui-inspector pick` in a second terminal.
+
+Three things about it that are easy to get wrong:
+
+- **It is off by default and gated in three places that must agree** — the cargo feature (adds the
+  plugin + grants `ui-inspector:default` at runtime), `import.meta.env.DEV` (keeps the two
+  `@tauri-ui-inspector/*` devDependencies out of the production bundle), and `isTauriRuntime()` (the
+  npm global install serves the same client into a plain browser). A `cargo tauri dev` *without*
+  the feature still installs the frontend bridge, so every capture is then rejected by the ACL and
+  the CLI reports only a timeout — the WebView console names the flag.
+- **Screenshots are off, and that is what makes it work.** `capture_screenshots(false)` is set in
+  `src/lib.rs`. Native capture is broken on Windows: measured against the same live pid at the same
+  moment with the same xcap 0.9.8, `xcap::Window::all()` returns Tandem's windows when called from
+  *outside* the process and returns **zero** windows matching the pid when called from *inside* it.
+  The plugin's `find_window` filters that list by `std::process::id()`, so the match set is always
+  empty and every capture fails with `no native window matched the Tauri process and window title`
+  — and a failed capture aborts the whole capture, writing no reference at all. Everything else
+  (metadata, locators, Svelte source, persistence, live `resolve`) works with it off. Tracked in
+  #1633; upstream's E2E evidence is macOS-only.
+- **The reference store is sensitive.** `.ui-inspector/` at the repo root holds a record of
+  whatever document was open. It is gitignored; never attach one to an issue or PR. The path is
+  pinned to the repo root via `CARGO_MANIFEST_DIR` rather than left at the plugin's CWD-relative
+  default — the CLI finds a store by walking *up* from where you invoke it, and the app's CWD under
+  `cargo tauri dev` is `src-tauri/`, a descendant. Left at the default, every CLI call from the repo
+  root fails with exit 3, which reads as "the app isn't running".
+- **Two upstream version floors sit above ours**: the crate declares `rust-version = 1.97` (ours is
+  1.77.2) and the npm packages declare `engines.node >= 26` (ours is >= 22.12.0). The crate is an
+  optional dependency, so a default `cargo build`/`cargo test` never resolves it and the Rust floor
+  applies only when you pass the feature. The Node floor is an `npm install` warning only — nothing
+  in this repo sets `engine-strict`, and CI on Node 22 warns and passes.
 
 ## Checks
 

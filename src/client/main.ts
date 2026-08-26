@@ -23,3 +23,13 @@ void initCrashReporting();
 void initializeStore();
 
 mount(Root, { target: document.getElementById("root")! });
+
+// UI element inspector bridge — dev builds only, and only inside the Tauri
+// WebView. `import.meta.env.DEV` is what keeps the two `@tauri-ui-inspector/*`
+// devDependencies out of the production bundle: the module's own imports are
+// dynamic, so Vite drops this whole branch (and them) from a `npm run build`.
+// Fire-and-forget, after mount — the picker attaches to live DOM, and nothing
+// about it should delay first paint. See ./tauri/ui-inspector.ts.
+if (import.meta.env.DEV) {
+  void import("./tauri/ui-inspector").then(({ installUiInspector }) => installUiInspector());
+}

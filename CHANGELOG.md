@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Accepting or dismissing the highlight in the welcome document tells Claude again.** Tandem's welcome document seeds a highlight attributed to Claude, and it sits in your review queue like anything else. Whether Tandem announced your accept or dismiss depended on a field that annotation happened not to carry, rather than on any decision — so tightening the announcement rules (see Security below) would have silently stopped announcing it, on the one annotation every new user touches. The seed now states plainly that it is meant for Claude, which is what every other Claude-authored annotation has always done.
+
+- **Sending a long-standing flag to Claude now actually reaches Claude.** Tandem used to have a "flag" annotation, replaced some time ago by the personal note. Old flags still in your documents are treated as notes everywhere you can see — including the "Send to Claude" action, which happily accepted one. What it did not do was tell Claude: the part of Tandem that decides what to announce was comparing against the stored label rather than the one the rest of Tandem had already translated, so the click succeeded, the annotation became a comment, and nothing was ever sent. Only affects flags predating the change; a note created today was never affected.
+
+- **A reply on a comment stored under one of Tandem's older labels is announced again.** Comments created by earlier versions were sometimes stored as "suggestion" or "question". Tandem still understands both and treats them as comments in every list and read — but the announcement path checked the raw stored label, so replying to one of these older comments sent Claude nothing. It now agrees with the rest of Tandem.
+
+### Security
+
+- **Tandem is stricter about which annotations it announces to Claude, and refuses anything it cannot identify.** Two changes, neither of which alters what Tandem does with an annotation it understands.
+
+  Announcements are now decided in exactly one place in the code, and that place is the only one that can produce a value the announcement machinery will accept — so a future change that forgets to check cannot compile rather than quietly announcing something private. Alongside the existing rule that a personal note is never sent, Tandem now also requires the annotation to be marked as intended for Claude. No comment Tandem writes today fails that second check, so for comments it guards against damaged or very old records rather than closing a live leak — with one real exception: a reply on an imported Word comment you had not yet triaged, stored in a shape earlier versions used, could reach Claude before you had approved it. It no longer can.
+
+  Second, an annotation whose kind Tandem does not recognise is now dropped rather than announced. Previously it was treated as an ordinary comment — which meant a personal note damaged such that its kind was lost stopped looking like a note and was announced with its text. This was the more serious of the two, and it was found by a test written to check the opposite.
+
+  **One honest limit.** This covers what Tandem *pushes* to Claude. Claude also *asks* Tandem for annotations, and that path still applies only the note rule, so a damaged record can still reach Claude when it next asks — tracked in #1619 and not closed here.
+
 ## [0.24.1] - 2026-08-23
 
 A patch release for three faults found in the days after v0.24.0.
