@@ -19,7 +19,9 @@
 import { describe, expect, it } from "vitest";
 import {
   acceptedPayload,
+  type ChannelEligible,
   createdPayload,
+  describeReplyRefusal,
   narrowForChannel,
   narrowReplyForChannel,
   replyPayload,
@@ -79,6 +81,135 @@ describe("the brand is enforced at compile time", () => {
 
     const eligible = narrowReplyForChannel(reply, parent);
     expect(eligible).not.toBeNull();
+  });
+});
+
+describe("the forge that worked", () => {
+  it("cannot rebuild the brand out of keyof", () => {
+    // **This attack compiled against the first version of this module**, whose
+    // comment claimed narrowForChannel was the only expression that could
+    // produce the type. A `unique symbol` is private as a VALUE; the type was
+    // exported, and `keyof` recovers the brand key as a TYPE. The only `as` is
+    // on `{}` -- the annotation is never asserted -- so nothing watching for
+    // `as ChannelEligible` would have seen it.
+    //
+    // The brand is now a `declare class` with a private member, which is not
+    // in `keyof` and cannot appear in an object literal. This assertion is the
+    // only thing standing between that fix and a silent regression, and it is
+    // real only because `tests/` is typechecked (#1616).
+    type BrandKey = Exclude<keyof ChannelEligible, keyof Annotation>;
+    const ann = plain({ author: "user", type: "comment" });
+
+    // @ts-expect-error - BrandKey is `never` now, so the spread cannot supply
+    // the private member and the result is not assignable to ChannelEligible.
+    const forged: ChannelEligible = { ...ann, ...({} as Record<BrandKey, true>) };
+    void forged;
+
+    // The other half of the same hole: un-exporting the type would not have
+    // helped, because the builders are exported and their parameter type IS
+    // the brand.
+    type ViaParams = Parameters<typeof createdPayload>[0];
+    // @ts-expect-error - same reason, reached by a different route.
+    const forged2: ViaParams = { ...ann, ...({} as Record<BrandKey, true>) };
+    void forged2;
+  });
+
+  it("cannot be satisfied by an ordinary named property", () => {
+    const ann = plain({ author: "user", type: "comment" });
+    // @ts-expect-error - the reason the brand is not `{__channelEligible: true}`:
+    // a named property is satisfied by any literal that happens to carry it.
+    const forged: ChannelEligible = { ...ann, __channelEligible: true };
+    void forged;
+  });
+
+  it("does not make a reply and an annotation interchangeable", () => {
+    // Separate brands now. Sharing one was safe only because Annotation and
+    // AnnotationReply are structurally disjoint today -- an accident, not a
+    // decision, and one edit from making the two substitutable.
+    const parent = narrowForChannel(plain({ author: "user", type: "comment" }));
+    if (!parent) throw new Error("fixture should narrow");
+    const eligible = narrowReplyForChannel(
+      { id: "r1", annotationId: "a1", author: "user", text: "t", timestamp: 1 },
+      parent,
+    );
+    if (!eligible) throw new Error("fixture should narrow");
+
+    // @ts-expect-error - a branded reply is not a branded annotation.
+    createdPayload(eligible);
+  });
+});
+
+describe("narrowReplyForChannel, reached directly", () => {
+  function parentFor(id: string) {
+    const parent = narrowForChannel(plain({ author: "user", type: "comment", id }));
+    if (!parent) throw new Error("fixture should narrow");
+    return parent;
+  }
+
+  function replyOn(id: string, extra: Partial<AnnotationReply> = {}): AnnotationReply {
+    return {
+      id: "r1",
+      annotationId: id,
+      author: "user",
+      text: "t",
+      timestamp: 1,
+      ...extra,
+    } as AnnotationReply;
+  }
+
+  it("refuses a reply filed against a different parent than the one narrowed", () => {
+    // **Only reachable from here.** The characterization suite ghost-parent
+    // test looks like it covers this and does not: replies.ts fetches the
+    // parent BY reply.annotationId, so a mismatch means the lookup misses and
+    // the PARENT narrow refuses first. Delete this guard and that test still
+    // passes. This is the caller the guard was written for -- one that
+    // supplies its own parent.
+    const refusals: string[] = [];
+    const out = narrowReplyForChannel(replyOn("OTHER"), parentFor("a1"), (r) =>
+      refusals.push(r.reason),
+    );
+    expect(out).toBeNull();
+    expect(refusals).toEqual(["reply-parent-mismatch"]);
+  });
+
+  it.each([["true"], [1], ["yes"], [{}]])("refuses the non-boolean private flag %p", (value) => {
+    const refusals: string[] = [];
+    const out = narrowReplyForChannel(
+      replyOn("a1", { private: value as unknown as boolean }),
+      parentFor("a1"),
+      (r) => refusals.push(r.reason),
+    );
+    expect(out).toBeNull();
+    expect(refusals).toEqual(["reply-private"]);
+  });
+
+  it("admits the ordinary case, so the refusals above are not vacuous", () => {
+    expect(narrowReplyForChannel(replyOn("a1"), parentFor("a1"))).not.toBeNull();
+    expect(
+      narrowReplyForChannel(replyOn("a1", { private: false }), parentFor("a1")),
+    ).not.toBeNull();
+  });
+
+  it("reports a missing reply rather than returning a bare null", () => {
+    const refusals: string[] = [];
+    expect(
+      narrowReplyForChannel(undefined, parentFor("a1"), (r) => refusals.push(r.reason)),
+    ).toBeNull();
+    expect(refusals).toEqual(["missing"]);
+  });
+
+  it("never puts reply text in a refusal report", () => {
+    const SECRET = "SECRET REPLY BODY";
+    let seen = "";
+    narrowReplyForChannel(
+      replyOn("a1", { author: "import", text: SECRET }),
+      parentFor("a1"),
+      (refusal) => {
+        seen = describeReplyRefusal(refusal, "r1");
+      },
+    );
+    expect(seen).not.toContain(SECRET);
+    expect(seen).toContain("import");
   });
 });
 

@@ -10,16 +10,27 @@
  * accidents.
  *
  * **Adversarial review then found three MORE deltas this file had not been
- * written to catch, and that is the honest headline.** A characterization
- * suite proves the deltas it thought to look for; it cannot prove there are no
- * others, and claiming otherwise is the failure mode. The three it missed:
- * the unrecognized-type refusal; a reply on a legacy `suggestion`/`question`
- * parent, which now emits where master dropped it — the only delta in the
- * EMITTING direction, and the one nobody predicted in either; and a legacy
- * `flag` promotion, which emitted nothing on master and now works.
+ * written to catch, and REMOVED one of the three it had. That is the honest
+ * headline.** A characterization suite proves the deltas it thought to look
+ * for; it cannot prove there are no others, and claiming otherwise is the
+ * failure mode. The three it missed: the unrecognized-type refusal; a reply on
+ * a legacy `suggestion`/`question` parent, which now emits where master
+ * dropped it — the only delta in the EMITTING direction, and the one nobody
+ * predicted in either; and a legacy `flag` promotion, which emitted nothing on
+ * master and now works.
  *
- * All six assert the NEW behaviour and each keeps the record of what it
- * asserted before, because a delta with no before is just an assertion.
+ * The one it removed was the Claude-authored tutorial highlight. That had been
+ * measured, accepted and written up as a cost worth paying — until review
+ * observed that the seed is a REVIEW TARGET (`isReviewTarget` is
+ * `author !== "user"`), so what the delta actually did was silently drop a
+ * first-run user's Dismiss. Stating `audience: "outbound"` at the seed, which
+ * is what `createAnnotation` always did, removes the delta instead of
+ * accepting it. Measuring a delta correctly is not the same as understanding
+ * what it costs.
+ *
+ * The five that remain assert the NEW behaviour, and each keeps the record of
+ * what it asserted before, because a delta with no before is just an
+ * assertion.
  *
  * The gates as they stood BEFORE the brand (all four, plus the origin filter
  * upstream of them):
@@ -52,6 +63,10 @@ import type { Annotation, AnnotationReply } from "../../../src/shared/types.js";
 type AnnotationSeed = Partial<Annotation> & Pick<Annotation, "author" | "type">;
 
 const SECRET = "PRIVATE PARENT TEXT — must not leak";
+/** Distinct from SECRET: the parent's snapshot legitimately ships in the
+ * parent's own `created` event, so asserting on SECRET here would fail for a
+ * reason that has nothing to do with the reply. */
+const REPLY_SECRET = "PRIVATE REPLY TEXT — must not leak";
 
 function annotation(id: string, seed: AnnotationSeed): Annotation {
   return {
@@ -182,12 +197,18 @@ describe("channel projection — claude accept and dismiss", () => {
     h.dispose();
   });
 
-  it("DELTA (was: emitted): a claude highlight with NO stored audience now emits nothing", () => {
-    // The `type !== "note"` gate admits highlights, and the tutorial seeds a
-    // Claude-authored highlight on sample/welcome.md
-    // (`mcp/tutorial-annotations.ts` — `type: "highlight"`, author assigned
-    // "claude" for everything that is not a note, and **no `audience` field**).
-    // So this fires on first run.
+  it("a claude highlight with NO stored audience emits nothing", () => {
+    // **No longer a delta, and the reason is the point.** This WAS one: the
+    // tutorial seeded a Claude-authored highlight on sample/welcome.md with
+    // no `audience` field, so it derived `private` and stopped emitting.
+    // That looked like a cosmetic first-run difference until the silent-
+    // failure review pointed out `isReviewTarget` is `author !== "user"` —
+    // the seed is IN the review queue, so a new user's Dismiss was being
+    // dropped with no signal. `mcp/tutorial-annotations.ts` now states
+    // `audience: "outbound"` on its Claude seeds, matching what
+    // `createAnnotation` always stamped, so the delta is gone rather than
+    // accepted. This test stays because the derivation it exercises is real
+    // and still governs any highlight that reaches here without the field.
     //
     // **The no-audience half of the title is load-bearing, and an earlier
     // version of this test got it wrong.** It claimed sanitize derives
@@ -230,6 +251,28 @@ describe("channel projection — claude accept and dismiss", () => {
       }),
     );
     expect(h.types()).toEqual(["annotation:accepted"]);
+    h.dispose();
+  });
+
+  it("DELTA (was: emitted): a claude comment stored audience:'private' is withheld on accept", () => {
+    // The audience hole had TWO sites and this file measured only the user-add
+    // one. Master's claude branch gated on `type !== "note"` alone, so this
+    // emitted `annotation:accepted`. Same class as the recorded delta, a
+    // different site — found by review, not by the suite whose header
+    // enumerates the gates.
+    const h = harness();
+    add(h, "a1", { author: "claude", type: "comment", audience: "private" });
+    h.annotations.set(
+      "a1",
+      annotation("a1", {
+        author: "claude",
+        type: "comment",
+        audience: "private",
+        status: "accepted",
+      }),
+    );
+    expect(h.events).toEqual([]);
+    expect(JSON.stringify(h.events)).not.toContain(SECRET);
     h.dispose();
   });
 
@@ -292,12 +335,17 @@ describe("channel projection — replies", () => {
     }
   });
 
-  it("a reply whose parent id does not match the annotation it is filed under emits nothing", () => {
+  it("a reply naming a parent that does not exist emits nothing", () => {
     const h = harness();
     add(h, "a1", { author: "user", type: "comment" });
-    // Filed under a1 but claiming a different parent. `replies.ts` fetches by
-    // `reply.annotationId`, so this misses and drops on that route too — the
-    // assertion is that `narrowReplyForChannel` refuses it independently.
+    // **This does NOT reach `narrowReplyForChannel`, and an earlier version of
+    // this comment claimed it did.** `replies.ts` fetches the parent by
+    // `reply.annotationId`, so `get("ghost")` returns undefined and the PARENT
+    // narrow refuses first; delete the `annotationId !== parent.id` guard and
+    // this test still passes. That guard exists for a future caller supplying
+    // its own parent, so only a direct unit test reaches it — see
+    // `channel-eligible-brand.test.ts`. A test that cannot fail for the reason
+    // it names is worse than no test, because it reads as coverage.
     h.replies.set("r1", {
       id: "r1",
       annotationId: "ghost",
@@ -327,6 +375,40 @@ describe("channel projection — replies", () => {
       private: value as unknown as boolean,
     });
     expect(h.types()).toEqual(["annotation:created"]);
+    h.dispose();
+  });
+
+  it.each(["import", "claude"] as const)("a reply authored by %s emits nothing", (author) => {
+    // Imported Word reply threads are `author: "import"` (#1000), user-private
+    // until triaged. This check moved from `replies.ts` into the narrow and had
+    // no test on either side of the move — deleting it broke nothing.
+    const h = harness();
+    add(h, "a1", { author: "user", type: "comment" });
+    h.replies.set("r1", { id: "r1", annotationId: "a1", author, text: REPLY_SECRET, timestamp: 1 });
+    expect(h.types()).toEqual(["annotation:created"]);
+    expect(JSON.stringify(h.events)).not.toContain(REPLY_SECRET);
+    h.dispose();
+  });
+
+  it("a reply stamped private:true on a comment parent is withheld", () => {
+    // The value production actually writes. The non-boolean cases cover the
+    // fail-open bug; nothing covered the ordinary path. The note/highlight
+    // cases look like reply-layer coverage but their fixtures omit `private`,
+    // so what refuses them is the PARENT narrow. A reply written while its
+    // parent was a note keeps `private: true` permanently, so a later
+    // promotion must not back-publish it.
+    const h = harness();
+    add(h, "a1", { author: "user", type: "comment" });
+    h.replies.set("r1", {
+      id: "r1",
+      annotationId: "a1",
+      author: "user",
+      text: REPLY_SECRET,
+      timestamp: 1,
+      private: true,
+    });
+    expect(h.types()).toEqual(["annotation:created"]);
+    expect(JSON.stringify(h.events)).not.toContain(REPLY_SECRET);
     h.dispose();
   });
 

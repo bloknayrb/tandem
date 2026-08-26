@@ -70,11 +70,17 @@ const FILES = allSourceFiles(SRC).map((f) => ({
  * Matches the template-literal form too. Nothing in `src/` builds one that way
  * today, but `` type: `annotation:${x}` `` is the obvious way to slip past a
  * quote-anchored pattern, and a guard that can be defeated by a backtick is
- * decorative. The `case "annotation:created":` consumers in `queue.ts`,
+ * decorative.
+ *
+ * **`[a-zA-Z-]`, not `[a-z]`.** The first version used `[a-z]+` and a review
+ * defeated it in one line: `type: "annotation:replyEdited"` matched nothing,
+ * so a brand-new event type could join a pinned producer without moving its
+ * count and without appearing as an offender. All five existing names are
+ * single lowercase words by luck; this codebase names things in camelCase. The `case "annotation:created":` consumers in `queue.ts`,
  * `delivery-state.ts` and `sse-consumer.ts` do not match: they are `case`
  * labels, not object properties.
  */
-const PRODUCER = /\btype:\s*(?:["'`]annotation:[a-z]+["'`]|`annotation:\$\{)/g;
+const PRODUCER = /\btype:\s*(?:["'`]annotation:[a-zA-Z-]+["'`]|`annotation:\$\{)/g;
 
 /**
  * The complete set of files that may construct an `annotation:*` event, with
@@ -167,13 +173,83 @@ describe("who can produce an annotation:* channel event", () => {
     expect(text).not.toMatch(/\bpushEvent\b|_pushEventForTests|from "[^"]*queue\.js"/);
   });
 
-  it("the pinned set covers every extension actually present under src/", () => {
-    // Not an assertion about producers — an assertion that the SWEEP above
-    // reads the whole tree. If this file ever grows an extension filter, this
-    // test is what notices that a new file type stopped being read.
-    const extensions = new Set(FILES.map((f) => f.path.replace(/^.*(\.[^./]+)$/, "$1")));
-    expect(extensions.size, "src/ should contain several file types").toBeGreaterThan(1);
-    expect(FILES.length).toBeGreaterThan(400);
+  it("the sweep reads file types an extension filter would have dropped", () => {
+    // Asserts the sweep reaches NAMED non-`.ts` files, not that its own output
+    // is large. `expect(FILES.length).toBeGreaterThan(400)` was the first
+    // version: self-referential, unable to fail for any reason connected to
+    // producers, and destined to need editing on unrelated growth.
+    //
+    // These three are the extensions actually present under `src/` besides
+    // `.ts`. If one is renamed away, pick another real file of that type
+    // rather than deleting the row — the row is the evidence that the walk has
+    // no extension filter, which is what Unit 4's fourth defeat turned on.
+    const witnesses = ["src/client/App.svelte", "src/client/actions/scroll-fade.css"];
+    for (const w of witnesses) {
+      expect(
+        FILES.some((f) => f.path === w),
+        `${w} should be in the sweep; if it moved, name a different file of that type`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("observer registration, which text-shape scanning cannot see", () => {
+  /**
+   * The fourth surface, and the one that closes a defeat a review actually
+   * demonstrated against the three above.
+   *
+   * A new observer module that builds its event through a const —
+   * `const CREATED = "annotation:created" as const; ... { type: CREATED }` —
+   * matches no pattern any of the other surfaces use. It is not an offender,
+   * it changes no pinned count, it is not in `MUST_NARROW`, and it never
+   * touches the test seam. It would have shipped a payload built from a raw
+   * `Annotation` with the brand never entering the picture.
+   *
+   * So this keys on the fact a producer cannot hide: **to emit anything it has
+   * to be registered.** `attachObservers` is the single registration site.
+   */
+  const QUEUE = FILES.find((f) => f.path === "src/server/events/queue.ts")?.text ?? "";
+  /** The body of `attachObservers`, from its signature to its closing brace at column 0. */
+  const ATTACH = (() => {
+    const start = QUEUE.indexOf("export function attachObservers");
+    if (start < 0) return "";
+    const end = QUEUE.indexOf("\n}", start);
+    return end < 0 ? QUEUE.slice(start) : QUEUE.slice(start, end);
+  })();
+
+  it("attachObservers is still the single registration site", () => {
+    // The anchor. If this function is renamed or split, the check below turns
+    // into a zero-of-zero pass and this is what says so.
+    expect(QUEUE).toMatch(/export function attachObservers\b/);
+    expect(ATTACH).toContain("makeAnnotationsObserver");
+    expect(ATTACH).toContain("makeRepliesObserver");
+  });
+
+  it("every observer factory it registers is accounted for", () => {
+    // Every `makeXObserver(` named in attachObservers, mapped to the module it
+    // is imported from. An annotation-carrying observer must be in PRODUCERS;
+    // the others are named here so adding one is a deliberate edit.
+    const registered = [...ATTACH.matchAll(/\b(make\w*Observer)\s*\(/g)].map((m) => m[1]);
+    expect(registered.length, "attachObservers should register observers").toBeGreaterThan(0);
+
+    const NON_ANNOTATION = ["makeAwarenessObserver"];
+    const unaccounted = registered.filter((name) => {
+      if (NON_ANNOTATION.includes(name)) return false;
+      const from = QUEUE.match(
+        new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*"([^"]+)"`),
+      );
+      const module = from?.[1] ?? "";
+      // "./observers/annotations.js" -> "src/server/events/observers/annotations.ts"
+      const path = module.replace(/^\.\//, "src/server/events/").replace(/\.js$/, ".ts");
+      return !(path in PRODUCERS);
+    });
+
+    expect(
+      unaccounted,
+      "An observer is registered whose module is not a pinned producer. If it " +
+        "emits annotation events, route it through narrowForChannel and add it " +
+        "to PRODUCERS. If it emits none, add it to NON_ANNOTATION here.",
+    ).toEqual([]);
   });
 });
 

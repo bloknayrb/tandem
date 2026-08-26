@@ -10,8 +10,8 @@
  *   never reaches Claude, by any route.
  * - `audience === "outbound"` is the half nothing checked before. Nothing
  *   prevents a `{type: "comment", audience: "private"}` record existing — the
- *   durable schema is `.passthrough()` and is documented as not cross-validated
- *   against `type` (`schema.ts`), `sanitizeAnnotation` demotes only
+ *   durable schema does not declare `audience` at all and it survives only
+ *   via `.passthrough()`, `sanitizeAnnotation` demotes only
  *   user-authored note/highlight/flag and never demotes a comment, and stale-tab
  *   CRDT merges and legacy envelopes both produce records nobody sanitized on
  *   the way in. Before this module, such a record reached Claude over the
@@ -33,18 +33,23 @@
  * second, unrelated policy — "only comments are conversational" — into the
  * privacy predicate, where nobody would find it.
  *
- * **An earlier version of this comment defended the choice on the grounds that
- * it keeps Claude-authored highlights emitting. That argument does not
- * survive: the audience half drops them anyway.** Every highlight without a
- * stored `audience` derives `private` (`sanitize.ts:79-87`), the tutorial seed
- * is one, and no product path creates a Claude highlight WITH a stored
- * audience — `tandem_highlight` is a deprecated stub and nothing else passes
- * `"highlight"` to a creator. So the two predicates are observably identical
- * today and the choice rests on where each rule belongs, not on behaviour.
- * `tests/server/events/channel-projection-characterization.test.ts` pins both
- * branches so that stays true by measurement rather than by this paragraph.
- * Decided 2026-08-26; ADR-035 is amended to match rather than this module
- * diverging silently from it.
+ * **This paragraph has been wrong twice, in opposite directions, and the
+ * second time is the instructive one.** It first defended `type !== "note"`
+ * as keeping Claude-authored highlights emitting — which the audience half
+ * then dropped anyway, since `sanitize.ts:79-87` derives `private` for a
+ * highlight carrying no stored `audience`, and the tutorial seed carried
+ * none. Rewriting it to say the two predicates were therefore observably
+ * identical was also wrong, because it treated that as a fact about
+ * highlights when it was a fact about ONE record's missing field.
+ *
+ * `mcp/tutorial-annotations.ts` now states `audience: "outbound"` on its
+ * Claude-authored seeds, as `createAnnotation` always did — so that highlight
+ * projects again and the two predicates are genuinely distinguishable. The
+ * choice rests on where each rule belongs: type carries ADR-027, audience
+ * carries privacy. Both branches are pinned in
+ * `tests/server/events/channel-projection-characterization.test.ts` so this
+ * stays true by measurement rather than by this paragraph, which has now
+ * earned that distrust. Decided 2026-08-26; ADR-035 amended to match.
  *
  * **What this module does NOT do.** It does not decide *which event* an
  * annotation produces — add, edit, promotion, accept and dismiss are distinct
@@ -64,37 +69,91 @@ import { type OnLossy, type RawAnnotation, sanitizeAnnotation } from "../../shar
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
 
 /**
- * Module-private brand. A `unique symbol` rather than an ordinary field on
- * purpose: a `__channelEligible: true` property is satisfied by any object
- * literal that happens to carry it, which makes the brand structurally
- * forgeable and therefore decorative. This symbol is never exported, so
- * `narrowForChannel` is the only expression in the program that can produce the
- * type.
+ * The brands, as `declare class` with a `private` member.
+ *
+ * **A `unique symbol` is NOT enough, and the first version of this module
+ * claimed it was.** That comment said `narrowForChannel` was "the only
+ * expression in the program that can produce the type". It was false and it
+ * was demonstrated, not argued — the symbol is private as a *value*, but the
+ * type is exported and `keyof` recovers the brand key as a *type*:
+ *
+ * ```ts
+ * type BrandKey = Exclude<keyof ChannelEligible, keyof Annotation>;
+ * const forged: ChannelEligible = { ...ann, ...({} as Record<BrandKey, true>) };
+ * ```
+ *
+ * That compiles clean, and the only `as` in it is on `{}` — the annotation
+ * itself is never asserted, so a reviewer or lint rule watching for
+ * `as ChannelEligible` sees nothing. Un-exporting the type does not help
+ * either: `Parameters<typeof createdPayload>[0]` recovers it just as well.
+ *
+ * A `private` member is not in `keyof` and cannot appear in an object literal,
+ * so both forges become type errors. `as` still works — it always will, casts
+ * defeat every brand — but `as` is visible in a diff, which is the honest
+ * claim: **a brand raises the cost of a bypass and makes one legible. It is
+ * not a proof.** `tests/server/events/channel-eligible-brand.test.ts` asserts
+ * the forge fails, so this cannot silently regress.
+ *
+ * Two brands, not one shared symbol. Sharing was safe only because `Annotation`
+ * and `AnnotationReply` are structurally disjoint today — an accident, not a
+ * decision, and one edit away from making the two mutually substitutable. A
+ * badge should name the gate it came through.
  */
-declare const CHANNEL_ELIGIBLE: unique symbol;
+declare class ChannelEligibleBrand {
+  private __channelEligible: never;
+}
+declare class ChannelEligibleReplyBrand {
+  private __channelEligibleReply: never;
+}
 
 /**
  * A sanitized annotation that has passed the projection predicate.
  *
- * The brand exists at the type level only — it is a phantom property, never
- * present at runtime and never serialized. Do not test for it; test the
- * predicate.
+ * The brand exists at the type level only — never present at runtime, never
+ * serialized. Do not test for it; test the predicate.
+ *
+ * Note what it does NOT say: this is `Annotation & brand`, so `type: "note"` is
+ * still inhabitable at the type level. The brand records that *a* check ran,
+ * not which one. The predicate is the authority.
  */
-export type ChannelEligible = Annotation & { readonly [CHANNEL_ELIGIBLE]: true };
+export type ChannelEligible = Annotation & ChannelEligibleBrand;
 
-/**
- * A reply that has passed the reply-side predicate. Carries the same
- * module-private brand, so `narrowReplyForChannel` is likewise the only
- * expression that can produce one.
- */
-export type ChannelEligibleReply = AnnotationReply & { readonly [CHANNEL_ELIGIBLE]: true };
+/** A reply that has passed the reply-side predicate. */
+export type ChannelEligibleReply = AnnotationReply & ChannelEligibleReplyBrand;
 
 /** What `narrowForChannel` refused, for the caller's log line. */
 export type ProjectionRefusal =
-  | { reason: "unsanitizable" }
+  | { reason: "missing" }
+  | { reason: "unsanitizable"; errorName: string }
   | { reason: "unknown-type"; rawType: unknown }
   | { reason: "note" }
   | { reason: "private"; audience: string | undefined };
+
+/** What `narrowReplyForChannel` refused. */
+export type ReplyRefusal =
+  | { reason: "missing" }
+  | { reason: "reply-author"; author: string }
+  | { reason: "reply-private"; value: string }
+  | { reason: "reply-parent-mismatch" };
+
+/**
+ * Reasons an operator should hear about, as opposed to normal traffic.
+ *
+ * **The first version of this module had this exactly inverted**, and the
+ * inversion was invisible because it looked like a filter rather than a
+ * policy. It logged only `unsanitizable` — the one reason that essentially
+ * cannot fire, since `sanitizeAnnotation` guards its only `JSON.parse` and its
+ * only array access and otherwise just reads properties, so malformed input
+ * lands on `unknown-type` instead. Meanwhile `unknown-type` and `private`,
+ * which are precisely the corruption this module was written to detect, were
+ * discarded. Three carefully redaction-safe formatters had no caller at all.
+ *
+ * `note` is excluded because it is ordinary: every note write hits it, and a
+ * log line per note is noise that would bury the two that matter.
+ */
+export function isNoteworthyRefusal(refusal: ProjectionRefusal): boolean {
+  return refusal.reason !== "note";
+}
 
 /**
  * Narrow a raw Y.Map value to something the channel may carry, or `null`.
@@ -131,10 +190,16 @@ export function narrowForChannel(
     onRefused?: (refusal: ProjectionRefusal, ann: Annotation | undefined) => void;
   } = {},
 ): ChannelEligible | null {
-  if (!raw) return null;
+  if (!raw) {
+    // Nameable, not a bare return. This was the one early exit that fired
+    // no callback even for a caller that supplied one, so a reply whose
+    // parent had been deleted was indistinguishable from a normal skip.
+    opts.onRefused?.({ reason: "missing" }, undefined);
+    return null;
+  }
 
   // `sanitizeAnnotation` does NOT reject a record whose type it fails to
-  // recognize — `sanitize.ts:213` coerces one to `type: "comment"` and, since
+  // recognize — `sanitize.ts:213-215` coerces one to `type: "comment"` and, since
   // `derivedAudience` keys off the type it no longer has, that comment derives
   // `audience: "outbound"`. So `sanitizeAnnotation({})` returns a projectable
   // comment with every other field `undefined`, and a note whose `type` was
@@ -165,10 +230,16 @@ export function narrowForChannel(
       // refusal above does not depend on the caller having listened.
       opts.onLossy?.(event);
     });
-  } catch {
-    // The error object can embed the annotation's own content; never widen this
-    // to log it. The caller gets the key, which is enough to find the record.
-    opts.onRefused?.({ reason: "unsanitizable" }, undefined);
+  } catch (err) {
+    // The error object can embed the annotation's own content; never widen
+    // this to log the message or the stack. The constructor NAME carries no
+    // annotation text, and master logged the whole error while this branch
+    // first logged nothing -- making the hardest-to-reach failure in the
+    // module also the only one you could learn nothing about.
+    opts.onRefused?.(
+      { reason: "unsanitizable", errorName: err instanceof Error ? err.name : typeof err },
+      undefined,
+    );
     return null;
   }
 
@@ -206,8 +277,20 @@ export function narrowForChannel(
 export function narrowReplyForChannel(
   reply: AnnotationReply | undefined,
   parent: ChannelEligible,
+  onRefused?: (refusal: ReplyRefusal) => void,
 ): ChannelEligibleReply | null {
-  if (!reply || reply.author !== "user") return null;
+  if (!reply) {
+    onRefused?.({ reason: "missing" });
+    return null;
+  }
+
+  // Imported Word reply threads carry `author: "import"` (#1000) and are
+  // user-private until triaged. This check moved here from `replies.ts`, where
+  // it lived on master.
+  if (reply.author !== "user") {
+    onRefused?.({ reason: "reply-author", author: reply.author });
+    return null;
+  }
 
   // Fails closed on anything that is not literally `false`.
   //
@@ -221,13 +304,19 @@ export function narrowReplyForChannel(
   // defence against the same stale-tab-merge and legacy-envelope cases the
   // parent narrow exists for. Leaving the reply outside that model while
   // sanitizing the parent was an asymmetry, not a decision.
-  if (reply.private !== false && reply.private !== undefined) return null;
+  if (reply.private !== false && reply.private !== undefined) {
+    onRefused?.({ reason: "reply-private", value: typeof reply.private });
+    return null;
+  }
 
   // The parent being eligible must be a statement about THIS reply's parent.
   // Nothing in `replies.ts` can violate this — it fetches the parent by
   // `reply.annotationId` — but the signature otherwise invites a future caller
   // to pass any eligible parent and launder an ineligible reply past the gate.
-  if (reply.annotationId !== parent.id) return null;
+  if (reply.annotationId !== parent.id) {
+    onRefused?.({ reason: "reply-parent-mismatch" });
+    return null;
+  }
 
   return reply as ChannelEligibleReply;
 }
@@ -290,7 +379,7 @@ export function describeRefusal(refusal: ProjectionRefusal, id: string | undefin
   const who = id ?? "<unknown>";
   switch (refusal.reason) {
     case "unsanitizable":
-      return `${who}: could not be sanitized`;
+      return `${who}: could not be sanitized (${refusal.errorName})`;
     case "unknown-type":
       // Only a string `rawType` is printed. A corrupted record can carry
       // anything in that slot, including an object holding annotation text,
@@ -302,5 +391,37 @@ export function describeRefusal(refusal: ProjectionRefusal, id: string | undefin
       return `${who}: type=note (ADR-027)`;
     case "private":
       return `${who}: audience=${refusal.audience ?? "<unset>"}`;
+    case "missing":
+      return `${who}: no such annotation`;
+    default: {
+      // Explicit anchor. Without it this switch is exhaustive only by accident
+      // — the declared `string` return plus no fall-through — and that check
+      // evaporates the moment someone widens the return type or adds a
+      // friendly default. `formatEventContent` in `shared/events/types.ts`
+      // already uses this idiom.
+      const _exhaustive: never = refusal;
+      return `<unknown refusal> ${JSON.stringify(_exhaustive)}`;
+    }
+  }
+}
+
+/** Same, for the reply side. */
+export function describeReplyRefusal(refusal: ReplyRefusal, id: string | undefined): string {
+  const who = id ?? "<unknown>";
+  switch (refusal.reason) {
+    case "missing":
+      return `${who}: no reply value`;
+    case "reply-author":
+      return `${who}: reply author=${refusal.author}`;
+    case "reply-private":
+      // The `typeof`, never the value. A corrupted `private` slot can hold
+      // anything, and this string reaches stderr.
+      return `${who}: reply private flag is a ${refusal.value}, not a boolean`;
+    case "reply-parent-mismatch":
+      return `${who}: reply filed against a different annotation than the one narrowed`;
+    default: {
+      const _exhaustive: never = refusal;
+      return `<unknown reply refusal> ${JSON.stringify(_exhaustive)}`;
+    }
   }
 }

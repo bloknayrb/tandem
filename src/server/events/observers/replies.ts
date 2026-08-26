@@ -3,6 +3,9 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../shared/con
 import type { AnnotationReply } from "../../../shared/types.js";
 import { relaySanitizationEvent } from "../../annotations/migration-log.js";
 import {
+  describeRefusal,
+  describeReplyRefusal,
+  isNoteworthyRefusal,
   narrowForChannel,
   narrowReplyForChannel,
   replyPayload,
@@ -35,8 +38,18 @@ export function makeRepliesObserver(deps: {
       // also closes the case where an UNTRIAGED imported comment's replies
       // reached the channel: imports derive `audience: "private"` until the
       // user triages them, and nothing here used to look.
+      // `onRefused` is supplied here too. Without it this observer could drop
+      // a reply the user had just watched themselves write -- parent corrupt,
+      // parent private, parent deleted -- with no signal anywhere, which is the
+      // "sometimes it is instant and sometimes it is not" report that costs days.
       const parent = narrowForChannel(annotationsMap.get(reply?.annotationId ?? ""), {
         onLossy: (event) => relaySanitizationEvent(docName, event),
+        onRefused: (refusal, refused) => {
+          if (!isNoteworthyRefusal(refusal)) return;
+          console.warn(
+            `[EventQueue] refused to project reply on key=${key}: parent ${describeRefusal(refusal, refused?.id)}`,
+          );
+        },
       });
       if (!parent) return undefined;
 
@@ -46,7 +59,11 @@ export function makeRepliesObserver(deps: {
       // was a note stays private after a promotion. This file never read that
       // field — it was safe only because its parent-type check happened to
       // agree, which is one invariant encoded twice. Now it is read.
-      const eligible = narrowReplyForChannel(reply, parent);
+      const eligible = narrowReplyForChannel(reply, parent, (refusal) => {
+        console.warn(
+          `[EventQueue] refused to project reply: ${describeReplyRefusal(refusal, reply?.id)}`,
+        );
+      });
       if (!eligible) return undefined;
 
       return {

@@ -1,6 +1,6 @@
 import type * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
-import { sanitizeAnnotation } from "../../../shared/sanitize.js";
+import { type OnLossy, sanitizeAnnotation } from "../../../shared/sanitize.js";
 import type { Annotation } from "../../../shared/types.js";
 import { relaySanitizationEvent } from "../../annotations/migration-log.js";
 import {
@@ -9,6 +9,7 @@ import {
   describeRefusal,
   dismissedPayload,
   editedPayload,
+  isNoteworthyRefusal,
   narrowForChannel,
 } from "../../annotations/projection.js";
 import type { TandemEvent } from "../types.js";
@@ -23,11 +24,26 @@ import { makePerKeyChangeObserver } from "./factory.js";
  * the edit branch, which needs `editedAt` to have advanced. That fails toward
  * emitting nothing.
  */
-function sanitizeOldType(oldRaw: Annotation | undefined): Annotation["type"] | undefined {
+function sanitizeOldType(
+  oldRaw: Annotation | undefined,
+  onLossy: OnLossy,
+): Annotation["type"] | undefined {
   if (!oldRaw) return undefined;
   try {
-    return sanitizeAnnotation(oldRaw, () => {}).type;
-  } catch {
+    // Relayed, not discarded. If the old value was a legacy `flag`, this
+    // promotion is the only moment its legacy-ness is observable on the
+    // server -- the new value is an ordinary comment -- so swallowing the
+    // event here loses the record entirely.
+    return sanitizeAnnotation(oldRaw, onLossy).type;
+  } catch (err) {
+    // Safe for privacy, unsafe for availability, so it does not get to be
+    // silent: `undefined` means "not a promotion", which routes to the edit
+    // branch, which needs `editedAt` to have advanced -- and promotion does
+    // not touch `editedAt`. The outcome is no event at all, which is verbatim
+    // the bug this function was added to fix.
+    console.warn(
+      `[EventQueue] could not read previous annotation type: ${err instanceof Error ? err.name : typeof err}`,
+    );
     return undefined;
   }
 }
@@ -51,9 +67,15 @@ export function makeAnnotationsObserver(deps: {
       const ann = narrowForChannel(raw, {
         onLossy: (event) => relaySanitizationEvent(docName, event),
         onRefused: (refusal, refused) => {
-          if (refusal.reason !== "unsanitizable") return;
+          // `isNoteworthyRefusal`, not a hand-written reason check. The first
+          // version of this filter logged ONLY `unsanitizable` -- the one
+          // reason that essentially cannot fire -- and silently discarded
+          // `unknown-type` and `private`, which are the corruption this module
+          // exists to detect. Naming the policy in `projection.ts` is what
+          // stops that being re-derived wrongly at each call site.
+          if (!isNoteworthyRefusal(refusal)) return;
           console.warn(
-            `[EventQueue] sanitizeAnnotation failed for key=${key}: ${describeRefusal(refusal, refused?.id)}`,
+            `[EventQueue] refused to project key=${key}: ${describeRefusal(refusal, refused?.id)}`,
           );
         },
       });
@@ -86,7 +108,7 @@ export function makeAnnotationsObserver(deps: {
         // the user got no channel event at all from a "Send to Claude" click.
         // Not narrowed: `narrowForChannel` refuses notes, which is precisely
         // the value this branch is looking for.
-        if (sanitizeOldType(oldRaw) === "note") {
+        if (sanitizeOldType(oldRaw, (event) => relaySanitizationEvent(docName, event)) === "note") {
           // Note promoted to comment via "Send to Claude" — surface it to the channel
           // so real-time subscribers see it as a new comment event.
           return {
