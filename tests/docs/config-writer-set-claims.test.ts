@@ -24,20 +24,19 @@ import { describe, expect, it } from "vitest";
  *    covers plain `writeFile` as well as the atomic idioms — a bare
  *    `writeFile(configPath, …)` is a perfectly good unsynchronized writer, and
  *    a scan that knows only `atomicWrite`/`rename` cannot see one.
- * 2. **The extension sweep.** `sourceFiles` filters by a
- *    pinned extension list, and `"x.mts".endsWith(".ts")` is `false` — so a
- *    `.mts` or `.cts` writer sitting *inside* a scanned directory was invisible
- *    to (1). The sweep asserts that every extension actually present in the
- *    scan roots is either scanned or explicitly ignored, so a new file type
- *    cannot appear unnoticed. Same failure this repo hit in `typecheck:tests`.
+ * 2. **The extension sweep.** `sourceFiles` filters by a pinned extension
+ *    list, so a source file using an unlisted extension inside a scanned
+ *    directory was invisible to (1) — see the sweep's own test below for the
+ *    concrete failure mode. It asserts that every extension actually present
+ *    in the scan roots is either scanned or explicitly ignored, so a new file
+ *    type cannot appear unnoticed. Same failure this repo hit in `typecheck:tests`.
  * 3. **The resource surfaces**, scoped to ALL of `src/`:
  *    - `CONFIG_API_REFERENCES` — every module reaching the config-mutation API
- *      or the config-path producers. (1) is directory-scoped by design, so a
- *      writer placed anywhere else in `src/` was invisible to it. Rather than
- *      pin every durable write in the repo (a list that churns with unrelated
- *      work and would be rubber-stamped), this pins who can reach the
- *      *resource*: a config write needs a config path, and there are exactly
- *      two ways to get one.
+ *      or the config-path producers (the two ways to get one — see `CONFIG_API`
+ *      below). (1) is directory-scoped by design, so a writer placed anywhere
+ *      else in `src/` was invisible to it. Rather than pin every durable write
+ *      in the repo (a list that churns with unrelated work and would be
+ *      rubber-stamped), this pins who can reach the *resource* instead.
  *    - `DURABLE_WRITER_FILES` — every file in `src/` that durably writes at
  *      all. Only the FILE SET is pinned, never the per-file counts: counts
  *      outside the scan roots would churn on unrelated work and get
