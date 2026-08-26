@@ -267,8 +267,9 @@ push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor std
 - `.claude/skills/e2e-debug/SKILL.md` -- Debug Playwright E2E test failures (port conflicts, server startup, post-mortem)
 - `.claude/skills/release/SKILL.md` -- Cut a Tandem release (six-surface version bump, tag, GitHub Release publish, smoke checklist)
 - `.claude/skills/screenshots/SKILL.md` -- Capture README screenshots via Playwright + MCP
+- `.claude/skills/ui-inspector/SKILL.md` -- Resolve a `@ui_<ULID>` reference from the desktop element picker into its source location, metadata and locators (screenshots are off — see the skill)
 
-Those six are the complete set. `skills/tandem/SKILL.md` (no leading dot) is a different thing entirely: the skill **shipped to users** in the npm package and installed into `~/.claude/skills/tandem/` by `tandem setup --apply`. It is behavioural instruction loaded into real user sessions, so treat a stale rule there as a product bug, and bump its frontmatter `version` when you change it — the installed copy only refreshes when the bundled version is newer.
+Those seven are the complete set. `skills/tandem/SKILL.md` (no leading dot) is a different thing entirely: the skill **shipped to users** in the npm package and installed into `~/.claude/skills/tandem/` by `tandem setup --apply`. It is behavioural instruction loaded into real user sessions, so treat a stale rule there as a product bug, and bump its frontmatter `version` when you change it — the installed copy only refreshes when the bundled version is newer.
 
 <!-- autoskills:end -->
 
