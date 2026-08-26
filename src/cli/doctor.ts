@@ -2540,6 +2540,10 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
     totalBytes: scan.totalBytes,
     corruptCount: scan.quarantined,
     unreadableActive: scan.unreadableActive,
+    // The only honest account of `examined < docCount` on a complete scan.
+    // Benign, so it does not warn — but leaving it out of the data bag is what
+    // made the vanished file untraceable in the first place.
+    vanished: scan.vanished,
     scan: scan.scan,
   };
   // The headline itself carries the verdict. A `warn` line elsewhere in the

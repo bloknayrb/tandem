@@ -1,13 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MockInstance } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { UnreadableFile } from "../../src/cli/annotation-store-scan.js";
 import {
   ANNOTATION_SCAN_MAX_FILE_BYTES,
   ANNOTATION_SCAN_MAX_FILES,
   ANNOTATION_SCAN_MAX_SAMPLE_NAMES,
   ANNOTATION_SCAN_MAX_TOTAL_BYTES,
+  resolveScanLimits,
   scanAnnotationStore,
 } from "../../src/cli/annotation-store-scan.js";
 import { LOCAL_EXTENDED_PATHS, NETWORK_PATHS } from "../helpers/unc-fixtures.js";
@@ -132,7 +134,7 @@ describe("scanAnnotationStore — verdicts", () => {
       unreadableActive: 1,
       // The name matters: `parseAnnotationDoc` logs a reason but never says
       // which file, so this is the only place an operator learns where to look.
-      unreadableSample: ["broken.json"],
+      unreadableSample: [{ name: "broken.json", reason: "not-json" }],
     });
   });
 
@@ -181,13 +183,150 @@ describe("scanAnnotationStore — verdicts", () => {
     expect(result).toMatchObject({ docCount: 1, examined: 1, unreadableActive: 0 });
   });
 
+  it("reports the FIRST schema version it sees, not the last", async () => {
+    // Two files disagreeing is the only shape that distinguishes the two, and
+    // the field's docblock claims "first". Without this the guard can be
+    // deleted and nothing notices.
+    writeDoc("a.json", VALID_DOC);
+    writeDoc("b.json", { ...VALID_DOC, schemaVersion: 99 });
+    utimesSync(join(dir, "a.json"), new Date(1_000_000), new Date(1_000_000));
+
+    const result = await scanAnnotationStore(dir);
+    // `readdir` returns a.json first, so "first observed" is a.json's 1.
+    expect(result).toMatchObject({ schemaVersion: 1, futureActive: 1 });
+  });
+
+  it("picks the newest file by mtime, not by scan order", async () => {
+    writeDoc("a.json", VALID_DOC);
+    writeDoc("b.json", VALID_DOC);
+    // Explicit mtimes: two writes in the same tick can tie on a coarse clock,
+    // and a tie would let "last one processed" pass for the right reason.
+    utimesSync(join(dir, "a.json"), new Date(9_000_000), new Date(9_000_000));
+    utimesSync(join(dir, "b.json"), new Date(1_000_000), new Date(1_000_000));
+
+    const result = await scanAnnotationStore(dir);
+    expect((result as { newest: { name: string } }).newest.name).toBe("a.json");
+  });
+
+  it("reports an existing but empty store as a complete scan of nothing", async () => {
+    // Materially different from `absent`: the directory exists, so the message
+    // and the result shape both differ, and neither was covered.
+    const result = await scanAnnotationStore(dir);
+    expect(result).toMatchObject({
+      kind: "scanned",
+      scan: "complete",
+      docCount: 0,
+      examined: 0,
+      unreadableActive: 0,
+      schemaVersion: null,
+      newest: null,
+    });
+  });
+
+  it("reports a store holding only quarantined and parked files", async () => {
+    writeDoc("a.json.corrupt.1700000000000", "garbage");
+    writeDoc("b.json.future", "garbage");
+
+    const result = await scanAnnotationStore(dir);
+    expect(result).toMatchObject({
+      docCount: 0,
+      quarantined: 1,
+      parkedFuture: 1,
+      unreadableActive: 0,
+    });
+  });
+
+  it("counts a file holding literal JSON null as unreadable", async () => {
+    writeDoc("null.json", "null");
+    const result = await scanAnnotationStore(dir);
+    expect(result).toMatchObject({
+      unreadableActive: 1,
+      unreadableSample: [{ name: "null.json", reason: "invalid-envelope" }],
+    });
+  });
+
+  it("counts a directory named like a store file as unreadable, not as a race", async () => {
+    // `stat` succeeds and `readFile` throws EISDIR. That is not ENOENT, so it
+    // must not take the benign-race path — a mutation that widened the race
+    // check to any read error would make it vanish from the report.
+    mkdirSync(join(dir, "weird.json"));
+    const result = await scanAnnotationStore(dir);
+    expect(result).toMatchObject({
+      unreadableActive: 1,
+      unreadableSample: [{ name: "weird.json", reason: "io-error", code: "EISDIR" }],
+    });
+  });
+
+  it("counts a file that vanishes between the listing and the read", async () => {
+    // The real interleaving: quarantining an unloadable file is a `rename`, so
+    // a live server can make a file doctor is examining stop existing under
+    // that name mid-scan. Before `vanished` existed this file was in no bucket
+    // at all — not unreadable, not quarantined under its new name — so the one
+    // failure mode with no trace anywhere in the report was the one where the
+    // store was actively dealing with corruption.
+    writeDoc("racing.json", VALID_DOC);
+    _readFileSpy.mockImplementationOnce(() => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+
+    const result = await scanAnnotationStore(dir);
+    expect(result).toMatchObject({
+      kind: "scanned",
+      scan: "complete",
+      docCount: 1,
+      // Stat'd, so examined; never opened, so not validated. `vanished` is
+      // what makes that distinction legible.
+      examined: 1,
+      vanished: 1,
+      unreadableActive: 0,
+    });
+  });
+
+  it("does not treat a non-ENOENT read failure as a race", async () => {
+    // Positive control for the row above: widening `isBenignRace` to any read
+    // error would silently move real corruption into the benign bucket.
+    writeDoc("denied.json", VALID_DOC);
+    _readFileSpy.mockImplementationOnce(() => {
+      throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+    });
+
+    const result = await scanAnnotationStore(dir);
+    expect(result).toMatchObject({
+      vanished: 0,
+      unreadableActive: 1,
+      unreadableSample: [{ name: "denied.json", reason: "io-error", code: "EACCES" }],
+    });
+  });
+
+  it("contains a validator that throws to the one file that caused it", async () => {
+    // Every other fallible step in the loop is contained per file. If this one
+    // were not, a future migration throwing on one malformed record would take
+    // the whole check down and lose every other file's verdict with it.
+    writeDoc("good.json", VALID_DOC);
+    writeDoc("boom.json", VALID_DOC);
+    const schema = await import("../../src/server/annotations/schema.js");
+    const spy = vi.spyOn(schema, "parseAnnotationDoc");
+    spy.mockImplementationOnce(() => {
+      throw new Error("migration exploded");
+    });
+
+    const result = await scanAnnotationStore(dir);
+    expect(result).toMatchObject({
+      kind: "scanned",
+      examined: 2,
+      unreadableActive: 1,
+      unreadableSample: [{ name: "boom.json", reason: "validator-threw" }],
+    });
+    spy.mockRestore();
+  });
+
   it("caps the unreadable-name sample without capping the count", async () => {
     const n = ANNOTATION_SCAN_MAX_SAMPLE_NAMES + 3;
     for (let i = 0; i < n; i++) writeDoc(`bad-${i}.json`, "{");
 
     const result = await scanAnnotationStore(dir);
     expect(result).toMatchObject({ unreadableActive: n });
-    expect((result as { unreadableSample: string[] }).unreadableSample).toHaveLength(
+    expect((result as { unreadableSample: UnreadableFile[] }).unreadableSample).toHaveLength(
       ANNOTATION_SCAN_MAX_SAMPLE_NAMES,
     );
   });
@@ -228,20 +367,60 @@ describe("scanAnnotationStore — bounds", () => {
       // land in `unreadableActive` is the proof the read was skipped.
       unreadableActive: 0,
       scan: "complete",
+      // An oversize file WAS examined — stat'd and judged. Counting it as
+      // unexamined would understate what the scan looked at, which is the
+      // number the incomplete-scan warning is derived from.
+      examined: 1,
     });
     expect((result as { totalBytes: number }).totalBytes).toBeGreaterThan(4);
   });
 
-  it("scan defaults match the exported caps", async () => {
-    // The limits override exists so the tests above stay fast. That makes a
-    // shrunken default invisible to them, so the defaults are pinned here.
+  /**
+   * The caps that are NOT exercised end-to-end need their wiring pinned, not
+   * just their values.
+   *
+   * `maxFiles` has a real integration pin — `doctor.test.ts` writes
+   * `ANNOTATION_SCAN_MAX_FILES + 1` files with no override. The two byte caps
+   * have none, because writing an 8 MiB file per run is not worth it. So a
+   * default written as a stray literal (`?? 1024`) rather than its constant
+   * would leave every exported value correct and every cap test above green,
+   * since those all pass explicit overrides. Pinning the resolver closes it.
+   */
+  it("resolves every unset cap to its exported constant", () => {
+    expect(resolveScanLimits()).toEqual({
+      maxFiles: ANNOTATION_SCAN_MAX_FILES,
+      maxFileBytes: ANNOTATION_SCAN_MAX_FILE_BYTES,
+      maxTotalBytes: ANNOTATION_SCAN_MAX_TOTAL_BYTES,
+    });
+    // And an override wins, which is what every bounds test above assumes.
+    expect(resolveScanLimits({ maxFiles: 7 }).maxFiles).toBe(7);
+    expect(resolveScanLimits({ maxFiles: 7 }).maxFileBytes).toBe(ANNOTATION_SCAN_MAX_FILE_BYTES);
+  });
+
+  it("keeps the exported caps at their reviewed values", () => {
+    // Separate from the wiring test on purpose: one pins that the constant is
+    // used, the other pins what it is. A single test conflating them passes
+    // when either half is wrong.
     expect(ANNOTATION_SCAN_MAX_FILES).toBe(512);
     expect(ANNOTATION_SCAN_MAX_FILE_BYTES).toBe(8 * 1024 * 1024);
     expect(ANNOTATION_SCAN_MAX_TOTAL_BYTES).toBe(64 * 1024 * 1024);
+  });
 
-    // And a store well inside every default scans complete with no override.
+  it("scans a store well inside every default as complete", async () => {
     for (let i = 0; i < 3; i++) writeDoc(`doc-${i}.json`, VALID_DOC);
     const result = await scanAnnotationStore(dir);
     expect(result).toMatchObject({ scan: "complete", examined: 3 });
+  });
+
+  it("treats a file of exactly maxFileBytes as within the cap", async () => {
+    // `>` not `>=`. Both existing bound tests use caps far below the real file
+    // sizes, so neither discriminates the operator.
+    writeDoc("exact.json", VALID_DOC);
+    const size = statSync(join(dir, "exact.json")).size;
+
+    expect(await scanAnnotationStore(dir, { maxFileBytes: size })).toMatchObject({ oversize: 0 });
+    expect(await scanAnnotationStore(dir, { maxFileBytes: size - 1 })).toMatchObject({
+      oversize: 1,
+    });
   });
 });

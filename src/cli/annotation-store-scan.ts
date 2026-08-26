@@ -58,8 +58,27 @@ export const ANNOTATION_SCAN_MAX_FILE_BYTES = 8 * 1024 * 1024;
 /** Total bytes read across the whole scan, whichever cap is reached first. */
 export const ANNOTATION_SCAN_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 
-/** Filenames sampled into the result for the operator to go look at. */
+/** Files sampled into the result for the operator to go look at. */
 export const ANNOTATION_SCAN_MAX_SAMPLE_NAMES = 5;
+
+/**
+ * Why one file could not be used.
+ *
+ * Carried in the result rather than left to `parseAnnotationDoc`'s stderr,
+ * because the consumers that most need it never see stderr: `doctor --json`,
+ * the `tandem_diagnostics` MCP tool, and `/api/diagnostics` all return the
+ * structured report alone. "Five files are unreadable" is a different problem
+ * from "five files are permission-denied", and only one of them is the user's
+ * to fix.
+ */
+export type UnreadableReason = "io-error" | "not-json" | "invalid-envelope" | "validator-threw";
+
+export interface UnreadableFile {
+  name: string;
+  reason: UnreadableReason;
+  /** errno for `io-error`; absent otherwise. */
+  code?: string;
+}
 
 /** Why a scan stopped short of examining every active file. */
 export type ScanLimit = "files" | "bytes";
@@ -93,8 +112,19 @@ export interface AnnotationStoreCounts {
   quarantined: number;
   /** Already-parked `<hash>.json.future` files (filename filter, no read). */
   parkedFuture: number;
-  /** Up to {@link ANNOTATION_SCAN_MAX_SAMPLE_NAMES} names of unreadable active files. */
-  unreadableSample: string[];
+  /** Up to {@link ANNOTATION_SCAN_MAX_SAMPLE_NAMES} unreadable active files, with reasons. */
+  unreadableSample: UnreadableFile[];
+  /**
+   * Active files that disappeared between the listing and the read.
+   *
+   * Benign and expected — the store rewrites constantly, and quarantining an
+   * unloadable file is itself a `rename`, so a file doctor is mid-way through
+   * examining can legitimately stop existing under that name. Counted rather
+   * than dropped because otherwise it is the one failure that leaves no trace
+   * anywhere in the report, and it is also the only honest explanation for
+   * `examined < docCount` on a scan that reports itself complete.
+   */
+  vanished: number;
   /** First `schemaVersion` observed on any examined file, parseable or not. */
   schemaVersion: number | null;
   /** Most recently modified active file. */
@@ -113,6 +143,22 @@ export type AnnotationStoreScan =
   | ({ kind: "scanned"; scan: "complete" } & AnnotationStoreCounts)
   | ({ kind: "scanned"; scan: "incomplete"; limit: ScanLimit } & AnnotationStoreCounts);
 
+/**
+ * Fill in the production caps for anything the caller left unset.
+ *
+ * Exported so the wiring is testable, which the constants alone are not: a
+ * default written as a stray literal instead of its constant leaves every
+ * exported value correct and every cap test — which passes explicit overrides
+ * to stay fast — green. Pinning this function is what catches that.
+ */
+export function resolveScanLimits(limits: ScanLimits = {}): Required<ScanLimits> {
+  return {
+    maxFiles: limits.maxFiles ?? ANNOTATION_SCAN_MAX_FILES,
+    maxFileBytes: limits.maxFileBytes ?? ANNOTATION_SCAN_MAX_FILE_BYTES,
+    maxTotalBytes: limits.maxTotalBytes ?? ANNOTATION_SCAN_MAX_TOTAL_BYTES,
+  };
+}
+
 /** Active store files: `<hash>.json`. Quarantined and parked names do not end in `.json`. */
 function isActiveFile(name: string): boolean {
   return name.endsWith(".json") && !name.includes(".corrupt.");
@@ -120,6 +166,19 @@ function isActiveFile(name: string): boolean {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * A file that vanished between `readdir` and the call that touched it. The
+ * store rewrites and renames constantly, so this is an ordinary race and not a
+ * health finding — every other failure is a file the loader would also refuse.
+ */
+function isBenignRace(err: unknown): boolean {
+  return errCode(err) === "ENOENT";
+}
+
+function errCode(err: unknown): string | undefined {
+  return (err as NodeJS.ErrnoException)?.code;
 }
 
 /**
@@ -145,9 +204,7 @@ export async function scanAnnotationStore(
    */
   limits: ScanLimits = {},
 ): Promise<AnnotationStoreScan> {
-  const maxFiles = limits.maxFiles ?? ANNOTATION_SCAN_MAX_FILES;
-  const maxFileBytes = limits.maxFileBytes ?? ANNOTATION_SCAN_MAX_FILE_BYTES;
-  const maxTotalBytes = limits.maxTotalBytes ?? ANNOTATION_SCAN_MAX_TOTAL_BYTES;
+  const { maxFiles, maxFileBytes, maxTotalBytes } = resolveScanLimits(limits);
 
   const unsafe = rejectUnsafeWindowsPrefix(dir);
   if (unsafe !== null) return { kind: "unsafe-path", reason: unsafe };
@@ -171,6 +228,7 @@ export async function scanAnnotationStore(
     quarantined: entries.filter((f) => f.includes(".corrupt.")).length,
     parkedFuture: entries.filter((f) => f.endsWith(".json.future")).length,
     unreadableSample: [],
+    vanished: 0,
     schemaVersion: null,
     newest: null,
   };
@@ -195,10 +253,8 @@ export async function scanAnnotationStore(
       size = s.size;
       mtimeMs = s.mtimeMs;
     } catch (err) {
-      // A file that vanished between readdir and stat is a benign race, not a
-      // health problem — the store rewrites and renames constantly. Anything
-      // else (EACCES, EIO) is a file the loader would also fail to read.
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") recordUnreadable(counts, name);
+      if (isBenignRace(err)) counts.vanished++;
+      else recordUnreadable(counts, name, "io-error", errCode(err));
       continue;
     }
 
@@ -220,7 +276,10 @@ export async function scanAnnotationStore(
       raw = await readFile(path, "utf-8");
       bytesRead += size;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") recordUnreadable(counts, name);
+      // The file was stat'd but never opened, so it is examined-but-unvalidated
+      // either way. A vanished one is the quarantine rename racing this scan.
+      if (isBenignRace(err)) counts.vanished++;
+      else recordUnreadable(counts, name, "io-error", errCode(err));
       continue;
     }
 
@@ -228,7 +287,7 @@ export async function scanAnnotationStore(
     try {
       parsedJson = JSON.parse(raw);
     } catch {
-      recordUnreadable(counts, name);
+      recordUnreadable(counts, name, "not-json");
       continue;
     }
 
@@ -240,10 +299,23 @@ export async function scanAnnotationStore(
       counts.schemaVersion = declared;
     }
 
-    const result = parseAnnotationDoc(parsedJson);
+    // Wrapped even though `parseAnnotationDoc` returns a tagged result and
+    // contains its own migration failures today. Every other fallible step in
+    // this loop is contained per file; leaving one uncontained means a future
+    // migration that throws on some malformed-but-parseable input takes the
+    // WHOLE check down — `Recorder.check` turns it into a bare "crashed" line
+    // and the scan's findings for every other file are lost with it. One bad
+    // file should cost one bad file.
+    let result: ReturnType<typeof parseAnnotationDoc>;
+    try {
+      result = parseAnnotationDoc(parsedJson);
+    } catch {
+      recordUnreadable(counts, name, "validator-threw");
+      continue;
+    }
     if (result.ok) continue;
     if (result.error === "future") counts.futureActive++;
-    else recordUnreadable(counts, name);
+    else recordUnreadable(counts, name, "invalid-envelope");
   }
 
   return limit === null
@@ -251,9 +323,14 @@ export async function scanAnnotationStore(
     : { kind: "scanned", scan: "incomplete", limit, ...counts };
 }
 
-function recordUnreadable(counts: AnnotationStoreCounts, name: string): void {
+function recordUnreadable(
+  counts: AnnotationStoreCounts,
+  name: string,
+  reason: UnreadableReason,
+  code?: string,
+): void {
   counts.unreadableActive++;
   if (counts.unreadableSample.length < ANNOTATION_SCAN_MAX_SAMPLE_NAMES) {
-    counts.unreadableSample.push(name);
+    counts.unreadableSample.push(code === undefined ? { name, reason } : { name, reason, code });
   }
 }

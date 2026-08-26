@@ -181,7 +181,11 @@ describe("runDoctor", () => {
 
     expect(summary?.status).toBe("warn");
     expect(summary?.data?.unreadableActive).toBe(1);
-    expect(summary?.data?.unreadableSample).toEqual(["broken.json"]);
+    // Pinned at the report boundary, not just in the scanner: `vanished` is
+    // the only account of `examined < docCount` on a complete scan, and
+    // dropping it from the data bag is invisible to the scanner's own suite.
+    expect(summary?.data?.vanished).toBe(0);
+    expect(summary?.data?.unreadableSample).toEqual([{ name: "broken.json", reason: "not-json" }]);
   });
 
   /**
