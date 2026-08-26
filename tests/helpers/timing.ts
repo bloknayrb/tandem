@@ -5,8 +5,9 @@ import { expect } from "vitest";
  * coverage run, where the budget measures the profiler.
  *
  * V8 coverage instrumentation slows this suite substantially (measured on the
- * first full baseline run: `tests` 765s uninstrumented against 982s
- * instrumented, and four files timed out that otherwise pass). A wall-clock
+ * first full baseline runs: `tests` 765s uninstrumented against 847-982s
+ * instrumented, and two files with their own inline ceilings exceeded them --
+ * see `timeoutMs` below for which). A wall-clock
  * upper bound written to catch a real regression -- streaming that silently
  * degrades to decompress-everything, a probe that stops being bounded -- cannot
  * distinguish that regression from the instrumentation once both are in play.
@@ -35,8 +36,26 @@ import { expect } from "vitest";
  * @param budgetMs    the upper bound the test is asserting
  * @param proxyFor    what the bound stands in for, for the failure message
  */
+let announcedSuspension = false;
+
 export function expectWithinMs(elapsedMs: number, budgetMs: number, proxyFor: string): void {
-  if (process.env.TANDEM_COVERAGE === "1") return;
+  if (process.env.TANDEM_COVERAGE === "1") {
+    // Say so, once. A suspension that leaves no trace in the output is the same
+    // shape as the problem this helper exists to fix: an assertion that is not
+    // asserting, with nothing visible to say it stopped. `TANDEM_COVERAGE` is
+    // set only by `test:coverage` today -- pinned by
+    // `tests/scripts/coverage-manifest-wiring.test.ts` -- but a stray export in
+    // a shell profile or a copy-pasted CI `env:` would silently disarm all
+    // three bounds, and this line is what makes that visible instead.
+    if (!announcedSuspension) {
+      announcedSuspension = true;
+      console.warn(
+        "[timing] TANDEM_COVERAGE=1: wall-clock upper bounds are SUSPENDED for this run. " +
+          "Expected under `npm run test:coverage`; anywhere else, the variable has leaked.",
+      );
+    }
+    return;
+  }
   expect(elapsedMs, `wall-clock proxy for: ${proxyFor}`).toBeLessThan(budgetMs);
 }
 

@@ -116,9 +116,13 @@ jobs:
         timeout-minutes: 10
 
   # Publishes the coverage BASELINE as an artifact. Separate from `check` on
-  # purpose: instrumentation roughly doubles the suite's wall clock (measured
-  # locally: `tests` 765s uninstrumented against 982s), and `check` is already
-  # this repo's longest job.
+  # purpose: instrumentation adds roughly 10-30% to the suite's wall clock
+  # (measured locally: `tests` 765s uninstrumented against 847-982s across
+  # runs), and `check` is already this repo's longest job.
+  #
+  # This said "roughly doubles" while citing the same numbers, which is 1.28x at
+  # the high end -- a claim a reader could disprove with the arithmetic in the
+  # sentence carrying it.
   #
   # NOT a threshold gate. Unit 3 of the maintainability programme publishes a
   # baseline; per-module floors are Unit 13's, seeded from these numbers with at

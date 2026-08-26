@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { KNOWN_UNTESTED_AREAS } from "../../scripts/ci/coverage-manifest.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -56,11 +57,24 @@ describe("the coverage baseline measures what it claims", () => {
     // Pinned as a source-shape check rather than by running coverage, because
     // running it costs six minutes and this has to be cheap enough to sit in
     // the ordinary suite.
-    const nodeProject = vitestConfig.slice(vitestConfig.indexOf('name: "node"'));
-    const include = nodeProject.slice(
-      nodeProject.indexOf("include:"),
-      nodeProject.indexOf("]", nodeProject.indexOf("include:")),
+    // Each anchor is checked before it is used. Without that, a renamed project
+    // or a reformatted `include:` makes `indexOf` return -1, the slice comes out
+    // empty, and `expect("").not.toContain('"!')` passes -- a vacuous pass on
+    // the one assertion guarding this unit's headline bug. Review found exactly
+    // that; the sibling test three cases down already had the guard.
+    const nodeAt = vitestConfig.indexOf('name: "node"');
+    expect(nodeAt, "no node project found in vitest.config.ts").toBeGreaterThan(-1);
+    const nodeProject = vitestConfig.slice(nodeAt);
+
+    const includeAt = nodeProject.indexOf("include:");
+    expect(includeAt, "the node project declares no `include`").toBeGreaterThan(-1);
+    const closeAt = nodeProject.indexOf("]", includeAt);
+    expect(closeAt, "the node project's `include` array is unterminated").toBeGreaterThan(
+      includeAt,
     );
+
+    const include = nodeProject.slice(includeAt, closeAt);
+    expect(include, "empty include slice -- the anchors matched nothing").not.toHaveLength(0);
     expect(
       include,
       "a negated pattern in the node project's `test.include` silently disables V8 " +
@@ -118,65 +132,70 @@ describe("the coverage baseline measures what it claims", () => {
     expect(script).toContain("json-summary");
   });
 
-  it("refuses a zero measurement rather than reporting 0%", () => {
-    // The distinction the whole artifact turns on: `0%` means the code is
-    // untested, `0/0` means nothing was looked at. They demand opposite
-    // responses and are one character apart in a summary.
-    expect(manifestScript).toContain("total.statements.total === 0");
-    expect(manifestScript).toContain("process.exit(1)");
+  // The script's REFUSAL LOGIC is not tested here. It lives in
+  // `coverage-manifest.test.ts`, which imports `buildManifest` and drives every
+  // refusal with a synthetic summary.
+  //
+  // That split is the correction to how this file was first written. It pinned
+  // the script's source TEXT -- `toContain("total.statements.total === 0")` and
+  // similar -- which reads like coverage and is not: the anti-partial-run
+  // check, by the script's own comment the most load-bearing thing in it, could
+  // be deleted outright with every assertion here still green. A string pin
+  // proves a string is present, never that the code does anything. What is left
+  // in this file is the genuinely textual half: config shape, npm script, CI
+  // job, and the cross-file consistency checks below.
+
+  it("carries a reason on every known-untested exemption", () => {
+    // Read from the imported object rather than regexed out of the source, so a
+    // reformat cannot make this pass by matching nothing. The earlier version
+    // sliced between two literal anchors and extracted keys with a regex
+    // assuming exact indentation -- and one of its anchors named a function
+    // this file no longer has.
+    const entries = Object.entries(KNOWN_UNTESTED_AREAS as Record<string, { reason?: string }>);
+    expect(entries.length, "no exemptions at all -- has the shape changed?").toBeGreaterThan(0);
+    for (const [id, entry] of entries) {
+      // A bare key would let an exemption be added with nothing recording
+      // whether it means "untested" or "the run missed it".
+      expect(entry.reason, `${id} has no reason`).toBeTruthy();
+      expect((entry.reason ?? "").length, `${id}'s reason is too short to be one`).toBeGreaterThan(
+        40,
+      );
+    }
   });
 
-  it("derives the guarded source areas from disk instead of enumerating them", () => {
-    // The independent review's finding, and it was live rather than
-    // hypothetical. The area check started as a literal list of
-    // `src/server/` / `src/client/` / `src/shared/`, which guards the areas
-    // whoever wrote the list thought of -- `src/cli/`, `src/channel/`,
-    // `src/monitor/` and `src/stdio-bridge/` were all outside it. A regression
-    // scoped to `tests/cli/**` would have left that directory at a uniform 0%
-    // and failed nothing: the `ts` family still has 400-odd other files in the
-    // report, so the family check stays green, and an unenumerated prefix
-    // cannot fail a check it is not in.
+  it("sets TANDEM_COVERAGE in exactly one place", () => {
+    // `expectWithinMs` disables three wall-clock assertions when this is set,
+    // and nothing about that suspension is visible in ordinary test output. So
+    // the blast radius of the variable IS the safety argument: if it leaked
+    // into `npm test`, the pre-push hook or CI `check`, those bounds would stop
+    // asserting with nothing anywhere saying so -- the same "riding on luck"
+    // problem the helper was written to fix, relocated to the env boundary.
     //
-    // That is this unit's own failure class one level of granularity down, so
-    // the derivation is what gets pinned, not the resulting list.
-    expect(manifestScript, "the area list must be derived from the src/ walk").toContain(
-      "const areaIds = [...new Set(onDisk.map(areaOf).filter(Boolean))]",
+    // This repo has the precedent: an ambient `VITE_TANDEM_*` baked into a
+    // shipped client, which is why `scripts/build-client.mjs` deletes those
+    // before building.
+    const setters: string[] = [];
+    for (const [file, text] of [
+      ["package.json", readFileSync(path.join(ROOT, "package.json"), "utf-8")],
+      ["ci.yml", readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf-8")],
+      [".husky/pre-push", readFileSync(path.join(ROOT, ".husky/pre-push"), "utf-8")],
+      [".husky/pre-commit", readFileSync(path.join(ROOT, ".husky/pre-commit"), "utf-8")],
+    ] as const) {
+      for (const line of text.split(/\r?\n/)) {
+        if (/TANDEM_COVERAGE\s*[=:]/.test(line)) setters.push(`${file}: ${line.trim()}`);
+      }
+    }
+    expect(setters, "TANDEM_COVERAGE is set nowhere -- test:coverage should set it").not.toEqual(
+      [],
     );
     expect(
-      manifestScript,
-      "an enumerated area list only guards the directories someone remembered",
-    ).not.toContain("const REQUIRED_AREAS");
-  });
-
-  it("accounts for every file under src/, including loose ones", () => {
-    // The area check keys on the first path segment under `src/`, so a file
-    // sitting directly in `src/` belongs to no area and is guarded by nothing.
-    // Deriving the area list closed the enumerated-list hole; this closes the
-    // one the derivation itself opens. Nothing is loose there today, which is
-    // exactly when it is cheap to refuse.
-    expect(manifestScript).toContain("belong to no area");
-    expect(manifestScript).toMatch(/const unassigned = onDisk\.filter\(\(f\) => !areaOf\(f\)\)/);
-  });
-
-  it("makes a known-untested exemption expire on its own", () => {
-    // An exemption is the one place this check can be turned off, so it has to
-    // be self-limiting: an area that gains coverage must FAIL until it is taken
-    // off the list, otherwise it stays permanently exempt and can go dark again
-    // -- a zero-of-zero built out of the fix for a zero-of-zero.
-    expect(manifestScript).toContain("staleExemptions");
-    expect(manifestScript).toContain("a.knownUntested && a.coveredStatements > 0");
-    // Every exemption carries a reason. A bare key would let one be added with
-    // nothing recording whether it means "untested" or "the run missed it".
-    const block = manifestScript.slice(
-      manifestScript.indexOf("const KNOWN_UNTESTED_AREAS"),
-      manifestScript.indexOf("function fail("),
-    );
-    const keys = [...block.matchAll(/^ {2}"?([\w-]+)"?: \{$/gm)].map((m) => m[1]);
-    expect(keys.length, "no exemption entries found -- has the shape changed?").toBeGreaterThan(0);
-    for (const key of keys) {
-      const entry = block.slice(block.indexOf(`${key}`));
-      expect(entry.slice(0, entry.indexOf("},")), `${key} has no reason`).toContain("reason:");
-    }
+      setters.filter((s) => !s.startsWith("package.json:")),
+      "TANDEM_COVERAGE must be set only by the test:coverage script",
+    ).toEqual([]);
+    expect(
+      setters.filter((s) => !s.includes('"test:coverage"')),
+      "TANDEM_COVERAGE appears in a package.json script other than test:coverage",
+    ).toEqual([]);
   });
 
   it("lists every suspended timing assertion, with none missing", () => {
@@ -264,6 +283,16 @@ describe("the coverage baseline measures what it claims", () => {
     expect(upload, "the coverage job produces no artifact").toBeDefined();
     // Uploaded unconditionally, not `if: success()`: the manifest is most worth
     // reading on the run where something went wrong.
-    expect(upload?.if ?? "always()").toContain("always()");
+    //
+    // Asserted on the value being PRESENT, never with a default. This was
+    // written `upload?.if ?? "always()"`, which passes when the `if:` key is
+    // absent -- and absent is precisely the regression, because a step with no
+    // `if:` gets Actions' success()-like default. The fallback made the check
+    // agree with the thing it was meant to catch.
+    expect(
+      upload?.if,
+      "the upload step has no `if:` -- Actions defaults it to success()",
+    ).toBeDefined();
+    expect(upload?.if).toContain("always()");
   });
 });
