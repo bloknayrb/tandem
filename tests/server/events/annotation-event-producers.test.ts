@@ -121,7 +121,12 @@ const MUST_NARROW = [
 
 describe("who can produce an annotation:* channel event", () => {
   it("no file outside the pinned set constructs one", () => {
-    const offenders = FILES.filter((f) => PRODUCER.test(((PRODUCER.lastIndex = 0), f.text)))
+    const offenders = FILES.filter((f) => {
+      // `PRODUCER` is a global regex, so `test` advances `lastIndex` and the
+      // next file would be scanned from wherever the previous match ended.
+      PRODUCER.lastIndex = 0;
+      return PRODUCER.test(f.text);
+    })
       .map((f) => f.path)
       .filter((p) => !(p in PRODUCERS) && !DECLARATIONS_ONLY.includes(p));
 

@@ -4,12 +4,21 @@
  *
  * Written before the brand landed, when every assertion passed against
  * unmodified production code. When the brand landed, **exactly three failed**
- * — the three marked `DELTA:` — and the other fourteen did not move. That is
- * the whole value of the file: without it, "the brand changes only what we
- * meant it to" is a claim nobody can check, and three intended changes are
- * indistinguishable from three accidents.
+ * — and the other fourteen did not move. That is the whole value of the file:
+ * without it, "the brand changes only what we meant it to" is a claim nobody
+ * can check, and three intended changes are indistinguishable from three
+ * accidents.
  *
- * The three now assert the NEW behaviour. Each keeps the record of what it
+ * **Adversarial review then found three MORE deltas this file had not been
+ * written to catch, and that is the honest headline.** A characterization
+ * suite proves the deltas it thought to look for; it cannot prove there are no
+ * others, and claiming otherwise is the failure mode. The three it missed:
+ * the unrecognized-type refusal; a reply on a legacy `suggestion`/`question`
+ * parent, which now emits where master dropped it — the only delta in the
+ * EMITTING direction, and the one nobody predicted in either; and a legacy
+ * `flag` promotion, which emitted nothing on master and now works.
+ *
+ * All six assert the NEW behaviour and each keeps the record of what it
  * asserted before, because a delta with no before is just an assertion.
  *
  * The gates as they stood BEFORE the brand (all four, plus the origin filter
@@ -24,9 +33,11 @@
  * | `observers/factory.ts:69` | `!shouldSkipChannel(txn.origin)` — runs before all of the above |
  *
  * Note what NO gate consulted: `audience`. That is the hole Unit 8a closes, and
- * the reason three of these are deltas rather than regressions. The third fell
- * out of the second: sanitizing `replies.ts`'s parent read, which nothing had
- * sanitized, also withholds replies on an untriaged imported comment.
+ * the reason these are deltas rather than regressions. Several fell out of one
+ * change: sanitizing `replies.ts`'s parent read, which nothing had sanitized,
+ * both withholds replies on an untriaged imported comment AND admits replies
+ * on a legacy `suggestion` parent — the same fix moving the line in both
+ * directions, which is what made it worth measuring rather than reasoning.
  */
 
 import { describe, expect, it } from "vitest";
@@ -299,9 +310,9 @@ describe("channel projection — replies", () => {
   });
 
   it.each([
-    ["true"],
-    [1],
-    ["yes"],
+    "true",
+    1,
+    "yes",
   ])("a reply whose private flag is the non-boolean %p is withheld", (value) => {
     // `private === true` fails open on every one of these. The reply is the
     // one value on this path nothing sanitizes.

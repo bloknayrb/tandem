@@ -60,7 +60,7 @@ import type {
   AnnotationEditedPayload,
   AnnotationReplyPayload,
 } from "../../shared/events/types.js";
-import { sanitizeAnnotation } from "../../shared/sanitize.js";
+import { type OnLossy, type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
 
 /**
@@ -81,6 +81,13 @@ declare const CHANNEL_ELIGIBLE: unique symbol;
  * predicate.
  */
 export type ChannelEligible = Annotation & { readonly [CHANNEL_ELIGIBLE]: true };
+
+/**
+ * A reply that has passed the reply-side predicate. Carries the same
+ * module-private brand, so `narrowReplyForChannel` is likewise the only
+ * expression that can produce one.
+ */
+export type ChannelEligibleReply = AnnotationReply & { readonly [CHANNEL_ELIGIBLE]: true };
 
 /** What `narrowForChannel` refused, for the caller's log line. */
 export type ProjectionRefusal =
@@ -120,7 +127,7 @@ export type ProjectionRefusal =
 export function narrowForChannel(
   raw: unknown,
   opts: {
-    onLossy?: Parameters<typeof sanitizeAnnotation>[1];
+    onLossy?: OnLossy;
     onRefused?: (refusal: ProjectionRefusal, ann: Annotation | undefined) => void;
   } = {},
 ): ChannelEligible | null {
@@ -147,7 +154,7 @@ export function narrowForChannel(
     // `raw` is unknown by design: this is the boundary where unvalidated Y.Map
     // content is checked, and validating it is exactly `sanitizeAnnotation`'s
     // job. The cast hands it the input and it does the work.
-    ann = sanitizeAnnotation(raw as Parameters<typeof sanitizeAnnotation>[0], (event) => {
+    ann = sanitizeAnnotation(raw as Annotation | RawAnnotation, (event) => {
       if (event.kind === "unknown-type") sawUnknownType = { rawType: event.rawType };
       // Relay regardless: the refusal is ours, but the migration record is the
       // caller's and swallowing it would hide the corruption from the log that
@@ -199,7 +206,7 @@ export function narrowForChannel(
 export function narrowReplyForChannel(
   reply: AnnotationReply | undefined,
   parent: ChannelEligible,
-): (AnnotationReply & { readonly [CHANNEL_ELIGIBLE]: true }) | null {
+): ChannelEligibleReply | null {
   if (!reply || reply.author !== "user") return null;
 
   // Fails closed on anything that is not literally `false`.
@@ -222,7 +229,7 @@ export function narrowReplyForChannel(
   // to pass any eligible parent and launder an ineligible reply past the gate.
   if (reply.annotationId !== parent.id) return null;
 
-  return reply as AnnotationReply & { readonly [CHANNEL_ELIGIBLE]: true };
+  return reply as ChannelEligibleReply;
 }
 
 // --- Payload builders: the only producers of annotation-bearing payloads -----
@@ -260,7 +267,7 @@ export function dismissedPayload(ann: ChannelEligible): AnnotationDismissedPaylo
 }
 
 export function replyPayload(
-  reply: AnnotationReply & { readonly [CHANNEL_ELIGIBLE]: true },
+  reply: ChannelEligibleReply,
   parent: ChannelEligible,
   replyId: string,
 ): AnnotationReplyPayload {
