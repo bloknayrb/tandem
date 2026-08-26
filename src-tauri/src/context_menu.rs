@@ -438,10 +438,6 @@ pub(crate) fn show_annotation_context_menu(
     Ok(())
 }
 
-/// App-level menu-event handler (registered ONCE in the builder). Forwards
-/// `ctx:`-prefixed ids to the main webview; tray ids (`MENU_*`) are handled by
-/// the tray's own scoped handler and ignored here. Window-scoped emit so a
-/// future second window can't receive another window's action.
 /// Whether a menu id belongs to this module's id space and should be forwarded
 /// to the webview.
 ///
@@ -454,6 +450,10 @@ fn is_forwardable_ctx_id(id: &str) -> bool {
     id.starts_with("ctx:")
 }
 
+/// App-level menu-event handler (registered ONCE in the builder). Forwards
+/// `ctx:`-prefixed ids to the main webview; tray ids (`MENU_*`) are handled by
+/// the tray's own scoped handler and ignored here. Window-scoped emit so a
+/// future second window can't receive another window's action.
 pub(crate) fn forward_context_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id().as_ref();
     if !is_forwardable_ctx_id(id) {
