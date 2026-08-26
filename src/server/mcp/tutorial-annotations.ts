@@ -87,6 +87,25 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
         // sees the cross-author authorship indicator.
         author: def.type === "note" ? ("user" as const) : ("claude" as const),
         type: def.type,
+        // Stated, not derived — matching what `createAnnotation` stamps on
+        // every Claude-authored annotation (`mcp/annotations.ts`).
+        //
+        // Omitting it used to be harmless, because nothing on the channel read
+        // `audience`. Under ADR-035's narrow it is not: `sanitize.ts:79-87`
+        // derives `private` for a highlight with no stored audience, and these
+        // seeds ARE review targets (`isReviewTarget` is `author !== "user"`),
+        // so the highlight every new user meets on `sample/welcome.md` would
+        // have had its accept and dismiss silently withheld from Claude. The
+        // user clicks Dismiss, the card animates away, and Claude is never
+        // told — which reads as "Claude sometimes misses things", the worst
+        // kind of bug to be handed.
+        //
+        // A Claude-authored seed the user is invited to accept or dismiss is
+        // outbound by intent. Deciding that here, at the seed, is the point:
+        // it was previously an accident of a type-keyed default two modules
+        // away. Notes stay private via the `user` author above and sanitize's
+        // demote guard, both of which still apply.
+        audience: "outbound" as const,
         range: result.range,
         // Only attach a CRDT-anchored relRange when fully resolved. Matches
         // the reloadFromDisk pattern (file-opener.ts) — a partial anchor
