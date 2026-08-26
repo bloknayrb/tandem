@@ -442,11 +442,31 @@ pub(crate) fn show_annotation_context_menu(
 /// `ctx:`-prefixed ids to the main webview; tray ids (`MENU_*`) are handled by
 /// the tray's own scoped handler and ignored here. Window-scoped emit so a
 /// future second window can't receive another window's action.
+/// Whether a menu id belongs to this module's id space and should be forwarded
+/// to the webview.
+///
+/// Split out of `forward_context_menu_event` so it can be tested at all: the
+/// handler itself needs a live `AppHandle` and a `MenuEvent`, neither of which
+/// a unit test can build, which is why the one rule separating these ids from
+/// the tray's `MENU_*` ids had nothing asserting it. The handler is the only
+/// caller; the split changes no behaviour.
+fn is_forwardable_ctx_id(id: &str) -> bool {
+    id.starts_with("ctx:")
+}
+
 pub(crate) fn forward_context_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id().as_ref();
-    if !id.starts_with("ctx:") {
+    if !is_forwardable_ctx_id(id) {
         return;
     }
+    // Window-scoped on purpose: a future second window must not receive
+    // another window's action. **Nothing tests this**, and flattening it to
+    // `app.emit(...)` is green everywhere -- confirmed by mutation, and it is
+    // the one survivor in Unit 11b's battery. Reaching it needs a live
+    // `AppHandle` and a second window, which no unit test can build and which
+    // only a `tests/tauri-driver/` WebDriver spec could. Left as prose with
+    // its limitation stated rather than covered by a source-text assertion
+    // that would read stronger than it is.
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         if let Err(e) = window.emit(
             EVENT_CONTEXT_MENU_ACTION,
@@ -1035,6 +1055,39 @@ mod context_menu_id_space_tests {
         );
         assert!(ids.contains(&"ctx:link:open"));
         assert!(ids.contains(&"ctx:tab:reveal"));
+        // A submenu-nested id, deliberately. Without one, deleting the
+        // recursive `CtxItem::Submenu` arm from `walk` still leaves well over
+        // twenty ids and every assertion below passes over a set that silently
+        // stopped containing the table operations -- found by mutation.
+        assert!(
+            ids.contains(&"ctx:table:insertRowAbove"),
+            "the sweep found no submenu-nested id, so it is not walking submenus"
+        );
+    }
+
+    #[test]
+    fn the_forwarding_predicate_accepts_only_this_module_s_ids() {
+        for id in all_custom_ids() {
+            assert!(
+                is_forwardable_ctx_id(id),
+                "`{id}` is emitted by a builder but the handler would drop it"
+            );
+        }
+        for id in [
+            crate::MENU_OPEN,
+            crate::MENU_SETUP,
+            crate::MENU_ABOUT,
+            crate::MENU_QUIT,
+            crate::MENU_UPDATE,
+        ] {
+            assert!(
+                !is_forwardable_ctx_id(id),
+                "tray id `{id}` would be forwarded into the webview"
+            );
+        }
+        assert!(!is_forwardable_ctx_id(""));
+        assert!(!is_forwardable_ctx_id("ctx"));
+        assert!(is_forwardable_ctx_id("ctx:"));
     }
 
     #[test]
