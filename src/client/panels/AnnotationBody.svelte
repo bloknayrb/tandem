@@ -4,7 +4,7 @@ import { renderMarkdown } from "./chat-markdown";
 import "./markdown-body.css";
 
 interface Props {
-  /** The body text. Non-string values are tolerated — `renderMarkdown` returns "". */
+  /** The body text. */
   text: string;
   /**
    * Who wrote it. Only `"claude"` renders as markdown; see below.
@@ -35,21 +35,27 @@ let { text, author, placeholder = "" }: Props = $props();
  *
  * `"claude"` also covers local-model replies when #1123 M4 arms — the collaborator
  * writes with the same author value, so nothing here needs to change then.
+ *
+ * **Known asymmetry: `author` tracks who OWNS the annotation, not who wrote the
+ * current text.** `tandem_editAnnotation` has no author gate and spreads the
+ * existing record, so Claude editing a user's comment leaves `author: "user"` —
+ * and that Claude-written markdown renders as literal asterisks, while the same
+ * text in a comment Claude *created* renders formatted. Cosmetic, and the honest
+ * fix is a separate `editedBy` field rather than rewriting `author`, which would
+ * corrupt the authorship model and the header dot.
  */
 const asMarkdown = $derived(author === "claude");
 
-const body = $derived(text || placeholder);
-
 /**
- * Keep a link click from also activating the card.
+ * The rendered text.
  *
- * `AnnotationCard` puts `onclick` + `tabindex` on its wrapper (it scrolls the
- * document to the annotation), so without this an anchor inside a rendered
- * reply both navigates AND scrolls the document out from under the user.
+ * `String(...)` because these values come off a Y.Map and both branches need to
+ * survive a non-string. `renderMarkdown` guards itself, but the plain branch is
+ * a bare `{body}` interpolation, which would stringify an object to
+ * `[object Object]` — and the plain branch is where user and import text goes,
+ * so it is the MAJORITY path, not the edge one.
  */
-function onBodyClick(event: MouseEvent) {
-  if ((event.target as HTMLElement | null)?.closest("a")) event.stopPropagation();
-}
+const body = $derived(typeof text === "string" ? text || placeholder : placeholder);
 </script>
 
 {#if asMarkdown}
@@ -63,9 +69,7 @@ function onBodyClick(event: MouseEvent) {
     silently reparents, breaking the layout in a way that looks like a CSS bug.
     All three annotation targets were `<p>` before #1626.
   -->
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="tandem-markdown ab-body" onclick={onBodyClick}>
+  <div class="tandem-markdown ab-body">
     {@html renderMarkdown(body)}
   </div>
 {:else}

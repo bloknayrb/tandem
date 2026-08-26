@@ -96,17 +96,34 @@ test("a claude comment renders markdown and still fits its column", async ({ pag
   }));
   expect(fit.scrollWidth).toBeLessThanOrEqual(fit.clientWidth + 1);
 
-  // 3. The link is styled from a theme token rather than the UA's untokened
-  //    blue. `markdown-body.css` had no `a` rule before #1626 — a defect that
-  //    was live in chat too.
-  const linkColor = await card
+  // 3. The link takes its colour from the intended TOKEN. `markdown-body.css`
+  //    had no `a` rule at all before #1626 — a defect that was live in chat too.
+  //
+  //    Compared against the resolved token rather than merely "not UA blue":
+  //    the weaker form passes on any colour, including the inherited body colour
+  //    you would get if the `a` rule were deleted outright. The token is
+  //    resolved through a probe element because its value is an `oklch()` with a
+  //    nested `var()`, so the raw custom-property string cannot be compared to a
+  //    computed one.
+  const { linkColor, expected, inherited } = await card
     .locator(".tandem-markdown a")
-    .evaluate((el) => getComputedStyle(el).color);
-  const bodyAccent = await page.evaluate(() =>
-    getComputedStyle(document.documentElement).getPropertyValue("--tandem-accent").trim(),
-  );
-  expect(bodyAccent).not.toBe("");
-  expect(linkColor).not.toBe("rgb(0, 0, 238)"); // the UA default
+    .evaluate((el) => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--tandem-accent-fg-strong)";
+      el.parentElement?.appendChild(probe);
+      const expectedColor = getComputedStyle(probe).color;
+      probe.remove();
+      return {
+        linkColor: getComputedStyle(el).color,
+        expected: expectedColor,
+        inherited: getComputedStyle(el.parentElement as HTMLElement).color,
+      };
+    });
+
+  expect(linkColor).toBe(expected);
+  // ...and the token is not coincidentally the same as plain body text, which
+  // would make the assertion above pass with no `a` rule present.
+  expect(expected).not.toBe(inherited);
 });
 
 test("a user comment with the same text renders as literal prose", async ({ page }) => {

@@ -140,6 +140,32 @@ describe("AnnotationBody — clicking a link must not also activate the card", (
   });
 });
 
+describe("AnnotationBody — the shapes a clamped card has to survive", () => {
+  // These pin the MARKUP the density rules in `AnnotationCard.svelte` have to
+  // flatten. They cannot pin the layout — happy-dom has no layout — but they
+  // fail if `renderMarkdown` stops emitting the shape those rules target, which
+  // is how a CSS rule quietly stops covering anything.
+  it("emits a <br> between list items, not just <li> elements", () => {
+    // The reason `display: inline` alone was not enough: `renderMarkdown` turns
+    // every single newline into `<br>`, so a bullet list — the likeliest thing
+    // Claude writes into a comment — carries one line break per item on top of
+    // the `<li>` boxes. A `<br>`'s normal display IS inline, so flattening the
+    // blocks left every break in place and the one-line teaser stayed N lines.
+    const c = body({ text: "Findings:\n- alpha\n- beta", author: "claude" });
+
+    expect(c.querySelectorAll("li")).toHaveLength(2);
+    expect(c.querySelectorAll("br").length).toBeGreaterThan(0);
+  });
+
+  it("keeps literal newlines inside a fenced block", () => {
+    // The other half: `<pre>` carries `white-space: pre-wrap`, which keeps
+    // honouring these newlines even once the box is inline — so the density rule
+    // has to reset `white-space` too, not just `display`.
+    const pre = body({ text: "```ts\na\nb\n```", author: "claude" }).querySelector("pre");
+    expect(pre?.textContent).toContain("\n");
+  });
+});
+
 describe("AnnotationBody — the tutorial is not accidentally reformatted", () => {
   it("renders every tutorial annotation's content as its literal prose", () => {
     // Tutorial annotations ship with `author: "claude"`, so they now take the

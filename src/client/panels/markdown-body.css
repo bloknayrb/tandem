@@ -47,17 +47,28 @@
   margin-bottom: 0;
 }
 
-/* Headings are capped at 1em. A markdown `#` inside a 12px annotation card is
-   a *emphasis* marker, not a document outline — rendering it at UA `2em` makes
-   a reply shout louder than the card's own header. Weight carries the emphasis
-   instead. */
 .tandem-markdown h1,
 .tandem-markdown h2,
 .tandem-markdown h3 {
   margin: 0.5em 0 0.25em;
-  font-size: 1em;
   font-weight: 600;
   line-height: 1.3;
+}
+
+/* Headings are capped at 1em on the CARD host only (`.ab-body`, emitted by
+   AnnotationBody), not app-wide. A markdown `#` inside a 12px annotation card is
+   an emphasis marker rather than a document outline, and at the UA's 2em it
+   shouts louder than the card's own header.
+   
+   Scoped deliberately: the rules above were moved out of `ChatPanel.svelte`,
+   which set no `font-size` at all, so capping globally would silently shrink
+   every heading in Claude's chat messages from 2em to 1em — a change to a
+   surface this work is not about, justified by an argument (12px, short) that
+   does not apply to a chat bubble. */
+.ab-body.tandem-markdown h1,
+.ab-body.tandem-markdown h2,
+.ab-body.tandem-markdown h3 {
+  font-size: 1em;
 }
 
 .tandem-markdown p {
@@ -78,7 +89,7 @@
 }
 
 .tandem-markdown code {
-  font-family: monospace;
+  font-family: var(--tandem-font-mono);
   font-size: 0.9em;
   background: var(--tandem-surface-muted);
   padding: 1px 4px;
@@ -111,11 +122,44 @@
 
 /* `a` had no rule either, so links rendered in the UA's untokened blue —
    the one colour in the app that ignores the theme entirely. */
+/* `accent-fg-strong`, NOT `accent`.
+   
+   A review-target card renders on `--tandem-accent-bg` (`AnnotationCard.svelte`
+   sets that background), and `accent` on `accent-bg` measures ~4.95:1 in light
+   mode — over the AA floor but marginal, and `index.html`'s own token comment
+   calls out that exact pairing and says `accent-fg-strong` "clears it
+   comfortably". ChatPanel already made this call twice (the anchor quote and the
+   selection indicator), so matching it is consistency, not invention.
+   
+   The underline is what satisfies SC 1.4.1 — links stay distinguishable without
+   relying on colour at all. */
 .tandem-markdown a {
-  color: var(--tandem-accent);
+  color: var(--tandem-accent-fg-strong);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 .tandem-markdown a:hover {
   color: var(--tandem-accent-hover);
+}
+
+/* Under forced colors, `--tandem-accent` maps to `Highlight` and
+   `--tandem-accent-hover` is not remapped at all — so a link would render in
+   the selection-FILL colour, or off the system palette entirely on hover.
+   `LinkText` is the keyword that exists for this. */
+@media (forced-colors: active) {
+  .tandem-markdown a,
+  .tandem-markdown a:hover {
+    color: LinkText;
+  }
+}
+
+/* `renderMarkdown` emits `</p><p>` for a blank line with no opening tag, so
+   `intro
+
+```ts…` parses to `intro<p></p><pre>…` — a stray EMPTY paragraph
+   carrying real vertical space. This is a band-aid on that, not a fix: the fix
+   is balancing the renderer's paragraph markup, which has to keep `<pre>`
+   outside the wrapping `<p>`. Verified against a parser. */
+.tandem-markdown p:empty {
+  display: none;
 }
