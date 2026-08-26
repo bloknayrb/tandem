@@ -41,7 +41,7 @@ describe("YDocStore.createAnnotation parity", () => {
     // the random id + timestamp legitimately differ between the two records.
     const ydoc = setupDoc("create-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "create-1");
 
     const idStore = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "needs work", {
       suggestedText: "Hi",
@@ -63,7 +63,7 @@ describe("YDocStore.createAnnotation parity", () => {
 
   it("tags the write with MCP_ORIGIN (ADR-031)", () => {
     const ydoc = setupDoc("create-origin", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "create-origin");
     let origin: unknown;
     ydoc.on("afterTransaction", (tr) => {
       origin = tr.origin;
@@ -77,7 +77,7 @@ describe("YDocStore.listAnnotations parity", () => {
   it("matches collectAnnotations output", () => {
     const ydoc = setupDoc("list-1", "Hello world content");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "list-1");
 
     createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "one");
     createAnnotation(map, ydoc, "highlight", rangeOf(6, 11, ydoc), "", { color: "yellow" });
@@ -89,7 +89,7 @@ describe("YDocStore.listAnnotations parity", () => {
 
   it("getAnnotation returns the sanitized record, undefined when absent", () => {
     const ydoc = setupDoc("get-1", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "get-1");
     const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "hi");
     expect(store.getAnnotation(id)?.content).toBe("hi");
     expect(store.getAnnotation("missing")).toBeUndefined();
@@ -99,7 +99,7 @@ describe("YDocStore.listAnnotations parity", () => {
 describe("YDocStore.editAnnotation parity (handler guard order)", () => {
   it("updates content + suggestedText and bumps rev/editedAt", () => {
     const ydoc = setupDoc("edit-ok", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "edit-ok");
     const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "old");
     const before = store.getAnnotation(id)!;
 
@@ -117,13 +117,13 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
 
   it("returns not-found for an absent ID", () => {
     const ydoc = setupDoc("edit-nf", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "edit-nf");
     expect(store.editAnnotation("nope", { content: "x" })).toEqual({ kind: "not-found" });
   });
 
   it("rejects editing a note (ADR-027) before any other guard", () => {
     const ydoc = setupDoc("edit-note", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "edit-note");
     const id = store.createAnnotation("note", rangeOf(0, 5, ydoc), "private");
     // Even with an empty patch, the note guard wins (it precedes empty-patch).
     expect(store.editAnnotation(id, {})).toEqual({ kind: "invalid-note" });
@@ -132,7 +132,7 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
   it("returns not-pending for an accepted annotation", () => {
     const ydoc = setupDoc("edit-np", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "edit-np");
     const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
     acceptPending(id, ydoc, map);
     expect(store.editAnnotation(id, { content: "y" })).toEqual({
@@ -143,15 +143,17 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
 
   it("returns empty-patch when no fields are supplied (pending comment)", () => {
     const ydoc = setupDoc("edit-empty", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "edit-empty");
     const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
     expect(store.editAnnotation(id, {})).toEqual({ kind: "empty-patch" });
   });
 
   it("rejects suggestedText on a non-comment after the empty-patch guard", () => {
     const ydoc = setupDoc("edit-sugg", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH);
-    const id = store.createAnnotation("highlight", rangeOf(0, 5, ydoc), "", { color: "yellow" });
+    const store = new YDocStore(ydoc, FILE_PATH, "edit-sugg");
+    const id = store.createAnnotation("highlight", rangeOf(0, 5, ydoc), "", {
+      color: "yellow",
+    });
     expect(store.editAnnotation(id, { suggestedText: "Hi" })).toEqual({
       kind: "invalid-suggestion-target",
       annotationType: "highlight",
@@ -163,7 +165,7 @@ describe("YDocStore lifecycle parity", () => {
   it("acceptAnnotation matches acceptPending", () => {
     const a = setupDoc("acc-a", "Hello world");
     const b = setupDoc("acc-b", "Hello world");
-    const storeA = new YDocStore(a, FILE_PATH);
+    const storeA = new YDocStore(a, FILE_PATH, "acc-a");
     const idA = storeA.createAnnotation("comment", rangeOf(0, 5, a), "x");
     const idB = createAnnotation(b.getMap(Y_MAP_ANNOTATIONS), b, "comment", rangeOf(0, 5, b), "x");
 
@@ -176,7 +178,7 @@ describe("YDocStore lifecycle parity", () => {
   it("dismissAnnotation matches dismissPending", () => {
     const a = setupDoc("dis-a", "Hello world");
     const b = setupDoc("dis-b", "Hello world");
-    const storeA = new YDocStore(a, FILE_PATH);
+    const storeA = new YDocStore(a, FILE_PATH, "dis-a");
     const idA = storeA.createAnnotation("comment", rangeOf(0, 5, a), "x");
     const idB = createAnnotation(b.getMap(Y_MAP_ANNOTATIONS), b, "comment", rangeOf(0, 5, b), "x");
 
@@ -190,7 +192,7 @@ describe("YDocStore.removeAnnotation parity", () => {
   it("removes the annotation and its replies, matching removeAnnotationById", () => {
     const ydoc = setupDoc("rm-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "rm-1");
 
     const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
     store.addReply(id, "a reply", "claude");
@@ -204,7 +206,7 @@ describe("YDocStore.removeAnnotation parity", () => {
 
   it("returns NOT_FOUND for an absent ID (same arm as the helper)", () => {
     const ydoc = setupDoc("rm-2", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "rm-2");
     const viaStore = store.removeAnnotation("nope");
     const viaHelper = removeAnnotationById(ydoc, ydoc.getMap(Y_MAP_ANNOTATIONS), FILE_PATH, "nope");
     expect(viaStore).toEqual(viaHelper);
@@ -214,7 +216,7 @@ describe("YDocStore.removeAnnotation parity", () => {
 describe("YDocStore replies parity", () => {
   it("addReply writes the same record as addReplyToAnnotation (claude author)", () => {
     const ydoc = setupDoc("rep-1", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "rep-1");
     const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
 
     const r = store.addReply(id, "agreed", "claude");
@@ -230,8 +232,10 @@ describe("YDocStore replies parity", () => {
 
   it("addReply rejects a non-comment parent (ADR-027), matching the helper", () => {
     const ydoc = setupDoc("rep-2", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH);
-    const id = store.createAnnotation("highlight", rangeOf(0, 5, ydoc), "", { color: "yellow" });
+    const store = new YDocStore(ydoc, FILE_PATH, "rep-2");
+    const id = store.createAnnotation("highlight", rangeOf(0, 5, ydoc), "", {
+      color: "yellow",
+    });
     const r = store.addReply(id, "nope", "claude");
     expect(r.ok).toBe(false);
     if (r.ok) throw new Error("unreachable");
@@ -243,7 +247,7 @@ describe("YDocStore.listAnnotationsRefreshed", () => {
   it("re-anchors flat offsets after an upstream edit and persists them", () => {
     const ydoc = setupDoc("refresh-1", "Hello world content here");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const store = new YDocStore(ydoc, FILE_PATH);
+    const store = new YDocStore(ydoc, FILE_PATH, "refresh-1");
     // Anchor a comment on "world" (offsets 6..11).
     const id = store.createAnnotation("comment", rangeOf(6, 11, ydoc), "on world");
 

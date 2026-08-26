@@ -637,9 +637,16 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     wizardStub.channelRegistered = false;
     // One error alongside the applied target, so the done step offers "Try
     // again" while the push-routes block is still on screen.
+    //
+    // `message`, not `error`: the latter is not a field on this result type,
+    // and `resultErrorText()` reads `result.message ?? <generic fallback>`.
+    // So this fixture DOES change what the component renders here -- "nope"
+    // instead of the fallback copy -- which is rendered-content drift, not a
+    // pure type fix. Deliberate: the fixture's whole point is an errored
+    // target, and no assertion in this test reads the error text.
     const { container } = mountDone(
       [pickedCode(), pickedDesktop()],
-      [applied("claude-code-1"), { id: "claude-desktop-1", status: "error", error: "nope" }],
+      [applied("claude-code-1"), { id: "claude-desktop-1", status: "error", message: "nope" }],
     );
     await tick();
 

@@ -44,10 +44,13 @@ import {
 import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { range } from "../helpers/positions.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
 const sidecarTempFiles: string[] = [];
+
+type CallToolResponse = Awaited<ReturnType<Client["callTool"]>>;
 
 async function setupMcpClient(): Promise<Client> {
   const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
@@ -64,8 +67,13 @@ async function setupMcpClient(): Promise<Client> {
   return mcpClient;
 }
 
-function parseResult(result: { content: Array<{ type: string; text?: string }> }) {
-  const textContent = result.content.find((c) => c.type === "text");
+function parseResult(result: CallToolResponse) {
+  // `result.content` is fine to read directly, but TS's deep Zod-inferred
+  // union type for it blows up ("is of type 'unknown'") the moment it's
+  // iterated (`.find`, `for...of`, etc.) — casting once to a plain shape
+  // sidesteps that without changing what's actually in the array.
+  const content = result.content as Array<{ type: string; text?: string }>;
+  const textContent = content.find((c) => c.type === "text");
   return textContent?.text ? JSON.parse(textContent.text) : null;
 }
 
@@ -314,7 +322,7 @@ describe("MCP tool integration — annotation tools", () => {
       id: "ann_user_solo",
       author: "user",
       type: "comment",
-      range: { from: 6, to: 11 },
+      range: range(6, 11),
       content: "my private WIP comment",
       status: "pending",
       timestamp: Date.now(),
@@ -354,7 +362,7 @@ describe("MCP tool integration — annotation tools", () => {
       id: "ann_held_restart",
       author: "user",
       type: "comment",
-      range: { from: 0, to: 5 },
+      range: range(0, 5),
       content: "held across restart",
       status: "pending",
       timestamp: Date.now(),
@@ -365,7 +373,7 @@ describe("MCP tool integration — annotation tools", () => {
       id: "ann_ordinary_restart",
       author: "user",
       type: "comment",
-      range: { from: 6, to: 11 },
+      range: range(6, 11),
       content: "ordinary comment",
       status: "pending",
       timestamp: Date.now(),
@@ -401,7 +409,7 @@ describe("MCP tool integration — annotation tools", () => {
       id: "ann_test_note_1",
       author: "user",
       type: "note",
-      range: { from: 6, to: 11 },
+      range: range(6, 11),
       content: "A private note",
       status: "pending",
       timestamp: Date.now(),
@@ -446,7 +454,7 @@ describe("MCP tool integration — annotation tools", () => {
       id: "imp_1",
       author: "import",
       type: "comment",
-      range: { from: 6, to: 11 },
+      range: range(6, 11),
       content: "[Reviewer] Reword this",
       status: "pending",
       timestamp: Date.now(),
@@ -456,7 +464,7 @@ describe("MCP tool integration — annotation tools", () => {
       id: "imp_2",
       author: "import",
       type: "comment",
-      range: { from: 12, to: 16 },
+      range: range(12, 16),
       content: "[Reviewer] Check fact",
       status: "pending",
       timestamp: Date.now(),
@@ -630,8 +638,10 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
   // content payload whose `text` starts with "MCP error -32602: ...". This is
   // a separate response shape from handler-level mcpError() (which returns
   // structured JSON). Tests that expect Zod rejection use rawErrorText().
-  function rawErrorText(result: { content: Array<{ type: string; text?: string }> }) {
-    return result.content.find((c) => c.type === "text")?.text ?? "";
+  function rawErrorText(result: CallToolResponse) {
+    const content = result.content as Array<{ type: string; text?: string }>;
+    const textContent = content.find((c) => c.type === "text");
+    return textContent?.text ?? "";
   }
 
   it("rejects a relative outputPath at schema level", async () => {

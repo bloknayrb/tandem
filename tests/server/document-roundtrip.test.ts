@@ -174,7 +174,9 @@ describe("getHeadingPrefixLength", () => {
     const testDoc = new Y.Doc();
     const frag = testDoc.getXmlFragment("default");
     const el = new Y.XmlElement("heading");
-    el.setAttribute("level", level);
+    // CLAUDE.md: Y.XmlElement.setAttribute needs a cast for Tiptap's numeric
+    // heading levels — its own signature only admits strings.
+    el.setAttribute("level", level as unknown as string);
     frag.insert(0, [el]);
     expect(getHeadingPrefixLength(el)).toBe(expected);
     testDoc.destroy();

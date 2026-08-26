@@ -1,0 +1,41 @@
+{
+  // Playwright: the primary E2E suite, the perf suite, and the two capture
+  // harnesses under `scripts/`. These share one config because they share one
+  // runner and one type surface (`@playwright/test`), not because they run
+  // together -- they are invoked by four different commands.
+  //
+  // Every include below is a DIRECTORY, not a `*.spec.ts` glob, because the
+  // Playwright config files and the `global-setup`/`global-teardown` modules
+  // are imported by nothing -- Playwright loads them by path -- so a suffix
+  // glob would leave them unchecked while looking complete. That is the exact
+  // shape of the gap this unit exists to close. Only the root
+  // `playwright.config.ts` needs naming, since it is the one such file sitting
+  // outside every directory listed here; `tests/perf/playwright.config.ts` and
+  // the two capture harnesses' configs arrive through their directories.
+  //
+  // Extends the ROOT config rather than the client one because these need DOM
+  // in `lib` but none of the client config's include set. They are NOT
+  // client-free, and an earlier version of this comment wrongly said they were:
+  // six files import a `src/client` module for a shared constant
+  // (`batch-promote-width`, `margin-view`, `settings-models`,
+  // `toolbar-redesign`, and `tests/perf/performance.spec.ts` twice), which is
+  // why 11 `src/client` files resolve into this program.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "tests/e2e/**/*.ts",
+    "tests/perf/**/*.ts",
+    "scripts/screenshots/**/*.ts",
+    "scripts/design-baselines/**/*.ts",
+    "playwright.config.ts",
+    // The perf harness reads `window.__TANDEM_PORTS__`, whose `declare global`
+    // lives with the code that SETS it (`backend-ports.ts:49`). Included by
+    // path so that declaration keeps one home rather than being duplicated into
+    // an ambient stub that can drift from the writer. This file imports only
+    // `shared/constants`, so it pulls in nothing else.
+    "src/client/utils/backend-ports.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

@@ -432,7 +432,6 @@ describe("renameDocument — residual concurrent-DELETE windows (#1040, a2/a3)",
           // concurrent delete before the bytes are written.
           withBrowser(doc, () => annMap.delete("A"));
         }
-        // @ts-expect-error — forward through to the real impl with original args.
         return realWriteFile(target, content, ...rest);
       });
 
@@ -495,7 +494,6 @@ describe("renameDocument — residual concurrent-DELETE windows (#1040, a2/a3)",
           fired = true;
           withBrowser(doc, () => annMap.delete("A"));
         }
-        // @ts-expect-error — forward through to the real impl with original args.
         return realReadFile(target, ...rest);
       });
 

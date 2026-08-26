@@ -59,6 +59,11 @@ import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { INTERNAL_ORIGIN } from "../../src/shared/origins.js";
 import { UPLOAD_PREFIX } from "../../src/shared/paths.js";
 import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
+import {
+  asChangedKey,
+  listenForTransactions,
+  type TxnRecord,
+} from "../helpers/yjs-transactions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DOCX_FIXTURE = path.resolve(__dirname, "../e2e/fixtures/single-paragraph.docx");
@@ -108,36 +113,15 @@ function buildStressMarkdown(sectionCount: number): string {
   return sections.join("\n");
 }
 
-interface UpdateRecord {
-  origin: unknown;
-  // Captures the type *instance refs* from txn.changed.keys() so callers can
-  // identity-test against a specific Y.AbstractType (e.g. the doc's
-  // XmlFragment) rather than name-comparing (which can't distinguish YMap
-  // variants ANNOTATIONS/REPLIES/AWARENESS — all have constructor.name "YMap").
-  changedTypes: Set<Y.AbstractType<unknown>>;
-}
-
-function listenForUpdates(doc: Y.Doc): { updates: UpdateRecord[]; detach: () => void } {
-  const updates: UpdateRecord[] = [];
-  const listener = (txn: {
-    origin: unknown;
-    changed: Map<Y.AbstractType<unknown>, Set<string | null>>;
-  }) => {
-    updates.push({ origin: txn.origin, changedTypes: new Set(txn.changed.keys()) });
-  };
-  doc.on("afterTransaction", listener);
-  return { updates, detach: () => doc.off("afterTransaction", listener) };
-}
-
 // Pre-subscribe to the Y.Doc that openFileByPath will reuse, so we capture every
 // update event during the open. getOrCreateDocument returns the same instance
 // the opener later picks up via the same docId.
 async function captureUpdatesDuringOpen(
   filePath: string,
-): Promise<{ updates: UpdateRecord[]; doc: Y.Doc }> {
+): Promise<{ updates: TxnRecord[]; doc: Y.Doc }> {
   const docId = docIdFromPath(filePath);
   const doc = getOrCreateDocument(docId);
-  const { updates, detach } = listenForUpdates(doc);
+  const { records: updates, detach } = listenForTransactions(doc);
   try {
     await openFileByPath(filePath);
   } finally {
@@ -151,13 +135,13 @@ async function captureUpdatesDuringOpen(
 async function captureUpdatesDuringOpenFromContent(
   fileName: string,
   content: string | Buffer,
-): Promise<{ updates: UpdateRecord[]; doc: Y.Doc }> {
+): Promise<{ updates: TxnRecord[]; doc: Y.Doc }> {
   const uuid = "test-uuid-batching";
   cryptoMocks.randomUUID.mockImplementation(() => uuid);
   const syntheticPath = `${UPLOAD_PREFIX}${uuid}/${fileName}`;
   const docId = docIdFromPath(syntheticPath);
   const doc = getOrCreateDocument(docId);
-  const { updates, detach } = listenForUpdates(doc);
+  const { records: updates, detach } = listenForTransactions(doc);
   try {
     await openFileFromContent(fileName, content);
   } finally {
@@ -181,9 +165,9 @@ async function captureUpdatesDuringOpenFromContent(
 // cleanup), so use the per-update origin loop instead.
 // ---------------------------------------------------------------------------
 
-function assertSingleBatchedPopulate(doc: Y.Doc, updates: UpdateRecord[]): void {
+function assertSingleBatchedPopulate(doc: Y.Doc, updates: TxnRecord[]): void {
   const fragment = doc.getXmlFragment("default");
-  const fragmentTouches = updates.filter((u) => u.changedTypes.has(fragment));
+  const fragmentTouches = updates.filter((u) => u.changedTypes.has(asChangedKey(fragment)));
   expect(fragmentTouches.length).toBe(1);
   for (const u of fragmentTouches) {
     expect(u.origin).toBe(INTERNAL_ORIGIN);
@@ -239,13 +223,13 @@ describe("loadContentIntoDoc — batching contract (#609)", () => {
 
     const fragment = doc.getXmlFragment("default");
     const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
-    const fragmentTouch = updates.find((u) => u.changedTypes.has(fragment));
+    const fragmentTouch = updates.find((u) => u.changedTypes.has(asChangedKey(fragment)));
     expect(fragmentTouch).toBeDefined();
     // Inner-transact flatten: the same transaction that touched the fragment
     // also touched the annotations map. A refactor that hoisted
     // injectCommentsAsAnnotations OUT of the outer transact (or that no-op'd
     // it) would fail this assertion.
-    expect(fragmentTouch?.changedTypes.has(annotations)).toBe(true);
+    expect(fragmentTouch?.changedTypes.has(asChangedKey(annotations))).toBe(true);
 
     // 3 comments actually landed as annotations.
     expect(annotations.size).toBe(3);

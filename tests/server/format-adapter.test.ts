@@ -18,6 +18,7 @@ vi.mock("../../src/server/file-io/docx.js", async (importOriginal) => {
 
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
+import { off } from "../helpers/positions.js";
 
 describe("FormatAdapter registry (ADR-036)", () => {
   it("returns markdown adapter for 'md' — save is defined", () => {
@@ -139,14 +140,19 @@ describe("DocxAdapter — two-phase parse/apply (#696, ADR-036, PR #707 review)"
     const prepared = {
       format: "docx" as const,
       html: "<p>x</p>",
+      // Reshaped to the real `DocxComment`: this fixture still carried the
+      // pre-#1000 `{id, author, text, range}` shape, which nothing read because
+      // `injectCommentsAsAnnotations` is mocked to throw before touching it.
       comments: [
         {
-          id: "c1",
-          author: "A",
-          text: "x",
-          range: { start: 0, end: 1 },
+          commentId: "c1",
+          authorName: "A",
+          bodyText: "x",
+          from: off(0),
+          to: off(1),
         },
       ],
+      footnoteBodies: {},
       issues: [],
     };
 

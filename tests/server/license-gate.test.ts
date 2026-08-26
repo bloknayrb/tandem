@@ -1,6 +1,6 @@
 import type { Response } from "express";
 import { describe, expect, it, vi } from "vitest";
-import type { LicenseState } from "../../src/server/license/license-types.js";
+import type { LicenseMetadata, LicenseState } from "../../src/server/license/license-types.js";
 import {
   gatedTool,
   licenseGateMiddleware,
@@ -19,15 +19,24 @@ const TRIAL: LicenseState = {
   updateWindowCurrent: false,
   trial: { firstRunAt: "x", expiresAt: "y", daysRemaining: 5 },
 };
+const LICENSE_METADATA: LicenseMetadata = {
+  id: "lic-1",
+  name: "Test User",
+  email: "test@example.com",
+  type: "personal",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  expiresAt: null,
+  version: "1.0",
+};
 const LICENSED: LicenseState = {
   gateActive: true,
   status: "licensed",
+  license: LICENSE_METADATA,
+  licenseId: "lic-1",
   updateWindowCurrent: true,
 };
 const DARK: LicenseState = {
   gateActive: false,
-  status: "licensed",
-  updateWindowCurrent: true,
 };
 
 /** Decode the JSON error envelope a tool result carries. */

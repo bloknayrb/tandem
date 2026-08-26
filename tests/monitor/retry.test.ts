@@ -89,7 +89,7 @@ describe("retry counter semantics", () => {
     await vi.advanceTimersByTimeAsync(200_000);
     await mainPromise;
 
-    const stdoutCalls = stdoutSpy.mock.calls.map((c) => String(c[0]));
+    const stdoutCalls: string[] = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0]));
     expect(
       stdoutCalls.find(
         (s) => s.includes("monitor:exit") || s.includes("Tandem monitor disconnected"),

@@ -3,6 +3,7 @@ import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_CHAT } from "../../src/shared/constants.js";
 import type { ChatMessage } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
+import { off } from "../helpers/positions.js";
 
 describe("chat message pruning logic", () => {
   it("prunes old messages keeping newest 200", () => {
@@ -138,7 +139,7 @@ describe("chat message document context", () => {
       author: "user",
       text: "What about this sentence?",
       timestamp: Date.now(),
-      anchor: { from: 10, to: 25, textSnapshot: "selected text here" },
+      anchor: { from: off(10), to: off(25), textSnapshot: "selected text here" },
       read: false,
     };
     chatMap.set(msg.id, msg);

@@ -113,7 +113,7 @@ afterAll(async () => {
 
 interface UpdateRecord {
   origin: unknown;
-  changedTypes: Set<Y.AbstractType<unknown>>;
+  changedTypes: Set<Y.AbstractType<Y.YEvent<any>>>;
 }
 
 describe("populateDocFromContent — cleanup on populate failure", () => {
@@ -125,10 +125,7 @@ describe("populateDocFromContent — cleanup on populate failure", () => {
     const docId = docIdFromPath(filePath);
     const doc = getOrCreateDocument(docId);
     const updates: UpdateRecord[] = [];
-    const listener = (txn: {
-      origin: unknown;
-      changed: Map<Y.AbstractType<unknown>, Set<string | null>>;
-    }) => {
+    const listener = (txn: Y.Transaction) => {
       updates.push({ origin: txn.origin, changedTypes: new Set(txn.changed.keys()) });
     };
     doc.on("afterTransaction", listener);
@@ -151,7 +148,12 @@ describe("populateDocFromContent — cleanup on populate failure", () => {
     // finally), and once by the cleanup transact. Both must be INTERNAL_ORIGIN
     // post-ADR-031 (populate + cleanup-after-failure are both withInternal).
     const fragment = doc.getXmlFragment("default");
-    const fragmentTouches = updates.filter((u) => u.changedTypes.has(fragment));
+    // AbstractType is invariant in its event-type param, so YXmlFragment (AbstractType<YXmlEvent>)
+    // doesn't structurally match Set<AbstractType<YEvent<any>>> even though it's the same
+    // runtime Set.has() identity check as txn.changed uses.
+    const fragmentTouches = updates.filter((u) =>
+      u.changedTypes.has(fragment as unknown as Y.AbstractType<Y.YEvent<any>>),
+    );
     expect(fragmentTouches.length).toBeGreaterThanOrEqual(2);
     for (const u of fragmentTouches) {
       expect(u.origin).toBe(INTERNAL_ORIGIN);

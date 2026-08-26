@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import fs from "fs";
 import path from "path";
 import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
+import type { ToolResponse } from "../../src/shared/types.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -153,8 +154,14 @@ test("slash menu inserts a fixed 3x3 table and round-trips through save/reload (
   // Save, then re-open with force:true to reload strictly from the on-disk
   // markdown (remark-gfm round-trip, already covered at the unit level by
   // mdast-ydoc.test.ts) and confirm the table survives serialize -> reparse.
-  const saveResult = await mcp.callTool("tandem_save", {});
-  expect(saveResult.isError).toBeFalsy();
+  // This assertion was `expect(saveResult.isError).toBeFalsy()`, which could
+  // never fail. `McpTestClient.callTool` THROWS when the MCP result carries
+  // `isError` (helpers.ts:71-75) and otherwise returns the parsed JSON payload,
+  // so the returned object has no `isError` property at all -- the expectation
+  // read `undefined` and passed unconditionally. Typechecking the test tree is
+  // what surfaced it. `error` is the discriminant the payload actually carries.
+  const saveResult = (await mcp.callTool("tandem_save", {})) as ToolResponse<unknown>;
+  expect(saveResult.error).toBe(false);
   const savedPath = path.join(tmpDir, "sample.md");
   const onDisk = fs.readFileSync(savedPath, "utf-8");
   expect(onDisk).toMatch(/\|.*\|.*\|.*\|/);

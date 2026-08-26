@@ -7,6 +7,7 @@ import {
   resolveOffset,
 } from "../../src/server/mcp/document.js";
 import { escapeRegex } from "../../src/server/mcp/response.js";
+import { off } from "../helpers/positions.js";
 import { makeDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -32,8 +33,8 @@ function findText(fullText: string, pattern: string, occurrence = 1) {
 /** Apply edit like tandem_edit */
 function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): boolean {
   const fragment = doc.getXmlFragment("default");
-  const startPos = resolveOffset(fragment, from);
-  const endPos = resolveOffset(fragment, to);
+  const startPos = resolveOffset(fragment, off(from));
+  const endPos = resolveOffset(fragment, off(to));
   if (!startPos || !endPos) return false;
   if (startPos.clampedFromPrefix || endPos.clampedFromPrefix) return false;
 

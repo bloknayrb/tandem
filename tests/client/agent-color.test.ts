@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { agentColor, agentTintColor } from "../../src/client/utils/agent-color";
-import type { AgentIdentity, ModelProvider } from "../../src/shared/types";
+import type { ModelProvider } from "../../src/shared/models/contract";
+import type { AgentIdentity } from "../../src/shared/types";
 
 function id(provider: ModelProvider, displayName = "Model"): AgentIdentity {
   return { provider, displayName };

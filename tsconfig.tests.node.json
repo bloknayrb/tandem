@@ -1,0 +1,82 @@
+{
+  // Node/Vitest tests, plus the doc- and wiring-guard suites that run in the
+  // same environment.
+  //
+  // **Extends the ROOT config, not the server config, and that is deliberate.**
+  // The obvious choice is `tsconfig.server.json`, so these files are checked
+  // against the same DOM-free lib the server ships with. Two reasons it is not:
+  //
+  // 1. It fails before any lib question is reached -- `tsconfig.server.json`
+  //    sets `rootDir: "src"`, so every `tests/**` file is TS6059.
+  // 2. Five files in this include set import a `src/client` module for a plain
+  //    value or type, which pulls DOM-dependent client code into the program:
+  //    `tests/server/annotation-promote-e2e.test.ts` (`promoteNotesToComments`),
+  //    `tests/server/replies-privacy.test.ts` (`getVisibleReplies`),
+  //    `tests/shared/models-contract.test.ts` (`ModelRegistryEntry`),
+  //    `tests/helpers/cowork-status-fixture.ts` (`CoworkStatus`) and
+  //    `tests/docs/welcome-links.test.ts` (`isSafeExternalHref`). Several test
+  //    files also reach for `document` or `RequestInfo` directly.
+  //
+  // An earlier version of this comment named `tests/build`, `tests/scripts`,
+  // `e2e-guard` and `check-semantic-tokens` as the draggers. Measured: those
+  // two scripts import only node builtins and `src/shared`, and `tests/build`
+  // and `tests/scripts` import zero client modules -- they mention
+  // `src/client` only as path STRINGS they read as text. Do not restore that
+  // version; it describes a mechanism that is not what is happening.
+  //
+  // The server's DOM-freeness is a real invariant, but `tsconfig.server.json`
+  // already owns and proves it, and CI runs that check directly -- duplicating
+  // it here would buy nothing and cost the coverage.
+  //
+  // Directories are included WHOLE rather than by `*.test.ts` glob. A suffix
+  // glob silently skips every helper, fixture-builder and standalone entry
+  // point that no matched file happens to import -- and skipping is
+  // indistinguishable from passing. The one exception is the `tests/*.test.ts`
+  // entry below, for the two suites sitting at the root of `tests/`; what makes
+  // that exception safe is not the glob but the orphan sweep in
+  // `tests/scripts/typecheck-tests-wiring.test.ts`, which goes red if a future
+  // `tests/foo-helper.ts` lands in no config at all.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Two suites import a `.mjs` script directly and are TS7016 without this:
+    // `tests/cli/dev-standalone.test.ts` -> `scripts/dev-standalone.mjs`, and
+    // `tests/scripts/windows-acl-proof-wiring.test.ts` ->
+    // `scripts/ci/windows-acl-proof.mjs`. `allowJs` lets tsc infer those
+    // modules' exports from their real source rather than from a hand-written
+    // `.d.mts` that would drift from them silently. `checkJs` stays off: the
+    // .mjs files are not this unit's to fix, and only files something under
+    // `include` actually imports are pulled in.
+    "allowJs": true
+  },
+  "include": [
+    "src/server/**/*.ts",
+    "src/shared/**/*.ts",
+    "src/channel/**/*.ts",
+    "src/monitor/**/*.ts",
+    "src/cli/**/*.ts",
+    "src/stdio-bridge/**/*.ts",
+    "tests/build/**/*.ts",
+    "tests/channel/**/*.ts",
+    "tests/cli/**/*.ts",
+    "tests/crdt/**/*.ts",
+    "tests/docs/**/*.ts",
+    "tests/helpers/**/*.ts",
+    "tests/monitor/**/*.ts",
+    "tests/plugin/**/*.ts",
+    "tests/scripts/**/*.ts",
+    "tests/server/**/*.ts",
+    "tests/shared/**/*.ts",
+    "tests/*.test.ts"
+  ],
+  // `**/*.svelte.ts` is excluded here and owned by `tsconfig.tests.client.json`
+  // instead: rune files need Svelte's ambient `$state` declarations, and those
+  // arrive by IMPORTING svelte, not by being the client program. (The e2e
+  // program has them too, via `tests/perf/performance.spec.ts` ->
+  // `src/client/layout/editor-stage.svelte`.) Dropping this exclude yields
+  // seven `Cannot find name '$state'` across the four
+  // `tests/helpers/*.svelte.ts` cells. They stay covered — the orphan check in
+  // tests/scripts/typecheck-tests-wiring.test.ts goes red if a config drops a
+  // file without another picking it up.
+  "exclude": ["node_modules", "dist", "tests/tauri-driver", "**/*.svelte.ts"]
+}

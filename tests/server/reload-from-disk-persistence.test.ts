@@ -62,6 +62,7 @@ import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN, RELOAD_ORIGIN, shouldSkipDurableSync } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { asChangedKey, listenForTransactions } from "../helpers/yjs-transactions.js";
 
 let tmpDir: string;
 
@@ -81,23 +82,6 @@ afterAll(async () => {
   if (appDataDir) await fs.rm(appDataDir, { recursive: true, force: true }).catch(() => {});
   delete process.env.TANDEM_APP_DATA_DIR;
 });
-
-interface TxnRecord {
-  origin: unknown;
-  changedTypes: Set<Y.AbstractType<unknown>>;
-}
-
-function listenForTransactions(doc: Y.Doc): { records: TxnRecord[]; detach: () => void } {
-  const records: TxnRecord[] = [];
-  const listener = (txn: {
-    origin: unknown;
-    changed: Map<Y.AbstractType<unknown>, Set<string | null>>;
-  }) => {
-    records.push({ origin: txn.origin, changedTypes: new Set(txn.changed.keys()) });
-  };
-  doc.on("afterTransaction", listener);
-  return { records, detach: () => doc.off("afterTransaction", listener) };
-}
 
 async function setupOpenedFile(initialText: string): Promise<{
   filePath: string;
@@ -189,7 +173,7 @@ describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
     // constructor.name (all YMap variants share name).
     const annMapRef = doc.getMap(Y_MAP_ANNOTATIONS);
     const reloadAnnotationWrites = reloadRecords.filter(
-      (r) => r.origin === RELOAD_ORIGIN && r.changedTypes.has(annMapRef),
+      (r) => r.origin === RELOAD_ORIGIN && r.changedTypes.has(asChangedKey(annMapRef)),
     );
     expect(reloadAnnotationWrites.length).toBeGreaterThanOrEqual(1);
 
@@ -263,7 +247,7 @@ describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
 
     const annMapRef = doc.getMap(Y_MAP_ANNOTATIONS);
     const reloadAnnotationWrites = records.filter(
-      (r) => r.origin === RELOAD_ORIGIN && r.changedTypes.has(annMapRef),
+      (r) => r.origin === RELOAD_ORIGIN && r.changedTypes.has(asChangedKey(annMapRef)),
     );
 
     expect(reloadAnnotationWrites).toHaveLength(1);

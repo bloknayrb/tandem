@@ -76,7 +76,7 @@ describe("handleGetLicenseStatus", () => {
   it("responds with a status object for a loopback caller", () => {
     const res = fakeRes();
     handleGetLicenseStatus(reqFrom("127.0.0.1"), res);
-    expect((res.body as LicenseState).status).toBeDefined();
+    expect((res.body as { status: string }).status).toBeDefined();
   });
 
   it("never leaks license/licenseId to a non-loopback caller", () => {

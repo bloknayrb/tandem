@@ -22,7 +22,7 @@ import type { Server } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import express from "express";
+import express, { type Request, type Response } from "express";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getCurrentSessionId, runWithMcpContext } from "../../src/server/sessions/context.js";
 import { allocPort } from "../helpers/alloc-port.js";
@@ -54,7 +54,7 @@ beforeEach(async () => {
 
   const app = express();
   app.use(express.json());
-  app.post("/mcp", async (req, res) => {
+  app.post("/mcp", async (req: Request, res: Response) => {
     const body = req.body as unknown;
     const claudeSessionId =
       typeof req.headers["x-claude-session-id"] === "string"
@@ -74,8 +74,9 @@ beforeEach(async () => {
       return;
     }
 
-    const sessionId = req.headers["mcp-session-id"];
-    const transport = typeof sessionId === "string" ? transports.get(sessionId) : undefined;
+    const rawSessionId = req.headers["mcp-session-id"];
+    const sessionId = typeof rawSessionId === "string" ? rawSessionId : undefined;
+    const transport = sessionId ? transports.get(sessionId) : undefined;
     if (!transport) {
       res.status(404).json({ jsonrpc: "2.0", error: { code: -32001, message: "no session" } });
       return;

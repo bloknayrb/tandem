@@ -4,6 +4,7 @@ import {
   readKvConfig,
   writeLicenseEntitlement,
 } from "../../src/server/license/kv-store.js";
+import type { LicenseEntitlement } from "../../src/server/license/license-types.js";
 
 const CONFIG = { accountId: "acct", namespaceId: "ns", apiToken: "tok" };
 
@@ -33,7 +34,11 @@ describe("kvValueUrl", () => {
 });
 
 describe("writeLicenseEntitlement", () => {
-  const entry = { updateWindowEnd: null, status: "grandfathered", version: "1.0" };
+  const entry: LicenseEntitlement = {
+    updateWindowEnd: null,
+    status: "grandfathered",
+    version: "1.0",
+  };
 
   it("skips (never calls fetch) when KV is not configured", async () => {
     const fetchFn = vi.fn();
@@ -43,14 +48,16 @@ describe("writeLicenseEntitlement", () => {
   });
 
   it("PUTs the entitlement with the bearer token and JSON body", async () => {
-    const fetchFn = vi.fn(async () => ({ ok: true }) as Response);
+    const fetchFn = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => ({ ok: true }) as Response,
+    );
     const r = await writeLicenseEntitlement("lic-1", entry, { config: CONFIG, fetchFn });
     expect(r.ok).toBe(true);
     const [url, init] = fetchFn.mock.calls[0];
     expect(url).toContain("/values/lic-1");
-    expect((init as RequestInit).method).toBe("PUT");
-    expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer tok" });
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual(entry);
+    expect(init?.method).toBe("PUT");
+    expect(init?.headers).toMatchObject({ Authorization: "Bearer tok" });
+    expect(JSON.parse(init?.body as string)).toEqual(entry);
   });
 
   it("returns ok:false on a non-2xx response (non-fatal) AND logs loudly with the id only", async () => {

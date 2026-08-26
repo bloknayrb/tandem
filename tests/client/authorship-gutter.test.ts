@@ -13,6 +13,7 @@ import { loadMarkdown } from "../../src/server/file-io/markdown";
 import { Y_MAP_AUTHORSHIP } from "../../src/shared/constants";
 import { anchorFlatRange } from "../../src/shared/positions/ydoc";
 import type { AuthorshipRange } from "../../src/shared/types";
+import { off } from "../helpers/positions";
 
 /**
  * The block gutter counts CONTENT positions, not block tokens.
@@ -81,11 +82,11 @@ function put(
   from: number,
   to: number,
 ): boolean {
-  const relRange = anchorFlatRange(ydoc, from, to);
+  const relRange = anchorFlatRange(ydoc, off(from), off(to));
   ydoc.getMap(Y_MAP_AUTHORSHIP).set(id, {
     id,
     author,
-    range: { from, to },
+    range: { from: off(from), to: off(to) },
     ...(relRange ? { relRange } : {}),
     timestamp: 1,
   } satisfies AuthorshipRange);

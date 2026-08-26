@@ -5,6 +5,7 @@ import { resetInbox } from "../../src/server/mcp/awareness.js";
 import { extractText, populateYDoc } from "../../src/server/mcp/document.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { range } from "../helpers/positions.js";
 
 let doc: Y.Doc;
 const DOC_HASH = "sha256:awareness-test";
@@ -16,16 +17,20 @@ function makeDoc(text: string): Y.Doc {
 }
 
 function addAnnotation(map: Y.Map<unknown>, overrides: Partial<Annotation>): Annotation {
-  const ann: Annotation = {
+  // `Partial<Annotation>` distributes over the discriminated union, so the
+  // spread's inferred type is a combinatorial mix of the three members'
+  // optional fields rather than one coherent member — the cast reflects that
+  // callers only ever pass a coherent override set for whatever `type` they choose.
+  const ann = {
     id: `ann_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     author: "user",
     type: "highlight",
-    range: { from: 0, to: 5 },
+    range: range(0, 5),
     content: "",
     status: "pending",
     timestamp: Date.now(),
     ...overrides,
-  };
+  } as Annotation;
   map.set(ann.id, ann);
   return ann;
 }
@@ -46,15 +51,15 @@ describe("tandem_checkInbox logic", () => {
     makeDoc("Hello world test");
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
 
-    const _highlight = addAnnotation(map, {
+    addAnnotation(map, {
       author: "user",
       type: "highlight",
-      range: { from: 0, to: 5 },
+      range: range(0, 5),
     });
-    const _comment = addAnnotation(map, {
+    addAnnotation(map, {
       author: "user",
       type: "comment",
-      range: { from: 6, to: 11 },
+      range: range(6, 11),
       content: "Nice",
     });
 
@@ -89,10 +94,10 @@ describe("tandem_checkInbox logic", () => {
     makeDoc("Hello world");
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
 
-    const _comment = addAnnotation(map, {
+    addAnnotation(map, {
       author: "user",
       type: "comment",
-      range: { from: 0, to: 5 },
+      range: range(0, 5),
       content: "What does this mean?",
     });
 

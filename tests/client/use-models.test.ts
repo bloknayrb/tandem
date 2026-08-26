@@ -84,7 +84,7 @@ describe("models store — CRUD", () => {
     );
 
     expect(typeof id).toBe("string");
-    expect(id.length).toBeGreaterThan(0);
+    expect((id as string).length).toBeGreaterThan(0);
     expect(models.models.length).toBe(1);
     expect(models.models[0]).toMatchObject({
       id,
@@ -112,15 +112,15 @@ describe("models store — CRUD", () => {
     const afterAdd = models.models;
     expect(afterAdd).not.toBe(before);
 
-    await models.updateModel(id, { displayName: "GPT-4o Renamed" });
+    await models.updateModel(id as string, { displayName: "GPT-4o Renamed" });
     const afterUpdate = models.models;
     expect(afterUpdate).not.toBe(afterAdd);
 
-    await models.toggleEnabled(id);
+    await models.toggleEnabled(id as string);
     const afterToggle = models.models;
     expect(afterToggle).not.toBe(afterUpdate);
 
-    await models.deleteModel(id);
+    await models.deleteModel(id as string);
     expect(models.models).not.toBe(afterToggle);
   });
 
@@ -139,7 +139,7 @@ describe("models store — CRUD", () => {
       enabled: false,
     });
 
-    await models.updateModel(idA, { displayName: "Patched A" });
+    await models.updateModel(idA as string, { displayName: "Patched A" });
     expect(models.models.length).toBe(2);
     expect(models.models[0]).toMatchObject({ id: idA, displayName: "Patched A" });
     expect(models.models[1]).toMatchObject({ id: idB, displayName: "B" });
@@ -154,7 +154,7 @@ describe("models store — CRUD", () => {
     const refBefore = models.models[0].apiKeyRef;
     expect(refBefore).toBeDefined();
 
-    await models.updateModel(id, {}, "second-secret");
+    await models.updateModel(id as string, {}, "second-secret");
     const refAfter = models.models[0].apiKeyRef;
     expect(refAfter).toBeDefined();
     expect(refAfter).not.toBe(refBefore);
@@ -175,11 +175,11 @@ describe("models store — CRUD", () => {
       enabled: false,
     });
 
-    await models.toggleEnabled(idA);
+    await models.toggleEnabled(idA as string);
     expect(models.models.find((m) => m.id === idA)?.enabled).toBe(false);
     expect(models.models.find((m) => m.id === idB)?.enabled).toBe(false);
 
-    await models.toggleEnabled(idB);
+    await models.toggleEnabled(idB as string);
     expect(models.models.find((m) => m.id === idB)?.enabled).toBe(true);
   });
 
@@ -200,7 +200,7 @@ describe("models store — CRUD", () => {
     await models.setDefault(idA);
     expect(models.defaultModelId).toBe(idA);
 
-    await models.deleteModel(idA);
+    await models.deleteModel(idA as string);
     expect(models.models.length).toBe(1);
     expect(models.models[0].id).toBe(idB);
     expect(models.defaultModelId).toBeNull(); // cleared — deleted id matched
@@ -392,7 +392,7 @@ describe("models store — write-through semantics", () => {
         return new Response(JSON.stringify({ file: serverFile, etag: "e" }), { status: 200 });
       }),
     );
-    await models.updateModel(idA, { displayName: "Should roll back" });
+    await models.updateModel(idA as string, { displayName: "Should roll back" });
     expect(models.models[0].displayName).toBe("Keep"); // reverted
     expect(models.saveError).not.toBeNull();
   });
@@ -432,8 +432,8 @@ describe("models store — write-through semantics", () => {
       }),
     );
 
-    const aPromise = models.toggleEnabled(idA); // starts; its POST is held pending
-    const bPromise = models.toggleEnabled(idB); // must queue behind A, not interleave
+    const aPromise = models.toggleEnabled(idA as string); // starts; its POST is held pending
+    const bPromise = models.toggleEnabled(idB as string); // must queue behind A, not interleave
 
     // Flush all pending microtasks. If overlapping writes were NOT serialized,
     // B's optimistic apply() would already be visible here (it's synchronous
@@ -539,7 +539,7 @@ describe("models store — keychain ordering on failed writes (terminal-only del
     // Now rotate the key while the registry POST fails terminally.
     const rec = recordingFetch(true);
     vi.stubGlobal("fetch", rec.fn);
-    await models.updateModel(id, {}, "new-secret");
+    await models.updateModel(id as string, {}, "new-secret");
 
     const newRef = rec.stored()[0]; // the only SET during the rotation
     expect(newRef).not.toBe(oldRef);
@@ -560,7 +560,7 @@ describe("models store — keychain ordering on failed writes (terminal-only del
 
     const rec = recordingFetch(true);
     vi.stubGlobal("fetch", rec.fn);
-    await models.deleteModel(id);
+    await models.deleteModel(id as string);
 
     // The delete rolled back → the entry is still live, so its secret must remain.
     expect(rec.ops).not.toContainEqual({ method: "DELETE", ref });
@@ -580,7 +580,7 @@ describe("models store — keychain ordering on failed writes (terminal-only del
 
     const rec = recordingFetch(false); // committed
     vi.stubGlobal("fetch", rec.fn);
-    await models.updateModel(id, {}, "new-secret");
+    await models.updateModel(id as string, {}, "new-secret");
 
     const newRef = rec.stored()[0];
     expect(newRef).not.toBe(oldRef);
@@ -600,7 +600,7 @@ describe("models store — keychain ordering on failed writes (terminal-only del
 
     const rec = recordingFetch(false); // committed
     vi.stubGlobal("fetch", rec.fn);
-    await models.deleteModel(id);
+    await models.deleteModel(id as string);
 
     expect(models.models.length).toBe(0);
     expect(rec.ops).toContainEqual({ method: "DELETE", ref }); // committed delete cleans the secret
@@ -742,7 +742,7 @@ describe("models store — concurrency (busy retry, persistent stale, adopt-orph
     serverFile = { schemaVersion: 1, models: [], defaultModelId: null }; // entry deleted elsewhere
     const rec = seqFetch([409, 200]); // stale, reload (empty), retry commits
     vi.stubGlobal("fetch", rec.fn);
-    await models.updateModel(id, {}, "new-secret");
+    await models.updateModel(id as string, {}, "new-secret");
 
     const newRef = rec.stored()[0];
     expect(newRef).not.toBe(oldRef);

@@ -91,8 +91,8 @@ describe("createIntegrationsStore", () => {
     await expect(
       store.write({
         schemaVersion: 1,
-        integrations: [{ kind: "unknown" } as never],
-      }),
+        integrations: [{ kind: "unknown" }],
+      } as never),
     ).rejects.toThrow();
   });
 

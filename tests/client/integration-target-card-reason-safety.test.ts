@@ -7,6 +7,7 @@ import {
   REASON_POLICY,
   REASON_STATUS_COPY,
 } from "../../src/client/components/integration-target-card-reason.js";
+import type { EntryValidationStatus } from "../../src/shared/integrations/contract.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
@@ -108,7 +109,10 @@ describe("the per-status render policy matches existing-config.ts's producers (#
     const verbatimInterpolating = [
       ...new Set(
         all
-          .filter((p) => p.interpolating && REASON_POLICY[p.status] === "verbatim")
+          .filter(
+            (p) =>
+              p.interpolating && REASON_POLICY[p.status as EntryValidationStatus] === "verbatim",
+          )
           .map((p) => p.status),
       ),
     ];

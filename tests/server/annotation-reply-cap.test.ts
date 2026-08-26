@@ -21,10 +21,10 @@ function seedComment(ydoc: ReturnType<typeof makeMarkdownDoc>) {
     id: "a1",
     type: "comment",
     author: "claude",
-    text: "c",
+    content: "c",
     status: "pending",
-    range: { start: 0, end: 1 },
-    createdAt: Date.now(),
+    range: { from: 0, to: 1 },
+    timestamp: Date.now(),
   });
   return map;
 }

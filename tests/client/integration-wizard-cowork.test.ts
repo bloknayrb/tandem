@@ -32,7 +32,7 @@ import {
 import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
 import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
-const toggleIntegration = vi.fn(async () => ({ ok: true as const }));
+const toggleIntegration = vi.fn(async (..._args: unknown[]) => ({ ok: true as const }));
 const fakeInvoke = vi.fn();
 
 // isTauriRuntime → true so the Cowork row + sub-view render; everything else

@@ -20,7 +20,7 @@ const listSessionsMetadata = vi.fn();
 const deleteSession = vi.fn();
 const clearAllSessions = vi.fn();
 const isStoreReadOnly = vi.fn(() => false);
-const isLoopbackMock = vi.fn(() => true);
+const isLoopbackMock = vi.fn((_remoteAddress: string | undefined) => true);
 
 vi.mock("../../src/server/session/manager.js", () => ({
   listSessionsMetadata: () => listSessionsMetadata(),
@@ -35,7 +35,10 @@ vi.mock("../../src/server/annotations/store.js", () => ({
 // Allow tests to simulate non-loopback callers for path-stripping coverage.
 vi.mock("../../src/server/auth/middleware.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/auth/middleware.js")>();
-  return { ...original, isLoopback: (...args: unknown[]) => isLoopbackMock(...args) };
+  return {
+    ...original,
+    isLoopback: (remoteAddress: string | undefined) => isLoopbackMock(remoteAddress),
+  };
 });
 
 import {

@@ -3,7 +3,7 @@ import { loadMarkdown } from "../../src/server/file-io/markdown.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { toFlatOffset } from "../../src/shared/positions/types.js";
+import { type AnchoredRangeResult, toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 
 /** Create a Y.Doc populated with text content */
@@ -37,6 +37,12 @@ export function getAnnotationsMap(doc: Y.Doc): Y.Map<unknown> {
 
 /** Create a test annotation with sensible defaults and optional overrides. */
 export function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
+  // `Annotation` is a discriminated union on `type`, and `Partial<Annotation>`
+  // makes `type` itself optional. Spreading an optional `type?: "highlight" |
+  // "comment" | "note"` over the required one widens the discriminant back to
+  // the full union, so the object literal no longer narrows to any single
+  // member -- even though every caller passes a coherent combination. The cast
+  // asserts that coherence. Same shape as `makeImportNote` below.
   return {
     id: "ann_test_001",
     author: "claude",
@@ -46,7 +52,7 @@ export function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation 
     status: "pending",
     timestamp: Date.now(),
     ...overrides,
-  };
+  } as Annotation;
 }
 
 /**
@@ -72,12 +78,24 @@ export function makeImportNote(overrides: Record<string, unknown> = {}): Annotat
   } as Annotation;
 }
 
-/** Create an anchored range (flat + CRDT) for annotation creation in tests. */
-export function rangeOf(from: number, to: number, ydoc?: Y.Doc) {
-  if (ydoc) {
-    const result = anchoredRange(ydoc, toFlatOffset(from), toFlatOffset(to));
-    if (!result.ok) throw new Error("anchoredRange failed in test helper");
-    return result;
-  }
-  return { range: { from: toFlatOffset(from), to: toFlatOffset(to) } };
+/**
+ * Create an anchored range (flat + CRDT) for annotation creation in tests.
+ *
+ * **The return type is annotated, not inferred, and `ydoc` is required — both
+ * on purpose.** This helper used to take an optional `ydoc` and fall back to a
+ * bare `{ range }`, which widened its inferred return type to a union of that
+ * shape and `AnchoredRangeResult`. Passing the result to anything expecting an
+ * `AnchoredRangeResult` therefore did not type-check. The first pass at this
+ * unit answered that by writing the *same* `anchoredRangeOf` wrapper into
+ * EIGHT test files, each casting the union back down -- so the duplication was
+ * this branch's own, introduced at `210085c` and deleted at `f191f58`, not
+ * pre-existing debt (`anchoredRangeOf` appears nowhere on master). Narrowing
+ * here is what removed the need for all eight. The
+ * no-ydoc branch had no remaining callers — `unanchored()` in
+ * `tests/helpers/positions.ts` is the fixture for a range with no CRDT anchor.
+ */
+export function rangeOf(from: number, to: number, ydoc: Y.Doc): AnchoredRangeResult {
+  const result = anchoredRange(ydoc, toFlatOffset(from), toFlatOffset(to));
+  if (!result.ok) throw new Error("anchoredRange failed in test helper");
+  return result;
 }

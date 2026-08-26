@@ -16,6 +16,7 @@ import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
 import { refreshRange } from "../../src/server/positions.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
+import { off } from "../helpers/positions.js";
 
 // ---------------------------------------------------------------------------
 // parseCommentMetadata
@@ -403,8 +404,8 @@ describe("injectCommentsAsAnnotations", () => {
         commentId: "1",
         authorName: "Alice",
         bodyText: "Good point",
-        from: 0,
-        to: 5, // "Hello"
+        from: off(0),
+        to: off(5), // "Hello"
         date: "2026-01-15T10:30:00Z",
       },
     ];
@@ -436,8 +437,8 @@ describe("injectCommentsAsAnnotations", () => {
         commentId: "2",
         authorName: "Unknown",
         bodyText: "Just a note",
-        from: 0,
-        to: 5,
+        from: off(0),
+        to: off(5),
       },
     ];
 
@@ -466,8 +467,8 @@ describe("injectCommentsAsAnnotations", () => {
         commentId: "bad",
         authorName: "Alice",
         bodyText: "Out of bounds",
-        from: 500,
-        to: 600,
+        from: off(500),
+        to: off(600),
       },
     ];
 
@@ -486,8 +487,8 @@ describe("injectCommentsAsAnnotations", () => {
         commentId: "1",
         authorName: "Test",
         bodyText: "Tagged",
-        from: 0,
-        to: 5,
+        from: off(0),
+        to: off(5),
       },
     ];
 
@@ -501,8 +502,8 @@ describe("injectCommentsAsAnnotations", () => {
   it("handles multiple comments", () => {
     // "Hello World" — two comments
     const comments: DocxComment[] = [
-      { commentId: "1", authorName: "A", bodyText: "First", from: 0, to: 5 },
-      { commentId: "2", authorName: "B", bodyText: "Second", from: 6, to: 11 },
+      { commentId: "1", authorName: "A", bodyText: "First", from: off(0), to: off(5) },
+      { commentId: "2", authorName: "B", bodyText: "Second", from: off(6), to: off(11) },
     ];
 
     const count = injectCommentsAsAnnotations(doc, comments);
@@ -514,8 +515,8 @@ describe("injectCommentsAsAnnotations", () => {
 
   it("re-importing the same comments is idempotent (content-hashed id + dedup)", () => {
     const comments: DocxComment[] = [
-      { commentId: "1", authorName: "Alice", bodyText: "Good", from: 0, to: 5 },
-      { commentId: "2", authorName: "Bob", bodyText: "Nice", from: 6, to: 11 },
+      { commentId: "1", authorName: "Alice", bodyText: "Good", from: off(0), to: off(5) },
+      { commentId: "2", authorName: "Bob", bodyText: "Nice", from: off(6), to: off(11) },
     ];
 
     const first = injectCommentsAsAnnotations(doc, comments);
@@ -539,8 +540,8 @@ describe("injectCommentsAsAnnotations", () => {
       commentId: "legacy",
       authorName: "Carol",
       bodyText: "Original body",
-      from: 0,
-      to: 5,
+      from: off(0),
+      to: off(5),
     };
     // Stand in for a real importAnnotationId by writing directly under the id
     // we'll compute on re-import — the function is deterministic, so we mirror it:
@@ -571,7 +572,7 @@ describe("injectCommentsAsAnnotations", () => {
   it("backfills importSource.commentId on pre-#1068 import notes (one-shot)", () => {
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
     const comments: DocxComment[] = [
-      { commentId: "9", authorName: "Dana", bodyText: "Old note", from: 0, to: 5 },
+      { commentId: "9", authorName: "Dana", bodyText: "Old note", from: off(0), to: off(5) },
     ];
     injectCommentsAsAnnotations(doc, comments, "rev.docx");
     const id = Array.from(map.keys())[0];
@@ -601,7 +602,7 @@ describe("injectCommentsAsAnnotations", () => {
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
     injectCommentsAsAnnotations(
       doc,
-      [{ commentId: "1", authorName: "Alice", bodyText: "Good", from: 0, to: 5 }],
+      [{ commentId: "1", authorName: "Alice", bodyText: "Good", from: off(0), to: off(5) }],
       "review.docx",
     );
     const key = Array.from(map.keys())[0];
@@ -610,7 +611,7 @@ describe("injectCommentsAsAnnotations", () => {
     // Same Word comment (id "1") whose flat range moved (external edit + reload).
     const injected = injectCommentsAsAnnotations(
       doc,
-      [{ commentId: "1", authorName: "Alice", bodyText: "Good", from: 6, to: 11 }],
+      [{ commentId: "1", authorName: "Alice", bodyText: "Good", from: off(6), to: off(11) }],
       "review.docx",
     );
     expect(injected).toBe(0); // updated in place, not injected
@@ -632,7 +633,7 @@ describe("injectCommentsAsAnnotations", () => {
     // First anchor in the body ("Title") → fullyAnchored, so it carries a relRange.
     injectCommentsAsAnnotations(
       hdoc,
-      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 2, to: 7 }],
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: off(2), to: off(7) }],
       "f.docx",
     );
     const key = Array.from(map.keys())[0];
@@ -641,7 +642,7 @@ describe("injectCommentsAsAnnotations", () => {
     // Drift onto the heading-prefix boundary → fresh anchor !fullyAnchored.
     injectCommentsAsAnnotations(
       hdoc,
-      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 0, to: 2 }],
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: off(0), to: off(2) }],
       "f.docx",
     );
     expect(map.size).toBe(1);
@@ -665,8 +666,8 @@ describe("injectCommentsAsAnnotations", () => {
           commentId: "1",
           authorName: "A",
           bodyText: "Good",
-          from: 0,
-          to: 5,
+          from: off(0),
+          to: off(5),
           replies: [{ commentId: "10", authorName: "B", bodyText: "reply-one" }],
         },
       ],
@@ -683,8 +684,8 @@ describe("injectCommentsAsAnnotations", () => {
           commentId: "1",
           authorName: "A",
           bodyText: "Good",
-          from: 6,
-          to: 11,
+          from: off(6),
+          to: off(11),
           replies: [
             { commentId: "10", authorName: "B", bodyText: "reply-one" },
             { commentId: "11", authorName: "C", bodyText: "reply-two" },
@@ -705,7 +706,7 @@ describe("injectCommentsAsAnnotations", () => {
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
     injectCommentsAsAnnotations(
       doc,
-      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 0, to: 5 }],
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: off(0), to: off(5) }],
       "f.docx",
     );
     const key = Array.from(map.keys())[0];
@@ -724,7 +725,7 @@ describe("injectCommentsAsAnnotations", () => {
     // External edit moves the comment, then reload re-imports it.
     const injected = injectCommentsAsAnnotations(
       doc,
-      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 6, to: 11 }],
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: off(6), to: off(11) }],
       "f.docx",
     );
     expect(injected).toBe(0);
@@ -738,7 +739,7 @@ describe("injectCommentsAsAnnotations", () => {
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
     injectCommentsAsAnnotations(
       doc,
-      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 0, to: 5 }],
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: off(0), to: off(5) }],
       "f.docx",
     );
     expect(map.size).toBe(1);
@@ -746,8 +747,8 @@ describe("injectCommentsAsAnnotations", () => {
     const injected = injectCommentsAsAnnotations(
       doc,
       [
-        { commentId: "1", authorName: "A", bodyText: "Good", from: 6, to: 11 }, // drift
-        { commentId: "2", authorName: "B", bodyText: "New", from: 0, to: 5 }, // new
+        { commentId: "1", authorName: "A", bodyText: "Good", from: off(6), to: off(11) }, // drift
+        { commentId: "2", authorName: "B", bodyText: "New", from: off(0), to: off(5) }, // new
       ],
       "f.docx",
     );
@@ -763,14 +764,14 @@ describe("injectCommentsAsAnnotations", () => {
     // degradation is duplicate-on-drift.
     injectCommentsAsAnnotations(
       doc,
-      [{ commentId: "01", authorName: "A", bodyText: "Good", from: 0, to: 5 }],
+      [{ commentId: "01", authorName: "A", bodyText: "Good", from: off(0), to: off(5) }],
       "f.docx",
     );
     expect(map.size).toBe(1);
 
     const injected = injectCommentsAsAnnotations(
       doc,
-      [{ commentId: "01", authorName: "A", bodyText: "Good", from: 6, to: 11 }],
+      [{ commentId: "01", authorName: "A", bodyText: "Good", from: off(6), to: off(11) }],
       "f.docx",
     );
     expect(injected).toBe(1); // injected as new, NOT re-anchored in place
@@ -794,6 +795,7 @@ describe("injectCommentsAsAnnotations", () => {
       status: "pending",
       rev: 1,
       importSource: { author: "A", file: "f.docx", commentId: "1" },
+      timestamp: 1000,
     } as Annotation);
     map.set("promoted-key", {
       id: "promoted-key",
@@ -806,6 +808,7 @@ describe("injectCommentsAsAnnotations", () => {
       status: "pending",
       rev: 2,
       importSource: { author: "A", file: "f.docx", commentId: "1" },
+      timestamp: 1000,
     } as Annotation);
 
     // Drift the comment. The index must deterministically pick the PROMOTED
@@ -813,7 +816,7 @@ describe("injectCommentsAsAnnotations", () => {
     // re-anchored and the promotion is left intact.
     const injected = injectCommentsAsAnnotations(
       doc,
-      [{ commentId: "1", authorName: "A", bodyText: "Edited", from: 6, to: 11 }],
+      [{ commentId: "1", authorName: "A", bodyText: "Edited", from: off(6), to: off(11) }],
       "f.docx",
     );
     expect(injected).toBe(0); // skipped, not injected
@@ -828,7 +831,7 @@ describe("injectCommentsAsAnnotations", () => {
     const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
     injectCommentsAsAnnotations(
       doc,
-      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 0, to: 5 }],
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: off(0), to: off(5) }],
       "f.docx",
     );
     const key = Array.from(map.keys())[0];
@@ -840,6 +843,7 @@ describe("injectCommentsAsAnnotations", () => {
       audience: "outbound",
       promotedFrom: "note",
       rev: (note.rev ?? 0) + 1,
+      timestamp: 1000,
     } as Annotation);
 
     // User adds a reply in Word, then the comment drifts and re-imports.
@@ -850,8 +854,8 @@ describe("injectCommentsAsAnnotations", () => {
           commentId: "1",
           authorName: "A",
           bodyText: "Good",
-          from: 6,
-          to: 11,
+          from: off(6),
+          to: off(11),
           replies: [{ commentId: "10", authorName: "B", bodyText: "post-promote reply" }],
         },
       ],
@@ -1084,8 +1088,8 @@ describe("injectCommentsAsAnnotations — threaded replies (#1000)", () => {
     commentId: "1",
     authorName: "Alice",
     bodyText: "Root note",
-    from: 0,
-    to: 5,
+    from: off(0),
+    to: off(5),
     date: "2026-01-01T00:00:00Z",
     replies: [
       { commentId: "2", authorName: "Bob", bodyText: "Bob's reply", date: "2026-01-02T00:00:00Z" },
@@ -1139,8 +1143,8 @@ describe("injectCommentsAsAnnotations — threaded replies (#1000)", () => {
       commentId: "1",
       authorName: "x".repeat(500),
       bodyText: "root",
-      from: 0,
-      to: 5,
+      from: off(0),
+      to: off(5),
       replies: [{ commentId: "2", authorName: "y".repeat(500), bodyText: "z".repeat(20_000) }],
     };
     injectCommentsAsAnnotations(doc, [huge]);

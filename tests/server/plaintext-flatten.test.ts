@@ -504,11 +504,11 @@ describe("flattenPlaintextBreaks", () => {
         type: "highlight",
         author: "user",
         status: "pending",
-        text: "",
-        createdAt: 0,
+        content: "",
+        timestamp: 0,
         range: { from: 6, to: 11 },
         relRange: anchored.relRange,
-      } as unknown as Annotation;
+      } as Annotation;
 
       expect(flattenPlaintextBreaks(doc)).toBe(true);
 

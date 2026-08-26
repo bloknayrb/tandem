@@ -36,7 +36,11 @@ describe("refreshMcpEntryBinary", () => {
   function write(body: unknown): void {
     writeFileSync(configPath, JSON.stringify(body, null, 2));
   }
-  function read(): Record<string, never> {
+  function read(): {
+    mcpServers: Record<string, { command?: string; args?: string[] } & Record<string, unknown>>;
+    // biome-ignore lint/suspicious/noExplicitAny: the fixture also asserts on arbitrary top-level vendor keys
+    [key: string]: any;
+  } {
     return JSON.parse(readFileSync(configPath, "utf-8"));
   }
 
@@ -267,7 +271,7 @@ describe("refreshMcpEntryBinary", () => {
 describe("refreshAllMcpEntryBinaries", () => {
   let home: string;
   let errSpy: ReturnType<typeof vi.spyOn>;
-  const stderr = () => errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+  const stderr = () => errSpy.mock.calls.map((c: unknown[]) => String(c[0] ?? "")).join("\n");
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "tandem-sweep-home-"));

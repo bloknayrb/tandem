@@ -9,6 +9,7 @@ import {
 import { getElementText } from "../../src/server/mcp/document.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { buildMarks } from "../helpers/docx-corpus.js";
+import { range } from "../helpers/positions.js";
 import { getFragment, makeAnnotation } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -398,7 +399,7 @@ describe("exportAnnotations", () => {
       makeAnnotation({
         id: "n1",
         type: "note",
-        range: { from: 0, to: 5 },
+        range: range(0, 5),
         content: "Personal reminder",
       }),
     ];
@@ -418,13 +419,13 @@ describe("exportAnnotations", () => {
       makeAnnotation({
         id: "c1",
         type: "comment",
-        range: { from: 0, to: 5 },
+        range: range(0, 5),
         content: "Public comment",
       }),
       makeAnnotation({
         id: "n1",
         type: "note",
-        range: { from: 6, to: 11 },
+        range: range(6, 11),
         content: "Private reminder",
       }),
     ];
@@ -442,20 +443,20 @@ describe("exportAnnotations", () => {
       makeAnnotation({
         id: "h1",
         type: "highlight",
-        range: { from: 0, to: 5 },
+        range: range(0, 5),
         content: "",
         color: "yellow",
       }),
       makeAnnotation({
         id: "c1",
         type: "comment",
-        range: { from: 6, to: 11 },
+        range: range(6, 11),
         content: "Nice word",
       }),
       makeAnnotation({
         id: "s1",
         type: "comment",
-        range: { from: 0, to: 5 },
+        range: range(0, 5),
         content: "More casual",
         suggestedText: "Hi",
       }),
@@ -473,7 +474,7 @@ describe("exportAnnotations", () => {
 
   it("includes text snippet from document", () => {
     loadHtml("<p>The quick brown fox</p>");
-    const annotations = [makeAnnotation({ range: { from: 4, to: 9 }, content: "fast animal" })];
+    const annotations = [makeAnnotation({ range: range(4, 9), content: "fast animal" })];
     const result = exportAnnotations(doc, annotations);
     expect(result).toContain("quick");
   });

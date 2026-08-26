@@ -51,7 +51,7 @@ const CLAUDE_DESKTOP: DetectedTarget = {
 
 describe("runSetup({ apply: true }) orchestration", () => {
   let errSpy: ReturnType<typeof vi.spyOn>;
-  const stderr = () => errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+  const stderr = () => errSpy.mock.calls.map((c: unknown[]) => String(c[0] ?? "")).join("\n");
 
   beforeEach(() => {
     errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -169,7 +169,7 @@ describe("runSetup({ apply: true }) orchestration", () => {
     const plain = () => stderr().replace(/\x1b\[[0-9;]*m/g, "");
 
     it("does not claim push when no target took a shim (the Desktop-only case)", async () => {
-      vi.mocked(resolveChannelShimIntent).mockReturnValue(false);
+      vi.mocked(resolveChannelShimIntent).mockResolvedValue(false);
       vi.mocked(detectTargets).mockReturnValue([CLAUDE_DESKTOP]);
       vi.mocked(applyConfig).mockResolvedValue(undefined);
       noExit();
@@ -183,7 +183,9 @@ describe("runSetup({ apply: true }) orchestration", () => {
     });
 
     it("names the targets that actually got a shim", async () => {
-      vi.mocked(resolveChannelShimIntent).mockImplementation((kind) => kind === "claude-code");
+      vi.mocked(resolveChannelShimIntent).mockImplementation(
+        async (kind) => kind === "claude-code",
+      );
       vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
       vi.mocked(applyConfig).mockResolvedValue(undefined);
       noExit();
@@ -217,7 +219,7 @@ describe("runSetup({ apply: true }) orchestration", () => {
       // elsewhere in the output (the "Found:" list, and its own ✗ failure line).
       const line = plain()
         .split("\n")
-        .find((l) => l.includes("Registered for:"));
+        .find((l: string) => l.includes("Registered for:"));
       expect(line).toBeDefined();
       expect(line).toContain("Claude Code");
       expect(line).not.toContain("Claude Desktop");

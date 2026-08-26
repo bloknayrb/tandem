@@ -143,7 +143,12 @@ describe("dev standalone runner", () => {
 
     const launchPromise = launchStandalone({
       env: { TANDEM_URL: "http://127.0.0.1:3479" },
-      spawnImpl: fakeSpawn,
+      // `FakeChild` implements only the handful of ChildProcess members
+      // `launchStandalone` touches; conforming to the whole interface would be
+      // noise. The cast is what the duck-typing was already relying on.
+      spawnImpl: fakeSpawn as unknown as NonNullable<
+        NonNullable<Parameters<typeof launchStandalone>[0]>["spawnImpl"]
+      >,
       waitForBackendReadyImpl: () => ready.promise,
       timeoutMs: 2_000,
     });

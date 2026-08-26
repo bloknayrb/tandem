@@ -90,7 +90,6 @@ describe("createAutostart", () => {
 
       active = true;
       flushSync();
-      return a;
     });
     await settle();
     expect(loads).toBe(1);

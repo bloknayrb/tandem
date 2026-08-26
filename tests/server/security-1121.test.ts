@@ -27,7 +27,7 @@ const {
   getActiveDocId,
   hasDoc,
 } = vi.hoisted(() => ({
-  isLoopbackMock: vi.fn(() => true),
+  isLoopbackMock: vi.fn((_req: unknown) => true),
   getCurrentDoc: vi.fn(),
   listDocBackups: vi.fn(),
   resolveAppDataDir: vi.fn(() => "/tmp/app-data"),
@@ -35,12 +35,12 @@ const {
   reloadDocumentFromMarkdown: vi.fn(),
   resolveExternalConflict: vi.fn(),
   getActiveDocId: vi.fn(),
-  hasDoc: vi.fn(() => true),
+  hasDoc: vi.fn((_id: string) => true),
 }));
 
 vi.mock("../../src/server/auth/middleware.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/auth/middleware.js")>();
-  return { ...original, isLoopback: (...args: unknown[]) => isLoopbackMock(...args) };
+  return { ...original, isLoopback: (req: unknown) => isLoopbackMock(req) };
 });
 
 vi.mock("../../src/server/mcp/document-service.js", () => ({ getCurrentDoc }));

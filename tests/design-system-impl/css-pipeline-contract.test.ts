@@ -140,6 +140,13 @@ function convertTargets(cssTarget: string | string[]): Targets {
 
 let targets: Targets;
 
+// 30s, not vitest's 10s default. These two files are the only ones in the suite
+// that call Vite's `resolveConfig`, which loads vite.config.ts and every plugin
+// with it -- and under the full 557-file parallel run that occasionally crosses
+// 10s. Observed: both files timed out in the same pre-push run whose ONLY diff
+// from a green run 30 minutes earlier was one line of markdown; `import` time
+// for the run was 686s against the green run's 549s. The cap was measuring
+// machine contention, not the contract.
 beforeAll(async () => {
   // `root` must be explicit. Resolved from any other cwd, Vite finds no config file and
   // silently returns its DEFAULT cssTarget — which is byte-identical to ours today, since
@@ -147,8 +154,10 @@ beforeAll(async () => {
   // "reads Tandem's real Vite config" below.
   const config = await resolveConfig({ root: ROOT }, "build");
   expect(config.configFile, "resolveConfig must actually find vite.config.ts").toBeDefined();
-  targets = convertTargets(config.build.cssTarget);
-});
+  const { cssTarget } = config.build;
+  if (cssTarget === false) throw new Error("cssTarget must be set for this contract to hold");
+  targets = convertTargets(cssTarget);
+}, 30_000);
 
 /** Minify one snippet exactly the way the real build's `minifyCSS` would. */
 function minify(css: string): string {

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import express from "express";
+import express, { type Application, type NextFunction, type Request, type Response } from "express";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { enforceLoopbackMutation } from "../../src/server/mcp/api-routes.js";
@@ -66,7 +66,7 @@ const PREVIOUSLY_UNGATED = [
 
 /** Set by each request via the `x-test-peer` header; undefined means "fail closed". */
 let baseUrl = "";
-let server: ReturnType<express.Application["listen"]>;
+let server: ReturnType<Application["listen"]>;
 const reached: string[] = [];
 
 beforeAll(async () => {
@@ -76,7 +76,7 @@ beforeAll(async () => {
   // sees a loopback peer — `server-security-invariants.test.ts` records that you
   // cannot fake one over a real socket — so the address is overridden here,
   // before the invariant runs, exactly where the kernel would have set it.
-  app.use((req, _res, next) => {
+  app.use((req: Request, _res: Response, next: NextFunction) => {
     const peer = req.headers["x-test-peer"];
     Object.defineProperty(req.socket, "remoteAddress", {
       value: typeof peer === "string" && peer !== "" ? peer : undefined,
@@ -90,7 +90,7 @@ beforeAll(async () => {
   // Registered at full `/api/...` paths on the root app — the same way every
   // registrar in `server.ts` does it. Recording reach rather than asserting on
   // status alone: a 403 with the handler already run is not a gate.
-  const record = (label: string) => (_req: express.Request, res: express.Response) => {
+  const record = (label: string) => (_req: Request, res: Response) => {
     reached.push(label);
     res.status(200).json({ ok: true });
   };
@@ -105,7 +105,7 @@ beforeAll(async () => {
     }
   }
   app.get(API_INFO, record(`GET ${API_INFO}`));
-  app.options(API_OPEN, (_req, res) => res.sendStatus(204));
+  app.options(API_OPEN, (_req: Request, res: Response) => res.sendStatus(204));
 
   await new Promise<void>((resolve) => {
     server = app.listen(0, "127.0.0.1", resolve);

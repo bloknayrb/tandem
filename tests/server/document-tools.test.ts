@@ -18,6 +18,7 @@ import {
   setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { off } from "../helpers/positions.js";
 
 function setupDoc(id: string, text: string, opts?: { readOnly?: boolean; format?: string }) {
   const ydoc = getOrCreateDocument(id);
@@ -143,8 +144,8 @@ describe("tandem_edit — range validation via resolveOffset", () => {
 
     // The actual production guard at document.ts:270 is: if (from > to) return mcpError(...)
     // We can verify the precondition and the offset resolution
-    const pos10 = resolveOffset(fragment, 10);
-    const pos5 = resolveOffset(fragment, 5);
+    const pos10 = resolveOffset(fragment, off(10));
+    const pos5 = resolveOffset(fragment, off(5));
     expect(pos10).not.toBeNull();
     expect(pos5).not.toBeNull();
     // from=10 > to=5 → the handler would reject this
@@ -154,8 +155,8 @@ describe("tandem_edit — range validation via resolveOffset", () => {
   it("from === to is a valid insert point", () => {
     const ydoc = setupDoc("ins-1", "Hello world");
     const fragment = ydoc.getXmlFragment("default");
-    const startPos = resolveOffset(fragment, 5);
-    const endPos = resolveOffset(fragment, 5);
+    const startPos = resolveOffset(fragment, off(5));
+    const endPos = resolveOffset(fragment, off(5));
     expect(startPos).not.toBeNull();
     expect(endPos).not.toBeNull();
     expect(startPos!.textOffset).toBe(endPos!.textOffset);
@@ -190,6 +191,7 @@ describe("tandem_edit — textSnapshot stale detection via verifyAndResolveRange
 
     const result = verifyAndResolveRange(ydoc, 0, 5, "Hello");
     expect(result.valid).toBe(false);
+    if (result.valid) throw new Error("expected range to be invalid");
     if (!result.gone) {
       expect(result.resolvedFrom).toBe(3);
       expect(result.resolvedTo).toBe(8);
@@ -202,10 +204,10 @@ describe("tandem_edit — heading prefix rejection via resolveOffset", () => {
     const ydoc = setupDoc("hp-1", "## Heading Text");
     const fragment = ydoc.getXmlFragment("default");
 
-    const pos0 = resolveOffset(fragment, 0);
-    const pos1 = resolveOffset(fragment, 1);
-    const pos2 = resolveOffset(fragment, 2);
-    const pos3 = resolveOffset(fragment, 3); // first text char
+    const pos0 = resolveOffset(fragment, off(0));
+    const pos1 = resolveOffset(fragment, off(1));
+    const pos2 = resolveOffset(fragment, off(2));
+    const pos3 = resolveOffset(fragment, off(3)); // first text char
 
     expect(pos0!.clampedFromPrefix).toBe(true);
     expect(pos1!.clampedFromPrefix).toBe(true);

@@ -270,6 +270,10 @@ describe("stageLayerStyle — docx keeps its legacy path", () => {
       effectivelyOn: true,
       leftReservePx: MARGIN_VIEW_RESERVE_PER_SIDE_PX,
       rightReservePx: MARGIN_VIEW_RESERVE_PER_SIDE_PX,
+      // Unread by the docx branch (it returns before touching these), but the
+      // input type requires them.
+      leftReserveMaxPx: 0,
+      rightReserveMaxPx: 0,
       measure: "100%",
     });
     expect(s).toBe("position: relative;");
@@ -281,6 +285,8 @@ describe("stageLayerStyle — docx keeps its legacy path", () => {
       effectivelyOn: false,
       leftReservePx: 0,
       rightReservePx: 0,
+      leftReserveMaxPx: 0,
+      rightReserveMaxPx: 0,
       measure: "100%",
     });
     expect(s).toBe("display: contents;");

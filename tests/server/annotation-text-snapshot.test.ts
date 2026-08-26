@@ -7,12 +7,9 @@ import {
 } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { isSnapshotTruncated, SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
+import { unanchored as makeResult } from "../helpers/positions.js";
 
 const DOC_HASH = "sha256:annotation-text-snapshot";
-
-function makeResult(from: number, to: number) {
-  return { ok: true as const, fullyAnchored: false as const, range: { from, to } };
-}
 
 describe("annotation textSnapshot", () => {
   it("stores textSnapshot when provided via extras", () => {
@@ -115,9 +112,19 @@ describe("#1486: isSnapshotTruncated", () => {
   // relocation pass (server). It lives in one file precisely because the second
   // consumer was missed on the first pass at this fix.
 
+  // `SnapshotBearing` requires an `id` (unused by either predicate below —
+  // it's the identifying field a real Annotation carries alongside the
+  // snapshot); a fixed placeholder here satisfies the type without touching
+  // what these tests exercise.
+  const TEST_ID = "ann_test";
+
   it("trusts the flag when the record carries one", () => {
-    expect(isSnapshotTruncated({ textSnapshot: "x", textSnapshotTruncated: true })).toBe(true);
-    expect(isSnapshotTruncated({ textSnapshot: "x", textSnapshotTruncated: false })).toBe(false);
+    expect(
+      isSnapshotTruncated({ id: TEST_ID, textSnapshot: "x", textSnapshotTruncated: true }),
+    ).toBe(true);
+    expect(
+      isSnapshotTruncated({ id: TEST_ID, textSnapshot: "x", textSnapshotTruncated: false }),
+    ).toBe(false);
   });
 
   it("treats a flagged-false cap-length ellipsis snapshot as complete", () => {
@@ -126,6 +133,7 @@ describe("#1486: isSnapshotTruncated", () => {
     // precedence backwards would refuse honest undos forever.
     expect(
       isSnapshotTruncated({
+        id: TEST_ID,
         textSnapshot: `${"c".repeat(SNAPSHOT_CAP - 3)}...`,
         textSnapshotTruncated: false,
       }),
@@ -135,23 +143,27 @@ describe("#1486: isSnapshotTruncated", () => {
   it("detects a LEGACY record by cap-length plus the old trailing ellipsis", () => {
     // No flag — this is what is on users' disks today. Both conditions are
     // required, and the next two tests pin each half.
-    expect(isSnapshotTruncated({ textSnapshot: `${"c".repeat(SNAPSHOT_CAP - 3)}...` })).toBe(true);
+    expect(
+      isSnapshotTruncated({ id: TEST_ID, textSnapshot: `${"c".repeat(SNAPSHOT_CAP - 3)}...` }),
+    ).toBe(true);
   });
 
   it("does not fire on a cap-length snapshot WITHOUT the ellipsis", () => {
     // What this build writes when it truncates — and also a legitimately
     // 200-character snapshot. Both carry the flag when truncated, so length
     // alone must not condemn them or every exactly-200 undo would be refused.
-    expect(isSnapshotTruncated({ textSnapshot: "c".repeat(SNAPSHOT_CAP) })).toBe(false);
+    expect(isSnapshotTruncated({ id: TEST_ID, textSnapshot: "c".repeat(SNAPSHOT_CAP) })).toBe(
+      false,
+    );
   });
 
   it("does not fire on a SHORT snapshot ending in an ellipsis", () => {
     // Ordinary prose. Sniffing for the ellipsis alone would refuse undo on
     // every sentence that trails off.
-    expect(isSnapshotTruncated({ textSnapshot: "he hesitated..." })).toBe(false);
+    expect(isSnapshotTruncated({ id: TEST_ID, textSnapshot: "he hesitated..." })).toBe(false);
   });
 
   it("does not fire on a missing snapshot", () => {
-    expect(isSnapshotTruncated({ textSnapshot: undefined })).toBe(false);
+    expect(isSnapshotTruncated({ id: TEST_ID, textSnapshot: undefined })).toBe(false);
   });
 });

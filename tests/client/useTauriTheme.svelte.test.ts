@@ -717,7 +717,7 @@ describe("setNativeTheme (#992)", () => {
     // ceremony and get simplified away.
     vi.useFakeTimers();
     try {
-      const { setNativeTheme, initTauriTheme, _resetForTests } = await import(
+      const { setNativeTheme, initTauriTheme } = await import(
         "../../src/client/hooks/useTauriTheme.svelte.js"
       );
       vi.stubGlobal("window", {
@@ -1094,7 +1094,7 @@ describe("setNativeTheme (#992)", () => {
       );
       _resetForTests();
       initTauriTheme(pushSpy);
-      const handler = addSpy.mock.calls.find((c) => c[0] === "pagehide")?.[1] as (e: {
+      const handler = addSpy.mock.calls.find((c) => c[0] === "pagehide")?.[1] as unknown as (e: {
         persisted: boolean;
       }) => void;
       expect(handler).toBeTypeOf("function");
@@ -1973,7 +1973,7 @@ describe("setNativeTheme (#992)", () => {
         );
         initTauriTheme(pushSpy);
         await vi.advanceTimersByTimeAsync(0);
-        const handler = addSpy.mock.calls.find((c) => c[0] === "pagehide")?.[1] as (e: {
+        const handler = addSpy.mock.calls.find((c) => c[0] === "pagehide")?.[1] as unknown as (e: {
           persisted: boolean;
         }) => void;
         expect(handler).toBeTypeOf("function");
@@ -2132,7 +2132,7 @@ describe("forced-colors re-push (#1364)", () => {
       "../../src/client/hooks/useTauriTheme.svelte.js"
     );
     _resetForTests();
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     setNativeTheme("dark");
     await flushAsync();
     expect(callsFor(invoke, "set_native_theme")).toHaveLength(1);
@@ -2160,7 +2160,7 @@ describe("forced-colors re-push (#1364)", () => {
       "../../src/client/hooks/useTauriTheme.svelte.js"
     );
     _resetForTests();
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     setNativeTheme("dark");
     await flushAsync();
 
@@ -2185,7 +2185,7 @@ describe("forced-colors re-push (#1364)", () => {
       "../../src/client/hooks/useTauriTheme.svelte.js"
     );
     _resetForTests();
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     setNativeTheme("dark");
     await flushAsync();
     fc.fire();
@@ -2207,7 +2207,7 @@ describe("forced-colors re-push (#1364)", () => {
       "../../src/client/hooks/useTauriTheme.svelte.js"
     );
     _resetForTests();
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     await flushAsync();
 
     fc.fire();
@@ -2231,7 +2231,7 @@ describe("forced-colors re-push (#1364)", () => {
         "../../src/client/hooks/useTauriTheme.svelte.js"
       );
       _resetForTests();
-      initTauriTheme();
+      initTauriTheme(pushSpy);
       setNativeTheme("dark");
       await flushAsync();
 
@@ -2260,13 +2260,13 @@ describe("forced-colors re-push (#1364)", () => {
     );
     _resetForTests();
 
-    initTauriTheme();
+    initTauriTheme(pushSpy);
     expect(fc.listenerCount()).toBe(1);
     _resetForTests();
     expect(fc.listenerCount()).toBe(0);
 
     for (let i = 0; i < 3; i++) {
-      initTauriTheme();
+      initTauriTheme(pushSpy);
       _resetForTests();
     }
     expect(fc.addCalls()).toBe(4); // one per initTauriTheme()

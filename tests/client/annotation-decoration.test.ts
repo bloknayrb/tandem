@@ -101,7 +101,7 @@ function addAnnotation(ydoc: Y.Doc, id = "ann-1") {
     status: "pending",
     content: "test",
     author: "claude",
-    createdAt: Date.now(),
+    timestamp: Date.now(),
     range: { from: 1, to: 5 },
   });
 }

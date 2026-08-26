@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { Y_MAP_AUTHORSHIP } from "../../src/shared/constants";
-import type { AuthorshipRange } from "../../src/shared/types";
 
 /**
  * Tests for buildAuthorshipDecorations — verifies that decorations emit
@@ -104,7 +103,7 @@ function makeMockDoc(
 }
 
 function addEntry(map: Y.Map<unknown>, author: string, id = "auth-1", from = 1, to = 5) {
-  const entry: Partial<AuthorshipRange> & { author: string } = {
+  const entry: Record<string, unknown> = {
     id,
     author,
     range: { from, to },

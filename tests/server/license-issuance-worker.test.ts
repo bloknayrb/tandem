@@ -37,7 +37,7 @@ import { canonicalize as canonicalizeServer } from "../../src/server/license/ver
 // on-device `verifyLicenseSignature`.
 const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
 
-const signBytes = async (data: Uint8Array): Promise<Uint8Array> =>
+const signBytes = async (data: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> =>
   new Uint8Array(crypto.sign(null, Buffer.from(data), privateKey));
 
 interface DecodedBlob {
@@ -957,7 +957,10 @@ describe("default fetch wiring (env → deps)", () => {
   });
 
   it("production default: mints, entitles, and emails via the Resend REST API", async () => {
-    const fetchMock = vi.fn(async () => new Response('{"id":"em_1"}', { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('{"id":"em_1"}', { status: 200 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const env = makeEnv();
     const res = await issuanceWorker.fetch(
@@ -968,10 +971,10 @@ describe("default fetch wiring (env → deps)", () => {
     // TANDEM_ISSUANCE_ENV unset → production → live keys + entitlement written
     expect(env.LEDGER_KV.map.has("order:live:ord_w")).toBe(true);
     expect(env.LICENSE_KV.map.size).toBe(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.resend.com/emails");
-    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer re_test");
-    const sent = JSON.parse(init.body as string);
+    expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer re_test");
+    const sent = JSON.parse(init?.body as string);
     expect(sent.to).toBe("buyer@example.com");
 
     // The ATTACHMENT is the primary delivery path. Its `content` must be base64
@@ -1008,16 +1011,16 @@ describe("default fetch wiring (env → deps)", () => {
   it("alerts the operator when an event is dropped", async () => {
     // `dropped` means a payload we couldn't fulfil — a paid sale may be behind
     // it, and nothing durable was written. It is the result worth waking for.
-    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("{}", { status: 200 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/xyz" });
     const body = JSON.stringify({ type: "order.paid", data: { id: "ord_d" } }); // no email
     await issuanceWorker.fetch(makeRequest(body, { id: "evt_drop_1", ts: nowTs() }), env as never);
-    const alert = fetchMock.mock.calls.find(
-      ([u]) => u === "https://hooks.example.com/xyz",
-    ) as unknown as [string, RequestInit] | undefined;
+    const alert = fetchMock.mock.calls.find(([u]) => u === "https://hooks.example.com/xyz");
     expect(alert).toBeDefined();
-    expect(JSON.parse(alert![1].body as string).text).toMatch(/could not be fulfilled/);
+    expect(JSON.parse(alert?.[1]?.body as string).text).toMatch(/could not be fulfilled/);
   });
 
   it("routes an EMAIL failure away from Resend — the channel that just failed", async () => {
@@ -1045,18 +1048,16 @@ describe("default fetch wiring (env → deps)", () => {
   });
 
   it("does not alert on an ordinary successful issuance", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("{}", { status: 200 })),
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("{}", { status: 200 }),
     );
+    vi.stubGlobal("fetch", fetchMock);
     const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/quiet" });
     await issuanceWorker.fetch(
       makeRequest(paidBody("ord_quiet"), { id: "evt_quiet", ts: nowTs() }),
       env as never,
     );
-    const urls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
-      ([u]: [string]) => u,
-    );
+    const urls = fetchMock.mock.calls.map(([u]) => u);
     expect(urls).not.toContain("https://hooks.example.com/quiet");
   });
 
@@ -1196,15 +1197,18 @@ describe("default fetch wiring (env → deps)", () => {
   });
 
   it("a configured SUPPORT_EMAIL reaches both reply_to and the email body", async () => {
-    const fetchMock = vi.fn(async () => new Response('{"id":"em_2"}', { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('{"id":"em_2"}', { status: 200 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const env = makeEnv();
     await issuanceWorker.fetch(
       makeRequest(paidBody("ord_se5"), { id: "evt_se5", ts: nowTs() }),
       env as never,
     );
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const sent = JSON.parse(init.body as string);
+    const [, init] = fetchMock.mock.calls[0];
+    const sent = JSON.parse(init?.body as string);
     expect(sent.reply_to).toBe("support@tandem.test");
     expect(sent.text as string).toContain("support@tandem.test");
   });

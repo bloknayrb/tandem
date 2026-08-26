@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { extractText, resolveOffset } from "../../src/server/mcp/document.js";
 import { validateRange } from "../../src/server/positions.js";
+import { off } from "../helpers/positions.js";
 import { getFragment, makeDoc, makeEmptyDoc, makeMarkdownDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -17,19 +18,19 @@ describe("resolveOffset", () => {
     });
 
     it("offset 0 → start of element", () => {
-      const result = resolveOffset(getFragment(doc), 0);
+      const result = resolveOffset(getFragment(doc), off(0));
       expect(result).toEqual({ elementIndex: 0, textOffset: 0, clampedFromPrefix: false });
     });
 
     it("offset 5 → middle of text", () => {
-      const result = resolveOffset(getFragment(doc), 5);
+      const result = resolveOffset(getFragment(doc), off(5));
       expect(result).toEqual({ elementIndex: 0, textOffset: 5, clampedFromPrefix: false });
     });
 
     it("offset 11 → end of text", () => {
       // "Hello world" has 11 chars, offset 11 is past end of element content
       // but within the element's full length, so it clamps to end
-      const result = resolveOffset(getFragment(doc), 11);
+      const result = resolveOffset(getFragment(doc), off(11));
       expect(result).toEqual({ elementIndex: 0, textOffset: 11, clampedFromPrefix: false });
     });
   });
@@ -41,7 +42,7 @@ describe("resolveOffset", () => {
     });
 
     it("offset 0 → first element, start", () => {
-      expect(resolveOffset(getFragment(doc), 0)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(0))).toEqual({
         elementIndex: 0,
         textOffset: 0,
         clampedFromPrefix: false,
@@ -49,7 +50,7 @@ describe("resolveOffset", () => {
     });
 
     it('offset 4 → first element, "o"', () => {
-      expect(resolveOffset(getFragment(doc), 4)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(4))).toEqual({
         elementIndex: 0,
         textOffset: 4,
         clampedFromPrefix: false,
@@ -58,7 +59,7 @@ describe("resolveOffset", () => {
 
     it("offset 5 (\\n separator) → end of first element", () => {
       // This hits the distinct separator code path (document.ts:163-167)
-      expect(resolveOffset(getFragment(doc), 5)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(5))).toEqual({
         elementIndex: 0,
         textOffset: 5,
         clampedFromPrefix: false,
@@ -66,7 +67,7 @@ describe("resolveOffset", () => {
     });
 
     it("offset 6 → start of second element", () => {
-      expect(resolveOffset(getFragment(doc), 6)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(6))).toEqual({
         elementIndex: 1,
         textOffset: 0,
         clampedFromPrefix: false,
@@ -74,7 +75,7 @@ describe("resolveOffset", () => {
     });
 
     it("offset 10 → end of second element", () => {
-      expect(resolveOffset(getFragment(doc), 10)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(10))).toEqual({
         elementIndex: 1,
         textOffset: 4,
         clampedFromPrefix: false,
@@ -89,7 +90,7 @@ describe("resolveOffset", () => {
     });
 
     it("offset 0 → element 0", () => {
-      expect(resolveOffset(getFragment(doc), 0)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(0))).toEqual({
         elementIndex: 0,
         textOffset: 0,
         clampedFromPrefix: false,
@@ -97,7 +98,7 @@ describe("resolveOffset", () => {
     });
 
     it("offset 1 (\\n) → end of element 0", () => {
-      expect(resolveOffset(getFragment(doc), 1)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(1))).toEqual({
         elementIndex: 0,
         textOffset: 1,
         clampedFromPrefix: false,
@@ -105,7 +106,7 @@ describe("resolveOffset", () => {
     });
 
     it("offset 2 → start of element 1", () => {
-      expect(resolveOffset(getFragment(doc), 2)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(2))).toEqual({
         elementIndex: 1,
         textOffset: 0,
         clampedFromPrefix: false,
@@ -113,7 +114,7 @@ describe("resolveOffset", () => {
     });
 
     it("offset 3 (\\n) → end of element 1", () => {
-      expect(resolveOffset(getFragment(doc), 3)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(3))).toEqual({
         elementIndex: 1,
         textOffset: 1,
         clampedFromPrefix: false,
@@ -121,7 +122,7 @@ describe("resolveOffset", () => {
     });
 
     it("offset 4 → start of element 2", () => {
-      expect(resolveOffset(getFragment(doc), 4)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(4))).toEqual({
         elementIndex: 2,
         textOffset: 0,
         clampedFromPrefix: false,
@@ -137,7 +138,7 @@ describe("resolveOffset", () => {
     });
 
     it('offset 0 (inside "## ") → clampedFromPrefix', () => {
-      expect(resolveOffset(getFragment(doc), 0)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(0))).toEqual({
         elementIndex: 0,
         textOffset: 0,
         clampedFromPrefix: true,
@@ -145,7 +146,7 @@ describe("resolveOffset", () => {
     });
 
     it('offset 1 (inside "## ") → clampedFromPrefix', () => {
-      expect(resolveOffset(getFragment(doc), 1)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(1))).toEqual({
         elementIndex: 0,
         textOffset: 0,
         clampedFromPrefix: true,
@@ -153,7 +154,7 @@ describe("resolveOffset", () => {
     });
 
     it('offset 2 (last char of "## ") → clampedFromPrefix', () => {
-      expect(resolveOffset(getFragment(doc), 2)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(2))).toEqual({
         elementIndex: 0,
         textOffset: 0,
         clampedFromPrefix: true,
@@ -161,7 +162,7 @@ describe("resolveOffset", () => {
     });
 
     it('offset 3 (first char "T") → NOT clamped', () => {
-      expect(resolveOffset(getFragment(doc), 3)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(3))).toEqual({
         elementIndex: 0,
         textOffset: 0,
         clampedFromPrefix: false,
@@ -169,7 +170,7 @@ describe("resolveOffset", () => {
     });
 
     it('offset 7 ("e" in Title) → textOffset 4', () => {
-      expect(resolveOffset(getFragment(doc), 7)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(7))).toEqual({
         elementIndex: 0,
         textOffset: 4,
         clampedFromPrefix: false,
@@ -177,7 +178,7 @@ describe("resolveOffset", () => {
     });
 
     it("offset 8 (\\n separator) → end of heading text", () => {
-      expect(resolveOffset(getFragment(doc), 8)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(8))).toEqual({
         elementIndex: 0,
         textOffset: 5,
         clampedFromPrefix: false,
@@ -185,7 +186,7 @@ describe("resolveOffset", () => {
     });
 
     it('offset 9 ("B" of Body) → start of second element', () => {
-      expect(resolveOffset(getFragment(doc), 9)).toEqual({
+      expect(resolveOffset(getFragment(doc), off(9))).toEqual({
         elementIndex: 1,
         textOffset: 0,
         clampedFromPrefix: false,
@@ -196,18 +197,18 @@ describe("resolveOffset", () => {
   describe("edge cases", () => {
     it("empty document returns null", () => {
       doc = makeEmptyDoc();
-      expect(resolveOffset(getFragment(doc), 0)).toBeNull();
+      expect(resolveOffset(getFragment(doc), off(0))).toBeNull();
     });
 
     it("offset past document end clamps to last element", () => {
       doc = makeDoc("Hello");
-      const result = resolveOffset(getFragment(doc), 100);
+      const result = resolveOffset(getFragment(doc), off(100));
       expect(result).toEqual({ elementIndex: 0, textOffset: 5, clampedFromPrefix: false });
     });
 
     it("offset past end of multi-element doc clamps to last element", () => {
       doc = makeDoc("A\nB");
-      const result = resolveOffset(getFragment(doc), 100);
+      const result = resolveOffset(getFragment(doc), off(100));
       expect(result).toEqual({ elementIndex: 1, textOffset: 1, clampedFromPrefix: false });
     });
   });
@@ -227,7 +228,7 @@ describe("blockquote offset consistency (Issue #148)", () => {
     expect(from).toBeGreaterThan(-1);
     const to = from + target.length;
 
-    const result = validateRange(doc, from, to, { textSnapshot: target });
+    const result = validateRange(doc, off(from), off(to), { textSnapshot: target });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.range.from).toBe(from);
@@ -244,7 +245,7 @@ describe("blockquote offset consistency (Issue #148)", () => {
     expect(from).toBeGreaterThan(-1);
     const to = from + target.length;
 
-    const result = validateRange(doc, from, to, { textSnapshot: target });
+    const result = validateRange(doc, off(from), off(to), { textSnapshot: target });
     expect(result.ok).toBe(true);
   });
 });

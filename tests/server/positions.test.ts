@@ -10,7 +10,9 @@ import {
   resolveToElement,
   validateRange,
 } from "../../src/server/positions.js";
+import type { FlatOffset, SerializedRelPos } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { off } from "../helpers/positions.js";
 import {
   getAnnotationsMap,
   getFragment,
@@ -28,14 +30,14 @@ afterEach(() => {
 describe("validateRange", () => {
   it("accepts a valid range", () => {
     doc = makeDoc("hello world");
-    const result = validateRange(doc, 0, 5);
+    const result = validateRange(doc, off(0), off(5));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.range).toEqual({ from: 0, to: 5 });
   });
 
   it("rejects from > to", () => {
     doc = makeDoc("hello");
-    const result = validateRange(doc, 5, 0);
+    const result = validateRange(doc, off(5), off(0));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe("INVALID_RANGE");
   });
@@ -48,7 +50,7 @@ describe("validateRange", () => {
     const xmlText = el.get(0) as Y.XmlText;
     xmlText.insert(0, "XXX");
 
-    const result = validateRange(doc, 0, 5, { textSnapshot: "hello" });
+    const result = validateRange(doc, off(0), off(5), { textSnapshot: "hello" });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("RANGE_MOVED");
@@ -68,7 +70,7 @@ describe("validateRange", () => {
     el.insert(0, [new Y.XmlText("goodbye")]);
     fragment.insert(0, [el]);
 
-    const result = validateRange(doc, 0, 5, { textSnapshot: "hello" });
+    const result = validateRange(doc, off(0), off(5), { textSnapshot: "hello" });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("RANGE_GONE");
@@ -77,20 +79,20 @@ describe("validateRange", () => {
 
   it("passes when textSnapshot matches", () => {
     doc = makeDoc("hello world");
-    const result = validateRange(doc, 0, 5, { textSnapshot: "hello" });
+    const result = validateRange(doc, off(0), off(5), { textSnapshot: "hello" });
     expect(result.ok).toBe(true);
   });
 
   it("rejects heading overlap when option is set", () => {
     doc = makeDoc("## Title");
-    const result = validateRange(doc, 0, 3, { rejectHeadingOverlap: true });
+    const result = validateRange(doc, off(0), off(3), { rejectHeadingOverlap: true });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe("HEADING_OVERLAP");
   });
 
   it("allows heading prefix range when rejectHeadingOverlap is false", () => {
     doc = makeDoc("## Title");
-    const result = validateRange(doc, 0, 3);
+    const result = validateRange(doc, off(0), off(3));
     expect(result.ok).toBe(true);
   });
 
@@ -98,7 +100,7 @@ describe("validateRange", () => {
     doc = new Y.Doc();
     // Empty fragment — no elements to resolve against
     doc.getXmlFragment("default");
-    const result = validateRange(doc, 0, 5, { rejectHeadingOverlap: true });
+    const result = validateRange(doc, off(0), off(5), { rejectHeadingOverlap: true });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("INVALID_RANGE");
@@ -109,7 +111,7 @@ describe("validateRange", () => {
 describe("anchoredRange", () => {
   it("returns both flat and rel range", () => {
     doc = makeDoc("hello world");
-    const result = anchoredRange(doc, 0, 5);
+    const result = anchoredRange(doc, off(0), off(5));
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.range).toEqual({ from: 0, to: 5 });
@@ -125,14 +127,14 @@ describe("anchoredRange", () => {
     const el = fragment.get(0) as Y.XmlElement;
     (el.get(0) as Y.XmlText).insert(0, "XXX");
 
-    const result = anchoredRange(doc, 0, 5, "hello");
+    const result = anchoredRange(doc, off(0), off(5), "hello");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe("RANGE_MOVED");
   });
 
   it("omits relRange when offset is in heading prefix", () => {
     doc = makeDoc("## Title");
-    const result = anchoredRange(doc, 0, 3);
+    const result = anchoredRange(doc, off(0), off(3));
     expect(result.ok).toBe(true);
     if (result.ok) {
       // from=0 is inside "## " prefix → flatOffsetToRelPos returns null
@@ -142,7 +144,7 @@ describe("anchoredRange", () => {
 
   it("succeeds without textSnapshot", () => {
     doc = makeDoc("hello");
-    const result = anchoredRange(doc, 0, 5);
+    const result = anchoredRange(doc, off(0), off(5));
     expect(result.ok).toBe(true);
   });
 });
@@ -151,7 +153,7 @@ describe("resolveToElement", () => {
   it("resolves offset in first paragraph", () => {
     doc = makeDoc("hello world");
     const fragment = getFragment(doc);
-    const result = resolveToElement(fragment, 3);
+    const result = resolveToElement(fragment, off(3));
     expect(result).toEqual({ elementIndex: 0, textOffset: 3, clampedFromPrefix: false });
   });
 
@@ -159,7 +161,7 @@ describe("resolveToElement", () => {
     doc = makeDoc("first\nsecond");
     const fragment = getFragment(doc);
     // "first" = 5 chars, \n = 1, "second" starts at 6
-    const result = resolveToElement(fragment, 8);
+    const result = resolveToElement(fragment, off(8));
     expect(result).toEqual({ elementIndex: 1, textOffset: 2, clampedFromPrefix: false });
   });
 
@@ -167,21 +169,21 @@ describe("resolveToElement", () => {
     doc = makeDoc("## Title");
     const fragment = getFragment(doc);
     // "## " is 3 chars, offset 1 is inside prefix
-    const result = resolveToElement(fragment, 1);
+    const result = resolveToElement(fragment, off(1));
     expect(result).toEqual({ elementIndex: 0, textOffset: 0, clampedFromPrefix: true });
   });
 
   it("returns null for empty fragment", () => {
     doc = new Y.Doc();
     const fragment = doc.getXmlFragment("default");
-    const result = resolveToElement(fragment, 0);
+    const result = resolveToElement(fragment, off(0));
     expect(result).toBeNull();
   });
 
   it("clamps past-end offset to last element", () => {
     doc = makeDoc("hello");
     const fragment = getFragment(doc);
-    const result = resolveToElement(fragment, 100);
+    const result = resolveToElement(fragment, off(100));
     expect(result).toEqual({ elementIndex: 0, textOffset: 5, clampedFromPrefix: false });
   });
 
@@ -189,7 +191,7 @@ describe("resolveToElement", () => {
     doc = makeDoc("first\nsecond");
     const fragment = getFragment(doc);
     // "first" = 5 chars, separator at offset 5
-    const result = resolveToElement(fragment, 5);
+    const result = resolveToElement(fragment, off(5));
     expect(result).toEqual({ elementIndex: 0, textOffset: 5, clampedFromPrefix: false });
   });
 });
@@ -197,29 +199,29 @@ describe("resolveToElement", () => {
 describe("flatOffsetToRelPos / relPosToFlatOffset round-trip", () => {
   it("round-trips a simple offset", () => {
     doc = makeDoc("hello world");
-    const relPos = flatOffsetToRelPos(doc, 6, 0);
+    const relPos = flatOffsetToRelPos(doc, off(6), 0);
     expect(relPos).not.toBeNull();
-    const flat = relPosToFlatOffset(doc, relPos);
+    const flat = relPosToFlatOffset(doc, relPos!);
     expect(flat).toBe(6);
   });
 
   it("returns null for heading prefix offset", () => {
     doc = makeDoc("## Title");
-    const relPos = flatOffsetToRelPos(doc, 1, 0); // inside "## "
+    const relPos = flatOffsetToRelPos(doc, off(1), 0); // inside "## "
     expect(relPos).toBeNull();
   });
 
   it("round-trips across multiple paragraphs", () => {
     doc = makeDoc("first\nsecond\nthird");
-    const relPos = flatOffsetToRelPos(doc, 13, 0); // start of "third"
+    const relPos = flatOffsetToRelPos(doc, off(13), 0); // start of "third"
     expect(relPos).not.toBeNull();
-    const flat = relPosToFlatOffset(doc, relPos);
+    const flat = relPosToFlatOffset(doc, relPos!);
     expect(flat).toBe(13);
   });
 
   it("survives concurrent edits", () => {
     doc = makeDoc("hello world");
-    const relPos = flatOffsetToRelPos(doc, 6, 0); // start of "world"
+    const relPos = flatOffsetToRelPos(doc, off(6), 0); // start of "world"
     expect(relPos).not.toBeNull();
 
     // Insert before
@@ -227,24 +229,26 @@ describe("flatOffsetToRelPos / relPosToFlatOffset round-trip", () => {
     const el = fragment.get(0) as Y.XmlElement;
     getOrCreateXmlText(el).insert(0, "XXX");
 
-    const flat = relPosToFlatOffset(doc, relPos);
+    const flat = relPosToFlatOffset(doc, relPos!);
     expect(flat).toBe(9); // shifted by 3
   });
 
   it("returns null for malformed relRange JSON", () => {
     doc = makeDoc("hello");
-    expect(relPosToFlatOffset(doc, "not-json")).toBeNull();
-    expect(relPosToFlatOffset(doc, { garbage: true })).toBeNull();
-    expect(relPosToFlatOffset(doc, null)).toBeNull();
-    expect(relPosToFlatOffset(doc, 42)).toBeNull();
+    // Deliberately malformed input to verify defensive handling — the cast
+    // documents that these values violate SerializedRelPos on purpose.
+    expect(relPosToFlatOffset(doc, "not-json" as unknown as SerializedRelPos)).toBeNull();
+    expect(relPosToFlatOffset(doc, { garbage: true } as unknown as SerializedRelPos)).toBeNull();
+    expect(relPosToFlatOffset(doc, null as unknown as SerializedRelPos)).toBeNull();
+    expect(relPosToFlatOffset(doc, 42 as unknown as SerializedRelPos)).toBeNull();
   });
 });
 
 describe("refreshRange (via positions module)", () => {
   function makeAnchoredAnnotation(
     map: Y.Map<unknown>,
-    from: number,
-    to: number,
+    from: FlatOffset,
+    to: FlatOffset,
     ydoc?: Y.Doc,
   ): Annotation {
     const result = ydoc
@@ -264,7 +268,7 @@ describe("refreshRange (via positions module)", () => {
   it("lazily attaches relRange", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const ann = makeAnchoredAnnotation(map, 0, 5); // no ydoc → no relRange
+    const ann = makeAnchoredAnnotation(map, off(0), off(5)); // no ydoc → no relRange
 
     expect(ann.relRange).toBeUndefined();
     const refreshed = refreshRange(ann, doc, map);
@@ -275,7 +279,7 @@ describe("refreshRange (via positions module)", () => {
   it("updates stale flat offsets after edit", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const ann = makeAnchoredAnnotation(map, 6, 11, doc);
+    const ann = makeAnchoredAnnotation(map, off(6), off(11), doc);
 
     // Insert before annotation
     const fragment = getFragment(doc);
@@ -290,7 +294,7 @@ describe("refreshRange (via positions module)", () => {
   it("returns the original annotation when CRDT resolves to inverted range", () => {
     doc = makeDoc("hello world");
     const map = getAnnotationsMap(doc);
-    const ann = makeAnchoredAnnotation(map, 0, 5, doc); // "hello"
+    const ann = makeAnchoredAnnotation(map, off(0), off(5), doc); // "hello"
 
     // Manually craft an inverted relRange by swapping fromRel and toRel
     const invertedAnn: Annotation = {
@@ -315,8 +319,8 @@ describe("refreshAllRanges", () => {
     const map = getAnnotationsMap(doc);
 
     // Create two annotations with relRange
-    const result1 = anchoredRange(doc, 0, 5);
-    const result2 = anchoredRange(doc, 6, 11);
+    const result1 = anchoredRange(doc, off(0), off(5));
+    const result2 = anchoredRange(doc, off(6), off(11));
     if (!result1.ok || !result2.ok) throw new Error("Failed");
 
     const ann1: Annotation = {
@@ -366,7 +370,7 @@ describe("list content positions (Phase B)", () => {
     const itemIdx = flat.indexOf("Item in a list");
     expect(itemIdx).toBeGreaterThanOrEqual(0);
 
-    const relPos = flatOffsetToRelPos(doc, itemIdx, 0);
+    const relPos = flatOffsetToRelPos(doc, off(itemIdx), 0);
     expect(relPos).not.toBeNull();
   });
 
@@ -377,7 +381,7 @@ describe("list content positions (Phase B)", () => {
     const secondIdx = flat.indexOf("Second item");
     expect(secondIdx).toBeGreaterThanOrEqual(0);
 
-    const relPos = flatOffsetToRelPos(doc, secondIdx, 0);
+    const relPos = flatOffsetToRelPos(doc, off(secondIdx), 0);
     expect(relPos).not.toBeNull();
 
     const resolved = relPosToFlatOffset(doc, relPos!);
@@ -392,7 +396,7 @@ describe("list content positions (Phase B)", () => {
     const idx = flat.indexOf(target);
     expect(idx).toBeGreaterThanOrEqual(0);
 
-    const result = anchoredRange(doc, idx, idx + target.length, target);
+    const result = anchoredRange(doc, off(idx), off(idx + target.length), target);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.fullyAnchored).toBe(true);
@@ -406,9 +410,9 @@ describe("list content positions (Phase B)", () => {
     // Test every offset in the flat text
     for (let offset = 0; offset < flat.length; offset++) {
       if (flat[offset] === "\n") continue; // separators are gaps, skip
-      const relPos = flatOffsetToRelPos(doc, offset, 0);
+      const relPos = flatOffsetToRelPos(doc, off(offset), 0);
       if (relPos !== null) {
-        const resolved = relPosToFlatOffset(doc, relPos);
+        const resolved = relPosToFlatOffset(doc, relPos!);
         expect(resolved).toBe(offset);
       }
     }

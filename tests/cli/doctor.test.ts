@@ -1798,7 +1798,10 @@ describe("desktop-mcp-config remedies reach both branches", () => {
     writeFileSync(configPath, JSON.stringify({ mcpServers: { tandem } }, null, 2));
   };
 
-  const desktopResult = async (): Promise<{ status: string; fix?: string } | undefined> => {
+  // Return type inferred from `report.results` on purpose: the hand-written
+  // subset that used to sit here had drifted and no longer named `message`,
+  // which nothing caught while `tests/` was outside every tsconfig.
+  const desktopResult = async () => {
     const report = await runDoctor({ homeOverride: home });
     return report.results.find((x) => x.check === "desktop-mcp-config" && x.status === "warn");
   };
@@ -1888,7 +1891,8 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  const userMcpResult = async (): Promise<{ status: string; fix?: string } | undefined> => {
+  // Inferred, for the same reason as `desktopResult` above.
+  const userMcpResult = async () => {
     const report = await runDoctor();
     return report.results.find((x) => x.check === "user-mcp-config" && x.status === "warn");
   };

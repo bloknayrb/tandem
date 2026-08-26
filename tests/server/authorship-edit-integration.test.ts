@@ -11,6 +11,7 @@ import { Y_MAP_AUTHORSHIP } from "../../src/shared/constants.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { AuthorshipRange } from "../../src/shared/types.js";
 import { generateAuthorshipId } from "../../src/shared/utils.js";
+import { off } from "../helpers/positions.js";
 import { makeDoc } from "../helpers/ydoc-factory.js";
 
 const MCP_ORIGIN = "mcp";
@@ -32,8 +33,8 @@ function applyEditWithAuthorship(
   newText: string,
 ): string | null {
   const fragment = doc.getXmlFragment("default");
-  const startPos = resolveOffset(fragment, from);
-  const endPos = resolveOffset(fragment, to);
+  const startPos = resolveOffset(fragment, off(from));
+  const endPos = resolveOffset(fragment, off(to));
 
   if (!startPos || !endPos) return `Cannot resolve offset range [${from}, ${to}].`;
   if (startPos.clampedFromPrefix || endPos.clampedFromPrefix) {

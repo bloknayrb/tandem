@@ -98,7 +98,7 @@ describe("/api/events keepalive is crash-safe", () => {
   });
 
   it("keeps the subscriber alive when keepalive writes succeed", () => {
-    const write = vi.fn(() => true);
+    const write = vi.fn((_chunk: string) => true);
     const res = { writeHead: vi.fn(), write, writableEnded: false } as unknown as Response;
     sseHandler(makeReq(), res);
 
@@ -110,7 +110,7 @@ describe("/api/events keepalive is crash-safe", () => {
   });
 
   it("does not write a keepalive once the response has ended", () => {
-    const write = vi.fn(() => true);
+    const write = vi.fn((_chunk: string) => true);
     const res = { writeHead: vi.fn(), write, writableEnded: true } as unknown as Response;
     sseHandler(makeReq(), res);
 
@@ -164,7 +164,7 @@ describe("/api/events keepalive is crash-safe", () => {
   });
 
   it("tears down the subscriber and clears the interval on req close", () => {
-    const write = vi.fn(() => true);
+    const write = vi.fn((_chunk: string) => true);
     const res = { writeHead: vi.fn(), write, writableEnded: false } as unknown as Response;
     let closeHandler: (() => void) | undefined;
     const req = {

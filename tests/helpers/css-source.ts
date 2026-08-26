@@ -187,7 +187,10 @@ export function cssRulesBySelector(css: string): CssRule[] {
  */
 function enclosingAtRules(rule: Rule): string[] {
   const chain: string[] = [];
-  let ancestor = rule.parent;
+  // `.parent` on a Root can itself be a `Document` (multi-root postcss usage),
+  // which a plain `typeof rule.parent` narrows away — widen explicitly so the
+  // walk-up assignment below type-checks without changing what it walks.
+  let ancestor: typeof rule.parent | import("postcss").Document = rule.parent;
   while (ancestor) {
     if (ancestor.type === "atrule") {
       const atrule = ancestor as import("postcss").AtRule;

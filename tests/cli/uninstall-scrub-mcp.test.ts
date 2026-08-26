@@ -28,7 +28,15 @@ afterEach(() => {
 });
 
 function makeLogger() {
-  return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), close: async () => {} };
+  // `warnings` is part of ScrubLogger and was missing here: the deliberate-skip
+  // counter that keeps a refuse-everything run from printing "0 failure(s)".
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    warnings: vi.fn(() => 0),
+    close: async () => {},
+  };
 }
 
 const FULL_CONFIG = {

@@ -12,7 +12,15 @@ import {
 // `animationName`. `no-preference` keeps Playwright from suppressing motion. This
 // lives in its own file so the `reducedMotion` override never leaks into the
 // motion-agnostic palette tests in keyboard-shortcuts.spec.ts.
-test.use({ reducedMotion: "no-preference" });
+test.use({ contextOptions: { reducedMotion: "no-preference" } });
+// ^ Routed through `contextOptions`, not passed to `test.use` directly.
+// `reducedMotion` is a BrowserContextOption, NOT a PlaywrightTestOption --
+// it appears zero times in playwright/lib/index.js, where `colorScheme`
+// appears seven -- so the bare form was silently discarded by the runner.
+// This is behaviour-neutral here: Playwright's default is already
+// no-preference, so the option was a no-op that happened to agree with the
+// default. The comment above it claiming Playwright suppresses motion by
+// default was wrong; the assertions were never vacuous for that reason.
 
 let mcp: McpTestClient;
 let tmpDir: string;

@@ -65,12 +65,16 @@ describe("saveExactTarget", () => {
 
   it("no-ops when activation reveals a closed or reopened target", async () => {
     const closed = setup(true);
-    closed.deps.afterActivate = async () => closed.setLive(null);
+    closed.deps.afterActivate = vi.fn(async () => {
+      closed.setLive(null);
+    });
     await expect(saveExactTarget(closed.deps)).resolves.toBe(false);
     expect(closed.commands.save).not.toHaveBeenCalled();
 
     const reopened = setup(true);
-    reopened.deps.afterActivate = async () => reopened.setLive({ id: "doc-a", generation: {} });
+    reopened.deps.afterActivate = vi.fn(async () => {
+      reopened.setLive({ id: "doc-a", generation: {} });
+    });
     await expect(saveExactTarget(reopened.deps)).resolves.toBe(false);
     expect(reopened.commands.save).not.toHaveBeenCalled();
   });

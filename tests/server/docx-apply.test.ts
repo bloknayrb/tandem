@@ -910,10 +910,10 @@ describe("applyChangesCore — write guards", () => {
       author: "claude",
       status: "accepted",
       range: { from: 0, to: 5 },
-      text: "swap it",
+      content: "swap it",
       suggestedText: "Howdy",
       textSnapshot: "Hello",
-      createdAt: Date.now(),
+      timestamp: Date.now(),
     });
 
     addDoc(DOC_ID, {

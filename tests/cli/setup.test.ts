@@ -883,7 +883,7 @@ describe("runSetup — non-interactive (#477 PR 3c-ii-c)", () => {
     errSpy.mockRestore();
   });
 
-  const stderr = () => errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+  const stderr = () => errSpy.mock.calls.map((c: unknown[]) => String(c[0] ?? "")).join("\n");
 
   it("bare `tandem setup` prints wizard-driven guidance and writes nothing", async () => {
     await runSetup();

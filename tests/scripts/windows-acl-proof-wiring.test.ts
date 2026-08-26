@@ -4,8 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-// @ts-expect-error -- plain .mjs CI script, no type declarations. `tests/` is not
-// covered by any tsconfig `include`, so this affects nothing but this comment.
+// This used to carry a `@ts-expect-error` for the untyped `.mjs`. The test
+// tree's tsconfigs set `allowJs`, so tsc now infers this module's exports from
+// its real source and the suppression became an error in its own right.
 import { evaluateReport, WINDOWS_ACL_PROOF_SPECS } from "../../scripts/ci/windows-acl-proof.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
