@@ -1,10 +1,13 @@
 import { render } from "@testing-library/svelte";
 import type { Editor as TiptapEditor } from "@tiptap/core";
+import { Editor } from "@tiptap/core";
 import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions.js";
 import { useAnnotationReview } from "../../src/client/panels/useAnnotationReview.svelte.js";
 import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { isReviewTarget } from "../../src/shared/types.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
@@ -142,6 +145,59 @@ describe("useAnnotationReview — onApplyFailed (B2)", () => {
     // build its own generic message from — but resolveAnnotation itself must
     // not have leaked content anywhere else. Reverted to pending:
     expect((map.get(ann.id) as Annotation).status).toBe("pending");
+  });
+
+  it("reverts to pending and calls onApplyFailed when the TEXT DRIFTED (#1629)", () => {
+    // The sibling case above drives the unresolvable-range path. This one
+    // drives the drift path, which is the one #1629 added and the one the
+    // toast's wording ("the text has changed") actually describes.
+    //
+    // They share the `if (!applied)` branch, so this is not re-testing that
+    // branch — it is pinning that a drift decline REACHES it. Mutation check:
+    // delete `onApplyFailed?.(ann)` and the whole drift-guard suite still
+    // passes, because that file calls `applySuggestion` directly. This is the
+    // only test that fails.
+    const ydoc = new Y.Doc();
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const ann = makeAnnotation({
+      id: "drifted",
+      author: "claude",
+      type: "comment",
+      status: "pending",
+      suggestedText: "replacement text",
+      range: { from: toFlatOffset(0), to: toFlatOffset(11) },
+      // The document says something else entirely at those offsets.
+      textSnapshot: "hello world",
+    });
+    map.set(ann.id, ann);
+
+    // A REAL editor: the drift guard reads the document, so a stub doc cannot
+    // reach the branch under test.
+    const editor = new Editor({
+      extensions: buildSchemaExtensions(),
+      content: "<p>totally other</p>",
+    });
+
+    const onApplyFailed = vi.fn();
+
+    const review = mountReview({
+      getYdoc: () => ydoc,
+      getEditor: () => editor,
+      getAnnotations: () => [map.get(ann.id) as Annotation],
+      onActiveAnnotationChange: () => {},
+      getScrollBehavior: () => "auto",
+      onApplyFailed,
+    });
+
+    review.resolveAnnotation(ann.id, "accepted");
+
+    expect(onApplyFailed).toHaveBeenCalledTimes(1);
+    expect((map.get(ann.id) as Annotation).status).toBe("pending");
+    // And the document was not touched on the way to that decline.
+    expect(editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n", "\n")).toBe(
+      "totally other",
+    );
+    editor.destroy();
   });
 
   it("does not call onApplyFailed when the suggestion applies successfully", () => {

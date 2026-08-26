@@ -378,6 +378,35 @@ describe("applyTrackedChanges", () => {
     expect(output.rejectedDetails[0].reason).toContain("snapshot mismatch");
   });
 
+  it("distinguishes an ABSENT textSnapshot from a stored EMPTY one (#1631)", async () => {
+    // The guard used to gate on `s.textSnapshot !== undefined`; it now calls
+    // the shared `snapshotContradicts`, and the whole risk of that move was
+    // collapsing these two into one. `snapshotSearchPrefix` returns "" for
+    // both, so a carve-out keyed on IT would silently stop checking the second.
+    //
+    // Absent means nothing was captured ⇒ nothing to contradict ⇒ apply.
+    // Empty means the range was captured and held no text ⇒ a real claim ⇒ a
+    // non-empty range contradicts it.
+    const xml = wrapBody(`<w:p><w:r><w:t>Hello World</w:t></w:r></w:p>`);
+    const docxBuffer = await createTestDocx(xml);
+
+    const absent = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 0, to: 5, newText: "Hi" }],
+      { author: "Test", ydocFlatText: "Hello World" },
+    );
+    expect(absent.applied).toBe(1);
+    expect(absent.rejected).toBe(0);
+
+    const empty = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 0, to: 5, newText: "Hi", textSnapshot: "" }],
+      { author: "Test", ydocFlatText: "Hello World" },
+    );
+    expect(empty.applied).toBe(0);
+    expect(empty.rejected).toBe(1);
+  });
+
   it("accepts a TRUNCATED textSnapshot that is still a prefix of the range (#1486)", async () => {
     // The snapshot is capped at 200 chars, so for any longer range it is a
     // prefix and can never equal the whole slice. Compared exactly, this

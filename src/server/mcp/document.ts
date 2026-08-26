@@ -12,7 +12,7 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import { headingPrefix } from "../../shared/offsets.js";
+import { flattenHeadingText, headingPrefix } from "../../shared/offsets.js";
 import { withMcp } from "../../shared/origins.js";
 import { isPlaintextFormat } from "../../shared/plaintext-format.js";
 import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
@@ -30,7 +30,6 @@ import { convertToMarkdown } from "./convert.js";
 // Document model (pure logic)
 import {
   extractText,
-  flattenHeadingText,
   getElementText,
   getElementTextLength,
   getHeadingPrefixLength,
