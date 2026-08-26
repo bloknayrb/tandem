@@ -54,6 +54,22 @@ fs2 = "0.4"
 # entirely (Cargo can't gate deps on `cfg(debug_assertions)`). Enable in dev
 # with `cargo tauri dev --features devtools`. See #924.
 tauri-plugin-devtools = { version = "2", optional = true }
+# UI element inspector (mathematic-inc/tauri-plugin-ui-inspector). Turns a
+# clicked DOM element into a durable `@ui_<ULID>` reference — metadata, ranked
+# locators, Svelte source location, and native window/element screenshots —
+# which the `ui-inspector` CLI then hands to a coding agent.
+#
+# Optional + behind the `ui-inspector` feature for the same reason as
+# `devtools` above: Cargo can't gate a dependency on `cfg(debug_assertions)`,
+# so an unconditional dep would ship `xcap` (native screen capture) and its
+# platform graphics chain in release builds. Upstream's suggested
+# `#[cfg(debug_assertions)]` gates the registration *call*, not the dep graph.
+#
+# MSRV: this crate declares rust-version 1.97, above tandem-desktop's 1.77.2.
+# Optional keeps that off the default build — `cargo build` / `cargo test`
+# without the feature never resolve it — but building WITH the feature needs a
+# toolchain >= 1.97. See CONTRIBUTING.md.
+tauri-plugin-ui-inspector = { version = "0.1", optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
@@ -103,6 +119,19 @@ cowork-test-hooks = []
 # release build. Mutually exclusive with tauri-plugin-log at runtime (both
 # install a global tracing subscriber); the log plugin is gated off when this is on.
 devtools = ["dep:tauri-plugin-devtools"]
+# Enables the UI element inspector. Dev-only — never pass this for a release
+# build; it links native screen-capture code and grants a window-scoped capture
+# permission. Unlike `devtools` it is NOT mutually exclusive with anything, and
+# it installs no tracing subscriber.
+#
+# `tauri/dynamic-acl` is part of the feature on purpose. The plugin needs the
+# `ui-inspector:default` permission granted to the `main` window, and a
+# capability file under `src-tauri/capabilities/` is resolved at BUILD time
+# against the crates in the graph — so a static file naming that permission
+# would fail every build with the feature off ("permission not found"). Runtime
+# `add_capability` (behind `dynamic-acl`) is the only gate that turns on and off
+# with the dep. See `run()` in src/lib.rs.
+ui-inspector = ["dep:tauri-plugin-ui-inspector", "tauri/dynamic-acl"]
 
 [dev-dependencies]
 tempfile = "3"
