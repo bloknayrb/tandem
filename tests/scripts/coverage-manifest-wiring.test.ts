@@ -126,6 +126,49 @@ describe("the coverage baseline measures what it claims", () => {
     expect(manifestScript).toContain("process.exit(1)");
   });
 
+  it("derives the guarded source areas from disk instead of enumerating them", () => {
+    // The independent review's finding, and it was live rather than
+    // hypothetical. The area check started as a literal list of
+    // `src/server/` / `src/client/` / `src/shared/`, which guards the areas
+    // whoever wrote the list thought of -- `src/cli/`, `src/channel/`,
+    // `src/monitor/` and `src/stdio-bridge/` were all outside it. A regression
+    // scoped to `tests/cli/**` would have left that directory at a uniform 0%
+    // and failed nothing: the `ts` family still has 400-odd other files in the
+    // report, so the family check stays green, and an unenumerated prefix
+    // cannot fail a check it is not in.
+    //
+    // That is this unit's own failure class one level of granularity down, so
+    // the derivation is what gets pinned, not the resulting list.
+    expect(manifestScript, "the area list must be derived from the src/ walk").toMatch(
+      /onDisk\.map\(\(f\) => f\.match\(\/\^src\\\/\(\[\^\/\]\+\)/,
+    );
+    expect(
+      manifestScript,
+      "an enumerated area list only guards the directories someone remembered",
+    ).not.toContain("const REQUIRED_AREAS");
+  });
+
+  it("makes a known-untested exemption expire on its own", () => {
+    // An exemption is the one place this check can be turned off, so it has to
+    // be self-limiting: an area that gains coverage must FAIL until it is taken
+    // off the list, otherwise it stays permanently exempt and can go dark again
+    // -- a zero-of-zero built out of the fix for a zero-of-zero.
+    expect(manifestScript).toContain("staleExemptions");
+    expect(manifestScript).toContain("a.knownUntested && a.coveredStatements > 0");
+    // Every exemption carries a reason. A bare key would let one be added with
+    // nothing recording whether it means "untested" or "the run missed it".
+    const block = manifestScript.slice(
+      manifestScript.indexOf("const KNOWN_UNTESTED_AREAS"),
+      manifestScript.indexOf("function fail("),
+    );
+    const keys = [...block.matchAll(/^ {2}"?([\w-]+)"?: \{$/gm)].map((m) => m[1]);
+    expect(keys.length, "no exemption entries found -- has the shape changed?").toBeGreaterThan(0);
+    for (const key of keys) {
+      const entry = block.slice(block.indexOf(`${key}`));
+      expect(entry.slice(0, entry.indexOf("},")), `${key} has no reason`).toContain("reason:");
+    }
+  });
+
   it("lists every suspended timing assertion, with none missing", () => {
     // `expectWithinMs` no-ops under TANDEM_COVERAGE=1 because a wall-clock upper
     // bound measures the profiler during an instrumented run. That is a real

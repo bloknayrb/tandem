@@ -79,6 +79,9 @@ const OMITTED_FAMILIES = [
   {
     id: "rust",
     label: "Rust (src-tauri/, reaper/)",
+    // Outside the walked tree entirely, so there is no count to take -- see the
+    // `filesOnDisk: null` handling at the emit site.
+    walkable: false,
     matches: () => false,
     reason:
       "Outside src/ and outside Vitest entirely. Covered by `cargo test` in the " +
@@ -106,21 +109,55 @@ const SUSPENDED_TIMING_SITES = [
 ];
 
 /**
- * Source areas that must each show at least one COVERED statement.
+ * The anti-partial-run check: every top-level area under `src/` must show at
+ * least one COVERED statement, or be named below as known-untested.
  *
- * This is the anti-partial-run check, and it is the one that catches the
- * mistake this repo is most likely to make. The two Vitest projects
- * (`client`, `node`) split the suite, and running only one of them still emits
- * a complete-looking report in which the other project's source sits at a
- * uniform 0% -- which reads as "none of this is tested" rather than "none of
- * this was run". Requiring a covered statement in each area makes a
- * single-project run fail loudly instead of publishing a plausible number.
+ * This is the check that catches the mistake this repo is most likely to make.
+ * The two Vitest projects (`client`, `node`) split the suite, and running only
+ * one of them still emits a complete-looking report in which the other
+ * project's source sits at a uniform 0% -- which reads as "none of this is
+ * tested" rather than "none of this was run".
+ *
+ * **Derived from disk, not enumerated**, and that is the load-bearing part. An
+ * enumerated list guards the areas whoever wrote it thought of. This started as
+ * `server` / `client` / `shared` and the independent review found the hole: a
+ * regression scoped to `tests/cli/**` or `tests/channel/**` would leave those
+ * directories at a uniform 0% while tripping nothing -- the `ts` family still
+ * has 400-odd other files present, so the family check stays green, and an
+ * unenumerated prefix cannot fail a check it is not in. That is the same
+ * failure class this unit exists to catch, one level of granularity down.
+ *
+ * Deriving it means a new top-level directory is guarded the day it appears,
+ * without anyone remembering to add it.
  */
-const REQUIRED_AREAS = [
-  { id: "server", prefix: "src/server/", ranBy: "vitest project: node" },
-  { id: "client", prefix: "src/client/", ranBy: "vitest project: client" },
-  { id: "shared", prefix: "src/shared/", ranBy: "both projects" },
-];
+const AREA_PROJECTS = {
+  server: "vitest project: node",
+  client: "vitest project: client",
+  shared: "both projects",
+  cli: "vitest project: node",
+  channel: "vitest project: node",
+  monitor: "vitest project: node",
+  "stdio-bridge": "vitest project: node",
+};
+
+/**
+ * Areas with genuinely zero covered statements, each with the reason.
+ *
+ * The distinction this whole artifact turns on applies to the exemption list
+ * too: an area belongs here only when it is UNTESTED, never when a run failed
+ * to reach it. Adding an entry to silence a failure is how the check becomes
+ * decorative, so each one names what is actually uncovered.
+ */
+const KNOWN_UNTESTED_AREAS = {
+  "stdio-bridge": {
+    reason:
+      "src/stdio-bridge/index.ts is a 3-statement process shim that execs the " +
+      "CLI bridge. The bridge logic it hands off to (src/cli/mcp-stdio.ts) is " +
+      "covered; the shim itself is entered only by a real spawn, which no unit " +
+      "test performs. Measured, present in the report, and genuinely at 0/3 -- " +
+      "not a run that failed to reach it.",
+  },
+};
 
 function fail(message, detail) {
   console.error(`\ncoverage-manifest: ${message}`);
@@ -220,21 +257,58 @@ if (emptyFamilies.length > 0) {
 
 // --- Anti-partial-run check --------------------------------------------------
 
-const areas = REQUIRED_AREAS.map((area) => {
-  const files = [...byRepoPath.keys()].filter((f) => f.startsWith(area.prefix));
+// Every top-level directory under `src/` that the walk found, whether or not
+// anyone thought to enumerate it. Taken from disk rather than from the report,
+// so an area that vanishes from the report entirely is still listed here at
+// zero files -- absent and uncovered are different, and the artifact should be
+// able to say which.
+const areaIds = [
+  ...new Set(onDisk.map((f) => f.match(/^src\/([^/]+)\//)?.[1]).filter(Boolean)),
+].sort();
+
+const areas = areaIds.map((id) => {
+  const prefix = `src/${id}/`;
+  const files = [...byRepoPath.keys()].filter((f) => f.startsWith(prefix));
   const coveredStatements = files.reduce((n, f) => n + byRepoPath.get(f).statements.covered, 0);
-  return { ...area, filesInReport: files.length, coveredStatements };
+  const totalStatements = files.reduce((n, f) => n + byRepoPath.get(f).statements.total, 0);
+  const known = KNOWN_UNTESTED_AREAS[id];
+  return {
+    id,
+    prefix,
+    ranBy: AREA_PROJECTS[id] ?? "unknown -- not listed in AREA_PROJECTS",
+    filesInReport: files.length,
+    coveredStatements,
+    totalStatements,
+    ...(known ? { knownUntested: true, reason: known.reason } : {}),
+  };
 });
 
-const dark = areas.filter((a) => a.filesInReport > 0 && a.coveredStatements === 0);
+const dark = areas.filter(
+  (a) => a.filesInReport > 0 && a.coveredStatements === 0 && !a.knownUntested,
+);
 if (dark.length > 0) {
   fail(
     `source areas present in the report with ZERO covered statements: ` +
       dark.map((a) => `${a.prefix} (${a.ranBy})`).join(", "),
-    "That is what a single-project run looks like: the other project's source is " +
-      "listed at a uniform 0%, which reads as untested rather than unrun. Run the " +
-      "whole suite (`npm run test:coverage`), or if an area genuinely has no tests " +
-      "at all, move it out of REQUIRED_AREAS in this script with a note saying why.",
+    "That is what a partial run looks like: the unrun project's source is listed " +
+      "at a uniform 0%, which reads as untested rather than unrun. Run the whole " +
+      "suite (`npm run test:coverage`). If an area genuinely has no tests at all, " +
+      "add it to KNOWN_UNTESTED_AREAS in this script with a reason -- and only if " +
+      "it is untested, never to silence a run that failed to reach it.",
+  );
+}
+
+// An exemption that stops being true is worse than no exemption: it holds the
+// door open for the exact failure the check exists to catch. So the list has to
+// shrink on its own when the area gets tested.
+const staleExemptions = areas.filter((a) => a.knownUntested && a.coveredStatements > 0);
+if (staleExemptions.length > 0) {
+  fail(
+    `KNOWN_UNTESTED_AREAS lists an area that now HAS coverage: ` +
+      staleExemptions.map((a) => `${a.prefix} (${a.coveredStatements} covered)`).join(", "),
+    "Good news, and it has to be removed from that list -- while it sits there, " +
+      "the area is exempt from the zero-coverage check and could go dark again " +
+      "without failing anything.",
   );
 }
 
@@ -252,15 +326,18 @@ const manifest = {
   omitted: OMITTED_FAMILIES.map((f) => ({
     id: f.id,
     label: f.label,
-    filesOnDisk: onDisk.filter(f.matches).length,
+    // `null`, not `0`, for a family that lives outside the walked tree. A zero
+    // here is formatted identically to the genuinely-counted families and reads
+    // as "there is none of this", when it means "we did not look". That is the
+    // artifact's own central distinction; it should not violate it in its own
+    // output.
+    filesOnDisk: f.walkable === false ? null : onDisk.filter(f.matches).length,
+    ...(f.walkable === false
+      ? { notWalked: "lives outside src/; this script walks src/ only" }
+      : {}),
     reason: f.reason,
   })),
-  requiredAreas: areas.map(({ id, prefix, filesInReport, coveredStatements }) => ({
-    id,
-    prefix,
-    filesInReport,
-    coveredStatements,
-  })),
+  areas,
   totals: {
     statements: total.statements,
     branches: total.branches,
@@ -298,6 +375,14 @@ for (const f of measured) {
 }
 console.log("\nOmitted families");
 for (const f of manifest.omitted) {
-  console.log(`  ${f.label.padEnd(34)} ${f.filesOnDisk} files -- ${f.reason.split(".")[0]}.`);
+  const count = f.filesOnDisk === null ? "not walked" : `${f.filesOnDisk} files`;
+  console.log(`  ${f.label.padEnd(34)} ${count} -- ${f.reason.split(".")[0]}.`);
+}
+console.log("\nAreas under src/");
+for (const a of areas) {
+  const note = a.knownUntested ? "  (known untested)" : "";
+  console.log(
+    `  ${a.prefix.padEnd(22)} ${String(a.coveredStatements).padStart(6)}/${a.totalStatements} statements${note}`,
+  );
 }
 console.log(`\nWrote ${path.relative(ROOT, OUT).replace(/\\/g, "/")}\n`);
