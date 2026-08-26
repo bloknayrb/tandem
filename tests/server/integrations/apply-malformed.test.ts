@@ -242,6 +242,22 @@ describe("applyConfig — malformed-input matrix (#645)", () => {
     });
   });
 
+  /**
+   * **This block is the executable record of an ACCEPTED risk, not a latent bug.**
+   *
+   * The lost-update race these two writers demonstrate was accepted, not fixed
+   * — Bryan, 2026-08-24, tracked as #1599, with the full bound and the void
+   * conditions in `docs/security.md` under "Accepted (bounded)". Last-writer-wins
+   * here is the accepted behaviour. Do not "fix" it by adding a lock without
+   * reopening that decision first; the scope it covers is pinned by
+   * `tests/docs/config-writer-set-claims.test.ts`.
+   *
+   * **What was NOT accepted, and must never regress:** the second property this
+   * test asserts — that the losing writer's token appears NOWHERE in the final
+   * file. No half-merge, no token leak. The acceptance covers whose change
+   * survives; it does not cover the file's integrity, and a failure of the
+   * `not.toContain(loser)` assertion is a real defect regardless of #1599.
+   */
   describe("concurrency: parallel applyConfig calls", () => {
     it("two callers racing with distinct tokens: both succeed, final file has no cross-contamination", async () => {
       // Atomic rename guarantees the final file is ONE of the two
