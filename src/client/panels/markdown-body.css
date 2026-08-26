@@ -41,7 +41,8 @@
  * carries the gap that separates it from what precedes it. Balancing the
  * markup properly is a renderer change, not a CSS one, and it has to keep
  * `<pre>` OUT of the wrapping `<p>` — the invalid-nesting trap this whole change
- * exists to fix. Tracked separately.
+ * exists to fix. Tracked in #1639, which also owns removing this comment and
+ * adding the rule it currently forbids.
  */
 .tandem-markdown > :last-child {
   margin-bottom: 0;
@@ -153,13 +154,12 @@
   }
 }
 
-/* `renderMarkdown` emits `</p><p>` for a blank line with no opening tag, so
-   `intro
-
-```ts…` parses to `intro<p></p><pre>…` — a stray EMPTY paragraph
-   carrying real vertical space. This is a band-aid on that, not a fix: the fix
-   is balancing the renderer's paragraph markup, which has to keep `<pre>`
-   outside the wrapping `<p>`. Verified against a parser. */
+/* `renderMarkdown` emits `</p><p>` for a blank line with no opening tag, so an
+   intro line followed by a fenced block parses to `intro<p></p><pre>…` — a stray
+   EMPTY paragraph carrying real vertical space. This is a band-aid on that, not
+   a fix: the fix is balancing the renderer's paragraph markup, which has to keep
+   `<pre>` outside the wrapping `<p>`. Verified against a parser. Tracked in
+   #1639, which owns deleting this rule. */
 .tandem-markdown p:empty {
   display: none;
 }
