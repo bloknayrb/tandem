@@ -473,6 +473,22 @@ function handleKeyDown(e: KeyboardEvent) {
     line-clamp: 1;
     overflow: clip;
   }
+  /* Markdown bodies (#1626) render BLOCK children — `<p>`, `<pre>`, `<li>` —
+     and each one opens its own line box, so the `-webkit-line-clamp: 1` above
+     collapses to one line per block rather than one line total. A two-paragraph
+     Claude comment would show two lines in a card sized for one, overflowing the
+     clamped band. Flattening the descendants to inline is what makes the teaser
+     single-line again; formatting is irrelevant at this size, and the full
+     rendering returns as soon as the card expands. */
+  .is-density-clamped :global(.aca-body .tandem-markdown *),
+  .is-density-compact :global(.aca-body .tandem-markdown *) {
+    display: inline;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+  }
+
   .is-density-clamped :global([data-testid^="annotation-snippet-"]),
   .is-density-clamped :global(.art-root),
   .is-density-compact :global([data-testid^="annotation-snippet-"]),

@@ -2,6 +2,7 @@
 import { isSnapshotTruncated } from "../../shared/snapshot";
 import type { Annotation } from "../../shared/types";
 import { diffWords } from "../utils/word-diff";
+import AnnotationBody from "./AnnotationBody.svelte";
 import AnnotationCardHeader from "./AnnotationCardHeader.svelte";
 import AnnotationSnippet from "./AnnotationSnippet.svelte";
 
@@ -95,9 +96,9 @@ const originalTruncated = $derived(isSnapshotTruncated(annotation));
     {/if}
   </div>
   {#if annotation.content}
-    <p style="margin: 0; font-size: 12px; color: var(--tandem-fg-muted);">
-      {annotation.content}
-    </p>
+    <div style="margin: 0; font-size: 12px; color: var(--tandem-fg-muted);">
+      <AnnotationBody text={annotation.content} author={annotation.author} />
+    </div>
   {/if}
 </div>
 {/if}
