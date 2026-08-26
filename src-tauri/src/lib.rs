@@ -1640,6 +1640,76 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_devtools::init());
     }
 
+    // UI element inspector — opt-in `ui-inspector` feature, development only.
+    // `cargo tauri dev --features ui-inspector`, then `ui-inspector pick`.
+    //
+    // Registration order is not load-bearing here (it registers no global
+    // subscriber and intercepts no events), but it stays after single-instance
+    // like every other plugin. The window-scoped `ui-inspector:default`
+    // permission is granted at runtime in setup() — see the note there for why
+    // it is not a capability file.
+    //
+    // `max_history(100)` and `crop_padding(8)` are the upstream defaults, kept
+    // explicit so they are visible where they can be tuned.
+    //
+    // `storage_dir` is NOT the default, and the reason is the CLI's discovery
+    // rule: `ui-inspector` resolves `--project` by walking *up* from its own CWD
+    // looking for a directory that CONTAINS `.ui-inspector`. The plugin's
+    // default resolves the store against the app process's CWD, which under
+    // `cargo tauri dev` is `src-tauri/` — a DESCENDANT of the repo root, so
+    // every CLI call from the repo root (where we actually work) would fail
+    // discovery with exit 3, indistinguishable from "the app isn't running".
+    //
+    // `CARGO_MANIFEST_DIR` is baked at compile time and is always
+    // `<repo>/src-tauri`, so this pins the store to the repo root regardless of
+    // how the binary is launched. A compile-time path is normally a smell; it
+    // is acceptable here only because nothing ships this feature — no release
+    // build passes it (see Cargo.toml), so the build machine and the run
+    // machine are the same machine. If that ever stops being true, this
+    // baked-in path is the first thing that breaks.
+    //
+    // Treat the store as sensitive: it holds whatever document was open.
+    // Gitignored; never attach a reference to an issue or PR.
+    //
+    // `capture_screenshots(false)` is NOT a preference — native capture is
+    // broken on Windows and leaving it on makes the whole plugin unusable
+    // here, because a failed capture fails the ENTIRE capture: no reference is
+    // written at all, and every `ui-inspector pick` returns
+    // "no native window matched the Tauri process and window title".
+    //
+    // Root cause, measured on this machine (#1633) against the same live pid,
+    // the same moment, and the same xcap 0.9.8:
+    //
+    //   called from OUTSIDE tandem-desktop -> 15 windows, both Tandem windows present
+    //   called from INSIDE  tandem-desktop -> 13 windows, ZERO matching self pid
+    //
+    // `xcap::Window::all()` omits the calling process's own windows on
+    // Windows. The plugin's `find_window` filters that list by
+    // `std::process::id()` and returns `WindowNotFound` when the result is
+    // empty, so the pid filter can never match from in-process. Nothing at the
+    // integration layer can fix it — it needs an upstream capture path that
+    // works on the app's own HWND. Upstream's E2E evidence is macOS-only, which
+    // is consistent with this never having been exercised on Windows.
+    //
+    // Everything else works with it off, verified end to end: DOM/ARIA
+    // metadata, ranked locators (`data-testid` first at confidence 1.0), the
+    // Svelte source location and component ancestry, persistence, and live
+    // `ui-inspector resolve`. That is the bulk of the value for an agent; the
+    // pixels are the part we lose.
+    //
+    // Flip this back to the upstream default (screenshots on) once the capture
+    // path is fixed, and delete this comment with it.
+    #[cfg(feature = "ui-inspector")]
+    {
+        let mut inspector = tauri_plugin_ui_inspector::Builder::new();
+        inspector
+            .storage_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.ui-inspector"))
+            .max_history(100)
+            .crop_padding(8)
+            .capture_screenshots(false);
+        builder = builder.plugin(inspector.build());
+    }
+
     // Windows-only kill-on-job-close ownership of the sidecar (#987). Managed
     // here (not in the fluent chain below) so the `#[cfg]` is a clean statement.
     // Held for the parent process's lifetime; the OS closes the job handle on
@@ -1809,6 +1879,38 @@ pub fn run() {
                         .rotation_strategy(RotationStrategy::KeepOne)
                         .build(),
                 )?;
+            }
+
+            // UI element inspector permission grant (`ui-inspector` feature).
+            //
+            // This is a RUNTIME capability, not a file under
+            // `src-tauri/capabilities/`, and the difference is not stylistic.
+            // Capability files are resolved by `tauri-build` against the crates
+            // actually in the dependency graph, so a static file naming
+            // `ui-inspector:default` would fail to build every time the feature
+            // is OFF — which is every release build and every default `cargo
+            // test`. `Manager::add_capability` (tauri's `dynamic-acl` feature,
+            // pulled in by our `ui-inspector` feature) is the only grant that
+            // appears and disappears together with the dependency.
+            //
+            // Scoped to the `main` window to match capabilities/default.json.
+            // `?` rather than a warn: a silent grant failure would leave the
+            // picker hanging on an IPC call the ACL rejects, with the CLI
+            // reporting only a timeout — and this build is developer-only, so
+            // failing loudly costs a user nothing.
+            #[cfg(feature = "ui-inspector")]
+            {
+                // `Manager` (which carries `add_capability`) is already in
+                // scope from the module-level `use tauri::{Emitter, Manager}`.
+                app.add_capability(
+                    r#"{
+                        "identifier": "ui-inspector-capability",
+                        "description": "Dev-only element picker (ui-inspector feature).",
+                        "windows": ["main"],
+                        "permissions": ["ui-inspector:default"]
+                    }"#,
+                )?;
+                log::info!("UI inspector enabled — run `ui-inspector pick` to select an element");
             }
 
             // Deferred from the visibility block above — logging wasn't live yet.
