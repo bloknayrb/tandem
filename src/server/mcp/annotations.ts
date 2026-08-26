@@ -189,8 +189,9 @@ export function addReplyToAnnotation(
   // Highlights are user-only UI markup with no body to thread — reject for any
   // author. Notes and comments accept replies (#1000): note replies are
   // user-private, stamped `private` below and stripped from every Claude-facing
-  // read by `channelVisibleReplies`; the channel observer independently gates on
-  // `parentAnn.type === "comment"`, so note replies never emit an SSE event.
+  // read by `channelVisibleReplies`; the channel observer independently gates
+  // via `narrowForChannel` (ADR-035) on the parent AND reads `private` on the
+  // reply itself, so note replies never emit an SSE event.
   if (ann.type === "highlight") {
     return {
       ok: false,
