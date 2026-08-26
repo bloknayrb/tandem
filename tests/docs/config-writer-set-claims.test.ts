@@ -13,9 +13,12 @@ import { describe, expect, it } from "vitest";
  * join the accepted set unnoticed.
  *
  * **Four surfaces, because three of them exist to cover the first one's blind
- * spots.** An earlier draft had only the first, and a review defeated it three
- * separate ways — a write idiom the regex did not know, a file outside the scan
- * roots, and a `.mts` file inside one. Each is now closed below.
+ * spots.** Two review rounds defeated earlier drafts four times — a write idiom
+ * the regex did not know, a file outside the scan roots, a `.mts` file inside
+ * one, and a `.mjs` file anywhere at all, which was invisible to every surface
+ * at once because this file's own extension list gated the repo-wide walk too.
+ * Each is closed below. The pattern is worth naming: every defeat was a scope
+ * that looked total and was not.
  *
  * 1. **The writer set** (`WRITER_SITES`), scoped to `src/server/integrations/`
  *    and `src/cli/`. Derivation is by CALL-SITE COUNT, not by function name: a
@@ -59,6 +62,11 @@ import { describe, expect, it } from "vitest";
  * appears, the effect is an under-count — a false negative, not a false alarm —
  * so it fails toward hiding a writer. Prefer a character class over `//` in a
  * regex literal in these files.
+ *
+ * **What still gets through, stated rather than implied.** A durable write that
+ * names none of the `DURABLE_WRITE` idioms — a raw `fd` from a native module, a
+ * child process invoked to write the file — is invisible here. The idiom list has
+ * already had to be widened twice, so treat it as a floor, not a proof.
  */
 
 const ROOT = resolve(__dirname, "../..");
@@ -66,20 +74,41 @@ const ROOT = resolve(__dirname, "../..");
 /** Scan roots for the writer set. Pinned so a silent narrowing fails. */
 const SCAN_ROOTS = ["src/server/integrations", "src/cli"] as const;
 
-/** Source extensions the scan reads. `.svelte.ts` is covered by `.ts`. */
-const SCANNED_EXTENSIONS = [".ts", ".mts", ".cts", ".tsx", ".svelte"] as const;
+/**
+ * Source extensions the scan reads. `.svelte.ts` is covered by `.ts`.
+ *
+ * The JS family is here because a `.mjs` writer placed anywhere under `src/`
+ * was once invisible to ALL FOUR surfaces at once — wrong directory for the
+ * writer set, and filtered out of the repo-wide walk by this very list. Nothing
+ * about these checks needs a TypeScript parse; they read source as text.
+ */
+const SCANNED_EXTENSIONS = [
+  ".ts",
+  ".mts",
+  ".cts",
+  ".tsx",
+  ".svelte",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".jsx",
+] as const;
 
-/** Extensions that may appear in a scan root without being source. */
-const IGNORED_EXTENSIONS = [".md"] as const;
+/** Extensions that may appear under `src/` without being source. */
+const IGNORED_EXTENSIONS = [".md", ".css"] as const;
 
 /**
  * Durable-write idioms. All are needed and none subsumes the others:
  * `apply.ts` commits through a module-private `atomicWrite` helper,
  * `uninstall-scrub.ts` hand-rolls tmp-then-`rename`, and a plain `writeFile`
- * straight onto the destination is the simplest writer of the three.
+ * straight onto the destination is the simplest writer of the three. The `open`
+ * forms are here because a file-handle write (`(await fs.promises.open(p,
+ * "w")).write(…)`) reaches disk without naming any of the others; matching the
+ * open rather than the write avoids the 60-odd `process.stdout.write` calls that
+ * a bare `.write(` would drag in.
  */
 const DURABLE_WRITE =
-  /\b(atomicWrite\w*|rename|renameSync|writeFile|writeFileSync|appendFile|appendFileSync|copyFile|copyFileSync|cp|cpSync|createWriteStream)\s*\(/g;
+  /\b(atomicWrite\w*|rename|renameSync|writeFile|writeFileSync|appendFile|appendFileSync|copyFile|copyFileSync|cp|cpSync|createWriteStream)\s*\(|\b(?:fs|promises)\.open\s*\(|\bopenSync\s*\(/g;
 
 /**
  * Every durable-write call site in the scan roots, keyed `file` -> total count,
@@ -114,9 +143,10 @@ const WRITER_SITES: Record<
       "read-modify-write cycle, so no lost update is possible.",
   },
   "src/server/integrations/storage.ts": {
-    sites: 5,
+    sites: 8,
     disposition: "out-of-scope",
     why:
+      "Five write/rename/copy sites plus three `fs.promises.open` file-handle opens. " +
       "atomicWriteConfigFile writes integrations.json, not the Claude config. Same " +
       "read-modify-write shape, different target, and the RMW lives in its callers " +
       "rather than here. Not covered by #1599; if it acquires a Claude-config " +
@@ -218,6 +248,9 @@ function stripComments(src: string): string {
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
+    // Skip dot-directories: `src/client/.claude/.workflow-state/` is gitignored
+    // tooling state, and sweeping it would report its own scratch files.
+    if (entry.startsWith(".")) continue;
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) walk(full, out);
     else out.push(relative(ROOT, full).replace(/\\/g, "/"));
@@ -286,21 +319,24 @@ describe("config-writer set (#1599 accepted risk)", () => {
     }
   });
 
-  it("scans every file type present in the scan roots", () => {
-    // `"x.mts".endsWith(".ts")` is false, so a .mts writer inside a scanned
-    // directory would be read by nothing. Sweeping the extensions actually on
-    // disk is what turns that from a silent blind spot into a failure.
-    const present = new Set(
-      SCAN_ROOTS.flatMap((r) => walk(join(ROOT, r))).map((f) => extname(f).toLowerCase()),
-    );
+  it("scans every file type present anywhere under src/", () => {
+    // `"x.mts".endsWith(".ts")` is false, so a file with an unlisted extension
+    // is read by nothing. Sweeping the extensions actually on disk turns that
+    // from a silent blind spot into a failure.
+    //
+    // The sweep covers ALL of `src/`, not just SCAN_ROOTS. Scoping it to the
+    // scan roots left the rest of the tree open: a `.mjs` writer under, say,
+    // `src/server/` was outside the writer set's directories AND filtered out
+    // of the repo-wide walk, so no surface could see it.
+    const present = new Set(walk(join(ROOT, "src")).map((f) => extname(f).toLowerCase()));
     const known: string[] = [...SCANNED_EXTENSIONS, ...IGNORED_EXTENSIONS];
     const unswept = [...present].filter((e) => e !== "" && !known.includes(e));
     expect(
       unswept,
-      `file types present in the scan roots that nothing reads: ${unswept}. Add them ` +
-        `to SCANNED_EXTENSIONS, or to IGNORED_EXTENSIONS if they cannot hold code.`,
+      `file types under src/ that nothing reads: ${unswept}. Add them to ` +
+        `SCANNED_EXTENSIONS, or to IGNORED_EXTENSIONS if they cannot hold code.`,
     ).toEqual([]);
-    expect(present.has(".ts"), "the scan roots hold no .ts at all — the walk is broken").toBe(true);
+    expect(present.has(".ts"), "src/ holds no .ts at all — the walk is broken").toBe(true);
   });
 
   it("keeps the scan roots pinned — narrowing them would hide writers", () => {
