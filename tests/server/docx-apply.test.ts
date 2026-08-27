@@ -5,6 +5,7 @@ import render from "dom-serializer";
 import JSZip from "jszip";
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { listDocBackups } from "../../src/server/file-io/doc-backup.js";
 import {
   applySingleSuggestion,
@@ -13,12 +14,7 @@ import {
   resolveWordComments,
 } from "../../src/server/file-io/docx-apply.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
-import {
-  addDoc,
-  getOpenDocs,
-  removeDoc,
-  setActiveDocId,
-} from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { applyChangesCore } from "../../src/server/mcp/docx-apply.js";
 import { resolveAppDataDir } from "../../src/server/platform.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";

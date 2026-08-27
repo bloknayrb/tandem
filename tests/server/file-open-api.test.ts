@@ -2,8 +2,9 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { removeDoc } from "../../src/server/documents/registry-testing.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
-import { getOpenDocs, removeDoc } from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import {
   openFileByPath,
   openFileFromContent,

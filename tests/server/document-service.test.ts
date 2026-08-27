@@ -4,9 +4,9 @@ import {
   registerDirtyObserver,
   resetForTesting as resetDirtyState,
 } from "../../src/server/documents/dirty.js";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import type { OpenDoc } from "../../src/server/mcp/document-service.js";
 import {
-  addDoc,
   autoSaveAllToDisk,
   broadcastOpenDocs,
   broadcastStoreReadOnly,
@@ -16,12 +16,10 @@ import {
   getCurrentDoc,
   getOpenDocs,
   hasDoc,
-  removeDoc,
   requireDocument,
   saveDocumentAsToDisk,
   saveDocumentToDisk,
   serializeDocument,
-  setActiveDocId,
   toDocListEntry,
 } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";

@@ -34,16 +34,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it } from "vitest";
 import { type ZodRawShape, z } from "zod";
 import type { DoctorReport } from "../../src/cli/doctor.js";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { createAnnotation, registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { registerDiagnosticsTools } from "../../src/server/mcp/diagnostics.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
-import {
-  addDoc,
-  getOpenDocs,
-  removeDoc,
-  setActiveDocId,
-} from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
 import {
   checkInboxOutputShape,
