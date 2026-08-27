@@ -823,6 +823,12 @@ export async function saveDocumentAsToDisk(
     // the prepare block — otherwise clients would see the promoted identity
     // (`source: "file"` is what gates the rename affordance) while the annotation
     // store and channel observers are still wired for an upload doc.
+    //
+    // "After the store is wired" means after the ATTEMPT: `wireAnnotationStore`
+    // catches its own failures and returns `{wired:false}` rather than throwing,
+    // which is what keeps a promote non-fatal. On that path the file is real and
+    // its annotations are session-only, and the user learns it from the
+    // notification the helper pushes — not from anything published here.
     await updateDocumentWhenReady(
       { id: docId, filePath: resolved, format, readOnly: false, source: "file" },
       async () => {
@@ -1333,28 +1339,46 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       // edit arriving within the TTL.
       wireFileWatcher(docId, newPath, format);
 
+      // Read the post-rename mtime BEFORE touching the registry, so the block
+      // below holds no `await` at all. Two things depend on that: the publish
+      // then cannot land between the registry write and the document's own
+      // `fileName` (a broadcast arriving in that gap reverts an optimistically
+      // renamed tab label, because the client treats the server entry as
+      // authoritative), and this filesystem call stays a plain statement of the
+      // enclosing function rather than a sink inside a nested closure.
+      //
+      // Safe FS sink (CodeQL js/path-injection): `newPath` is the validated
+      // rename target (see the Phase-0 barriers above) — not raw user input.
+      // An alert here is a false positive; dismiss per issue #1042.
+      const stat = await fs.stat(newPath).catch(() => null);
+
       // Update the registry entry, then publish the new basename once the
       // document's own meta agrees with it: same id/room, new path, overwritten
-      // by id. Activation is untouched — a rename must not steal focus. The
-      // publish waits because the `fs.stat` below is a real yield point, and
-      // before ADR-033 the broadcast was this function's last statement.
+      // by id. Activation is untouched — a rename must not steal focus. Before
+      // ADR-033 the broadcast was this function's last statement.
       await updateDocumentWhenReady(
         { id: docId, filePath: newPath, format, readOnly: false, source: "file" },
-        async () => {
+        () => {
           // Update the tab's fileName + savedAt baseline. withFileSync is the right
           // origin per ADR-031 (post-rename bookkeeping — a file-writer echo, not user
           // intent or setup). fs.rename preserves bytes + mtime, so set savedAt to the
           // real mtime and DO NOT markClean: unsaved edits must stay dirty so the next
           // autosave writes them to newPath.
-          const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-          // Safe FS sink (CodeQL js/path-injection): `newPath` is the validated
-          // rename target (see the Phase-0 barriers above) — not raw user input.
-          // An alert here is a false positive; dismiss per issue #1042.
-          const stat = await fs.stat(newPath).catch(() => null);
-          withFileSync(doc, () => {
-            meta.set("fileName", fileName);
-            if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
-          });
+          //
+          // Caught rather than thrown, deliberately: `updateDocumentWhenReady`
+          // skips its broadcast on a throw, and rename is the caller that must
+          // NOT skip. `fs.rename` has already committed, so the registry's new
+          // path is the truth — clients left showing the old label would be
+          // permanently wrong, with no later broadcast to correct them.
+          try {
+            const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+            withFileSync(doc, () => {
+              meta.set("fileName", fileName);
+              if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
+            });
+          } catch (err) {
+            console.error("[Rename] tab metadata update failed for %s:", docId, err);
+          }
         },
       );
     } catch (err) {

@@ -27,8 +27,9 @@
  *     from a stale CRDT re-broadcast, so a second advance silently overrides a
  *     tab switch the user made in between (`client/hooks/tab-reconcile.ts`).
  *
- * So `openDocument` / `activateDocument` / `updateDocument` / `closeDocument`
- * are the mutating surface, each ending in exactly one broadcast, and the
+ * So `openDocument` / `openDocumentWhenReady` / `activateDocument` /
+ * `updateDocumentWhenReady` / `closeDocument` are the mutating surface, each
+ * ending in exactly one broadcast, and the
  * primitives are not reachable from outside this file. `broadcastOpenDocs`
  * stays exported for the one honest remaining case: content changed, the tab
  * list did not.
@@ -252,23 +253,39 @@ export function activateDocument(id: string | null): void {
  * writing the document's own `fileName`. Publishing at the mutation point shows
  * clients the new identity across those gaps.
  *
- * The broadcast is in a `finally`, which is where this DELIBERATELY diverges
- * from {@link openDocumentWhenReady}. A failed open must not add a tab, so that
- * one skips its broadcast. An update's entry is already tracked and already on
- * screen, so skipping would leave clients showing the pre-update entry forever
- * while the registry holds the new one — trading a transient inconsistency for
- * a permanent one.
+ * **A throwing `prepare` skips the broadcast**, exactly as
+ * {@link openDocumentWhenReady} does. That is one rule rather than two, and it
+ * is deliberately NOT a per-caller flag: the two callers genuinely want opposite
+ * failure behaviour, and each says so in ordinary code instead.
+ *
+ * Save-As wants the skip. Its `prepare` re-attaches channel observers, so a
+ * throw partway leaves a document whose entry says `source: "file"` while its
+ * observers are still wired for an upload doc — publishing that would enable the
+ * rename affordance and clear the upload styling on a document whose annotations
+ * are still being suppressed from Claude, with no later broadcast to correct it.
+ * Skipping matches what the hand-rolled sequence did before ADR-033.
+ *
+ * Rename wants the opposite, because `fs.rename` has already committed by then:
+ * the registry's new path is the truth and clients showing the old label would
+ * be permanently wrong. So rename's `prepare` catches and logs its own failure
+ * rather than throwing, which is a local decision at the site that owns it.
+ *
+ * One honest limit: skipping the broadcast does not un-track the entry. The
+ * registry still holds it, and the next broadcast from any unrelated operation
+ * publishes it. The skip narrows the window rather than closing it — cleanup is
+ * the caller's, as it was before.
+ *
+ * It also writes unconditionally. A concurrent `POST /api/close` landing during
+ * one of the caller's awaits would be followed by this `set` re-adding the
+ * entry. Pre-existing in shape, and the caller owns the liveness check.
  */
 export async function updateDocumentWhenReady(
   entry: OpenDoc,
   prepare: () => void | Promise<void>,
 ): Promise<void> {
   openDocs.set(entry.id, entry);
-  try {
-    await prepare();
-  } finally {
-    broadcastOpenDocs();
-  }
+  await prepare();
+  broadcastOpenDocs();
 }
 
 /**

@@ -579,11 +579,19 @@ named `HocuspocusLifecycle`, replacing all four free callback slots (`setShouldK
    upload doc; for a rename the publish would cross an `await fs.stat` before the document's own
    `fileName` agrees with it.
 
-   They differ in one way, deliberately: the update variant broadcasts in a `finally`. A failed
-   open must not add a tab, so `openDocumentWhenReady` skips its broadcast — but an update's entry
-   is already tracked and already on screen, so skipping would leave clients showing the pre-update
-   entry indefinitely while the registry holds the new one. A transient inconsistency is
-   recoverable; a permanent one is not.
+   Both skip the broadcast when `prepare` throws — one rule, not two, and deliberately not a
+   per-caller flag even though the two callers want opposite failure behaviour. Save-As wants the
+   skip: its `prepare` re-attaches channel observers, so a throw partway leaves an entry reading
+   `source: "file"` on a document whose observers are still wired for an upload doc, and publishing
+   that enables the rename affordance while annotations stay suppressed from Claude with no later
+   broadcast to correct it. Rename wants the opposite, because `fs.rename` has already committed —
+   so it catches inside its own `prepare` rather than asking the helper for different semantics.
+   The decision lives at the site that owns it.
+
+   One limit worth stating, because the prose otherwise reads stronger than the code: skipping the
+   broadcast does not un-track the entry, so the next broadcast from any unrelated operation
+   publishes it. The skip narrows the window rather than closing it. Cleanup is the caller's, as it
+   was before ADR-033.
 4. **`getYDoc` and `eachOpen` were not added.** `requireDocument` already resolves the Y.Doc fresh
    per call (the property `getYDoc`'s doc comment was there to warn about), and `getOpenDocs()`
    returns a `ReadonlyMap`, which covers iteration without a second accessor.

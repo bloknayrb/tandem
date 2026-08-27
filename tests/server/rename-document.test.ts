@@ -2,7 +2,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { Y_MAP_ANNOTATIONS, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_OPEN_DOCUMENTS,
+} from "../../src/shared/constants.js";
 import { withBrowser, withInternal } from "../../src/shared/origins.js";
 
 // Mock the session manager — saveSession/deleteSession touch disk for the
@@ -968,5 +973,51 @@ describe("renameDocument — note privacy (ADR-027)", () => {
     expect(claudeVisible).toHaveLength(0);
     // And the note is still present in the doc (private, not deleted).
     expect(store!.listAnnotationsRefreshed().some((a) => a.id === "note-1")).toBe(true);
+  });
+});
+
+describe("publishing a committed rename (ADR-033)", () => {
+  it("publishes the new path even when the tab-metadata write throws", async () => {
+    // `updateDocumentWhenReady` skips its broadcast when `prepare` throws —
+    // right for Save-As, wrong here, because `fs.rename` has already committed
+    // by this point. Clients left showing the old label would be permanently
+    // wrong, so renameDocument catches inside its own prepare.
+    //
+    // Driven through the real function rather than a hand-built callback of the
+    // same shape: a mutation removing renameDocument's catch left every
+    // shape-only assertion green, because a test that builds its own input can
+    // only confirm the model it was written from.
+    const { docId, doc } = await openFileDoc("committed.md", "body\n");
+
+    // Inject the failure at the one write only the prepare performs. Narrow on
+    // purpose: `documentMeta` carries other keys, and throwing for all of them
+    // would fail somewhere earlier and never reach the code under test.
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    const realSet = meta.set.bind(meta);
+    const setSpy = vi
+      .spyOn(meta, "set")
+      .mockImplementation((key: string, value: unknown): never | unknown => {
+        if (key === "fileName") throw new Error("Y.Doc destroyed mid-rename");
+        return realSet(key, value as never);
+      });
+
+    try {
+      const result = await renameDocument(docId, "committed-renamed.md");
+      expect(result.status, "the disk rename is the contract and it succeeded").toBe("renamed");
+      expect(setSpy, "control: the injected failure actually fired").toHaveBeenCalledWith(
+        "fileName",
+        expect.anything(),
+      );
+    } finally {
+      setSpy.mockRestore();
+    }
+
+    const published = getOrCreateDocument(CTRL_ROOM)
+      .getMap(Y_MAP_DOCUMENT_META)
+      .get(Y_MAP_OPEN_DOCUMENTS) as Array<{ id: string; filePath: string }> | undefined;
+    expect(
+      published?.find((d) => d.id === docId)?.filePath,
+      "the doc list carries the committed new path",
+    ).toContain("committed-renamed.md");
   });
 });

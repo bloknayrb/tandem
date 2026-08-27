@@ -427,31 +427,76 @@ describe("the composite mutators", () => {
     );
   });
 
-  it("updateDocumentWhenReady still publishes when prepare throws", async () => {
-    // The deliberate asymmetry with openDocumentWhenReady. A failed OPEN must
-    // not add a tab, so that one skips its broadcast. An update's entry is
-    // already tracked and already on screen — skipping here would leave clients
-    // showing the pre-update entry forever while the registry holds the new one,
-    // trading a transient inconsistency for a permanent one.
-    openDocument(makeOpenDoc("half-renamed"));
+  it("updateDocumentWhenReady does not publish when prepare throws", async () => {
+    // Same rule as openDocumentWhenReady, and Save-As is why. Its prepare
+    // re-attaches channel observers; a throw partway leaves a document whose
+    // entry reads `source: "file"` while its observers are still wired for an
+    // upload doc. Publishing that enables the rename affordance and clears the
+    // upload styling on a document whose annotations are still suppressed from
+    // Claude, with no later broadcast to correct it. On master the broadcast was
+    // this sequence's last statement, so a throw published nothing — this keeps
+    // that.
+    //
+    // A caller that must publish regardless catches inside its own prepare;
+    // `renameDocument` is the one that does, and the case below is that shape.
+    openDocument(makeOpenDoc("half-promoted"));
 
     await expect(
       updateDocumentWhenReady(
         {
-          id: "half-renamed",
-          filePath: "/tmp/half-renamed-NEW.md",
+          id: "half-promoted",
+          filePath: "/tmp/half-promoted-NEW.md",
           format: "md",
           readOnly: false,
           source: "file",
         },
         () => {
-          throw new Error("post-commit bookkeeping failed");
+          throw new Error("attachObservers failed");
         },
       ),
-    ).rejects.toThrow("post-commit bookkeeping failed");
+    ).rejects.toThrow("attachObservers failed");
 
-    expect(readPublishedPath("half-renamed"), "the registry's state was published anyway").toBe(
-      "/tmp/half-renamed-NEW.md",
+    expect(readPublishedPath("half-promoted"), "the partial promotion is not published").toBe(
+      "/tmp/half-promoted.md",
+    );
+
+    // …and the honest limit, asserted rather than only claimed in prose: the
+    // entry IS still tracked, so the next unrelated broadcast publishes it. The
+    // skip narrows the window; it does not close it.
+    openDocument(makeOpenDoc("some-other-doc"));
+    expect(readPublishedPath("half-promoted"), "a later broadcast surfaces it anyway").toBe(
+      "/tmp/half-promoted-NEW.md",
+    );
+  });
+
+  it("publishes when prepare handles its own failure (the rename shape)", async () => {
+    // What `renameDocument` does: `fs.rename` has already committed, so the
+    // registry's new path is the truth and clients left on the old label would
+    // be permanently wrong. It catches inside prepare rather than asking the
+    // helper for different semantics.
+    openDocument(makeOpenDoc("renamed-anyway"));
+
+    let handled = false;
+    await updateDocumentWhenReady(
+      {
+        id: "renamed-anyway",
+        filePath: "/tmp/renamed-anyway-NEW.md",
+        format: "md",
+        readOnly: false,
+        source: "file",
+      },
+      () => {
+        try {
+          throw new Error("tab metadata update failed");
+        } catch {
+          handled = true;
+        }
+      },
+    );
+
+    expect(handled, "control: the prepare really did fail").toBe(true);
+    expect(readPublishedPath("renamed-anyway"), "the committed rename is published").toBe(
+      "/tmp/renamed-anyway-NEW.md",
     );
   });
 
