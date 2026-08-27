@@ -5,6 +5,7 @@ import render from "dom-serializer";
 import JSZip from "jszip";
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { listDocBackups } from "../../src/server/file-io/doc-backup.js";
 import {
   applySingleSuggestion,
@@ -13,12 +14,7 @@ import {
   resolveWordComments,
 } from "../../src/server/file-io/docx-apply.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
-import {
-  addDoc,
-  getOpenDocs,
-  removeDoc,
-  setActiveDocId,
-} from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { applyChangesCore } from "../../src/server/mcp/docx-apply.js";
 import { resolveAppDataDir } from "../../src/server/platform.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
@@ -376,6 +372,35 @@ describe("applyTrackedChanges", () => {
     expect(output.rejected).toBe(1);
     expect(output.rejectedDetails[0].id).toBe("s1");
     expect(output.rejectedDetails[0].reason).toContain("snapshot mismatch");
+  });
+
+  it("distinguishes an ABSENT textSnapshot from a stored EMPTY one (#1631)", async () => {
+    // The guard used to gate on `s.textSnapshot !== undefined`; it now calls
+    // the shared `snapshotContradicts`, and the whole risk of that move was
+    // collapsing these two into one. `snapshotSearchPrefix` returns "" for
+    // both, so a carve-out keyed on IT would silently stop checking the second.
+    //
+    // Absent means nothing was captured ⇒ nothing to contradict ⇒ apply.
+    // Empty means the range was captured and held no text ⇒ a real claim ⇒ a
+    // non-empty range contradicts it.
+    const xml = wrapBody(`<w:p><w:r><w:t>Hello World</w:t></w:r></w:p>`);
+    const docxBuffer = await createTestDocx(xml);
+
+    const absent = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 0, to: 5, newText: "Hi" }],
+      { author: "Test", ydocFlatText: "Hello World" },
+    );
+    expect(absent.applied).toBe(1);
+    expect(absent.rejected).toBe(0);
+
+    const empty = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 0, to: 5, newText: "Hi", textSnapshot: "" }],
+      { author: "Test", ydocFlatText: "Hello World" },
+    );
+    expect(empty.applied).toBe(0);
+    expect(empty.rejected).toBe(1);
   });
 
   it("accepts a TRUNCATED textSnapshot that is still a prefix of the range (#1486)", async () => {

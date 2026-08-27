@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  REPO_ROOT,
+  RUST_SRC,
+  rustSources,
+  stripRustComments,
+  stripRustTestModules,
+} from "./rust-sources.js";
 
 /**
  * Pins the parts of #1416's fix that **nothing else can fail on**.
@@ -35,14 +42,8 @@ import { describe, expect, it } from "vitest";
  * mistaken for one that is present.
  */
 
-const REPO_ROOT = join(import.meta.dirname, "..", "..");
-const LIB_RS = join(REPO_ROOT, "src-tauri", "src", "lib.rs");
+const LIB_RS = join(RUST_SRC, "lib.rs");
 const CLIENT_MAP = join(REPO_ROOT, "src", "client", "utils", "startup-rejection.ts");
-
-/** Drop `//` and `/* *\/` comments, so prose about a call is not read as the call. */
-function stripRustComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
 
 function stripTsComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
@@ -82,8 +83,76 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     ).toBe(true);
   });
 
+  it("scans every Rust source file, not a list written here", () => {
+    // The control on the scan itself. `rustSources()` feeding the parity check
+    // means an empty or truncated walk satisfies it silently: zero declared
+    // codes is zero unhandled codes. This is what makes the walk falsifiable.
+    const rel = rustSources().map((f) => f.rel);
+    expect(rel.length, "the Rust source walk found almost nothing").toBeGreaterThan(10);
+    expect(rel).toContain("src-tauri/src/lib.rs");
+    expect(
+      rel,
+      "the module holding the excluded wire code must be in scope, or its " +
+        "exclusion is asserted against text the scan never read",
+    ).toContain("src-tauri/src/pending_update.rs");
+  });
+
+  it("strips test modules without eating production code", () => {
+    // The control on the stripper. It runs before every scan below, so one that
+    // removed too much would make each of them pass by finding nothing, and one
+    // that removed nothing would reinstate the hole it exists to close.
+    const pu = readFileSync(join(RUST_SRC, "pending_update.rs"), "utf8");
+    const stripped = stripRustTestModules(stripRustComments(pu));
+    expect(stripped, "the production declaration must survive stripping").toContain(
+      "const CODE_UPDATE_MAY_NOT_HAVE_COMPLETED",
+    );
+    expect(
+      stripped,
+      "the test module's own call must not survive, or a test can satisfy a claim " +
+        "about production routing",
+    ).not.toContain("surface_pending_update_hint_with(CODE_UPDATE_MAY_NOT_HAVE_COMPLETED");
+    expect(pu, "the fixture this control relies on has moved").toContain(
+      "surface_pending_update_hint_with(CODE_UPDATE_MAY_NOT_HAVE_COMPLETED",
+    );
+
+    // The brace counter must survive a brace inside a literal. `pending_update.rs`
+    // already carries one (`b"{ not json"`), and only escapes the bug because its
+    // test module is last in the file — so assert the property on a fixture that
+    // puts a constant AFTER the test module, which is what the real file becomes
+    // the moment anyone appends to it.
+    const withLiteralBrace = [
+      "#[cfg(test)]",
+      "mod t {",
+      '    fn f() { std::fs::write(&path, b"{ not json").unwrap(); }',
+      "    fn g() { let raw = r#\"} still not json\"#; let c = '{'; }",
+      "}",
+      'const CODE_AFTER_THE_TEST_MODULE: &str = "after";',
+    ].join("\n");
+    const survivor = stripRustTestModules(withLiteralBrace);
+    expect(
+      survivor,
+      "a brace inside a string or char literal must not desync the counter — " +
+        "swallowing everything after a test module is how a widened scan hollows itself",
+    ).toContain("CODE_AFTER_THE_TEST_MODULE");
+    expect(survivor, "the test module itself must still be stripped").not.toContain("not json");
+
+    // ...and a block that genuinely never closes fails loud rather than truncating.
+    expect(
+      () => stripRustTestModules("#[cfg(test)]\nmod t {\n    fn f() {\n"),
+      "an unbalanced block must throw, not silently drop the rest of the file",
+    ).toThrow(/ran off the end/);
+  });
+
   it("gives every Rust wire code an explicit case in the client's message map", () => {
-    const declared = [...lib.matchAll(/const (CODE_[A-Z_]+): &str = "([a-z-]+)";/g)].map((m) => ({
+    const sources = rustSources();
+    // Stripped once and shared: `routedIn` below asks about the same derived
+    // text, and computing it twice invites the two from drifting apart.
+    const stripped = sources.map((f) => ({
+      rel: f.rel,
+      text: stripRustTestModules(stripRustComments(f.text)),
+    }));
+    const rust = stripped.map((f) => f.text).join("\n");
+    const declared = [...rust.matchAll(/const (CODE_[A-Z_]+): &str = "([a-z-]+)";/g)].map((m) => ({
       name: m[1],
       value: m[2],
     }));
@@ -95,7 +164,7 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     const ROUTED_ELSEWHERE = ["CODE_UPDATE_MAY_NOT_HAVE_COMPLETED"];
     for (const name of ROUTED_ELSEWHERE) {
       expect(
-        new RegExp(`surface_pending_update_hint\\w*\\([^)]*${name}`).test(lib),
+        new RegExp(`surface_pending_update_hint\\w*\\([^)]*${name}`).test(rust),
         `${name} is excluded from the message-map parity check, so it must be ` +
           "demonstrably routed to the pending-update surface instead. It is not.",
       ).toBe(true);
@@ -110,6 +179,17 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     // let a genuinely unrouted code through unnoticed.
     expect(declared.map((d) => d.value)).toContain("update-may-not-have-completed");
     expect(codes).not.toContain("update-may-not-have-completed");
+    // ...and it must be earned in a file the scan actually reached. Without
+    // this, re-pointing the scan back at `lib.rs` alone after some future move
+    // leaves the exclusion asserting nothing about a constant that is no longer
+    // there — the exact hollowing this widening exists to prevent.
+    const routedIn = stripped.filter(({ text }) =>
+      /const CODE_UPDATE_MAY_NOT_HAVE_COMPLETED: &str/.test(text),
+    );
+    expect(
+      routedIn.map((f) => f.rel),
+      "the excluded wire code must be declared in exactly one scanned Rust file",
+    ).toHaveLength(1);
 
     const client = stripTsComments(readFileSync(CLIENT_MAP, "utf8"));
     for (const code of codes) {

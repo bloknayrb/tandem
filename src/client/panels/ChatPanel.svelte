@@ -9,6 +9,7 @@ import { flatOffsetToPmPos } from "../positions";
 import { agentColor } from "../utils/agent-color";
 import { localChatDateLabel } from "./chat-export";
 import { renderMarkdown } from "./chat-markdown";
+import "./markdown-body.css";
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 
@@ -363,7 +364,7 @@ async function exportChat() {
 
         <!-- Message text -->
         {#if msg.author === "claude"}
-          <div class="chat-markdown">
+          <div class="chat-markdown tandem-markdown">
             {@html renderMarkdown(msg.text)}
           </div>
         {:else}
@@ -575,33 +576,6 @@ async function exportChat() {
         opacity: 1;
       }
     }
-  }
-
-  .chat-markdown :global(h1),
-  .chat-markdown :global(h2),
-  .chat-markdown :global(h3) {
-    margin: 0.5em 0 0.25em;
-    font-weight: 600;
-  }
-  .chat-markdown :global(p) {
-    margin: 0.25em 0;
-  }
-  .chat-markdown :global(code) {
-    font-family: monospace;
-    font-size: 0.9em;
-    background: var(--tandem-surface-muted);
-    padding: 1px 4px;
-    border-radius: var(--tandem-r-2);
-  }
-  .chat-markdown :global(li) {
-    margin-left: 1.25em;
-    list-style: disc;
-  }
-  .chat-markdown :global(strong) {
-    font-weight: 600;
-  }
-  .chat-markdown :global(em) {
-    font-style: italic;
   }
 
   /* Anchor quote — collapsed to a 60px teaser, expands on hover OR focus so

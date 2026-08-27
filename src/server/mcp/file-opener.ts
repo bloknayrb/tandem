@@ -33,6 +33,14 @@ import { recoverRenamedEnvelope } from "../annotations/rename-recovery.js";
 import { annotationFileExists, createStore } from "../annotations/store.js";
 import { loadAndMerge } from "../annotations/sync.js";
 import { isDirty, markClean, markDirty, registerDirtyObserver } from "../documents/dirty.js";
+import {
+  activateDocument,
+  broadcastOpenDocs,
+  getOpenDocs,
+  type OpenDoc,
+  openDocument,
+  openDocumentWhenReady,
+} from "../documents/registry.js";
 import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
@@ -62,15 +70,10 @@ import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { sanitizeAnnotation } from "./annotations.js";
 import { detectFormat, docIdFromPath, extractText } from "./document-model.js";
 import {
-  addDoc,
   autoSaveAllToDisk,
-  broadcastOpenDocs,
   canSaveToDisk,
-  getOpenDocs,
-  type OpenDoc,
   readPendingConflict,
   saveDocumentToDisk,
-  setActiveDocId,
 } from "./document-service.js";
 import { injectTutorialAnnotations } from "./tutorial-annotations.js";
 
@@ -164,10 +167,12 @@ export async function openFileByPath(
       await clearAndReload(existingId, doc, resolved, format, existing, reloadBuffer, {
         readOnly,
       });
-      addDoc(existingId, { id: existingId, filePath: resolved, format, readOnly, source: "file" });
-      setActiveDocId(existingId);
-      await wireAnnotationStore(existingId, doc, resolved);
-      broadcastOpenDocs();
+      await openDocumentWhenReady(
+        { id: existingId, filePath: resolved, format, readOnly, source: "file" },
+        async () => {
+          await wireAnnotationStore(existingId, doc, resolved);
+        },
+      );
       ensureAutoSave();
       return {
         ...buildResult(doc, {
@@ -305,12 +310,14 @@ export async function openFileFromContent(
     dedupSource: syntheticPath,
   });
 
-  addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
-  setActiveDocId(id);
-  writeDocMeta(doc, id, fileName, format, readOnly);
-  await initSavedBaseline(doc);
-  await wireAnnotationStore(id, doc, syntheticPath);
-  broadcastOpenDocs();
+  await openDocumentWhenReady(
+    { id, filePath: syntheticPath, format, readOnly, source: "upload" },
+    async () => {
+      writeDocMeta(doc, id, fileName, format, readOnly);
+      await initSavedBaseline(doc);
+      await wireAnnotationStore(id, doc, syntheticPath);
+    },
+  );
   ensureAutoSave();
 
   return buildResult(doc, {
@@ -355,13 +362,15 @@ export async function openScratchpad(content?: string): Promise<OpenFileResult> 
   const prepared = await adapter.parse(content ?? "");
   withInternal(doc, () => adapter.apply(doc, prepared));
 
-  addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });
-  setActiveDocId(id);
-  writeDocMeta(doc, id, fileName, format, readOnly);
-  await initSavedBaseline(doc);
-  // Skip wireAnnotationStore — scratchpads are ephemeral; durable store
-  // would leave orphaned JSON files in the annotations directory on close.
-  broadcastOpenDocs();
+  await openDocumentWhenReady(
+    { id, filePath: syntheticPath, format, readOnly, source: "upload" },
+    async () => {
+      writeDocMeta(doc, id, fileName, format, readOnly);
+      await initSavedBaseline(doc);
+      // Skip wireAnnotationStore — scratchpads are ephemeral; durable store
+      // would leave orphaned JSON files in the annotations directory on close.
+    },
+  );
   ensureAutoSave();
 
   return {
@@ -753,17 +762,19 @@ function handleAlreadyOpen(
   explicitReadOnly: boolean,
 ): OpenFileResult {
   // Upgrade to read-only when explicitly requested and not already read-only.
+  // Both branches end in exactly one broadcast: `openDocument` carries the
+  // metadata change and the activation together, so the upgrade never
+  // publishes an intermediate state.
   if (explicitReadOnly && !existing.readOnly) {
-    addDoc(id, { ...existing, readOnly: true });
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
     withInternal(doc, () => {
       meta.delete(Y_MAP_READ_ONLY);
       meta.set(Y_MAP_READ_ONLY, true);
     });
+    openDocument({ ...existing, readOnly: true });
+  } else {
+    activateDocument(id);
   }
-
-  setActiveDocId(id);
-  broadcastOpenDocs();
   return {
     ...buildResult(doc, {
       documentId: id,
@@ -1165,23 +1176,24 @@ async function finalizeDocOpen(
   format: string,
   readOnly: boolean,
 ): Promise<void> {
-  addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
-  setActiveDocId(id);
-  writeDocMeta(doc, id, fileName, format, readOnly);
-  await initSavedBaseline(doc, resolved);
-  // Normal first open of a real file — enable rename recovery (#313).
-  await wireAnnotationStore(id, doc, resolved, { allowRecovery: true });
+  await openDocumentWhenReady(
+    { id, filePath: resolved, format, readOnly, source: "file" },
+    async () => {
+      writeDocMeta(doc, id, fileName, format, readOnly);
+      await initSavedBaseline(doc, resolved);
+      // Normal first open of a real file — enable rename recovery (#313).
+      await wireAnnotationStore(id, doc, resolved, { allowRecovery: true });
 
-  // Register the autosave dirty-tracking observer NOW (#851), after content has
-  // been loaded into the body — so the open-time baseline is "clean" and a doc
-  // opened to view but never edited never autosaves. Registering here (not only
-  // in the Hocuspocus swap path) ensures MCP-only edits (tandem_edit) are
-  // tracked even when no browser has connected yet. The observer is keyed by
-  // docId in module state and re-registered on swap, so it survives the Y.Doc
-  // replacement in onLoadDocument.
-  registerDirtyObserver(id, doc);
-
-  broadcastOpenDocs();
+      // Register the autosave dirty-tracking observer NOW (#851), after content
+      // has been loaded into the body — so the open-time baseline is "clean" and
+      // a doc opened to view but never edited never autosaves. Registering here
+      // (not only in the Hocuspocus swap path) ensures MCP-only edits
+      // (tandem_edit) are tracked even when no browser has connected yet. The
+      // observer is keyed by docId in module state and re-registered on swap, so
+      // it survives the Y.Doc replacement in onLoadDocument.
+      registerDirtyObserver(id, doc);
+    },
+  );
   ensureAutoSave();
 
   // Watch for external file changes. Clean docs reload from disk in every

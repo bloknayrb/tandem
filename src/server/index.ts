@@ -4,13 +4,11 @@ import path from "path";
 import { fileURLToPath } from "url";
 import {
   BYO_MODELS_ENABLED,
-  CTRL_ROOM,
   DEFAULT_BIND_HOST,
   DEFAULT_MCP_PORT,
   DEFAULT_WS_PORT,
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
 } from "../shared/constants.js";
-import { isUploadPath } from "../shared/paths.js";
 import { docHash } from "./annotations/doc-hash.js";
 import {
   acquireStoreLock,
@@ -20,13 +18,10 @@ import {
 } from "./annotations/store.js";
 import { loadOrCreateToken, readTokenFromFile } from "./auth/token-store.js";
 import { checkBindConfig, isNonLoopback } from "./bind-check.js";
+import { installTandemLifecycle } from "./bootstrap/hocuspocus-lifecycle.js";
+import { openFromDisk } from "./documents/open.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
-import {
-  attachCtrlObservers,
-  detachObservers,
-  reattachCtrlObservers,
-  reattachObservers,
-} from "./events/queue.js";
+import { attachCtrlObservers } from "./events/queue.js";
 import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
 import { unwatchAll } from "./file-watcher.js";
@@ -47,7 +42,6 @@ import {
   docCount,
   getOpenDocs,
 } from "./mcp/document-service.js";
-import { openFileByPath } from "./mcp/file-opener.js";
 import {
   APP_VERSION,
   closeMcpSession,
@@ -71,7 +65,7 @@ import {
 } from "./session/manager.js";
 import { maybeOpenStartupFile } from "./startup-file.js";
 import { checkVersionChange } from "./version-check.js";
-import { setDocLifecycleCallbacks, startHocuspocus } from "./yjs/provider.js";
+import { startHocuspocus } from "./yjs/provider.js";
 
 // stdout is exclusively reserved for the MCP JSON-RPC wire protocol (stdio mode).
 // Redirect any console.log calls (from Hocuspocus or other libs) to stderr.
@@ -446,6 +440,21 @@ async function main() {
     console.error("[Tandem] Failed to compact stale tombstones:", err);
   }
 
+  // Install the Hocuspocus lifecycle (ADR-033) — the keep-alive predicate, the
+  // doc swap/unload hooks, the generation gate's token source, and the
+  // dirty-mirror eligibility predicate, as one named seam.
+  //
+  // Two separate reasons it sits HERE and not later, and only the first is
+  // obvious: it must precede both `startHocuspocus` call sites below, because a
+  // doc that loads before installation silently gets no server-side observers
+  // for its lifetime. It must also precede `restoreOpenDocuments`, because until
+  // it runs the dirty-mirror predicate is unset and `dirty.ts` defaults to
+  // mirroring everything. That default happens to agree with the real predicate
+  // for the only thing restore produces today (`source: "file"` docs), so the
+  // gap is currently unobservable — which is exactly why it would survive a
+  // future restore path that produced an upload-sourced doc.
+  installTandemLifecycle();
+
   // Must complete before Hocuspocus starts to prevent browsers seeing stale openDocuments
   const previousActiveDocId = await restoreCtrlSession().catch((err) => {
     console.error("[Tandem] Failed to restore chat history:", err);
@@ -489,23 +498,6 @@ async function main() {
   // Wire the local-model collaborator (#1123 M1.2). DARK: this is a no-op while
   // BYO_MODELS_ENABLED is false (it never subscribes) — the gate lives inside.
   startLocalModelCollaborator();
-
-  // Register doc lifecycle callbacks so the event queue reattaches observers
-  // when Hocuspocus swaps Y.Doc instances (avoids circular import).
-  setDocLifecycleCallbacks(
-    (docName, newDoc) => {
-      if (docName === CTRL_ROOM) {
-        reattachCtrlObservers();
-      } else {
-        const openDoc = getOpenDocs().get(docName);
-        const uploadDoc = openDoc ? isUploadPath(openDoc.filePath) : false;
-        reattachObservers(docName, newDoc, { uploadDoc });
-      }
-    },
-    (docName) => {
-      detachObservers(docName);
-    },
-  );
 
   // ── Bind-host selection (MCP only — Hocuspocus always stays loopback) ────────
   const bindHost = process.env.TANDEM_BIND_HOST ?? DEFAULT_BIND_HOST;
@@ -606,7 +598,7 @@ async function main() {
     try {
       const versionStatus = await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE);
       if (versionStatus === "upgraded") {
-        await openFileByPath(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
+        await openFromDisk(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
         console.error(`[Tandem] Opened CHANGELOG.md (upgraded to v${APP_VERSION})`);
       }
     } catch (err) {
@@ -632,7 +624,7 @@ async function main() {
       const sampleBase = process.env.TANDEM_DATA_DIR || projectRoot;
       const samplePath = path.join(sampleBase, "sample/welcome.md");
       try {
-        await openFileByPath(samplePath);
+        await openFromDisk(samplePath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           console.error("[Tandem] Sample file not found (skipping):", samplePath);

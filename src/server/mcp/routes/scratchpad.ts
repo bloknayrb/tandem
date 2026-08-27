@@ -1,10 +1,10 @@
 import type { Request, Response } from "express";
 import { API_SCRATCHPAD } from "../../../shared/api-paths.js";
+import { openScratchpad } from "../../documents/open.js";
 import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
-import { openScratchpad } from "../file-opener.js";
 import { sendApiError } from "./_shared.js";
 
 const MAX_SCRATCHPAD_CONTENT_BYTES = 1024 * 1024;

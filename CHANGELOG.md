@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A reply on a comment stored under one of Tandem's older labels is announced again.** Comments created by earlier versions were sometimes stored as "suggestion" or "question". Tandem still understands both and treats them as comments in every list and read — but the announcement path checked the raw stored label, so replying to one of these older comments sent Claude nothing. It now agrees with the rest of Tandem.
 
+- **`tandem doctor` no longer calls your annotation store healthy when it cannot read any of it.** The check counted your documents, added up their size, reported "0 corrupt" and passed — while, in the same loop, quietly discarding every file it had failed to parse. Its count of corrupt files was derived from filenames alone: Tandem renames a file it cannot load, so that number only ever described files some *other* part of Tandem had already dealt with. A file that was simply garbage under an ordinary name was counted as a healthy document and mentioned nowhere. If your annotations had stopped loading, the one tool built to tell you so said everything was fine. It now reads every active file with the same code the editor uses to load one, and the headline line itself carries the verdict — naming how many files failed and which ones — rather than passing while a warning hides further down the report.
+
+- **Annotation files left behind by a newer Tandem are now reported.** When a build finds an annotation file written by a later version than itself, it sets that file aside untouched rather than risk mangling it. That is the right behaviour, and it was invisible: the file matched neither of doctor's two filters, so someone who had gone back to an older Tandem got no signal at all that a document's annotations were sitting on disk unread. Doctor now names them, and says that updating brings them back.
+
 ### Security
 
 - **Tandem is stricter about which annotations it announces to Claude, and refuses anything it cannot identify.** Two changes, neither of which alters what Tandem does with an annotation it understands.
@@ -24,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Second, an annotation whose kind Tandem does not recognise is now dropped rather than announced. Previously it was treated as an ordinary comment — which meant a personal note damaged such that its kind was lost stopped looking like a note and was announced with its text. This was the more serious of the two, and it was found by a test written to check the opposite.
 
   **One honest limit.** This covers what Tandem *pushes* to Claude. Claude also *asks* Tandem for annotations, and that path still applies only the note rule, so a damaged record can still reach Claude when it next asks — tracked in #1619 and not closed here.
+
+- **The annotation-store check is bounded, and screens where it is about to read before it reads.** The scan had no limit of any kind on how many files it opened or how large they could be, and it ran on the same thread that answers requests — so a large enough store could stall the whole server, editor connections included, while it worked through the directory. It is now asynchronous and capped by file count, per-file size, and total bytes read, and it says so in the report when a limit stopped it short rather than publishing a count it never checked. Separately, it now refuses network and extended-length Windows paths before making any filesystem call, which is the rule every other path-reading check in doctor already followed. **Stated honestly:** the location it reads is fixed when Tandem starts and no request can influence it, so this closes no reachable hole today — it removes the one check that would not have been safe if that ever changed.
 
 ## [0.24.1] - 2026-08-23
 

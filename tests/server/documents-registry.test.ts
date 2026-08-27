@@ -8,16 +8,14 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  addDoc,
   docCount,
   getActiveDocId,
   getCurrentDoc,
   getOpenDocs,
   hasDoc,
-  removeDoc,
   requireDocument,
-  setActiveDocId,
 } from "../../src/server/documents/registry.js";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 
 function reset() {
   for (const id of Array.from(getOpenDocs().keys())) removeDoc(id);

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { installTandemLifecycle } from "../../src/server/bootstrap/hocuspocus-lifecycle.js";
 import {
   clearDirtyState,
   isDirty,
@@ -11,7 +12,8 @@ import {
   setDirtyMirrorEligibility,
   snapshotDirtyVersion,
 } from "../../src/server/documents/dirty.js";
-import { addDoc, isDirtyMirrorEligible, removeDoc } from "../../src/server/documents/registry.js";
+import { isDirtyMirrorEligible } from "../../src/server/documents/registry.js";
+import { addDoc, removeDoc } from "../../src/server/documents/registry-testing.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_DIRTY, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
 
@@ -43,14 +45,15 @@ function attachAndEdit(doc: Y.Doc, text: string): void {
   fragment.insert(fragment.length, [p]);
 }
 
-// Declared FIRST on purpose: `resetForTesting` clears the injected mirror
-// predicate, so only a test running before any afterEach has fired can observe
-// the AMBIENT registration that `registry.ts` performs at module scope. That
-// one wiring line has no other cover. It fails closed — if this ever runs after
-// a reset, the predicate is null, the upload doc publishes, and the assertion
-// below goes red rather than silently passing for the wrong reason.
-describe("dirty.ts — registry wiring is live on import (#1447)", () => {
-  it("S0: importing registry.ts is enough to suppress an upload doc's mirror", () => {
+// The mirror predicate used to be registered by `registry.ts` at module scope,
+// so this suite had to run FIRST — `resetForTesting` clears the injection, and
+// only a test before any afterEach could observe an ambient registration. That
+// ordering dependency is gone (ADR-033): the composition root registers it, so
+// this installs it explicitly and no longer cares where it sits in the file.
+// The wiring still has no other cover, which is why the case stays.
+describe("dirty.ts — the composition root wires the mirror predicate (#1447)", () => {
+  it("S0: installing the lifecycle suppresses an upload doc's mirror", () => {
+    installTandemLifecycle();
     const docId = "mirror-wiring";
     const doc = liveDoc(docId);
     addDoc(docId, {

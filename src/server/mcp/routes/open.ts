@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { openFileByPath } from "../file-opener.js";
+import { openFromDisk } from "../../documents/open.js";
 import { licenseGate, sendLicenseRequired } from "../license-gate.js";
 import { sendApiError } from "./_shared.js";
 
@@ -16,7 +16,7 @@ export async function handleOpen(req: Request, res: Response): Promise<void> {
     return;
   }
   try {
-    const result = await openFileByPath(filePath, {
+    const result = await openFromDisk(filePath, {
       force: force === true,
       readOnly: readOnly === true,
     });
