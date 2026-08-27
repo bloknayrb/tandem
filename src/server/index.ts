@@ -19,6 +19,7 @@ import {
 import { loadOrCreateToken, readTokenFromFile } from "./auth/token-store.js";
 import { checkBindConfig, isNonLoopback } from "./bind-check.js";
 import { installTandemLifecycle } from "./bootstrap/hocuspocus-lifecycle.js";
+import { openFromDisk } from "./documents/open.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
 import { attachCtrlObservers } from "./events/queue.js";
 import { sweepDocBackups } from "./file-io/doc-backup.js";
@@ -41,7 +42,6 @@ import {
   docCount,
   getOpenDocs,
 } from "./mcp/document-service.js";
-import { openFileByPath } from "./mcp/file-opener.js";
 import {
   APP_VERSION,
   closeMcpSession,
@@ -598,7 +598,7 @@ async function main() {
     try {
       const versionStatus = await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE);
       if (versionStatus === "upgraded") {
-        await openFileByPath(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
+        await openFromDisk(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
         console.error(`[Tandem] Opened CHANGELOG.md (upgraded to v${APP_VERSION})`);
       }
     } catch (err) {
@@ -624,7 +624,7 @@ async function main() {
       const sampleBase = process.env.TANDEM_DATA_DIR || projectRoot;
       const samplePath = path.join(sampleBase, "sample/welcome.md");
       try {
-        await openFileByPath(samplePath);
+        await openFromDisk(samplePath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           console.error("[Tandem] Sample file not found (skipping):", samplePath);

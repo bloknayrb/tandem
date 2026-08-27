@@ -8,7 +8,11 @@ const openScratchpad = vi.hoisted(() =>
     content,
   })),
 );
-vi.mock("../../src/server/mcp/file-opener.js", () => ({ openScratchpad }));
+// Mocked at the module the route actually imports (ADR-034 seam), not at the
+// implementation behind it. A partial factory for `file-opener.js` left the
+// seam's other two re-exports resolving to `undefined` — tolerated by Vite's
+// SSR transform, a link error under a real ESM linker.
+vi.mock("../../src/server/documents/open.js", () => ({ openScratchpad }));
 
 import { handleScratchpad } from "../../src/server/mcp/routes/scratchpad";
 import { TAURI_HOSTNAME } from "../../src/shared/constants.js";

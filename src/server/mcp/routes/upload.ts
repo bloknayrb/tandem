@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
+import { openFromUpload } from "../../documents/open.js";
 import { detectFormat } from "../document-model.js";
-import { openFileFromContent } from "../file-opener.js";
 import { sendApiError } from "./_shared.js";
 
 export async function handleUpload(req: Request, res: Response): Promise<void> {
@@ -20,7 +20,7 @@ export async function handleUpload(req: Request, res: Response): Promise<void> {
   try {
     const format = detectFormat(fileName);
     const decoded = format === "docx" ? Buffer.from(content, "base64") : String(content);
-    const result = await openFileFromContent(fileName, decoded);
+    const result = await openFromUpload(fileName, decoded);
     res.json({ data: result });
   } catch (err: unknown) {
     sendApiError(res, err);
