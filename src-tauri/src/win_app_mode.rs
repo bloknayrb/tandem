@@ -66,7 +66,7 @@
 
 use std::sync::OnceLock;
 
-// `AppModeOutcome` is declared in `lib.rs`, NOT here, even though this module is its
+// `AppModeOutcome` is declared in `native_theme.rs`, NOT here, even though this module is its
 // only producer. This module is `#![cfg(target_os = "windows")]`, so a type declared
 // here is invisible to the type-checker on every other host — and the classification
 // that maps this outcome onto the IPC contract (`applied_native_theme`, #1368) has to
@@ -83,7 +83,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETHIGHCONTRAST, SystemPar
 /// Win32 ABI type passed by value across the ordinal-135 FFI boundary, and
 /// its variant order is load-bearing. It is intentionally a different type
 /// from `crate::native_theme::AppMode`, which is the platform-agnostic decision
-/// `native_theme_action` (in `lib.rs`) produces and is unit-tested on every
+/// `native_theme_action` (in `native_theme.rs`) produces and is unit-tested on every
 /// host; keeping them separate means the FFI shape can never leak into the
 /// pure decision layer.
 ///
@@ -212,7 +212,7 @@ fn build_supports_app_mode() -> bool {
 /// "preferred app mode" — the mechanism that themes native context menus and
 /// the tray menu (#992). See the module doc for what this does NOT reach.
 /// A non-`Applied` outcome is an unsupported-host no-op, not an error, but
-/// the caller is expected to log which one — see `apply_app_mode` in `lib.rs`.
+/// the caller is expected to log which one — see `apply_app_mode` in `native_theme.rs`.
 pub fn set_preferred_app_mode(mode: crate::native_theme::AppMode) -> AppModeOutcome {
     if !build_supports_app_mode() {
         return AppModeOutcome::UnsupportedBuild;

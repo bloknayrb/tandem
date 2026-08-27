@@ -66,7 +66,10 @@ const CHANGELOG = join(REPO_ROOT, "CHANGELOG.md");
  * `lib.rs`, and scoping that lookup to the crate root is the point of it.
  */
 const NATIVE_THEME = rustSourceDefining(
-  /#\[tauri::command\]\s*(?:pub\(crate\)\s+)?fn set_native_theme\s*\(/,
+  // The visibility group is spelled the same way in all five patterns in this
+  // file that have to tolerate one, so "we widened these to `pub(crate)`" reads
+  // as one change rather than two idioms a reader has to compare.
+  /#\[tauri::command\]\s*(?:pub(?:\(crate\))?\s+)?fn set_native_theme\s*\(/,
   "the #[tauri::command] fn set_native_theme",
 );
 const RUST = NATIVE_THEME.text;
