@@ -238,7 +238,10 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
   // ("Send to Claude", "Send to GPT", "Send to Assistant" when none is
   // configured), so match the agent-agnostic shape rather than a brand. The
   // composer opens on the outbound audience, so that is the resting name.
-  const commit = toolbar.getByRole("button", { name: /^Send to .+ \(Ctrl\+Enter\)$/ });
+  // WCAG 2.5.3: the name must START with the visible label "Add". Anchoring on
+  // /^Add/ is the half of this regex that guards the Label-in-Name fix; the
+  // rest keeps #438's agent-agnostic shape.
+  const commit = toolbar.getByRole("button", { name: /^Add — send to .+ \(Ctrl\+Enter\)$/ });
   await expect(commit).toBeVisible();
 
   // Flipping the toggle must re-label the commit button. This is the assertion
@@ -251,6 +254,57 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
     toolbar.getByRole("button", { name: "Add private note (Ctrl+Enter)" }),
   ).toBeVisible();
   await expect(commit).toHaveCount(0);
+});
+
+// The regression this pins is invisible: nothing throws, nothing looks wrong,
+// and the draft is simply gone one scroll later. Clicking an audience segment
+// must NOT move DOM focus off the textarea, because five separate guards in
+// Toolbar.svelte key on `document.activeElement === textareaEl` — including
+// the scroll-dismiss guard, whose dismissPopup() sets `annotationText = ""`.
+// Every sibling control in the popup carries `onmousedown` preventDefault for
+// this reason; the segments were added without it.
+test("choosing an audience keeps focus in the composer and keeps Ctrl+Enter live", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await selectTextStable(editor.locator("p").first());
+  await openAnnotatePopup(page);
+
+  const input = page.locator("[data-testid='popup-annotation-input']");
+  await input.fill("draft that must survive");
+
+  // A real pointer press — `.click()` dispatches the trusted mousedown whose
+  // default action is what moves focus. `.dispatchEvent` would not.
+  await page.locator("[data-testid='popup-note-submit']").click();
+  await expect(page.locator("[data-testid='popup-note-submit']")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+
+  // 1. Focus never left the textarea.
+  await expect(input).toBeFocused();
+
+  // 2. So the scroll-dismiss guard still holds and the draft survives. Without
+  //    the mousedown fix this scroll destroys it.
+  await page.mouse.wheel(0, 400);
+  await expect(input).toHaveValue("draft that must survive");
+
+  // 3. And Ctrl+Enter — which the commit button's aria-label advertises —
+  //    still submits, to the audience the toggle now names.
+  await input.press("ControlOrMeta+Enter");
+  await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  await expect(page.locator("[data-testid^='annotation-card-']").first()).toContainText(
+    "draft that must survive",
+  );
 });
 
 // Split into two single-selection tests: re-selecting the same range within one

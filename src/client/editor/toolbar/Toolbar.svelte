@@ -827,7 +827,17 @@ function submitAsNote() {
   dismissPopup();
 }
 
-function handleTextareaKeyDown(e: KeyboardEvent) {
+// Bound to the textarea AND to all three footer controls, not the textarea
+// alone. A keyboard user can Tab onto an audience segment or the commit button,
+// and while one of those held focus the Ctrl/Cmd+Enter this handler implements
+// was dead — which the commit button's own `(Ctrl+Enter)` aria-label was busy
+// advertising. Buttons are interactive elements, so binding here raises no
+// a11y warning, and focus is exclusive, so it can never double-fire.
+//
+// Plain Enter on a focused button falls through: `resolveAnnotationSubmission`
+// returns null without a modifier, so the native Enter-activates-button
+// behaviour is left alone.
+function handleComposerKeyDown(e: KeyboardEvent) {
   // Plain Enter inserts a newline. Alt+Enter is always private; the primary
   // Ctrl/Cmd+Enter path follows the native-menu intent and otherwise defaults
   // to an outbound comment.
@@ -1022,7 +1032,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
           data-testid="popup-annotation-input"
           aria-label="Annotation text"
           bind:value={annotationText}
-          onkeydown={handleTextareaKeyDown}
+          onkeydown={handleComposerKeyDown}
           placeholder={primaryAnnotationIntent === "note"
             ? "Write a private note..."
             : "Write an instruction for AI..."}
@@ -1060,6 +1070,22 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
                  (Written without a literal testid-attribute spelling on
                  purpose: testid-coverage.test.ts scans this file for that
                  spelling and reports a prose one as an unparseable value.) -->
+            <!-- `onmousedown` preventDefault is REQUIRED, and these two were
+                 the only interactive controls in this popup missing it — every
+                 sibling (the format column, Decorations, the bar swap, each
+                 highlight swatch, Annotate) carries the same line for the same
+                 reason. The old footer buttons got away without it only because
+                 they submitted and unmounted the popup in one gesture; a TOGGLE
+                 leaves focus parked on the button indefinitely, and five things
+                 in this file key on `document.activeElement === textareaEl`:
+                 the scroll-dismiss guard (which calls dismissPopup, and that
+                 sets `annotationText = ""` — so type, pick an audience, scroll
+                 to re-read the passage, and the draft was silently gone), the
+                 resize-glitch draft clear, the "never pull the user out of a
+                 composer they're typing in" guard, the position-jitter skip and
+                 the selection re-capture skip. Keeping focus in the textarea
+                 restores all five at once, and keeps the caret — which is this
+                 composer's only focus indicator — visible while you toggle. -->
             <button
               type="button"
               class="audience-seg"
@@ -1067,6 +1093,8 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
               data-testid="popup-note-submit"
               aria-pressed={primaryAnnotationIntent === "note"}
               title={`Keep private — never sent to ${agentLabel.family}. Alt+Enter always submits privately, whatever this is set to.`}
+              onmousedown={(e) => e.preventDefault()}
+              onkeydown={handleComposerKeyDown}
               onclick={() => (annotationIntent = "note")}
             ><span class="composer-dest composer-dest-user" aria-hidden="true"></span>Self</button>
             <button
@@ -1076,6 +1104,8 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
               data-testid="popup-comment-submit"
               aria-pressed={primaryAnnotationIntent === "comment"}
               title={`Send to ${agentLabel.family} as an outbound comment`}
+              onmousedown={(e) => e.preventDefault()}
+              onkeydown={handleComposerKeyDown}
               onclick={() => (annotationIntent = "comment")}
             ><span class="composer-dest" aria-hidden="true"></span>{agentLabel.family}</button>
           </div>
@@ -1085,14 +1115,25 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
                document save. The key hint is unconditional now — Ctrl/Cmd+Enter
                commits in BOTH audiences, so unlike the old Send button there is
                no state where printing it would claim something untrue. -->
+          <!-- Both accessible names START with the visible label. WCAG 2.5.3
+               (Label in Name, A) requires the visible text to appear IN the
+               accessible name, and `Send to Claude (Ctrl+Enter)` on a button
+               reading "Add" shares no word with it — a speech-input user saying
+               "click Add" gets no match. The outbound branch is the resting
+               default (`defaultAnnotationIntent(null) === "comment"`), so that
+               was the common case, not an edge one. Nothing in CI would have
+               caught it: axe-core's `label-content-name-mismatch` is
+               experimental and off by default, so accessibility.spec.ts is
+               silent on it. Keep "Add" first in any future rewording. -->
           <button
             type="button"
             class="composer-btn"
             data-testid="popup-annotation-submit"
             aria-label={primaryAnnotationIntent === "note"
               ? "Add private note (Ctrl+Enter)"
-              : `Send to ${agentLabel.family} (Ctrl+Enter)`}
+              : `Add — send to ${agentLabel.family} (Ctrl+Enter)`}
             disabled={!annotationTextTrimmed}
+            onkeydown={handleComposerKeyDown}
             onclick={primaryAnnotationIntent === "note" ? submitAsNote : submitAsComment}
           >
             Add
