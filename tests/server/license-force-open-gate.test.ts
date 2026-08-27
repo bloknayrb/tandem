@@ -24,8 +24,9 @@ vi.mock("../../src/server/mcp/license-gate.js", async (importOriginal) => {
   return { ...actual, licenseGate: vi.fn() };
 });
 
+import { removeDoc } from "../../src/server/documents/registry-testing.js";
 import { registerDocumentTools } from "../../src/server/mcp/document.js";
-import { getOpenDocs, removeDoc } from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { licenseGate } from "../../src/server/mcp/license-gate.js";
 import { handleOpen } from "../../src/server/mcp/routes/open.js";
 import { removeDocument } from "../../src/server/yjs/provider.js";

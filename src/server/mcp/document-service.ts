@@ -62,7 +62,7 @@ import {
   saveSession,
   stopAutoSave,
 } from "../session/manager.js";
-import { getOrCreateDocument, setGenerationTokenSource } from "../yjs/provider.js";
+import { getOrCreateDocument } from "../yjs/provider.js";
 
 // --- Multi-document state (ADR-033: moved to src/server/documents/registry.ts) ---
 //
@@ -72,18 +72,18 @@ import { getOrCreateDocument, setGenerationTokenSource } from "../yjs/provider.j
 // Save / auto-save / broadcast / session-restore concerns stay here for now.
 
 import {
-  addDoc,
+  activateDocument,
+  closeDocument,
   docCount,
-  getActiveDocEpoch,
   getActiveDocId,
   getOpenDocs,
-  type OpenDoc,
-  removeDoc,
-  setActiveDocId,
+  updateDocumentWhenReady,
 } from "../documents/registry.js";
 
 export {
-  addDoc,
+  activateDocument,
+  broadcastOpenDocs,
+  closeDocument,
   docCount,
   getActiveDocEpoch,
   getActiveDocId,
@@ -91,9 +91,11 @@ export {
   getOpenDocs,
   hasDoc,
   type OpenDoc,
-  removeDoc,
+  openDocument,
+  openDocumentWhenReady,
   requireDocument,
-  setActiveDocId,
+  toDocListEntry,
+  updateDocumentWhenReady,
 } from "../documents/registry.js";
 
 /** Internal alias for the registry's view of open docs — used by closures below. */
@@ -814,61 +816,67 @@ export async function saveDocumentAsToDisk(
 
     // Promote in place — keep the Hocuspocus room ID, swap source/filePath/format.
     const fileName = path.basename(resolved);
-    addDoc(docId, {
-      id: docId,
-      filePath: resolved,
-      format,
-      readOnly: false,
-      source: "file",
-    });
-
-    // Refresh meta + dirty-tracking baseline. `withFileSync` is the right
-    // origin per ADR-031 — this is post-save bookkeeping (the file-writer
-    // echo), not user-intent (`withMcp`) and not setup (`withInternal`).
-    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    const now = Date.now();
-    withFileSync(doc, () => {
-      meta.set("format", format);
-      meta.set("fileName", fileName);
-      meta.set(Y_MAP_SAVED_AT_VERSION, now);
-    });
-
-    // Re-key the durable annotation store to the promoted path. Scratchpads
-    // open WITHOUT a file-sync context (openScratchpad skips wireAnnotationStore
-    // — ephemeral docs shouldn't orphan JSON on close). Once promoted to a real
-    // file, annotations SHOULD persist under `docHash(resolved)`, so wire the
-    // store now. wireAnnotationStore runs loadAndMerge (no prior on-disk state
-    // for a fresh path) and registers the file-sync context keyed to the new
-    // docHash, so annotations created post-promote serialize under the real
-    // path's key and reload on reopen-by-path. Best-effort: a wiring failure
-    // must not fail the save (the disk write is the contract), and the helper
-    // itself swallows + surfaces its own errors via the notification bus.
+    // The registry write cannot be deferred to where the broadcast used to sit:
+    // `markClean` below reads this entry's `source` via `isDirtyMirrorEligible`,
+    // and a stale "upload" would silently suppress the dirty mirror for a
+    // now-real file. So the write stays here and the PUBLISH moves to the end of
+    // the prepare block — otherwise clients would see the promoted identity
+    // (`source: "file"` is what gates the rename affordance) while the annotation
+    // store and channel observers are still wired for an upload doc.
     //
-    // Note (#827 review, flush Low): wireAnnotationStore → setFileSyncContext
-    // disposes any prior file-sync context with phase "close" WITHOUT flushing
-    // its debounced writes. For a SECOND Save-As on the same doc that would
-    // drop unflushed annotations — but the `source === "upload"` gate above
-    // closes that window: the first promote flips `source` to "file", so a
-    // second Save-As is rejected with NOT_PROMOTABLE before reaching here. The
-    // first promote is safe because a scratchpad/upload doc has no prior
-    // file-sync context to dispose (openScratchpad skips wireAnnotationStore).
-    const { wireAnnotationStore } = await import("./file-opener.js");
-    await wireAnnotationStore(docId, doc, resolved);
+    // "After the store is wired" means after the ATTEMPT: `wireAnnotationStore`
+    // catches its own failures and returns `{wired:false}` rather than throwing,
+    // which is what keeps a promote non-fatal. On that path the file is real and
+    // its annotations are session-only, and the user learns it from the
+    // notification the helper pushes — not from anything published here.
+    await updateDocumentWhenReady(
+      { id: docId, filePath: resolved, format, readOnly: false, source: "file" },
+      async () => {
+        // Refresh meta + dirty-tracking baseline. `withFileSync` is the right
+        // origin per ADR-031 — this is post-save bookkeeping (the file-writer
+        // echo), not user-intent (`withMcp`) and not setup (`withInternal`).
+        const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+        const now = Date.now();
+        withFileSync(doc, () => {
+          meta.set("format", format);
+          meta.set("fileName", fileName);
+          meta.set(Y_MAP_SAVED_AT_VERSION, now);
+        });
 
-    // The doc is now a real file — its channel observers were attached as an
-    // upload doc (uploadDoc: true → annotation/reply events suppressed). Re-
-    // attach as a non-upload doc so post-promote annotations reach Claude.
-    attachObservers(docId, doc);
+        // Re-key the durable annotation store to the promoted path. Scratchpads
+        // open WITHOUT a file-sync context (openScratchpad skips wireAnnotationStore
+        // — ephemeral docs shouldn't orphan JSON on close). Once promoted to a real
+        // file, annotations SHOULD persist under `docHash(resolved)`, so wire the
+        // store now. wireAnnotationStore runs loadAndMerge (no prior on-disk state
+        // for a fresh path) and registers the file-sync context keyed to the new
+        // docHash, so annotations created post-promote serialize under the real
+        // path's key and reload on reopen-by-path. Best-effort: a wiring failure
+        // must not fail the save (the disk write is the contract), and the helper
+        // itself swallows + surfaces its own errors via the notification bus.
+        //
+        // Note (#827 review, flush Low): wireAnnotationStore → setFileSyncContext
+        // disposes any prior file-sync context with phase "close" WITHOUT flushing
+        // its debounced writes. For a SECOND Save-As on the same doc that would
+        // drop unflushed annotations — but the `source === "upload"` gate above
+        // closes that window: the first promote flips `source` to "file", so a
+        // second Save-As is rejected with NOT_PROMOTABLE before reaching here. The
+        // first promote is safe because a scratchpad/upload doc has no prior
+        // file-sync context to dispose (openScratchpad skips wireAnnotationStore).
+        const { wireAnnotationStore } = await import("./file-opener.js");
+        await wireAnnotationStore(docId, doc, resolved);
 
-    // The promoted doc's body was just written to disk, so its dirty baseline
-    // is the current content — clear the flag so the next autosave pass doesn't
-    // immediately re-write it (#851). attachObservers re-registered the body
-    // observer above (preserving the version counter), so mark clean here.
-    markClean(docId);
+        // The doc is now a real file — its channel observers were attached as an
+        // upload doc (uploadDoc: true → annotation/reply events suppressed). Re-
+        // attach as a non-upload doc so post-promote annotations reach Claude.
+        attachObservers(docId, doc);
 
-    // Broadcast the new openDocuments list so every connected tab bar reflects
-    // the new basename + format.
-    broadcastOpenDocs();
+        // The promoted doc's body was just written to disk, so its dirty baseline
+        // is the current content — clear the flag so the next autosave pass doesn't
+        // immediately re-write it (#851). attachObservers re-registered the body
+        // observer above (preserving the version counter), so mark clean here.
+        markClean(docId);
+      },
+    );
 
     // Emit a synthetic `document:opened` so Claude can read/edit the now-real
     // file by path. Because promote keeps the same documentId, the ctrl-meta
@@ -944,57 +952,6 @@ export async function autoSaveAllToDisk(): Promise<void> {
       }
     } catch (err) {
       console.error("[AutoSave] Unexpected error saving %s:", state.filePath, err);
-    }
-  }
-}
-
-/** Build the document list entry for a single OpenDoc */
-export function toDocListEntry(d: OpenDoc) {
-  return {
-    id: d.id,
-    filePath: d.filePath,
-    fileName: path.basename(d.filePath),
-    format: d.format,
-    readOnly: d.readOnly,
-    // `source` distinguishes on-disk files ("file") from ephemeral
-    // scratchpads/uploads ("upload"). The client uses it to gate the rename
-    // affordance (only "file" docs are renamable); see #1017.
-    source: d.source,
-  };
-}
-
-/** Broadcast the open documents list to connected clients.
- *  Writes to both the bootstrap room (CTRL_ROOM) so new clients discover
- *  docs, and to the active document's room so tab-switching clients stay in sync. */
-export function broadcastOpenDocs(): void {
-  const docList = Array.from(openDocs.values()).map(toDocListEntry);
-  const id = getActiveDocId();
-  const epoch = getActiveDocEpoch();
-
-  try {
-    const ctrl = getOrCreateDocument(CTRL_ROOM);
-    const ctrlMeta = ctrl.getMap(Y_MAP_DOCUMENT_META);
-    withInternal(ctrl, () => {
-      ctrlMeta.set(Y_MAP_OPEN_DOCUMENTS, docList);
-      ctrlMeta.set(Y_MAP_ACTIVE_DOCUMENT_ID, id);
-      ctrlMeta.set(Y_MAP_ACTIVE_DOCUMENT_EPOCH, epoch);
-    });
-  } catch (err) {
-    console.error("[Tandem] broadcastOpenDocs: failed to update CTRL_ROOM:", err);
-  }
-
-  // Update ALL open doc rooms so no per-doc Y.Doc ever has a stale list.
-  for (const [docId] of openDocs) {
-    try {
-      const ydoc = getOrCreateDocument(docId);
-      const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
-      withInternal(ydoc, () => {
-        meta.set(Y_MAP_OPEN_DOCUMENTS, docList);
-        meta.set(Y_MAP_ACTIVE_DOCUMENT_ID, id);
-        meta.set(Y_MAP_ACTIVE_DOCUMENT_EPOCH, epoch);
-      });
-    } catch (err) {
-      console.error("[Tandem] broadcastOpenDocs: failed to update doc %s:", docId, err);
     }
   }
 }
@@ -1382,25 +1339,48 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       // edit arriving within the TTL.
       wireFileWatcher(docId, newPath, format);
 
-      // Update the registry entry: same id/room, new path. addDoc overwrites by id.
-      addDoc(docId, { id: docId, filePath: newPath, format, readOnly: false, source: "file" });
-
-      // Update the tab's fileName + savedAt baseline. withFileSync is the right
-      // origin per ADR-031 (post-rename bookkeeping — a file-writer echo, not user
-      // intent or setup). fs.rename preserves bytes + mtime, so set savedAt to the
-      // real mtime and DO NOT markClean: unsaved edits must stay dirty so the next
-      // autosave writes them to newPath.
-      const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      // Read the post-rename mtime BEFORE touching the registry, so the block
+      // below holds no `await` at all. Two things depend on that: the publish
+      // then cannot land between the registry write and the document's own
+      // `fileName` (a broadcast arriving in that gap reverts an optimistically
+      // renamed tab label, because the client treats the server entry as
+      // authoritative), and this filesystem call stays a plain statement of the
+      // enclosing function rather than a sink inside a nested closure.
+      //
       // Safe FS sink (CodeQL js/path-injection): `newPath` is the validated
       // rename target (see the Phase-0 barriers above) — not raw user input.
       // An alert here is a false positive; dismiss per issue #1042.
       const stat = await fs.stat(newPath).catch(() => null);
-      withFileSync(doc, () => {
-        meta.set("fileName", fileName);
-        if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
-      });
 
-      broadcastOpenDocs();
+      // Update the registry entry, then publish the new basename once the
+      // document's own meta agrees with it: same id/room, new path, overwritten
+      // by id. Activation is untouched — a rename must not steal focus. Before
+      // ADR-033 the broadcast was this function's last statement.
+      await updateDocumentWhenReady(
+        { id: docId, filePath: newPath, format, readOnly: false, source: "file" },
+        () => {
+          // Update the tab's fileName + savedAt baseline. withFileSync is the right
+          // origin per ADR-031 (post-rename bookkeeping — a file-writer echo, not user
+          // intent or setup). fs.rename preserves bytes + mtime, so set savedAt to the
+          // real mtime and DO NOT markClean: unsaved edits must stay dirty so the next
+          // autosave writes them to newPath.
+          //
+          // Caught rather than thrown, deliberately: `updateDocumentWhenReady`
+          // skips its broadcast on a throw, and rename is the caller that must
+          // NOT skip. `fs.rename` has already committed, so the registry's new
+          // path is the truth — clients left showing the old label would be
+          // permanently wrong, with no later broadcast to correct them.
+          try {
+            const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+            withFileSync(doc, () => {
+              meta.set("fileName", fileName);
+              if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
+            });
+          } catch (err) {
+            console.error("[Rename] tab metadata update failed for %s:", docId, err);
+          }
+        },
+      );
     } catch (err) {
       console.error("[Rename] post-commit bookkeeping failed for %s:", docId, err);
     }
@@ -1454,7 +1434,7 @@ export async function closeDocumentById(
   // mid-flight at close time; if `readPendingConflict` ran first and the
   // debounce delivered a NEW conflict in the gap before `unwatchFile`, that
   // flag would be written to the just-evicted Y.Doc and immediately orphaned
-  // — `removeDoc` drops the doc from the registry right after, so nothing
+  // — `closeDocument` drops the doc from the registry right after, so nothing
   // would ever read or carry it into the session. Unwatching first closes
   // that window: any debounce callback still in flight finds `getDocument(id)`
   // returns the doc (harmless — `readPendingConflict` below already captured
@@ -1466,7 +1446,7 @@ export async function closeDocumentById(
   // (#1238): every save path is blocked while one is pending, so the edits may
   // never have reached disk, and the teardown below would otherwise delete the
   // only copy of them. Write the session NOW — before `clearDirtyState` and
-  // `removeDoc` take away the state it needs — so the preserved file actually
+  // `closeDocument` take away the state it needs — so the preserved file actually
   // contains the edits rather than whatever the last periodic write held.
   //
   // Normally closing really does discard: a dirty .md/.txt autosaves within
@@ -1513,7 +1493,10 @@ export async function closeDocumentById(
   // Drop dirty-tracking state + detach its body observer (#851).
   clearDirtyState(id);
 
-  removeDoc(id);
+  // The registry's slice of the close: untrack, reassign the active id when the
+  // closed doc held it, publish once. The store flush, file-sync context and
+  // dirty teardown above stay here — their ordering is load-bearing.
+  closeDocument(id);
 
   // Delete the session file so this document doesn't reopen on restart —
   // unless the block above just wrote it as the surviving copy of unpersisted
@@ -1532,16 +1515,9 @@ export async function closeDocumentById(
     }
   }
 
-  if (getActiveDocId() === id) {
-    const remaining = Array.from(openDocs.keys());
-    setActiveDocId(remaining.length > 0 ? remaining[0] : null);
-  }
-
   if (docCount() === 0) {
     stopAutoSave();
   }
-
-  broadcastOpenDocs();
 
   return { success: true, closedPath, activeDocumentId: getActiveDocId() };
 }
@@ -1612,10 +1588,9 @@ export function getGenerationId(): string | null {
  */
 export function writeGenerationId(): void {
   currentGenerationId = randomUUID();
-  // Arm the Hocuspocus onAuthenticate gate (callback registration — provider
-  // must not import document-service back). Runs before Hocuspocus binds in
-  // both transports (index.ts boot order), so no connection ever races it.
-  setGenerationTokenSource(getGenerationId);
+  // The Hocuspocus onAuthenticate gate reads this through the installed
+  // lifecycle's `expectedGenerationToken()` method, so it needs no arming call
+  // here and no longer depends on minting happening before installation.
   console.error(`[Tandem] Server generationId: ${currentGenerationId}`);
 }
 
@@ -1675,8 +1650,7 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
 
   // Restore the previously active document if it was successfully reopened
   if (previousActiveDocId && openDocs.has(previousActiveDocId)) {
-    setActiveDocId(previousActiveDocId);
-    broadcastOpenDocs();
+    activateDocument(previousActiveDocId);
   }
 
   if (restoredCount > 0) {

@@ -1,11 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { extractText, populateYDoc } from "../../src/server/mcp/document.js";
-import {
-  addDoc,
-  getOpenDocs,
-  removeDoc,
-  setActiveDocId,
-} from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import {
   countOccurrences,
   extractContext,

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { z } from "zod";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   attachObservers,
   detachObservers,
@@ -19,12 +20,7 @@ import {
   safeSlice,
 } from "../../src/server/mcp/awareness.js";
 import { extractText, populateYDoc } from "../../src/server/mcp/document.js";
-import {
-  addDoc,
-  getOpenDocs,
-  removeDoc,
-  setActiveDocId,
-} from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
