@@ -25,12 +25,32 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { rustSourceDefining } from "../docs/rust-sources.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 
 function read(rel: string): string {
   return readFileSync(path.join(repoRoot, rel), "utf8");
 }
+
+/**
+ * The module holding the Cowork commands, **found by construct, not named**.
+ *
+ * This read `src-tauri/src/lib.rs` by path until Unit 11d moved the commands
+ * into `cowork_commands.rs`. A hardcoded path is the shape that goes quiet
+ * rather than red across the Unit 11 split — every `indexOf`/`matchAll` below
+ * would simply find nothing, and only their explicit not-found assertions stand
+ * between that and a silent pass. `firewall.rs` and `single_flight.rs` are
+ * still read by name below because nothing is moving them and their claims are
+ * about those modules specifically.
+ *
+ * The visibility is left open in the pattern: Unit 11d widened the commands to
+ * `pub(crate)` so `generate_handler!` in `lib.rs` can still name them.
+ */
+const COWORK_COMMANDS = rustSourceDefining(
+  /#\[tauri::command\]\s*(?:pub(?:\(crate\))?\s+)?async fn cowork_detect_vethernet_subnet\s*\(/,
+  "cowork_detect_vethernet_subnet",
+);
 
 /**
  * The source of a Rust fn: from its signature to its brace-balanced end.
@@ -79,10 +99,28 @@ function rustFnBody(src: string, signature: string): string {
 }
 
 describe("the Cowork subnet probe stays off the main thread (#1371)", () => {
-  const lib = read("src-tauri/src/lib.rs");
+  const lib = COWORK_COMMANDS.text;
+
+  it("scans a real Rust module, found by search rather than named here", () => {
+    // The control on the locator. Renaming the module must stay GREEN — that is
+    // what finding it by construct buys. What must not stay green is the module
+    // ceasing to hold the other two subjects: `cowork_toggle_integration` and
+    // `detect_subnet_advisory_blocking` are read out of THIS file by the budget
+    // pins below, so a future unit that splits them apart has to re-point them
+    // rather than discover it through a thrown brace-scanner error.
+    for (const sig of ["fn cowork_toggle_integration(", "fn detect_subnet_advisory_blocking("]) {
+      expect(
+        COWORK_COMMANDS.code,
+        `${sig} is no longer in the module located by cowork_detect_vethernet_subnet — ` +
+          "the budget pins below read it from there",
+      ).toContain(sig);
+    }
+  });
 
   it("declares the command as a single ungated `async fn`", () => {
-    const decls = [...lib.matchAll(/^async fn cowork_detect_vethernet_subnet\(/gm)];
+    const decls = [
+      ...lib.matchAll(/^(?:pub(?:\(crate\))?\s+)?async fn cowork_detect_vethernet_subnet\(/gm),
+    ];
     expect(
       decls.length,
       "expected exactly one `async fn cowork_detect_vethernet_subnet`. Zero means it reverted to a sync command, which Tauri dispatches inline on the main thread; two means it was re-split into cfg-gated arms, which puts the fix back where no non-Windows build type-checks it",
@@ -231,7 +269,7 @@ describe("every external process on the Cowork firewall path is bounded (#1371)"
   });
 
   it("passes the generous budget on the enable path and the fast one on the probe", () => {
-    const lib = read("src-tauri/src/lib.rs");
+    const lib = COWORK_COMMANDS.text;
     const toggle = rustFnBody(lib, "fn cowork_toggle_integration(");
     expect(
       toggle,
