@@ -44,14 +44,10 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
   suppressNextChange: vi.fn(),
 }));
 
+import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { summarizeMammothMessages } from "../../src/server/file-io/docx.js";
 import { watchFile } from "../../src/server/file-watcher.js";
-import {
-  getOpenDocs,
-  removeDoc,
-  saveDocumentToDisk,
-  setActiveDocId,
-} from "../../src/server/mcp/document-service.js";
+import { getOpenDocs, saveDocumentToDisk } from "../../src/server/mcp/document-service.js";
 import { openFileByPath } from "../../src/server/mcp/file-opener.js";
 import { resetForTesting as resetNotifications } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";

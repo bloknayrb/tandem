@@ -53,8 +53,9 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
   return { ...actual, pushNotification: vi.fn() };
 });
 
+import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { docIdFromPath } from "../../src/server/mcp/document-model.js";
-import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { openFileByPath } from "../../src/server/mcp/file-opener.js";
 import { anchoredRange, refreshRange } from "../../src/server/positions.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";

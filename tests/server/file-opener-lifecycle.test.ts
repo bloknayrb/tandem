@@ -34,9 +34,10 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
   watchFile: vi.fn(),
 }));
 
+import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import * as fileSyncRegistryModule from "../../src/server/events/file-sync-registry.js";
 import { watchFile } from "../../src/server/file-watcher.js";
-import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { openFileByPath } from "../../src/server/mcp/file-opener.js";
 import { saveSession } from "../../src/server/session/manager.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";

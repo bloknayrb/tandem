@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   getOrCreateXmlText,
   getOutline,
@@ -9,13 +10,10 @@ import {
   verifyAndResolveRange,
 } from "../../src/server/mcp/document.js";
 import {
-  addDoc,
   docCount,
   getCurrentDoc,
   getOpenDocs,
   hasDoc,
-  removeDoc,
-  setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { off } from "../helpers/positions.js";

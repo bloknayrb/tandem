@@ -57,6 +57,7 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 
 import type { Request, Response } from "express";
 import { resetForTesting as resetDirtyState } from "../../src/server/documents/dirty.js";
+import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { suppressNextChange, watchFile } from "../../src/server/file-watcher.js";
 import { registerDocumentTools } from "../../src/server/mcp/document.js";
@@ -66,11 +67,9 @@ import {
   EXTERNAL_CONFLICT_SKIP_REASON,
   getOpenDocs,
   hasDoc,
-  removeDoc,
   renameDocument,
   saveCurrentSession,
   saveDocumentToDisk,
-  setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
 import {
   openFileByPath,

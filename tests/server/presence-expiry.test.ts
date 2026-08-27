@@ -16,7 +16,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { addDoc, getOpenDocs, removeDoc } from "../../src/server/mcp/document-service.js";
+import { addDoc, removeDoc } from "../../src/server/documents/registry-testing.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import {
   clearAllClaudePresence,
   isPresenceSweepArmed,
