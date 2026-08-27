@@ -28,8 +28,13 @@
 //! the Rust/TypeScript enum parity -- are pinned from outside by
 //! `tests/docs/native-theme-claims.test.ts`, which reads this file as text.
 //! None of them is visible to `cargo check` or `npm run typecheck`.
-
-use crate::win_app_mode;
+//!
+//! **The two `crate::win_app_mode::` paths below are fully qualified on purpose.**
+//! `mod win_app_mode;` in `lib.rs` is itself `#[cfg(target_os = "windows")]`, so
+//! on macOS and Linux the module does not exist at all -- a top-level `use crate::win_app_mode;`
+//! is an unconditional E0432 there even though both call sites are Windows-gated.
+//! Hoisting them into a `use` is the obvious tidy and it is what CI's macOS leg
+//! rejected; a Windows `cargo test` cannot see it.
 
 /// Reads the native/OS theme via `window.theme()` — not a direct registry
 /// read; Tauri/tao resolve `AppsUseLightTheme` from
@@ -380,7 +385,7 @@ fn apply_app_mode(
             // cfg-stripped on the hosts it is developed on, so a transposition between
             // two arms would compile on Windows, pass CI and mislabel the wire forever
             // (#1368).
-            let outcome = win_app_mode::set_preferred_app_mode(mode);
+            let outcome = crate::win_app_mode::set_preferred_app_mode(mode);
             match outcome {
                 AppModeOutcome::Applied => {}
                 AppModeOutcome::AppliedWithoutFlush => log::warn!(
@@ -436,7 +441,7 @@ fn apply_app_mode(
 
 #[cfg(target_os = "windows")]
 fn native_host_high_contrast() -> HighContrast {
-    win_app_mode::probe_high_contrast()
+    crate::win_app_mode::probe_high_contrast()
 }
 
 /// Non-Windows hosts have no equivalent conflict — see `native_theme_action`.
