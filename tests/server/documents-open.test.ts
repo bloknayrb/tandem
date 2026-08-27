@@ -118,9 +118,13 @@ describe("the redirect invariant (Unit 6)", () => {
       ];
       for (const m of matches) {
         for (const spec of m[1].split(",")) {
+          // Both rename spellings, because they are different syntax for the
+          // same evasion: `import { x as y }` uses `as`, and destructuring a
+          // dynamic import — `const { x: y } = await import(...)` — uses `:`.
+          // Splitting on `as` alone let the second one through.
           const name = spec
             .trim()
-            .split(/\s+as\s+/)[0]
+            .split(/[\s:]+/)[0]
             ?.trim();
           if (ENTRIES.includes(name)) {
             // Separator-normalized: the same source tree must not report a
