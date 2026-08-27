@@ -1190,7 +1190,8 @@ vi.mock("../../src/server/yjs/provider.js", () => ({
   getDocument: () => undefined,
 }));
 
-vi.mock("../../src/server/mcp/document-service.js", () => ({
+vi.mock("../../src/server/documents/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/server/documents/registry.js")>()),
   getOpenDocs: () => new Map(),
 }));
 

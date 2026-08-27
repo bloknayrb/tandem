@@ -8,7 +8,7 @@ import {
 } from "../../../shared/constants.js";
 import { shouldSkipChannel } from "../../../shared/origins.js";
 import { isUploadPath } from "../../../shared/paths.js";
-import { getOpenDocs } from "../../mcp/document-service.js";
+import { getOpenDocs } from "../../documents/registry.js";
 import type { DocumentOpenedPayload, TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
 
