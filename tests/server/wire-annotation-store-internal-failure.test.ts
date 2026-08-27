@@ -96,7 +96,7 @@ const { resetForTesting: syncReset } = await import("../../src/server/annotation
 const { clearFileSyncContext, resetForTesting: queueReset } = await import(
   "../../src/server/events/queue.js"
 );
-const { wireAnnotationStore } = await import("../../src/server/mcp/file-opener.js");
+const { wireAnnotationStore } = await import("../../src/server/documents/annotation-wiring.js");
 const { pushNotification } = await import("../../src/server/notifications.js");
 
 let docDir = "";

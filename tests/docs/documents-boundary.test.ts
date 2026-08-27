@@ -279,6 +279,13 @@ const FAN_IN = [
   // the point of the split: leaving `prepareContent`/`clearDocMaps` behind in
   // file-opener.ts would have made `documents/` import back into `mcp/`.
   "server/mcp/file-opener.ts -> server/documents/populate.ts (value) x1",
+  "server/mcp/file-opener.ts -> server/documents/annotation-wiring.ts (value) x1",
+  "server/mcp/file-opener.ts -> server/documents/conflict.ts (value) x1",
+  // document-service reaching in is the point of the conflict split: it read
+  // `Y_MAP_EXTERNAL_CONFLICT` through a helper it owned, so the watcher had to
+  // import document-service to ask a question about a map it writes itself.
+  "server/mcp/document-service.ts -> server/documents/annotation-wiring.ts (value) x1",
+  "server/mcp/document-service.ts -> server/documents/conflict.ts (value) x1",
   "server/mcp/presence-expiry.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/backups.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-raw.ts -> server/documents/registry.ts (value) x1",
@@ -309,6 +316,19 @@ const FAN_OUT = [
   "server/documents/populate.ts -> shared/origins.ts (value) x1",
   "server/documents/populate.ts -> shared/types.ts (type) x1",
   "server/documents/populate.ts -> shared/utils.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/annotations/doc-hash.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/annotations/rename-recovery.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/annotations/store.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/annotations/sync.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/events/queue.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/notifications.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> shared/utils.ts (value) x1",
+  "server/documents/conflict.ts -> server/notifications.ts (value) x1",
+  "server/documents/conflict.ts -> server/session/manager.ts (value) x1",
+  "server/documents/conflict.ts -> shared/constants.ts (value) x1",
+  "server/documents/conflict.ts -> shared/origins.ts (value) x1",
+  "server/documents/conflict.ts -> shared/types.ts (type) x1",
+  "server/documents/conflict.ts -> shared/utils.ts (value) x1",
   "server/documents/open.ts -> server/mcp/file-opener.ts (value) x1",
   "server/documents/registry.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/registry.ts -> shared/constants.ts (value) x1",
@@ -525,7 +545,6 @@ describe("runtime export surfaces", () => {
         "reloadDocumentFromMarkdown",
         "resolveExternalConflict",
         "restoreDocumentFromBackup",
-        "wireAnnotationStore",
         "wireFileWatcher",
       ].sort(),
     );
