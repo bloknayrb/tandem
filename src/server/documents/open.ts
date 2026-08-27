@@ -16,10 +16,27 @@
  * `openFromRestore` is the one that changes the shape of the module graph.
  * `restoreOpenDocuments` used to reach `mcp/file-opener.ts` through a dynamic
  * `import()` whose only job was breaking the cycle that file-opener's static
- * import of document-service created. With the pipeline living below both, that
- * import is static and the cycle is gone rather than deferred — which is the
- * whole point of the unit, and why the last three dynamic imports in
+ * import of document-service created. With the pipeline living below both,
+ * that import is static — which is why the last three dynamic imports in
  * document-service disappeared alongside it.
+ *
+ * **But do not read that as "acyclic", because it is not.** The specific
+ * `file-opener.ts ↔ document-service.ts` pair is gone; a three-module cycle
+ * replaced it: `open.ts → autosave.ts → mcp/document-service.ts → open.ts`.
+ * It is inert at runtime — no module in it touches a cross-cycle binding at
+ * top level, every use is inside an `async function` invoked after the graph
+ * has initialized — but inert is not absent, and the next person to add a
+ * top-level `const` here is the one who finds out. Its load-bearing edge is
+ * `autosave.ts`'s import of `autoSaveAllToDisk`; moving that function out of
+ * document-service is what would actually break it, and that is Unit 7c/8's
+ * to do, not this unit's.
+ *
+ * `tests/docs/documents-boundary.test.ts` cannot see this cycle and is not
+ * meant to: its acyclicity check is deliberately scoped to cycles contained
+ * *entirely within* `documents/`, and this one routes through `mcp/`. What
+ * that suite does hold is the edge itself, written down in FAN_OUT as the one
+ * `documents/ → document-service` import — so the cycle is visible as its
+ * parts even though nothing calls it a cycle.
  *
  * **What is still in `mcp/file-opener.ts`, and why.** Three entries remain,
  * and they are the reload family, not the open family:
@@ -27,9 +44,10 @@
  * `restoreDocumentFromBackup` (`routes/backups.ts`, `mcp/docx-apply.ts`) and
  * `resolveExternalConflict` (`routes/external-conflict.ts`). Each replaces the
  * content of an ALREADY-open document; none of them opens one. Unit 7c decides
- * where they land. Until then `tests/server/documents-open.test.ts` names those
- * three call sites, so a fourth reaching back into file-opener is a test
- * failure rather than a quiet regrowth.
+ * where they land. Until then `tests/server/documents-open.test.ts` names the
+ * four call sites that may reach them (`restoreDocumentFromBackup` has two),
+ * so a fifth reaching back into file-opener is a test failure rather than a
+ * quiet regrowth.
  *
  * Two corrections to what this header used to claim, both load-bearing enough
  * that a reader acting on them would be wrong:
@@ -69,6 +87,7 @@ import {
   loadSession,
   narrowConflict,
   restoreYDoc,
+  type SessionFileEntry,
   sessionModelIsStale,
   sourceFileChanged,
 } from "../session/manager.js";
@@ -749,11 +768,24 @@ function buildResult(
  * `false` and a read-only tab (View Changelog) comes back writable — a bug that
  * has been shipped once already (#1591). Naming the restore path is what gives
  * that flag somewhere to live.
+ *
+ * The parameter is a `Pick` of `SessionFileEntry` rather than a hand-written
+ * `{ filePath, readOnly? }`, so the two fields have one definition instead of
+ * two that must be kept in agreement by eye — if `readOnly` ever stops being a
+ * bare boolean, this follows automatically. `lastAccessed` stays out because
+ * restore has no business receiving it.
+ *
+ * Be clear about what that does NOT buy, because it is the half worth knowing:
+ * a `Pick` selects named fields, so a THIRD field added to `SessionFileEntry`
+ * that restore must honour still will not force this signature to widen. The
+ * type makes the existing fields consistent; it does not make forgetting a new
+ * one a compile error. #1591 was that class of bug, and what actually guards
+ * against a repeat is this entry point existing at all — one named place where
+ * the question "what does restore have to carry?" is asked.
  */
-export async function openFromRestore(entry: {
-  filePath: string;
-  readOnly?: boolean;
-}): Promise<OpenFileResult> {
+export async function openFromRestore(
+  entry: Pick<SessionFileEntry, "filePath" | "readOnly">,
+): Promise<OpenFileResult> {
   return await openFromDisk(entry.filePath, { readOnly: entry.readOnly });
 }
 

@@ -14,8 +14,9 @@
  *     (`openFromDisk`'s outcomes are covered in the characterization suite,
  *     which drives every entry point through this same seam.)
  *   - **The redirect invariant.** No module under `src/` may reach
- *     `mcp/file-opener.ts` outside a written-down exception list — five modules
- *     today, each with the symbols it is allowed to take. That is Unit 6's
+ *     `mcp/file-opener.ts` outside a written-down exception list — four
+ *     modules today (Unit 7a removed the fifth), each with the symbols it may
+ *     take. That is Unit 6's
  *     actual deliverable, and nothing else observes it: a new route importing
  *     `openFromDisk` would work perfectly and quietly put the seam back to
  *     zero production consumers.
@@ -88,7 +89,8 @@ describe("the redirect invariant (Unit 6)", () => {
    * Derived from the module's real export surface, not written down.
    *
    * This was a hand-written list of the three open entry points, and four of
-   * the five SANCTIONED rows below were consequently zero-of-zero: their
+   * the five SANCTIONED rows that existed then were consequently zero-of-zero
+   * (Unit 7a has since removed the fifth, `document-service.ts`): their
    * `allowed` lists name reload-family symbols (`restoreDocumentFromBackup`,
    * `reloadDocumentFromMarkdown`, `resolveExternalConflict`) that the
    * vocabulary could not see, so those rows constrained nothing and could
@@ -138,8 +140,10 @@ describe("the redirect invariant (Unit 6)", () => {
     // file-opener through three dynamic imports whose only purpose was
     // breaking the cycle its own static import created; with the pipeline,
     // annotation wiring and the watcher all living below both modules, every
-    // one of them is a static import of `documents/` and the cycle is gone.
-    // A row reappearing here is that cycle regrowing.
+    // one of them is a static import of `documents/`, so that PAIR of modules
+    // no longer forms a cycle. (A three-module one through `documents/autosave.ts`
+    // does remain — see the `documents/open.ts` header. This row is not what
+    // would catch it.) A row reappearing here is the old cycle regrowing.
   };
 
   const srcRoot = path.resolve(fileURLToPath(import.meta.url), "../../../src");
@@ -218,7 +222,7 @@ describe("the redirect invariant (Unit 6)", () => {
 
   it("sanctioned modules take only the symbols they are sanctioned for", async () => {
     // The file-level gate above is what syntax cannot evade. This narrows what
-    // the five survivors may do with their access — including through a
+    // the four survivors may do with their access — including through a
     // namespace alias, since `fo.openFromDisk` still spells the bare name.
     for (const [relPath, allowed] of Object.entries(SANCTIONED)) {
       const body = stripCommentsAndStrings(await fs.readFile(path.join(srcRoot, relPath), "utf8"));

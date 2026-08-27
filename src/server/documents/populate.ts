@@ -150,7 +150,7 @@ function notifyIssue(issue: LoadIssue, ctx: PopulateContext): void {
  * populateDocFromContent — reads the buffer once (the caller has already
  * validated `resolved` via resolveAndValidatePath: size limit, extension
  * allowlist, UNC rejection) and delegates the parse + transact + cleanup logic
- * to the shared helper used by openFileFromContent.
+ * to the shared helper used by openFromUpload.
  */
 export async function loadContentIntoDoc(
   doc: Y.Doc,
@@ -166,7 +166,7 @@ export async function loadContentIntoDoc(
 }
 
 /**
- * Shared populate path for openFileByPath (disk) and openFileFromContent
+ * Shared populate path for openFromDisk (disk) and openFromUpload
  * (upload). Async I/O and parsing happen OUTSIDE the transaction; the Y.Doc
  * mutation runs INSIDE one `withInternal` transact so mdastToYDoc's many tiny
  * inserts arrive as one update. The durable-annotation sync observer and the

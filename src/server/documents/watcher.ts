@@ -152,7 +152,7 @@ export async function reloadFromDisk(
       // Any apply-time issues are dropped here — reload is a recovery path,
       // not a user-initiated open; surfacing inject failures via toast on
       // every file-watcher reload would be noisy. The original surface in
-      // openFileByPath catches inject failures during the initial open.
+      // openFromDisk catches inject failures during the initial open.
       reloadAdapter.apply(doc, reloadPrepared, { fileName: path.basename(filePath) });
 
       // The body now mirrors the externally-written disk content. Refresh the

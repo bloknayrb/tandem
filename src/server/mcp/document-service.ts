@@ -364,7 +364,7 @@ export async function saveDocumentToDisk(
 
     // Guard against overwriting external modifications.
     // Safe FS sink (CodeQL js/path-injection): `docState.filePath` is the
-    // registry's server-managed path (only ever set by openFileByPath /
+    // registry's server-managed path (only ever set by openFromDisk /
     // resolveAndValidatePath / a validated rename or save-as) — never raw user
     // input. An alert here is a false positive; dismiss per issue #1042.
     try {
@@ -1100,7 +1100,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
 
     // --- Phase 2: commit (point of no return) ---
     // Safe FS sink (CodeQL js/path-injection): `oldPath` is the registry's
-    // server-managed `docState.filePath` (only ever set by openFileByPath /
+    // server-managed `docState.filePath` (only ever set by openFromDisk /
     // resolveAndValidatePath); `newPath` was built from path.dirname(oldPath) +
     // path.basename(newName) and then cleared validateRenameFilename, the inline
     // separator/null-byte guard, rejectUnsafeWindowsPrefix, and assertPathSafe

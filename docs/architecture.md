@@ -245,7 +245,7 @@ Chat state persists across server restarts via the same `saveCtrlSession` / `res
 
 ### Session Auto-Restore on Startup
 
-On server startup, `listSessionFilePaths()` scans the session directory and `restoreOpenDocuments()` reopens all previously-open files via `openFileByPath()`. `restoreCtrlSession()` returns the previous active document ID so the correct tab is selected. If a session's source file no longer exists (ENOENT), the stale session is cleaned up. After restore, the version check opens `CHANGELOG.md` on upgrade, or the `sample/welcome.md` fallback opens if zero documents are open. Both run **before** Hocuspocus and MCP start to prevent CRDT merge races with stale browser tabs.
+On server startup, `listSessionFilePaths()` scans the session directory and `restoreOpenDocuments()` reopens all previously-open files via `openFromRestore()` (ADR-034's named restore entry — it carries the persisted `readOnly` flag back through, which a bare open call drops). `restoreCtrlSession()` returns the previous active document ID so the correct tab is selected. If a session's source file no longer exists (ENOENT), the stale session is cleaned up. After restore, the version check opens `CHANGELOG.md` on upgrade, or the `sample/welcome.md` fallback opens if zero documents are open. Both run **before** Hocuspocus and MCP start to prevent CRDT merge races with stale browser tabs.
 
 ### OS File-Association Open
 
@@ -259,7 +259,7 @@ Cold start, Windows / Linux:
                                                     TANDEM_OPEN_FILE=<path>
                                               ──▶  Node startup-file.ts:
                                                     maybeOpenStartupFile()
-                                              ──▶  openFileByPath()  [BEFORE bind]
+                                              ──▶  openFromDisk()  [BEFORE bind]
                                               ──▶  HTTP / Hocuspocus bind
                                               ──▶  browser opens, sees the doc
 
@@ -897,7 +897,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `chat-stream-staleness.ts` -- Abandoned-`chatStream`-entry tripwire (#1340): the ledger + warn-once sweep shared by `mcp/awareness.ts` (seeds) and `session/manager.ts`'s `foldChatStream` (checks). A leaf module with no project imports — `session/manager.ts` cannot import `mcp/awareness.ts` without a cycle
 - `startup-file.ts` -- `maybeOpenStartupFile()`; consumes `TANDEM_OPEN_FILE` before HTTP bind
 - `bind-check.ts` -- Bind-host policy: `TANDEM_BIND_HOST`, `TANDEM_LAN_IP`, wildcard handling, the token-provisioned refusal
-- `documents/` -- Per-document state helpers. `registry.ts` owns `openDocs`, `activeDocId`, the activation epoch and `broadcastOpenDocs` (ADR-033); its whole mutating surface is `openDocument` / `openDocumentWhenReady` / `activateDocument` / `updateDocumentWhenReady` / `closeDocument`, each ending in exactly one `documentMeta` broadcast, with the primitives private. `registry-testing.ts` is the test-only seam onto those primitives and is banned from `src/`.
+- `documents/` -- Per-document state helpers. `registry.ts` owns `openDocs`, `activeDocId`, the activation epoch and `broadcastOpenDocs` (ADR-033); its whole mutating surface is `openDocument` / `openDocumentWhenReady` / `activateDocument` / `updateDocumentWhenReady` / `closeDocument`, each ending in exactly one `documentMeta` broadcast, with the primitives private. `registry-testing.ts` is the test-only seam onto those primitives and is banned from `src/`. **Since ADR-034 Unit 7a this directory also holds the file-open pipeline**, split out of `mcp/file-opener.ts`: `open.ts` (the pipeline plus the four named entries `openFromDisk` / `openFromUpload` / `openScratchpad` / `openFromRestore`, and the `kindOfOpenResult` derivation), `populate.ts` (content into and out of a Y.Doc — `prepareContent`, `applyPreparedContent`, `clearDocMaps`, `clearAndReload`), `watcher.ts` (the reload lifecycle — `reloadFromDisk`, `wireFileWatcher`, and the per-document concurrent-reload guard exposed as `acquireReloadGuard` / `releaseReloadGuard` / `isReloadInProgress`), `conflict.ts` (`readPendingConflict` + `flagExternalConflict` — the read and write halves of `Y_MAP_EXTERNAL_CONFLICT`, which used to live in different files), `annotation-wiring.ts` (`wireAnnotationStore`) and `autosave.ts` (`ensureAutoSave`, its own module because both the open pipeline and the reload family arm it). `tests/docs/documents-boundary.test.ts` pins every import edge into and out of this directory as an exact set.
 - `integrations/` -- `IntegrationConfig` schema, atomic storage, keychain, `apply.ts` (writes the MCP entries), HTTP routes, the Claude CLI installer
 - `launcher/` -- Auto-launcher and `supervisor.ts` (writes wake turns on the child's stdin)
 - `license/`, `local-model/` -- both ship dark; see CLAUDE.md
