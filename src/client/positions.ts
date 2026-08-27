@@ -16,7 +16,12 @@
 
 import type { Node as PmNode } from "@tiptap/pm/model";
 import * as Y from "yjs";
-import { headingPrefixLength } from "../shared/offsets";
+import {
+  FLAT_SEPARATOR,
+  flattenHeadingText,
+  headingPrefix,
+  headingPrefixLength,
+} from "../shared/offsets";
 import type { PmRangeResult } from "../shared/positions/index";
 import type { DocumentRange, FlatOffset, PmPos, RelativeRange } from "../shared/positions/types";
 import { toFlatOffset, toPmPos } from "../shared/positions/types";
@@ -56,6 +61,92 @@ function pmNodeFlatTextLength(node: PmNode): number {
     len += pmNodeFlatTextLength(node.child(i));
   }
   return len;
+}
+
+/**
+ * The CHARACTERS behind the two length functions above.
+ *
+ * This module already modelled the server's flat projection — heading prefixes,
+ * `"\n"` between block children, a hard break as one character, a block leaf as
+ * none — but only as arithmetic. Anything that needed the flat TEXT on the
+ * client had nothing to call, so `applySuggestion` reached for
+ * `doc.textBetween(from, to, "\n", "\n")` instead, which is a different
+ * projection and diverges on three reachable shapes (#1631):
+ *
+ *  - a heading's `"## "` prefix is in the flat text and in no PM text node;
+ *  - a hard break inside a heading is a SPACE in flat text ({@link
+ *    flattenHeadingText}) and a newline to `textBetween`;
+ *  - a block leaf (`horizontalRule`, a block `image`) contributes nothing to
+ *    flat text, and one `leafText` character to `textBetween`.
+ *
+ * Each one made a suggestion permanently unacceptable on a document nobody had
+ * edited. They are emitted here as a pair with the length walk deliberately:
+ * `pmDocFlatText(doc).length` must equal `pmPosToFlatOffset(doc, content.size)`
+ * for every document, which is what the equivalence test asserts alongside the
+ * server's own `extractText`.
+ */
+function textblockFlatText(node: PmNode): string {
+  let out = "";
+  node.forEach((child) => {
+    if (child.isText) {
+      out += child.text ?? "";
+    } else if (child.type.name === "hardBreak") {
+      out += FLAT_SEPARATOR;
+    }
+    // Everything else contributes NOTHING — the mirror of `textblockFlatLength`
+    // counting only these two. This is the arm `textBetween`'s `leafText` gets
+    // wrong for block leaves.
+  });
+  return out;
+}
+
+function pmNodeFlatText(node: PmNode): string {
+  if (node.isTextblock) return textblockFlatText(node);
+  const parts: string[] = [];
+  for (let i = 0; i < node.childCount; i++) {
+    parts.push(pmNodeFlatText(node.child(i)));
+  }
+  return parts.join(FLAT_SEPARATOR);
+}
+
+/**
+ * The server's flat text for a whole PM document, rebuilt from the client's
+ * content model. Mirrors `extractText`.
+ *
+ * The heading prefix is applied at the TOP level only, exactly as
+ * {@link pmPosToFlatOffset} charges `headingPrefixLength` at the top level only.
+ * That is a mirror of the existing offset math rather than an independent
+ * reading of the server — if the projection ever grows nested headings, both
+ * walks change together or the offsets they produce stop agreeing.
+ */
+export function pmDocFlatText(doc: PmNode): string {
+  const parts: string[] = [];
+  for (let i = 0; i < doc.childCount; i++) {
+    const child = doc.child(i);
+    if (child.type.name === "heading") {
+      const level = (child.attrs.level as number) || 1;
+      parts.push(headingPrefix(level) + flattenHeadingText(pmNodeFlatText(child)));
+    } else {
+      parts.push(pmNodeFlatText(child));
+    }
+  }
+  return parts.join(FLAT_SEPARATOR);
+}
+
+/**
+ * The server's flat text under a PM range — what `captureSnapshot` would have
+ * stored for it.
+ *
+ * Deliberately built by projecting the whole document and slicing it with
+ * {@link pmPosToFlatOffset}, rather than by walking the range directly. The
+ * boundary cases are the hard part (an offset landing ON a block separator, a
+ * container whose last child is a block), `pmPosToFlatOffset` already solves
+ * them and is already tested, and a second range-walk would be a second copy of
+ * that reasoning. Cost is O(document) per call; this runs on a click.
+ */
+export function flatTextForPmRange(doc: PmNode, from: PmPos, to: PmPos): string {
+  const flat = pmDocFlatText(doc);
+  return flat.slice(pmPosToFlatOffset(doc, from), pmPosToFlatOffset(doc, to));
 }
 
 /**

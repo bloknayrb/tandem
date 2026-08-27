@@ -1,6 +1,6 @@
 import path from "path";
 import * as Y from "yjs";
-import { FLAT_SEPARATOR, headingPrefix } from "../../shared/offsets.js";
+import { FLAT_SEPARATOR, flattenHeadingText, headingPrefix } from "../../shared/offsets.js";
 import {
   findXmlTextAtOffset,
   getElementTextLength,
@@ -58,32 +58,6 @@ export function docIdFromPath(filePath: string): string {
     .replace(/-+/g, "-")
     .slice(0, 16);
   return `${name}-${Math.abs(hash).toString(36).slice(0, 6)}`;
-}
-
-/**
- * Collapse newlines in a heading's text to spaces.
- *
- * A heading must never present as multiple lines. Since `paragraph` gained
- * `whitespace: "pre"` (#1448) a soft-wrapped paragraph promoted to a heading —
- * toolbar, `Mod-Alt-1`, a slash command — carries a literal newline along with
- * it, because `setBlockType` does not re-split content by the target type's
- * whitespace spec.
- *
- * There are three independent readers of heading text and each needs this:
- * `yxmlToMdast` (what gets written to disk), `extractText` below (the flat-text
- * coordinate system, and what `tandem_getTextContent` returns), and `getOutline`
- * (what `tandem_getOutline` hands the AI). Fixing only the disk writer leaves
- * the AI reading a heading that spans two lines.
- *
- * **Must be a 1:1 character substitution, never a trim or a collapse of runs.**
- * `extractText` is the annotation coordinate system and `getElementTextLength`
- * counts the raw `Y.XmlText` length; anything that changed the character count
- * would desync every annotation offset after the heading.
- */
-export function flattenHeadingText(text: string): string {
-  // Character class, not `/\r?\n/` — a CRLF must become TWO spaces, not one,
-  // or the offsets shift by one for every CRLF in the heading.
-  return text.replace(/[\r\n]/g, " ");
 }
 
 /** Insert text content into a Y.Doc's XmlFragment as paragraphs */

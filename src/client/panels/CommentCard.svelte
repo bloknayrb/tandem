@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Annotation } from "../../shared/types";
+import AnnotationBody from "./AnnotationBody.svelte";
 import AnnotationCardHeader from "./AnnotationCardHeader.svelte";
 import AnnotationSnippet from "./AnnotationSnippet.svelte";
 
@@ -31,6 +32,10 @@ let { annotation, isPending, isReviewTarget, isEditing, canEdit, onEnterEdit }: 
 
 {#if !isEditing}
   <div class="aca-body" style="margin: 0; color: var(--tandem-fg); line-height: 1.45;">
-    <p style="margin: 0;">{annotation.content || "(no note)"}</p>
+    <AnnotationBody
+      text={annotation.content}
+      author={annotation.author}
+      placeholder="(no note)"
+    />
   </div>
 {/if}

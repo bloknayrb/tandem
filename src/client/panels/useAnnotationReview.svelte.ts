@@ -7,13 +7,13 @@ import { withBrowser } from "../../shared/origins";
 import { isPlaintextFormat } from "../../shared/plaintext-format";
 import type { SanitizationEvent } from "../../shared/sanitize";
 import { sanitizeAnnotation } from "../../shared/sanitize";
-import { isSnapshotTruncated } from "../../shared/snapshot";
+import { isSnapshotTruncated, snapshotContradicts } from "../../shared/snapshot";
 import type { Annotation } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship";
 import type { RestoreBreak } from "../editor/utils/literal-content";
 import { literalInlineContent, literalRestoreContent } from "../editor/utils/literal-content";
-import { annotationToPmRange } from "../positions";
+import { annotationToPmRange, flatTextForPmRange } from "../positions";
 
 /** Why undo refused, permanently. See `onUndoFailed`. */
 export type UndoDeclineReason = "truncated-snapshot" | "block-structure";
@@ -47,16 +47,29 @@ function isCodeContext(editor: TiptapEditor, pos: number): boolean {
 }
 
 /**
- * The flat text a PM range covers, in the SERVER's flat-text projection.
+ * The flat text a PM range covers, with "\n" for both block boundaries and
+ * hard breaks.
  *
  * Both separators are load-bearing, and they are the same argument made twice.
- * `suggestedText` and `textSnapshot` come from `extractText()`, which spells a
- * hard break "\n" (`leafText`) AND joins blocks with "\n" (`blockSeparator`).
- * Drop the first and every multi-line suggestion looks edited-since-accept;
- * drop the second and a range that has DRIFTED across a block boundary can
- * concatenate to exactly the snapshot, passing a guard that exists to stop
- * precisely that — after which undo deletes across the boundary and merges two
- * blocks.
+ * `suggestedText` comes from `extractText()`, which spells a hard break "\n"
+ * (`leafText`) AND joins blocks with "\n" (`blockSeparator`). Drop the first and
+ * every multi-line suggestion looks edited-since-accept; drop the second and a
+ * range that has DRIFTED across a block boundary can concatenate to exactly the
+ * expected text, passing a guard that exists to stop precisely that — after
+ * which undo deletes across the boundary and merges two blocks.
+ *
+ * **This is close to the server's flat projection but is NOT it**, and the
+ * difference is why `applySuggestion`'s snapshot guard calls
+ * `flatTextForPmRange` instead. `textBetween` omits heading prefixes, spells a
+ * hard break inside a heading `"\n"` where the server writes a space, and emits
+ * a `leafText` character for block leaves that contribute nothing to flat text.
+ *
+ * That does not make this function wrong — it makes it the right tool for its
+ * one caller. `undoResolveAnnotation` compares the range against
+ * `appliedProjection(...)`, a string this same client just inserted: both sides
+ * are ProseMirror's own reading, so no projection is crossed and the three
+ * divergences cancel. Reusing it against a SERVER-captured `textSnapshot` does
+ * cross, and did (#1631).
  */
 export function rangeText(editor: TiptapEditor, from: number, to: number): string {
   return editor.state.doc.textBetween(from, to, "\n", "\n");
@@ -299,6 +312,52 @@ export function applySuggestion(
   }
 
   try {
+    // #1629: verify the target still reads as what the suggestion was written
+    // against, BEFORE deleting it.
+    //
+    // Resolvability is not that check, and on its own it barely gates anything:
+    // `annotationToPmRange` does not fail when the CRDT anchor dies, it warns
+    // and falls back to the stale flat offsets — and `range` is required on
+    // `AnnotationBase`. The fallback is right for RENDERING (that is what
+    // `buildDecorations`' warn is for) and wrong as the only gate on a delete.
+    // Without this, accepting after the target moved delete-replaced whatever
+    // text had arrived at those offsets, silently.
+    //
+    // `flatTextForPmRange`, NOT `rangeText`. Both read the same PM range, but
+    // `textSnapshot` was sliced from the SERVER's flat projection and only the
+    // former reproduces it. `rangeText` is `textBetween(from, to, "\n", "\n")`,
+    // which is right for undo below — that compares the client's own inserted
+    // text against the client's own document, so it never crosses projections —
+    // and wrong here. Using it cost three shapes their accept on documents
+    // nobody had edited: a range spanning a heading's `"## "`, a hard break
+    // inside a heading, and a range containing a block leaf.
+    //
+    // Inside the `try` on purpose. `resolveAnnotation` has already written
+    // `status: "accepted"` and only reverts on a `false` RETURN, so a throw
+    // escaping here would strand the annotation accepted with nothing applied.
+    // Nothing on this path throws today — `flatOffsetToPmPos` clamps — but the
+    // guard would otherwise be silently relying on that.
+    if (ann.textSnapshot === undefined) {
+      // Not refused: legacy records predate `textSnapshot`, and refusing every
+      // one of them would break accept for documents that are perfectly fine.
+      // But "we do not refuse" and "we do not mention it" are separate calls,
+      // and only the first is argued — this write really is going out without
+      // the check the feature advertises.
+      console.warn(`[SidePanel] Applying ${ann.id} UNVERIFIED — no textSnapshot to check against`);
+    } else if (
+      snapshotContradicts(ann, flatTextForPmRange(editor.state.doc, resolved.from, resolved.to))
+    ) {
+      // `method` distinguishes the two ways this fires, and they mean opposite
+      // things: on `flat` the CRDT anchor is dead and the offsets are a guess —
+      // the case this guard was written for. On `rel` the anchor TRACKED the
+      // edit, so the range is right and the user changed the text underneath a
+      // healthy annotation. Same refusal, very different diagnosis.
+      console.warn(
+        `[SidePanel] Text changed since the suggestion was written, refusing to apply ${ann.id} (resolved via ${resolved.method})`,
+      );
+      return false;
+    }
+
     const inCode = isCodeContext(editor, resolved.from);
     const marks = marksAcrossRange(editor, resolved.from, resolved.to);
 
