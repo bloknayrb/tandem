@@ -59,9 +59,14 @@ const TESTING_SEAM = "server/documents/registry-testing.ts";
  * fails the pin below — it cannot silently narrow the sweep.
  */
 function tsconfigAliases(): Array<[string, string]> {
+  // Parsed as strict JSON on purpose. `stripComments` is for TypeScript and
+  // blanks non-specifier strings, which would erase these very values -- and a
+  // naive regex stripper is no better here, because `"src/server/*"` contains a
+  // block-comment opener. tsconfig.json has no comments today; if that changes,
+  // this throws rather than silently reading a truncated table.
   const raw = readFileSync(join(REPO_ROOT, "tsconfig.json"), "utf8");
-  const paths = JSON.parse(stripComments(raw).replace(/,(\s*[}\]])/g, "$1")).compilerOptions
-    .paths as Record<string, string[]>;
+  const paths = (JSON.parse(raw) as { compilerOptions: { paths: Record<string, string[]> } })
+    .compilerOptions.paths;
   return Object.entries(paths).map(([from, [to]]) => [
     from.replace(/\*$/, ""),
     (to as string).replace(/^src\//, "").replace(/\*$/, ""),
@@ -88,6 +93,23 @@ interface Edge {
  * as live code — failing red. Comments and strings have to be recognised in
  * one pass, because which one you are inside decides what the other means.
  */
+/**
+ * Is the string literal starting at `quoteAt` a module specifier?
+ *
+ * Only `from "…"`, a bare side-effect `import "…"`, and `import("…")` count.
+ * Everything else is data, and its contents must not be readable as code.
+ */
+function inSpecifierPosition(text: string, quoteAt: number): boolean {
+  let k = quoteAt - 1;
+  while (k >= 0 && /\s/.test(text[k])) k -= 1;
+  if (text[k] === "(") {
+    let m = k - 1;
+    while (m >= 0 && /\s/.test(text[m])) m -= 1;
+    return /\bimport$/.test(text.slice(Math.max(0, m - 5), m + 1));
+  }
+  return /\b(?:from|import)$/.test(text.slice(Math.max(0, k - 5), k + 1));
+}
+
 function stripComments(text: string): string {
   const out = text.split("");
   const blank = (from: number, to: number) => {
@@ -106,9 +128,7 @@ function stripComments(text: string): string {
       const j = end === -1 ? text.length : end + 2;
       blank(i, j);
       i = j;
-    } else if (two === '"' || text[i] === "'" || text[i] === "`" || two[0] === '"') {
-      // Skip the literal WITHOUT blanking it: a module specifier IS a string,
-      // so blanking here would erase every edge in the file.
+    } else if (text[i] === '"' || text[i] === "'" || text[i] === "`") {
       const quote = text[i];
       let j = i + 1;
       while (j < text.length && text[j] !== quote) {
@@ -116,6 +136,11 @@ function stripComments(text: string): string {
         else if (quote !== "`" && text[j] === "\n") break;
         j += 1;
       }
+      // A module specifier IS a string, so these cannot all be blanked. But a
+      // string that is NOT in specifier position must be, or its contents stay
+      // readable and `const s = "a://import { z } from '../x.js'"` invents an
+      // edge. Position is decided by the token before the quote.
+      if (!inSpecifierPosition(text, i)) blank(i + 1, Math.min(j, text.length));
       i = j + 1;
     } else {
       i += 1;
@@ -277,6 +302,46 @@ const FAN_OUT = [
   "server/documents/registry.ts -> shared/constants.ts (value) x1",
   "server/documents/registry.ts -> shared/origins.ts (value) x1",
 ];
+
+describe("stripComments", () => {
+  // Checked directly rather than through the graph. Both cases below were live
+  // defects in the two-regex version this replaced, and NEITHER is observable
+  // downstream: a swallowed import removes an edge, which looks exactly like a
+  // module that simply does not import that thing, and an invented edge only
+  // surfaces if it happens to cross the boundary. The helper is the only place
+  // they are visible, so it is the place to assert them.
+
+  it("a string containing a block-comment opener does not open a comment", () => {
+    const src = [
+      'const glob = "docs/*";',
+      'import { x } from "../documents/open.js";',
+      "/** a real doc comment */",
+    ].join("\n");
+
+    expect(
+      stripComments(src),
+      "the block pass used to run first, so this string opened a comment that ran to the file's next terminator and blanked every import between — and the graph then read as complete",
+    ).toContain('from "../documents/open.js"');
+  });
+
+  it("a // inside a string neither survives as code nor blanks its line", () => {
+    const src = "const s = \"a://import { z } from '../documents/open.js'\";\nconst after = 1;";
+    const out = stripComments(src);
+
+    expect(out, "the string's contents must not be readable as an import").not.toContain(
+      "import { z }",
+    );
+    expect(out, "and the [^:] guard that used to protect https:// must not be needed").toContain(
+      "const after = 1;",
+    );
+  });
+
+  it("preserves offsets, so blanking cannot shift what follows", () => {
+    const src = "// note\nimport { x } from './y.js';";
+    expect(stripComments(src)).toHaveLength(src.length);
+    expect(stripComments(src)).toContain("import { x }");
+  });
+});
 
 describe("the documents/ boundary is an inventory", () => {
   const { edges, unresolved } = buildGraph();
