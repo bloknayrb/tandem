@@ -49,6 +49,7 @@ vi.mock("../../src/server/integrations/acl-win.js", () => ({
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Document, Packer, Paragraph, TextRun } from "docx";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   _resetDocBackupGateForTests,
   docBackupSnapshotPath,
@@ -58,12 +59,7 @@ import {
 } from "../../src/server/file-io/doc-backup.js";
 import { suppressNextChange } from "../../src/server/file-watcher.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
-import {
-  addDoc,
-  getOpenDocs,
-  removeDoc,
-  setActiveDocId,
-} from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerApplyTools } from "../../src/server/mcp/docx-apply.js";
 import { openFileByPath, restoreDocumentFromBackup } from "../../src/server/mcp/file-opener.js";
 import { pushNotification } from "../../src/server/notifications.js";

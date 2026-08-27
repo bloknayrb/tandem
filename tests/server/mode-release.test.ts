@@ -1,11 +1,7 @@
 import type { Request, Response } from "express";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  addDoc,
-  getOpenDocs,
-  removeDoc,
-  setActiveDocId,
-} from "../../src/server/documents/registry.js";
+import { getOpenDocs } from "../../src/server/documents/registry.js";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { resetForTesting, subscribe, unsubscribe } from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
 import { handleModeRelease } from "../../src/server/mcp/routes/mode-release.js";

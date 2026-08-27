@@ -4,41 +4,35 @@ import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
 import { applyConnectionGate } from "../license/connection-gate.js";
 import { GATE_ENABLED } from "../license/gate-flag.js";
 import { resolveLiveLicenseState } from "../license/license-state.js";
+import type { HocuspocusLifecycle } from "./lifecycle.js";
 
 let hocuspocusInstance: Hocuspocus | null = null;
 const documents = new Map<string, Y.Doc>();
 
-// Callback predicate: returns true if Hocuspocus should keep a document in the
-// map even after all WebSocket clients disconnect.  Registered by document-service
-// to avoid a circular import (provider -> document-service -> provider).
-let shouldKeepDocument: ((name: string) => boolean) | null = null;
+/**
+ * The installed lifecycle (ADR-033). Replaces four independent free setters —
+ * `setShouldKeepDocument`, `setDocLifecycleCallbacks` and
+ * `setGenerationTokenSource` — with one named seam, so "is the lifecycle
+ * installed?" is a single observable fact rather than four.
+ *
+ * Still injected rather than imported: the registry, the event queue and the
+ * document-service all import THIS module, so reaching back for any of them
+ * would close a cycle. `provider.ts` must never import a default
+ * implementation as a fallback — that is the cycle, just spelled differently.
+ *
+ * Installed by `bootstrap/hocuspocus-lifecycle.ts` from `index.ts`, before
+ * every `startHocuspocus` call. `tests/server/index.startup-ordering.test.ts`
+ * is what holds that order.
+ */
+let lifecycle: HocuspocusLifecycle | null = null;
 
-// Callback for event queue observer lifecycle (registered by events/queue.ts to avoid circular import).
-let onDocSwapped: ((docName: string, newDoc: Y.Doc) => void) | null = null;
-let onDocUnloaded: ((docName: string) => void) | null = null;
-
-export function setDocLifecycleCallbacks(
-  swapped: (docName: string, newDoc: Y.Doc) => void,
-  unloaded: (docName: string) => void,
-): void {
-  onDocSwapped = swapped;
-  onDocUnloaded = unloaded;
+export function installHocuspocusLifecycle(installed: HocuspocusLifecycle): void {
+  lifecycle = installed;
 }
 
-/** Register a predicate that prevents afterUnloadDocument from evicting docs
- *  that MCP (or the bootstrap channel) still needs. */
-export function setShouldKeepDocument(fn: (name: string) => boolean): void {
-  shouldKeepDocument = fn;
-}
-
-// Source of the expected generation token for the onAuthenticate gate.
-// Registered by document-service's writeGenerationId() (same callback pattern
-// as setShouldKeepDocument — provider must not import document-service back).
-// Fail-closed: while unregistered (or before a generation exists), every
-// connection is rejected; production always registers before Hocuspocus binds.
-let getExpectedGenerationToken: (() => string | null) | null = null;
-export function setGenerationTokenSource(fn: () => string | null): void {
-  getExpectedGenerationToken = fn;
+/** Drop the installed lifecycle. Tests only — production installs exactly once. */
+export function resetHocuspocusLifecycleForTesting(): void {
+  lifecycle = null;
 }
 
 /**
@@ -135,7 +129,7 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
     // id now lives in module state and travels over HTTP only).
     async onAuthenticate({ token, documentName, requestHeaders, connection }) {
       assertAllowedOrigin(requestHeaders?.origin);
-      const expected = getExpectedGenerationToken?.() ?? null;
+      const expected = lifecycle?.expectedGenerationToken() ?? null;
       if (expected === null || token !== expected) {
         console.error(
           `[Hocuspocus] Rejected stale-generation connection to ${documentName} ` +
@@ -184,12 +178,12 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
       documents.set(documentName, document);
 
       // Notify event queue to reattach observers to the new doc instance
-      if (onDocSwapped) {
-        onDocSwapped(documentName, document);
+      if (lifecycle) {
+        lifecycle.onDocSwapped(documentName, document);
       } else {
         console.error(
           `[Tandem] WARN: onDocSwapped callback not registered during doc load for ${documentName}. ` +
-            `Server-side observers will NOT be attached. Call setDocLifecycleCallbacks() before starting Hocuspocus.`,
+            `Server-side observers will NOT be attached. Call installHocuspocusLifecycle() before starting Hocuspocus.`,
         );
       }
 
@@ -197,12 +191,12 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
     },
 
     async afterUnloadDocument({ documentName }) {
-      if (shouldKeepDocument?.(documentName)) {
+      if (lifecycle?.shouldKeepDocument(documentName)) {
         console.error(`[Hocuspocus] Kept document in map (MCP still tracking): ${documentName}`);
         return;
       }
       if (documents.has(documentName)) {
-        onDocUnloaded?.(documentName);
+        lifecycle?.onDocUnloaded(documentName);
         documents.delete(documentName);
         console.error(`[Hocuspocus] Unloaded document from map: ${documentName}`);
       }

@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry.js";
+import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { resetForTesting as resetEventQueue } from "../../src/server/events/queue.js";
 import {
   resetTypingPresenceForTesting,

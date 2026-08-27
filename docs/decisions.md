@@ -545,7 +545,64 @@ Callers that don't care about the variant destructure `.annotation` / `.from` / 
 
 ## ADR-033: Document Registry and Named Hocuspocus Lifecycle Interface
 
-**Status:** Accepted; partially implemented (verified against `src/` 2026-05-25). The `DocumentRegistry` landed (`src/server/documents/registry.ts`, described in-file as "a minimal seam extraction" owning `openDocs` / `activeDocId` / the keep-alive predicate). The named `HocuspocusLifecycle` interface is **deferred:** `src/server/yjs/lifecycle.ts` does not exist, and the free callback slots (`setShouldKeepDocument`, `setDocLifecycleCallbacks` with `onDocSwapped` / `onDocUnloaded`) still live in `provider.ts`. Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
+**Status:** Accepted; implemented (verified against `src/` 2026-08-26). The registry owns
+`openDocs` / `activeDocId` / `broadcastOpenDocs`, and `src/server/yjs/lifecycle.ts` exports the
+named `HocuspocusLifecycle`, replacing all four free callback slots (`setShouldKeepDocument`,
+`setDocLifecycleCallbacks`, `setGenerationTokenSource`). Designed in the
+`/improve-codebase-architecture` grilling pass, 2026-05-15.
+
+**Four things diverge from the sketch below; each is a decision, not a shortfall.**
+
+1. **The registry does NOT implement `HocuspocusLifecycle`.** The interface also needs the doc
+   swap/unload hooks (owned by `events/queue.ts`) and the generation token (owned by
+   `document-service.ts`), neither of which the registry owns. Making it implement the interface
+   would pull the event queue into the registry's import graph to satisfy a shape. Instead
+   `src/server/bootstrap/hocuspocus-lifecycle.ts` is the composition root that assembles the
+   implementation from all three and installs it, and it is the *only* module that knows how they
+   fit together.
+2. **A fourth member, `expectedGenerationToken()`.** The sketch named three. Folding the generation
+   gate in is what makes "the lifecycle is installed" one fact instead of two. It must stay a
+   **method** and stay non-optional: a `string | null` field would be captured at construction —
+   at the composition root, which is exactly where a future change would move ahead of the first
+   mint — and freeze at `null`, which the provider treats as fail-closed. Every connection for the
+   whole run would be rejected, logging the same line as a legitimate stale-tab rejection.
+3. **Five mutators, not three.** `setActive` in the sketch conflated two different operations, and
+   the split is load-bearing: `updateDocumentWhenReady` (rename, Save-As promotion) must NOT
+   advance the activation epoch, because the client reads an advance as an intentional focus event
+   and the user's tab would jump when a background file was renamed.
+
+   Both `…WhenReady` composites exist for the same reason — a change is not finished at the moment
+   the registry entry changes, and publishing at the mutation point moves the broadcast EARLIER
+   than the code it replaced. For an open, the doc meta, saved baseline and annotation store are
+   still being wired. For a Save-As promotion the entry must flip to `source: "file"` before
+   `markClean` reads it, while the annotation store and channel observers are still wired for an
+   upload doc; for a rename the publish would cross an `await fs.stat` before the document's own
+   `fileName` agrees with it.
+
+   Both skip the broadcast when `prepare` throws — one rule, not two, and deliberately not a
+   per-caller flag even though the two callers want opposite failure behaviour. Save-As wants the
+   skip: its `prepare` re-attaches channel observers, so a throw partway leaves an entry reading
+   `source: "file"` on a document whose observers are still wired for an upload doc, and publishing
+   that enables the rename affordance while annotations stay suppressed from Claude with no later
+   broadcast to correct it. Rename wants the opposite, because `fs.rename` has already committed —
+   so it catches inside its own `prepare` rather than asking the helper for different semantics.
+   The decision lives at the site that owns it.
+
+   One limit worth stating, because the prose otherwise reads stronger than the code: skipping the
+   broadcast does not un-track the entry, so the next broadcast from any unrelated operation
+   publishes it. The skip narrows the window rather than closing it. Cleanup is the caller's, as it
+   was before ADR-033.
+4. **`getYDoc` and `eachOpen` were not added.** `requireDocument` already resolves the Y.Doc fresh
+   per call (the property `getYDoc`'s doc comment was there to warn about), and `getOpenDocs()`
+   returns a `ReadonlyMap`, which covers iteration without a second accessor.
+
+**The primitives are private, with one declared escape hatch.** 34 test files legitimately need to
+arrange registry state without the Y.Doc writes a real mutation performs, so `unsafeAddDoc` /
+`unsafeRemoveDoc` / `unsafeSetActiveDocId` are re-exported through
+`src/server/documents/registry-testing.ts`, which nothing under `src/` may import.
+`tests/docs/registry-primitive-containment.test.ts` holds that two independent ways: a runtime
+check of what the production barrels actually export, and a source sweep. Reaching the primitives
+from production code is allowed to be possible; it is not allowed to be quiet.
 
 **Context:** Document state was spread across two modules with three implicit invariants enforced only by call-order discipline:
 

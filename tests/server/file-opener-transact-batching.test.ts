@@ -50,8 +50,9 @@ vi.mock("node:crypto", async (importOriginal) => {
   };
 });
 
+import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { docIdFromPath } from "../../src/server/mcp/document-model.js";
-import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
+import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { openFileByPath, openFileFromContent } from "../../src/server/mcp/file-opener.js";
 import { pushNotification } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
