@@ -90,7 +90,7 @@ describe("index.ts startup ordering invariant", () => {
     for (const expected of [
       "restoreCtrlSession",
       "restoreOpenDocuments",
-      "openFileByPath",
+      "openFromDisk",
       "maybeOpenStartupFile",
     ]) {
       expect(

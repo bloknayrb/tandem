@@ -1,4 +1,4 @@
-import { openFileByPath } from "./mcp/file-opener.js";
+import { openFromDisk } from "./documents/open.js";
 
 /**
  * Open a file referenced by the `TANDEM_OPEN_FILE` env var, if set.
@@ -22,7 +22,7 @@ export async function maybeOpenStartupFile(envPath: string | undefined): Promise
   if (!envPath || envPath.trim() === "") return false;
 
   try {
-    await openFileByPath(envPath);
+    await openFromDisk(envPath);
   } catch (err) {
     console.error(
       `[Tandem] TANDEM_OPEN_FILE failed (${envPath}): ${

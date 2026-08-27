@@ -1,13 +1,13 @@
 import fs from "fs/promises";
 import path from "path";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
+import { openFromDisk } from "../documents/open.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { atomicWrite } from "../file-io/index.js";
 import { resolveAppDataDir } from "../platform.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { extractMarkdown } from "./document-model.js";
 import { getCurrentDoc } from "./document-service.js";
-import { openFileByPath } from "./file-opener.js";
 
 export interface ConvertResult {
   outputPath: string;
@@ -148,7 +148,7 @@ export async function convertToMarkdown(
 
   // Open the new file in Tandem — include outputPath in error if this fails
   try {
-    const openResult = await openFileByPath(resolvedOutput);
+    const openResult = await openFromDisk(resolvedOutput);
     return {
       outputPath: resolvedOutput,
       documentId: openResult.documentId,

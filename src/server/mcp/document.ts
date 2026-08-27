@@ -19,6 +19,7 @@ import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
+import { openFromDisk, openScratchpad } from "../documents/open.js";
 import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast } from "../file-io/mdast-ydoc.js";
@@ -52,7 +53,6 @@ import {
   saveDocumentToDisk,
   toDocListEntry,
 } from "./document-service.js";
-import { openFileByPath, openScratchpad } from "./file-opener.js";
 import { gatedTool, licenseGate } from "./license-gate.js";
 import {
   getTextContentOutputShape,
@@ -129,8 +129,6 @@ export {
   updateDocumentWhenReady,
   writeGenerationId,
 } from "./document-service.js";
-export type { OpenFileResult } from "./file-opener.js";
-export { openFileByPath, openFileFromContent, SUPPORTED_EXTENSIONS } from "./file-opener.js";
 
 export interface OutlineEntry {
   level: number;
@@ -328,7 +326,7 @@ export function registerDocumentTools(server: McpServer): void {
         if (blocked) return blocked;
       }
       try {
-        const result = await openFileByPath(filePath, { force });
+        const result = await openFromDisk(filePath, { force });
 
         // Issue #937: attribute Claude-authored documents at creation. Stamp
         // AFTER openFileByPath resolves — content is guaranteed populated, and
