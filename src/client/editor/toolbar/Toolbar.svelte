@@ -216,12 +216,21 @@ function armDwell(from: number, to: number, byPointer: boolean) {
   }, DWELL_MS);
 }
 
-// Platform-correct modifier glyphs for the submit-button hints. Alt+Enter is
-// always a note; Ctrl/Cmd+Enter follows the current composer intent (ordinary
-// composers default to outbound comment). These aren't remappable shortcut ids:
-// Mac uses the symbol glyphs, Windows/Linux the spelled-out modifier + the ⏎ key.
+// Platform-correct modifier glyph for the commit button's hint. Not a
+// remappable shortcut id: Mac uses the symbol glyphs, Windows/Linux the
+// spelled-out modifier + the ⏎ key.
+//
+// Only ONE glyph now, where there used to be two. Ctrl/Cmd+Enter commits to
+// whatever the audience toggle is set to (`resolveAnnotationSubmission` reads
+// `annotationIntent`), so a single unconditional chip on the commit button is
+// accurate in both audiences — it no longer has to change with the intent.
+//
+// Alt+Enter still forces a note regardless of the toggle, and its rendered
+// chip is deliberately gone: it used to be the ONLY affordance for the private
+// path, and the toggle is now a one-click replacement for it. It survives as a
+// power-user bypass named in the Self segment's tooltip, not as a second chip
+// competing for room in a footer that has to hold the toggle as well.
 const isMac = isMacPlatform();
-const noteHintKbd = isMac ? "⌥⏎" : "Alt+⏎";
 const sendHintKbd = isMac ? "⌘⏎" : "Ctrl+⏎";
 
 // A26 morph (#798). The popup's two content blocks are ALWAYS mounted (so the
@@ -263,21 +272,6 @@ const showPopup = $derived(
 );
 const annotationTextTrimmed = $derived(annotationText.trim());
 const primaryAnnotationIntent = $derived(defaultAnnotationIntent(annotationIntent));
-
-// #1385's eyebrow. The mock labelled it `DRAFT`, which names a state this
-// component does not have: `annotationText` is plain component-local $state
-// with no persistence behind it, and `AnnotationStatus` is
-// pending/accepted/dismissed only. (It is not even uniformly discarded — the
-// click-away path at the `showPopup` effect deliberately KEEPS the text while
-// the textarea has focus, for recovery. So "draft" would overstate durability
-// in one direction and understate it in the other.)
-// Labelling the AUDIENCE instead is honest and more useful — it is one of only
-// three resting surfaces stating ADR-027's primary axis (private vs outbound).
-// The other two are the placeholder and whether the Send button renders a key
-// hint (#1444 removed the primary/secondary treatment that used to be a fourth).
-const composerAudience = $derived(
-  primaryAnnotationIntent === "note" ? "Private note" : `To ${agentLabel.family}`,
-);
 
 // Plain `let` — see SelectionToolbarPositionArgs.previousPlacement docstring.
 // This is read+written from a Tiptap event listener, NOT from inside a
@@ -1023,19 +1017,6 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
       <!-- Annotate popover. Alt+Enter is always private; Ctrl/Cmd+Enter follows
            the requested menu intent (ordinary opens default to outbound). -->
       <div class="composer-card">
-        <!-- #1385 eyebrow. `aria-hidden` deliberately: it duplicates what the
-             textarea's placeholder already says ("Write a private note…" /
-             "Write an instruction for AI…"), and an announced eyebrow would put
-             a bare audience word ahead of the field's own label on every AT
-             traversal. It carries no data-testid on purpose — the coverage
-             snapshot is a SET over all of src/client/, so *adding* one rewrites
-             a file another branch currently owns. -->
-        <div class="composer-eyebrow" aria-hidden="true">
-          <span
-            class="composer-eyebrow-dot"
-            class:is-private={primaryAnnotationIntent === "note"}
-          ></span>{composerAudience}
-        </div>
         <textarea
           bind:this={textareaEl}
           data-testid="popup-annotation-input"
@@ -1048,52 +1029,74 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
           rows={1}
           class="composer-input"
         ></textarea>
+        <!-- Audience is a TOGGLE, not a choice made at submit time. The two
+             segments write `annotationIntent`; one button commits to whatever
+             is selected. No keyboard behaviour changes: resolveAnnotationSubmission
+             already reads that same state for Ctrl/Cmd+Enter and already forces
+             "note" for Alt+Enter regardless of it, so the private fast-path
+             survives the toggle and is surfaced in the Self segment's title.
+
+             TESTIDS DRIFT ON PURPOSE. `popup-note-submit` / `popup-comment-submit`
+             now sit on segments that SELECT rather than submit. Critical Rule 7
+             lets the set gain selectors but never lose one, and the project has
+             taken this exact trade before — see `batch-promote-confirm` in
+             docs/design-system-impl/conflicts-resolved.md, kept verbatim on a
+             button whose meaning had moved. The committing control takes a new
+             id rather than stealing either name. -->
         <div class="composer-actions">
+          <div class="composer-audience" role="group" aria-label="Annotation audience">
+            <!-- Placed BEFORE the segments and aria-hidden: it is the sliding
+                 fill, not a control, and it must not sit in the tab order. -->
+            <span
+              class="audience-thumb"
+              class:is-agent={primaryAnnotationIntent === "comment"}
+              aria-hidden="true"
+            ></span>
+            <!-- Exactly ONE direct child <span> per segment, and the label is a
+                 bare text node. tests/e2e/forced-colors.spec.ts locates each
+                 destination marker as the segment's only direct child span and
+                 asserts a count of 1 — wrapping the label in a span silently
+                 breaks that spec's locator rather than its assertion.
+                 (Written without a literal testid-attribute spelling on
+                 purpose: testid-coverage.test.ts scans this file for that
+                 spelling and reports a prose one as an unparseable value.) -->
+            <button
+              type="button"
+              class="audience-seg"
+              class:on={primaryAnnotationIntent === "note"}
+              data-testid="popup-note-submit"
+              aria-pressed={primaryAnnotationIntent === "note"}
+              title={`Keep private — never sent to ${agentLabel.family}. Alt+Enter always submits privately, whatever this is set to.`}
+              onclick={() => (annotationIntent = "note")}
+            ><span class="composer-dest composer-dest-user" aria-hidden="true"></span>Self</button>
+            <button
+              type="button"
+              class="audience-seg"
+              class:on={primaryAnnotationIntent === "comment"}
+              data-testid="popup-comment-submit"
+              aria-pressed={primaryAnnotationIntent === "comment"}
+              title={`Send to ${agentLabel.family} as an outbound comment`}
+              onclick={() => (annotationIntent = "comment")}
+            ><span class="composer-dest" aria-hidden="true"></span>{agentLabel.family}</button>
+          </div>
+          <!-- "Add" rather than "Send"/"Save": the toggle owns the destination,
+               so naming it here would state it twice, and "Send" would be a lie
+               in the private case. "Save" was rejected for colliding with
+               document save. The key hint is unconditional now — Ctrl/Cmd+Enter
+               commits in BOTH audiences, so unlike the old Send button there is
+               no state where printing it would claim something untrue. -->
           <button
             type="button"
             class="composer-btn"
-            data-testid="popup-note-submit"
+            data-testid="popup-annotation-submit"
             aria-label={primaryAnnotationIntent === "note"
-              ? "Note to self (Ctrl+Enter)"
-              : "Note to self (Alt+Enter)"}
-            title={primaryAnnotationIntent === "note"
-              ? `Note to self — private, not sent to ${agentLabel.family} (Ctrl/Cmd+Enter)`
-              : `Note to self — private, not sent to ${agentLabel.family} (Alt+Enter)`}
+              ? "Add private note (Ctrl+Enter)"
+              : `Send to ${agentLabel.family} (Ctrl+Enter)`}
             disabled={!annotationTextTrimmed}
-            onclick={submitAsNote}
+            onclick={primaryAnnotationIntent === "note" ? submitAsNote : submitAsComment}
           >
-            <span class="composer-dest composer-dest-user" aria-hidden="true"></span>
-            Note to self
-            <kbd class="composer-kbd"
-              >{primaryAnnotationIntent === "note" ? sendHintKbd : noteHintKbd}</kbd
-            >
-          </button>
-          <button
-            type="button"
-            class="composer-btn"
-            data-testid="popup-comment-submit"
-            aria-label={primaryAnnotationIntent === "comment"
-              ? `Send to ${agentLabel.family} (Ctrl+Enter)`
-              : `Send to ${agentLabel.family}`}
-            title={primaryAnnotationIntent === "comment"
-              ? `Send to ${agentLabel.family} — outbound comment (Ctrl/Cmd+Enter)`
-              : `Send to ${agentLabel.family} — outbound comment`}
-            disabled={!annotationTextTrimmed}
-            onclick={submitAsComment}
-          >
-            <span class="composer-dest" aria-hidden="true"></span>
-            Send to {agentLabel.family}
-            <!-- The guard is truthful, not a leftover of the old primary/
-                 secondary styling, and #1444 makes it load-bearing. In note
-                 intent NO keystroke submits a comment — resolveAnnotationSubmission
-                 returns "note" for Alt+Enter and defaultAnnotationIntent passes
-                 "note" through for Ctrl/Cmd+Enter — so printing a key here would
-                 either duplicate Note's or claim Alt+Enter sends. With the
-                 primary treatment gone, the presence or absence of this hint is
-                 the resting intent signal, alongside the eyebrow. -->
-            {#if primaryAnnotationIntent === "comment"}
-              <kbd class="composer-kbd">{sendHintKbd}</kbd>
-            {/if}
+            Add
+            <kbd class="composer-kbd">{sendHintKbd}</kbd>
           </button>
         </div>
       </div>
@@ -1148,8 +1151,15 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
       border-color var(--morph-p1) var(--tandem-ease-out),
       box-shadow var(--morph-p1) var(--tandem-ease-out);
   }
+  /* r-5, not r-4: the design system's `components-inputs` annotation popup is
+     the reference for this surface and carries a 16px corner. 16 is off the
+     radius scale (2/4/6/8/12), so this takes the nearest token rather than
+     introducing a ninth value — the card reads notably rounder than it did at
+     r-4 without leaving the system. Morph-safe either way: `border-radius` is
+     one of the four properties P1 already tweens, so this only changes the
+     target the pill-shaped format state animates toward. */
   .selection-popup.is-annotate {
-    border-radius: var(--tandem-r-4);
+    border-radius: var(--tandem-r-5);
     background: var(--tandem-surface);
     border-color: var(--tandem-border);
     box-shadow: var(--c7-pill-shadow);
@@ -1245,11 +1255,16 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
      --tandem-r-3, so the shape matches the card and batch-bar Sends.
      ADR-027 structure (Note = private, Send = outbound) and keybindings are
      unchanged. See docs/design-system-impl/conflicts-resolved.md. */
+  /* Padding is space-3 with a shorter bottom, following the design system's
+     `preview/components-inputs.html` annotation popup (12/12/10). The bottom is
+     lighter than the sides on purpose: the action row's own `padding-top`
+     already supplies space under the divider, so a symmetric 12 would read as a
+     double gutter at the card's foot. */
   .composer-card {
     display: flex;
     flex-direction: column;
     gap: var(--tandem-space-2);
-    padding: var(--tandem-space-2);
+    padding: var(--tandem-space-3) var(--tandem-space-3) var(--tandem-space-2);
     min-width: 260px;
     /* 420px, raised from 360px by #1444. The destination markers cost 10px +
        gap each, which consumed the entire margin the old cap had: measured in
@@ -1270,42 +1285,20 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
        SELECTION_POPUP_HEIGHT_RESERVE is not back in scope. */
     max-width: 420px;
   }
-  /* Sized off --tandem-text-2xs with tracking so the eyebrow reads as a label
-     rather than as the first line of the user's own text. */
-  .composer-eyebrow {
-    display: flex;
-    align-items: center;
-    gap: var(--tandem-space-2);
-    font-size: var(--tandem-text-2xs);
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--tandem-fg-subtle);
-    /* Load-bearing for SELECTION_POPUP_HEIGHT_RESERVE, not cosmetic. The
-       eyebrow cannot wrap today only because `min-width: 260px` happens to
-       exceed the longest label — an incidental guarantee sitting on the thin
-       end of that constant's headroom. `nowrap` makes the one-row assumption
-       structural. */
-    white-space: nowrap;
-  }
-  /* The leading dot follows the same authorship keying the card headers use
-     (derived-spec's "cobalt dot · You" / "coral dot · Claude"): cobalt while the
-     composer is private, coral once it is addressed to the agent. */
-  .composer-eyebrow-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: var(--tandem-r-circle);
-    background: var(--tandem-author-claude);
-    flex-shrink: 0;
-  }
-  .composer-eyebrow-dot.is-private {
-    background: var(--tandem-author-user);
-  }
+  /* 52px, up from 28px, per the design system's annotation popup: a one-line
+     well made the card feel like a search field, and the reference gives the
+     draft about three lines of resting room before it grows.
+
+     This DOES move a number the position math reads. The card's resting height
+     goes up by ~24px, but SELECTION_POPUP_HEIGHT_RESERVE is 240 against a card
+     that measured ~111px, so the headroom absorbs it several times over.
+     `field-sizing: content` still grows from here; `max-height` is unchanged,
+     so the scroll ceiling has not moved. */
   .composer-input {
     width: 100%;
     box-sizing: border-box;
     field-sizing: content;
-    min-height: 28px;
+    min-height: 52px;
     max-height: 120px;
     overflow-y: auto;
     resize: none;
@@ -1322,7 +1315,11 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     background: none;
     color: var(--tandem-fg);
     font-size: var(--tandem-text-base);
-    line-height: 1.45;
+    /* 1.5 per the reference. Horizontal padding stays 0 even though the
+       reference insets its textarea by 6px: that inset is relative to a card
+       whose eyebrow is inset too, and here only the textarea would move —
+       leaving the draft hanging 6px right of the label above it. */
+    line-height: 1.5;
     font-family: inherit;
     padding: var(--tandem-space-1) 0;
   }
@@ -1345,18 +1342,46 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
      Claude's *presence* tint (paragraph background in `awareness.ts`, the
      typing pill, the working pill), not a keyboard-focus token.
 
-     Deliberately `:focus`, not `:focus-visible`: UAs always match
-     :focus-visible on text-entry fields, so switching buys nothing and would
-     stake the only focus indicator on that heuristic — and this field is also
-     focused programmatically (the rAF in openRequestedComposer /
-     openAnnotateMode). */
+     THE RING IS NOW FORCED-COLORS ONLY. In normal mode the caret is the focus
+     indicator and there is no drawn ring at all.
+
+     Why the drawn ring had to go: it and #1385's un-boxing pull against each
+     other. An opaque 2px rectangle standing 2px off a borderless well re-draws
+     exactly the box that was removed, and at the reference's 52px well height
+     that rectangle is the largest object on the card. It is also lit ~100% of
+     the time — the composer auto-focuses this field on open — so it never
+     reads as "focused", only as chrome. A card-edge ring was tried instead and
+     fails the same way for the same reason: always-on, so always decoration.
+
+     This is a deliberate departure from the usual "never remove a focus ring"
+     rule, and the thing that makes it defensible is narrow, so do not
+     generalise it. A text-entry field renders a blinking caret at the
+     insertion point whenever it holds focus; that caret is a real, moving,
+     author-independent focus indicator, and it is the only control type that
+     has one. The two audience segments and the commit button keep their
+     `:focus-visible` rings precisely because they do not.
+
+     `outline: none` is REQUIRED, not tidying. Deleting the author rule does not
+     leave the field ringless — it uncovers Chromium's UA default, which
+     computes to `rgb(16,16,16) auto 1px`: a near-black rectangle in the same
+     place, worse than the accent one it replaced. That is what this line
+     suppresses, and it is why "just delete the rule" is not the fix.
+
+     Forcing keeps a real ring, and that is not a hedge. HCM users may be
+     running a theme where the caret is low-contrast or a screen magnifier
+     where it is off-screen, the aesthetic argument above does not apply there,
+     and an outline is forcing's own idiom. `Highlight` is the system focus
+     color; `--tandem-accent` would have mapped to it anyway. */
   .composer-input:focus {
-    outline: 2px solid var(--tandem-accent);
-    outline-offset: 2px;
+    outline: none;
   }
   @media (forced-colors: active) {
     .composer-input {
       border-color: ButtonText;
+    }
+    .composer-input:focus {
+      outline: 2px solid Highlight;
+      outline-offset: 2px;
     }
   }
   /* #1385: a full-bleed hairline separates the action row instead of whitespace
@@ -1366,20 +1391,135 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
      still supplies the space ABOVE the border, and `padding-top` adds the
      matching space below it.
 
+     THE MARGIN AND THE CARD'S SIDE PADDING MUST BE THE SAME TOKEN. They are
+     both space-3. Change one without the other and the divider either stops
+     short of the card edge or overhangs it into the shell's rounded corner —
+     visible, but easy to mistake for a radius artefact rather than a margin
+     bug, which is why this is stated rather than left to be inferred.
+
      The codebase's other edge-to-edge dividers (ChatPanel, CommandPalette,
      FindReplaceBar) avoid this cancellation by keeping horizontal padding on
      the sections rather than the container. That is the tidier shape, but here
      it would push .composer-input's box out to the card edges, and its focus
      outline sits at `outline-offset: 2px` — which `.morph-block`'s
      `overflow: clip` would then cut. Left as-is deliberately. */
+  /* space-between, not flex-end: the audience toggle takes the left half that
+     the old two-button row left empty, and the single commit button holds the
+     right. */
   .composer-actions {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
     align-items: center;
     gap: var(--tandem-space-2);
-    margin: 0 calc(-1 * var(--tandem-space-2));
-    padding: var(--tandem-space-2) var(--tandem-space-2) 0;
+    margin: 0 calc(-1 * var(--tandem-space-3));
+    padding: var(--tandem-space-2) var(--tandem-space-3) 0;
     border-top: 1px solid var(--tandem-border);
+  }
+
+  /* ── Audience toggle ─────────────────────────────────────────────────────
+     A deliberate copy of ModeToggle's recipe (Solo/Tandem), because this is the
+     same control doing the same job on a different axis, and two segmented
+     controls that look almost-but-not-quite alike is worse than either.
+     What is copied and WHY it is copied, since each one is load-bearing there:
+
+       - `repeat(2, minmax(0, 1fr))`, not `1fr`. A bare `1fr` floors each column
+         at min-content, so unequal labels ("Self" vs "Assistant") produce
+         unequal columns and the thumb — which IS column 1 — lands on a segment
+         of a different width. That was #1383/#1384 on the mode toggle, and the
+         agent family name makes this control MORE exposed to it, not less.
+       - `position: relative` establishes the thumb's containing block. Without
+         it the grid placement below silently stops applying.
+       - `gap: 0`. The thumb slides exactly one column, so any gutter desyncs
+         `translateX(100%)` from the column pitch.
+
+     Metrics are this card's, not the title bar's: text-2xs against the mode
+     toggle's 11px, because it sits next to a 26px pill rather than in a 44px
+     strip. */
+  .composer-audience {
+    display: inline-grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    position: relative;
+    gap: 0;
+    padding: 2px;
+    background: var(--tandem-surface-sunk);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-pill);
+    font-size: var(--tandem-text-2xs);
+    font-weight: 600;
+    min-width: 0;
+  }
+  /* Both axes' grid lines are written out. On an absolutely-positioned grid
+     child an `auto` end line resolves to the container's PADDING EDGE rather
+     than `span 1`, so a two-line `grid-area: 1 / 1` stretches the thumb across
+     the whole track. `inset: 0` is required too — without it the abspos box
+     shrink-to-fits and renders 0x0. */
+  .audience-thumb {
+    position: absolute;
+    grid-area: 1 / 1 / 2 / 2;
+    inset: 0;
+    background: var(--tandem-surface);
+    border-radius: var(--tandem-r-pill);
+    box-shadow: var(--tandem-shadow-1);
+    pointer-events: none;
+    z-index: 0;
+    transition: transform 220ms var(--tandem-ease-out);
+  }
+  :global(body.tandem-reduce-motion) .audience-thumb {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .audience-thumb {
+      transition: none;
+    }
+  }
+  .audience-thumb.is-agent {
+    transform: translateX(100%);
+  }
+  .audience-seg {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--tandem-space-1);
+    padding: 3px var(--tandem-space-2);
+    border-radius: var(--tandem-r-pill);
+    color: var(--tandem-fg-muted);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font: inherit;
+    /* `normal`, not `1`: at line-height 1 the line box is shorter than the
+       glyph box and the label rides against the top of the pill. */
+    line-height: normal;
+    white-space: nowrap;
+    min-width: 0;
+    /* Above the thumb — the thumb, not the button, carries the active fill. */
+    position: relative;
+    z-index: 1;
+    transition: color 140ms ease;
+  }
+  :global(body.tandem-reduce-motion) .audience-seg {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .audience-seg {
+      transition: none;
+    }
+  }
+  .audience-seg.on {
+    color: var(--tandem-fg);
+  }
+  .audience-seg:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+  /* Not cosmetic. Under forced colors the thumb's `--tandem-surface` and the
+     track's `--tandem-surface-sunk` both map to Canvas, so the sliding fill
+     disappears and this outline becomes the ONLY indication of which audience
+     is selected. Same rule, same reason, as ModeToggle. */
+  @media (forced-colors: active) {
+    .audience-seg.on {
+      outline: 2px solid ButtonText;
+    }
   }
   /* #1444: one rule, both buttons — there is no primary variant to override it.
      #1385's `flex: 1` removal stands (content-sized, so the row's width is the
@@ -1397,19 +1537,31 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     color: var(--tandem-fg);
     font-weight: 500;
     /* `nowrap` keeps a long agent family name from wrapping text out of the
-       fixed 28px height; the destination markers cost another 10px + gap each,
+       fixed height; the destination markers cost another 10px + gap each,
        which is why .composer-card's cap moved to 420px. */
     white-space: nowrap;
-    height: 28px;
+    /* 26/11px, down from 28/12px. Two references agree on the smaller size and
+       the old one agreed with neither: the design system's annotation popup
+       sets 26px at 11.5px, and .aca-btn — the card twin this is deliberately
+       colour-matched to — is text-xs. The composer was the only surface in the
+       app running text-sm on an action of this kind.
+
+       This SHRINKS the actions row, so #1444's 420px cap keeps its headroom
+       rather than losing it; the cap is not re-derived here because it was
+       measured, and a narrower row cannot invalidate a measurement taken
+       against a wider one. */
+    height: 26px;
     padding: 0 var(--tandem-space-3);
     border-radius: var(--tandem-r-pill);
-    font-size: var(--tandem-text-sm);
+    font-size: var(--tandem-text-xs);
     font-family: inherit;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: var(--tandem-space-2);
+    /* space-1, not space-2: at 26px the marker, label and key chip are one
+       tight cluster. `.aca-btn--send` uses 6px for the same reason. */
+    gap: var(--tandem-space-1);
     transition:
       background 120ms,
       color 120ms;
@@ -1473,9 +1625,20 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     border-color: var(--tandem-author-user);
     background: transparent;
   }
+  /* A chip, not bare text — the design system's annotation popup sets its key
+     hint on its own tinted ground, and on a neutral pill that is what stops the
+     glyphs reading as part of the label.
+
+     `surface-sunk` is the same token the button's own hover uses, so a hovered
+     button and its chip converge to one surface instead of the chip staying a
+     lighter island. The reference tints with a white alpha, which would vanish
+     on the dark theme's muted pill; a token holds in both. */
   .composer-kbd {
     font-family: var(--tandem-font-mono);
     font-size: var(--tandem-text-2xs);
+    background: var(--tandem-surface-sunk);
+    border-radius: var(--tandem-r-2);
+    padding: 1px var(--tandem-space-1);
     /* -muted, not -subtle. With the primary treatment gone this hint is the
        only element stating which key commits which action, so it takes the
        louder of the two quiet tokens. */

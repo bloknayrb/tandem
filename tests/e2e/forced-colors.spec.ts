@@ -6,6 +6,7 @@ import {
   createFixtureDir,
   McpTestClient,
   openAnnotatePopup,
+  submitAnnotation,
 } from "./helpers";
 
 /**
@@ -330,7 +331,7 @@ test("destination markers stay distinguishable by shape, not colour", async ({ p
   // all. It renders only for a USER-authored pending note — an imported one
   // takes the Accept/Reject branch instead and has no marker.
   await page.locator("[data-testid='popup-annotation-input']").fill("marker check");
-  await page.locator("[data-testid='popup-note-submit']").click();
+  await submitAnnotation(page, "note");
 
   const cardSend = page.locator("[data-testid^='send-to-claude-btn-']").first();
   await expect(cardSend).toBeVisible({ timeout: 10_000 });

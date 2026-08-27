@@ -9,6 +9,7 @@ import {
   McpTestClient,
   openAnnotatePopup,
   selectTextStable,
+  submitAnnotation,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -230,11 +231,26 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
   await expect(toolbar.locator("[data-testid='decorations-menu']")).toBeVisible();
   // Annotate mode swaps the pills for the note popover.
   await openAnnotatePopup(page);
-  // #438: the comment-submit label names the active model ("Send to Claude",
-  // "Send to GPT", or "Send to Assistant" when none is configured) — match the
-  // agent-agnostic shape rather than a specific brand.
-  await expect(toolbar.getByRole("button", { name: /^Send to .+ \(Ctrl\+Enter\)$/ })).toBeVisible();
-  await expect(toolbar.getByRole("button", { name: "Note to self (Alt+Enter)" })).toBeVisible();
+  // The composer commits through ONE button whose accessible name follows the
+  // audience toggle, not through two buttons named after the two audiences.
+  //
+  // #438 still applies to the outbound name: it must name the active model
+  // ("Send to Claude", "Send to GPT", "Send to Assistant" when none is
+  // configured), so match the agent-agnostic shape rather than a brand. The
+  // composer opens on the outbound audience, so that is the resting name.
+  const commit = toolbar.getByRole("button", { name: /^Send to .+ \(Ctrl\+Enter\)$/ });
+  await expect(commit).toBeVisible();
+
+  // Flipping the toggle must re-label the commit button. This is the assertion
+  // that would catch the real regression here — a toggle wired to the submit
+  // handler but not to the accessible name leaves a screen-reader user being
+  // told they are sending to the agent while the click files a private note.
+  await expect(toolbar.getByRole("group", { name: "Annotation audience" })).toBeVisible();
+  await page.locator("[data-testid='popup-note-submit']").click();
+  await expect(
+    toolbar.getByRole("button", { name: "Add private note (Ctrl+Enter)" }),
+  ).toBeVisible();
+  await expect(commit).toHaveCount(0);
 });
 
 // Split into two single-selection tests: re-selecting the same range within one
@@ -325,7 +341,7 @@ test("Comment flow creates a comment annotation", async ({ page }) => {
   await openAnnotatePopup(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
   await input.fill("test comment");
-  await page.locator("[data-testid='popup-comment-submit']").click();
+  await submitAnnotation(page, "comment");
 
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
     timeout: 10_000,
@@ -350,7 +366,7 @@ test("Note flow creates a note annotation", async ({ page }) => {
   await openAnnotatePopup(page);
   const input = page.locator("[data-testid='popup-annotation-input']");
   await input.fill("test note");
-  await page.locator("[data-testid='popup-note-submit']").click();
+  await submitAnnotation(page, "note");
 
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
     timeout: 10_000,
@@ -365,7 +381,7 @@ test("#480 regression — popup appears on selection without creating an annotat
 }) => {
   // AR3 redesign: the unified popup appears immediately on text selection.
   // No annotation should be created just by selecting text — the user must
-  // explicitly submit via "Comment" or "Note to self". This replaces the old
+  // explicitly press the commit button (or Ctrl/Alt+Enter). This replaces the old
   // invariant (click Note → input appears, no annotation yet) with the new one
   // (select text → popup appears, no annotation yet).
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
@@ -406,9 +422,11 @@ test("Comment submit is disabled when textarea is empty (no annotation created)"
   await editor.click();
   await selectTextStable(editor.locator("p").first());
 
-  // Popup appears — Comment button should be disabled when textarea is empty
+  // Popup appears — the commit button should be disabled when textarea is empty.
+  // The audience segments are NOT the guard: they are a toggle and stay live on
+  // an empty draft, so the empty-guard assertion has to name the commit button.
   await openAnnotatePopup(page);
-  await expect(page.locator("[data-testid='popup-comment-submit']")).toBeDisabled({
+  await expect(page.locator("[data-testid='popup-annotation-submit']")).toBeDisabled({
     timeout: 2_000,
   });
 
@@ -526,9 +544,13 @@ test("empty Alt+Enter / Ctrl+Enter create nothing (guard on both submit paths)",
     timeout: 2_000,
   });
   expect(await getAnnotationCount()).toBe(0);
-  // Both submit buttons are disabled when empty.
-  await expect(page.locator("[data-testid='popup-note-submit']")).toBeDisabled();
-  await expect(page.locator("[data-testid='popup-comment-submit']")).toBeDisabled();
+  // The single commit button is disabled when empty — and the audience toggle
+  // is deliberately NOT, so assert that too rather than leaving it unpinned.
+  // A toggle that disabled itself on an empty draft would make the private
+  // path unreachable until after typing, which is the regression this guards.
+  await expect(page.locator("[data-testid='popup-annotation-submit']")).toBeDisabled();
+  await expect(page.locator("[data-testid='popup-note-submit']")).toBeEnabled();
+  await expect(page.locator("[data-testid='popup-comment-submit']")).toBeEnabled();
 });
 
 test("formatting from the popup survives the click, then Annotate produces a correct comment", async ({
