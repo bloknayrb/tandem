@@ -48,14 +48,26 @@ const SRC = join(REPO_ROOT, "src");
 const DOCUMENTS = "server/documents/";
 const TESTING_SEAM = "server/documents/registry-testing.ts";
 
-/** tsconfig `paths`. A resolver that skips non-relative specifiers drops these
- *  silently, and `@server/*` is configured-but-unused today — which is worse
- *  than unused, because it reads as unremarkable the first time it appears. */
-const ALIASES: Array<[string, string]> = [
-  ["@server/", "server/"],
-  ["@shared/", "shared/"],
-  ["@client/", "client/"],
-];
+/**
+ * tsconfig `paths`, DERIVED — never hand-written.
+ *
+ * `resolveSpec` treats an unrecognised non-relative specifier as a package
+ * import and drops it. So a hand-written table plus one new alias
+ * (`"@docs/*": ["src/server/documents/*"]`) makes every `@docs/...` edge
+ * vanish from this graph with nothing reported: not an edge, not unresolved,
+ * green. Reading the real table means a new alias is either handled or it
+ * fails the pin below — it cannot silently narrow the sweep.
+ */
+function tsconfigAliases(): Array<[string, string]> {
+  const raw = readFileSync(join(REPO_ROOT, "tsconfig.json"), "utf8");
+  const paths = JSON.parse(stripComments(raw).replace(/,(\s*[}\]])/g, "$1")).compilerOptions
+    .paths as Record<string, string[]>;
+  return Object.entries(paths).map(([from, [to]]) => [
+    from.replace(/\*$/, ""),
+    (to as string).replace(/^src\//, "").replace(/\*$/, ""),
+  ]);
+}
+const ALIASES = tsconfigAliases();
 
 type EdgeKind = "value" | "type" | "dynamic";
 interface Edge {
@@ -65,17 +77,51 @@ interface Edge {
 }
 
 /**
- * Blank comments to spaces rather than deleting them, so a prose mention of a
- * module specifier cannot be read as an import.
+ * Blank comments to spaces, preserving offsets, so a prose mention of a module
+ * specifier is not read as an import.
  *
- * The `[^:]` guard is load-bearing, not noise: without it the `//` in a URL
- * inside a string literal is read as a line comment and blanks the rest of
- * that line — including any specifier on it.
+ * This is a scanner rather than two regexes because the regex version was
+ * unsound in both directions, and both were demonstrated: a string containing
+ * `/*` (e.g. `const g = "docs/*"`) opened a block comment that ran to the
+ * file's next `*​/` and swallowed every import in between — failing GREEN; and
+ * a `//` guard written as `[^:]` to protect `https://` let `"a://…"` be read
+ * as live code — failing red. Comments and strings have to be recognised in
+ * one pass, because which one you are inside decides what the other means.
  */
 function stripComments(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
-    .replace(/(^|[^:])\/\/[^\n]*/g, (m, p1: string) => p1 + " ".repeat(m.length - p1.length));
+  const out = text.split("");
+  const blank = (from: number, to: number) => {
+    for (let k = from; k < to; k += 1) if (out[k] !== "\n") out[k] = " ";
+  };
+  let i = 0;
+  while (i < text.length) {
+    const two = text.slice(i, i + 2);
+    if (two === "//") {
+      let j = i;
+      while (j < text.length && text[j] !== "\n") j += 1;
+      blank(i, j);
+      i = j;
+    } else if (two === "/*") {
+      const end = text.indexOf("*/", i + 2);
+      const j = end === -1 ? text.length : end + 2;
+      blank(i, j);
+      i = j;
+    } else if (two === '"' || text[i] === "'" || text[i] === "`" || two[0] === '"') {
+      // Skip the literal WITHOUT blanking it: a module specifier IS a string,
+      // so blanking here would erase every edge in the file.
+      const quote = text[i];
+      let j = i + 1;
+      while (j < text.length && text[j] !== quote) {
+        if (text[j] === "\\") j += 1;
+        else if (quote !== "`" && text[j] === "\n") break;
+        j += 1;
+      }
+      i = j + 1;
+    } else {
+      i += 1;
+    }
+  }
+  return out.join("");
 }
 
 /** Every source file under `src/`, not narrowed to `.ts`. Scoping this to the
@@ -132,7 +178,12 @@ function resolveSpec(spec: string, fromRel: string): string | null {
  */
 const STATEMENT =
   /\b(?:import|export)\s+(type\s+)?(?:[^;'"]*?\s+)?from\s*["']([^"']+)["']|\bimport\s+["']([^"']+)["']/g;
-const DYNAMIC = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
+const DYNAMIC = /\bimport\s*\(\s*(["'`])([^"'`]*)\1\s*\)/g;
+/** Any other `import(` — a template with `${…}`, a concatenation, a variable.
+ *  Recorded as unresolved so it fails closed; `await import()` is the
+ *  sanctioned idiom in exactly this area, so a spelling the resolver cannot
+ *  read must not simply disappear from the graph. */
+const DYNAMIC_OPAQUE = /\bimport\s*\((?!\s*(["'`])[^"'`]*\1\s*\))\s*[^)]/g;
 
 function buildGraph(): { edges: Edge[]; unresolved: Array<[string, string]> } {
   const edges: Edge[] = [];
@@ -148,7 +199,11 @@ function buildGraph(): { edges: Edge[]; unresolved: Array<[string, string]> } {
     for (const m of text.matchAll(STATEMENT)) {
       record(m[2] ?? m[3], m[1] ? "type" : "value");
     }
-    for (const m of text.matchAll(DYNAMIC)) record(m[1], "dynamic");
+    for (const m of text.matchAll(DYNAMIC)) {
+      if (m[2].includes("${")) unresolved.push([rel, m[2]]);
+      else record(m[2], "dynamic");
+    }
+    for (const m of text.matchAll(DYNAMIC_OPAQUE)) unresolved.push([rel, m[0].trim()]);
   }
   return { edges, unresolved };
 }
@@ -158,33 +213,53 @@ function format(e: Edge): string {
 }
 
 /**
+ * Count the rows, do not dedupe them.
+ *
+ * A `Set` keyed on the formatted string was the guard's worst hole: sixteen
+ * modules already hold a `(value)` row into `documents/`, so any of them could
+ * add `export * from "../documents/open.js"` — turning an already-sanctioned
+ * module into an unrestricted public facade for the whole directory — and the
+ * set came out byte-identical. Counting makes a second statement a second row.
+ */
+function tally(edges: Edge[]): string[] {
+  const counts = new Map<string, number>();
+  for (const e of edges) counts.set(format(e), (counts.get(format(e)) ?? 0) + 1);
+  return [...counts].map(([row, n]) => `${row} x${n}`).sort();
+}
+
+/**
  * Written down, not derived: this is the review inventory. Every import edge
  * that crosses into or out of `src/server/documents/`. Adding a row is a
  * decision someone makes deliberately; that edit is the point of the file.
  */
 const FAN_IN = [
-  "server/bootstrap/hocuspocus-lifecycle.ts -> server/documents/dirty.ts (value)",
-  "server/bootstrap/hocuspocus-lifecycle.ts -> server/documents/registry.ts (value)",
-  "server/events/observers/ctrl-meta.ts -> server/documents/registry.ts (value)",
-  "server/events/queue.ts -> server/documents/dirty.ts (value)",
-  "server/index.ts -> server/documents/open.ts (value)",
-  "server/local-model/collaborator.ts -> server/documents/registry.ts (value)",
-  "server/mcp/convert.ts -> server/documents/open.ts (value)",
-  "server/mcp/document-service.ts -> server/documents/dirty.ts (value)",
-  "server/mcp/document-service.ts -> server/documents/registry.ts (value)",
-  "server/mcp/document.ts -> server/documents/open.ts (value)",
-  "server/mcp/file-opener.ts -> server/documents/dirty.ts (value)",
-  "server/mcp/file-opener.ts -> server/documents/registry.ts (value)",
-  "server/mcp/presence-expiry.ts -> server/documents/registry.ts (value)",
-  "server/mcp/routes/backups.ts -> server/documents/registry.ts (value)",
-  "server/mcp/routes/document-raw.ts -> server/documents/registry.ts (value)",
-  "server/mcp/routes/document-reload.ts -> server/documents/registry.ts (value)",
-  "server/mcp/routes/external-conflict.ts -> server/documents/registry.ts (value)",
-  "server/mcp/routes/mode-release.ts -> server/documents/registry.ts (value)",
-  "server/mcp/routes/open.ts -> server/documents/open.ts (value)",
-  "server/mcp/routes/scratchpad.ts -> server/documents/open.ts (value)",
-  "server/mcp/routes/upload.ts -> server/documents/open.ts (value)",
-  "server/startup-file.ts -> server/documents/open.ts (value)",
+  "server/bootstrap/hocuspocus-lifecycle.ts -> server/documents/dirty.ts (value) x1",
+  "server/bootstrap/hocuspocus-lifecycle.ts -> server/documents/registry.ts (value) x1",
+  "server/events/observers/ctrl-meta.ts -> server/documents/registry.ts (value) x1",
+  "server/events/queue.ts -> server/documents/dirty.ts (value) x1",
+  "server/index.ts -> server/documents/open.ts (value) x1",
+  "server/local-model/collaborator.ts -> server/documents/registry.ts (value) x1",
+  "server/mcp/convert.ts -> server/documents/open.ts (value) x1",
+  "server/mcp/document-service.ts -> server/documents/dirty.ts (value) x1",
+  // x2: document-service.ts both imports from the registry AND re-exports
+  // fifteen of its symbols. That facade is why callers spent two units
+  // importing registry symbols through document-service, which is what made
+  // the open path look like it depended on a subsystem it does not touch.
+  // The deduped version of this list could not see the second statement.
+  "server/mcp/document-service.ts -> server/documents/registry.ts (value) x2",
+  "server/mcp/document.ts -> server/documents/open.ts (value) x1",
+  "server/mcp/file-opener.ts -> server/documents/dirty.ts (value) x1",
+  "server/mcp/file-opener.ts -> server/documents/registry.ts (value) x1",
+  "server/mcp/presence-expiry.ts -> server/documents/registry.ts (value) x1",
+  "server/mcp/routes/backups.ts -> server/documents/registry.ts (value) x1",
+  "server/mcp/routes/document-raw.ts -> server/documents/registry.ts (value) x1",
+  "server/mcp/routes/document-reload.ts -> server/documents/registry.ts (value) x1",
+  "server/mcp/routes/external-conflict.ts -> server/documents/registry.ts (value) x1",
+  "server/mcp/routes/mode-release.ts -> server/documents/registry.ts (value) x1",
+  "server/mcp/routes/open.ts -> server/documents/open.ts (value) x1",
+  "server/mcp/routes/scratchpad.ts -> server/documents/open.ts (value) x1",
+  "server/mcp/routes/upload.ts -> server/documents/open.ts (value) x1",
+  "server/startup-file.ts -> server/documents/open.ts (value) x1",
 ];
 
 /**
@@ -193,14 +268,14 @@ const FAN_IN = [
  * replaces them, Unit 7c deletes the target.
  */
 const FAN_OUT = [
-  "server/documents/dirty.ts -> server/yjs/provider.ts (value)",
-  "server/documents/dirty.ts -> shared/constants.ts (value)",
-  "server/documents/dirty.ts -> shared/origins.ts (value)",
-  "server/documents/open.ts -> server/mcp/file-opener.ts (type)",
-  "server/documents/open.ts -> server/mcp/file-opener.ts (value)",
-  "server/documents/registry.ts -> server/yjs/provider.ts (value)",
-  "server/documents/registry.ts -> shared/constants.ts (value)",
-  "server/documents/registry.ts -> shared/origins.ts (value)",
+  "server/documents/dirty.ts -> server/yjs/provider.ts (value) x1",
+  "server/documents/dirty.ts -> shared/constants.ts (value) x1",
+  "server/documents/dirty.ts -> shared/origins.ts (value) x1",
+  "server/documents/open.ts -> server/mcp/file-opener.ts (type) x1",
+  "server/documents/open.ts -> server/mcp/file-opener.ts (value) x1",
+  "server/documents/registry.ts -> server/yjs/provider.ts (value) x1",
+  "server/documents/registry.ts -> shared/constants.ts (value) x1",
+  "server/documents/registry.ts -> shared/origins.ts (value) x1",
 ];
 
 describe("the documents/ boundary is an inventory", () => {
@@ -223,6 +298,23 @@ describe("the documents/ boundary is an inventory", () => {
     ).toEqual([]);
   });
 
+  it("the alias table matches tsconfig, and every alias maps into src/", () => {
+    // Derivation alone is not enough: an alias pointing outside `src/` would
+    // resolve to a path this walker never lists, so the edge disappears just as
+    // quietly as an unhandled one.
+    expect(ALIASES.length, "control: tsconfig still declares path aliases").toBeGreaterThan(0);
+    for (const [from, to] of ALIASES) {
+      expect(
+        from.startsWith("@"),
+        `${from} is not an alias spelling this resolver understands`,
+      ).toBe(true);
+      expect(
+        sourceFiles().some((f) => f.startsWith(to)),
+        `alias ${from} maps to ${to}, which is not under src/ — edges through it would vanish from this graph`,
+      ).toBe(true);
+    }
+  });
+
   it("the resolver can still see a cycle it is not looking for", () => {
     // If the `.js -> .ts` mapping or the alias table breaks, every sweep above
     // reports a clean bill of health. So pin a known, unrelated, deliberately
@@ -237,13 +329,9 @@ describe("the documents/ boundary is an inventory", () => {
   });
 
   it("only these modules reach into documents/", () => {
-    const actual = [
-      ...new Set(
-        edges
-          .filter((e) => e.to.startsWith(DOCUMENTS) && !e.from.startsWith(DOCUMENTS))
-          .map(format),
-      ),
-    ].sort();
+    const actual = tally(
+      edges.filter((e) => e.to.startsWith(DOCUMENTS) && !e.from.startsWith(DOCUMENTS)),
+    );
     expect(
       actual,
       "a module reaching into documents/ must be written down here — and a row that DISAPPEARS is equally a change, which is why this is an exact set rather than a subset check",
@@ -251,13 +339,9 @@ describe("the documents/ boundary is an inventory", () => {
   });
 
   it("documents/ reaches out only to these", () => {
-    const actual = [
-      ...new Set(
-        edges
-          .filter((e) => e.from.startsWith(DOCUMENTS) && !e.to.startsWith(DOCUMENTS))
-          .map(format),
-      ),
-    ].sort();
+    const actual = tally(
+      edges.filter((e) => e.from.startsWith(DOCUMENTS) && !e.to.startsWith(DOCUMENTS)),
+    );
     expect(
       actual,
       "ADR-034's residue lives in this list: every edge out of documents/ that is not yet where it belongs",
