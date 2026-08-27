@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rejectUnsafeWindowsPrefix } from "../../src/shared/windows-path-safety.js";
 import { LOCAL_EXTENDED_PATHS, NETWORK_PATHS } from "../helpers/unc-fixtures.js";
@@ -24,6 +24,26 @@ import { LOCAL_EXTENDED_PATHS, NETWORK_PATHS } from "../helpers/unc-fixtures.js"
  * is not configurable, so `vi.spyOn(fs, …)` throws. Same technique as
  * `tests/server/unc-guard-ordering.test.ts`.
  */
+/**
+ * `node:fs/promises` is a SEPARATE module from `node:fs`, and the mock above
+ * does not reach it. The annotation-store scan is async and imports from here,
+ * so without this tally its "no filesystem call" rows would assert against a
+ * spy the code never touches — a check that cannot fail.
+ */
+const { _fspReaddirTally } = vi.hoisted(() => ({
+  _fspReaddirTally: { paths: [] as string[] },
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readdir: (p: unknown, ...rest: unknown[]) => {
+      if (typeof p === "string") _fspReaddirTally.paths.push(p);
+      return (actual.readdir as (...a: unknown[]) => unknown)(p, ...rest);
+    },
+  };
+});
+
 const { _readFileSyncSpy, _existsSyncSpy, _statTally } = vi.hoisted(() => ({
   _readFileSyncSpy: vi.fn(),
   _existsSyncSpy: vi.fn(),
@@ -701,4 +721,101 @@ describe("this suite does not perform the handshake it tests for", () => {
     expect(statSync(dataDir, { throwIfNoEntry: false })?.isDirectory()).toBe(true);
     expect(_statTally.refused).toEqual([]);
   });
+});
+
+/**
+ * The annotation-store check screens its raw app-data input before deriving a
+ * path from it (#1417's ordering class, in the one doctor check that had no
+ * screen at all).
+ *
+ * **Screening the derived path alone would not be enough, and would look
+ * identical on CI.** `posix.join` renders the four pure forward-slash spellings
+ * harmless, so on a Linux runner a derived-path-only guard never fires for them
+ * and the row passes because the path stopped being dangerous — the #1529
+ * shape. The rows here poison the *input*, which is load-bearing on every
+ * platform.
+ *
+ * The assertion is on the syscall, not the report: an unreachable UNC host
+ * produces the same failure whether or not the guard ran, so a return-value
+ * assertion passes against the vulnerable code. It is scoped to `annotations`
+ * paths because `runDoctor` legitimately reads elsewhere.
+ */
+describe("the annotation-store check screens its app-data input", () => {
+  function annotationReaddirs(): string[] {
+    return _fspReaddirTally.paths.filter((p) => p.includes("annotations"));
+  }
+
+  it.each([
+    ...NETWORK_PATHS,
+    ...LOCAL_EXTENDED_PATHS,
+  ])("%s in TANDEM_APP_DATA_DIR reaches no filesystem call", async (_label, hostile) => {
+    process.env.TANDEM_APP_DATA_DIR = hostile;
+    _fspReaddirTally.paths.length = 0;
+
+    const report = await runDoctor();
+    const store = report.results.filter((r) => r.check === "annotation-store");
+
+    expect(annotationReaddirs()).toEqual([]);
+    expect(store.some((r) => r.status === "fail" && r.data?.unsafePath === true)).toBe(true);
+  });
+
+  it("still reads the store for an ordinary local path", async () => {
+    // Positive control. Without it a guard that refused unconditionally — or a
+    // rename that stopped the check running at all — satisfies every row above.
+    process.env.TANDEM_APP_DATA_DIR = dataDir;
+    mkdirSync(join(dataDir, "annotations"), { recursive: true });
+    _fspReaddirTally.paths.length = 0;
+
+    const report = await runDoctor();
+    expect(annotationReaddirs()).toContain(join(dataDir, "annotations"));
+    expect(report.results.some((r) => r.check === "annotation-store" && r.status !== "fail")).toBe(
+      true,
+    );
+  });
+});
+
+/**
+ * Why the input screen is not redundant with the scanner's own derived-path
+ * screen — and why proving that is platform-gated.
+ *
+ * On win32 `join` preserves every hostile prefix, so the derived path is still
+ * hostile and the scanner's screen refuses it. Deleting doctor's input screen
+ * therefore changes NOTHING observable on this machine: the rows above stay
+ * green against the vulnerable code. That is the #1529 shape, measured rather
+ * than assumed — a mutation that removed the input screen survived the whole
+ * suite locally.
+ *
+ * On posix the four pure forward-slash spellings collapse
+ * (`//attacker/share/x` -> `/attacker/share/x/annotations`), the derived screen
+ * accepts the result, and the input screen is the only thing left. The first
+ * test pins the collapse itself so the premise cannot rot silently; the second
+ * is the discriminating assertion and runs on CI's ubuntu job, which is the
+ * only vitest job there is.
+ */
+describe("the input screen is load-bearing where posix.join collapses the prefix", () => {
+  const COLLAPSING = NETWORK_PATHS.filter(([, p]) => p.startsWith("//"));
+
+  it("posix.join renders those spellings acceptable to the derived-path screen", () => {
+    expect(COLLAPSING.length).toBeGreaterThan(0);
+    for (const [label, hostile] of COLLAPSING) {
+      const derived = posix.join(hostile, "annotations");
+      expect(
+        rejectUnsafeWindowsPrefix(derived),
+        `${label}: still rejected after posix.join, so it does not discriminate the two screens`,
+      ).toBeNull();
+    }
+  });
+
+  it.runIf(process.platform !== "win32").each(COLLAPSING)(
+    "%s is refused by the input screen alone",
+    async (_label, hostile) => {
+      process.env.TANDEM_APP_DATA_DIR = hostile;
+      const report = await runDoctor();
+      expect(
+        report.results.some(
+          (r) => r.check === "annotation-store" && r.status === "fail" && r.data?.unsafePath,
+        ),
+      ).toBe(true);
+    },
+  );
 });
