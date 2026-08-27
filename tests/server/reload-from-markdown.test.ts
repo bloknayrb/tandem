@@ -39,6 +39,11 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
 });
 
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import {
+  acquireReloadGuard,
+  isReloadInProgress,
+  releaseReloadGuard,
+} from "../../src/server/documents/watcher.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import {
@@ -181,5 +186,70 @@ describe("reloadDocumentFromMarkdown — scratchpad (editable upload source)", (
 
     expect(extractText(doc)).toContain("second");
     expect(extractText(doc)).not.toContain("first");
+  });
+});
+
+/**
+ * The concurrent-reload guard spans two modules (#ADR-034 Unit 7a):
+ * `reloadFromDisk` owns the Set in `documents/watcher.ts`, and
+ * `reloadDocumentFromMarkdown` takes the SAME guard from `mcp/file-opener.ts`
+ * so two clear+repopulate transactions never interleave on one Y.Doc.
+ *
+ * Before the split that was structural — one module-private Set — and so
+ * nothing tested it. It is now a contract between modules, and the way it
+ * breaks is silent: a second module declaring its own Set leaves both halves
+ * green, every existing spec passing, and the serialization simply gone. Both
+ * directions are asserted because a duplicate on either side is invisible from
+ * the other.
+ */
+describe("reloadDocumentFromMarkdown — shares the watcher's reload guard", () => {
+  it("refuses while the watcher's guard is held", async () => {
+    const filePath = path.join(tmpDir, "guarded.md");
+    await fs.writeFile(filePath, "# Doc\n\nbody\n", "utf-8");
+    await openFileByPath(filePath);
+    const id = docIdFromPath(filePath);
+
+    // Taken through the watcher's own contract — the point is that this is the
+    // guard file-opener consults, not a same-named one it declares itself.
+    expect(acquireReloadGuard(id), "control: the guard was free to take").toBe(true);
+    try {
+      await expect(reloadDocumentFromMarkdown(id, "# hacked")).rejects.toMatchObject({
+        code: "RELOAD_IN_PROGRESS",
+      });
+    } finally {
+      releaseReloadGuard(id);
+    }
+
+    // Control: with the guard released the same call succeeds, so the rejection
+    // above is the guard and not some other precondition of this fixture.
+    await reloadDocumentFromMarkdown(id, "# after\n\nreleased\n");
+    expect(extractText(getOrCreateDocument(id))).toContain("released");
+  });
+
+  it("is visible to the watcher while it holds the guard", async () => {
+    const filePath = path.join(tmpDir, "observed.md");
+    await fs.writeFile(filePath, "# Doc\n\nbody\n", "utf-8");
+    await openFileByPath(filePath);
+    const id = docIdFromPath(filePath);
+
+    expect(isReloadInProgress(id), "control: not held before the call").toBe(false);
+
+    let heldDuringReload: boolean | undefined;
+    const populate = await import("../../src/server/documents/populate.js");
+    const realClearAndReload = populate.clearAndReload;
+    const spy = vi.spyOn(populate, "clearAndReload").mockImplementation(async (...args) => {
+      // Read through the watcher's own probe: a duplicated Set in file-opener
+      // would leave this false while the reload is genuinely in flight.
+      heldDuringReload = isReloadInProgress(id);
+      return await realClearAndReload(...args);
+    });
+    try {
+      await reloadDocumentFromMarkdown(id, "# mid\n\nflight\n");
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(heldDuringReload, "the reload body ran at all").toBe(true);
+    expect(isReloadInProgress(id), "released once the reload finished").toBe(false);
   });
 });

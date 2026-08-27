@@ -36,6 +36,7 @@ import {
   markCleanIfUnchanged,
   snapshotDirtyVersion,
 } from "../documents/dirty.js";
+import { wireFileWatcher } from "../documents/watcher.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
@@ -1072,7 +1073,6 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
   // cycle (same pattern as saveDocumentAsToDisk).
   try {
     savingDocs.add(docId);
-    const { wireFileWatcher } = await import("./file-opener.js");
     const doc = getOrCreateDocument(docId);
 
     // --- Phase 1: reversible prep (flush, keep observer ATTACHED) ---
