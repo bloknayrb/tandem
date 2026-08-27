@@ -275,6 +275,10 @@ const FAN_IN = [
   "server/mcp/document.ts -> server/documents/open.ts (value) x1",
   "server/mcp/file-opener.ts -> server/documents/dirty.ts (value) x1",
   "server/mcp/file-opener.ts -> server/documents/registry.ts (value) x1",
+  // The reload family reaching for the shared content machinery. This edge is
+  // the point of the split: leaving `prepareContent`/`clearDocMaps` behind in
+  // file-opener.ts would have made `documents/` import back into `mcp/`.
+  "server/mcp/file-opener.ts -> server/documents/populate.ts (value) x1",
   "server/mcp/presence-expiry.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/backups.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-raw.ts -> server/documents/registry.ts (value) x1",
@@ -297,6 +301,14 @@ const FAN_OUT = [
   "server/documents/dirty.ts -> shared/constants.ts (value) x1",
   "server/documents/dirty.ts -> shared/origins.ts (value) x1",
   "server/documents/open.ts -> server/mcp/file-opener.ts (type) x1",
+  "server/documents/populate.ts -> server/events/queue.ts (value) x1",
+  "server/documents/populate.ts -> server/file-io/index.ts (value) x1",
+  "server/documents/populate.ts -> server/notifications.ts (value) x1",
+  "server/documents/populate.ts -> server/session/manager.ts (value) x1",
+  "server/documents/populate.ts -> shared/constants.ts (value) x1",
+  "server/documents/populate.ts -> shared/origins.ts (value) x1",
+  "server/documents/populate.ts -> shared/types.ts (type) x1",
+  "server/documents/populate.ts -> shared/utils.ts (value) x1",
   "server/documents/open.ts -> server/mcp/file-opener.ts (value) x1",
   "server/documents/registry.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/registry.ts -> shared/constants.ts (value) x1",
@@ -507,7 +519,6 @@ describe("runtime export surfaces", () => {
     ).toEqual(
       [
         "SUPPORTED_EXTENSIONS",
-        "__testEvictPartialDocState",
         "openFileByPath",
         "openFileFromContent",
         "openScratchpad",
