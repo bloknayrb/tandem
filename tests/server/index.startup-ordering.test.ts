@@ -50,6 +50,89 @@ describe("index.ts startup ordering invariant", () => {
     ).toMatch(/\bawait\s+maybeOpenStartupFile\b/);
   });
 
+  /**
+   * The spec above pins ONE call site by its literal text. Every other startup
+   * document open — session restore, the post-upgrade CHANGELOG tab, the
+   * first-run welcome file — had no ordering guard at all, and each is subject
+   * to the same rule for the same reason: a browser that reconnects after the
+   * bind but before an open sees an incomplete `openDocuments` list and
+   * CRDT-merges it back over the real one.
+   *
+   * So this derives the set rather than listing it. Any imported binding whose
+   * name starts `open`/`restore`/`maybeOpen` counts as a document open, and
+   * every call site of every one of them must precede the earliest bind.
+   * Adding a fifth startup open is then covered automatically — provided it is
+   * named in that vocabulary, which is the honest limit of a text derivation.
+   * The named-anchor assertion below is what makes a rename out of the
+   * vocabulary fail loudly instead of silently shrinking the set.
+   */
+  it("awaits every startup document open before the earliest server bind", async () => {
+    const indexPath = path.resolve(fileURLToPath(import.meta.url), "../../../src/server/index.ts");
+    const src = await readFile(indexPath, "utf8");
+
+    // Local binding names, so `import { x as openThing }` is caught and a
+    // same-named local helper from an unimported module is not.
+    const opens = new Set<string>();
+    for (const m of src.matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*["']\.[^"']*["']/gs)) {
+      for (const spec of m[1].split(",")) {
+        const local = spec
+          .trim()
+          .split(/\s+as\s+/)
+          .pop()
+          ?.trim();
+        if (local && /^(open|restore|maybeOpen)[A-Z]/.test(local)) opens.add(local);
+      }
+    }
+
+    // Positive anchor: a zero-length set would satisfy "every call site
+    // precedes the bind" vacuously, and a rename out of the prefix vocabulary
+    // is exactly how the set would silently shrink to zero.
+    for (const expected of [
+      "restoreCtrlSession",
+      "restoreOpenDocuments",
+      "openFileByPath",
+      "maybeOpenStartupFile",
+    ]) {
+      expect(
+        opens,
+        `expected ${expected} to still be a startup open — if it was renamed, update this anchor and the prefix vocabulary above`,
+      ).toContain(expected);
+    }
+
+    // The bind side is derived the same way: `startHocuspocus(wsPort)` is not
+    // the only bind, and matching its call text alone is how an aliased or
+    // added bind contributes nothing to the check.
+    const bindIdxs: number[] = [];
+    for (const bind of ["startHocuspocus", "startMcpServerHttp", "startMcpServerStdio"]) {
+      expect(opens, `${bind} must not itself be classed as an open`).not.toContain(bind);
+      for (const m of src.matchAll(new RegExp(`\\b${bind}\\(`, "g"))) {
+        bindIdxs.push(m.index as number);
+      }
+    }
+    expect(bindIdxs.length, "expected at least one server bind call site").toBeGreaterThan(0);
+    const firstBind = Math.min(...bindIdxs);
+
+    let sites = 0;
+    for (const name of opens) {
+      for (const m of src.matchAll(new RegExp(`\\b${name}\\(`, "g"))) {
+        const idx = m.index as number;
+        // No filter narrowing this to main()'s body. A call site hoisted into
+        // a helper is exactly the restructure that would slip a late open past
+        // a body-scoped scan, so every call site in the file is in scope. That
+        // makes a legitimately-late helper a false positive — deliberately: a
+        // red test forcing someone to reason about bind ordering beats a hole.
+        sites += 1;
+        expect(idx, `${name}() must be called before the server binds`).toBeLessThan(firstBind);
+        const lineStart = src.lastIndexOf("\n", idx) + 1;
+        expect(
+          src.slice(lineStart, idx + name.length + 1),
+          `${name}() must be awaited — fire-and-forget races the bind it is ordered against`,
+        ).toMatch(new RegExp(`\\bawait\\s+${name}\\($`));
+      }
+    }
+    expect(sites, "expected startup opens to actually be called in main()").toBeGreaterThan(3);
+  });
+
   it("awaits best-effort existing-skill refresh before HTTP readiness in every launcher mode", async () => {
     const indexPath = path.resolve(fileURLToPath(import.meta.url), "../../../src/server/index.ts");
     const src = await readFile(indexPath, "utf8");
