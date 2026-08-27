@@ -696,6 +696,11 @@ describe("renameDocument — post-commit best-effort (Phase 3)", () => {
       const result = await renameDocument(docId, "committed-renamed.md");
       expect(result.status).toBe("renamed");
       expect(result.fileName).toBe("committed-renamed.md");
+      // Without this the spy is unverified: `renamed` is ALSO what a rename
+      // with no injected failure returns, so a spy that silently stopped
+      // patching (a moved export, a re-export left behind) leaves this spec
+      // green having exercised only the happy path.
+      expect(rewireSpy).toHaveBeenCalled();
     } finally {
       rewireSpy.mockRestore();
     }
@@ -754,6 +759,7 @@ describe("renameDocument — re-wire-FAILURE stale observer disposal (#1040)", (
       const result = await renameDocument(docId, "rewire-fail-renamed.md");
       // The disk rename committed; a re-wire failure must NOT flip the result.
       expect(result.status).toBe("renamed");
+      expect(rewireSpy).toHaveBeenCalled();
     } finally {
       rewireSpy.mockRestore();
     }
