@@ -36,6 +36,7 @@ import {
   markCleanIfUnchanged,
   snapshotDirtyVersion,
 } from "../documents/dirty.js";
+import { openFromRestore } from "../documents/open.js";
 import { wireFileWatcher } from "../documents/watcher.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
@@ -1604,9 +1605,6 @@ export function broadcastStoreReadOnly(readOnly: boolean): void {
  * Called during startup to restore the working set.
  */
 export async function restoreOpenDocuments(previousActiveDocId: string | null): Promise<number> {
-  // Import dynamically to avoid circular dependency (file-opener imports document-service)
-  const { openFileByPath } = await import("./file-opener.js");
-
   const sessions = await listSessionFilePaths();
   if (sessions.length === 0) return 0;
 
@@ -1616,7 +1614,7 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
       // Carry the persisted read-only flag back through: without it every
       // restored document takes `resolveAndValidatePath`'s hardcoded `false`,
       // and a read-only tab (View Changelog) comes back writable.
-      await openFileByPath(filePath, { readOnly });
+      await openFromRestore({ filePath, readOnly });
       restoredCount++;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;

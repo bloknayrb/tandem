@@ -1,7 +1,7 @@
 /**
  * Tests for the ADR-034 named file-open seam.
  *
- * This file used to assert `openFromDisk === openFileByPath`, and the two
+ * This file used to assert `openFromDisk === openFromDisk`, and the two
  * siblings of that. Those assertions were true of a re-export and of nothing
  * else: they pass while the seam forwards, and go RED the moment Unit 7a moves
  * the implementation into this module — which is the change they sit in front
@@ -17,7 +17,7 @@
  *     `mcp/file-opener.ts` outside a written-down exception list — five modules
  *     today, each with the symbols it is allowed to take. That is Unit 6's
  *     actual deliverable, and nothing else observes it: a new route importing
- *     `openFileByPath` would work perfectly and quietly put the seam back to
+ *     `openFromDisk` would work perfectly and quietly put the seam back to
  *     zero production consumers.
  *
  * Broader behaviour of the open pipelines is characterized in
@@ -41,12 +41,12 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 
 import {
   kindOfOpenResult,
+  type OpenFileResult,
   openFromUpload,
   openScratchpad,
 } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import type { OpenFileResult } from "../../src/server/mcp/file-opener.js";
 import { removeDocument } from "../../src/server/yjs/provider.js";
 
 afterAll(async () => {
@@ -103,8 +103,21 @@ describe("the redirect invariant (Unit 6)", () => {
   let ENTRIES: string[] = [];
   beforeAll(async () => {
     ENTRIES = Object.keys(await import("../../src/server/mcp/file-opener.js"));
-    // A derived vocabulary that derives to nothing satisfies every filter below.
-    expect(ENTRIES.length, "control: the export surface is non-empty").toBeGreaterThan(3);
+    // A derived vocabulary that derives to nothing satisfies every filter
+    // below. This was a `> 3` count, which was really the old export surface's
+    // size wearing a control's clothing: Unit 7a shrank that surface to exactly
+    // the three reload entries and the control failed on a correct change.
+    //
+    // The honest check is the one that rules out the bug the derivation exists
+    // to fix — a SANCTIONED row naming a symbol the vocabulary cannot see, and
+    // therefore constraining nothing. Asserting coverage of the rows keeps that
+    // impossible no matter how the surface is resized.
+    const named = new Set(Object.values(SANCTIONED).flat());
+    expect(ENTRIES.length, "control: the export surface is non-empty").toBeGreaterThan(0);
+    expect(
+      [...named].filter((n) => !ENTRIES.includes(n)),
+      "every SANCTIONED symbol must be in the derived vocabulary, or its row is zero-of-zero",
+    ).toEqual([]);
   });
 
   /**
@@ -121,10 +134,12 @@ describe("the redirect invariant (Unit 6)", () => {
     "server/mcp/docx-apply.ts": ["restoreDocumentFromBackup"],
     "server/mcp/routes/document-reload.ts": ["reloadDocumentFromMarkdown"],
     "server/mcp/routes/external-conflict.ts": ["resolveExternalConflict"],
-    // The cycle break: file-opener statically imports document-service, so the
-    // restore path can only reach back dynamically. Unit 7a replaces this with
-    // `openFromRestore` on the seam.
-    "server/mcp/document-service.ts": ["openFileByPath", "wireAnnotationStore", "wireFileWatcher"],
+    // Unit 7a removed the fifth row. `document-service.ts` reached into
+    // file-opener through three dynamic imports whose only purpose was
+    // breaking the cycle its own static import created; with the pipeline,
+    // annotation wiring and the watcher all living below both modules, every
+    // one of them is a static import of `documents/` and the cycle is gone.
+    // A row reappearing here is that cycle regrowing.
   };
 
   const srcRoot = path.resolve(fileURLToPath(import.meta.url), "../../../src");
@@ -167,9 +182,9 @@ describe("the redirect invariant (Unit 6)", () => {
   /**
    * The previous version of this guard matched two import *shapes*. Four
    * reviewers independently defeated it by writing the same import a different
-   * way — `import * as fo`, `export { openFileByPath } from …` (the exact line
+   * way — `import * as fo`, `export { openFromDisk } from …` (the exact line
    * this branch deleted from `mcp/document.ts`), a bare
-   * `(await import(…)).openFileByPath`, and a multi-line destructure Biome
+   * `(await import(…)).openFromDisk`, and a multi-line destructure Biome
    * emits on its own once the list is long enough. Every one of those is a real
    * regrowth of the thing Unit 6 removes, and every one passed.
    *
@@ -204,24 +219,28 @@ describe("the redirect invariant (Unit 6)", () => {
   it("sanctioned modules take only the symbols they are sanctioned for", async () => {
     // The file-level gate above is what syntax cannot evade. This narrows what
     // the five survivors may do with their access — including through a
-    // namespace alias, since `fo.openFileByPath` still spells the bare name.
+    // namespace alias, since `fo.openFromDisk` still spells the bare name.
     for (const [relPath, allowed] of Object.entries(SANCTIONED)) {
       const body = stripCommentsAndStrings(await fs.readFile(path.join(srcRoot, relPath), "utf8"));
       const used = ENTRIES.filter((name) => new RegExp(`\\b${name}\\b`).test(body));
       const forbidden = used.filter((name) => !allowed.includes(name));
       expect(forbidden, `${relPath} may not use ${forbidden.join(", ")}`).toEqual([]);
-    }
 
-    // Positive control for the symbol matcher itself: the one sanctioned use of
-    // an entry point must actually be visible to it. Without this, a matcher
-    // that found nothing anywhere would report a clean bill of health.
-    const restore = stripCommentsAndStrings(
-      await fs.readFile(path.join(srcRoot, "server/mcp/document-service.ts"), "utf8"),
-    );
-    expect(
-      /\bopenFileByPath\b/.test(restore),
-      "control: the sanctioned restore call is where this test thinks it is",
-    ).toBe(true);
+      // Positive control, per row rather than once for the suite. This was a
+      // single anchor naming `openFileByPath` in `document-service.ts` — which
+      // Unit 7a legitimately removed, so the control failed on a correct change
+      // while proving nothing about the other four rows.
+      //
+      // Checking each row instead means a row can never go quiet: if a module's
+      // sanctioned symbol stops appearing, the row has stopped constraining
+      // anything and should be deleted, not left sitting there reading like a
+      // rule. It also keeps the matcher honest — one that found nothing
+      // anywhere would fail here rather than report a clean bill of health.
+      expect(
+        used,
+        `${relPath} no longer uses any sanctioned symbol — delete the row rather than leaving it`,
+      ).not.toEqual([]);
+    }
   });
 
   it("scans every executable file under src/, so a new extension cannot hide", async () => {

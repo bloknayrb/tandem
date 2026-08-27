@@ -38,6 +38,7 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
   return { ...actual, pushNotification: vi.fn() };
 });
 
+import { openFromDisk, openScratchpad } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   acquireReloadGuard,
@@ -46,11 +47,7 @@ import {
 } from "../../src/server/documents/watcher.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import {
-  openFileByPath,
-  openScratchpad,
-  reloadDocumentFromMarkdown,
-} from "../../src/server/mcp/file-opener.js";
+import { reloadDocumentFromMarkdown } from "../../src/server/mcp/file-opener.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
@@ -80,7 +77,7 @@ afterAll(async () => {
 async function openMdFile(initial: string): Promise<{ filePath: string; id: string; doc: Y.Doc }> {
   const filePath = path.join(tmpDir, "doc.md");
   await fs.writeFile(filePath, initial, "utf-8");
-  await openFileByPath(filePath);
+  await openFromDisk(filePath);
   const id = docIdFromPath(filePath);
   return { filePath, id, doc: getOrCreateDocument(id) };
 }
@@ -156,7 +153,7 @@ describe("reloadDocumentFromMarkdown — guards", () => {
   it("rejects a non-.md document with UNSUPPORTED_FORMAT", async () => {
     const filePath = path.join(tmpDir, "notes.txt");
     await fs.writeFile(filePath, "plain text\n", "utf-8");
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
     const id = docIdFromPath(filePath);
 
     await expect(reloadDocumentFromMarkdown(id, "# x")).rejects.toMatchObject({
@@ -167,7 +164,7 @@ describe("reloadDocumentFromMarkdown — guards", () => {
   it("rejects a read-only .md document with READ_ONLY", async () => {
     const filePath = path.join(tmpDir, "ro.md");
     await fs.writeFile(filePath, "# Read only\n", "utf-8");
-    await openFileByPath(filePath, { readOnly: true });
+    await openFromDisk(filePath, { readOnly: true });
     const id = docIdFromPath(filePath);
 
     await expect(reloadDocumentFromMarkdown(id, "# hacked")).rejects.toMatchObject({
@@ -206,7 +203,7 @@ describe("reloadDocumentFromMarkdown — shares the watcher's reload guard", () 
   it("refuses while the watcher's guard is held", async () => {
     const filePath = path.join(tmpDir, "guarded.md");
     await fs.writeFile(filePath, "# Doc\n\nbody\n", "utf-8");
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
     const id = docIdFromPath(filePath);
 
     // Taken through the watcher's own contract — the point is that this is the
@@ -229,7 +226,7 @@ describe("reloadDocumentFromMarkdown — shares the watcher's reload guard", () 
   it("is visible to the watcher while it holds the guard", async () => {
     const filePath = path.join(tmpDir, "observed.md");
     await fs.writeFile(filePath, "# Doc\n\nbody\n", "utf-8");
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
     const id = docIdFromPath(filePath);
 
     expect(isReloadInProgress(id), "control: not held before the call").toBe(false);

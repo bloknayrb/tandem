@@ -49,6 +49,7 @@ vi.mock("../../src/server/integrations/acl-win.js", () => ({
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Document, Packer, Paragraph, TextRun } from "docx";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
+import { openFromDisk } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   _resetDocBackupGateForTests,
@@ -61,7 +62,7 @@ import { suppressNextChange } from "../../src/server/file-watcher.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerApplyTools } from "../../src/server/mcp/docx-apply.js";
-import { openFileByPath, restoreDocumentFromBackup } from "../../src/server/mcp/file-opener.js";
+import { restoreDocumentFromBackup } from "../../src/server/mcp/file-opener.js";
 import { pushNotification } from "../../src/server/notifications.js";
 import { resolveAppDataDir } from "../../src/server/platform.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
@@ -246,7 +247,7 @@ describe("restoreDocumentFromBackup", () => {
 
     // ...then disk holds the bad rewrite, and the doc is open on it.
     await fs.writeFile(filePath, v2);
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     expect(extractText(doc)).toContain("badly escaped");
 
@@ -299,7 +300,7 @@ describe("restoreDocumentFromBackup", () => {
   it("rejects traversal-shaped and unknown snapshot names", async () => {
     const filePath = path.join(tmpDir, "doc.md");
     await fs.writeFile(filePath, "content\n");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
 
     await expect(
       restoreDocumentFromBackup(opened.documentId, "../../../etc/passwd"),
@@ -316,7 +317,7 @@ describe("restoreDocumentFromBackup", () => {
   it("rejects read-only documents", async () => {
     const filePath = path.join(tmpDir, "CHANGELOG.md");
     await fs.writeFile(filePath, "content\n");
-    const opened = await openFileByPath(filePath, { readOnly: true });
+    const opened = await openFromDisk(filePath, { readOnly: true });
     await expect(
       restoreDocumentFromBackup(opened.documentId, "doc-20260101-100000-aaaaaaaa.md"),
     ).rejects.toMatchObject({ code: "READ_ONLY" });
@@ -396,7 +397,7 @@ describe("docx backup + restore", () => {
 
     // ...then disk holds the mangled rewrite, and the doc is open on it.
     await fs.writeFile(filePath, v2);
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     expect(extractText(doc)).toContain("mangled");
     // Sanity: "Hello world" is at offset 3 in the open (v2) content.
@@ -451,7 +452,7 @@ describe("docx backup + restore", () => {
     );
     const [snapshot] = await listDocBackups(filePath, resolveAppDataDir());
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const annotations = getOrCreateDocument(opened.documentId).getMap(Y_MAP_ANNOTATIONS);
     const initialCount = annotations.size;
     // The fixture carries imported Word comments.
@@ -481,7 +482,7 @@ describe("tandem_restoreBackup tool", () => {
     const filePath = path.join(tmpDir, "notes.md");
     await fs.writeFile(filePath, "first version\n");
     await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
 
     const parsed = parseResult(await restoreTool({}));
     expect(parsed.error).toBe(false);
@@ -493,7 +494,7 @@ describe("tandem_restoreBackup tool", () => {
   it("returns FILE_NOT_FOUND for a text document with no snapshots", async () => {
     const filePath = path.join(tmpDir, "fresh.md");
     await fs.writeFile(filePath, "no backups yet\n");
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
 
     const parsed = parseResult(await restoreTool({}));
     expect(parsed.error).toBe(true);
@@ -506,7 +507,7 @@ describe("tandem_restoreBackup tool", () => {
     await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
     const [snapshot] = await listDocBackups(filePath, resolveAppDataDir());
     await fs.writeFile(filePath, "ruined draft\n");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
 
     const parsed = parseResult(await restoreTool({ backup: snapshot.name }));
     expect(parsed.error).toBe(false);
@@ -537,7 +538,7 @@ describe("tandem_restoreBackup tool", () => {
   it("reports FILE_NOT_FOUND for a .docx with no snapshots and no sidecar", async () => {
     const filePath = path.join(tmpDir, "plain.docx");
     await fs.writeFile(filePath, await buildDocx("plain"));
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     setActiveDocId(opened.documentId);
 
     // A snapshot-shaped name that does not exist → FILE_NOT_FOUND (docx now
@@ -596,7 +597,7 @@ describe("tandem_restoreBackup tool", () => {
     await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
     const [snapshot] = await listDocBackups(filePath, resolveAppDataDir());
     await fs.writeFile(filePath, await buildDocx("draft ruined"));
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     setActiveDocId(opened.documentId);
 
     _resetDocBackupGateForTests();
