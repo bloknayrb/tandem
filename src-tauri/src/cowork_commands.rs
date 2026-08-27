@@ -34,6 +34,16 @@
 //! is untouched; the `generate_handler!` entries in `lib.rs` become
 //! `cowork_commands::`-qualified, matching `pending_update::`, `context_menu::`
 //! and `native_theme::`.
+//!
+//! **External guards.** `tests/build/cowork-retry-delegates.test.ts` (#1560:
+//! the Retry command delegates, it does not bookkeep) and
+//! `tests/build/cowork-subnet-probe-contract.test.ts` (#1371: the subnet probe
+//! stays off the main thread) both pin properties of this module as source
+//! text, because the code they pin is `#[cfg(target_os = "windows")]` and no
+//! test on any CI leg executes it. Both find this file by searching for a
+//! command's declaration rather than by naming it, so **renaming this module is
+//! free but moving either subject out of it turns them red** -- which is the
+//! point, and is what a hardcoded path would have failed to do quietly.
 
 #[cfg(target_os = "windows")]
 use std::path::PathBuf;
