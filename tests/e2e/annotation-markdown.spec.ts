@@ -7,6 +7,7 @@ import {
   McpTestClient,
   openAnnotatePopup,
   selectTextStable,
+  submitAnnotation,
 } from "./helpers";
 
 /**
@@ -143,7 +144,7 @@ test("a user comment with the same text renders as literal prose", async ({ page
   await selectTextStable(editor.locator("p").first());
   await openAnnotatePopup(page);
   await page.locator("[data-testid='popup-annotation-input']").fill("**not bold** and `not code`");
-  await page.locator("[data-testid='popup-comment-submit']").click();
+  await submitAnnotation(page, "comment");
 
   const card = page.locator("[data-testid^='annotation-card-']").first();
   await expect(card).toBeVisible({ timeout: 15_000 });

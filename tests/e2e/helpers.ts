@@ -244,7 +244,11 @@ export async function selectTextStable(target: Locator): Promise<void> {
  * highlight swatches + Annotate button); clicking Annotate reveals the
  * textarea-bearing annotate mode (`popup-annotation-input`,
  * `popup-comment-submit`, `popup-note-submit`). Tests that interact with the
- * textarea or submit buttons must call this helper after selecting text.
+ * textarea or the footer controls must call this helper after selecting text.
+ *
+ * To actually CREATE the annotation, follow this with `submitAnnotation` — the
+ * two `*-submit` ids above now sit on audience-toggle segments and no longer
+ * submit anything on their own.
  */
 export async function openAnnotatePopup(page: Page): Promise<void> {
   const annotateBtn = page.locator("[data-testid='popup-annotate-btn']");
