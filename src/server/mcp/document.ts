@@ -329,9 +329,9 @@ export function registerDocumentTools(server: McpServer): void {
         const result = await openFromDisk(filePath, { force });
 
         // Issue #937: attribute Claude-authored documents at creation. Stamp
-        // AFTER openFileByPath resolves — content is guaranteed populated, and
+        // AFTER openFromDisk resolves — content is guaranteed populated, and
         // the durable-sync/channel observers attach later in wireAnnotationStore,
-        // so there is no race. Upload/scratchpad paths bypass openFileByPath and
+        // so there is no race. Upload/scratchpad paths bypass openFromDisk and
         // are naturally excluded.
         if (authoredBy === "claude") {
           const loaded = requireDocument(result.documentId);
