@@ -27,7 +27,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/server/platform", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
@@ -84,7 +84,28 @@ describe("named entry points (ADR-034 seam)", () => {
 });
 
 describe("the redirect invariant (Unit 6)", () => {
-  const ENTRIES = ["openFileByPath", "openFileFromContent", "openScratchpad"];
+  /**
+   * Derived from the module's real export surface, not written down.
+   *
+   * This was a hand-written list of the three open entry points, and four of
+   * the five SANCTIONED rows below were consequently zero-of-zero: their
+   * `allowed` lists name reload-family symbols (`restoreDocumentFromBackup`,
+   * `reloadDocumentFromMarkdown`, `resolveExternalConflict`) that the
+   * vocabulary could not see, so those rows constrained nothing and could
+   * never fail. Only the `document-service.ts` row was live.
+   *
+   * A name list cannot see a symbol nobody has heard of yet — the same
+   * argument `registry-primitive-containment.test.ts` makes for pinning an
+   * exact exported surface. Deriving it means a NEW export from
+   * `file-opener.ts` is in scope automatically, and every row constrains
+   * something.
+   */
+  let ENTRIES: string[] = [];
+  beforeAll(async () => {
+    ENTRIES = Object.keys(await import("../../src/server/mcp/file-opener.js"));
+    // A derived vocabulary that derives to nothing satisfies every filter below.
+    expect(ENTRIES.length, "control: the export surface is non-empty").toBeGreaterThan(3);
+  });
 
   /**
    * Written down here, not derived: this is the review inventory. Every module
