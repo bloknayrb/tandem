@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { REPO_ROOT, rustSourceDefining, rustSources } from "./rust-sources.js";
 
 /**
  * Tripwires for the cross-boundary claims #992 introduced, none of which any
@@ -38,14 +39,38 @@ import { describe, expect, it } from "vitest";
  * have failed before.
  */
 
-const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const LIB_RS = join(REPO_ROOT, "src-tauri", "src", "lib.rs");
 const CLIENT_HOOK = join(REPO_ROOT, "src", "client", "hooks", "useTauriTheme.svelte.ts");
 const SETTINGS = join(REPO_ROOT, "src", "client", "hooks", "useTandemSettings.ts");
 const CHANGELOG = join(REPO_ROOT, "CHANGELOG.md");
 
-/** `lib.rs` is ~244 KB and two tests read it; hoisted so it is read once. */
-const RUST = readFileSync(LIB_RS, "utf-8");
+/**
+ * The Rust module that defines this feature, **found rather than named**.
+ *
+ * Every claim below except the `generate_handler!` one used to be read out of
+ * `lib.rs`, which was true until Unit 11c extracted the whole cluster into
+ * `native_theme.rs` and eight of the ten specs here went red at once. That is
+ * the file working — each extraction asserts it found something before
+ * asserting anything about the result — but re-pointing the constant at
+ * `native_theme.rs` would only re-arm the same breakage for whichever unit moves
+ * it next.
+ *
+ * So the module is located by a construct that IS the feature. `rustSourceDefining`
+ * asserts exactly one file matches, which matters more than it looks: a
+ * concatenate-everything corpus would let the several first-hit `.match()` calls
+ * below silently return a different module's occurrence, and "found the wrong
+ * thing" still reports a pass. Both directions are loud here — zero matches names
+ * the pattern, two or more names the files.
+ *
+ * `LIB` stays separate because `generate_handler!` genuinely does live in
+ * `lib.rs`, and scoping that lookup to the crate root is the point of it.
+ */
+const NATIVE_THEME = rustSourceDefining(
+  /#\[tauri::command\]\s*(?:pub\(crate\)\s+)?fn set_native_theme\s*\(/,
+  "the #[tauri::command] fn set_native_theme",
+);
+const RUST = NATIVE_THEME.text;
+const LIB = readFileSync(LIB_RS, "utf-8");
 
 /**
  * Slice a Rust `fn <name>(…) { … }` body by brace balance. Naive brace
@@ -56,7 +81,7 @@ const RUST = readFileSync(LIB_RS, "utf-8");
  */
 function rustFnBody(src: string, name: string): string {
   const start = src.indexOf(`fn ${name}(`);
-  expect(start, `lib.rs no longer defines fn ${name}`).toBeGreaterThan(-1);
+  expect(start, `${NATIVE_THEME.rel} no longer defines fn ${name}`).toBeGreaterThan(-1);
   const open = src.indexOf("{", start);
   expect(open, `fn ${name} has no body`).toBeGreaterThan(-1);
   let depth = 0;
@@ -94,14 +119,14 @@ describe("native theme (#992) cross-boundary claims", () => {
       ).toContain(required);
     }
 
-    const handlerStart = RUST.indexOf("tauri::generate_handler![");
+    const handlerStart = LIB.indexOf("tauri::generate_handler![");
     expect(handlerStart, "lib.rs no longer calls tauri::generate_handler!").toBeGreaterThan(-1);
-    const handlerList = RUST.slice(handlerStart, RUST.indexOf("]", handlerStart));
+    const handlerList = LIB.slice(handlerStart, LIB.indexOf("]", handlerStart));
 
     for (const command of invoked) {
       // A defined-but-unregistered command fails at runtime exactly like a
       // typo, so both halves have to hold.
-      expect(RUST, `lib.rs has no '#[tauri::command] fn ${command}'`).toMatch(
+      expect(RUST, `${NATIVE_THEME.rel} has no '#[tauri::command] fn ${command}'`).toMatch(
         new RegExp(`#\\[tauri::command\\][\\s\\S]{0,200}?\\bfn ${command}\\s*\\(`),
       );
       expect(handlerList, `${command} is not registered in generate_handler!`).toContain(command);
@@ -122,7 +147,10 @@ describe("native theme (#992) cross-boundary claims", () => {
     expect(argKeys.length, "extracted no argument keys — the parser broke").toBeGreaterThan(0);
 
     const sig = RUST.match(/fn set_native_theme\(([\s\S]*?)\)\s*->/);
-    expect(sig, "lib.rs no longer declares fn set_native_theme(..) -> ..").not.toBeNull();
+    expect(
+      sig,
+      `${NATIVE_THEME.rel} no longer declares fn set_native_theme(..) -> ..`,
+    ).not.toBeNull();
     // Only a name at the start of a parameter, followed by a SINGLE colon —
     // otherwise `window: tauri::WebviewWindow` also yields "tauri" from the
     // path separator. Then drop the injected `window`, which Tauri supplies
@@ -142,8 +170,13 @@ describe("native theme (#992) cross-boundary claims", () => {
     // which is falsy, so the macOS override gate is off FOREVER and `osTheme`
     // never writes through. The promise still resolves, so nothing logs and
     // nothing throws. Measured: removing the attribute passed everything.
-    const struct = RUST.match(/((?:#\[[^\]]*\]\s*)*)struct NativeThemeOutcome\s*\{([\s\S]*?)\n\}/);
-    expect(struct, "lib.rs no longer declares struct NativeThemeOutcome").not.toBeNull();
+    const struct = RUST.match(
+      /((?:#\[[^\]]*\]\s*)*)(?:pub(?:\(crate\))?\s+)?struct NativeThemeOutcome\s*\{([\s\S]*?)\n\}/,
+    );
+    expect(
+      struct,
+      `${NATIVE_THEME.rel} no longer declares struct NativeThemeOutcome`,
+    ).not.toBeNull();
     expect(struct?.[1] ?? "", "NativeThemeOutcome lost its camelCase serde rename").toMatch(
       /rename_all\s*=\s*"camelCase"/,
     );
@@ -256,10 +289,16 @@ describe("native theme (#992) cross-boundary claims", () => {
       .toLowerCase();
   }
 
-  /** Variant identifiers of a fieldless Rust enum, skipping doc comments. */
+  /**
+   * Variant identifiers of a fieldless Rust enum, skipping doc comments.
+   *
+   * Deliberately NOT anchored on the attribute list, unlike the three `rename_all`
+   * checks: those must prove the attrs sit on the item, this only needs the block.
+   * A `pub(crate) enum` matches either way.
+   */
   function rustEnumVariants(name: string): string[] {
     const block = RUST.match(new RegExp(`enum ${name}\\s*\\{([\\s\\S]*?)\\n\\}`));
-    expect(block, `lib.rs no longer declares enum ${name}`).not.toBeNull();
+    expect(block, `${NATIVE_THEME.rel} no longer declares enum ${name}`).not.toBeNull();
     return [...(block?.[1] ?? "").matchAll(/^\s*([A-Z]\w*)\s*,/gm)].map((m) => m[1]);
   }
 
@@ -279,7 +318,9 @@ describe("native theme (#992) cross-boundary claims", () => {
       "extracted no AppliedNativeTheme variants — the parser broke",
     ).toBeGreaterThan(4);
 
-    const attrs = RUST.match(/((?:#\[[^\]]*\]\s*)*)enum AppliedNativeTheme\s*\{/);
+    const attrs = RUST.match(
+      /((?:#\[[^\]]*\]\s*)*)(?:pub(?:\(crate\))?\s+)?enum AppliedNativeTheme\s*\{/,
+    );
     expect(attrs?.[1] ?? "", "AppliedNativeTheme lost its kebab-case serde rename").toMatch(
       /rename_all\s*=\s*"kebab-case"/,
     );
@@ -305,7 +346,9 @@ describe("native theme (#992) cross-boundary claims", () => {
       "extracted no NativeThemeErrorCode variants — the parser broke",
     ).toBeGreaterThan(2);
 
-    const enumAttrs = RUST.match(/((?:#\[[^\]]*\]\s*)*)enum NativeThemeErrorCode\s*\{/);
+    const enumAttrs = RUST.match(
+      /((?:#\[[^\]]*\]\s*)*)(?:pub(?:\(crate\))?\s+)?enum NativeThemeErrorCode\s*\{/,
+    );
     expect(enumAttrs?.[1] ?? "", "NativeThemeErrorCode lost its kebab-case serde rename").toMatch(
       /rename_all\s*=\s*"kebab-case"/,
     );
@@ -313,8 +356,13 @@ describe("native theme (#992) cross-boundary claims", () => {
     // The rename on the STRUCT governs FIELD names, where kebab-case would be wrong
     // for any future multi-word field (`retryAfterMs` -> `retry-after-ms`), and where
     // camelCase matches what every other payload in this feature uses.
-    const structAttrs = RUST.match(/((?:#\[[^\]]*\]\s*)*)struct NativeThemeError\s*\{/);
-    expect(structAttrs, "lib.rs no longer declares struct NativeThemeError").not.toBeNull();
+    const structAttrs = RUST.match(
+      /((?:#\[[^\]]*\]\s*)*)(?:pub(?:\(crate\))?\s+)?struct NativeThemeError\s*\{/,
+    );
+    expect(
+      structAttrs,
+      `${NATIVE_THEME.rel} no longer declares struct NativeThemeError`,
+    ).not.toBeNull();
     expect(structAttrs?.[1] ?? "", "NativeThemeError must serialize its FIELDS camelCase").toMatch(
       /rename_all\s*=\s*"camelCase"/,
     );
@@ -411,5 +459,37 @@ describe("native theme (#992) cross-boundary claims", () => {
     // is where the High-Contrast disambiguation has to live, so the test is "an `if`
     // ahead of a `=>` on the same line", not "an `if` anywhere".
     expect(code, "a match guard would force a catch-all arm").not.toMatch(/^[^\n]*\bif\b[^\n]*=>/m);
+  });
+
+  it("scans a real Rust module, found by search rather than named here", () => {
+    // The control on the location step. Every spec above reads `NATIVE_THEME.text`,
+    // so a walk that returned nothing, or a `rustSourceDefining` that resolved to
+    // some unrelated file, would change what each of them is really asserting
+    // without changing whether they pass. Assert the walk is populated, that the
+    // module it found is a distinct file from `lib.rs` (which is the whole point
+    // after Unit 11c), and that the two commands the client invokes are BOTH in
+    // the file it found -- not merely somewhere under src-tauri/src.
+    //
+    // What this deliberately does NOT assert is the module's FILENAME. Renaming
+    // `native_theme.rs` leaves this file green, and that is the intended answer,
+    // not a hole: a rename breaks none of the claims here, the code is still
+    // read, and a guard that fails on a harmless rename is noise its next reader
+    // learns to route around. Measured -- the rename was run as a mutation
+    // alongside the six that must go red, and it is the only one that stays
+    // green on purpose.
+    const rel = rustSources().map((f) => f.rel);
+    expect(rel.length, "the Rust source walk found almost nothing").toBeGreaterThan(10);
+    expect(rel).toContain("src-tauri/src/lib.rs");
+    expect(rel, "the located module must be one of the files the walk returned").toContain(
+      NATIVE_THEME.rel,
+    );
+    expect(
+      NATIVE_THEME.rel,
+      "the native-theme cluster was extracted out of lib.rs in Unit 11c; if this " +
+        "resolves back to lib.rs the search matched the wrong construct",
+    ).not.toBe("src-tauri/src/lib.rs");
+    for (const command of ["get_app_theme", "set_native_theme"]) {
+      expect(RUST, `${command} is not defined in ${NATIVE_THEME.rel}`).toContain(`fn ${command}(`);
+    }
   });
 });

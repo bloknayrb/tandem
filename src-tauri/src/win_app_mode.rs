@@ -71,8 +71,8 @@ use std::sync::OnceLock;
 // here is invisible to the type-checker on every other host — and the classification
 // that maps this outcome onto the IPC contract (`applied_native_theme`, #1368) has to
 // be ungated and unit-testable on the machines this is developed on. Same reasoning,
-// and the same shape, as `crate::AppMode` and `crate::HighContrast` above/below.
-use crate::AppModeOutcome;
+// and the same shape, as `crate::native_theme::AppMode` and `crate::native_theme::HighContrast` above/below.
+use crate::native_theme::AppModeOutcome;
 
 use windows_sys::Win32::Foundation::{FARPROC, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
@@ -82,7 +82,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETHIGHCONTRAST, SystemPar
 /// Mirrors uxtheme.dll's `PreferredAppMode` enum exactly — this is the raw
 /// Win32 ABI type passed by value across the ordinal-135 FFI boundary, and
 /// its variant order is load-bearing. It is intentionally a different type
-/// from `crate::AppMode`, which is the platform-agnostic decision
+/// from `crate::native_theme::AppMode`, which is the platform-agnostic decision
 /// `native_theme_action` (in `lib.rs`) produces and is unit-tested on every
 /// host; keeping them separate means the FFI shape can never leak into the
 /// pure decision layer.
@@ -108,16 +108,16 @@ enum PreferredAppMode {
     ForceLight = 3,
 }
 
-impl From<crate::AppMode> for PreferredAppMode {
-    fn from(mode: crate::AppMode) -> Self {
+impl From<crate::native_theme::AppMode> for PreferredAppMode {
+    fn from(mode: crate::native_theme::AppMode) -> Self {
         match mode {
-            crate::AppMode::ForceDark => PreferredAppMode::ForceDark,
-            crate::AppMode::ForceLight => PreferredAppMode::ForceLight,
+            crate::native_theme::AppMode::ForceDark => PreferredAppMode::ForceDark,
+            crate::native_theme::AppMode::ForceLight => PreferredAppMode::ForceLight,
             // Release maps to AllowDark, not Default — AllowDark is what tao
             // itself installs at event-loop init
             // (`windows/event_loop.rs:195`), so releasing restores the status
             // quo ante rather than switching to a third, different mode.
-            crate::AppMode::AllowDark => PreferredAppMode::AllowDark,
+            crate::native_theme::AppMode::AllowDark => PreferredAppMode::AllowDark,
         }
     }
 }
@@ -213,7 +213,7 @@ fn build_supports_app_mode() -> bool {
 /// the tray menu (#992). See the module doc for what this does NOT reach.
 /// A non-`Applied` outcome is an unsupported-host no-op, not an error, but
 /// the caller is expected to log which one — see `apply_app_mode` in `lib.rs`.
-pub fn set_preferred_app_mode(mode: crate::AppMode) -> AppModeOutcome {
+pub fn set_preferred_app_mode(mode: crate::native_theme::AppMode) -> AppModeOutcome {
     if !build_supports_app_mode() {
         return AppModeOutcome::UnsupportedBuild;
     }
@@ -279,7 +279,7 @@ pub fn set_preferred_app_mode(mode: crate::AppMode) -> AppModeOutcome {
 /// `useHighContrast.ts`). The two are unrelated despite the shared name —
 /// this one gates whether we may override the OS appearance at all, and a
 /// future reader should not wire them together.
-pub fn probe_high_contrast() -> crate::HighContrast {
+pub fn probe_high_contrast() -> crate::native_theme::HighContrast {
     let mut hc = HIGHCONTRASTW {
         cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,
         dwFlags: 0,
@@ -318,14 +318,14 @@ pub fn probe_high_contrast() -> crate::HighContrast {
 /// `SystemParametersInfoW` silently return FALSE — so tao's High Contrast
 /// neutralization never fires, and the two readings in this process disagree.
 /// Tracked in #1367.
-fn high_contrast_from(ok: i32, flags: u32) -> crate::HighContrast {
+fn high_contrast_from(ok: i32, flags: u32) -> crate::native_theme::HighContrast {
     if ok == 0 {
-        return crate::HighContrast::Unknown;
+        return crate::native_theme::HighContrast::Unknown;
     }
     if (flags & HCF_HIGHCONTRASTON) != 0 {
-        crate::HighContrast::On
+        crate::native_theme::HighContrast::On
     } else {
-        crate::HighContrast::Off
+        crate::native_theme::HighContrast::Off
     }
 }
 
@@ -343,18 +343,18 @@ mod tests {
         // The single point where dark and light could be transposed. The
         // symptom of getting it wrong is "user picks dark, gets a light
         // context menu" — i.e. exactly the bug #992 exists to fix — and it is
-        // invisible to every other test, which all stop at `crate::AppMode`.
+        // invisible to every other test, which all stop at `crate::native_theme::AppMode`.
         assert_eq!(
-            PreferredAppMode::from(crate::AppMode::ForceDark),
+            PreferredAppMode::from(crate::native_theme::AppMode::ForceDark),
             PreferredAppMode::ForceDark
         );
         assert_eq!(
-            PreferredAppMode::from(crate::AppMode::ForceLight),
+            PreferredAppMode::from(crate::native_theme::AppMode::ForceLight),
             PreferredAppMode::ForceLight
         );
         // Release maps to AllowDark, not Default — see the `From` impl.
         assert_eq!(
-            PreferredAppMode::from(crate::AppMode::AllowDark),
+            PreferredAppMode::from(crate::native_theme::AppMode::AllowDark),
             PreferredAppMode::AllowDark
         );
     }
@@ -376,10 +376,10 @@ mod tests {
         // Fails CLOSED: the flags are all-clear (i.e. "off"), but a zero
         // return means we could not tell, and the guard must not read that as
         // permission to override an accessibility setting.
-        assert_eq!(high_contrast_from(0, 0), crate::HighContrast::Unknown);
+        assert_eq!(high_contrast_from(0, 0), crate::native_theme::HighContrast::Unknown);
         assert_eq!(
             high_contrast_from(0, HCF_HIGHCONTRASTON),
-            crate::HighContrast::Unknown
+            crate::native_theme::HighContrast::Unknown
         );
     }
 
@@ -387,8 +387,8 @@ mod tests {
     fn a_successful_high_contrast_query_reads_the_flag() {
         assert_eq!(
             high_contrast_from(1, HCF_HIGHCONTRASTON),
-            crate::HighContrast::On
+            crate::native_theme::HighContrast::On
         );
-        assert_eq!(high_contrast_from(1, 0), crate::HighContrast::Off);
+        assert_eq!(high_contrast_from(1, 0), crate::native_theme::HighContrast::Off);
     }
 }

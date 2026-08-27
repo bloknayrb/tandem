@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { REPO_ROOT, RUST_SRC, rustSources } from "./rust-sources.js";
 
 /**
  * Pins the parts of #1416's fix that **nothing else can fail on**.
@@ -35,39 +36,8 @@ import { describe, expect, it } from "vitest";
  * mistaken for one that is present.
  */
 
-const REPO_ROOT = join(import.meta.dirname, "..", "..");
-const RUST_SRC = join(REPO_ROOT, "src-tauri", "src");
 const LIB_RS = join(RUST_SRC, "lib.rs");
 const CLIENT_MAP = join(REPO_ROOT, "src", "client", "utils", "startup-rejection.ts");
-
-/**
- * Every Rust source file, **derived from disk rather than named here**.
- *
- * The wire-code half of this test used to read `lib.rs` alone. That was correct
- * only while every `CODE_*` constant lived there, and it stopped being correct
- * the moment one was extracted into a module (Unit 11a moved
- * `CODE_UPDATE_MAY_NOT_HAVE_COMPLETED` into `pending_update.rs`). A hardcoded
- * scope does not follow the code: the constant simply left the scan, and the
- * parity check would have gone quiet about it.
- *
- * Re-pointing at a fixed pair of files would have reproduced the same bug one
- * extraction later — `lib.rs` is mid-way through being split into six modules.
- * Deriving the set is what makes this survive the rest of that split, and
- * `scans every Rust source file` below is the positive control on the set
- * itself, because a walk that silently returns nothing satisfies every
- * assertion built on it.
- */
-function rustSources(): Array<{ rel: string; text: string }> {
-  return readdirSync(RUST_SRC, { recursive: true, withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.endsWith(".rs"))
-    .map((e) => {
-      const abs = join(e.parentPath, e.name);
-      return {
-        rel: abs.slice(REPO_ROOT.length + 1).replace(/\\/g, "/"),
-        text: readFileSync(abs, "utf8"),
-      };
-    });
-}
 
 /**
  * Drop `#[cfg(test)] mod ... { ... }` blocks.
