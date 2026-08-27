@@ -70,6 +70,7 @@ import { createStore, resetForTesting as storeReset } from "../../src/server/ann
 import { openFromDisk, openFromUpload, openScratchpad } from "../../src/server/documents/open.js";
 import { getActiveDocEpoch, getActiveDocId } from "../../src/server/documents/registry.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { MAX_DOCX_PART_BYTES } from "../../src/server/file-io/docx-size-gate.js";
 import { watchFile } from "../../src/server/file-watcher.js";
 import { extractText, restoreOpenDocuments } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
@@ -439,6 +440,36 @@ describe("open failures keep their error codes", () => {
     // before Unit 7b decides which failures become `OpenFailure` variants.
     expect(await codeOf(() => openFromUpload("payload.docx", "not a zip"))).toBe("INVALID_SOURCE");
   });
+
+  it("a declared-size .docx bomb throws DOCX_TOO_LARGE through the OPEN path", async () => {
+    // The one open error whose `code` comes from a class field rather than an
+    // `Object.assign`, which makes it the most fragile to a normalizing
+    // rewrap. `docx-size-gate-call-sites.test.ts` covers it by calling
+    // `getAdapter("docx").parse(bomb)` directly — that test stays green no
+    // matter what the open path does to the error on its way out, so this
+    // pins the join: the gate fires inside `loadContentIntoDoc →
+    // prepareContent` and the code survives to the caller.
+    //
+    // The archive over-declares its uncompressed size and is refused by the
+    // declared-size pass, so nothing here inflates 32MB — the built zip is
+    // under a megabyte.
+    const { default: JSZip } = await import("jszip");
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/media/blob.bin", Buffer.alloc(MAX_DOCX_PART_BYTES + 8 * 1024 * 1024, 0x41));
+    const bomb = (await zip.generateAsync({
+      type: "nodebuffer",
+      compression: "DEFLATE",
+    })) as Buffer;
+    expect(bomb.length, "control: it sails through every COMPRESSED-size check").toBeLessThan(
+      1024 * 1024,
+    );
+
+    const filePath = path.join(tmpDir, "bomb.docx");
+    await fs.writeFile(filePath, bomb);
+
+    expect(await codeOf(() => openFromDisk(filePath))).toBe("DOCX_TOO_LARGE");
+  }, 60_000);
 
   it("an OS errno from the read reaches the caller unchanged", async () => {
     // EBUSY / EPERM are the most user-visible open failures the product has on
