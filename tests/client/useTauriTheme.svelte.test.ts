@@ -2013,7 +2013,7 @@ describe("setNativeTheme (#992)", () => {
  * #1364 — an OS High Contrast toggle must re-issue the CURRENT preference.
  *
  * The Windows guard that declines to force an app mode while High Contrast is on
- * (`native_theme_action`, lib.rs) samples `SPI_GETHIGHCONTRAST` once per push, and
+ * (`native_theme_action`, native_theme.rs) samples `SPI_GETHIGHCONTRAST` once per push, and
  * nothing subscribes to changes. Since the preference has not changed, `createTheme`'s
  * effect does not re-run and the dedupe latch would refuse the push if it did — so the
  * forced app mode stayed in place until the user's next theme change.
