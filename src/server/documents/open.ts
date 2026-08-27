@@ -14,14 +14,22 @@
  *     until then `restoreOpenDocuments` calls `file-opener` directly, through
  *     the dynamic import that breaks the module cycle.
  *
- * Every disk, upload and scratchpad caller in `src/` now goes through this
- * module, but **the redirect is not the whole of file-open and is not meant to
- * be.** `routes/backups.ts`, `routes/document-reload.ts`,
- * `routes/external-conflict.ts` and `mcp/docx-apply.ts` still import
- * `mcp/file-opener.ts` for `restoreDocumentFromBackup`,
- * `reloadDocumentFromMarkdown` and `resolveExternalConflict` — reload-family
- * entries this seam does not name. Deleting `file-opener.ts` therefore waits
- * for Unit 7c, not for this redirect.
+ * Every **non-restore** disk caller in `src/`, and every upload and scratchpad
+ * caller, now goes through this module — but **the redirect is not the whole of
+ * file-open and is not meant to be.** Five modules still reach
+ * `mcp/file-opener.ts`, and each is sanctioned by name in
+ * `tests/server/documents-open.test.ts`:
+ *
+ *   - `routes/backups.ts` and `mcp/docx-apply.ts` — `restoreDocumentFromBackup`
+ *   - `routes/document-reload.ts` — `reloadDocumentFromMarkdown`
+ *   - `routes/external-conflict.ts` — `resolveExternalConflict`
+ *   - `mcp/document-service.ts` — three **dynamic** imports:
+ *     `wireAnnotationStore` (Save-As promote), `wireAnnotationStore` +
+ *     `wireFileWatcher` (rename), and `openFileByPath` (restore)
+ *
+ * The first four are reload-family entries this seam does not name. The fifth
+ * is the cycle break. Deleting `file-opener.ts` therefore waits for Unit 7c,
+ * not for this redirect.
  *
  * Each named entry still forwards to the implementation in
  * `src/server/mcp/file-opener.ts`. Unit 7a moves the shared pipeline (path
@@ -40,8 +48,13 @@
  * boolean-flag `OpenFileResult` so callers that want to branch on an enum
  * instead of three booleans can do so today without waiting for the full shape
  * migration. Unit 7b promotes it to a real discriminator — and must pin this
- * precedence ordering first, because the booleans are disjoint by accident
- * (two of them are hardcoded `false` at their construction sites), not by type.
+ * precedence ordering first, because the booleans are disjoint by accident, not
+ * by type: the shared `buildResult` factory hardcodes `alreadyOpen` and
+ * `forceReloaded` to `false`, and `restoredFromSession` is hardcoded at four of
+ * the five construction sites and computed at exactly one. Disjointness holds
+ * by exhaustion, so the precedence cannot currently be observed — which is
+ * precisely why promoting it to a discriminator needs it pinned first. The same
+ * ladder is duplicated at `mcp/document.ts`, so 7b has two copies to reconcile.
  */
 
 export {
@@ -60,7 +73,8 @@ import type { OpenFileResult } from "../mcp/file-opener.js";
  * type; part 1 exposes it as a derivation so callers can adopt the
  * vocabulary now.
  *
- *   - `fresh`            — first time this session, content loaded from disk/upload/empty
+ *   - `fresh`            — first time this session; content loaded from disk or
+ *                          upload, or seeded from a scratchpad's optional content
  *   - `restored`         — disk-cached session state was applied; no disk re-read
  *   - `already-open`     — caller asked for a doc that's already tracked; no-op switch
  *   - `force-reloaded`   — caller passed `force: true`; doc state replaced from disk

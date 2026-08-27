@@ -28,6 +28,13 @@
  *   - **Error-path identity.** HTTP status and MCP error code are both derived
  *     from the thrown `err.code`. Any wrapping — even a `try`/`catch` that
  *     rethrows a new Error — silently changes both.
+ * Entry points are called through `documents/open.ts`, never through
+ * `mcp/file-opener.ts`. This file's whole claim is that it stays green WITHOUT
+ * being edited across the ADR-034 moves — and Unit 7a empties the
+ * implementation module, so importing from it directly would have forced an
+ * edit and voided the claim. That is the same mistake `documents-open.test.ts`
+ * was rewritten to fix, and it was reintroduced one file over.
+ *
  *   - **Scratchpad's populate bypass.** It calls `adapter.apply` directly
  *     rather than going through `populateDocFromContent`, so it is the one
  *     path where a "unification" could quietly lose the attach-before-populate
@@ -60,16 +67,12 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 
 import { docHash } from "../../src/server/annotations/doc-hash.js";
 import { createStore, resetForTesting as storeReset } from "../../src/server/annotations/store.js";
-import { getActiveDocId } from "../../src/server/documents/registry.js";
+import { openFromDisk, openFromUpload, openScratchpad } from "../../src/server/documents/open.js";
+import { getActiveDocEpoch, getActiveDocId } from "../../src/server/documents/registry.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { watchFile } from "../../src/server/file-watcher.js";
 import { extractText, restoreOpenDocuments } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import {
-  openFileByPath,
-  openFileFromContent,
-  openScratchpad,
-} from "../../src/server/mcp/file-opener.js";
 import {
   getBuffer,
   resetForTesting as notificationsReset,
@@ -80,7 +83,9 @@ import {
   CHARS_PER_PAGE,
   CTRL_ROOM,
   LARGE_FILE_PAGE_THRESHOLD,
+  MAX_FILE_SIZE,
   VERY_LARGE_FILE_PAGE_THRESHOLD,
+  Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ANNOTATIONS,
   Y_MAP_DOCUMENT_META,
   Y_MAP_SAVED_AT_VERSION,
@@ -123,6 +128,28 @@ function watchTransactions(doc: Y.Doc) {
   return () => count;
 }
 
+/**
+ * The activation epoch, read straight off CTRL_ROOM.
+ *
+ * The transaction count above is a proxy: it is what "one broadcast" looks like
+ * from outside, but an ADR-031-motivated split writing the doc list and the
+ * active pointer under two different origin helpers would be behaviour-identical
+ * to every client and turn all five counts red. The epoch delta is what the harm
+ * is actually made of — the client reads an advance as a genuine focus event and
+ * lets it override a tab switch the user made in between — so both are asserted:
+ * the count catches a duplicated broadcast, the delta names why it matters.
+ */
+function activeEpoch(): number {
+  return getActiveDocEpoch();
+}
+
+/** The epoch CTRL_ROOM currently advertises to clients. */
+function publishedEpoch(): number {
+  return (getOrCreateDocument(CTRL_ROOM)
+    .getMap(Y_MAP_DOCUMENT_META)
+    .get(Y_MAP_ACTIVE_DOCUMENT_EPOCH) ?? 0) as number;
+}
+
 // ---------------------------------------------------------------------------
 // Exactly one documentMeta broadcast per open
 // ---------------------------------------------------------------------------
@@ -137,51 +164,66 @@ describe("one open, one broadcast", () => {
     await fs.writeFile(filePath, "# Fresh\n\nBody.\n");
 
     const ctrlWrites = watchTransactions(getOrCreateDocument(CTRL_ROOM));
-    const result = await openFileByPath(filePath);
+    const epochBefore = activeEpoch();
+    const result = await openFromDisk(filePath);
 
     expect(result.documentId, "control: the open actually succeeded").toBeTruthy();
     expect(ctrlWrites(), "exactly one documentMeta publish").toBe(1);
+    expect(activeEpoch() - epochBefore, "…and exactly one activation-epoch advance").toBe(1);
+    expect(publishedEpoch(), "…which is the epoch the broadcast carried").toBe(activeEpoch());
   });
 
   it("publishes once for an upload", async () => {
     const ctrlWrites = watchTransactions(getOrCreateDocument(CTRL_ROOM));
-    const result = await openFileFromContent("uploaded.md", "# Uploaded\n");
+    const epochBefore = activeEpoch();
+    const result = await openFromUpload("uploaded.md", "# Uploaded\n");
 
     expect(result.documentId).toBeTruthy();
     expect(ctrlWrites(), "exactly one documentMeta publish").toBe(1);
+    expect(activeEpoch() - epochBefore, "…and exactly one activation-epoch advance").toBe(1);
+    expect(publishedEpoch(), "…which is the epoch the broadcast carried").toBe(activeEpoch());
   });
 
   it("publishes once for a scratchpad", async () => {
     const ctrlWrites = watchTransactions(getOrCreateDocument(CTRL_ROOM));
+    const epochBefore = activeEpoch();
     const result = await openScratchpad("# Scratch\n");
 
     expect(result.documentId).toBeTruthy();
     expect(ctrlWrites(), "exactly one documentMeta publish").toBe(1);
+    expect(activeEpoch() - epochBefore, "…and exactly one activation-epoch advance").toBe(1);
+    expect(publishedEpoch(), "…which is the epoch the broadcast carried").toBe(activeEpoch());
   });
 
   it("publishes once when re-opening an already-open document", async () => {
     const filePath = path.join(tmpDir, "again.md");
     await fs.writeFile(filePath, "# Again\n");
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
 
     const ctrlWrites = watchTransactions(getOrCreateDocument(CTRL_ROOM));
-    const result = await openFileByPath(filePath);
+    const epochBefore = activeEpoch();
+    const result = await openFromDisk(filePath);
 
     expect(result.alreadyOpen, "control: this is the already-open branch").toBe(true);
     expect(ctrlWrites(), "a re-open is still exactly one publish").toBe(1);
+    expect(activeEpoch() - epochBefore, "…and exactly one activation-epoch advance").toBe(1);
+    expect(publishedEpoch(), "…which is the epoch the broadcast carried").toBe(activeEpoch());
   });
 
   it("publishes once for a force reload", async () => {
     const filePath = path.join(tmpDir, "forced.md");
     await fs.writeFile(filePath, "# Before\n");
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
     await fs.writeFile(filePath, "# After\n");
 
     const ctrlWrites = watchTransactions(getOrCreateDocument(CTRL_ROOM));
-    const result = await openFileByPath(filePath, { force: true });
+    const epochBefore = activeEpoch();
+    const result = await openFromDisk(filePath, { force: true });
 
     expect(result.forceReloaded, "control: this is the force branch").toBe(true);
     expect(ctrlWrites(), "a force reload is still exactly one publish").toBe(1);
+    expect(activeEpoch() - epochBefore, "…and exactly one activation-epoch advance").toBe(1);
+    expect(publishedEpoch(), "…which is the epoch the broadcast carried").toBe(activeEpoch());
   });
 });
 
@@ -191,11 +233,23 @@ describe("one open, one broadcast", () => {
 
 describe("durable annotations survive an open", () => {
   it("re-anchors a stored annotation against populated content, not an empty doc", async () => {
-    // The ordering this protects: populate → wireAnnotationStore. Inverted,
-    // `loadAndMerge` runs `refreshRange` against an EMPTY XmlFragment, every
-    // stored range resolves to nothing, the dead-relRange strip fires, and the
-    // re-anchored garbage is then durably persisted. On a clean store the
-    // inversion is invisible, which is why this writes a real envelope first.
+    // What this pins, exactly: a stored envelope reaches the Y.Map with its
+    // offsets still selecting the text they were anchored to.
+    //
+    // It is deliberately narrower than the comment that used to sit here, which
+    // claimed `loadAndMerge` re-anchors through `refreshRange` against an empty
+    // XmlFragment when populate and wiring are inverted. It does not —
+    // `refreshRange` appears nowhere in `annotations/sync.ts`, and `loadAndMerge`
+    // copies `range` verbatim out of the envelope. The only re-anchoring on any
+    // file-opener path is `reloadDocumentFromMarkdown`'s, which is the watcher
+    // reload, not open.
+    //
+    // A reviewer proved the honest limit by inverting populate and
+    // `finalizeDocOpen` in the real source: THIS test stayed green (two of the
+    // watcher tests below caught it). Making it discriminating would need a real
+    // `relRange` seeded via `anchoredRange()` AND an edit between the probe and
+    // the cold open, so the flat and CRDT answers diverge. Until then it claims
+    // only what it can see, and the inversion is covered elsewhere in the file.
     const filePath = path.join(tmpDir, "annotated.md");
     const body = "# Title\n\nThe quick brown fox jumps over the lazy dog.\n";
     await fs.writeFile(filePath, body);
@@ -206,7 +260,7 @@ describe("durable annotations survive an open", () => {
     // bytes is off by one — flat text separates blocks with a single newline —
     // and a fixture built from my model would be testing the model, not the
     // property under test, which is that the offsets SURVIVE the second open.
-    const probe = await openFileByPath(filePath);
+    const probe = await openFromDisk(filePath);
     const flat = extractText(getOrCreateDocument(probe.documentId));
     const start = flat.indexOf("quick brown fox");
     const end = start + "quick brown fox".length;
@@ -244,7 +298,7 @@ describe("durable annotations survive an open", () => {
     }));
     await store.flush();
 
-    const result = await openFileByPath(filePath);
+    const result = await openFromDisk(filePath);
     const doc = getOrCreateDocument(result.documentId);
     const annotations = doc.getMap(Y_MAP_ANNOTATIONS);
 
@@ -283,7 +337,7 @@ describe("saved-at baseline", () => {
     await fs.utimes(filePath, past, past);
     const stat = await fs.stat(filePath);
 
-    const result = await openFileByPath(filePath);
+    const result = await openFromDisk(filePath);
 
     expect(savedAt(result.documentId)).toBe(stat.mtimeMs);
     expect(savedAt(result.documentId), "…which is NOT the wall clock").toBeLessThan(
@@ -293,7 +347,7 @@ describe("saved-at baseline", () => {
 
   it("uses the wall clock for an upload, which has no file to stat", async () => {
     const before = Date.now();
-    const result = await openFileFromContent("no-file.md", "# Upload\n");
+    const result = await openFromUpload("no-file.md", "# Upload\n");
 
     const value = savedAt(result.documentId);
     expect(value).toBeGreaterThanOrEqual(before);
@@ -344,24 +398,80 @@ describe("open failures keep their error codes", () => {
   }
 
   it("a missing path throws ENOENT (→ HTTP 404, MCP FILE_NOT_FOUND)", async () => {
-    const code = await codeOf(() => openFileByPath(path.join(tmpDir, "nope.md")));
+    const code = await codeOf(() => openFromDisk(path.join(tmpDir, "nope.md")));
     expect(code).toBe("ENOENT");
   });
 
   it("an unsupported extension throws UNSUPPORTED_FORMAT (→ 400, FORMAT_ERROR)", async () => {
     const filePath = path.join(tmpDir, "binary.exe");
     await fs.writeFile(filePath, "MZ");
-    expect(await codeOf(() => openFileByPath(filePath))).toBe("UNSUPPORTED_FORMAT");
+    expect(await codeOf(() => openFromDisk(filePath))).toBe("UNSUPPORTED_FORMAT");
   });
 
   it("an unsupported upload extension throws UNSUPPORTED_FORMAT", async () => {
-    expect(await codeOf(() => openFileFromContent("payload.exe", "MZ"))).toBe("UNSUPPORTED_FORMAT");
+    expect(await codeOf(() => openFromUpload("payload.exe", "MZ"))).toBe("UNSUPPORTED_FORMAT");
+  });
+
+  it("an oversized file on disk throws FILE_TOO_LARGE (→ 413) before any read", async () => {
+    // Sparse: `truncate` sets the size without writing 50MB, and the gate reads
+    // `stat.size`, so this exercises the real branch at real cost.
+    const filePath = path.join(tmpDir, "huge-on-disk.md");
+    await fs.writeFile(filePath, "");
+    await fs.truncate(filePath, MAX_FILE_SIZE + 1);
+
+    expect(await codeOf(() => openFromDisk(filePath))).toBe("FILE_TOO_LARGE");
+  });
+
+  it("an oversized upload throws FILE_TOO_LARGE from the content length", async () => {
+    // The disk gate reads `stat.size`; the upload gate measures the payload.
+    // They are separate checks producing the same code, and only the pairing of
+    // code to status was pinned before (in the middleware test) — never the throw.
+    expect(await codeOf(() => openFromUpload("huge.md", Buffer.alloc(MAX_FILE_SIZE + 1)))).toBe(
+      "FILE_TOO_LARGE",
+    );
+  });
+
+  it("a string-bodied .docx upload throws INVALID_SOURCE", async () => {
+    // Reachable through the seam by any caller: `.docx` is a supported format,
+    // so it passes the extension gate and fails in `prepareContent`, which needs
+    // a Buffer. It falls to the default 500 arm, which makes `sendApiError` log
+    // an unhandled-error stack for what is a caller mistake — worth pinning
+    // before Unit 7b decides which failures become `OpenFailure` variants.
+    expect(await codeOf(() => openFromUpload("payload.docx", "not a zip"))).toBe("INVALID_SOURCE");
+  });
+
+  it("an OS errno from the read reaches the caller unchanged", async () => {
+    // EBUSY / EPERM are the most user-visible open failures the product has on
+    // Windows — `document.ts` turns them into FILE_LOCKED with the "another
+    // program (likely Microsoft Word) has it open" message, and `_shared.ts`
+    // maps them to 423. Both are pure Node errno passthrough with no
+    // `Object.assign` anywhere asserting them, so a selective rewrap in Unit 7a
+    // would silently downgrade the lock message to a generic 500.
+    const filePath = path.join(tmpDir, "locked.md");
+    await fs.writeFile(filePath, "# Locked\n");
+
+    const real = fs.readFile;
+    const spy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      if (String(args[0]) === filePath) {
+        throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+      }
+      return real(...(args as Parameters<typeof real>));
+    });
+
+    try {
+      expect(await codeOf(() => openFromDisk(filePath))).toBe("EBUSY");
+      expect(spy, "control: the injected failure actually fired").toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("a UNC path throws INVALID_PATH (→ 400) before any filesystem call", async () => {
-    // The ordering matters as much as the code: `is_file()` on a UNC path
-    // performs the SMB handshake the check exists to prevent.
-    expect(await codeOf(() => openFileByPath("\\\\attacker.example\\share\\doc.md"))).toBe(
+    // The ordering matters as much as the code, and the reason is specific:
+    // `realpathSync` on `\\\\evil.example\\share\\x.md` OPENS the SMB connection
+    // and leaks the NTLM hash. So the prefix rejection has to land before path
+    // resolution, not merely before the read.
+    expect(await codeOf(() => openFromDisk("\\\\attacker.example\\share\\doc.md"))).toBe(
       "INVALID_PATH",
     );
   });
@@ -384,7 +494,7 @@ describe("large-document warnings", () => {
     const filePath = path.join(tmpDir, "small.md");
     await fs.writeFile(filePath, "# Small\n\nShort body.\n");
 
-    const result = await openFileByPath(filePath);
+    const result = await openFromDisk(filePath);
     expect(result.warnings ?? [], "control: the threshold is not always tripped").toEqual([]);
   });
 
@@ -392,7 +502,7 @@ describe("large-document warnings", () => {
     const filePath = path.join(tmpDir, "large.md");
     await fs.writeFile(filePath, pagesOf(LARGE_FILE_PAGE_THRESHOLD * CHARS_PER_PAGE));
 
-    const result = await openFileByPath(filePath);
+    const result = await openFromDisk(filePath);
 
     expect(result.documentId, "the open still succeeds — a warning is not a failure").toBeTruthy();
     expect(result.warnings?.join(" ")).toMatch(/Large document/);
@@ -403,7 +513,7 @@ describe("large-document warnings", () => {
     const filePath = path.join(tmpDir, "huge.md");
     await fs.writeFile(filePath, pagesOf(VERY_LARGE_FILE_PAGE_THRESHOLD * CHARS_PER_PAGE));
 
-    const result = await openFileByPath(filePath);
+    const result = await openFromDisk(filePath);
     expect(result.warnings?.join(" ")).toMatch(/Very large document/);
   });
 });
@@ -421,10 +531,10 @@ describe("force reload failures", () => {
     // test noticing.
     const filePath = path.join(tmpDir, "vanishing.md");
     await fs.writeFile(filePath, "# Still here\n");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     await fs.rm(filePath);
 
-    await expect(openFileByPath(filePath, { force: true })).rejects.toMatchObject({
+    await expect(openFromDisk(filePath, { force: true })).rejects.toMatchObject({
       code: "ENOENT",
     });
 
@@ -513,35 +623,50 @@ describe("file-watcher reload notification", () => {
     // what the code does today — it is NOT an endorsement. The fix belongs in
     // 7b, where the notification becomes a function of the result arm; when it
     // lands, this expectation flips to 1 and the test name loses its prefix.
-    const filePath = path.join(tmpDir, "watched.md");
-    await fs.writeFile(filePath, "# Watched\n");
-    const opened = await openFileByPath(filePath);
+    //
+    // "Two toasts for ONE reload" is the whole claim, so the reload count is
+    // measured, not assumed. An earlier version asserted only the toast count —
+    // which two REAL reloads also satisfy, so applying the fix and relocating
+    // the in-flight dedupe left it green with the defect gone.
+    async function fireWatcher(name: string, times: number) {
+      const filePath = path.join(tmpDir, name);
+      await fs.writeFile(filePath, "# Watched\n");
+      const opened = await openFromDisk(filePath);
 
-    const registered = vi.mocked(watchFile).mock.calls.find(([p]) => p === filePath);
-    expect(registered, "control: the open actually registered a watcher").toBeDefined();
-    const onChange = registered?.[1] as () => Promise<void>;
+      const registered = vi.mocked(watchFile).mock.calls.find(([p]) => p === filePath);
+      expect(registered, "control: the open actually registered a watcher").toBeDefined();
+      const onChange = registered?.[1] as () => Promise<void>;
 
-    await fs.writeFile(filePath, "# Watched, changed\n");
-    notificationsReset();
+      await fs.writeFile(filePath, "# Watched, changed\n");
+      notificationsReset();
+      const docWrites = watchTransactions(getOrCreateDocument(opened.documentId));
 
-    // Both callbacks are started before either is awaited: the first holds
-    // `reloadInProgress`, so the second takes the skip branch. Driving the real
-    // callback is the point — a hand-built pair of promises could not see the
-    // discarded return value.
-    const first = onChange();
-    const second = onChange();
-    await Promise.all([first, second]);
+      // Every callback is started before any is awaited: the first holds
+      // `reloadInProgress`, so the rest take the skip branch. Driving the real
+      // callback is the point — a hand-built pair of promises could not see the
+      // discarded return value.
+      await Promise.all(Array.from({ length: times }, () => onChange()));
 
-    const reloaded = getBuffer().filter(
-      (n) => n.type === "file-reloaded" && n.documentId === opened.documentId,
-    );
-    expect(reloaded.length, "two toasts for one reload — the defect").toBe(2);
+      const toasts = getBuffer().filter(
+        (n) => n.type === "file-reloaded" && n.documentId === opened.documentId,
+      ).length;
+      return { toasts, docWrites: docWrites() };
+    }
+
+    // Baseline: what exactly one reload costs in document-room transactions.
+    const single = await fireWatcher("watched-single.md", 1);
+    expect(single.toasts, "control: one callback, one toast").toBe(1);
+    expect(single.docWrites, "control: one reload actually wrote to the doc").toBeGreaterThan(0);
+
+    const pair = await fireWatcher("watched-pair.md", 2);
+    expect(pair.toasts, "two toasts…").toBe(2);
+    expect(pair.docWrites, "…from exactly ONE reload — that is the defect").toBe(single.docWrites);
   });
 
   it("reports a failure when the reload throws", async () => {
     const filePath = path.join(tmpDir, "doomed.md");
     await fs.writeFile(filePath, "# Doomed\n");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
 
     const registered = vi.mocked(watchFile).mock.calls.find(([p]) => p === filePath);
     const onChange = registered?.[1] as () => Promise<void>;

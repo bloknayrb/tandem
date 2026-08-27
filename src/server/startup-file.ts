@@ -6,7 +6,7 @@ import { openFromDisk } from "./documents/open.js";
  * Used by the HTTP-mode startup block to honor the OS-file-association cold
  * start: the Tauri shell parses argv on Windows / Linux, extracts the file
  * path, and exports it as `TANDEM_OPEN_FILE` before spawning the Node sidecar.
- * `openFileByPath` runs synchronously before HTTP bind so the doc is in
+ * `openFromDisk` runs synchronously before HTTP bind so the doc is in
  * `openDocuments` by the time browser clients connect — required to keep stale
  * tabs from CRDT-merging an `openDocuments` list that lacks the new doc (see
  * CLAUDE.md "Startup document opens must precede server bind").
@@ -32,7 +32,7 @@ export async function maybeOpenStartupFile(envPath: string | undefined): Promise
     return false;
   }
 
-  // No activation call here, deliberately. `openFileByPath` has already
+  // No activation call here, deliberately. `openFromDisk` has already
   // registered the document, made it active and published all of that in one
   // broadcast — `finalizeDocOpen` through `openDocumentWhenReady`, and the
   // already-open branch through `activateDocument`. Re-activating would advance
