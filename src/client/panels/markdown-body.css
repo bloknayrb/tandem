@@ -1,0 +1,165 @@
+/*
+ * Shared presentation for `renderMarkdown` output.
+ *
+ * This is a plain `.css` imported from a component `<script>`, which lands
+ * GLOBAL rather than Svelte-scoped. That is the point: the same rendered HTML
+ * appears in the chat panel and in three annotation cards, and a
+ * component-scoped copy cannot reach markup another component owns. The rules
+ * lived inside `ChatPanel.svelte`'s `<style>` until #1626 for exactly that
+ * reason — they were unreachable, so annotation cards had no way to render
+ * markdown at all.
+ *
+ * It goes through lightningcss (CLAUDE.md, CSS-pipeline gotcha), so write the
+ * STANDARD property alone — a hand-written prefixed pair can collapse to the
+ * `-webkit-` form and go inert. `-webkit-line-clamp` is the documented
+ * exception and is not used here.
+ *
+ * Everything is scoped under `.tandem-markdown` so it can never leak onto
+ * user-authored text, which renders as plain text by design.
+ */
+
+.tandem-markdown {
+  /* The container is inline-flow; block children below supply their own
+     spacing. `overflow-wrap` matters more than it looks: a long unbroken token
+     (a URL, a hash) in a 160px-wide clamped annotation card otherwise pushes
+     the card past the rail and trips the E2E scrollWidth gates. */
+  overflow-wrap: anywhere;
+}
+
+/*
+ * NO `> :first-child { margin-top: 0 }` rule, deliberately — it would introduce
+ * a visible bug rather than fix one.
+ *
+ * `renderMarkdown` builds paragraphs by replacing `\n\n` with `</p><p>`, which
+ * is unbalanced: there is no opening tag at the start and no closing tag at the
+ * end. Parsed, `a\n\nb` becomes the TEXT NODE `a` followed by `<p>b</p>` — so
+ * the first paragraph is not an element at all, and `> :first-child` selects
+ * paragraph *two*. Zeroing its top margin runs the first two paragraphs
+ * together. Verified against happy-dom, not assumed.
+ *
+ * As it stands the spacing is already right: each `<p>` from the second onward
+ * carries the gap that separates it from what precedes it. Balancing the
+ * markup properly is a renderer change, not a CSS one, and it has to keep
+ * `<pre>` OUT of the wrapping `<p>` — the invalid-nesting trap this whole change
+ * exists to fix. Tracked in #1639, which also owns removing this comment and
+ * adding the rule it currently forbids.
+ */
+.tandem-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.tandem-markdown h1,
+.tandem-markdown h2,
+.tandem-markdown h3 {
+  margin: 0.5em 0 0.25em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* Headings are capped at 1em on the CARD host only (`.ab-body`, emitted by
+   AnnotationBody), not app-wide. A markdown `#` inside a 12px annotation card is
+   an emphasis marker rather than a document outline, and at the UA's 2em it
+   shouts louder than the card's own header.
+   
+   Scoped deliberately: the rules above were moved out of `ChatPanel.svelte`,
+   which set no `font-size` at all, so capping globally would silently shrink
+   every heading in Claude's chat messages from 2em to 1em — a change to a
+   surface this work is not about, justified by an argument (12px, short) that
+   does not apply to a chat bubble. */
+.ab-body.tandem-markdown h1,
+.ab-body.tandem-markdown h2,
+.ab-body.tandem-markdown h3 {
+  font-size: 1em;
+}
+
+.tandem-markdown p {
+  margin: 0.25em 0;
+}
+
+.tandem-markdown strong {
+  font-weight: 600;
+}
+
+.tandem-markdown em {
+  font-style: italic;
+}
+
+.tandem-markdown li {
+  margin-left: 1.25em;
+  list-style: disc;
+}
+
+.tandem-markdown code {
+  font-family: var(--tandem-font-mono);
+  font-size: 0.9em;
+  background: var(--tandem-surface-muted);
+  padding: 1px 4px;
+  border-radius: var(--tandem-r-2);
+}
+
+/* `pre` had NO rule before this file existed — a defect in chat, not only in
+   the annotation cards. Without `white-space: pre-wrap` the UA default is
+   `pre`, so a fenced block never wraps and scrolls the whole panel sideways;
+   `overflow-x: auto` keeps any remaining overflow inside the block. */
+.tandem-markdown pre {
+  margin: 0.4em 0;
+  padding: 6px 8px;
+  background: var(--tandem-surface-sunk);
+  border: 1px solid var(--tandem-border);
+  border-radius: var(--tandem-r-2);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Reset the inline-code chrome inside a block — otherwise every fenced block
+   carries the inline pill's background and padding on top of the `pre`'s own. */
+.tandem-markdown pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.9em;
+}
+
+/* `a` had no rule either, so links rendered in the UA's untokened blue —
+   the one colour in the app that ignores the theme entirely. */
+/* `accent-fg-strong`, NOT `accent`.
+   
+   A review-target card renders on `--tandem-accent-bg` (`AnnotationCard.svelte`
+   sets that background), and `accent` on `accent-bg` measures ~4.95:1 in light
+   mode — over the AA floor but marginal, and `index.html`'s own token comment
+   calls out that exact pairing and says `accent-fg-strong` "clears it
+   comfortably". ChatPanel already made this call twice (the anchor quote and the
+   selection indicator), so matching it is consistency, not invention.
+   
+   The underline is what satisfies SC 1.4.1 — links stay distinguishable without
+   relying on colour at all. */
+.tandem-markdown a {
+  color: var(--tandem-accent-fg-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.tandem-markdown a:hover {
+  color: var(--tandem-accent-hover);
+}
+
+/* Under forced colors, `--tandem-accent` maps to `Highlight` and
+   `--tandem-accent-hover` is not remapped at all — so a link would render in
+   the selection-FILL colour, or off the system palette entirely on hover.
+   `LinkText` is the keyword that exists for this. */
+@media (forced-colors: active) {
+  .tandem-markdown a,
+  .tandem-markdown a:hover {
+    color: LinkText;
+  }
+}
+
+/* `renderMarkdown` emits `</p><p>` for a blank line with no opening tag, so an
+   intro line followed by a fenced block parses to `intro<p></p><pre>…` — a stray
+   EMPTY paragraph carrying real vertical space. This is a band-aid on that, not
+   a fix: the fix is balancing the renderer's paragraph markup, which has to keep
+   `<pre>` outside the wrapping `<p>`. Verified against a parser. Tracked in
+   #1639, which owns deleting this rule. */
+.tandem-markdown p:empty {
+  display: none;
+}

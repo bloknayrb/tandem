@@ -8,7 +8,7 @@ import type { ChildNode } from "domhandler";
 import { Element, Text } from "domhandler";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
-import { isSnapshotTruncated, snapshotSearchPrefix } from "../../shared/snapshot.js";
+import { snapshotContradicts } from "../../shared/snapshot.js";
 import { assertDocxWithinSizeLimits } from "./docx-size-gate.js";
 import {
   findAllByName,
@@ -535,23 +535,19 @@ export async function applyTrackedChanges(
 
   for (const s of sorted) {
     // textSnapshot check — has the text under this range changed since the
-    // suggestion was accepted?
-    if (s.textSnapshot !== undefined) {
-      const actual = offsetMap.flatText.slice(s.from, s.to);
-      // A capped snapshot is a PREFIX (#1486), so it can never equal the whole
-      // slice and exact comparison rejects EVERY suggestion over a 200-char
-      // range — reported as "the text changed", which it had not. Compare what
-      // the snapshot actually claims to be: the range's opening characters.
-      const stale = isSnapshotTruncated(s)
-        ? !actual.startsWith(snapshotSearchPrefix(s))
-        : actual !== s.textSnapshot;
-      if (stale) {
-        rejectedDetails.push({
-          id: s.id,
-          reason: `Text snapshot mismatch: expected "${s.textSnapshot}", got "${actual}"`,
-        });
-        continue;
-      }
+    // suggestion was WRITTEN? (`captureSnapshot` runs at annotation creation,
+    // and everything here is already accepted, so the snapshot always predates
+    // acceptance.) The capped-snapshot-is-a-prefix rule (#1486)
+    // lives in the predicate, which the editor's accept path shares (#1629);
+    // it also absorbs the "no snapshot ⇒ nothing to contradict" case that used
+    // to be an outer guard here.
+    const actual = offsetMap.flatText.slice(s.from, s.to);
+    if (snapshotContradicts(s, actual)) {
+      rejectedDetails.push({
+        id: s.id,
+        reason: `Text snapshot mismatch: expected "${s.textSnapshot}", got "${actual}"`,
+      });
+      continue;
     }
 
     // Offset resolution check
