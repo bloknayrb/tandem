@@ -33,6 +33,14 @@ import { recoverRenamedEnvelope } from "../annotations/rename-recovery.js";
 import { annotationFileExists, createStore } from "../annotations/store.js";
 import { loadAndMerge } from "../annotations/sync.js";
 import { isDirty, markClean, markDirty, registerDirtyObserver } from "../documents/dirty.js";
+import {
+  activateDocument,
+  broadcastOpenDocs,
+  getOpenDocs,
+  type OpenDoc,
+  openDocument,
+  openDocumentWhenReady,
+} from "../documents/registry.js";
 import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
@@ -62,14 +70,8 @@ import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { sanitizeAnnotation } from "./annotations.js";
 import { detectFormat, docIdFromPath, extractText } from "./document-model.js";
 import {
-  activateDocument,
   autoSaveAllToDisk,
-  broadcastOpenDocs,
   canSaveToDisk,
-  getOpenDocs,
-  type OpenDoc,
-  openDocument,
-  openDocumentWhenReady,
   readPendingConflict,
   saveDocumentToDisk,
 } from "./document-service.js";
