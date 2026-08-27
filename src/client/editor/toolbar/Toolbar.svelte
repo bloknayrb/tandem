@@ -1266,23 +1266,27 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     gap: var(--tandem-space-2);
     padding: var(--tandem-space-3) var(--tandem-space-3) var(--tandem-space-2);
     min-width: 260px;
-    /* 420px, raised from 360px by #1444. The destination markers cost 10px +
-       gap each, which consumed the entire margin the old cap had: measured in
-       the browser at spacious density with Windows key hints (longer than the
-       mac glyphs), the actions row needs 374px for "Claude" and 385px for
-       "Assistant" — both over 360, so `Note to self` clipped on its LEFT.
-       (Overflow in a `justify-content: flex-end` row with no `flex-wrap` spills
-       off the start side, and `.morph-block` is `overflow: clip`, so the symptom
-       is a silently truncated label, not a wrapped row.)
+    /* 420px, inherited from #1444 and now VESTIGIAL — it is kept as a ceiling,
+       not as a fitting constraint, and nothing here is sized to it.
 
-       Sized for headroom rather than to the current worst case, because the
-       label is an agent family name and #1123 brings longer ones: 420 also
-       clears "Local model" (403) and "GPT-5 Codex" (408).
+       #1444 raised this from 360 because the footer was two labelled pills in a
+       `justify-content: flex-end` row that clipped on its LEFT when they
+       overflowed (a silent truncation, since `.morph-block` is `overflow:
+       clip`). The audience toggle deleted that geometry. Measured in the
+       running app: the footer needs 254px of content — toggle 149 + gap 8 +
+       commit 97 — plus 24px of card padding, against a card that renders at
+       414px because the shell pins it to the format row's natural width. Some
+       142px of slack, and the card is not content-sized in the first place.
 
-       Safe against the position clamp: computeSelectionToolbarPosition derives
-       maxLeft from the MEASURED toolbarWidth, so a wider card is pinned into
-       the viewport rather than overflowing it. Height is untouched at 28px, so
-       SELECTION_POPUP_HEIGHT_RESERVE is not back in scope. */
+       #1123's longer agent names do not bring the old risk back. The segments
+       are `minmax(0, 1fr)`, so they stay equal (72px each here) and a longer
+       family name widens the toggle by a few px per segment rather than pushing
+       a sibling off the start edge. "GPT-5 Codex" lands around 278px total.
+
+       Left in place rather than deleted because it still bounds the card if the
+       shell ever stops governing, and `computeSelectionToolbarPosition` derives
+       maxLeft from the MEASURED toolbarWidth either way, so a wider card is
+       clamped into the viewport rather than overflowing it. */
     max-width: 420px;
   }
   /* 52px, up from 28px, per the design system's annotation popup: a one-line
