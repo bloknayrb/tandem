@@ -587,7 +587,7 @@ function acceptReadback(seqAtIssue: number, next: "light" | "dark"): void {
  * and `overrideActive` is `true` while an explicit theme is set; on Linux
  * the Rust side resolves to a no-op *action* (#1363), though the round trip
  * is not itself a no-op -- the outcome still carries an `osTheme`, currently
- * a hardcoded `Light` (see `native_theme_outcome` in `lib.rs`). The client
+ * a hardcoded `Light` (see `native_theme_outcome` in `native_theme.rs`). The client
  * pushes identically on every platform. Called
  * on every `settings.theme` change: an explicit preference forces that
  * theme, and `"system"` clears the override so native surfaces resume
@@ -1103,7 +1103,7 @@ export function initTauriTheme(push: (n: TandemNotification) => void): void {
   // Re-push on an OS High Contrast change (#1364).
   //
   // The Windows guard that declines to force an app mode while High Contrast is on
-  // (`native_theme_action` in lib.rs) samples `SPI_GETHIGHCONTRAST` ONCE, at push time,
+  // (`native_theme_action` in native_theme.rs) samples `SPI_GETHIGHCONTRAST` ONCE, at push time,
   // and nothing on either side subscribes to changes. So turning High Contrast on while
   // an explicit theme was already forced left the forced app mode in place until the
   // user's next theme change: the preference has not changed, so `createTheme`'s effect

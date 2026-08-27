@@ -257,7 +257,7 @@ pub fn set_preferred_app_mode(mode: crate::native_theme::AppMode) -> AppModeOutc
 }
 
 /// True when Windows' High Contrast accessibility mode is currently active.
-/// `native_theme_action` (`lib.rs`) uses this to refuse forcing an app mode
+/// `native_theme_action` (`native_theme.rs`) uses this to refuse forcing an app mode
 /// while it's on, so an explicit theme choice never fights the user's
 /// accessibility setting. This remains a PER-CALL sample by design — nothing
 /// here subscribes to `WM_SETTINGCHANGE`. Mid-session toggling is handled on

@@ -491,8 +491,17 @@ describe("native theme (#992) cross-boundary claims", () => {
       "the native-theme cluster was extracted out of lib.rs in Unit 11c; if this " +
         "resolves back to lib.rs the search matched the wrong construct",
     ).not.toBe("src-tauri/src/lib.rs");
+    // Against `.code` -- comments and `#[cfg(test)]` modules stripped -- not
+    // `.text`. Review defeated the raw form: a block comment in an unrelated
+    // module holding two syntactically exact command signatures made
+    // `rustSourceDefining` resolve there AND made this control pass while it
+    // did, because a commented-out `fn get_app_theme(` satisfies `toContain`
+    // exactly as well as a real one.
     for (const command of ["get_app_theme", "set_native_theme"]) {
-      expect(RUST, `${command} is not defined in ${NATIVE_THEME.rel}`).toContain(`fn ${command}(`);
+      expect(
+        NATIVE_THEME.code,
+        `${command} is not defined as code in ${NATIVE_THEME.rel}`,
+      ).toContain(`fn ${command}(`);
     }
   });
 });
