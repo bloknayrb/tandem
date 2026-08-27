@@ -10,7 +10,7 @@
  * paper first and the cycle framing loses three ways:
  *
  *   1. It is red today and stays red. `documents/open.ts` already sits in a
- *      27-module strongly-connected component — `open.ts -> mcp/file-opener.ts
+ *      large strongly-connected component — `open.ts -> mcp/file-opener.ts
  *      -> mcp/annotations.ts -> mcp/document.ts -> open.ts`, all static value
  *      imports, closed by Unit 6's own redirect of `mcp/document.ts` at the
  *      seam. Four more paths close through `mcp/api-routes.ts`. None of that is
@@ -46,6 +46,7 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const SRC = join(REPO_ROOT, "src");
 const DOCUMENTS = "server/documents/";
+const TESTING_SEAM = "server/documents/registry-testing.ts";
 
 /** tsconfig `paths`. A resolver that skips non-relative specifiers drops these
  *  silently, and `@server/*` is configured-but-unused today — which is worse
@@ -66,6 +67,10 @@ interface Edge {
 /**
  * Blank comments to spaces rather than deleting them, so a prose mention of a
  * module specifier cannot be read as an import.
+ *
+ * The `[^:]` guard is load-bearing, not noise: without it the `//` in a URL
+ * inside a string literal is read as a line comment and blanks the rest of
+ * that line — including any specifier on it.
  */
 function stripComments(text: string): string {
   return text
@@ -73,17 +78,17 @@ function stripComments(text: string): string {
     .replace(/(^|[^:])\/\/[^\n]*/g, (m, p1: string) => p1 + " ".repeat(m.length - p1.length));
 }
 
-/** Every source file under `src/`, unfiltered by extension except for the
- *  declaration files that carry no runtime edges. Filtering to `.ts` would let
- *  a `.mts`/`.cts`/`.svelte` module cross the boundary unseen, and a sweep that
- *  finds zero offenders reads exactly like a pass. */
+/** Every source file under `src/`, not narrowed to `.ts`. Scoping this to the
+ *  extension the boundary happens to use today would let a `.mts`/`.cts`/
+ *  `.svelte` module cross it unseen, and a sweep that finds zero offenders
+ *  reads exactly like a pass. Declaration files carry no runtime edges. */
 function sourceFiles(): string[] {
   const out: string[] = [];
   const walk = (dir: string) => {
     for (const name of readdirSync(dir)) {
       const full = join(dir, name);
       if (statSync(full).isDirectory()) walk(full);
-      else if (/\.(ts|tsx|mts|cts|svelte)$/.test(name) && !name.endsWith(".d.ts")) {
+      else if (/\.(ts|tsx|mts|cts|svelte)$/.test(name) && !/\.d\.[mc]?ts$/.test(name)) {
         out.push(relative(SRC, full).split("\\").join("/"));
       }
     }
@@ -106,15 +111,10 @@ function resolveSpec(spec: string, fromRel: string): string | null {
   else return null;
 
   const candidates = base.endsWith(".js")
-    ? [`${base.slice(0, -3)}.ts`, `${base.slice(0, -3)}.tsx`]
-    : [];
-  candidates.push(base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`);
+    ? [`${base.slice(0, -3)}.ts`, `${base.slice(0, -3)}.tsx`, base]
+    : [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`];
   for (const c of candidates) {
-    try {
-      if (statSync(join(SRC, c)).isFile()) return c;
-    } catch {
-      /* next candidate */
-    }
+    if (statSync(join(SRC, c), { throwIfNoEntry: false })?.isFile()) return c;
   }
   return `UNRESOLVED:${spec}`;
 }
@@ -264,10 +264,23 @@ describe("the documents/ boundary is an inventory", () => {
     ).toEqual([...FAN_OUT].sort());
   });
 
-  it("every module under documents/ has at least one namer", () => {
+  it("nothing in src/ imports the test-only registry seam", () => {
+    // The one module under documents/ that is SUPPOSED to have no namer, so the
+    // sweep below has to skip it. Asserting the reason turns an unchecked
+    // carve-out into a control — and a src module reaching for the unsafe
+    // registry primitives is exactly the breach worth catching.
+    // `registry-primitive-containment.test.ts` holds the same line from the
+    // symbol side.
+    expect(
+      edges.filter((e) => e.to === TESTING_SEAM).map(format),
+      "registry-testing.ts is reachable only from tests; see registry.ts's note on the unsafe primitives",
+    ).toEqual([]);
+  });
+
+  it("every other module under documents/ has at least one namer", () => {
     // A watched module with zero fan-in produces an empty result that matches an
     // empty expectation — the per-target version of the vacuity above.
-    const modules = files.filter((f) => f.startsWith(DOCUMENTS) && !f.includes("-testing"));
+    const modules = files.filter((f) => f.startsWith(DOCUMENTS) && f !== TESTING_SEAM);
     expect(modules.length, "control: documents/ is non-empty").toBeGreaterThan(2);
     for (const m of modules) {
       expect(
@@ -283,18 +296,11 @@ describe("the documents/ boundary is an inventory", () => {
     // detection, so the verdict cannot depend on readdir order — which differs
     // between Windows and CI's Linux runner.
     const nodes = files.filter((f) => f.startsWith(DOCUMENTS));
-    const adj = new Map<string, string[]>(
-      nodes.map((n) => [
-        n,
-        [
-          ...new Set(
-            edges
-              .filter((e) => e.from === n && nodes.includes(e.to) && e.to !== n)
-              .map((e) => e.to),
-          ),
-        ],
-      ]),
-    );
+    const nodeSet = new Set(nodes);
+    const adj = new Map<string, Set<string>>(nodes.map((n) => [n, new Set<string>()]));
+    for (const e of edges) {
+      if (e.from !== e.to && nodeSet.has(e.from) && nodeSet.has(e.to)) adj.get(e.from)?.add(e.to);
+    }
 
     const index = new Map<string, number>();
     const low = new Map<string, number>();
