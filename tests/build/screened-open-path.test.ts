@@ -43,6 +43,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { rustSourceDefining } from "../docs/rust-sources.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const rustSrc = path.join(repoRoot, "src-tauri/src");
@@ -203,13 +204,25 @@ describe("the carriers between the screener and POST /api/open keep the newtype"
     ["cold_start_file", /cold_start_file: Option<ScreenedOpenPath>/],
   ];
 
+  // Each carrier is located by its own declaration rather than read out of a
+  // hardcoded `lib.rs`. All six still live there today, but Unit 11 is moving
+  // clusters out one PR at a time and **across that split a hardcoded path does
+  // not go red, it goes quiet** (epic rows 11a, 11c, 11d). `rustSourceDefining`
+  // asserts exactly one Rust source declares each, so a carrier that moves is
+  // followed, one that is deleted fails loudly, and one that is duplicated into a
+  // second module fails loudly too.
   for (const [name, re] of carriers) {
     it(`${name} carries ScreenedOpenPath, not a bare PathBuf`, () => {
-      expect(LIB).toMatch(re);
+      expect(rustSourceDefining(re, `${name}, a ScreenedOpenPath carrier`).rel).toMatch(
+        /^src-tauri\/src\/\w+\.rs$/,
+      );
     });
   }
 
   it("re-exports the type at the crate root for `tests/file_association.rs`", () => {
+    // Deliberately still keyed on `lib.rs` by path, unlike the carriers above: a
+    // crate-root re-export can only live at the crate root, so the path IS the
+    // claim here rather than an assumption about where some code happens to sit.
     expect(LIB).toMatch(/pub use open_candidate::\{[^}]*ScreenedOpenPath[^}]*\}/s);
   });
 });

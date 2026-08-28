@@ -273,8 +273,25 @@ const FAN_IN = [
   // The deduped version of this list could not see the second statement.
   "server/mcp/document-service.ts -> server/documents/registry.ts (value) x2",
   "server/mcp/document.ts -> server/documents/open.ts (value) x1",
-  "server/mcp/file-opener.ts -> server/documents/dirty.ts (value) x1",
+  "server/mcp/file-opener.ts -> server/documents/autosave.ts (value) x1",
   "server/mcp/file-opener.ts -> server/documents/registry.ts (value) x1",
+  // The reload family reaching for the shared content machinery. This edge is
+  // the point of the split: leaving `prepareContent`/`clearDocMaps` behind in
+  // file-opener.ts would have made `documents/` import back into `mcp/`.
+  "server/mcp/file-opener.ts -> server/documents/populate.ts (value) x1",
+  "server/mcp/file-opener.ts -> server/documents/annotation-wiring.ts (value) x1",
+  "server/mcp/file-opener.ts -> server/documents/conflict.ts (value) x1",
+  // document-service reaching in is the point of the conflict split: it read
+  // `Y_MAP_EXTERNAL_CONFLICT` through a helper it owned, so the watcher had to
+  // import document-service to ask a question about a map it writes itself.
+  "server/mcp/document-service.ts -> server/documents/annotation-wiring.ts (value) x1",
+  "server/mcp/document-service.ts -> server/documents/conflict.ts (value) x1",
+  "server/mcp/file-opener.ts -> server/documents/watcher.ts (value) x1",
+  "server/mcp/document-service.ts -> server/documents/watcher.ts (value) x1",
+  // The restore path, by its name on the seam. This edge replaced a dynamic
+  // import whose only purpose was breaking the cycle; a static edge here is
+  // the cycle being gone rather than deferred.
+  "server/mcp/document-service.ts -> server/documents/open.ts (value) x1",
   "server/mcp/presence-expiry.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/backups.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-raw.ts -> server/documents/registry.ts (value) x1",
@@ -296,8 +313,64 @@ const FAN_OUT = [
   "server/documents/dirty.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/dirty.ts -> shared/constants.ts (value) x1",
   "server/documents/dirty.ts -> shared/origins.ts (value) x1",
-  "server/documents/open.ts -> server/mcp/file-opener.ts (type) x1",
-  "server/documents/open.ts -> server/mcp/file-opener.ts (value) x1",
+  "server/documents/populate.ts -> server/events/queue.ts (value) x1",
+  "server/documents/populate.ts -> server/file-io/index.ts (value) x1",
+  "server/documents/populate.ts -> server/notifications.ts (value) x1",
+  "server/documents/populate.ts -> server/session/manager.ts (value) x1",
+  "server/documents/populate.ts -> shared/constants.ts (value) x1",
+  "server/documents/populate.ts -> shared/origins.ts (value) x1",
+  "server/documents/populate.ts -> shared/types.ts (type) x1",
+  "server/documents/populate.ts -> shared/utils.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/annotations/doc-hash.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/annotations/rename-recovery.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/annotations/store.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/annotations/sync.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/events/queue.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> server/notifications.ts (value) x1",
+  "server/documents/annotation-wiring.ts -> shared/utils.ts (value) x1",
+  "server/documents/conflict.ts -> server/notifications.ts (value) x1",
+  "server/documents/conflict.ts -> server/session/manager.ts (value) x1",
+  "server/documents/conflict.ts -> shared/constants.ts (value) x1",
+  "server/documents/conflict.ts -> shared/origins.ts (value) x1",
+  "server/documents/conflict.ts -> shared/types.ts (type) x1",
+  "server/documents/conflict.ts -> shared/utils.ts (value) x1",
+  // Autosave is the ONLY thing in documents/ still reaching
+  // document-service, and it is why `ensureAutoSave` got its own module
+  // instead of riding the open seam: leaving it in open.ts would have put
+  // this edge back on the pipeline that just shed it.
+  "server/documents/autosave.ts -> server/mcp/document-service.ts (value) x1",
+  "server/documents/autosave.ts -> server/session/manager.ts (value) x1",
+  "server/documents/autosave.ts -> server/yjs/provider.ts (value) x1",
+  "server/documents/open.ts -> server/file-io/index.ts (value) x1",
+  // Two edges from the seam back into mcp/, both ADR-034 residue: format
+  // detection/id derivation, and the welcome-doc tutorial annotations.
+  "server/documents/open.ts -> server/mcp/document-model.ts (value) x1",
+  "server/documents/open.ts -> server/mcp/tutorial-annotations.ts (value) x1",
+  "server/documents/open.ts -> server/session/manager.ts (value) x1",
+  "server/documents/open.ts -> server/yjs/provider.ts (value) x1",
+  "server/documents/open.ts -> shared/constants.ts (value) x1",
+  "server/documents/open.ts -> shared/origins.ts (value) x1",
+  "server/documents/open.ts -> shared/paths.ts (value) x1",
+  "server/documents/open.ts -> shared/types.ts (type) x1",
+  "server/documents/open.ts -> shared/windows-path-safety.ts (value) x1",
+  "server/documents/watcher.ts -> server/annotations/doc-hash.ts (value) x1",
+  "server/documents/watcher.ts -> server/annotations/migration-log.ts (value) x1",
+  "server/documents/watcher.ts -> server/events/queue.ts (value) x1",
+  "server/documents/watcher.ts -> server/file-io/index.ts (value) x1",
+  "server/documents/watcher.ts -> server/file-watcher.ts (value) x1",
+  // The one edge out of documents/ that points back at mcp/, and the reason
+  // this list is phrased as residue rather than as a contract: annotation
+  // sanitization has not been split out of the MCP layer yet.
+  "server/documents/watcher.ts -> server/mcp/annotations.ts (value) x1",
+  "server/documents/watcher.ts -> server/notifications.ts (value) x1",
+  "server/documents/watcher.ts -> server/positions.ts (value) x1",
+  "server/documents/watcher.ts -> server/yjs/provider.ts (value) x1",
+  "server/documents/watcher.ts -> shared/constants.ts (value) x1",
+  "server/documents/watcher.ts -> shared/origins.ts (value) x1",
+  "server/documents/watcher.ts -> shared/positions/types.ts (value) x1",
+  "server/documents/watcher.ts -> shared/snapshot.ts (value) x1",
+  "server/documents/watcher.ts -> shared/types.ts (type) x1",
+  "server/documents/watcher.ts -> shared/utils.ts (value) x1",
   "server/documents/registry.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/registry.ts -> shared/constants.ts (value) x1",
   "server/documents/registry.ts -> shared/origins.ts (value) x1",
@@ -505,18 +578,7 @@ describe("runtime export surfaces", () => {
       Object.keys(mod).sort(),
       "ADR-034 shrinks this surface: Unit 7a moves the open entries out, 7c deletes the module. A name reappearing here is the seam being undone, whatever syntax put it there",
     ).toEqual(
-      [
-        "SUPPORTED_EXTENSIONS",
-        "__testEvictPartialDocState",
-        "openFileByPath",
-        "openFileFromContent",
-        "openScratchpad",
-        "reloadDocumentFromMarkdown",
-        "resolveExternalConflict",
-        "restoreDocumentFromBackup",
-        "wireAnnotationStore",
-        "wireFileWatcher",
-      ].sort(),
+      ["reloadDocumentFromMarkdown", "resolveExternalConflict", "restoreDocumentFromBackup"].sort(),
     );
   });
 
@@ -524,7 +586,15 @@ describe("runtime export surfaces", () => {
     const mod = await import("../../src/server/documents/open.js");
     expect(
       Object.keys(mod).sort(),
-      "the seam's own surface — 7a adds openFromRestore here and 7b adds the result discriminator",
-    ).toEqual(["kindOfOpenResult", "openFromDisk", "openFromUpload", "openScratchpad"].sort());
+      "the seam's own surface — 7a added openFromRestore here and 7b adds the result discriminator",
+    ).toEqual(
+      [
+        "kindOfOpenResult",
+        "openFromDisk",
+        "openFromRestore",
+        "openFromUpload",
+        "openScratchpad",
+      ].sort(),
+    );
   });
 });

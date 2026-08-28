@@ -608,7 +608,7 @@ jobs:
 
           out="$data/sidecar.out"
           err="$data/sidecar.err"
-          # Match the shell's spawn (lib.rs start_sidecar): production mode +
+          # Match the shell's spawn (sidecar.rs start_sidecar): production mode +
           # isolated data dir, launcher OFF (no Claude/reaper spawn in CI). No auth
           # token needed — /health is loopback auth-exempt (server.ts). We exec the
           # binary directly, so $! is the node process itself — and thus the process
@@ -633,7 +633,7 @@ jobs:
             tail -n 20 "$out" 2>/dev/null || true
           }
 
-          # Port 3479 = DEFAULT_MCP_PORT (shared/constants.ts); HEALTH_URL in lib.rs.
+          # Port 3479 = DEFAULT_MCP_PORT (shared/constants.ts); HEALTH_URL in sidecar.rs.
           # Wall-clock deadline (not an iteration count) so a slow curl can't shrink
           # the window. 120s budgets notarized first-exec plus the pre-bind document
           # opens (CHANGELOG/welcome.md parse) that run before the server binds.
