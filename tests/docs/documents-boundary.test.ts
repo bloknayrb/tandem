@@ -587,14 +587,19 @@ describe("runtime export surfaces", () => {
     const mod = await import("../../src/server/documents/open.js");
     expect(
       Object.keys(mod).sort(),
-      "the seam's own surface — 7a added openFromRestore here and 7b adds the result discriminator",
+      "the seam's own surface — 7a added openFromRestore here, 7b added toWireResult",
     ).toEqual(
       [
+        // `toWireResult` is the single projector from the internal `OpenSuccess`
+        // union onto the flat JSON six sites put on the wire. It is exported
+        // because those six live in three other modules — a second copy of the
+        // projection is exactly what Unit 7b exists to prevent.
         "kindOfOpenResult",
         "openFromDisk",
         "openFromRestore",
         "openFromUpload",
         "openScratchpad",
+        "toWireResult",
       ].sort(),
     );
   });

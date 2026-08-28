@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { openFromUpload } from "../../documents/open.js";
+import { openFromUpload, toWireResult } from "../../documents/open.js";
 import { detectFormat } from "../document-model.js";
 import { sendApiError } from "./_shared.js";
 
@@ -21,7 +21,7 @@ export async function handleUpload(req: Request, res: Response): Promise<void> {
     const format = detectFormat(fileName);
     const decoded = format === "docx" ? Buffer.from(content, "base64") : String(content);
     const result = await openFromUpload(fileName, decoded);
-    res.json({ data: result });
+    res.json({ data: toWireResult(result) });
   } catch (err: unknown) {
     sendApiError(res, err);
   }

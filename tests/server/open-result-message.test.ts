@@ -3,29 +3,54 @@ import {
   kindOfOpenResult,
   type OpenFileResult,
   type OpenResultKind,
+  type OpenSuccess,
+  type OpenSuccessPayload,
+  toWireResult,
 } from "../../src/server/documents/open.js";
 import { openResultMessage } from "../../src/server/mcp/document.js";
 
 /**
- * Characterization for ADR-034 Unit 7b, written BEFORE the result type changes.
+ * Characterization for ADR-034 Unit 7b.
  *
- * Two independent copies of one precedence exist today: `kindOfOpenResult`
- * (`documents/open.ts`) and the message chain `tandem_open` returns
- * (`mcp/document.ts`, extracted here as `openResultMessage`). They agree only
- * by inspection — nothing tied them together. 7b promotes that precedence to a
- * type discriminator, and promoting an ordering nobody pinned is how a
- * "refactor" silently changes which case wins.
+ * Written first against the pre-union code, where two independent copies of
+ * one precedence existed - `kindOfOpenResult` and the message chain
+ * `tandem_open` returns - agreeing by inspection only. 7b promoted that
+ * ordering to a discriminator, and promoting an ordering nobody pinned is how
+ * a "refactor" silently changes which case wins.
  *
- * So: pin both, over the FULL cross product, including combinations the
- * pipeline cannot currently produce. The impossible ones are the point. Today
- * the booleans are disjoint by accident — the force branch hardcodes
- * `restoredFromSession: false` and `buildResult` hardcodes `alreadyOpen: false,
- * forceReloaded: false` — so only the precedence makes the mapping total. A
- * future restored-and-already-open path would resolve silently, and these rows
- * are what say which way.
+ * The specs survive that change with their subject rewritten, not weakened:
+ *
+ *   - `kindOfOpenResult` still faces the FULL 2^3 boolean cross product,
+ *     including the four combinations no path can produce. It reads the WIRE
+ *     type, where the booleans still live, so those rows still mean something:
+ *     they say how a transported result is interpreted when its flags are not
+ *     disjoint.
+ *   - The "two copies agree" spec becomes a ROUND TRIP -
+ *     `kindOfOpenResult(toWireResult(x)) === x.kind` - which is a stronger
+ *     claim than the old one, because the pair is now an encode/decode rather
+ *     than two orderings that happened to match.
+ *   - The `readOnly` rows are unchanged. `readOnly` is a distinction the four
+ *     kinds do not name, and it still applies to `fresh` alone.
  */
 
-/** The three legacy booleans alone — the table rows carry bookkeeping fields too. */
+const PAYLOAD: OpenSuccessPayload = {
+  documentId: "doc-1",
+  filePath: "/tmp/doc-1.md",
+  fileName: "doc-1.md",
+  format: "md",
+  readOnly: false,
+  source: "file",
+  tokenEstimate: 0,
+  pageEstimate: 0,
+};
+
+const ALL_KINDS: OpenResultKind[] = ["fresh", "restored", "already-open", "force-reloaded"];
+
+function success(kind: OpenResultKind, over: Partial<OpenSuccessPayload> = {}): OpenSuccess {
+  return { ...PAYLOAD, ...over, kind } as OpenSuccess;
+}
+
+/** The three legacy booleans alone - the table rows carry bookkeeping fields too. */
 function flags(c: Combination): Partial<OpenFileResult> {
   return {
     forceReloaded: c.forceReloaded,
@@ -34,16 +59,10 @@ function flags(c: Combination): Partial<OpenFileResult> {
   };
 }
 
-function result(overrides: Partial<OpenFileResult>): OpenFileResult {
+/** A wire result: the flat shape, for feeding `kindOfOpenResult` directly. */
+function wire(overrides: Partial<OpenFileResult>): OpenFileResult {
   return {
-    documentId: "doc-1",
-    filePath: "/tmp/doc-1.md",
-    fileName: "doc-1.md",
-    format: "md",
-    readOnly: false,
-    source: "file",
-    tokenEstimate: 0,
-    pageEstimate: 0,
+    ...PAYLOAD,
     restoredFromSession: false,
     alreadyOpen: false,
     forceReloaded: false,
@@ -60,7 +79,7 @@ interface Combination {
   reachable: boolean;
 }
 
-/** All 8 combinations of the three legacy booleans, with the kind each resolves to. */
+/** All 8 combinations of the three wire booleans, with the kind each resolves to. */
 const COMBINATIONS: Combination[] = [
   {
     forceReloaded: false,
@@ -134,71 +153,80 @@ describe("kindOfOpenResult — the full cross product, not just the reachable fo
   for (const c of COMBINATIONS) {
     const label = `force=${c.forceReloaded} already=${c.alreadyOpen} restored=${c.restoredFromSession}`;
     it(`resolves ${label} to '${c.kind}'${c.reachable ? "" : " (unreachable today)"}`, () => {
-      expect(kindOfOpenResult(result(flags(c)))).toBe(c.kind);
+      expect(kindOfOpenResult(wire(flags(c)))).toBe(c.kind);
     });
   }
 });
 
-describe("openResultMessage — arms x readOnly, which is 8 outcomes and only 5 sentences", () => {
-  // The whole reason this describe exists. `readOnly` is a fifth discriminator
-  // the four-kind vocabulary does not name, and because the chain is else-if it
-  // is reached ONLY when the other three are false. So a read-only document
-  // that is also restored/already-open/force-reloaded says nothing about being
-  // read only.
-  const MESSAGES: Array<{ over: Partial<OpenFileResult>; expected: string }> = [
-    { over: {}, expected: "Document opened: doc-1.md" },
-    { over: { readOnly: true }, expected: "Document opened (review only): doc-1.md" },
-    {
-      over: { restoredFromSession: true },
-      expected: "Session restored: doc-1.md (annotations preserved)",
-    },
-    { over: { alreadyOpen: true }, expected: "Switched to already-open document: doc-1.md" },
-    { over: { forceReloaded: true }, expected: "Force-reloaded from disk: doc-1.md" },
+describe("openResultMessage - kind x readOnly, which is 8 outcomes and only 5 sentences", () => {
+  // `readOnly` is a fifth distinction the four kinds do not name, and it is
+  // consulted under `fresh` alone. So a read-only document that is also
+  // restored/already-open/force-reloaded says nothing about being read only.
+  const MESSAGES: Array<[OpenSuccess, string]> = [
+    [success("fresh"), "Document opened: doc-1.md"],
+    [success("fresh", { readOnly: true }), "Document opened (review only): doc-1.md"],
+    [success("restored"), "Session restored: doc-1.md (annotations preserved)"],
+    [success("already-open"), "Switched to already-open document: doc-1.md"],
+    [success("force-reloaded"), "Force-reloaded from disk: doc-1.md"],
   ];
 
-  for (const { over, expected } of MESSAGES) {
-    it(`says "${expected}" for ${JSON.stringify(over)}`, () => {
-      expect(openResultMessage(result(over))).toBe(expected);
+  for (const [result, expected] of MESSAGES) {
+    it(`says "${expected}" for kind '${result.kind}' readOnly=${result.readOnly}`, () => {
+      expect(openResultMessage(result)).toBe(expected);
     });
   }
 
-  // #1591's shape. These three are the recorded gap: setting readOnly changes
-  // NOTHING once another flag is set. If a later PR fixes the wording, these
-  // rows are what it has to change deliberately — which is the point of
-  // characterizing rather than quietly preserving.
-  const READ_ONLY_IS_SWALLOWED: Array<[string, Partial<OpenFileResult>]> = [
-    ["restored", { restoredFromSession: true }],
-    ["already-open", { alreadyOpen: true }],
-    ["force-reloaded", { forceReloaded: true }],
-  ];
+  it("has a distinct sentence for every kind", () => {
+    // Guards against a future kind quietly reusing another's wording, which
+    // would leave the per-kind rows above unable to tell the two apart.
+    const sentences = ALL_KINDS.map((kind) => openResultMessage(success(kind)));
+    expect(new Set(sentences).size).toBe(ALL_KINDS.length);
+  });
 
-  for (const [kind, over] of READ_ONLY_IS_SWALLOWED) {
+  // #1591's shape. These three are the recorded gap: setting readOnly changes
+  // NOTHING for a non-fresh kind. If a later PR fixes the wording, these rows
+  // are what it has to change deliberately - which is the point of
+  // characterizing rather than quietly preserving.
+  for (const kind of ALL_KINDS.filter((k) => k !== "fresh")) {
     it(`gives a ${kind} document the SAME sentence whether or not it is read-only`, () => {
-      const writable = openResultMessage(result(over));
-      const readOnly = openResultMessage(result({ ...over, readOnly: true }));
+      const writable = openResultMessage(success(kind));
+      const readOnly = openResultMessage(success(kind, { readOnly: true }));
       expect(readOnly).toBe(writable);
       expect(readOnly).not.toContain("review only");
     });
   }
 });
 
-describe("the two precedence copies agree", () => {
-  // The tie that did not exist. Reordering either chain alone now goes red.
-  const SENTENCE_FOR_KIND: Record<OpenResultKind, string> = {
-    fresh: "Document opened: doc-1.md",
-    restored: "Session restored: doc-1.md (annotations preserved)",
-    "already-open": "Switched to already-open document: doc-1.md",
-    "force-reloaded": "Force-reloaded from disk: doc-1.md",
-  };
-
-  for (const c of COMBINATIONS) {
-    const label = `force=${c.forceReloaded} already=${c.alreadyOpen} restored=${c.restoredFromSession}`;
-    it(`message for ${label} matches its kind '${c.kind}'`, () => {
-      // Writable only: readOnly's fifth branch is outside the kind vocabulary,
-      // which is exactly what the describe above records.
-      expect(openResultMessage(result(flags(c)))).toBe(
-        SENTENCE_FOR_KIND[kindOfOpenResult(result(flags(c)))],
-      );
+describe("toWireResult and kindOfOpenResult are a round trip", () => {
+  for (const kind of ALL_KINDS) {
+    it(`encodes and decodes '${kind}'`, () => {
+      expect(kindOfOpenResult(toWireResult(success(kind)))).toBe(kind);
     });
   }
+
+  it("sets exactly one boolean for every kind except fresh, and none for fresh", () => {
+    for (const kind of ALL_KINDS) {
+      const w = toWireResult(success(kind));
+      const set = [w.restoredFromSession, w.alreadyOpen, w.forceReloaded].filter(Boolean).length;
+      expect(set, `kind '${kind}' set ${set} booleans`).toBe(kind === "fresh" ? 0 : 1);
+    }
+  });
+
+  it("only ever emits combinations the decoder reads back unambiguously", () => {
+    // The encoder can only produce disjoint flags, so every encoded result
+    // lands on a REACHABLE row of COMBINATIONS. This is what ties the two
+    // tables together: a new kind that forgot to set its boolean would collide
+    // with `fresh` here rather than passing quietly.
+    const reachable = new Set(
+      COMBINATIONS.filter((c) => c.reachable).map(
+        (c) => `${c.forceReloaded}${c.alreadyOpen}${c.restoredFromSession}`,
+      ),
+    );
+    for (const kind of ALL_KINDS) {
+      const w = toWireResult(success(kind));
+      expect([...reachable]).toContain(
+        `${w.forceReloaded}${w.alreadyOpen}${w.restoredFromSession}`,
+      );
+    }
+  });
 });

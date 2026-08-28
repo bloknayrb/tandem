@@ -19,7 +19,7 @@ import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
-import { type OpenFileResult, openFromDisk, openScratchpad } from "../documents/open.js";
+import { type OpenSuccess, openFromDisk, openScratchpad, toWireResult } from "../documents/open.js";
 import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast } from "../file-io/mdast-ydoc.js";
@@ -139,29 +139,40 @@ export interface OutlineEntry {
 /**
  * The user-facing sentence `tandem_open` returns for a successful open.
  *
- * Extracted verbatim from the inline ternary it used to be, with no wording
- * change, because it is a **second copy of `kindOfOpenResult`'s precedence**
- * (`documents/open.ts:828-833`) and nothing tied the two together. Two
- * independent orderings that agree only by inspection is what a
- * characterization step exists to catch before a refactor promotes one of them
- * to a discriminator.
+ * This used to be an inline `else if` chain over the three result booleans —
+ * a **second, independent copy of `kindOfOpenResult`'s precedence** that
+ * nothing tied to the first. It now switches on `OpenSuccess["kind"]`, which
+ * the pipeline decided at construction, so there is one ordering rather than
+ * two that agreed by inspection.
  *
- * **`readOnly` is a fifth discriminator, and the chain is `else if`.** So it is
- * consulted only when the other three are false — a restored, already-open or
- * force-reloaded document that is ALSO read-only says nothing about being read
- * only. That is today's behaviour and this function preserves it exactly;
+ * **`readOnly` is a fifth distinction the four kinds do not name**, and the
+ * old chain reached it only when the other three were false. That is preserved
+ * exactly: the `readOnly` split lives under `fresh` alone, so a restored,
+ * already-open or force-reloaded document that is ALSO read-only still says
+ * nothing about being read only. The switch makes that a visible choice
+ * instead of a fall-through consequence, but it is the same behaviour;
  * `tests/server/open-result-message.test.ts` pins all eight
- * `(kind × readOnly)` combinations so the gap is recorded rather than
+ * `(kind × readOnly)` combinations so the gap stays recorded rather than
  * rediscovered. Changing the wording is a behaviour change and belongs in its
  * own PR.
+ *
+ * The switch has no `default`. That is deliberate — a fifth kind added to
+ * `OpenResultKind` must fail to compile here rather than silently fall through
+ * to a generic sentence.
  */
-export function openResultMessage(result: OpenFileResult): string {
-  if (result.forceReloaded) return `Force-reloaded from disk: ${result.fileName}`;
-  if (result.alreadyOpen) return `Switched to already-open document: ${result.fileName}`;
-  if (result.restoredFromSession)
-    return `Session restored: ${result.fileName} (annotations preserved)`;
-  if (result.readOnly) return `Document opened (review only): ${result.fileName}`;
-  return `Document opened: ${result.fileName}`;
+export function openResultMessage(result: OpenSuccess): string {
+  switch (result.kind) {
+    case "force-reloaded":
+      return `Force-reloaded from disk: ${result.fileName}`;
+    case "already-open":
+      return `Switched to already-open document: ${result.fileName}`;
+    case "restored":
+      return `Session restored: ${result.fileName} (annotations preserved)`;
+    case "fresh":
+      return result.readOnly
+        ? `Document opened (review only): ${result.fileName}`
+        : `Document opened: ${result.fileName}`;
+  }
 }
 
 /** Extract document outline (headings). Pure logic exported for testing. */
@@ -367,7 +378,7 @@ export function registerDocumentTools(server: McpServer): void {
             stampClaudeAuthorshipWholeDoc(loaded.doc);
           }
         }
-        return mcpSuccess({ ...result, message: openResultMessage(result) });
+        return mcpSuccess({ ...toWireResult(result), message: openResultMessage(result) });
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
         if (e.code === "ENOENT" || e.code === "FILE_NOT_FOUND") {

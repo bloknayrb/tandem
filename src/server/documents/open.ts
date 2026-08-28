@@ -107,6 +107,22 @@ import {
 } from "./registry.js";
 import { wireFileWatcher } from "./watcher.js";
 
+/**
+ * The flat JSON shape a successful open puts on the MCP and HTTP wire.
+ *
+ * This is a **wire type, not the internal one** — `OpenSuccess` below is what
+ * the pipeline builds and what callers inside `src/` should consume.
+ * `toWireResult` is the only sanctioned way to produce one, and its three
+ * booleans are an encoding of `OpenSuccess["kind"]`, not independent state.
+ *
+ * It keeps its name and its exact key set because six sites ship it verbatim
+ * (`mcp/document.ts`, `routes/{open,upload,scratchpad}.ts`, plus field
+ * cherry-picks in `mcp/document.ts`'s scratchpad tool and `mcp/convert.ts`).
+ * Every field is on the wire today, including `warnings` and the two
+ * estimates, which no code in this repo reads — the MCP payload's consumer is
+ * the calling model, which no grep here can see. Unread-by-us is not unread:
+ * changing a key is a breaking change with nothing in this repo to fail.
+ */
 export interface OpenFileResult {
   documentId: string;
   filePath: string;
@@ -120,6 +136,94 @@ export interface OpenFileResult {
   alreadyOpen: boolean;
   forceReloaded: boolean;
   warnings?: string[];
+}
+
+/**
+ * Everything a successful open produces besides which kind of open it was.
+ *
+ * `warnings` lives here, not on a failure arm: `buildResult` emits the
+ * large/very-large document warnings on the SUCCESS path, computed from the
+ * populated Y.Doc. So does every field below it.
+ */
+export interface OpenSuccessPayload {
+  documentId: string;
+  filePath: string;
+  fileName: string;
+  format: string;
+  readOnly: boolean;
+  source: "file" | "upload";
+  tokenEstimate: number;
+  pageEstimate: number;
+  warnings?: string[];
+}
+
+/**
+ * The result of an open call **that did not throw** (ADR-034 Unit 7b).
+ *
+ * Named `OpenSuccess`, not `OpenResult`, on purpose. Failures are still
+ * thrown, not returned, so a `switch` over this type is total over the kinds
+ * of success and NOT over what `openFromDisk` can do. TypeScript has no
+ * checked exceptions to make that structural; the name is the one free signal.
+ *
+ * **Be honest about what the union buys.** Every arm carries the identical
+ * payload, so this is structurally `{ kind } & OpenSuccessPayload` — there is
+ * no arm-specific narrowing, and reading `pageEstimate` will never require
+ * checking `kind` first. Inventing arm-specific payloads the domain does not
+ * have would be worse. The actual win is that `kind` is **computed once, at
+ * construction**, by the code that knows which path it took — replacing two
+ * independent re-derivations of the same precedence that agreed by inspection
+ * only. It is written as four explicit arms rather than
+ * `OpenSuccessPayload & { kind: OpenResultKind }` because only a real union
+ * lets `Extract` narrow it, which is what `FreshOpen` needs.
+ *
+ * **One success outcome this still does not express**, and a type whose job is
+ * to describe the success contract precisely should say so: "opened, but
+ * flagged for external-conflict resolution" rides a Y.Map side channel
+ * (`flagExternalConflict`) entirely outside this type. Pre-existing, not this
+ * unit's to fix, but do not read the union as the complete picture.
+ */
+export type OpenSuccess =
+  | (OpenSuccessPayload & { kind: "fresh" })
+  | (OpenSuccessPayload & { kind: "restored" })
+  | (OpenSuccessPayload & { kind: "already-open" })
+  | (OpenSuccessPayload & { kind: "force-reloaded" });
+
+/**
+ * The only kind `openFromUpload` and `openScratchpad` can produce.
+ *
+ * Both route through `buildResult` and neither can reach the already-open or
+ * force-reload branches, which live in `openFromDisk` alone. Typing them as
+ * the full union would force every exhaustive switch to supply three provably
+ * dead arms, and would admit `{ kind: "restored", source: "upload" }`, which
+ * no path produces. It also turns any future change that lets upload reach a
+ * second kind — content-hash dedup landing on `already-open`, say — into a
+ * visible signature change rather than a silent new runtime path a permissive
+ * type already allowed. Same argument `openFromRestore`'s `Pick` parameter
+ * makes for its input.
+ */
+export type FreshOpen = Extract<OpenSuccess, { kind: "fresh" }>;
+
+/**
+ * Project the internal union back onto the wire shape, unchanged.
+ *
+ * **All six wire sites go through here.** Six independent projections would be
+ * six chances to drift, and a spec would then be pinning the projector rather
+ * than what each site emits.
+ *
+ * `warnings` is spread conditionally rather than assigned, because the key is
+ * ABSENT when there are none today — assigning `undefined` would add a key to
+ * every payload that lacks one, which `JSON.stringify` hides but `Object.keys`
+ * and a strict client do not.
+ */
+export function toWireResult(result: OpenSuccess): OpenFileResult {
+  const { kind, warnings, ...payload } = result;
+  return {
+    ...payload,
+    restoredFromSession: kind === "restored",
+    alreadyOpen: kind === "already-open",
+    forceReloaded: kind === "force-reloaded",
+    ...(warnings !== undefined ? { warnings } : {}),
+  };
 }
 
 /** Resolved + validated path metadata for openFromDisk. stat is NOT included — only used for the size check. */
@@ -149,7 +253,7 @@ function pathsEqual(a: string, b: string): boolean {
 export async function openFromDisk(
   filePath: string,
   options?: { force?: boolean; readOnly?: boolean },
-): Promise<OpenFileResult> {
+): Promise<OpenSuccess> {
   const {
     resolved,
     format,
@@ -208,9 +312,12 @@ export async function openFromDisk(
           format,
           readOnly,
           source: "file",
-          restoredFromSession: false,
         }),
-        forceReloaded: true,
+        // Decided HERE, after clearAndReload and the store wiring, not before.
+        // The force path wipes the open document's content and annotations
+        // first; claiming the arm earlier would decouple which outcome we
+        // report from whether the mutation that outcome names completed.
+        kind: "force-reloaded",
       };
     }
     return handleAlreadyOpen(
@@ -293,9 +400,8 @@ export async function openFromDisk(
       format,
       readOnly,
       source: "file",
-      restoredFromSession,
     }),
-    forceReloaded: false,
+    kind: restoredFromSession ? "restored" : "fresh",
   };
 }
 
@@ -306,7 +412,7 @@ export async function openFromDisk(
 export async function openFromUpload(
   rawFileName: string,
   content: string | Buffer,
-): Promise<OpenFileResult> {
+): Promise<FreshOpen> {
   // `fileName` arrives straight off `req.body` (routes/upload.ts), typed as a
   // string and nothing more, and it used to be interpolated verbatim into the
   // synthetic registry path below. `../` segments landed in a registry
@@ -366,15 +472,17 @@ export async function openFromUpload(
   );
   ensureAutoSave();
 
-  return buildResult(doc, {
-    documentId: id,
-    filePath: syntheticPath,
-    fileName,
-    format,
-    readOnly,
-    source: "upload",
-    restoredFromSession: false,
-  });
+  return {
+    ...buildResult(doc, {
+      documentId: id,
+      filePath: syntheticPath,
+      fileName,
+      format,
+      readOnly,
+      source: "upload",
+    }),
+    kind: "fresh",
+  };
 }
 
 /**
@@ -389,7 +497,7 @@ export async function openFromUpload(
  * Each call mints a new UUID so closing a scratchpad tab and opening another
  * always yields a fresh empty document. Content is gone when the tab is closed.
  */
-export async function openScratchpad(content?: string): Promise<OpenFileResult> {
+export async function openScratchpad(content?: string): Promise<FreshOpen> {
   const uuid = randomUUID();
   const syntheticPath = `${SCRATCHPAD_PREFIX}${uuid}/Scratchpad.md`;
   const fileName = "Scratchpad.md";
@@ -427,9 +535,8 @@ export async function openScratchpad(content?: string): Promise<OpenFileResult> 
       format,
       readOnly,
       source: "upload",
-      restoredFromSession: false,
     }),
-    forceReloaded: false,
+    kind: "fresh",
   };
 }
 
@@ -522,7 +629,7 @@ function handleAlreadyOpen(
   readOnly: boolean,
   existing: OpenDoc,
   explicitReadOnly: boolean,
-): OpenFileResult {
+): Extract<OpenSuccess, { kind: "already-open" }> {
   // Upgrade to read-only when explicitly requested and not already read-only.
   // Both branches end in exactly one broadcast: `openDocument` carries the
   // metadata change and the activation together, so the upgrade never
@@ -545,9 +652,8 @@ function handleAlreadyOpen(
       format,
       readOnly,
       source: "file",
-      restoredFromSession: false,
     }),
-    alreadyOpen: true,
+    kind: "already-open",
   };
 }
 
@@ -752,11 +858,8 @@ function writeDocMeta(
 
 function buildResult(
   doc: Y.Doc,
-  base: Omit<
-    OpenFileResult,
-    "tokenEstimate" | "pageEstimate" | "alreadyOpen" | "forceReloaded" | "warnings"
-  >,
-): OpenFileResult {
+  base: Omit<OpenSuccessPayload, "tokenEstimate" | "pageEstimate" | "warnings">,
+): OpenSuccessPayload {
   const textContent = extractText(doc);
   const textLen = textContent.length;
   const pageEstimate = Math.ceil(textLen / CHARS_PER_PAGE);
@@ -774,8 +877,6 @@ function buildResult(
     ...base,
     tokenEstimate: Math.ceil(textLen / 4),
     pageEstimate,
-    alreadyOpen: false,
-    forceReloaded: false,
     ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
@@ -806,16 +907,14 @@ function buildResult(
  */
 export async function openFromRestore(
   entry: Pick<SessionFileEntry, "filePath" | "readOnly">,
-): Promise<OpenFileResult> {
+): Promise<OpenSuccess> {
   return await openFromDisk(entry.filePath, { readOnly: entry.readOnly });
 }
 
 /**
- * Tagged variant for `OpenFileResult.kind` — derived from the existing
- * `restoredFromSession` / `alreadyOpen` / `forceReloaded` booleans.
- * ADR-034 part 2 promotes this to a real discriminator on the result
- * type; part 1 exposes it as a derivation so callers can adopt the
- * vocabulary now.
+ * Which kind of open produced a result. Since ADR-034 Unit 7b this is a real
+ * discriminator on `OpenSuccess`, decided at construction by the code that
+ * knows which path it took — not derived after the fact.
  *
  *   - `fresh`            — first time this session; content loaded from disk or
  *                          upload, or seeded from a scratchpad's optional content
@@ -825,6 +924,17 @@ export async function openFromRestore(
  */
 export type OpenResultKind = "fresh" | "restored" | "already-open" | "force-reloaded";
 
+/**
+ * Recover the kind from a wire result — the inverse of `toWireResult`'s
+ * boolean encoding.
+ *
+ * Not a second copy of a precedence any more: `toWireResult` writes the three
+ * booleans FROM `kind`, and this reads `kind` back OUT of them, so the pair is
+ * a round trip with a spec to match (`tests/server/open-result-message.test.ts`).
+ * It exists because the booleans are what crosses the wire, and anything
+ * reading a stored or transported result — a test, a future client — needs one
+ * sanctioned way to interpret them rather than three ad-hoc `if`s.
+ */
 export function kindOfOpenResult(result: OpenFileResult): OpenResultKind {
   if (result.forceReloaded) return "force-reloaded";
   if (result.alreadyOpen) return "already-open";

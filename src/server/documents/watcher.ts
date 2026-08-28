@@ -95,10 +95,11 @@ export function releaseReloadGuard(id: string): void {
  * 5. Reattach event queue observers
  *
  * Returns `true` when the reload ran, `false` when it was skipped because a
- * concurrent reload holds the per-doc guard. The file-watcher caller ignores
- * the result (the in-flight reload reads the same disk state); the
- * backup-restore caller turns a skip into RELOAD_IN_PROGRESS so it never
- * reports success while the Y.Doc still holds pre-restore content.
+ * concurrent reload holds the per-doc guard. **Every caller reads it** (#1641):
+ * the file-watcher and external-conflict callers suppress their success toast
+ * on a skip, and the backup-restore caller turns a skip into
+ * RELOAD_IN_PROGRESS so it never reports success while the Y.Doc still holds
+ * pre-restore content.
  */
 export async function reloadFromDisk(
   id: string,
@@ -325,7 +326,15 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
           });
           return;
         }
-        await reloadFromDisk(id, filePath, format);
+        // #1641: the return value is the claim's warrant. `reloadFromDisk`
+        // yields false when a concurrent reload holds the guard, and this
+        // callback used to discard that and toast anyway — telling the user a
+        // reload happened for a pass that did nothing, sometimes while the
+        // in-flight reload was still mid-transaction. The in-flight one lands
+        // its own content and pushes its own toast, so suppressing this one
+        // loses nothing. `resolveExternalConflict` already gated on the same
+        // value; this was the only caller that did not.
+        if (!(await reloadFromDisk(id, filePath, format))) return;
         pushNotification({
           id: generateNotificationId(),
           type: "file-reloaded",

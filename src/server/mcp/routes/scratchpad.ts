@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { API_SCRATCHPAD } from "../../../shared/api-paths.js";
-import { openScratchpad } from "../../documents/open.js";
+import { openScratchpad, toWireResult } from "../../documents/open.js";
 import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
@@ -67,7 +67,7 @@ export async function handleScratchpad(req: Request, res: Response): Promise<voi
   }
   try {
     const result = await openScratchpad(content as string | undefined);
-    res.json({ data: result });
+    res.json({ data: toWireResult(result) });
   } catch (err: unknown) {
     sendApiError(res, err);
   }

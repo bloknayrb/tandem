@@ -67,7 +67,12 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 
 import { docHash } from "../../src/server/annotations/doc-hash.js";
 import { createStore, resetForTesting as storeReset } from "../../src/server/annotations/store.js";
-import { openFromDisk, openFromUpload, openScratchpad } from "../../src/server/documents/open.js";
+import {
+  openFromDisk,
+  openFromUpload,
+  openScratchpad,
+  toWireResult,
+} from "../../src/server/documents/open.js";
 import { getActiveDocEpoch, getActiveDocId } from "../../src/server/documents/registry.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { MAX_DOCX_PART_BYTES } from "../../src/server/file-io/docx-size-gate.js";
@@ -205,7 +210,7 @@ describe("one open, one broadcast", () => {
     const epochBefore = activeEpoch();
     const result = await openFromDisk(filePath);
 
-    expect(result.alreadyOpen, "control: this is the already-open branch").toBe(true);
+    expect(result.kind, "control: this is the already-open branch").toBe("already-open");
     expect(ctrlWrites(), "a re-open is still exactly one publish").toBe(1);
     expect(activeEpoch() - epochBefore, "…and exactly one activation-epoch advance").toBe(1);
     expect(publishedEpoch(), "…which is the epoch the broadcast carried").toBe(activeEpoch());
@@ -221,7 +226,7 @@ describe("one open, one broadcast", () => {
     const epochBefore = activeEpoch();
     const result = await openFromDisk(filePath, { force: true });
 
-    expect(result.forceReloaded, "control: this is the force branch").toBe(true);
+    expect(result.kind, "control: this is the force branch").toBe("force-reloaded");
     expect(ctrlWrites(), "a force reload is still exactly one publish").toBe(1);
     expect(activeEpoch() - epochBefore, "…and exactly one activation-epoch advance").toBe(1);
     expect(publishedEpoch(), "…which is the epoch the broadcast carried").toBe(activeEpoch());
@@ -514,8 +519,10 @@ describe("open failures keep their error codes", () => {
 
 describe("large-document warnings", () => {
   // `buildResult` attaches these to every success path. Unit 7b's sketched
-  // `OpenResult` union puts `warnings` only on the `failed` arm, which would
-  // drop them silently — nothing else asserts they exist.
+  // `OpenResult` union put `warnings` only on a `failed` arm, which would have
+  // dropped them silently — nothing else asserts they exist. The shipped
+  // `OpenSuccess` carries them on the success payload instead, and these are
+  // what says so.
 
   function pagesOf(chars: number): string {
     return "x".repeat(chars);
@@ -647,13 +654,12 @@ describe("session restore", () => {
 // ---------------------------------------------------------------------------
 
 describe("file-watcher reload notification", () => {
-  it("KNOWN DEFECT (#1641): reports a reload even when the reload was skipped", async () => {
+  it("reports one reload per reload, not one per callback (#1641)", async () => {
     // `reloadFromDisk` returns false when a reload for the same document is
-    // already in flight; the watcher callback discards that return and pushes
-    // the success toast anyway. Unit 6 is behaviour-preserving, so this pins
-    // what the code does today — it is NOT an endorsement. The fix belongs in
-    // 7b, where the notification becomes a function of the result arm; when it
-    // lands, this expectation flips to 1 and the test name loses its prefix.
+    // already in flight. The watcher callback used to discard that and toast
+    // anyway; Unit 6 pinned the defect here as current behaviour and 7b fixed
+    // it, so this expectation flipped from 2 to 1 and the name lost its
+    // KNOWN DEFECT prefix.
     //
     // "Two toasts for ONE reload" is the whole claim, so the reload count is
     // measured, not assumed. An earlier version asserted only the toast count —
@@ -690,8 +696,10 @@ describe("file-watcher reload notification", () => {
     expect(single.docWrites, "control: one reload actually wrote to the doc").toBeGreaterThan(0);
 
     const pair = await fireWatcher("watched-pair.md", 2);
-    expect(pair.toasts, "two toasts…").toBe(2);
-    expect(pair.docWrites, "…from exactly ONE reload — that is the defect").toBe(single.docWrites);
+    expect(pair.docWrites, "control: still exactly ONE reload, as before the fix").toBe(
+      single.docWrites,
+    );
+    expect(pair.toasts, "…and now exactly one toast to match it").toBe(1);
   });
 
   it("reports a failure when the reload throws", async () => {
@@ -711,5 +719,141 @@ describe("file-watcher reload notification", () => {
     );
     expect(errors.length, "the user is told the reload failed").toBe(1);
     expect(errors[0]?.severity).toBe("warning");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The wire shape does not change (Unit 7b §5)
+// ---------------------------------------------------------------------------
+
+describe("toWireResult keeps the payload the six wire sites already ship", () => {
+  /**
+   * The whole safety argument for Unit 7b.
+   *
+   * `OpenSuccess` is internal; six sites put a FLAT object on the MCP and HTTP
+   * wire — `mcp/document.ts`'s `tandem_open`, `routes/{open,upload,scratchpad}.ts`,
+   * plus field cherry-picks in `tandem_scratchpad` and `mcp/convert.ts`. Four of
+   * them spread the result into an untyped response body, which means dropping
+   * a field there **compiles silently**: that is exactly what happened when the
+   * union first landed, and only one call site in the whole repo produced a type
+   * error.
+   *
+   * So the control is the key set, and the results are produced by calling the
+   * REAL entry points. A hand-built fixture could only confirm my own model of
+   * what the pipeline emits — which is the model under test.
+   *
+   * Two fields have no reader anywhere in `src/`, `src/client/` or `src-tauri/`:
+   * `tokenEstimate`/`pageEstimate` and `warnings`. They are pinned hardest,
+   * because the MCP payload's consumer is the calling model, which no grep of
+   * this repo can see. Unread-by-us is not unread.
+   */
+  const WIRE_KEYS = [
+    "alreadyOpen",
+    "documentId",
+    "fileName",
+    "filePath",
+    "forceReloaded",
+    "format",
+    "pageEstimate",
+    "readOnly",
+    "restoredFromSession",
+    "source",
+    "tokenEstimate",
+  ];
+
+  function keysOf(o: object): string[] {
+    return Object.keys(o).sort();
+  }
+
+  it("emits exactly the eleven always-present keys for a fresh disk open", async () => {
+    const filePath = path.join(tmpDir, "wire-fresh.md");
+    await fs.writeFile(filePath, "# Fresh\n");
+
+    const wire = toWireResult(await openFromDisk(filePath));
+
+    // `warnings` is ABSENT, not undefined. Assigning it unconditionally would
+    // add a key to every payload that lacks one — invisible to
+    // `JSON.stringify`, visible to `Object.keys` and to a strict client.
+    expect(keysOf(wire)).toEqual(WIRE_KEYS);
+    expect("warnings" in wire).toBe(false);
+    expect(wire.tokenEstimate).toBeGreaterThan(0);
+    expect(wire.pageEstimate).toBeGreaterThan(0);
+  });
+
+  it("adds `warnings` — and only then — for a document over the threshold", async () => {
+    const filePath = path.join(tmpDir, "wire-large.md");
+    await fs.writeFile(filePath, "x".repeat(LARGE_FILE_PAGE_THRESHOLD * CHARS_PER_PAGE));
+
+    const wire = toWireResult(await openFromDisk(filePath));
+
+    expect(keysOf(wire)).toEqual([...WIRE_KEYS, "warnings"].sort());
+    expect(wire.warnings?.join(" ")).toMatch(/Large document/);
+    // The estimates are computed from the POPULATED doc. Assembling the union
+    // progressively — fields added as they become known rather than at the
+    // final return — would read the text before population and silently zero
+    // these, suppressing the warning with it. A stubbed Y.Doc cannot see that,
+    // because zero is what a stub yields anyway.
+    expect(wire.pageEstimate).toBeGreaterThanOrEqual(LARGE_FILE_PAGE_THRESHOLD);
+  });
+
+  it("sets alreadyOpen alone when the document is reopened", async () => {
+    const filePath = path.join(tmpDir, "wire-reopen.md");
+    await fs.writeFile(filePath, "# Reopen\n");
+    await openFromDisk(filePath);
+
+    const wire = toWireResult(await openFromDisk(filePath));
+
+    expect(keysOf(wire)).toEqual(WIRE_KEYS);
+    expect([wire.alreadyOpen, wire.forceReloaded, wire.restoredFromSession]).toEqual([
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  it("sets forceReloaded alone on a force reload", async () => {
+    const filePath = path.join(tmpDir, "wire-force.md");
+    await fs.writeFile(filePath, "# Force\n");
+    await openFromDisk(filePath);
+
+    const wire = toWireResult(await openFromDisk(filePath, { force: true }));
+
+    expect([wire.alreadyOpen, wire.forceReloaded, wire.restoredFromSession]).toEqual([
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  it("keeps upload provenance and sets no kind boolean", async () => {
+    const wire = toWireResult(await openFromUpload("wire-upload.md", "# Upload\n"));
+
+    expect(keysOf(wire)).toEqual(WIRE_KEYS);
+    expect(wire.source).toBe("upload");
+    expect([wire.alreadyOpen, wire.forceReloaded, wire.restoredFromSession]).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it("keeps the scratchpad payload identical in shape to a file open", async () => {
+    const wire = toWireResult(await openScratchpad("# Scratch\n"));
+
+    expect(keysOf(wire)).toEqual(WIRE_KEYS);
+    expect(wire.source).toBe("upload");
+  });
+
+  it("still exposes the three fields the cherry-picking sites name", async () => {
+    // `tandem_scratchpad` takes documentId/fileName/format; `mcp/convert.ts`
+    // takes documentId/fileName. Neither spreads, so neither would break at
+    // compile time if a field changed MEANING rather than name — which is
+    // where a correspondence bug hides. Both read them off the union directly,
+    // so assert them there.
+    const result = await openScratchpad("# Cherry\n");
+
+    expect(result.documentId).toBeTruthy();
+    expect(result.fileName).toBeTruthy();
+    expect(result.format).toBe("md");
   });
 });
