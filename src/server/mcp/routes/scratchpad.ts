@@ -1,11 +1,11 @@
 import type { Request, Response } from "express";
 import { API_SCRATCHPAD } from "../../../shared/api-paths.js";
-import { openScratchpad, toWireResult } from "../../documents/open.js";
+import { openScratchpad } from "../../documents/open.js";
 import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
-import { sendApiError } from "./_shared.js";
+import { sendApiError, sendOpenResult } from "./_shared.js";
 
 const MAX_SCRATCHPAD_CONTENT_BYTES = 1024 * 1024;
 
@@ -67,7 +67,7 @@ export async function handleScratchpad(req: Request, res: Response): Promise<voi
   }
   try {
     const result = await openScratchpad(content as string | undefined);
-    res.json({ data: toWireResult(result) });
+    sendOpenResult(res, result);
   } catch (err: unknown) {
     sendApiError(res, err);
   }

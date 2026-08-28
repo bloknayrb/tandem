@@ -293,6 +293,12 @@ const FAN_IN = [
   // the cycle being gone rather than deferred.
   "server/mcp/document-service.ts -> server/documents/open.ts (value) x1",
   "server/mcp/presence-expiry.ts -> server/documents/registry.ts (value) x1",
+  // Route infrastructure reaching the open seam, added by ADR-034 Unit 7b.
+  // `_shared.ts` owns `sendOpenResult`, the one place the three open routes
+  // project `OpenSuccess` onto the wire — the alternative was three routes
+  // each importing `toWireResult` themselves, which is three edges instead of
+  // one and three places to forget the projection.
+  "server/mcp/routes/_shared.ts -> server/documents/open.ts (value) x1",
   "server/mcp/routes/backups.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-raw.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-reload.ts -> server/documents/registry.ts (value) x1",

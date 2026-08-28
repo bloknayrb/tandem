@@ -123,19 +123,10 @@ import { wireFileWatcher } from "./watcher.js";
  * the calling model, which no grep here can see. Unread-by-us is not unread:
  * changing a key is a breaking change with nothing in this repo to fail.
  */
-export interface OpenFileResult {
-  documentId: string;
-  filePath: string;
-  fileName: string;
-  format: string;
-  readOnly: boolean;
-  source: "file" | "upload";
-  tokenEstimate: number;
-  pageEstimate: number;
+export interface OpenFileResult extends OpenSuccessPayload {
   restoredFromSession: boolean;
   alreadyOpen: boolean;
   forceReloaded: boolean;
-  warnings?: string[];
 }
 
 /**
@@ -144,6 +135,13 @@ export interface OpenFileResult {
  * `warnings` lives here, not on a failure arm: `buildResult` emits the
  * large/very-large document warnings on the SUCCESS path, computed from the
  * populated Y.Doc. So does every field below it.
+ *
+ * `OpenFileResult` above **extends** this rather than re-listing the fields,
+ * and the direction is the load-bearing part: the wire shape is the payload
+ * plus the three-boolean encoding of `kind`, which is exactly what
+ * `toWireResult` builds. Two hand-maintained field lists could drift, and the
+ * drift would be silent in the worst direction — a field added here but not
+ * there would ship on the wire as an undeclared key.
  */
 export interface OpenSuccessPayload {
   documentId: string;
