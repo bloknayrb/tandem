@@ -57,7 +57,8 @@ export function messageForStartupRejection(code: string): string {
       // must mean exactly one thing, VERSION SKEW. Without this arm an
       // `"open_failed"` typo on the Rust side would render identically and
       // every test here would stay green — which is the desync this pair of
-      // assertions (with `open_failed_code_is_stable` in `lib.rs`) exists to
+      // assertions (with `open_failed_code_is_stable` in
+      // `src-tauri/src/startup_rejection.rs`) exists to
       // catch.
       return "That file couldn't be opened in Tandem.";
     default:

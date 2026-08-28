@@ -65,7 +65,7 @@ describe("messageForStartupRejection", () => {
     // alone cannot tell "deliberately mapped" from "unknown code" — what makes
     // it load-bearing is the explicit `case` in the source, whose absence would
     // let a Rust-side rename render identically. Its other half is
-    // `open_failed_code_is_stable` in `src-tauri/src/lib.rs`.
+    // `open_failed_code_is_stable` in `src-tauri/src/startup_rejection.rs`.
     expect(messageForStartupRejection("open-failed")).toBe(
       "That file couldn't be opened in Tandem.",
     );
