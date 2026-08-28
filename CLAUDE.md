@@ -133,7 +133,7 @@ Data flows, coordinate systems and the file map are in
 - **Auto-launched sessions are woken by the supervisor, not the channel (#1266).** `supervisor.ts` subscribes to `events/queue.ts` in-process and writes a user turn on the child's stdin, registering as an **`"external"`** subscriber — the launched Claude is outside this process, so the Solo gate must apply to it; `"internal"` would push Solo-held annotations at a model. The wake turn deliberately carries **no event payload**, so the pull path stays the single authority on what the AI sees. Only `annotation:*`/`chat:message` wake. The bootstrap turn is written **on spawn** — waiting for `init` deadlocks.
 - Solo/Tandem mode lives in `CTRL_ROOM`'s `Y_MAP_USER_AWARENESS` under `Y_MAP_MODE`, **not per-document**; changes broadcast to all open documents.
 - Selection events are dwell-gated (default 1s) — they fire only after the user holds a selection steady.
-- File open/close converge in `file-opener.ts` / `document-service.ts`; tab close goes through `POST /api/close`. `openFileByPath` takes an optional `readOnly` flag (used by View Changelog).
+- File open converges in `documents/open.ts` (ADR-034 Unit 7a), close in `document-service.ts`; tab close goes through `POST /api/close`. **`mcp/file-opener.ts` is now the reload family only** — `reloadDocumentFromMarkdown`, `restoreDocumentFromBackup`, `resolveExternalConflict`, each replacing an already-open document's content. The four named entries are `openFromDisk` / `openFromUpload` / `openScratchpad` / `openFromRestore`; the first takes an optional `readOnly` flag (used by View Changelog), and `openFromRestore` exists so the restore path cannot forget to carry it.
 
 ## Semantic Tokens
 

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { rustSources } from "./rust-sources.js";
 
 /**
  * Pins the two Tauri registration sites that **nothing else can fail on**.
@@ -147,6 +148,52 @@ describe("Tauri command registration, which only source-scanning can pin", () =>
         `The client invokes "${name}" but tauri::generate_handler! does not register it. ` +
           `Nothing else catches this: the Rust side compiles and its whole suite passes, ` +
           `and the failure surfaces only as a rejected invoke() in the WebView at runtime.`,
+      ).toBe(true);
+    }
+  });
+
+  it("registers every command the crate defines, invoked from the client or not", () => {
+    // The other direction, and the one the client-driven check above cannot
+    // reach. Five of the eleven Cowork commands are invoked from nowhere in
+    // `src/client` — they are called from the integration wizard's own flow and
+    // from tests — so dropping any of them from `generate_handler!` during a
+    // module move compiles clean and passes every suite in the repo, including
+    // the parity check above. That is precisely the edit Unit 11 makes over and
+    // over: 11d alone re-qualified eleven entries in one commit.
+    //
+    // Definitions are derived from disk, not from `lib.rs`, because after the
+    // split most `#[tauri::command]`s no longer live there.
+    const defined = new Map<string, string>();
+    for (const { rel, code } of rustSources()) {
+      for (const m of code.matchAll(
+        /#\[tauri::command\][\s\n]*(?:#\[[^\]]*\][\s\n]*)*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([a-z_0-9]+)\s*\(/g,
+      )) {
+        defined.set(m[1], rel);
+      }
+    }
+    // The control: a scan that found nothing would satisfy the loop below.
+    expect(defined.size, "the #[tauri::command] scan found almost nothing").toBeGreaterThan(20);
+    // A size floor is not enough, because losing ONE entry is invisible against it.
+    // The regex has to tolerate `pub(crate)` sitting between the attribute list and
+    // the item — the exact shape every Unit 11 extraction introduces, and the one
+    // that broke three assertions in 11c by being anchored on adjacency. If it ever
+    // stopped matching, this map would silently shed a command and the loop below
+    // would iterate one fewer time, still green. Named without its file, so a later
+    // unit may move it again for free.
+    expect(
+      [...defined.keys()],
+      "the #[tauri::command] regex must still match a `pub(crate)` command",
+    ).toContain("restart_sidecar");
+
+    const registered = new Set(registeredCommands());
+    for (const [name, rel] of [...defined].sort()) {
+      expect(
+        registered.has(name),
+        `${rel} defines #[tauri::command] fn ${name}, but tauri::generate_handler! does not ` +
+          `register it. The command does not exist at runtime, and nothing else notices: it ` +
+          `compiles, the Rust suite passes, and no client code invokes it for the parity ` +
+          `check above to catch. If it is deliberately unregistered, this list is the place ` +
+          `to say so.`,
       ).toBe(true);
     }
   });

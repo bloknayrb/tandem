@@ -2,13 +2,14 @@
  * Regression pin for #1560 — `cowork_retry_admin_elevation` must not gate the
  * enable behind a `cowork_meta` write of its own.
  *
- * WHY A TEXT TEST. The command is `#[cfg(target_os = "windows")]`. `lib.rs` is
- * the crate root, so a Linux `cargo test` *parses* it — but the cfg-stripped
- * arm is dropped before type-check, and nothing on any leg executes it. The
+ * WHY A TEXT TEST. The command is `#[cfg(target_os = "windows")]`, so a Linux
+ * `cargo test` *parses* its module — but the cfg-stripped arm is dropped before
+ * type-check, and nothing on any leg executes it. The
  * `windows-latest` `rust-test` leg type-checks the arm and still runs no test
  * over it: `grep -rn cowork_retry_admin_elevation src-tauri/ tests/ src/` finds
- * the definition, the `invoke_handler!` registration, two capability JSON
- * descriptions, and two *client* tests that only assert `invoke` was called
+ * both arms, the `generate_handler!` registration, two capability JSON
+ * descriptions (`capabilities/default.json` and the generated
+ * `gen/schemas/capabilities.json`), and two *client* tests that only assert `invoke` was called
  * with the command name. So the exact pre-#1560 body could be restored and
  * every suite would stay green.
  *
@@ -33,11 +34,25 @@
  * meta freely and must keep doing so.
  */
 
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { rustSourceDefining } from "../docs/rust-sources.js";
 
-const repoRoot = path.resolve(__dirname, "../..");
+/**
+ * The module holding the command, **found by the construct rather than named**.
+ *
+ * This read `src-tauri/src/lib.rs` by path until Unit 11d moved the Cowork
+ * commands into `cowork_commands.rs`, and a hardcoded path is exactly the shape
+ * that goes quiet rather than red when the Unit 11 split moves its subject: the
+ * regex below would simply stop matching, and the `not.toBeNull()` above would
+ * be the only thing standing between that and a silent pass. Locating by
+ * `cowork_retry_admin_elevation`'s own declaration means the next module move
+ * relocates this pin for free, and a second definition of the command anywhere
+ * in the crate fails loudly instead of being picked between.
+ */
+const RETRY = rustSourceDefining(
+  /#\[tauri::command\]\s*(?:pub(?:\(crate\))?\s+)?fn cowork_retry_admin_elevation\s*\(/,
+  "cowork_retry_admin_elevation",
+);
 
 /**
  * The body of the `cfg(target_os = "windows")` arm — braces excluded.
@@ -50,11 +65,23 @@ const repoRoot = path.resolve(__dirname, "../..");
  * The return type is deliberately left open: it is the `cfg` attribute that
  * distinguishes the two arms, not the type, and #1438 widened `String` to
  * `CoworkToggleReport` without touching anything this file pins.
+ *
+ * The visibility is left open for the same reason: Unit 11d widened both arms
+ * to `pub(crate)` so `generate_handler!` in `lib.rs` can still name them, and a
+ * pin anchored on attribute/item adjacency breaks on exactly that kind of edit.
+ *
+ * **Matched against `code`, not `text`, and that is load-bearing.** Review
+ * constructed the defeat and ran it: a `/* … *\/` block holding a column-0,
+ * syntactically exact copy of the post-fix Windows arm, with the real arm
+ * reverted to the pre-#1560 body, left every spec in this file green. The
+ * regex is a first-hit match over the file, so the commented impostor wins.
+ * `rustSourceDefining` already matches `code` for the same reason; running the
+ * extraction against `text` reopened the hole one level down.
  */
 function windowsRetryBody(): string {
-  const src = readFileSync(path.join(repoRoot, "src-tauri/src/lib.rs"), "utf8");
+  const src = RETRY.code;
   const match =
-    /#\[cfg\(target_os = "windows"\)\]\n#\[tauri::command\]\nfn cowork_retry_admin_elevation\(\) -> [^{\n]+\{\n([\s\S]*?)\n\}/.exec(
+    /#\[cfg\(target_os = "windows"\)\]\n#\[tauri::command\]\n(?:pub(?:\(crate\))?\s+)?fn cowork_retry_admin_elevation\(\) -> [^{\n]+\{\n([\s\S]*?)\n\}/.exec(
       src,
     );
   expect(
@@ -70,6 +97,34 @@ function writesMetaItself(body: string): boolean {
 }
 
 describe("regression pin (#1560): the Retry command delegates, it does not bookkeep", () => {
+  it("scans a real Rust module, found by search rather than named here", () => {
+    // The control on the locator. `rustSourceDefining` already fails loudly on
+    // zero or two matches, but that only says the pattern resolved — not that
+    // it resolved onto the pair of arms every assertion below reads. Renaming
+    // the module this lives in must stay GREEN (that is the point of finding it
+    // by construct); losing either arm must not.
+    //
+    // Asserted as the cfg attribute IMMEDIATELY ABOVE each declaration, not as
+    // a file-wide `toContain`. Review ran the difference: `cowork_commands.rs`
+    // holds 23 `#[cfg(target_os = "windows")]` and 12 of its negation, so a
+    // file-wide check for either string cannot fail until the module loses
+    // every one of them — it reads like a second assertion while doing no work.
+    const arms = [...RETRY.code.matchAll(/fn cowork_retry_admin_elevation\s*\(/g)].map((m) =>
+      RETRY.code.slice(Math.max(0, (m.index ?? 0) - 120), m.index),
+    );
+    expect(
+      arms,
+      "expected exactly two arms — the Windows command and its non-Windows stub",
+    ).toHaveLength(2);
+    for (const cfg of ['#[cfg(target_os = "windows")]', '#[cfg(not(target_os = "windows"))]']) {
+      expect(
+        arms.some((preamble) => preamble.includes(cfg)),
+        `no cowork_retry_admin_elevation declaration is preceded by ${cfg} — the two arms ` +
+          "this file pins are the Windows command and its stub, and it just found neither",
+      ).toBe(true);
+    }
+  });
+
   it("the Windows arm calls the toggle", () => {
     expect(windowsRetryBody()).toContain("cowork_toggle_integration(true)");
   });
