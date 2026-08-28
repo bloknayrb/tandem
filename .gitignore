@@ -12,6 +12,17 @@ graphify-out/
 .env
 .env.local
 
+# Cloudflare Wrangler's local-secrets file for `wrangler dev`. It holds exactly
+# what infra/license-issuance-worker/wrangler.toml documents as `wrangler secret
+# put` targets -- TANDEM_PRIVATE_KEY, POLAR_WEBHOOK_SECRET, RESEND_API_KEY --
+# and docs/licensing-operations.md walks an operator toward creating one. This
+# repo is public, and a leaked TANDEM_PRIVATE_KEY is not recoverable by rotation:
+# src/server/license/public-key.ts is a single const with no keyId, so replacing
+# it drops every existing customer to `restricted` mid-session. None has ever
+# been committed (verified by path sweep over all refs); this keeps it that way.
+.dev.vars
+.dev.vars.*
+
 # Project-local Claude Code MCP config. The repo ships .mcp.json.example as a
 # template; the real .mcp.json is developer-local and must NOT be shipped with
 # the plugin install (the plugin's own .claude-plugin/plugin.json is
