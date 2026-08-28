@@ -40,9 +40,9 @@ function read(rel: string): string {
  * into `cowork_commands.rs`. A hardcoded path is the shape that goes quiet
  * rather than red across the Unit 11 split — every `indexOf`/`matchAll` below
  * would simply find nothing, and only their explicit not-found assertions stand
- * between that and a silent pass. `firewall.rs` and `single_flight.rs` are
- * still read by name below because nothing is moving them and their claims are
- * about those modules specifically.
+ * between that and a silent pass. `firewall.rs`, `single_flight.rs` and
+ * `uninstall_scrub.rs` are still read by name below because nothing is moving
+ * them and their claims are about those modules specifically.
  *
  * The visibility is left open in the pattern: Unit 11d widened the commands to
  * `pub(crate)` so `generate_handler!` in `lib.rs` can still name them.
@@ -59,13 +59,36 @@ const COWORK_COMMANDS = rustSourceDefining(
  * `detect_vethernet_subnet` embeds a PowerShell script in an `r#"…"#` raw string
  * whose own closing brace sits at column zero. Raw strings, ordinary strings and
  * line comments are all skipped so a brace inside them cannot end the scan.
+ *
+ * **Callers reading a module found by `rustSourceDefining` must pass `.code`,
+ * never `.text`.** The comment-skipping above happens inside the brace scan,
+ * i.e. AFTER the `indexOf` that picks which occurrence to scan — so a comment
+ * containing the signature wins outright. Review ran it: three `//!` lines
+ * naming `` fn cowork_toggle_integration( `` were enough to make the enable-path
+ * budget pin below pass with the defect it exists to catch in place, and
+ * `cowork_commands.rs` already carries a doc comment naming that function one
+ * `(` short of tripping it. The `firewall.rs` / `single_flight.rs` callers pass
+ * raw text because those files are read by name and carry no such prose.
  */
 function rustFnBody(src: string, signature: string): string {
   const start = src.indexOf(signature);
   expect(start, `\`${signature}\` not found — the declaration's shape changed`).toBeGreaterThan(-1);
+  return rustFnBodyAt(src, start, signature);
+}
 
+/**
+ * The same scan, from a known offset rather than a text key.
+ *
+ * Needed wherever the caller already has the declaration's position and there
+ * is more than one of them: keying by text re-finds the FIRST occurrence every
+ * time, so N arms of the same function all resolve to arm one. That was true of
+ * `detect_subnet_advisory_blocking` below, whose two arms were being located by
+ * a 40-character source slice — identical for both — so the non-Windows arm was
+ * never actually scanned and the `.some(...)` over them was a `.some` over one.
+ */
+function rustFnBodyAt(src: string, start: number, label: string): string {
   let i = src.indexOf("{", start);
-  expect(i, `no opening brace after \`${signature}\``).toBeGreaterThan(-1);
+  expect(i, `no opening brace after \`${label}\``).toBeGreaterThan(-1);
 
   let depth = 0;
   while (i < src.length) {
@@ -95,11 +118,11 @@ function rustFnBody(src: string, signature: string): string {
     }
     i += 1;
   }
-  throw new Error(`unbalanced braces while scanning \`${signature}\``);
+  throw new Error(`unbalanced braces while scanning \`${label}\``);
 }
 
 describe("the Cowork subnet probe stays off the main thread (#1371)", () => {
-  const lib = COWORK_COMMANDS.text;
+  const lib = COWORK_COMMANDS.code;
 
   it("scans a real Rust module, found by search rather than named here", () => {
     // The control on the locator. Renaming the module must stay GREEN — that is
@@ -127,13 +150,21 @@ describe("the Cowork subnet probe stays off the main thread (#1371)", () => {
     ).toBe(1);
 
     // The cfg split belongs on the blocking BODY, never on the command.
-    const before = lib
+    //
+    // Scanned back to the nearest NON-BLANK line rather than over a fixed
+    // window. Review defeated the fixed 4-line version by exploiting the fact
+    // that Rust permits blank lines between an attribute and its item: gate the
+    // real command, push it four blank lines down, and add a SYNC
+    // `#[cfg(not(target_os = "windows"))]` arm, and the `async` count stays 1
+    // while the window sees only whitespace. That is precisely the re-split the
+    // failure message above claims to catch, and off Windows the command would
+    // be dispatched inline on the main thread again.
+    const preceding = lib
       .slice(0, decls[0].index ?? 0)
       .split("\n")
-      .slice(-4)
-      .join("\n");
+      .filter((line) => line.trim() !== "");
     expect(
-      before,
+      preceding.slice(-3).join("\n"),
       "the command itself must not be cfg-gated — only `detect_subnet_advisory_blocking` is",
     ).not.toMatch(/#\[cfg\(\s*(not\()?target_os/);
   });
@@ -269,7 +300,7 @@ describe("every external process on the Cowork firewall path is bounded (#1371)"
   });
 
   it("passes the generous budget on the enable path and the fast one on the probe", () => {
-    const lib = COWORK_COMMANDS.text;
+    const lib = COWORK_COMMANDS.code;
     const toggle = rustFnBody(lib, "fn cowork_toggle_integration(");
     expect(
       toggle,
@@ -278,10 +309,18 @@ describe("every external process on the Cowork firewall path is bounded (#1371)"
 
     // Two arms share this name (Windows and stub); only the Windows one probes,
     // so assert the advisory constant appears in at least one of them.
+    //
+    // Located by OFFSET, not by a text key. The previous form built a key by
+    // slicing 40 characters from each match — identical for both arms — and fed
+    // it to an `indexOf`, so both entries resolved to arm one and the `.some`
+    // below was a `.some` over a single body twice.
     const advisoryArms = [...lib.matchAll(/fn detect_subnet_advisory_blocking\(/g)].map((m) =>
-      rustFnBody(lib, lib.slice(m.index ?? 0, (m.index ?? 0) + 40)),
+      rustFnBodyAt(lib, m.index ?? 0, "detect_subnet_advisory_blocking"),
     );
-    expect(advisoryArms.length, "detect_subnet_advisory_blocking not found").toBeGreaterThan(0);
+    expect(
+      advisoryArms.length,
+      "expected both arms of detect_subnet_advisory_blocking — the Windows probe and its stub",
+    ).toBe(2);
     expect(
       advisoryArms.some((arm) => arm.includes("SUBNET_PROBE_TIMEOUT_ADVISORY")),
       "the advisory probe must use the fast budget — timing out there costs only a re-check",
