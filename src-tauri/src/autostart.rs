@@ -1,4 +1,5 @@
-//! Start-at-login commands (#1236).
+//! Start-at-login: the OS registration commands and the launch-mode
+//! detection that reads what they wrote (#1236, ADR-046).
 //!
 //! Thin wrappers over `tauri-plugin-autostart` rather than the plugin's own JS
 //! API. Two reasons the indirection earns its keep:
@@ -228,6 +229,7 @@ pub(crate) const AUTOSTART_FLAG: &str = "--tandem-autostart";
 /// `--tandem-autostart`. Mirrors `TANDEM_DISABLE_LAUNCHER` in spirit — every
 /// other lifecycle behavior here has an env opt-out.
 pub(crate) const AUTOSTART_DISABLE_ENV: &str = "TANDEM_DISABLE_AUTOSTART";
+
 /// True when this process was started by the OS at login.
 pub(crate) fn is_autostart_launch(args: &[String]) -> bool {
     has_argv_flag(args, AUTOSTART_FLAG)

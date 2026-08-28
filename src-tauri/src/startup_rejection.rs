@@ -16,10 +16,7 @@
 //! start, the single-instance warm start, the macOS Apple-Event handler,
 //! `show_server_error_dialog`'s decline arm — and `post_paths_and_surface`,
 //! which drives a batch to completion and belongs to the open pipeline rather
-//! than to the buffer. `lib.rs` re-exports this module's names at the crate
-//! root instead of qualifying ~20 call sites, the same idiom it already uses
-//! for `open_candidate`; that is what keeps the call sites byte-identical and
-//! keeps a sibling module's `use crate::{…}` resolving across the split.
+//! than to the buffer.
 
 use std::sync::Mutex;
 

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  matchRustBrace,
   REPO_ROOT,
   RUST_SRC,
   rustSourceDefining,
@@ -64,12 +65,28 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
       /fn show_server_error_dialog\s*\(/,
       "show_server_error_dialog",
     );
-    // ...and sliced from the function, because the match below is a FIRST-hit
-    // search. Unanchored, any other `if !retry` in the same file would satisfy
-    // a claim that is specifically about this dialog's decline branch.
-    const from = dialog.code.indexOf("fn show_server_error_dialog");
-    expect(from, "the locator resolved a file that does not define it").toBeGreaterThanOrEqual(0);
-    const declineArm = dialog.code.slice(from).match(/if !retry \{[\s\S]{0,900}?\n\s*\}/);
+    // ...and sliced to the function's OWN BODY, because the match below is a
+    // FIRST-hit search. Two mutants that review executed prove each half is
+    // load-bearing, and both left all six specs green:
+    //
+    //  - Slicing from `indexOf("fn show_server_error_dialog")` is satisfied by
+    //    `fn show_server_error_dialog_decline_shim`, whose name has the real
+    //    one as a PREFIX. Placed above the real function it moves the slice
+    //    onto itself. Anchoring on the locator's own regex — which requires
+    //    `(` after the name — is what refuses the longer name.
+    //  - Slicing to end-of-file lets any later `if !retry` satisfy a claim that
+    //    is specifically about this dialog's decline branch, including one in a
+    //    `#[cfg(test)]` fake. `stripRustTestModules` now removes test-gated
+    //    items whatever their shape, and brace-matching bounds the rest.
+    const SIG = /fn show_server_error_dialog\s*\(/;
+    const from = dialog.code.search(SIG);
+    const open = dialog.code.indexOf("{", from);
+    const body = dialog.code.slice(open, matchRustBrace(dialog.code, open) + 1);
+    expect(
+      body.length,
+      "the body slice reached the end of the file — it is no longer bounding anything",
+    ).toBeLessThan(dialog.code.length - from);
+    const declineArm = body.match(/if !retry \{[\s\S]{0,900}?\n\s*\}/);
     expect(declineArm, "show_server_error_dialog's `if !retry` arm not found").not.toBeNull();
     const arm = declineArm?.[0] ?? "";
     expect(
@@ -105,7 +122,8 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     // The control on the scan itself. `rustSources()` feeding the parity check
     // means an empty or truncated walk satisfies it silently: zero declared
     // codes is zero unhandled codes. This is what makes the walk falsifiable.
-    const rel = rustSources().map((f) => f.rel);
+    const files = rustSources();
+    const rel = files.map((f) => f.rel);
     expect(rel.length, "the Rust source walk found almost nothing").toBeGreaterThan(10);
     expect(rel).toContain("src-tauri/src/lib.rs");
     expect(
@@ -120,7 +138,7 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     // walk" — rather than the file's name, because naming it would rebuild the
     // hardcoded path this unit spent its effort removing, and would then fail
     // on a rename that breaks no claim here.
-    const declaring = rustSources().filter((f) => /const CODE_OPEN_FAILED: &str/.test(f.code));
+    const declaring = files.filter((f) => /const CODE_OPEN_FAILED: &str/.test(f.code));
     expect(
       declaring.map((f) => f.rel),
       "exactly one scanned Rust file must declare the startup wire codes, or the " +
@@ -167,10 +185,11 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     ).toContain("CODE_AFTER_THE_TEST_MODULE");
     expect(survivor, "the test module itself must still be stripped").not.toContain("not json");
 
-    // `#[cfg(test)]` is not the only spelling. `lib.rs` carries two
-    // `#[cfg(all(test, target_os = "windows"))]` modules, and the substring scan
-    // this stripper used until Unit 11d matched NEITHER — so a scan reading that
-    // file saw their bodies as production code. Both directions are asserted,
+    // `#[cfg(test)]` is not the only spelling. The crate carries two
+    // `#[cfg(all(test, target_os = "windows"))]` modules — in `lib.rs` until
+    // Unit 11d moved them to `cowork_commands.rs` — and the substring scan this
+    // stripper used until then matched NEITHER, so a scan reading that file saw
+    // their bodies as production code. Both directions are asserted,
     // because a stripper that fixed the `all(...)` form by matching any cfg
     // mentioning `test` would eat `#[cfg(not(test))]`, which gates production.
     const cfgForms = [
@@ -200,22 +219,27 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     // A test-gated attribute can sit on any item, and until Unit 11f this
     // stripper assumed it always gated a module WITH A BODY. Both assumptions
     // were false in `lib.rs`, and both failures ate production declarations
-    // rather than announcing themselves — the `code` view was missing
-    // `pub mod open_candidate;`, every Windows `mod` declaration and every
-    // crate-root re-export, so `rustSourceDefining` could not have located a
-    // construct there and any claim about that region would have passed by
-    // finding nothing. Both shapes, both directions.
+    // rather than announcing themselves — measured on `origin/master`, the
+    // `code` view was missing `pub mod open_candidate;`, 7 of 9 Windows-gated
+    // `mod` declarations and 3 crate-root re-exports, so `rustSourceDefining`
+    // could not have located a construct there and any claim about that region
+    // would have passed by finding nothing. Both shapes, both directions.
     const gatedStatic = [
       "#[cfg(test)]",
       "pub(crate) static LOCK: Mutex<()> = Mutex::new(());",
       "pub mod open_candidate;",
       "pub use open_candidate::{ a, b };",
     ].join("\n");
+    const staticStripped = stripRustTestModules(gatedStatic);
     expect(
-      stripRustTestModules(gatedStatic),
+      staticStripped,
       "a test-gated STATIC has no brace of its own — jumping to the next `{` " +
         "swallows every declaration up to some unrelated group import",
     ).toContain("pub mod open_candidate;");
+    expect(
+      staticStripped,
+      "...and the static itself is test-only, so it must not survive into `code`",
+    ).not.toContain("static LOCK");
 
     const gatedDecl = ["#[cfg(test)]", "mod probe;", "pub mod real;"].join("\n");
     const declStripped = stripRustTestModules(gatedDecl);
@@ -226,6 +250,46 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
       declStripped,
       "`mod t;` terminates at its semicolon — brace-matching past it deletes what follows",
     ).toContain("pub mod real;");
+
+    // A test-gated NON-MODULE item must go too, and this is not tidiness: a
+    // `#[cfg(test)] fn` shaped like the construct a caller asserts on — placed
+    // anywhere, including inside the very function under assertion — otherwise
+    // survives into `code` and satisfies the claim outright. Review executed
+    // that mutant against the decline-arm spec above and it stayed green.
+    const gatedFn = [
+      "#[cfg(test)]",
+      "fn shim(retry: bool) {",
+      "    if !retry { report_pending_opens_with(p, true, surface_startup_rejection); }",
+      "}",
+      "pub fn real() {}",
+    ].join("\n");
+    const fnStripped = stripRustTestModules(gatedFn);
+    expect(
+      fnStripped,
+      "a test-gated `fn` is a fake that satisfies production-shaped claims",
+    ).not.toContain("report_pending_opens_with");
+    expect(fnStripped, "...and it must not eat the item after it").toContain("pub fn real()");
+
+    // ...and the counterweight, which is the whole reason `any(` is refused.
+    // `#[cfg(any(target_os = "macos", test))]` gates PRODUCTION code that a
+    // macOS build compiles — `lib.rs` carries exactly this on an
+    // `open_candidate` re-export. Stripping non-module items without this
+    // refusal would delete it and hollow the region these controls guard.
+    const anyGated = [
+      '#[cfg(any(target_os = "macos", test))]',
+      "pub(crate) use open_candidate::{ classify_opened_url };",
+      "pub fn after() {}",
+    ].join("\n");
+    expect(
+      stripRustTestModules(anyGated),
+      "`any(…, test)` means test is only one way in — the item ships on another platform",
+    ).toContain("use open_candidate::{ classify_opened_url }");
+
+    // An item whose terminator never arrives fails loud, like the brace matcher.
+    expect(
+      () => stripRustTestModules("#[cfg(test)]\nstatic LOOSE: u8 = 1"),
+      "an unterminated gated item must throw, not silently drop the rest of the file",
+    ).toThrow(/ran off the end/);
 
     // ...and the strip must still happen for the shapes that DO gate a module,
     // including one behind a second attribute. Without this the fix above could
@@ -250,10 +314,9 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     // 11f had just created, and a rename probe in that unit's mutation battery
     // reddened it — a guard that fails on a rename breaking no claim here is
     // noise, and this file spent its effort removing exactly that.
-    const lib = rustSources().find((f) => f.rel === "src-tauri/src/lib.rs");
-    expect(lib, "lib.rs left the walk").toBeDefined();
+    const root = rustSourceDefining(/^pub mod open_candidate;$/m, "the crate root");
     for (const decl of ["pub mod open_candidate;", "pub use open_candidate::{"]) {
-      expect(lib?.code, `the code view of lib.rs must reach ${decl}`).toContain(decl);
+      expect(root.code, `the code view of the crate root must reach ${decl}`).toContain(decl);
     }
   });
 
@@ -288,9 +351,15 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
         "fails on this: the nudge carries no payload, so a mismatch is indistinguishable " +
         "from no rejection having happened.",
     ).toBe(listened?.[1]);
-    // The control: both halves must have actually parsed something, or the
-    // equality above is `undefined === undefined`.
-    expect(declared?.[1], "the event-name scan found nothing").toBe("startup-file-rejected");
+    // ...and the emit site must USE the constant. Pinning the two literals
+    // against each other leaves `app.emit("startup-file-rejectd", ())` green on
+    // both sides while every warm-path toast dies — review executed exactly
+    // that mutant, keeping the `log::warn!` interpolation so the const stays
+    // live and `dead_code` never fires.
+    expect(
+      rust.code,
+      "the emit site must pass EVENT_STARTUP_FILE_REJECTED, not a second literal",
+    ).toMatch(/app\.emit\(EVENT_STARTUP_FILE_REJECTED/);
   });
 
   it("gives every Rust wire code an explicit case in the client's message map", () => {
@@ -306,9 +375,11 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
       name: m[1],
       value: m[2],
     }));
-    // `lib.rs` also declares wire codes for OTHER surfaces — #1118's
-    // pending-update hint has its own client reader and never reaches
-    // `messageForStartupRejection`. Each exclusion has to EARN it below by
+    // The crate also declares wire codes for OTHER surfaces — #1118's
+    // pending-update hint, in `pending_update.rs` since Unit 11a, has its own
+    // client reader and never reaches `messageForStartupRejection`. (Since
+    // Unit 11f `lib.rs` declares no `CODE_*` at all.) Each exclusion has to
+    // EARN it below by
     // being passed to that surface, and the default is inclusion: a code added
     // tomorrow and routed nowhere obvious is still required to have a case.
     const ROUTED_ELSEWHERE = ["CODE_UPDATE_MAY_NOT_HAVE_COMPLETED"];

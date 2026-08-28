@@ -98,10 +98,7 @@ pub(crate) use open_candidate::validate_open_candidate;
 // anyone. `get_startup_rejection` is deliberately absent: `#[tauri::command]`
 // generates a sibling `__cmd__…` macro that a plain `use` of the function does
 // not import, so `generate_handler!` module-qualifies it as 11b–11d did.
-pub(crate) use startup_rejection::{
-    clear_startup_rejection, surface_startup_rejection, RejectionBatch, CODE_MULTIPLE_DEFERRED,
-    CODE_OPEN_DEFERRED, CODE_OPEN_FAILED,
-};
+//
 // The launch-mode half of start-at-login moved into `autostart.rs` alongside
 // the registration commands. `autostart_seen_and_mark` carries its item's own
 // `#[cfg(target_os = "linux")]`: an ungated re-export of a gated item is an
@@ -113,6 +110,10 @@ pub(crate) use autostart::{
 };
 #[cfg(target_os = "linux")]
 pub(crate) use autostart::autostart_seen_and_mark;
+pub(crate) use startup_rejection::{
+    clear_startup_rejection, surface_startup_rejection, RejectionBatch, CODE_MULTIPLE_DEFERRED,
+    CODE_OPEN_DEFERRED, CODE_OPEN_FAILED,
+};
 
 // Bare `PathBuf` survives only in the `#[cfg(test)]` modules now. Every
 // unconditionally-compiled use went to `open_candidate.rs` with the
@@ -440,8 +441,8 @@ pub(crate) fn begin_start_attempt(state: &PendingOpens) {
 ///
 /// `terminal` means "no further attempt is offered from here" and controls only
 /// the latch. `surface` is the injection seam, for the same reason
-/// [`surface_startup_rejection_with`] has one: the real callers need an
-/// `AppHandle`, which cannot be constructed in a unit test.
+/// `startup_rejection::surface_startup_rejection_with` has one: the real callers
+/// need an `AppHandle`, which cannot be constructed in a unit test.
 ///
 /// Returns the number of undelivered opens (0 = nothing was pending, and nothing
 /// is surfaced — a failed restart of an app that never had a pending open must
@@ -603,7 +604,8 @@ async fn best_effort_token_off_thread(context: &'static str) -> Option<String> {
 ///
 /// Generic over both the poster and the sink so it is unit-testable with neither
 /// an HTTP server nor an `AppHandle` — the same seam, for the same reason, as
-/// [`surface_startup_rejection_with`]. The `Send` bounds and `&'static str` are
+/// `startup_rejection::surface_startup_rejection_with`. The `Send` bounds and
+/// `&'static str` are
 /// load-bearing: real callers hand the returned future to
 /// `tauri::async_runtime::spawn`, which requires `Future + Send + 'static`, while
 /// the test's `block_on` imposes neither — so without them the test would compile
@@ -782,7 +784,8 @@ async fn request_launcher_start(
 /// natively-hidden Tauri window is unverified, and it would silently do nothing
 /// if the WebView failed to mount. Rust knows exactly when the window is shown.
 /// A Tauri *event* would not work — events aren't buffered, and the listener may
-/// not exist yet (see [`STARTUP_REJECTION`]) — but a direct loopback POST
+/// not exist yet (see `startup_rejection::STARTUP_REJECTION`) — but a direct
+/// loopback POST
 /// has no such constraint.
 ///
 /// Known, accepted consequence: the tray's "Setup AI Assistant" item also

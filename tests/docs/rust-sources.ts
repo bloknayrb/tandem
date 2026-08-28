@@ -94,7 +94,8 @@ export function stripRustComments(src: string): string {
 }
 
 /**
- * Drop `#[cfg(test)] mod ... { ... }` blocks.
+ * Drop `#[cfg(test)]`-gated items — modules with a body, `mod x;` declarations,
+ * and non-module items alike.
  *
  * **A test satisfied a production-routing claim**, which is why this exists:
  * `pending_update_tests` calls `surface_pending_update_hint_with(CODE_…)`, so
@@ -125,12 +126,12 @@ export function stripRustTestModules(src: string): string {
     const at = nextTestCfg(src, i);
     if (at === null) return out + src.slice(i);
     out += src.slice(i, at.attr);
-    i = at.inline ? matchRustBrace(src, at.body) + 1 : at.body + 1;
+    i = at.end;
   }
 }
 
 /**
- * Index of the next `#[cfg(…)]` that gates on `test`, or -1.
+ * The next `#[cfg(…)]`-gated test item at or after `from`, or `null`.
  *
  * **`#[cfg(test)]` is not the only spelling, and keying on that literal was a
  * real hole.** The crate carries two `#[cfg(all(test, target_os = "windows"))]`
@@ -142,84 +143,110 @@ export function stripRustTestModules(src: string): string {
  * while planning Unit 11d, which is the first unit to move a file containing
  * that spelling into this scan's path.
  *
- * `not(` anywhere in the predicate means **don't strip**, and that asymmetry is
- * deliberate: `#[cfg(not(test))]` gates production code, and the safe error here
- * is to leave a block in (a scan that reads too much fails loud on the extra
- * match) rather than to remove one (a scan that reads too little passes
- * silently).
- *
- * **The attribute must gate a `mod`, and checking that is not pedantry — it is
- * the difference between this function stripping test modules and stripping
- * two-thirds of a file's declarations.** A test-gated attribute can sit on any
- * item, and the crate has eight such sites that are not modules. The caller
- * jumps to the next `{` after the attribute and brace-matches from there, so a
- * `#[cfg(test)] static COWORK_ENV_LOCK: Mutex<()> = Mutex::new(());` — which has
- * no brace of its own — made it match the `pub use open_candidate::{…}` group
- * forty lines later and delete everything in between. Measured, not reasoned:
- * `lib.rs`'s `code` view was missing `pub mod open_candidate;`, every
- * `#[cfg(target_os = "windows")] mod …` declaration and every crate-root
- * re-export, so `rustSourceDefining` could never have located a construct there
- * and any claim about them would have passed by finding nothing. Found by
- * adversarial plan review for Unit 11f, which is the unit that adds re-exports
- * to exactly that region.
+ * **Two predicate shapes are refused, and both refusals protect production
+ * code.** `not(` means the item is gated *against* test — `#[cfg(not(test))]`
+ * ships. `any(` means test is only one way in: the crate has four such sites,
+ * and `#[cfg(any(target_os = "macos", test))] pub(crate) use open_candidate::{…}`
+ * in `lib.rs` is a production re-export that a macOS build compiles. Refusing
+ * `any(` is what makes stripping non-module items below safe; it removes
+ * nothing that the mod-only version stripped, because none of those four sites
+ * is a module.
  */
-function nextTestCfg(src: string, from: number): TestModuleSite | null {
+function nextTestCfg(src: string, from: number): TestItemSite | null {
   for (let i = src.indexOf("#[cfg(", from); i !== -1; i = src.indexOf("#[cfg(", i + 1)) {
     const close = src.indexOf(")]", i);
     if (close === -1) return null;
     const predicate = src.slice(i + "#[cfg(".length, close);
-    if (predicate.includes("not(")) continue;
+    if (predicate.includes("not(") || predicate.includes("any(")) continue;
     if (!/(^|[^A-Za-z0-9_])test([^A-Za-z0-9_]|$)/.test(predicate)) continue;
-    const site = testModuleAt(src, close + ")]".length);
-    if (site) return { ...site, attr: i };
+    return { attr: i, end: testItemEnd(src, close + ")]".length) };
   }
   return null;
 }
 
-interface TestModuleSite {
-  /** Index of the `#[cfg(…)]` that opens the gated module. */
+interface TestItemSite {
+  /** Index of the `#[cfg(…)]` that opens the gated item. */
   attr: number;
-  /** Index of the module's `{` (when `inline`) or of its terminating `;`. */
-  body: number;
-  /** `mod t { … }` rather than `mod t;`. */
-  inline: boolean;
+  /** Index just past the item's terminator — its closing `}` or its `;`. */
+  end: number;
 }
 
 /**
- * The test module starting at `from` (after any further attributes), or `null`.
+ * Index just past the test-gated item starting at `from` (after any further
+ * attributes).
  *
- * Two shapes, and **both were wrong before Unit 11f**:
+ * **A test-gated attribute can sit on any item, and assuming it always gated a
+ * `mod` with a body is what hollowed this scan.** Until Unit 11f the caller
+ * jumped to the next `{` after the attribute and brace-matched from there, so
+ * two shapes ran past their own item and deleted production code:
  *
- * - Attributes stack, so `#[cfg(test)] #[allow(dead_code)] mod t { … }` has to
- *   be recognised past the second attribute.
- * - `mod t;` is a *declaration*, with no brace of its own. `lib.rs` carries one
- *   (`#[cfg(test)] mod integrations_probe;`), and jumping to "the next `{`"
- *   from there landed on the `pub use open_candidate::{…}` group fifteen lines
- *   later and deleted everything between. That is why the terminator is
- *   returned rather than assumed.
+ * - An item with no brace at all. `lib.rs`'s
+ *   `#[cfg(test)] pub(crate) static COWORK_ENV_LOCK: Mutex<()> = Mutex::new(());`
+ *   matched the `pub use open_candidate::{…}` group 41 lines later.
+ * - A `mod` *declaration*. `#[cfg(test)] mod integrations_probe;` has no body
+ *   either, and reaches the same group 13 lines later.
  *
- * Anything that is not a `mod` at all — a `static`, a `use`, a `fn` — yields
- * `null`, because this function's whole contract is test *modules*.
+ * Measured on `origin/master`'s `lib.rs` rather than reasoned about: its `code`
+ * view was missing `pub mod open_candidate;`, 7 of its 9 windows-gated `mod`
+ * declarations, and 3 crate-root re-exports including the two `open_candidate`
+ * groups — so `rustSourceDefining` could not have located a construct anywhere
+ * in that region, and any claim about it would have passed by finding nothing.
+ * (`mod bounded_command;`, `mod cowork_atomic_json;` and
+ * `pub(crate) use open_candidate::rejection_reason_code;` did survive; the
+ * damage was one contiguous span, not every declaration of those kinds.) Found
+ * by adversarial plan review for Unit 11f, the unit that adds re-exports to
+ * exactly that region.
+ *
+ * **Stripping is no longer limited to modules**, because the mod-only version
+ * left a defeat open: a `#[cfg(test)] fn` shaped like the construct a caller
+ * asserts on — placed anywhere, including inside the very function under
+ * assertion — survives into `code` and satisfies the claim. Review executed
+ * that mutant. So the terminator is found rather than assumed: the first `{`
+ * or `;` outside parens, brackets and literals ends the item.
+ *
+ * Running off the end **throws**, like the brace matcher, because a stripper
+ * that truncates silently drops every item after it from the scan.
  */
-function testModuleAt(src: string, from: number): Omit<TestModuleSite, "attr"> | null {
+function testItemEnd(src: string, from: number): number {
   let i = from;
   for (;;) {
     while (i < src.length && /\s/.test(src[i])) i++;
     if (!src.startsWith("#[", i)) break;
     const end = src.indexOf("]", i);
-    if (end === -1) return null;
+    if (end === -1) break;
     i = end + 1;
   }
-  const head = /^(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*/.exec(src.slice(i));
-  if (!head) return null;
-  const body = i + head[0].length;
-  if (src[body] === "{") return { body, inline: true };
-  if (src[body] === ";") return { body, inline: false };
-  return null;
+  let depth = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '"' || c === "'") {
+      const after = skipRustLiteral(src, i);
+      if (after > i) {
+        i = after;
+        continue;
+      }
+    }
+    if (c === "(" || c === "[") depth++;
+    else if (c === ")" || c === "]") depth--;
+    else if (depth === 0 && c === "{") return matchRustBrace(src, i) + 1;
+    else if (depth === 0 && c === ";") return i + 1;
+    i++;
+  }
+  throw new Error(
+    "unterminated `#[cfg(test)]` item: the scanner ran off the end of the input " +
+      "looking for its `{` or `;`. Truncating here would silently drop every Rust " +
+      "item after it from the scan, so this fails instead.",
+  );
 }
 
-/** Index of the `}` closing the `{` at `open`. Throws if the block never closes. */
-function matchRustBrace(src: string, open: number): number {
+/**
+ * Index of the `}` closing the `{` at `open`. Throws if the block never closes.
+ *
+ * Exported so a caller can narrow a scan to one function's body. A guard that
+ * locates a function and then searches to end-of-file is a first-hit search,
+ * and any later occurrence of the shape it wants satisfies it.
+ */
+export function matchRustBrace(src: string, open: number): number {
   let depth = 0;
   let j = open;
   while (j < src.length) {
