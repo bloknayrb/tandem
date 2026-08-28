@@ -135,8 +135,10 @@ export function stripRustTestModules(src: string): string {
  * Index of the next `#[cfg(…)]` that gates on `test`, or -1.
  *
  * **`#[cfg(test)]` is not the only spelling, and keying on that literal was a
- * real hole.** `lib.rs` carries two `#[cfg(all(test, target_os = "windows"))]`
- * modules, and the substring scan this replaced matched neither — so the
+ * real hole.** The crate carries two `#[cfg(all(test, target_os = "windows"))]`
+ * modules — `workspace_entry_written_tests` and `cowork_heal_pass_tests`, in
+ * `lib.rs` when this was written and in `cowork_commands.rs` since Unit 11d
+ * moved them — and the substring scan this replaced matched neither, so the
  * "a `#[cfg(test)]` mock defeats the locator identically" defense that
  * `rustSourceDefining` documents simply did not fire for them. Found by review
  * while planning Unit 11d, which is the first unit to move a file containing
