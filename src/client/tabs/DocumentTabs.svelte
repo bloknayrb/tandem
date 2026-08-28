@@ -1339,7 +1339,7 @@ $effect(() => {
               }}
               onNewScratchpad={() => {
                 closeMenu();
-                void createScratchpad();
+                void createScratchpad({ announceBusy: true });
               }}
               onBrowse={() => {
                 closeMenu();

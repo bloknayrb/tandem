@@ -121,15 +121,29 @@ describe("client-log call sites", () => {
     expect(aliased).toEqual([]);
   });
 
+  /*
+   * Explicit budget rather than the 5s default: this walks and reads all of
+   * `src/client/`, so its cost tracks the size of the tree, not the code under
+   * test. Sized for a loaded Windows run, not for the isolated one — the
+   * two-read version below was comfortably under budget in isolation (~1s) and
+   * still timed out inside a full parallel run.
+   *
+   * The budget is passed as `it`'s third argument, which is easy to write and
+   * have do nothing; it was verified to bind by setting it to `1` and
+   * confirming the failure names that value.
+   */
   it("is not re-exported, so no wrapper can hide a call site from this scan", () => {
     const reexports = walk(SRC)
-      .filter(
-        (file) =>
-          /export\s*(?:type\s*)?\{[^}]*logClient(?:Warning|Error)[^}]*\}/.test(
-            readFileSync(file, "utf8"),
-          ) || /export\s*\*\s*from\s*"[^"]*client-log/.test(readFileSync(file, "utf8")),
-      )
+      .filter((file) => {
+        // ONE read per file: the previous version re-read every file in
+        // src/client just to try the second regex.
+        const source = readFileSync(file, "utf8");
+        return (
+          /export\s*(?:type\s*)?\{[^}]*logClient(?:Warning|Error)[^}]*\}/.test(source) ||
+          /export\s*\*\s*from\s*"[^"]*client-log/.test(source)
+        );
+      })
       .map((file) => relative(ROOT, file));
     expect(reexports).toEqual([]);
-  });
+  }, 20_000); // under test. Sized for a loaded Windows run, not for the isolated one. // `src/client/`, and its cost tracks the size of the tree, not the code // Explicit budget rather than the 5s default: this walks and reads all of
 });

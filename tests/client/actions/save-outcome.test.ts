@@ -3,8 +3,25 @@ import {
   saveSkippedMessage,
   saveStore,
   triggerSave,
-  wireActionDeps,
 } from "../../../src/client/actions/builtin.svelte";
+import { type ActionExecutor, mountActionExecutor } from "../../../src/client/actions/executor.js";
+import { makeActionDeps } from "./deps-bag.js";
+
+/** Did `notify` fire with this severity and a message containing `substring`?
+ *
+ * Asserted over `mock.calls` rather than with `toHaveBeenCalledWith`, which
+ * matches on the FULL argument list: `notifyUser` always forwards a third
+ * `opts` argument (usually `undefined`), so a two-argument expectation silently
+ * stops matching — and its `.not.` form silently starts passing vacuously. */
+function notified(
+  notify: { mock: { calls: unknown[][] } },
+  severity: string,
+  substring: string,
+): boolean {
+  return notify.mock.calls.some(
+    ([sev, msg]) => sev === severity && typeof msg === "string" && msg.includes(substring),
+  );
+}
 
 /** A 200 response carrying a specific SaveResult body. */
 function fetchWith(data: Record<string, unknown>) {
@@ -26,36 +43,24 @@ function fetchFail() {
   );
 }
 
-const baseDeps = {
-  getActiveTabId: () => "doc-1",
-  afterLauncherAction: () => {},
-  openSettings: () => {},
-  toggleSoloMode: () => {},
-  openFindBar: () => {},
-  openFindBarTabs: () => {},
-  findNext: () => {},
-  findPrev: () => {},
-  closeActiveTab: () => {},
-  openFileDialog: () => {},
-  toggleLeftPanel: () => {},
-  toggleRightPanel: () => {},
-  reopenClosedTab: () => {},
-  annotationNext: () => {},
-  annotationPrev: () => {},
-  annotationAccept: () => {},
-  annotationDismiss: () => {},
-  selectBlock: () => {},
-  toggleAuthorship: () => {},
-  toggleFormattingBar: () => {},
-  toggleSourceView: () => {},
-  focusChat: () => {},
-  save: async () => {},
-  saveAs: async () => {},
+/** Bind the action deps with a document path (the only field that varies).
+ *
+ * `triggerSave` is exported and driven directly here, NOT through an action —
+ * it reaches `notify` via `currentActionDeps()`, which is exactly why that
+ * accessor exists. Routing this file through `mountActionExecutor` is what
+ * proves the accessor covers the non-action callers. */
+let executor: ActionExecutor | null = null;
+const wireDeps = (notify: (...args: unknown[]) => void, path: string): void => {
+  executor = mountActionExecutor(makeActionDeps({ notify, getActiveDocumentPath: () => path }));
 };
 
-/** Wire the action deps with a document path (the only field that varies). */
-const wireDeps = (notify: (...args: unknown[]) => void, path: string): void =>
-  wireActionDeps({ ...baseDeps, notify, getActiveDocumentPath: () => path });
+// File-level, not per-describe: every block here binds an executor, and a leaked
+// one stays module-global and would leak `notify` into the next file.
+afterEach(() => {
+  executor?.dispose();
+  executor = null;
+  vi.unstubAllGlobals();
+});
 
 describe("triggerSave / saveStore.lastSaveOk", () => {
   const notify = vi.fn();
@@ -70,7 +75,7 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
     await expect(triggerSave("doc-1")).resolves.toBe(true);
     expect(saveStore.lastSaveOk).toBe(true);
     expect(saveStore.saving).toBe(false);
-    expect(notify).not.toHaveBeenCalledWith("error", expect.anything());
+    expect(notify.mock.calls.filter(([sev]) => sev === "error")).toEqual([]);
     vi.unstubAllGlobals();
   });
 
@@ -79,7 +84,7 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
     await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
     expect(saveStore.saving).toBe(false);
-    expect(notify).toHaveBeenCalledWith("error", expect.stringContaining("disk full"));
+    expect(notified(notify, "error", "disk full")).toBe(true);
     vi.unstubAllGlobals();
   });
 
@@ -91,7 +96,7 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
     await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
     expect(saveStore.saving).toBe(false);
-    expect(notify).toHaveBeenCalledWith("error", expect.stringContaining("try again"));
+    expect(notified(notify, "error", "try again")).toBe(true);
     vi.unstubAllGlobals();
   });
 });
@@ -121,7 +126,7 @@ describe("saveSkippedMessage", () => {
     );
     await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
-    expect(notify).toHaveBeenCalledWith("warning", expect.stringContaining("read-only"));
+    expect(notified(notify, "warning", "read-only")).toBe(true);
     vi.unstubAllGlobals();
   });
 });
@@ -137,8 +142,6 @@ describe("triggerSave — docx fidelity toasts", () => {
     notify.mockClear();
     wireDeps(notify, "/tmp/doc.docx");
   });
-
-  afterEach(() => vi.unstubAllGlobals());
 
   const warnings = () => notify.mock.calls.filter(([level]) => level === "warning");
 
@@ -188,7 +191,7 @@ describe("triggerSave — docx fidelity toasts", () => {
       vi.fn(fetchWith({ status: "saved", integrityWarnings: ["y"], unpreservedImports: 2 })),
     );
     await triggerSave("doc-1");
-    expect(notify).toHaveBeenCalledWith("error", expect.stringContaining("backed up"));
+    expect(notified(notify, "error", "backed up")).toBe(true);
     expect(warnings()).toHaveLength(1); // the unpreserved half still speaks
   });
 });

@@ -995,11 +995,20 @@ describe("applyChangesCore — write guards", () => {
     expect(await onDisk()).toEqual(before);
   });
 
-  // The tests in this block that expect applyChangesCore to RESOLVE get
-  // explicit headroom over the project's 15s default. They are the only ones
-  // here that perform a real .docx apply -- measured in isolation at 1977ms and
-  // 463ms, against 20-24ms for the refusals, which return before doing any
-  // work. Under the full suite's worker parallelism a 7.6x slowdown crosses the
+  // EVERY test in this block that expects applyChangesCore to RESOLVE gets
+  // explicit headroom over the project's 15s default -- they are the only ones
+  // here that perform a real .docx apply, measured in isolation at 1977ms and
+  // 463ms against 20-24ms for the refusals, which return before doing any work.
+  //
+  // "Every" is load-bearing, and getting it wrong is what #1617 was. The first
+  // pass at this budgeted the two specs that had been OBSERVED failing rather
+  // than asking which specs do a real apply. There were four. The other two
+  // kept the 15s ceiling and duly started failing later, and the green suite in
+  // between could not have told anyone: an underfunded spec only fails under
+  // load. The rule the file wants is name the SET that does the expensive
+  // thing, never the members that happened to trip.
+  //
+  // Under the full suite's worker parallelism a 7.6x slowdown crosses the
   // ceiling, and it did: three of four full-suite runs on one branch failed
   // here, twice on the same test, including the fastest run of the four with
   // nothing else on the machine. CI is green throughout, so this is wall-clock
@@ -1008,8 +1017,9 @@ describe("applyChangesCore — write guards", () => {
   // Safe because duration is NOT the property under test -- these assert
   // `applied: 1`. Where duration IS the assertion, raising the ceiling turns a
   // real gate into a slower real gate that catches nothing; see
-  // `tests/helpers/timing.ts`. Proved honoured rather than ignored: set to 1ms,
-  // both tests fail with "timed out in 1ms".
+  // `tests/helpers/timing.ts`. Proved honoured rather than ignored: set
+  // REAL_APPLY_TIMEOUT_MS to 1 and every spec carrying it fails naming that
+  // value -- the only observation available here that can come back negative.
 
   it(
     "allows an unsaved-restore conflict over an UNCHANGED disk",
