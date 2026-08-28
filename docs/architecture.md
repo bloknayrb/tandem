@@ -58,7 +58,7 @@ graph LR
         ChannelAPI["Channel API<br/>/api/events, /api/channel-*"]
         EventQueue["Event Queue<br/>(Y.Map observers)"]
         Notify["notifications.ts<br/>(ring buffer + SSE)"]
-        FO["file-opener.ts<br/>(shared open logic)"]
+        FO["documents/open.ts<br/>(open pipeline + named entries)"]
         YDoc["Y.Doc per room<br/>(one per open document)"]
         PushLiveness["push-liveness.ts<br/>(consumer heartbeat counters,<br/>diagnostics only)"]
         FileIO["File I/O<br/>markdown, txt, docx"]
@@ -175,7 +175,7 @@ Claude calls tandem_comment({ from: 10, to: 20, text: "Review this section", doc
 User clicks "+" in DocumentTabs or drops a file on the editor
     → FileOpenDialog sends POST /api/open { filePath } or POST /api/upload { fileName, content }
     → Express route calls openFromDisk() or openFromUpload() — the ADR-034 named
-      entry points in documents/open.ts, which forward to file-opener.ts
+      entry points in documents/open.ts, which IS the pipeline (Unit 7a)
     → Same logic as tandem_open: format detection, session restore, adapter load
     → registry.openDocumentWhenReady(...) tracks + activates, wires the doc
       meta / baseline / annotation store, THEN publishes to Y.Map
@@ -187,7 +187,7 @@ User clicks "+" in DocumentTabs or drops a file on the editor
 
 ```
 tandem_open("report.docx")
-    → file-opener.ts detects .docx format
+    → documents/open.ts detects .docx format
     → docx adapter converts HTML → Y.Doc (mammoth.js in worker thread)
     → docx-comments.ts extracts <w:comment> elements via JSZip
     → For each comment: resolves w:commentRangeStart/End to flat text offsets
@@ -245,7 +245,7 @@ Chat state persists across server restarts via the same `saveCtrlSession` / `res
 
 ### Session Auto-Restore on Startup
 
-On server startup, `listSessionFilePaths()` scans the session directory and `restoreOpenDocuments()` reopens all previously-open files via `openFileByPath()`. `restoreCtrlSession()` returns the previous active document ID so the correct tab is selected. If a session's source file no longer exists (ENOENT), the stale session is cleaned up. After restore, the version check opens `CHANGELOG.md` on upgrade, or the `sample/welcome.md` fallback opens if zero documents are open. Both run **before** Hocuspocus and MCP start to prevent CRDT merge races with stale browser tabs.
+On server startup, `listSessionFilePaths()` scans the session directory and `restoreOpenDocuments()` reopens all previously-open files via `openFromRestore()` (ADR-034's named restore entry — it carries the persisted `readOnly` flag back through, which a bare open call drops). `restoreCtrlSession()` returns the previous active document ID so the correct tab is selected. If a session's source file no longer exists (ENOENT), the stale session is cleaned up. After restore, the version check opens `CHANGELOG.md` on upgrade, or the `sample/welcome.md` fallback opens if zero documents are open. Both run **before** Hocuspocus and MCP start to prevent CRDT merge races with stale browser tabs.
 
 ### OS File-Association Open
 
@@ -259,7 +259,7 @@ Cold start, Windows / Linux:
                                                     TANDEM_OPEN_FILE=<path>
                                               ──▶  Node startup-file.ts:
                                                     maybeOpenStartupFile()
-                                              ──▶  openFileByPath()  [BEFORE bind]
+                                              ──▶  openFromDisk()  [BEFORE bind]
                                               ──▶  HTTP / Hocuspocus bind
                                               ──▶  browser opens, sees the doc
 
@@ -589,7 +589,7 @@ Each Y.Map has observers attached by different subsystems. Understanding who own
 | `documentMeta` (per-doc) | Client Svelte hook | `yjsSync.svelte.ts` → `setupTabObservers()` | Sync readOnly flag per tab |
 | `documentMeta` → `fidelityReport` (per-doc) | Client Svelte component | `src/client/components/FidelityReportBanner.svelte` | Render the `.docx` fidelity notice (#1145). **No server-side observer** — server write-only (open/reload/save), client read-only. |
 
-**Force-reload (`force: true`)** clears all Y.Maps and repopulates content in a single `doc.transact()` (see `clearAndReload` in `file-opener.ts`). The Y.Doc instance, Hocuspocus room, and client connections survive. Client-side observers survive because they reference the same Y.Doc/Y.Map instances. Server event queue observers are defensively re-attached via `attachObservers()` (idempotent -- detaches existing first).
+**Force-reload (`force: true`)** clears all Y.Maps and repopulates content in a single `doc.transact()` (see `clearAndReload` in `documents/populate.ts`). The Y.Doc instance, Hocuspocus room, and client connections survive. Client-side observers survive because they reference the same Y.Doc/Y.Map instances. Server event queue observers are defensively re-attached via `attachObservers()` (idempotent -- detaches existing first).
 
 **Server restarts (generation gate).** Every server run mints a `generationId` (UUID). Clients fetch it from `GET /api/info` (loopback-only field) and pin it as the Hocuspocus auth token on every provider at construction. The server's `onAuthenticate` hook (`src/server/yjs/provider.ts`) rejects token mismatches for all rooms **including `CTRL_ROOM`** — Hocuspocus queues sync messages until auth passes, so a tab that survived a restart can never merge its disjoint-history Y.Docs back into freshly-loaded server documents. On `authenticationFailed` the client re-fetches the generation and rebuilds the ctrl provider plus all tabs with fresh Y.Docs (`scheduleRebuild` in `yjsSync.svelte.ts`). The id lives in module state (`getGenerationId()` in `document-service.ts`) and is distributed over HTTP only — deliberately never broadcast via the ctrl Y.Map, where a stale merge could clobber it. The rebuild orchestration (single-flight, microtask deferral, server-down poll loop) is extracted to `rebuild-scheduler.ts` for unit testing. In stdio mode no HTTP route serves the id, so browser clients are fully locked out of Hocuspocus — they were already non-functional there (the editor needs the :3479 API).
 
@@ -890,14 +890,14 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `index.ts` -- Entry point, starts MCP HTTP on :3479 and Hocuspocus WebSocket on :3478 (stdio fallback via `TANDEM_TRANSPORT=stdio`)
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
 - `notifications.ts` -- Toast notification system: ring buffer of `NotificationPayload` objects, `pushNotification()` + `subscribe()`/`unsubscribe()` for SSE consumers
-- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API; `openScratchpad(content?)` for ephemeral in-memory docs via `source:"upload"` — **production callers reach the disk/upload/scratchpad entries through `documents/open.ts`, not this module directly**, and `tests/server/documents-open.test.ts` enforces that, naming the five sanctioned exceptions), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`, `broadcastStoreReadOnly()`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`, `snapshotToolCount()` for diagnostic tool census, `findRepoFile()` for locating bundled docs), `transport-registry.ts` (live MCP sessions keyed by `Mcp-Session-Id` — one `McpServer` per session, LRU cap + idle reaper; ADR-045), `../sessions/context.ts` (`AsyncLocalStorage` carrying the calling Claude session id into tool handlers), `api-routes.ts` (REST API: `GET /api/info`, `/api/open`, `/api/upload`, `/api/close`, `POST /api/scratchpad`, `GET /api/notify-stream`), `routes/info.ts` (`makeInfoHandler()` factory for `GET /api/info` — loopback-gated fields, token mtime, `changelogPath`, `workflowsPath`), `routes/diagnostics.ts` (`makeDiagnosticsHandler()` factory for `GET /api/diagnostics` — embedded `runDoctor()` report for the About tab's Copy Diagnostics button; loopback-only, cwd-dependent checks filtered, single-flight), `routes/scratchpad.ts` (handler for `POST /api/scratchpad`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
+- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (**the reload family only, since ADR-034 Unit 7a**: `reloadDocumentFromMarkdown`, `restoreDocumentFromBackup`, `resolveExternalConflict` — each replaces the content of an ALREADY-open document. Everything that OPENS one lives in `documents/open.ts`; `tests/server/documents-open.test.ts` names the four sanctioned callers that may still reach this module, and `tests/docs/documents-boundary.test.ts` pins its exported surface), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`, `broadcastStoreReadOnly()`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`, `snapshotToolCount()` for diagnostic tool census, `findRepoFile()` for locating bundled docs), `transport-registry.ts` (live MCP sessions keyed by `Mcp-Session-Id` — one `McpServer` per session, LRU cap + idle reaper; ADR-045), `../sessions/context.ts` (`AsyncLocalStorage` carrying the calling Claude session id into tool handlers), `api-routes.ts` (REST API: `GET /api/info`, `/api/open`, `/api/upload`, `/api/close`, `POST /api/scratchpad`, `GET /api/notify-stream`), `routes/info.ts` (`makeInfoHandler()` factory for `GET /api/info` — loopback-gated fields, token mtime, `changelogPath`, `workflowsPath`), `routes/diagnostics.ts` (`makeDiagnosticsHandler()` factory for `GET /api/diagnostics` — embedded `runDoctor()` report for the About tab's Copy Diagnostics button; loopback-only, cwd-dependent checks filtered, single-flight), `routes/scratchpad.ts` (handler for `POST /api/scratchpad`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer + subscriber-gated payload tracking), `sse.ts` (SSE endpoint handler), `push-liveness.ts` (consumer heartbeat counters — diagnostics only, never Claude's presence), `observers/` (per-map event derivation), `file-sync-registry.ts` (durable-annotation file-watcher binding), `wake-socket.ts` (the self-armed `ws://…/api/wake` transport — ADR-049), `delivery-state.ts` (per-item surfaced/pushed bookkeeping)
 - `yjs/` -- Y.Doc management, the authoritative document state. `lifecycle.ts` is the named `HocuspocusLifecycle` seam (ADR-033) — a leaf module, so `provider.ts` can depend on it with no cycle — assembled and installed by `bootstrap/hocuspocus-lifecycle.ts` before every bind.
 - `mode.ts` -- Solo/Tandem authority (CTRL_ROOM `Y_MAP_MODE`), read by `shouldForwardExternally`
 - `chat-stream-staleness.ts` -- Abandoned-`chatStream`-entry tripwire (#1340): the ledger + warn-once sweep shared by `mcp/awareness.ts` (seeds) and `session/manager.ts`'s `foldChatStream` (checks). A leaf module with no project imports — `session/manager.ts` cannot import `mcp/awareness.ts` without a cycle
 - `startup-file.ts` -- `maybeOpenStartupFile()`; consumes `TANDEM_OPEN_FILE` before HTTP bind
 - `bind-check.ts` -- Bind-host policy: `TANDEM_BIND_HOST`, `TANDEM_LAN_IP`, wildcard handling, the token-provisioned refusal
-- `documents/` -- Per-document state helpers. `registry.ts` owns `openDocs`, `activeDocId`, the activation epoch and `broadcastOpenDocs` (ADR-033); its whole mutating surface is `openDocument` / `openDocumentWhenReady` / `activateDocument` / `updateDocumentWhenReady` / `closeDocument`, each ending in exactly one `documentMeta` broadcast, with the primitives private. `registry-testing.ts` is the test-only seam onto those primitives and is banned from `src/`.
+- `documents/` -- Per-document state helpers. `registry.ts` owns `openDocs`, `activeDocId`, the activation epoch and `broadcastOpenDocs` (ADR-033); its whole mutating surface is `openDocument` / `openDocumentWhenReady` / `activateDocument` / `updateDocumentWhenReady` / `closeDocument`, each ending in exactly one `documentMeta` broadcast, with the primitives private. `registry-testing.ts` is the test-only seam onto those primitives and is banned from `src/`. **Since ADR-034 Unit 7a this directory also holds the file-open pipeline**, split out of `mcp/file-opener.ts`: `open.ts` (the pipeline plus the four named entries `openFromDisk` / `openFromUpload` / `openScratchpad` / `openFromRestore`, and the `kindOfOpenResult` derivation), `populate.ts` (content into and out of a Y.Doc — `prepareContent`, `applyPreparedContent`, `clearDocMaps`, `clearAndReload`), `watcher.ts` (the reload lifecycle — `reloadFromDisk`, `wireFileWatcher`, and the per-document concurrent-reload guard exposed as `acquireReloadGuard` / `releaseReloadGuard` / `isReloadInProgress`), `conflict.ts` (`readPendingConflict` + `flagExternalConflict` — the read and write halves of `Y_MAP_EXTERNAL_CONFLICT`, which used to live in different files), `annotation-wiring.ts` (`wireAnnotationStore`) and `autosave.ts` (`ensureAutoSave`, its own module because both the open pipeline and the reload family arm it). `tests/docs/documents-boundary.test.ts` pins every import edge into and out of this directory as an exact set.
 - `integrations/` -- `IntegrationConfig` schema, atomic storage, keychain, `apply.ts` (writes the MCP entries), HTTP routes, the Claude CLI installer
 - `launcher/` -- Auto-launcher and `supervisor.ts` (writes wake turns on the child's stdin)
 - `license/`, `local-model/` -- both ship dark; see CLAUDE.md

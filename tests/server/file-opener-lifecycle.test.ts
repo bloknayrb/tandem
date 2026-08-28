@@ -34,11 +34,11 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
   watchFile: vi.fn(),
 }));
 
+import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import * as fileSyncRegistryModule from "../../src/server/events/file-sync-registry.js";
 import { watchFile } from "../../src/server/file-watcher.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import { openFileByPath } from "../../src/server/mcp/file-opener.js";
 import { saveSession } from "../../src/server/session/manager.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 
@@ -73,7 +73,7 @@ describe("session restore — hit", () => {
     await fs.writeFile(filePath, "# Original content");
 
     // First open — populates Y.Doc and registers in open-docs
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     expect(first.restoredFromSession).toBe(false);
 
     // Save session state so it's available on next open
@@ -85,7 +85,7 @@ describe("session restore — hit", () => {
     setActiveDocId(null);
 
     // Reopen — should restore from session (file unchanged)
-    const second = await openFileByPath(filePath);
+    const second = await openFromDisk(filePath);
     expect(second.restoredFromSession).toBe(true);
     expect(second.documentId).toBe(first.documentId);
   });
@@ -99,7 +99,7 @@ describe("session restore — stale mtime", () => {
     const filePath = path.join(tmpDir, "restore-stale.md");
     await fs.writeFile(filePath, "# Original content");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
     await saveSession(filePath, "md", doc);
 
@@ -112,7 +112,7 @@ describe("session restore — stale mtime", () => {
     const futureMtime = new Date(Date.now() + 10_000);
     await fs.utimes(filePath, new Date(), futureMtime);
 
-    const second = await openFileByPath(filePath);
+    const second = await openFromDisk(filePath);
     expect(second.restoredFromSession).toBe(false);
   });
 });
@@ -130,7 +130,7 @@ describe("session restore — empty fragment", () => {
     await saveSession(filePath, "md", emptyDoc);
 
     // Open — should detect fragment.length === 0 and fall back to source file
-    const result = await openFileByPath(filePath);
+    const result = await openFromDisk(filePath);
     expect(result.restoredFromSession).toBe(false);
   });
 });
@@ -145,7 +145,7 @@ describe("annotation wiring", () => {
     const filePath = path.join(tmpDir, "annotation-wire.md");
     await fs.writeFile(filePath, "# Annotation wiring test");
 
-    const result = await openFileByPath(filePath);
+    const result = await openFromDisk(filePath);
 
     expect(spy).toHaveBeenCalled();
     const firstCallArgs = spy.mock.calls[0];
@@ -161,7 +161,7 @@ describe("file-watcher — .md", () => {
     const filePath = path.join(tmpDir, "watch-md.md");
     await fs.writeFile(filePath, "# Watch test");
 
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
 
     const mockWatchFile = vi.mocked(watchFile);
     expect(mockWatchFile).toHaveBeenCalled();
@@ -182,7 +182,7 @@ describe("file-watcher — .docx", () => {
     const filePath = path.join(tmpDir, "watch-docx.docx");
     await fs.copyFile(sourceDocx, filePath);
 
-    const result = await openFileByPath(filePath);
+    const result = await openFromDisk(filePath);
 
     const mockWatchFile = vi.mocked(watchFile);
     expect(mockWatchFile).toHaveBeenCalled();
@@ -205,14 +205,14 @@ describe("already-open branch", () => {
     const filePath = path.join(tmpDir, "already-open.md");
     await fs.writeFile(filePath, "# Already open test");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     expect(first.alreadyOpen).toBe(false);
 
     const mockWatchFile = vi.mocked(watchFile);
     expect(mockWatchFile.mock.calls.length).toBe(1);
 
     // Reopen without force — must hit the handleAlreadyOpen branch
-    const second = await openFileByPath(filePath);
+    const second = await openFromDisk(filePath);
     expect(second.alreadyOpen).toBe(true);
     expect(second.documentId).toBe(first.documentId);
     expect(second.forceReloaded).toBe(false);
@@ -232,7 +232,7 @@ describe("force-reload branch", () => {
     const filePath = path.join(tmpDir, "force-reload.md");
     await fs.writeFile(filePath, "# First content");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     expect(first.forceReloaded).toBe(false);
 
     const mockWatchFile = vi.mocked(watchFile);
@@ -241,7 +241,7 @@ describe("force-reload branch", () => {
     // Modify the file on disk so the reload has observable content
     await fs.writeFile(filePath, "# Second content");
 
-    const second = await openFileByPath(filePath, { force: true });
+    const second = await openFromDisk(filePath, { force: true });
     expect(second.forceReloaded).toBe(true);
     expect(second.alreadyOpen).toBe(false);
     expect(second.documentId).toBe(first.documentId);
@@ -260,7 +260,7 @@ describe("resolveAndValidatePath — unsupported extension", () => {
     const filePath = path.join(tmpDir, "bad.xyz");
     await fs.writeFile(filePath, "some content");
 
-    await expect(openFileByPath(filePath)).rejects.toMatchObject({
+    await expect(openFromDisk(filePath)).rejects.toMatchObject({
       code: "UNSUPPORTED_FORMAT",
     });
   });
@@ -278,7 +278,7 @@ describe("resolveAndValidatePath — oversized file", () => {
     await fs.writeFile(filePath, "");
     await fs.truncate(filePath, MAX_FILE_SIZE + 1);
 
-    await expect(openFileByPath(filePath)).rejects.toMatchObject({
+    await expect(openFromDisk(filePath)).rejects.toMatchObject({
       code: "FILE_TOO_LARGE",
     });
   });

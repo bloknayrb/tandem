@@ -2,17 +2,14 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { openFromDisk, openFromUpload } from "../../src/server/documents/open.js";
 import { removeDoc } from "../../src/server/documents/registry-testing.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import {
-  openFileByPath,
-  openFileFromContent,
-  SUPPORTED_EXTENSIONS,
-} from "../../src/server/mcp/file-opener.js";
 import { sourceFileChanged } from "../../src/server/session/manager.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import {
+  SUPPORTED_EXTENSIONS,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_DOCUMENT_META,
@@ -39,13 +36,13 @@ afterEach(async () => {
   }
 });
 
-describe("openFileByPath", () => {
+describe("openFromDisk", () => {
   it("opens a .md file and returns correct metadata", async () => {
     const dir = await makeTmpDir();
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello\n\nWorld");
 
-    const result = await openFileByPath(filePath);
+    const result = await openFromDisk(filePath);
 
     expect(result.fileName).toBe("test.md");
     expect(result.format).toBe("md");
@@ -57,7 +54,7 @@ describe("openFileByPath", () => {
   });
 
   it("rejects nonexistent paths", async () => {
-    await expect(openFileByPath("/nonexistent/file.md")).rejects.toMatchObject({
+    await expect(openFromDisk("/nonexistent/file.md")).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
@@ -67,7 +64,7 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "data.csv");
     await fs.writeFile(filePath, "a,b,c");
 
-    await expect(openFileByPath(filePath)).rejects.toMatchObject({
+    await expect(openFromDisk(filePath)).rejects.toMatchObject({
       code: "UNSUPPORTED_FORMAT",
     });
   });
@@ -77,8 +74,8 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
 
-    const first = await openFileByPath(filePath);
-    const second = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
+    const second = await openFromDisk(filePath);
 
     expect(first.alreadyOpen).toBe(false);
     expect(second.alreadyOpen).toBe(true);
@@ -90,13 +87,13 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Original");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     expect(first.alreadyOpen).toBe(false);
 
     // Modify the file on disk
     await fs.writeFile(filePath, "# Updated content\n\nNew paragraph");
 
-    const second = await openFileByPath(filePath, { force: true });
+    const second = await openFromDisk(filePath, { force: true });
 
     expect(second.forceReloaded).toBe(true);
     expect(second.alreadyOpen).toBe(false);
@@ -115,7 +112,7 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
 
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
     const id = docIdFromPath(filePath);
 
     // Delete the file on disk
@@ -123,7 +120,7 @@ describe("openFileByPath", () => {
 
     // fs.stat runs before the force-close branch, so ENOENT is thrown
     // without tearing down the in-memory doc
-    await expect(openFileByPath(filePath, { force: true })).rejects.toMatchObject({
+    await expect(openFromDisk(filePath, { force: true })).rejects.toMatchObject({
       code: "ENOENT",
     });
 
@@ -136,7 +133,7 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
 
-    const result = await openFileByPath(filePath, { force: true });
+    const result = await openFromDisk(filePath, { force: true });
 
     expect(result.alreadyOpen).toBe(false);
     expect(result.forceReloaded).toBe(false);
@@ -148,8 +145,8 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
 
-    await openFileByPath(filePath);
-    const second = await openFileByPath(filePath, { force: false });
+    await openFromDisk(filePath);
+    const second = await openFromDisk(filePath, { force: false });
 
     expect(second.alreadyOpen).toBe(true);
     expect(second.forceReloaded).toBe(false);
@@ -160,8 +157,8 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
 
-    await openFileByPath(filePath);
-    const second = await openFileByPath(filePath);
+    await openFromDisk(filePath);
+    const second = await openFromDisk(filePath);
 
     expect(second.alreadyOpen).toBe(true);
     expect(second.forceReloaded).toBe(false);
@@ -172,11 +169,11 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const docBefore = getOrCreateDocument(first.documentId);
 
     await fs.writeFile(filePath, "# Changed");
-    await openFileByPath(filePath, { force: true });
+    await openFromDisk(filePath, { force: true });
     const docAfter = getOrCreateDocument(first.documentId);
 
     // Same Y.Doc instance — cleared and repopulated in-place
@@ -191,12 +188,12 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
 
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
 
-    const second = await openFileByPath(filePath, { force: true });
+    const second = await openFromDisk(filePath, { force: true });
     expect(second.forceReloaded).toBe(true);
 
-    const third = await openFileByPath(filePath, { force: true });
+    const third = await openFromDisk(filePath, { force: true });
     expect(third.forceReloaded).toBe(true);
     expect(third.documentId).toBe(second.documentId);
   });
@@ -206,7 +203,7 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Original");
 
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
 
     // Mock deleteSession to throw — teardown should still complete
     const sessionManager = await import("../../src/server/session/manager.js");
@@ -215,7 +212,7 @@ describe("openFileByPath", () => {
       .mockRejectedValueOnce(new Error("EPERM: permission denied"));
 
     await fs.writeFile(filePath, "# After error");
-    const result = await openFileByPath(filePath, { force: true });
+    const result = await openFromDisk(filePath, { force: true });
 
     expect(result.forceReloaded).toBe(true);
     const doc = getOrCreateDocument(result.documentId);
@@ -230,7 +227,7 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
 
     // Inject a fake annotation
@@ -239,7 +236,7 @@ describe("openFileByPath", () => {
     expect(annotations.size).toBe(1);
 
     // Force-reload should clear it
-    await openFileByPath(filePath, { force: true });
+    await openFromDisk(filePath, { force: true });
     expect(annotations.size).toBe(0);
   });
 
@@ -248,7 +245,7 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
 
     // Inject fake awareness data
@@ -257,7 +254,7 @@ describe("openFileByPath", () => {
     expect(awareness.size).toBe(1);
 
     // Force-reload should clear it
-    await openFileByPath(filePath, { force: true });
+    await openFromDisk(filePath, { force: true });
     expect(awareness.size).toBe(0);
   });
 
@@ -266,9 +263,9 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.txt");
     await fs.writeFile(filePath, "Original text");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     await fs.writeFile(filePath, "Updated text");
-    await openFileByPath(filePath, { force: true });
+    await openFromDisk(filePath, { force: true });
 
     const doc = getOrCreateDocument(first.documentId);
     const text = extractText(doc);
@@ -281,9 +278,9 @@ describe("openFileByPath", () => {
     const filePath = path.join(dir, "test.md");
     await fs.writeFile(filePath, "# Hello");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     await fs.writeFile(filePath, "# Changed");
-    await openFileByPath(filePath, { force: true });
+    await openFromDisk(filePath, { force: true });
 
     const doc = getOrCreateDocument(first.documentId);
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
@@ -294,9 +291,9 @@ describe("openFileByPath", () => {
   });
 });
 
-describe("openFileFromContent", () => {
+describe("openFromUpload", () => {
   it("creates doc from text content", async () => {
-    const result = await openFileFromContent("notes.md", "# Test\n\nContent here");
+    const result = await openFromUpload("notes.md", "# Test\n\nContent here");
 
     expect(result.fileName).toBe("notes.md");
     expect(result.format).toBe("md");
@@ -306,20 +303,20 @@ describe("openFileFromContent", () => {
   });
 
   it("detects format from filename extension", async () => {
-    const result = await openFileFromContent("readme.txt", "plain text");
+    const result = await openFromUpload("readme.txt", "plain text");
 
     expect(result.format).toBe("txt");
     expect(result.source).toBe("upload");
   });
 
   it("rejects unsupported extensions", async () => {
-    await expect(openFileFromContent("data.csv", "a,b,c")).rejects.toMatchObject({
+    await expect(openFromUpload("data.csv", "a,b,c")).rejects.toMatchObject({
       code: "UNSUPPORTED_FORMAT",
     });
   });
 
   it("marks upload docs as read-only", async () => {
-    const result = await openFileFromContent("test.md", "# Hello");
+    const result = await openFromUpload("test.md", "# Hello");
     expect(result.readOnly).toBe(true);
   });
 });

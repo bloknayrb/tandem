@@ -44,11 +44,11 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
   suppressNextChange: vi.fn(),
 }));
 
+import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { summarizeMammothMessages } from "../../src/server/file-io/docx.js";
 import { watchFile } from "../../src/server/file-watcher.js";
 import { getOpenDocs, saveDocumentToDisk } from "../../src/server/mcp/document-service.js";
-import { openFileByPath } from "../../src/server/mcp/file-opener.js";
 import { resetForTesting as resetNotifications } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_DOCUMENT_META, Y_MAP_FIDELITY_REPORT } from "../../src/shared/constants.js";
@@ -223,7 +223,7 @@ describe("fidelity report wiring", () => {
     const filePath = path.join(tmpDir, "lossy.docx");
     await fs.writeFile(filePath, await buildDocxWithUnknownStyle("Body", "ClientSecretAcme"));
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const report = reportOf(getOrCreateDocument(opened.documentId));
 
     expect(report).toBeDefined();
@@ -237,7 +237,7 @@ describe("fidelity report wiring", () => {
     const filePath = path.join(tmpDir, "clean.docx");
     await fs.writeFile(filePath, await buildSimpleDocx("All supported"));
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const report = reportOf(getOrCreateDocument(opened.documentId));
 
     expect(report).toBeDefined();
@@ -249,7 +249,7 @@ describe("fidelity report wiring", () => {
     const filePath = path.join(tmpDir, "reload.docx");
     await fs.writeFile(filePath, await buildDocxWithUnknownStyle("Body", "OldStyle"));
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     expect(reportOf(doc)!.importLosses.length).toBeGreaterThan(0);
@@ -267,7 +267,7 @@ describe("fidelity report wiring", () => {
     const filePath = path.join(tmpDir, "save.docx");
     await fs.writeFile(filePath, await buildDocxWithUnknownStyle("Body", "KeepMe"));
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const before = reportOf(doc)!;
     expect(before.importLosses.length).toBeGreaterThan(0);
@@ -287,7 +287,7 @@ describe("fidelity report wiring", () => {
     const filePath = path.join(tmpDir, "reviewed.docx");
     await fs.writeFile(filePath, await buildDocxWithSilentLosses("Alice Q Reviewer", "ACME LTD"));
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const report = reportOf(getOrCreateDocument(opened.documentId))!;
 
     expect(report.importLosses.some((l) => /tracked deletion/i.test(l))).toBe(true);
@@ -317,7 +317,7 @@ describe("fidelity report wiring", () => {
     );
     await fs.writeFile(filePath, (await zip.generateAsync({ type: "nodebuffer" })) as Buffer);
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const losses = reportOf(getOrCreateDocument(opened.documentId))!.importLosses;
     const revision = losses.findIndex((l) => /tracked deletion/i.test(l));
     const style = losses.findIndex((l) => /style/i.test(l));
@@ -329,7 +329,7 @@ describe("fidelity report wiring", () => {
     const filePath = path.join(tmpDir, "reload-losses.docx");
     await fs.writeFile(filePath, await buildDocxWithSilentLosses("A", "Letterhead"));
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     expect(reportOf(doc)!.importLosses.some((l) => /tracked/i.test(l))).toBe(true);
@@ -345,7 +345,7 @@ describe("fidelity report wiring", () => {
   it("reports the unpreserved-import COUNT on save, and omits it when clean", async () => {
     const lossy = path.join(tmpDir, "lossy-save.docx");
     await fs.writeFile(lossy, await buildDocxWithSilentLosses("A", "Letterhead"));
-    const openedLossy = await openFileByPath(lossy);
+    const openedLossy = await openFromDisk(lossy);
     const before = reportOf(getOrCreateDocument(openedLossy.documentId))!;
     const lossyResult = await saveDocumentToDisk(openedLossy.documentId, "manual");
     expect(lossyResult.status).toBe("saved");
@@ -355,7 +355,7 @@ describe("fidelity report wiring", () => {
 
     const clean = path.join(tmpDir, "clean-save.docx");
     await fs.writeFile(clean, await buildSimpleDocx("All supported"));
-    const openedClean = await openFileByPath(clean);
+    const openedClean = await openFromDisk(clean);
     const cleanResult = await saveDocumentToDisk(openedClean.documentId, "manual");
     expect(cleanResult.status).toBe("saved");
     expect(cleanResult.unpreservedImports).toBeUndefined();
@@ -368,7 +368,7 @@ describe("fidelity report wiring", () => {
     const filePath = path.join(tmpDir, "style-only.docx");
     await fs.writeFile(filePath, await buildDocxWithUnknownStyle("Body", "CorpStyle"));
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const report = reportOf(getOrCreateDocument(opened.documentId))!;
     expect(report.importLosses.length).toBeGreaterThan(0); // the banner still tells them
     expect(report.structuralLosses).toBe(0);
@@ -393,7 +393,7 @@ describe("fidelity report wiring", () => {
     );
     await fs.writeFile(filePath, (await zip.generateAsync({ type: "nodebuffer" })) as Buffer);
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const report = reportOf(getOrCreateDocument(opened.documentId))!;
     expect(report.importLosses.length).toBeGreaterThan(1); // deletion + style
     expect(report.structuralLosses).toBe(1); // ...only the deletion is structural
@@ -410,7 +410,7 @@ describe("fidelity report wiring", () => {
     const { buildFootnoteWithFormatting } = await import("../helpers/docx-corpus.js");
     await fs.writeFile(filePath, await buildFootnoteWithFormatting());
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const report = reportOf(getOrCreateDocument(opened.documentId))!;
     expect(report.importLosses.some((l) => /preserved, but body formatting/.test(l))).toBe(true);
     expect(report.structuralLosses).toBe(0);
@@ -423,7 +423,7 @@ describe("fidelity report wiring", () => {
     const filePath = path.join(tmpDir, "note.md");
     await fs.writeFile(filePath, "# Heading\n\nPlain markdown.\n", "utf-8");
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     expect(reportOf(getOrCreateDocument(opened.documentId))).toBeUndefined();
   });
 });
