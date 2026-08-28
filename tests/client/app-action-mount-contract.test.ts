@@ -57,15 +57,30 @@ interface ContractResult {
 }
 
 /**
+ * Offset of the `</script>` that closes the tag opened at `from`, or -1.
+ *
+ * A regex rather than `indexOf` because the opening-tag matches above are
+ * case-insensitive (CodeQL js/bad-tag-filter reads a lowercase-only `<script`
+ * match as a sanitiser with an uppercase bypass). Searching for a literal
+ * lowercase closer while accepting `<SCRIPT>` would run an uppercase block to
+ * end-of-file. Neither spelling occurs in `App.svelte` -- Svelte only honours
+ * the lowercase tag -- so this is consistency, not a behaviour change.
+ */
+function closeScriptAt(src: string, from: number): number {
+  const m = /<\/script\s*>/i.exec(src.slice(from));
+  return m ? from + m.index : -1;
+}
+
+/**
  * The `<script>` spans of a Svelte file, as [from, to) offsets into `src`.
  * A file with no `<script` tag at all is one span covering everything — the
  * synthetic controls below are bare JavaScript.
  */
 function scriptSpans(src: string): Array<[number, number]> {
   const spans: Array<[number, number]> = [];
-  for (const tag of src.matchAll(/<script\b[^>]*>/g)) {
+  for (const tag of src.matchAll(/<script\b[^>]*>/gi)) {
     const from = tag.index + tag[0].length;
-    const close = src.indexOf("</script>", from);
+    const close = closeScriptAt(src, from);
     spans.push([from, close === -1 ? src.length : close]);
   }
   return spans.length > 0 ? spans : [[0, src.length]];
@@ -106,11 +121,11 @@ function moduleScriptRanges(src: string): Array<[number, number]> {
   // Read off the RAW source: `blankNonCode` would have blanked the quotes in
   // `context="module"`, which is exactly how the legacy spelling used to slip
   // past this check while the comment claimed it was covered.
-  for (const tag of src.matchAll(/<script\b([^>]*)>/g)) {
+  for (const tag of src.matchAll(/<script\b([^>]*)>/gi)) {
     const attrs = tag[1];
     if (!/\bmodule\b/.test(attrs) && !/\bcontext\s*=\s*["']module["']/.test(attrs)) continue;
     const from = tag.index;
-    const close = src.indexOf("</script>", from);
+    const close = closeScriptAt(src, from);
     ranges.push([from, close === -1 ? src.length : close]);
   }
   return ranges;
