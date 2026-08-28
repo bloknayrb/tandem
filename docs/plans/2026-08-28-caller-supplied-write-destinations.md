@@ -55,14 +55,14 @@ origin allowlist never gets a say. **Measured, not inferred** (express 5.2.1, th
 missing Content-Type *all* leave `req.body === undefined`, while `application/json` parses. So an
 attacker can reach any of these handlers but cannot inject a single field.
 
-Of the nine routes CLAUDE.md lists as single-layer, **three reach a real side effect** with an
-all-undefined body:
+Of the nine routes CLAUDE.md lists as single-layer, **two reach a real side effect** with an
+all-undefined body, and a third is worth hardening on the same reasoning:
 
 | Route | Side effect | Why it gets through |
 |---|---|---|
-| **`/api/save`** | **Overwrites the user's file on disk.** For an open `.docx` it re-exports through mammoth over the original — the lossy round-trip the auto-save carve-out exists to prevent, bypassed because `source === "manual"` skips it (`document-service.ts:307`) | `routes/save.ts:30` `req.body ?? {}`; falls to `getActiveDocId()` at `:37` and `saveDocumentToDisk` at `:109` |
+| **`/api/save`** | **Overwrites the user's file on disk** whenever the steady state holds (`saveDocumentToDisk` has ten skip returns — open, on-disk, not read-only, saveable format, no save in flight, no unresolved conflict, no external modification — and no dirty check). For an open `.docx` it re-exports through mammoth over the original, losing what the converter cannot represent. The binary carve-out at `document-service.ts:307` does not stop this and was never meant to: it is scoped to `source === "auto-save"`, and `routes/save.ts:127` passes `"manual"` — the same value the user's own Ctrl+S carries. The attack does what a legitimate explicit save does, rather than slipping past a guard aimed at it | `routes/save.ts:30` `req.body ?? {}`; falls to `getActiveDocId()` at `:37` and `saveDocumentToDisk` at `:109` |
 | **`/api/convert`** | Writes a new `.md` beside the user's document **and flips the active document** | `routes/convert.ts:6`; both guards are `!== undefined`, so `convertToMarkdown(undefined, undefined)` targets the active doc |
-| **`/api/rotate-token`** | Swaps the in-memory auth token from disk and arms a 60-second grace window; loopable to keep one permanently armed | `routes/rotate-token.ts:10` takes `_req` — the body is **never read**, so there is nothing to fail closed on |
+| `/api/rotate-token` | **Hardening, not a hole — review corrected an earlier draft of this doc that listed it as a third finding.** It swaps the in-memory auth token from disk and arms a 60-second grace window, but in the steady state the disk token already equals the in-memory one, so the swap is a no-op and the grace slot holds the already-current credential; and the route 409s *before* touching any state whenever `TANDEM_AUTH_TOKEN` is set, which is the entire Tauri desktop build | `routes/rotate-token.ts:10` takes `_req` — the body is **never read**, so there is nothing to fail closed on |
 
 The other five (`open`, `close`, `upload`, `annotation-reply`, `remove-annotation`) fail closed on
 a missing required field before any Y.Doc access or notification. `apply-changes` reaches
@@ -94,7 +94,10 @@ reqwest with no Origin (`src-tauri/src/lib.rs:110`, `:639-641`).
 ### What the fix breaks, and must be fixed with it
 
 - **`tests/server/routes/response-path-scrub.test.ts:61-62`** builds requests as
-  `{ body, headers: {}, socket: {...} }` — no Origin. Four specs turn into 403s.
+  `{ body, headers: {}, socket: {...} }` — no Origin. **Six** specs turn into 403s, not four; an
+  earlier draft undercounted. `tests/server/external-conflict.test.ts` loses two more, and its
+  stub is worse than Origin-less — it has no `headers` object at all, so
+  `assertOriginAllowlisted` **TypeErrors** rather than returning 403.
 - **`tests/docs/loopback-gate-claims.test.ts`** derives the ungated set from source and compares it
   against the enumerations in **CLAUDE.md** and **docs/security.md**. Gating three routes shrinks
   nine to six, so both documents must be edited in the same PR or that test goes red. This is the
