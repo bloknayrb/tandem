@@ -33,6 +33,7 @@ import {
   resetForTesting as resetSyncForTesting,
   type SyncContext,
 } from "../../src/server/annotations/sync.js";
+import { __testEvictPartialDocState } from "../../src/server/documents/populate.js";
 import {
   attachObservers,
   detachObservers,
@@ -41,7 +42,6 @@ import {
   subscribe,
   unsubscribe,
 } from "../../src/server/events/queue.js";
-import { __testEvictPartialDocState } from "../../src/server/mcp/file-opener.js";
 import {
   Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,

@@ -150,8 +150,8 @@ impl AsRef<Path> for ScreenedOpenPath {
 }
 
 /// File extensions Tandem can open via OS file association. Keep aligned with
-/// `SUPPORTED_EXTENSIONS` in `src/shared/constants.ts` (re-exported through
-/// `src/server/mcp/file-opener.ts`) — server-side is the authority; this list is
+/// `SUPPORTED_EXTENSIONS` in `src/shared/constants.ts` — server-side is the
+/// authority; this list is
 /// defense-in-depth, rejecting an obviously-wrong open candidate before an HTTP
 /// request is issued. Since #1344 that means BOTH surfaces: argv on
 /// Windows/Linux, and macOS `RunEvent::Opened` URLs.
