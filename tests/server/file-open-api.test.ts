@@ -48,7 +48,7 @@ describe("openFromDisk", () => {
     expect(result.format).toBe("md");
     expect(result.readOnly).toBe(false);
     expect(result.source).toBe("file");
-    expect(result.alreadyOpen).toBe(false);
+    expect(result.kind).not.toBe("already-open");
     expect(result.documentId).toBeTruthy();
     expect(result.tokenEstimate).toBeGreaterThan(0);
   });
@@ -77,8 +77,8 @@ describe("openFromDisk", () => {
     const first = await openFromDisk(filePath);
     const second = await openFromDisk(filePath);
 
-    expect(first.alreadyOpen).toBe(false);
-    expect(second.alreadyOpen).toBe(true);
+    expect(first.kind).not.toBe("already-open");
+    expect(second.kind).toBe("already-open");
     expect(second.documentId).toBe(first.documentId);
   });
 
@@ -88,15 +88,14 @@ describe("openFromDisk", () => {
     await fs.writeFile(filePath, "# Original");
 
     const first = await openFromDisk(filePath);
-    expect(first.alreadyOpen).toBe(false);
+    expect(first.kind).not.toBe("already-open");
 
     // Modify the file on disk
     await fs.writeFile(filePath, "# Updated content\n\nNew paragraph");
 
     const second = await openFromDisk(filePath, { force: true });
 
-    expect(second.forceReloaded).toBe(true);
-    expect(second.alreadyOpen).toBe(false);
+    expect(second.kind).toBe("force-reloaded");
     expect(second.documentId).toBe(first.documentId);
 
     // Verify actual document content reflects the disk change
@@ -135,8 +134,8 @@ describe("openFromDisk", () => {
 
     const result = await openFromDisk(filePath, { force: true });
 
-    expect(result.alreadyOpen).toBe(false);
-    expect(result.forceReloaded).toBe(false);
+    expect(result.kind).not.toBe("already-open");
+    expect(result.kind).not.toBe("force-reloaded");
     expect(result.fileName).toBe("test.md");
   });
 
@@ -148,8 +147,7 @@ describe("openFromDisk", () => {
     await openFromDisk(filePath);
     const second = await openFromDisk(filePath, { force: false });
 
-    expect(second.alreadyOpen).toBe(true);
-    expect(second.forceReloaded).toBe(false);
+    expect(second.kind).toBe("already-open");
   });
 
   it("default (no options) preserves alreadyOpen behavior", async () => {
@@ -160,8 +158,7 @@ describe("openFromDisk", () => {
     await openFromDisk(filePath);
     const second = await openFromDisk(filePath);
 
-    expect(second.alreadyOpen).toBe(true);
-    expect(second.forceReloaded).toBe(false);
+    expect(second.kind).toBe("already-open");
   });
 
   it("force=true clears and repopulates the same Y.Doc in-place", async () => {
@@ -191,10 +188,10 @@ describe("openFromDisk", () => {
     await openFromDisk(filePath);
 
     const second = await openFromDisk(filePath, { force: true });
-    expect(second.forceReloaded).toBe(true);
+    expect(second.kind).toBe("force-reloaded");
 
     const third = await openFromDisk(filePath, { force: true });
-    expect(third.forceReloaded).toBe(true);
+    expect(third.kind).toBe("force-reloaded");
     expect(third.documentId).toBe(second.documentId);
   });
 
@@ -214,7 +211,7 @@ describe("openFromDisk", () => {
     await fs.writeFile(filePath, "# After error");
     const result = await openFromDisk(filePath, { force: true });
 
-    expect(result.forceReloaded).toBe(true);
+    expect(result.kind).toBe("force-reloaded");
     const doc = getOrCreateDocument(result.documentId);
     const text = extractText(doc);
     expect(text).toContain("After error");

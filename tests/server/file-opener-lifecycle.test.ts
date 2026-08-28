@@ -74,7 +74,7 @@ describe("session restore — hit", () => {
 
     // First open — populates Y.Doc and registers in open-docs
     const first = await openFromDisk(filePath);
-    expect(first.restoredFromSession).toBe(false);
+    expect(first.kind).not.toBe("restored");
 
     // Save session state so it's available on next open
     const doc = getOrCreateDocument(first.documentId);
@@ -86,7 +86,7 @@ describe("session restore — hit", () => {
 
     // Reopen — should restore from session (file unchanged)
     const second = await openFromDisk(filePath);
-    expect(second.restoredFromSession).toBe(true);
+    expect(second.kind).toBe("restored");
     expect(second.documentId).toBe(first.documentId);
   });
 });
@@ -113,7 +113,7 @@ describe("session restore — stale mtime", () => {
     await fs.utimes(filePath, new Date(), futureMtime);
 
     const second = await openFromDisk(filePath);
-    expect(second.restoredFromSession).toBe(false);
+    expect(second.kind).not.toBe("restored");
   });
 });
 
@@ -131,7 +131,7 @@ describe("session restore — empty fragment", () => {
 
     // Open — should detect fragment.length === 0 and fall back to source file
     const result = await openFromDisk(filePath);
-    expect(result.restoredFromSession).toBe(false);
+    expect(result.kind).not.toBe("restored");
   });
 });
 
@@ -206,17 +206,15 @@ describe("already-open branch", () => {
     await fs.writeFile(filePath, "# Already open test");
 
     const first = await openFromDisk(filePath);
-    expect(first.alreadyOpen).toBe(false);
+    expect(first.kind).not.toBe("already-open");
 
     const mockWatchFile = vi.mocked(watchFile);
     expect(mockWatchFile.mock.calls.length).toBe(1);
 
     // Reopen without force — must hit the handleAlreadyOpen branch
     const second = await openFromDisk(filePath);
-    expect(second.alreadyOpen).toBe(true);
+    expect(second.kind).toBe("already-open");
     expect(second.documentId).toBe(first.documentId);
-    expect(second.forceReloaded).toBe(false);
-    expect(second.restoredFromSession).toBe(false);
 
     // Key invariant: the already-open branch must NOT re-wire the watcher.
     // If it did, every reopen would leak a watcher handle.
@@ -233,7 +231,7 @@ describe("force-reload branch", () => {
     await fs.writeFile(filePath, "# First content");
 
     const first = await openFromDisk(filePath);
-    expect(first.forceReloaded).toBe(false);
+    expect(first.kind).not.toBe("force-reloaded");
 
     const mockWatchFile = vi.mocked(watchFile);
     expect(mockWatchFile.mock.calls.length).toBe(1);
@@ -242,8 +240,7 @@ describe("force-reload branch", () => {
     await fs.writeFile(filePath, "# Second content");
 
     const second = await openFromDisk(filePath, { force: true });
-    expect(second.forceReloaded).toBe(true);
-    expect(second.alreadyOpen).toBe(false);
+    expect(second.kind).toBe("force-reloaded");
     expect(second.documentId).toBe(first.documentId);
 
     // Force-reload intentionally skips wireFileWatcher (comment at file-opener.ts

@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { openFromDisk } from "../../documents/open.js";
 import { licenseGate, sendLicenseRequired } from "../license-gate.js";
 import { sendApiError } from "./_shared.js";
+import { sendOpenResult } from "./send-open-result.js";
 
 export async function handleOpen(req: Request, res: Response): Promise<void> {
   const { filePath, force, readOnly } = (req.body ?? {}) as Record<string, unknown>;
@@ -20,7 +21,7 @@ export async function handleOpen(req: Request, res: Response): Promise<void> {
       force: force === true,
       readOnly: readOnly === true,
     });
-    res.json({ data: result });
+    sendOpenResult(res, result);
   } catch (err: unknown) {
     sendApiError(res, err);
   }
