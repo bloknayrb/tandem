@@ -49,6 +49,7 @@ import {
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { removeDocument } from "../../src/server/yjs/provider.js";
+import { timeoutMs } from "../helpers/timing.js";
 
 afterAll(async () => {
   const appDataDir = process.env.TANDEM_APP_DATA_DIR;
@@ -212,8 +213,13 @@ describe("the redirect invariant (Unit 6)", () => {
    * corpus walks stop disagreeing. Generous on purpose: it exists so load
    * cannot decide the outcome, and should only ever fail if the walk is
    * genuinely broken.
+   *
+   * Via `timeoutMs` rather than a bare literal: an explicit second
+   * argument to `it` beats `--testTimeout`, so a coverage run (1.1-1.5x
+   * instrumented) would otherwise fail these on a clock for a reason
+   * unrelated to what they check.
    */
-  const CORPUS_TIMEOUT_MS = 90_000;
+  const CORPUS_TIMEOUT_MS = timeoutMs(90_000, 300_000);
 
   it(
     "only sanctioned modules name the legacy file-opener specifier",
@@ -275,19 +281,28 @@ describe("the redirect invariant (Unit 6)", () => {
     CORPUS_TIMEOUT_MS,
   );
 
-  it("scans every executable file under src/, so a new extension cannot hide", async () => {
-    // The sweep filters on `.ts`/`.svelte`. That is complete today and has no
-    // guard against a `.mts`/`.cts`/`.tsx` appearing — the exact drift that has
-    // already cost this repo twice (see the typecheck:tests orphan sweep).
-    const unscanned = (await walk(srcRoot))
-      .filter((f) => /\.(mts|cts|tsx|jsx|mjs|cjs|js)$/.test(f))
-      .map(rel);
+  // Budgeted for the same reason as the two above, and it carried no budget
+  // on EITHER side of this merge: it walks the same corpus. Two specs were
+  // observed failing under load and two got funded; three do the expensive
+  // thing. Naming the set is only worth anything if the set is the thing
+  // that gets funded.
+  it(
+    "scans every executable file under src/, so a new extension cannot hide",
+    async () => {
+      // The sweep filters on `.ts`/`.svelte`. That is complete today and has no
+      // guard against a `.mts`/`.cts`/`.tsx` appearing — the exact drift that has
+      // already cost this repo twice (see the typecheck:tests orphan sweep).
+      const unscanned = (await walk(srcRoot))
+        .filter((f) => /\.(mts|cts|tsx|jsx|mjs|cjs|js)$/.test(f))
+        .map(rel);
 
-    expect(
-      unscanned,
-      "these are executable and the redirect sweep does not read them — widen the extension filter above",
-    ).toEqual([]);
-  });
+      expect(
+        unscanned,
+        "these are executable and the redirect sweep does not read them — widen the extension filter above",
+      ).toEqual([]);
+    },
+    CORPUS_TIMEOUT_MS,
+  );
 });
 
 describe("kindOfOpenResult", () => {

@@ -535,6 +535,48 @@ describe("tandem_restoreBackup tool", () => {
     expect(await fs.readFile(filePath, "utf-8")).toBe("original docx bytes");
   });
 
+  // The severe half of the symlink pair, and the reason it is severe: the old
+  // code probed the sidecar with `fs.access`, which follows links, then
+  // `fs.copyFile` read THROUGH the link and overwrote the user's document with
+  // whatever it pointed at. The size verification then compared the link's
+  // target against the file it had just written from that same target --
+  // identical by construction -- so it verified, and the tool returned
+  // "Restored report.docx from backup." A silent whole-document replacement,
+  // reported as a success.
+  //
+  // Which is exactly why the assertion below is not only on the error code: a
+  // refusal that still clobbered the document would satisfy a code check. The
+  // load-bearing line is that filePath still holds its own bytes.
+  it.runIf(process.platform !== "win32")(
+    "refuses to restore through a symlinked .docx sidecar, and leaves the document alone",
+    async () => {
+      const filePath = path.join(tmpDir, "linked.docx");
+      const backupPath = path.join(tmpDir, "linked.backup.docx");
+      const attacker = path.join(tmpDir, "attacker-payload.docx");
+      await fs.writeFile(filePath, "the user's real document");
+      await fs.writeFile(attacker, "attacker-chosen bytes");
+      await fs.symlink(attacker, backupPath);
+
+      addDoc("docx-symlink-restore", {
+        id: "docx-symlink-restore",
+        filePath,
+        format: "docx",
+        readOnly: false,
+        source: "file",
+      });
+      setActiveDocId("docx-symlink-restore");
+
+      const parsed = parseResult(await restoreTool({}));
+      expect(parsed.error).toBe(true);
+      expect(parsed.code).toBe("INVALID_PATH");
+      expect(
+        await fs.readFile(filePath, "utf-8"),
+        "the document was overwritten through the symlink -- the refusal did not " +
+          "happen before the write",
+      ).toBe("the user's real document");
+    },
+  );
+
   it("reports FILE_NOT_FOUND for a .docx with no snapshots and no sidecar", async () => {
     const filePath = path.join(tmpDir, "plain.docx");
     await fs.writeFile(filePath, await buildDocx("plain"));

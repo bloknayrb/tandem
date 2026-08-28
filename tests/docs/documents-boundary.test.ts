@@ -349,6 +349,7 @@ const FAN_OUT = [
   "server/documents/open.ts -> server/session/manager.ts (value) x1",
   "server/documents/open.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/open.ts -> shared/constants.ts (value) x1",
+  "server/documents/open.ts -> shared/cross-basename.ts (value) x1",
   "server/documents/open.ts -> shared/origins.ts (value) x1",
   "server/documents/open.ts -> shared/paths.ts (value) x1",
   "server/documents/open.ts -> shared/types.ts (type) x1",

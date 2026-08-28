@@ -401,3 +401,42 @@ describe("openFromDisk — UNC paths are rejected BEFORE canonicalization", () =
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe("openFromUpload — the uploaded filename is not a path", () => {
+  // `fileName` arrives straight off `req.body` in `routes/upload.ts`, typed as
+  // a string and nothing else, and it used to be interpolated verbatim into the
+  // synthetic `upload://<uuid>/<fileName>` registry path. Separators landed in
+  // a registry `filePath`.
+  //
+  // Nothing reachable consumed them — `isUploadPath` diverts at every
+  // filesystem sink and uploads are read-only — so this is hardening, not a
+  // live hole. Worth a gate anyway: that is a reachability accident, and the
+  // next sink added would be relying on one without knowing it.
+
+  it("strips path segments from the synthetic registry path and the display name", async () => {
+    const result = await openFromUpload("../../evil.md", "# Notes");
+
+    expect(result.filePath, "traversal segments survived into the registry filePath").not.toContain(
+      "..",
+    );
+    // Both, deliberately. Asserting only `filePath` would pass a fix applied at
+    // the interpolation site alone, leaving `..` in the name the user is shown.
+    expect(result.fileName, "traversal segments survived into the display name").toBe("evil.md");
+  });
+
+  it("strips a Windows-spelled separator too, on every platform", async () => {
+    // `crossBasename` splits on BOTH separators, which is why it is the right
+    // helper here rather than `path.posix.basename`.
+    //
+    // An earlier version of this spec asserted the opposite — that `a\b.md`
+    // comes back whole — because the first fix used `path.posix.basename`,
+    // which ignores backslashes. That pinned the weaker behaviour as correct,
+    // and it also could only ever have failed on Windows: on ubuntu
+    // `path.basename` IS the posix one, so `check` could not have caught a
+    // regression. This assertion discriminates on both platforms, which is the
+    // second reason to prefer the shared helper.
+    const result = await openFromUpload("a\\b.md", "# Notes");
+    expect(result.fileName).toBe("b.md");
+    expect(result.filePath).not.toContain("\\");
+  });
+});

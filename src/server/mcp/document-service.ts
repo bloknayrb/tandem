@@ -365,8 +365,13 @@ export async function saveDocumentToDisk(
     // Guard against overwriting external modifications.
     // Safe FS sink (CodeQL js/path-injection): `docState.filePath` is the
     // registry's server-managed path (only ever set by openFromDisk /
-    // resolveAndValidatePath / a validated rename or save-as) — never raw user
-    // input. An alert here is a false positive; dismiss per issue #1042.
+    // resolveAndValidatePath / a validated rename or save-as / an upload) —
+    // never raw user input. `openFromUpload` is the fourth
+    // setter and the one this enumeration used to omit: it registers a
+    // synthetic `upload://<uuid>/<name>` whose only caller-controlled
+    // segment is reduced by `crossBasename` before it is joined, and
+    // `isUploadPath` diverts that path from every fs sink anyway.
+    // An alert here is a false positive; dismiss per issue #1042.
     try {
       const stat = await fs.stat(docState.filePath);
       // Compare to the session's mtime — if the file changed externally, skip
@@ -1108,6 +1113,13 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // path.basename() the raw input — CodeQL's recognized taint terminator —
     // before it reaches renameDocument. Any alert here is a false positive;
     // dismiss per issue #1042.
+    //
+    // The registry-path enumeration this comment leans on names four setters,
+    // not three: openFromDisk, resolveAndValidatePath, a validated rename or
+    // save-as, and openFromUpload, which registers a synthetic
+    // `upload://<uuid>/<name>` with the caller-controlled segment reduced by
+    // `crossBasename`. An enumeration missing a setter is a denylist, so it is
+    // written out here rather than left implied.
     try {
       await fs.rename(oldPath, newPath);
     } catch (err) {

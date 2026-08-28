@@ -3,7 +3,9 @@
  * tracked changes, and restoring from backup.
  */
 
+import type { Stats } from "node:fs";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { randomUUID } from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import { z } from "zod";
@@ -46,6 +48,62 @@ export interface ApplyChangesResult {
  * Collect accepted suggestions, apply them as tracked changes to the original
  * .docx, write a backup, and atomically replace the file.
  */
+/**
+ * A sibling of `base` that is unlikely to exist, for when a backup is already there.
+ *
+ * Two things here are load-bearing and both were bugs.
+ *
+ * The `ext ? … : base` guard: `path.extname` returns `""` for an extensionless
+ * path, and `slice(0, -0)` is `slice(0, 0)` — the empty string, because
+ * `-0 === 0`. The old code therefore turned an absolute `backupPath` with no
+ * extension into a bare `"-<timestamp>"`, a RELATIVE path resolved against the
+ * server's cwd, discarding the `path.resolve` sanitizing done at the top of
+ * `applyChangesCore`. The size check that follows stats the file that was
+ * actually written, so the sizes matched and the apply reported success with
+ * the user's backup silently somewhere else under a garbage name.
+ *
+ * The random suffix: a bare `Date.now()` is not a uniquifier. A `copyFile`
+ * EEXIST returns immediately, so a retry lands in the same millisecond and
+ * recomputes the identical name — five identical collisions rather than five
+ * attempts. Same reasoning, and the same shape, as `integrations/backup.ts`'s
+ * `backupFilename()`, `doc-backup.ts`'s snapshot names and `tempSiblingPath`.
+ */
+function uniqueBackupPath(base: string): string {
+  const ext = path.extname(base);
+  const stem = ext ? base.slice(0, -ext.length) : base;
+  return `${stem}-${Date.now()}-${randomUUID().slice(0, 8)}${ext}`;
+}
+
+/**
+ * Copy `src` to `first`, create-only, uniquifying on collision.
+ *
+ * `COPYFILE_EXCL` is what closes the check-then-act between probing the
+ * destination and writing it. The retry recomputes from `defaultBackup` rather
+ * than from the name that just collided: compounding walks toward
+ * `ENAMETOOLONG`, which is not an `EEXIST` and would escape raw.
+ *
+ * Returns where the backup actually landed.
+ */
+async function copyBackupExclusive(
+  src: string,
+  defaultBackup: string,
+  first: string,
+): Promise<string> {
+  let dest = first;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await fs.copyFile(src, dest, fs.constants.COPYFILE_EXCL);
+      return dest;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      dest = uniqueBackupPath(defaultBackup);
+    }
+  }
+  throw Object.assign(new Error("Could not find a free backup filename after 5 attempts."), {
+    code: "BACKUP_FAILED",
+  });
+}
+
 export async function applyChangesCore(
   documentId?: string,
   author?: string,
@@ -245,17 +303,72 @@ export async function applyChangesCore(
   });
 
   // 6. Backup — avoid overwriting an existing backup from a previous apply
-  let resolvedBackup = resolvedBackupPath ?? filePath.replace(/\.docx$/i, ".backup.docx");
+  //
+  // `lstat`, not `access`, and the difference is the whole point. `access`
+  // FOLLOWS symlinks, so a dangling symlink at the destination reported ENOENT,
+  // took the "no existing backup" branch, and `copyFile` then wrote *through*
+  // the link to whatever it pointed at — creating an attacker-chosen file with
+  // the user's document in it. `lstat` sees the link itself.
+  //
+  // The catch is narrowed to ENOENT deliberately. A broad catch read an EACCES
+  // on the parent as "no existing backup", which is the same swallow class as
+  // the `slice(0, -0)` bug below: a failure that looks like a clean path.
+  // Screen the destination's PARENT, not just its leaf.
+  //
+  // `lstat` below inspects the final component only, while `copyFile` resolves
+  // every parent component — so `backupPath = /tmp/attacker-link/x.backup.docx`
+  // still wrote the user's whole document wherever `attacker-link` pointed, and
+  // reported the requested path back as though nothing had happened. Same
+  // threat model as the leaf case and the same outcome.
+  //
+  // Caught by review, and it is the inconsistency that made it obvious: this
+  // same change taught `convert.ts` and `annotations.ts` to canonicalize the
+  // parent for exactly this reason, and the one file actually carrying the
+  // symlink defect did not get it.
+  let defaultBackup = resolvedBackupPath ?? filePath.replace(/\.docx$/i, ".backup.docx");
   try {
-    await fs.access(resolvedBackup);
-    // Backup already exists — use a timestamped name to preserve the original
-    const ext = path.extname(resolvedBackup);
-    const base = resolvedBackup.slice(0, -ext.length);
-    resolvedBackup = `${base}-${Date.now()}${ext}`;
-  } catch {
-    // No existing backup — use the default path
+    const realParent = await fs.realpath(path.dirname(defaultBackup));
+    const parentReason = rejectUnsafeWindowsPrefix(realParent);
+    if (parentReason) throw Object.assign(new Error(parentReason), { code: "INVALID_PATH" });
+    defaultBackup = path.join(realParent, path.basename(defaultBackup));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    throw Object.assign(
+      new Error(`Backup directory does not exist: ${path.dirname(defaultBackup)}`),
+      { code: "FILE_NOT_FOUND" },
+    );
   }
-  await fs.copyFile(filePath, resolvedBackup);
+  let resolvedBackup = defaultBackup;
+  let existing: Stats | null = null;
+  try {
+    existing = await fs.lstat(resolvedBackup);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  if (existing?.isSymbolicLink()) {
+    // Not a backup this tool wrote. Refusing costs a user who deliberately
+    // symlinked the destination, so the message has to name the way out.
+    throw Object.assign(
+      new Error(
+        `Backup destination ${path.basename(resolvedBackup)} is a symbolic link, which Tandem ` +
+          "will not write through. Move or remove it, or pass an explicit `backupPath`.",
+      ),
+      { code: "BACKUP_SYMLINK" },
+    );
+  }
+  if (existing) {
+    // Something is already there — anything at all, not just a regular file, so
+    // a directory does not fall through to `copyFile` and throw a raw EISDIR
+    // that no error mapping below recognises. Keep the default name pointing at
+    // the FIRST backup: `tandem_restoreBackup`'s .docx fallback derives that
+    // name and derives it only, so a uniquified sidecar is write-only.
+    resolvedBackup = uniqueBackupPath(defaultBackup);
+  }
+  // COPYFILE_EXCL closes the check-then-act between the lstat above and this
+  // write. On EEXIST, recompute from `defaultBackup` — never from the already-
+  // uniquified name, which would compound toward ENAMETOOLONG (not an EEXIST,
+  // so it would escape raw).
+  resolvedBackup = await copyBackupExclusive(filePath, defaultBackup, resolvedBackup);
   // Verify backup size
   const [origStat, backupStat] = await Promise.all([fs.stat(filePath), fs.stat(resolvedBackup)]);
   if (origStat.size !== backupStat.size) {
@@ -347,6 +460,14 @@ export function registerApplyTools(server: McpServer): void {
         if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
         if (e.code === "INVALID_PATH") return mcpError("FORMAT_ERROR", e.message);
         if (e.code === "BACKUP_FAILED") return mcpError("BACKUP_FAILED", e.message);
+        // Its own code, and it must stay distinguishable on BOTH surfaces.
+        // Reusing INVALID_PATH would map to FORMAT_ERROR here — a symlinked
+        // destination is not a format problem. Collapsing it onto BACKUP_FAILED
+        // is the mirror mistake, and is what this line used to do: it would put
+        // "move the symlink or pass a different backupPath", which the caller
+        // CAN fix and should retry, in the same bucket as a failed size
+        // verification, which it must not retry.
+        if (e.code === "BACKUP_SYMLINK") return mcpError("INVALID_PATH", e.message);
         // The write guards (#1448 W1). Every one of these is an expected policy
         // refusal, so it has to come back as a structured error the AI can read
         // and act on. Rethrowing would surface "the file changed on disk" as an
@@ -415,10 +536,47 @@ export function registerApplyTools(server: McpServer): void {
           }
           // No doc-backups snapshots — fall back to the applyChanges sidecar.
           const backupPath = filePath.replace(/\.docx$/i, ".backup.docx");
+          // Open the sidecar WITHOUT following symlinks, and read from that
+          // handle. The check and the read are then the same syscall, which is
+          // what makes this safe rather than merely checked.
+          //
+          // `access` — what this used to do — follows links, so a link planted
+          // here read as a present backup, `copyFile` read THROUGH it, and the
+          // size check compared the link's target against the file it had just
+          // written from that same target: identical by construction, so it
+          // verified. The user's document was silently replaced by an
+          // attacker-chosen file and the tool reported "Restored ... from
+          // backup."
+          //
+          // An `lstat`-then-`copyFile` pair fixes the steady state and leaves
+          // the race: a link planted between the two is still followed. Opening
+          // with O_NOFOLLOW closes that, because there is no window between
+          // deciding and reading.
+          let backupBytes: Buffer;
           try {
-            await fs.access(backupPath);
+            // O_NOFOLLOW is POSIX-only; on Windows the constant is undefined
+            // and `open` has no equivalent flag, so there the leaf check falls
+            // back to `lstat` below and the race remains. Creating a symlink on
+            // Windows needs a privilege that is not granted by default, which
+            // is the reason this is an acceptable asymmetry rather than a
+            // silent gap — but it IS an asymmetry, so it is written down.
+            const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+            const handle = await fs.open(backupPath, fs.constants.O_RDONLY | noFollow);
+            try {
+              if (noFollow === 0 && (await fs.lstat(backupPath)).isSymbolicLink()) {
+                return mcpError(
+                  "INVALID_PATH",
+                  `${path.basename(backupPath)} is a symbolic link, not a backup Tandem wrote. ` +
+                    "Refusing to restore through it.",
+                );
+              }
+              backupBytes = await handle.readFile();
+            } finally {
+              await handle.close();
+            }
           } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code === "ENOENT") {
               return mcpError(
                 "FILE_NOT_FOUND",
                 `No backups found for ${path.basename(filePath)}. Tandem snapshots a .docx ` +
@@ -426,16 +584,25 @@ export function registerApplyTools(server: McpServer): void {
                   "{name}.backup.docx sidecar.",
               );
             }
+            // O_NOFOLLOW turns "it is a symlink" into ELOOP at open time. That
+            // is the refusal, not an error — report it as one the caller can act
+            // on rather than as a Tandem fault.
+            if (code === "ELOOP") {
+              return mcpError(
+                "INVALID_PATH",
+                `${path.basename(backupPath)} is a symbolic link, not a backup Tandem wrote. ` +
+                  "Refusing to restore through it.",
+              );
+            }
             throw err;
           }
 
-          await fs.copyFile(backupPath, filePath);
-          // Verify restored file matches backup size
-          const [backupStat, restoredStat] = await Promise.all([
-            fs.stat(backupPath),
-            fs.stat(filePath),
-          ]);
-          if (backupStat.size !== restoredStat.size) {
+          await atomicWriteBuffer(filePath, backupBytes);
+          // Verify against the bytes we actually read, not a re-stat of the
+          // source: re-statting reintroduces the very indirection this branch
+          // just eliminated.
+          const restoredStat = await fs.stat(filePath);
+          if (restoredStat.size !== backupBytes.length) {
             throw new Error("Restore verification failed: file sizes do not match.");
           }
           return mcpSuccess({
