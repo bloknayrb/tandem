@@ -123,13 +123,17 @@ describe("client-log call sites", () => {
 
   it("is not re-exported, so no wrapper can hide a call site from this scan", () => {
     const reexports = walk(SRC)
-      .filter(
-        (file) =>
-          /export\s*(?:type\s*)?\{[^}]*logClient(?:Warning|Error)[^}]*\}/.test(
-            readFileSync(file, "utf8"),
-          ) || /export\s*\*\s*from\s*"[^"]*client-log/.test(readFileSync(file, "utf8")),
-      )
+      .filter((file) => {
+        // ONE read per file. The two-read version below-budget in isolation
+        // (~1s) but timed out at the 5s default inside a full parallel run —
+        // it re-read every file in src/client just to try the second regex.
+        const source = readFileSync(file, "utf8");
+        return (
+          /export\s*(?:type\s*)?\{[^}]*logClient(?:Warning|Error)[^}]*\}/.test(source) ||
+          /export\s*\*\s*from\s*"[^"]*client-log/.test(source)
+        );
+      })
       .map((file) => relative(ROOT, file));
     expect(reexports).toEqual([]);
-  });
+  }, 20_000); // under test. Sized for a loaded Windows run, not for the isolated one. // `src/client/`, and its cost tracks the size of the tree, not the code // Explicit budget rather than the 5s default: this walks and reads all of
 });

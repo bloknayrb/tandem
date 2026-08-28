@@ -26,6 +26,7 @@ import {
   type ActionExecutor,
   currentActionDeps,
   mountActionExecutor,
+  notifyUser,
   runAction,
   runBoundAction,
 } from "../../../src/client/actions/executor.js";
@@ -68,6 +69,31 @@ afterEach(() => {
   while (live.length) live.pop()?.dispose();
   vi.restoreAllMocks();
 });
+
+/**
+ * Run `body` with a private `unhandledRejection` listener installed, handing it
+ * the rejections that actually escaped.
+ *
+ * Node's `process` is the emitter, NOT `window`: the first draft of this file
+ * listened on `window`, and the positive control below is what caught that
+ * **happy-dom never dispatches `unhandledrejection` on `window`** — the
+ * negative specs would have passed forever without observing anything.
+ *
+ * Vitest's own handler is detached for the duration and restored afterwards;
+ * otherwise the deliberate rejection in the control would fail the run it exists
+ * to validate.
+ */
+function withRejectionListener<T>(body: (seen: unknown[]) => Promise<T>): Promise<T> {
+  const seen: unknown[] = [];
+  const previous = process.listeners("unhandledRejection");
+  const onRejection = (reason: unknown) => void seen.push(reason);
+  process.removeAllListeners("unhandledRejection");
+  process.on("unhandledRejection", onRejection);
+  return body(seen).finally(() => {
+    process.removeListener("unhandledRejection", onRejection);
+    for (const l of previous) process.on("unhandledRejection", l);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Binding
@@ -273,16 +299,53 @@ describe("failure reporting", () => {
   it("survives a notify that itself throws, and still emits the console line", async () => {
     // A throw inside a rejection handler is a FRESH unhandled rejection — the
     // exact defect, relocated one frame outward.
+    //
+    // "still emits the console line" cannot be asserted as a bare
+    // `expect(consoleError).toHaveBeenCalled()`: `report` logs the ORIGINAL
+    // failure before it ever touches `notify`, so that expectation is satisfied
+    // whether or not the notify throw was caught. The load-bearing assertions
+    // are the SECOND console line (only the catch emits it) and the absence of
+    // a fresh unhandled rejection.
     const notify = vi.fn(() => {
       throw new Error("notify exploded");
     });
     mount(depsBag(notify as unknown as Notify));
 
-    runBoundAction("save", () => Promise.reject(new Error("nope")));
-    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
-    await Promise.resolve();
+    await withRejectionListener(async (seen) => {
+      runBoundAction("save", () => Promise.reject(new Error("nope")));
+      await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 50));
 
-    expect(consoleError).toHaveBeenCalled();
+      const lines = consoleError.mock.calls.map((c: unknown[]) => String(c[0]));
+      expect(lines.some((l: string) => l.includes('"save" failed'))).toBe(true);
+      expect(lines.some((l: string) => l.includes('reporting "save" failed'))).toBe(true);
+      expect(seen).toHaveLength(0);
+    });
+  });
+
+  it("reports into a LIVE successor App rather than the dead one", async () => {
+    // The ErrorBoundary recovery case: the executor that ran the action is gone
+    // by the time it fails, but there is a working App on screen. Reporting into
+    // the dead one (or nowhere) loses the toast in the case that most needs it.
+    const oldNotify = vi.fn();
+    const newNotify = vi.fn();
+    const first = mount(depsBag(oldNotify));
+
+    let reject!: (e: unknown) => void;
+    runBoundAction(
+      "save",
+      () =>
+        new Promise<void>((_, rj) => {
+          reject = rj;
+        }),
+    );
+    first.dispose();
+    mount(depsBag(newNotify));
+    reject(new Error("late"));
+    await vi.waitFor(() => expect(newNotify).toHaveBeenCalled());
+
+    expect(oldNotify).not.toHaveBeenCalled();
+    expect(newNotify.mock.calls[0][0]).toBe("error");
   });
 
   it("does not notify when the executor was disposed before the rejection landed", async () => {
@@ -318,31 +381,9 @@ describe("crash-report telemetry", () => {
    * Attaching a rejection handler here marks those rejections handled, and they
    * stop arriving. Asserting only "no unhandled rejection fires" would therefore
    * be green whether or not the report was preserved — and greener still if the
-   * environment never emits the event at all.
-   *
-   * That last hazard is not hypothetical: the first draft of this file listened
-   * on `window`, and the positive control below is what caught that **happy-dom
-   * never dispatches `unhandledrejection` on `window`** — the negative spec
-   * would have passed forever without observing anything. Node's `process` is
-   * the emitter that actually fires under vitest, so that is what is listened to
-   * here, and the control stays as the proof.
-   *
-   * Vitest's own `unhandledRejection` handler is detached for the duration and
-   * restored afterwards; otherwise the deliberate rejection in the control would
-   * fail the run it exists to validate.
+   * environment never emits the event at all, which is why the positive control
+   * below is a required part of this pair. See `withRejectionListener`.
    */
-  function withRejectionListener<T>(body: (seen: unknown[]) => Promise<T>): Promise<T> {
-    const seen: unknown[] = [];
-    const previous = process.listeners("unhandledRejection");
-    const onRejection = (reason: unknown) => void seen.push(reason);
-    process.removeAllListeners("unhandledRejection");
-    process.on("unhandledRejection", onRejection);
-    return body(seen).finally(() => {
-      process.removeListener("unhandledRejection", onRejection);
-      for (const l of previous) process.on("unhandledRejection", l);
-    });
-  }
-
   it("positive control: the listener DOES fire for a genuinely unhandled rejection", async () => {
     await withRejectionListener(async (seen) => {
       void Promise.reject(new Error("control"));
@@ -358,6 +399,100 @@ describe("crash-report telemetry", () => {
       await new Promise((r) => setTimeout(r, 50));
       expect(seen).toHaveLength(0);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The revalidating facade
+// ---------------------------------------------------------------------------
+
+describe("revalidating facade", () => {
+  it("ABORTS the rest of a body that touches a dep after teardown", async () => {
+    // The facade throws rather than returning a plausible value. An earlier
+    // draft returned `null` — "the documented no-active-document value" — which
+    // would have let a body continue past the check it just failed and reach a
+    // destructive call with the wrong argument.
+    const deps = depsBag();
+    const executor = mount(deps);
+    const after = vi.fn();
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+
+    runBoundAction("launcher-relaunch-here", async (d) => {
+      await gate;
+      d.notify("info", "still here");
+      after();
+    });
+
+    executor.dispose();
+    release();
+    await vi.waitFor(() => expect(reportErrorSpy).toHaveBeenCalled());
+
+    expect(after).not.toHaveBeenCalled();
+  });
+
+  it("classifies a dropped call as a DROP, never as an action failure", async () => {
+    // The distinction is user-visible: a drop is not something that went wrong
+    // with the command, so it must not raise an error toast on the successor.
+    const executor = mount(depsBag());
+    const successorNotify = vi.fn();
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    runBoundAction("save", async (d) => {
+      await gate;
+      d.focusChat();
+    });
+
+    executor.dispose();
+    mount(depsBag(successorNotify));
+    release();
+    await vi.waitFor(() => expect(reportErrorSpy).toHaveBeenCalled());
+
+    expect(reportErrorSpy).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ droppedMember: "focusChat" }),
+    );
+    expect(reportErrorSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ actionId: "save" }),
+    );
+    expect(successorNotify).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// notifyUser — the non-action toast path
+// ---------------------------------------------------------------------------
+
+describe("notifyUser", () => {
+  it("delivers through the live bag", () => {
+    const notify = vi.fn();
+    mount(depsBag(notify));
+
+    notifyUser("warning", "heads up", { dedupKey: "k" });
+
+    expect(notify).toHaveBeenCalledWith("warning", "heads up", { dedupKey: "k" });
+  });
+
+  it("REPORTS the drop when no App is mounted rather than swallowing it", () => {
+    // The optional-chained `currentActionDeps()?.notify(...)` this replaced was
+    // a silent failure. The integrity advisory ("some content may not have been
+    // preserved") is the message whose disappearance is worst.
+    expect(currentActionDeps()).toBeNull();
+
+    notifyUser("error", "some content may not have been preserved");
+
+    expect(consoleWarn.mock.calls.flat().join(" ")).toContain("no App mounted");
+    expect(reportErrorSpy).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ droppedToast: "error" }),
+    );
   });
 });
 

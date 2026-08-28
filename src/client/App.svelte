@@ -1703,7 +1703,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     const el = e.target as HTMLElement | null;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return;
     e.preventDefault();
-    void createScratchpad();
+    void createScratchpad({ announceBusy: true });
   },
   "close-tab": (e) => {
     if (shouldIgnoreShortcut(e)) return;

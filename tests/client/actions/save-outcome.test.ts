@@ -7,6 +7,22 @@ import {
 import { type ActionExecutor, mountActionExecutor } from "../../../src/client/actions/executor.js";
 import { makeActionDeps } from "./deps-bag.js";
 
+/** Did `notify` fire with this severity and a message containing `substring`?
+ *
+ * Asserted over `mock.calls` rather than with `toHaveBeenCalledWith`, which
+ * matches on the FULL argument list: `notifyUser` always forwards a third
+ * `opts` argument (usually `undefined`), so a two-argument expectation silently
+ * stops matching — and its `.not.` form silently starts passing vacuously. */
+function notified(
+  notify: { mock: { calls: unknown[][] } },
+  severity: string,
+  substring: string,
+): boolean {
+  return notify.mock.calls.some(
+    ([sev, msg]) => sev === severity && typeof msg === "string" && msg.includes(substring),
+  );
+}
+
 /** A 200 response carrying a specific SaveResult body. */
 function fetchWith(data: Record<string, unknown>) {
   return () =>
@@ -59,7 +75,7 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
     await expect(triggerSave("doc-1")).resolves.toBe(true);
     expect(saveStore.lastSaveOk).toBe(true);
     expect(saveStore.saving).toBe(false);
-    expect(notify).not.toHaveBeenCalledWith("error", expect.anything());
+    expect(notify.mock.calls.filter(([sev]) => sev === "error")).toEqual([]);
     vi.unstubAllGlobals();
   });
 
@@ -68,7 +84,7 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
     await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
     expect(saveStore.saving).toBe(false);
-    expect(notify).toHaveBeenCalledWith("error", expect.stringContaining("disk full"));
+    expect(notified(notify, "error", "disk full")).toBe(true);
     vi.unstubAllGlobals();
   });
 
@@ -80,7 +96,7 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
     await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
     expect(saveStore.saving).toBe(false);
-    expect(notify).toHaveBeenCalledWith("error", expect.stringContaining("try again"));
+    expect(notified(notify, "error", "try again")).toBe(true);
     vi.unstubAllGlobals();
   });
 });
@@ -110,7 +126,7 @@ describe("saveSkippedMessage", () => {
     );
     await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
-    expect(notify).toHaveBeenCalledWith("warning", expect.stringContaining("read-only"));
+    expect(notified(notify, "warning", "read-only")).toBe(true);
     vi.unstubAllGlobals();
   });
 });
@@ -175,7 +191,7 @@ describe("triggerSave — docx fidelity toasts", () => {
       vi.fn(fetchWith({ status: "saved", integrityWarnings: ["y"], unpreservedImports: 2 })),
     );
     await triggerSave("doc-1");
-    expect(notify).toHaveBeenCalledWith("error", expect.stringContaining("backed up"));
+    expect(notified(notify, "error", "backed up")).toBe(true);
     expect(warnings()).toHaveLength(1); // the unpreserved half still speaks
   });
 });

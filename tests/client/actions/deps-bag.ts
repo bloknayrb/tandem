@@ -23,7 +23,11 @@ import { vi } from "vitest";
 import type { ActionDeps } from "../../../src/client/actions/executor.js";
 
 /** Every member is a distinguishable spy; pass `overrides` for the ones a spec
- * actually asserts on (typically `notify` plus an active-document path). */
+ * actually asserts on (typically `notify` plus an active-document path).
+ *
+ * The three members typed `() => void | Promise<void>` default to ASYNC spies,
+ * not bare `vi.fn()`: their promise arm is the one the executor has to await,
+ * and a synchronous default would exercise only the arm that cannot fail. */
 export function makeActionDeps(overrides: Partial<ActionDeps> = {}): ActionDeps {
   return {
     getActiveTabId: () => "doc-1",
@@ -37,10 +41,10 @@ export function makeActionDeps(overrides: Partial<ActionDeps> = {}): ActionDeps 
     findNext: vi.fn(),
     findPrev: vi.fn(),
     closeActiveTab: vi.fn(),
-    openFileDialog: vi.fn(),
+    openFileDialog: vi.fn(async () => {}),
     toggleLeftPanel: vi.fn(),
     toggleRightPanel: vi.fn(),
-    reopenClosedTab: vi.fn(),
+    reopenClosedTab: vi.fn(async () => {}),
     annotationNext: vi.fn(),
     annotationPrev: vi.fn(),
     annotationAccept: vi.fn(),
@@ -48,7 +52,7 @@ export function makeActionDeps(overrides: Partial<ActionDeps> = {}): ActionDeps 
     selectBlock: vi.fn(),
     toggleAuthorship: vi.fn(),
     toggleFormattingBar: vi.fn(),
-    toggleSourceView: vi.fn(),
+    toggleSourceView: vi.fn(async () => {}),
     focusChat: vi.fn(),
     save: vi.fn(async () => {}),
     saveAs: vi.fn(async () => {}),

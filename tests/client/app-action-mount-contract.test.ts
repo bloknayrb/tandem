@@ -24,12 +24,16 @@
  * ## The controls are the load-bearing half
  *
  * A contract check that cannot fail is not a check. The same extracted matcher
- * is run over four synthetic sources, each a way this could regress:
- * a missing `onDestroy`; disposing a different identifier; two mounts; and a
- * mount nested inside a function body. Each must be rejected. Without them this
- * file would be green against a matcher that returned `true` unconditionally.
+ * is run over five synthetic sources, each a way this could regress:
+ * a missing `onDestroy`; disposing a different identifier; two mounts; a mount
+ * nested inside a function body; and a mount hoisted into `<script module>`,
+ * which is at column 0 and so defeats the indentation test while running once
+ * per module load rather than once per App instance. Each must be rejected.
+ * Without them this file would be green against a matcher that returned `true`
+ * unconditionally.
  */
 
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -108,6 +112,23 @@ export function checkActionMountContract(rawSource: string): ContractResult {
     return { ok: false, reason: "mountActionExecutor result is not bound to a const" };
   }
 
+  // `<script module>` (and its legacy `context="module"` spelling) runs ONCE
+  // per module load, not per component instance — so a mount hoisted there is
+  // at column 0, passes the indentation test below, and still never re-binds
+  // after an ErrorBoundary recovery remounts App. That is precisely the failure
+  // this contract exists to prevent, wearing the shape of a pass.
+  const moduleScript = /<script\b[^>]*\b(module\b|context\s*=\s*.module.)[^>]*>/.exec(src);
+  if (moduleScript) {
+    const end = src.indexOf("</script>", moduleScript.index);
+    const stop = end === -1 ? src.length : end;
+    if (anyMountCall[0].index >= moduleScript.index && anyMountCall[0].index < stop) {
+      return {
+        ok: false,
+        reason: "mountActionExecutor is in the module script, not the instance script",
+      };
+    }
+  }
+
   const [, , indent, identifier] = mounts[0];
   // Top-level statement of the instance script. Any indentation means it sits
   // inside a function, a block, or a conditional — i.e. it may never run at
@@ -116,8 +137,11 @@ export function checkActionMountContract(rawSource: string): ContractResult {
     return { ok: false, reason: "mountActionExecutor is not a top-level script statement" };
   }
 
+  // The arrow may be expression-bodied or block-bodied; both are the same
+  // contract, and pinning only the expression form would turn a harmless
+  // reformat into a red test while teaching nothing.
   const disposePattern = new RegExp(
-    `(^|\\n)onDestroy\\s*\\(\\s*\\(\\s*\\)\\s*=>\\s*${identifier}\\.dispose\\s*\\(\\s*\\)\\s*\\)`,
+    `(^|\\n)onDestroy\\s*\\(\\s*\\(\\s*\\)\\s*=>\\s*\\{?\\s*${identifier}\\.dispose\\s*\\(\\s*\\)`,
   );
   if (!disposePattern.test(src)) {
     return { ok: false, reason: `no top-level onDestroy disposing "${identifier}"` };
@@ -145,6 +169,61 @@ describe("App.svelte action-executor composition contract", () => {
     // builtins after an ErrorBoundary recovery, with nothing to put them back.
     expect(source).not.toContain("builtinRegistration");
     expect(source).not.toContain("unregisterAction");
+  });
+});
+
+describe("the executor has exactly one mount site in the whole client", () => {
+  it("nothing outside App.svelte mounts an executor", () => {
+    // The App.svelte matcher above is scoped to one file, so a second
+    // `mountActionExecutor` in some other component would install a rival
+    // `current` and pass every check in this file. The repo-wide sweep is what
+    // makes "App owns the binding" a fact rather than a convention.
+    //
+    // `git grep` finds candidate FILES; the call sites are then counted through
+    // `blankNonCode`, because prose is what most mentions of the name are — the
+    // first draft of this spec failed on a comment in `builtin.svelte.ts` that
+    // merely explains where the binding lives.
+    const out = execFileSync("git", ["grep", "-l", "--", "mountActionExecutor", "src/"], {
+      cwd: ROOT,
+      encoding: "utf-8",
+    });
+    const candidates = out
+      .split("\n")
+      .filter(Boolean)
+      .map((f) => f.trim().replace(/\\/g, "/"));
+
+    const callers = candidates.filter((rel) => {
+      const src = blankNonCode(readFileSync(join(ROOT, rel), "utf-8"));
+      // Negative lookbehind so the DECLARATION in executor.ts is not counted as
+      // a call site; without it the declaring module is indistinguishable from
+      // a rival binder.
+      return /(?<!function\s+)mountActionExecutor\s*\(/.test(src);
+    });
+
+    // executor.ts declares it; App.svelte calls it. Nothing else may.
+    expect(callers.sort()).toEqual(["src/client/App.svelte"]);
+  });
+});
+
+describe("builtin registration shape", () => {
+  const BUILTIN = join(ROOT, "src", "client", "actions", "builtin.svelte.ts");
+  // Comments and strings blanked: this file explains BOTH rejected designs in
+  // prose, so a raw `toContain` reports the explanation as the violation.
+  const source = blankNonCode(readFileSync(BUILTIN, "utf-8"));
+
+  it("declares its re-registration instead of relying on an HMR disposer", () => {
+    // vite keys HMR disposers by `ownerPath` and looks them up by
+    // `acceptedPath`; vite-plugin-svelte injects no `accept` into a `.svelte.ts`,
+    // so a disposer registered here is never looked up and never fires. A
+    // reintroduced one would read as working teardown while doing nothing.
+    expect(source).not.toContain("import.meta.hot");
+    expect(source).toMatch(/registerActions\(BUILTINS,\s*\{\s*replace:\s*true\s*\}\)/);
+  });
+
+  it("does not bind registration to a component lifecycle", () => {
+    // An onDestroy-driven registry teardown would empty the palette of every
+    // builtin after an ErrorBoundary recovery, with nothing to put them back.
+    expect(source).not.toContain("onDestroy");
   });
 });
 
@@ -186,10 +265,29 @@ describe("the contract matcher can actually fail", () => {
         "}",
       ].join("\n"),
     ],
+    [
+      "mount hoisted into the module script",
+      [
+        "<script module>",
+        "const actionExecutor = mountActionExecutor({});",
+        "onDestroy(() => actionExecutor.dispose());",
+        "</script>",
+      ].join("\n"),
+    ],
   ];
 
   it.each(controls)("rejects: %s", (_name, src) => {
     expect(checkActionMountContract(src).ok).toBe(false);
+  });
+
+  it("accepts a block-bodied onDestroy arrow", () => {
+    const src = [
+      "const actionExecutor = mountActionExecutor({});",
+      "onDestroy(() => {",
+      "  actionExecutor.dispose();",
+      "});",
+    ].join("\n");
+    expect(checkActionMountContract(src).ok).toBe(true);
   });
 
   it("is not satisfied by a mention inside a comment or a string", () => {

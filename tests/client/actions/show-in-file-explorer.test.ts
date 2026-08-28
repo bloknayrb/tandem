@@ -8,11 +8,13 @@
  * `isTauriRuntime()` — it exists in the registry only inside the Tauri desktop
  * runtime (detected via `window.__TAURI_INTERNALS__`). Registration is a
  * top-level side effect of importing the module, so we set the runtime sentinel
- * BEFORE the single dynamic import. `vi.isolateModulesAsync` gives this file its
- * own module realm so the sentinel is observed at registration time even though
- * sibling action tests (e.g. launcher-commands) import the same module without
- * it. We do NOT call `vi.resetModules()` per-test — re-running the BUILTINS
- * registration loop against a shared registry throws on id collision.
+ * BEFORE the single dynamic import. A one-shot `vi.resetModules()` gives this
+ * file its own module realm so the sentinel is observed at registration time
+ * even though sibling action tests (e.g. launcher-commands) import the same
+ * module without it. It is done ONCE, in `beforeAll`, not per test: each reset
+ * re-runs the BUILTINS registration against the shared registry, and while
+ * `{ replace: true }` makes that legal it also silently repoints every id at a
+ * fresh realm's action objects, which the sibling suites are still holding.
  *
  * The Tauri-vs-browser *gating* (action present on desktop, hidden in the
  * browser) is asserted by the Playwright/claude-in-chrome E2E recipe for #299,

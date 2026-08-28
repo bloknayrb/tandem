@@ -8,11 +8,11 @@
  * reports failures. `App.svelte` binds that bag with `mountActionExecutor` and
  * releases it in `onDestroy`.
  *
- * Registration itself is torn down only on Vite HMR (see the bottom of this
- * file). It is deliberately NOT wired to a component lifecycle: this module
- * body runs once per page load, so an `onDestroy`-driven teardown would empty
- * the palette of all its builtins after an ErrorBoundary recovery remounted
- * App, with nothing to put them back.
+ * Registration itself has no teardown, deliberately (see the bottom of this
+ * file for why an HMR disposer cannot work here). It is not wired to a
+ * component lifecycle either: this module body runs once per page load, so an
+ * `onDestroy`-driven teardown would empty the palette of all its builtins after
+ * an ErrorBoundary recovery remounted App, with nothing to put them back.
  */
 
 import {
@@ -34,7 +34,7 @@ import { clearDriftNudgeOptOut, driftNudgeOptedOut } from "../status/cwdDriftDis
 import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
-import { type ActionDeps, currentActionDeps, runBoundAction } from "./executor.js";
+import { type ActionDeps, notifyUser, runBoundAction } from "./executor.js";
 import { type Action, registerActions } from "./registry.svelte.js";
 
 // ---------------------------------------------------------------------------
@@ -90,34 +90,56 @@ export function shouldAutoOpenScratchpad(state: {
   return state.connected && state.tabCount === 0 && state.activeTabId === null;
 }
 
-export async function createScratchpad(): Promise<void> {
-  if (scratchpadInflight) return;
+/**
+ * `announceBusy` defaults to FALSE, and the default is the important half.
+ *
+ * A second *press* while the first request is in flight is a legitimate no-op,
+ * but a palette command that does nothing and says nothing is indistinguishable
+ * from a broken one — so the three user-initiated call sites opt in. The
+ * empty-state auto-open effect does not: it fires on a debounce timer with no
+ * gesture behind it, and a toast there would be the app talking to itself.
+ */
+export async function createScratchpad({
+  announceBusy = false,
+}: {
+  announceBusy?: boolean;
+} = {}): Promise<void> {
+  if (scratchpadInflight) {
+    if (announceBusy) {
+      notifyUser("info", "Still creating a scratchpad…", {
+        dedupKey: "scratchpad-inflight",
+        id: "scratchpad-inflight",
+      });
+    }
+    return;
+  }
   scratchpadInflight = true;
   try {
     const res = await fetch(`${API_BASE}${API_SCRATCHPAD}`, { method: "POST" });
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      console.warn(
-        "[Tandem] New Scratchpad failed:",
-        (body as Record<string, string>).message ?? res.statusText,
-      );
+      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      const detail = body.message ?? res.statusText;
+      console.warn("[Tandem] New Scratchpad failed:", detail);
       // Without this the palette entry is the exact shape this module's
       // executor exists to remove: the user presses it, nothing happens, and
       // the only record is a console they cannot see. It never rejects, so no
       // central funnel can cover for it.
-      currentActionDeps()?.notify(
-        "error",
-        "Couldn't create a new scratchpad — the server refused the request.",
-        { type: "general-error", dedupKey: "scratchpad-failed", id: "scratchpad-failed" },
-      );
+      // "refused" would be a claim about intent that a 500 does not support, so
+      // the copy stays neutral and carries the server's own words — dropping
+      // them left the one actionable detail in a console the user cannot see.
+      notifyUser("error", `Couldn't create a new scratchpad: ${detail}`, {
+        type: "general-error",
+        dedupKey: "scratchpad-failed",
+        id: "scratchpad-failed",
+      });
     }
   } catch (err) {
     console.warn("[Tandem] New Scratchpad request failed:", err);
-    currentActionDeps()?.notify(
-      "error",
-      "Couldn't create a new scratchpad — check your connection and try again.",
-      { type: "general-error", dedupKey: "scratchpad-failed", id: "scratchpad-failed" },
-    );
+    notifyUser("error", "Couldn't create a new scratchpad — check your connection and try again.", {
+      type: "general-error",
+      dedupKey: "scratchpad-failed",
+      id: "scratchpad-failed",
+    });
   } finally {
     scratchpadInflight = false;
   }
@@ -374,15 +396,16 @@ export async function triggerSave(activeDocId: string | null): Promise<boolean> 
       const body = await resp.json().catch(() => ({}));
       const message = (body as Record<string, string>).message ?? resp.statusText;
       console.warn("[Tandem] Save failed:", message);
-      currentActionDeps()?.notify("error", `Save failed: ${message}`);
+      notifyUser("error", `Save failed: ${message}`);
     } else {
       // Surface export-fidelity downgrades (#1145, 0c). The server already
       // returns these on a .docx save (SaveResult.fidelityWarnings) but the
       // success body was previously dropped here. The persistent fidelity
       // notice carries the specifics; this is the immediate "it happened" nudge.
-      // `currentActionDeps()?.` guards two windows at once: before App has
-      // bound the bag, and after it has released it (this fetch can settle
-      // long after an ErrorBoundary recovery tore the old App down).
+      // `notifyUser` covers two windows at once: before App has bound the bag,
+      // and after it has released it (this fetch can settle long after an
+      // ErrorBoundary recovery tore the old App down). In both it reports the
+      // drop rather than swallowing the message.
       const json = (await resp.json().catch(() => null)) as {
         data?: {
           status?: "saved" | "skipped" | "error";
@@ -401,18 +424,15 @@ export async function triggerSave(activeDocId: string | null): Promise<boolean> 
       //
       const result = json?.data;
       if (result?.status === "skipped") {
-        currentActionDeps()?.notify("warning", saveSkippedMessage(result.skipCode, result.reason));
+        notifyUser("warning", saveSkippedMessage(result.skipCode, result.reason));
         return false;
       }
       if (result?.status === "error") {
-        currentActionDeps()?.notify(
-          "error",
-          `Save failed: ${result.reason ?? "The document could not be saved."}`,
-        );
+        notifyUser("error", `Save failed: ${result.reason ?? "The document could not be saved."}`);
         return false;
       }
       if (result?.status !== "saved") {
-        currentActionDeps()?.notify("error", "Save failed: the server returned an invalid result.");
+        notifyUser("error", "Save failed: the server returned an invalid result.");
         return false;
       }
       ok = true;
@@ -422,7 +442,7 @@ export async function triggerSave(activeDocId: string | null): Promise<boolean> 
       // Deliberately NOT folded into the "N features simplified" line below.
       const integrity = json?.data?.integrityWarnings?.length ?? 0;
       if (integrity > 0) {
-        currentActionDeps()?.notify(
+        notifyUser(
           "error",
           'Saved, but some content may not have been preserved — your original is backed up. See the document notice, or run "Restore a backup of this document…" from the command palette.',
         );
@@ -444,17 +464,17 @@ export async function triggerSave(activeDocId: string | null): Promise<boolean> 
       const downgraded = json?.data?.fidelityWarnings?.length ?? 0;
       const unpreserved = json?.data?.unpreservedImports ?? 0;
       if (downgraded > 0 && unpreserved > 0) {
-        currentActionDeps()?.notify(
+        notifyUser(
           "warning",
           `Saved — ${downgraded} Word feature${downgraded === 1 ? " was" : "s were"} simplified on export, and the backed-up original has features this file doesn't. See the document notice for details.`,
         );
       } else if (downgraded > 0) {
-        currentActionDeps()?.notify(
+        notifyUser(
           "warning",
           `Saved — ${downgraded} Word feature${downgraded === 1 ? " was" : "s were"} simplified on export; see the document notice for details.`,
         );
       } else if (unpreserved > 0) {
-        currentActionDeps()?.notify(
+        notifyUser(
           "warning",
           "Saved — the backed-up original has Word features this file doesn't. Your original can still be restored; see the document notice for details.",
         );
@@ -462,7 +482,7 @@ export async function triggerSave(activeDocId: string | null): Promise<boolean> 
     }
   } catch (err) {
     console.warn("[Tandem] Save request failed:", err);
-    currentActionDeps()?.notify("error", "Save failed — check your connection and try again.");
+    notifyUser("error", "Save failed — check your connection and try again.");
   } finally {
     inflight = false;
     lastSaveOk = ok;
@@ -519,7 +539,11 @@ async function fetchLauncherStatus(): Promise<FetchResult<LauncherStatus>> {
   }
   if (res.status === 404) return { ok: false, kind: "not-built" };
   if (!res.ok) return { ok: false, kind: "server-error", detail: `HTTP ${res.status}` };
-  return { ok: true, value: (await res.json()) as LauncherStatus };
+  // Outside the try above, so a malformed body used to reject past every
+  // caller's FetchResult handling and land in the generic funnel as a crash.
+  const body = (await res.json().catch(() => null)) as LauncherStatus | null;
+  if (!body) return { ok: false, kind: "server-error", detail: "malformed status response" };
+  return { ok: true, value: body };
 }
 
 async function fetchLauncherNonce(): Promise<FetchResult<string>> {
@@ -531,8 +555,8 @@ async function fetchLauncherNonce(): Promise<FetchResult<string>> {
   }
   if (res.status === 404) return { ok: false, kind: "not-built" };
   if (!res.ok) return { ok: false, kind: "server-error", detail: `HTTP ${res.status}` };
-  const body = (await res.json()) as { nonce?: unknown };
-  if (typeof body.nonce !== "string") {
+  const body = (await res.json().catch(() => null)) as { nonce?: unknown } | null;
+  if (typeof body?.nonce !== "string") {
     return { ok: false, kind: "server-error", detail: "malformed nonce response" };
   }
   return { ok: true, value: body.nonce };
@@ -857,7 +881,15 @@ function formatBackupTimestamp(iso: string): string {
  * primary surface (ADR-038); this action is the discoverable on-ramp.
  */
 async function restoreBackupOfActiveDoc(d: ActionDeps): Promise<void> {
-  if (restoreBackupInflight) return;
+  if (restoreBackupInflight) {
+    // Same reasoning as createScratchpad's guard: silence here reads as a
+    // broken palette entry, and this one can sit behind a blocking confirm.
+    d.notify("info", "A restore is already in progress.", {
+      dedupKey: "restore-backup-inflight",
+      id: "restore-backup-inflight",
+    });
+    return;
+  }
   const activeDocId = d.getActiveTabId();
   if (!activeDocId) {
     d.notify("warning", "No active document.");
@@ -980,7 +1012,7 @@ const BUILTINS: Action[] = [
     group: "document",
     shortcut: "Ctrl+N",
     run() {
-      runBoundAction("new-scratchpad", () => createScratchpad());
+      runBoundAction("new-scratchpad", () => createScratchpad({ announceBusy: true }));
     },
   },
   {
@@ -1234,18 +1266,22 @@ const BUILTINS: Action[] = [
     : []),
 ];
 
-const builtinRegistration = registerActions(BUILTINS);
-
-// HMR is the ONLY teardown for registration, and it is the only place a
-// re-registration can actually happen: this module body re-runs on module
-// re-import, not when a component remounts. Without this, every edit during
-// `npm run dev` re-enters `registerActions` against a registry that still
-// holds the previous copies, which throws on the DEV id-collision path.
+// `{ replace: true }`, and the reason is a Vite fact rather than a preference.
 //
-// Deliberately NOT exported and never wired to `onDestroy`: an App remount
-// (ErrorBoundary's "Try to recover") does not re-run this module, so a
-// lifecycle-driven dispose would empty the palette of all its builtins for
-// the rest of the session, silently.
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => builtinRegistration.dispose());
-}
+// This module body re-runs on module RE-IMPORT, not when a component remounts —
+// so an HMR edit during `npm run dev` re-enters `registerActions` against a
+// registry that still holds the previous copies. An earlier draft handled that
+// with `import.meta.hot.dispose(...)`, which is dead code here: vite keys
+// disposers by `ownerPath` and looks them up by `acceptedPath`
+// (`vite/dist/client/client.mjs`), and vite-plugin-svelte's `compileModule`
+// injects no `accept` into a `.svelte.ts`. This module is therefore neither
+// self-accepting nor an accepted HMR dep, its disposer is never looked up, and
+// it never fires. Re-registration is the legitimate outcome of a module
+// re-execution, so it is declared rather than policed.
+//
+// The returned handle is deliberately NOT exported and never wired to
+// `onDestroy`: an App remount (ErrorBoundary's "Try to recover") does not re-run
+// this module, so a lifecycle-driven dispose would empty the palette of all its
+// builtins for the rest of the session, silently. Action *execution* is what is
+// lifecycle-bound, and that lives in `executor.ts`.
+registerActions(BUILTINS, { replace: true });

@@ -27,6 +27,11 @@ import {
 } from "../../../src/client/actions/registry.svelte.js";
 import { observeRegistry } from "../../helpers/registry-observer.svelte.js";
 
+const reportErrorSpy = vi.fn();
+vi.mock("../../../src/client/sentry.js", () => ({
+  reportError: (...args: unknown[]) => reportErrorSpy(...args),
+}));
+
 let n = 0;
 const uniqueId = () => `unit9-test-${++n}`;
 
@@ -42,6 +47,7 @@ function plant(action: Action): Action {
 
 afterEach(() => {
   for (const id of planted.splice(0)) unregisterAction(id);
+  reportErrorSpy.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -102,6 +108,40 @@ describe("registerActions", () => {
 
     expect(getActionsMap().get(id)).toBe(replacement);
     expect(warn.mock.calls.flat().join(" ")).toContain(id);
+    // Reported, not merely logged: two owners are fighting over one id and the
+    // loser's teardown is now permanently incomplete. A console line in a
+    // shipped desktop build (devtools excluded) reaches nobody.
+    expect(reportErrorSpy).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ source: "actionRegistry", actionId: id }),
+    );
+  });
+
+  it("rejects a duplicate id WITHIN one batch even with { replace: true }", () => {
+    // `replace` says "this batch owns ids that already exist" — a legitimate
+    // claim on an HMR re-run. It says nothing about an array that names the same
+    // id twice, which is always an authoring bug: the later entry wins, the
+    // disposer's identity check then declines to remove the earlier one, and the
+    // batch is silently one action shorter than it reads.
+    const dup = uniqueId();
+    expect(() =>
+      registerActions([makeAction(dup, "first"), makeAction(dup, "second")], { replace: true }),
+    ).toThrow(/collision/);
+    expect(getActionsMap().has(dup)).toBe(false);
+  });
+
+  it("re-registers an existing batch without throwing when { replace: true }", () => {
+    // The shipped shape: `builtin.svelte.ts` re-runs its module body on an HMR
+    // edit, against a registry that still holds the previous copies. There is no
+    // disposer to call first (vite never looks one up for a `.svelte.ts`), so
+    // declaring the replacement is what keeps DEV from throwing on every edit.
+    const id = uniqueId();
+    const first = plant(makeAction(id, "first"));
+    registerActions([first]);
+
+    const second = makeAction(id, "second");
+    expect(() => registerActions([second], { replace: true })).not.toThrow();
+    expect(getActionsMap().get(id)).toBe(second);
   });
 
   it("pre-validates the whole batch, so a collision leaves the registry untouched", () => {

@@ -12,6 +12,8 @@
  * ADR-029 (docs/decisions.md) records the design rationale.
  */
 
+import { reportError } from "../sentry.js";
+
 export const ACTION_GROUPS = [
   "editor",
   "navigation",
@@ -91,10 +93,18 @@ export interface ActionRegistration {
  * - **One reassignment for the whole batch**, in each direction. A per-id loop
  *   would re-run all four `$derived.by` consumers N times and is non-atomic in
  *   the middle.
+ *
+ * `{ replace: true }` suppresses the *pre-existing-entry* collision only. A
+ * duplicate id WITHIN one batch is always an authoring bug — the later entry
+ * would win, the disposer's identity check would then decline to remove the
+ * earlier one, and the array would silently be one action shorter than it reads.
  */
-export function registerActions(actions: Action[]): ActionRegistration {
+export function registerActions(actions: Action[], opts: RegisterOptions = {}): ActionRegistration {
+  const seen = new Set<string>();
   for (const action of actions) {
-    if (actionsMap.has(action.id)) reportCollision(action.id);
+    if (seen.has(action.id)) reportCollision(action.id);
+    seen.add(action.id);
+    if (actionsMap.has(action.id) && !opts.replace) reportCollision(action.id);
   }
 
   const next = new Map(actionsMap);
@@ -121,9 +131,16 @@ export function registerActions(actions: Action[]): ActionRegistration {
           after.delete(action.id);
           changed = true;
         } else if (after.has(action.id)) {
-          console.warn(
-            `[actions] not unregistering "${action.id}" — a later registration superseded this batch's entry.`,
-          );
+          // Reported, not just logged: this means two owners are fighting over
+          // one id, and the loser's teardown is now permanently incomplete —
+          // the superseding entry outlives whatever was supposed to own it.
+          const msg = `[actions] not unregistering "${action.id}" — a later registration superseded this batch's entry.`;
+          console.warn(msg);
+          try {
+            reportError(new Error(msg), { source: "actionRegistry", actionId: action.id });
+          } catch (reportErr) {
+            console.warn("[actions] crash reporting is unavailable:", reportErr);
+          }
         }
       }
       if (changed) actionsMap = after;

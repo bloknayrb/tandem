@@ -196,7 +196,11 @@ function failureMessage(id: string): string {
   // the raw id would put a machine-readable string in front of a user, so the
   // unnamed case drops the name rather than inventing one.
   const subject = label ? `"${label}" didn't finish` : "That command didn't finish";
-  return `${subject} — something went wrong inside Tandem. The details are in the developer console.`;
+  // Deliberately does NOT say "see the developer console": devtools are excluded
+  // from release desktop builds, so that would send the primary distribution's
+  // users somewhere they cannot go. This toast is itself the activity-tray
+  // record, which is the surface that does exist.
+  return `${subject} — something went wrong inside Tandem. Try again; if it keeps happening, restart Tandem.`;
 }
 
 /**
@@ -208,13 +212,22 @@ function failureMessage(id: string): string {
  * wrapping (rather than one `try` around all three) is what keeps a failing
  * `reportError` from also swallowing the user-facing toast.
  */
-function report(id: string, err: unknown, deps: ActionDeps | null): void {
+function report(id: string, err: unknown): void {
   console.error(`[actions] "${id}" failed:`, err);
   try {
     reportError(err, { source: "actionExecutor", actionId: id });
-  } catch {
-    // reportError is already internally guarded; belt and braces.
+  } catch (reportErr) {
+    // reportError is internally guarded, so reaching here means crash reporting
+    // itself is broken — worth one line rather than nothing.
+    console.warn("[actions] crash reporting is unavailable:", reportErr);
   }
+  // The LIVE bag, deliberately — not the failing executor's. An ErrorBoundary
+  // recovery is the motivating scenario for this whole module, and it ends with
+  // a working App on screen; reporting into the dead one (or into nothing)
+  // would lose the toast in exactly the case that most needs it. The live
+  // facade belongs to the successor, so this still never writes into a dead
+  // closure.
+  const deps = currentActionDeps();
   if (!deps) return;
   try {
     deps.notify(
@@ -229,17 +242,43 @@ function report(id: string, err: unknown, deps: ActionDeps | null): void {
   }
 }
 
-/** One `console.warn` + crash report for a call that arrived after teardown. */
-function reportDroppedCall(member: DepKey): void {
-  const err = new Error(
-    `[actions] "${member}" called after the action executor was disposed — the App instance that owned it is gone, so this call was dropped.`,
-  );
+/**
+ * Thrown by the revalidating facade when a body touches a dependency after its
+ * executor was disposed. It aborts the body rather than being an action failure,
+ * so `run` reports it as a drop and never as a crash.
+ */
+class ExecutorDisposedError extends Error {
+  readonly member: DepKey;
+  constructor(member: DepKey) {
+    super(
+      `[actions] "${member}" called after the action executor was disposed — the App instance that owned it is gone, so the action was abandoned.`,
+    );
+    this.name = "ExecutorDisposedError";
+    this.member = member;
+  }
+}
+
+/** One `console.warn` + crash report for a body abandoned after teardown. */
+function reportDroppedCall(err: ExecutorDisposedError): void {
   console.warn(err.message);
   try {
-    reportError(err, { source: "actionExecutor", droppedMember: member });
-  } catch {
-    // ignore
+    reportError(err, { source: "actionExecutor", droppedMember: err.member });
+  } catch (reportErr) {
+    console.warn("[actions] crash reporting is unavailable:", reportErr);
   }
+}
+
+/**
+ * Classify what came out of an action body. A body abandoned by the facade is
+ * not a failure — nothing went wrong with the command, its App went away — so
+ * it gets the drop report rather than a crash report and an error toast.
+ */
+function settle(id: string, err: unknown): void {
+  if (err instanceof ExecutorDisposedError) {
+    reportDroppedCall(err);
+    return;
+  }
+  report(id, err);
 }
 
 /** The mutable half of an executor, shared by its facade, `run` and `dispose`. */
@@ -257,13 +296,21 @@ function buildFacade(state: ExecutorState): ActionDeps {
   const facade = {} as Record<string, unknown>;
   for (const key of Object.keys(state.deps) as DepKey[]) {
     facade[key] = (...args: unknown[]) => {
-      if (state.disposed) {
-        reportDroppedCall(key);
-        // A dropped call must still return something type-shaped. `null` is the
-        // documented "no active document / no path" value for the two getters,
-        // and is ignored by every other member's `void`/`Promise<void>` caller.
-        return null;
-      }
+      // THROW, never a type-shaped placeholder. An earlier draft returned
+      // `null` — "the documented no-active-document value" — and that was the
+      // most dangerous line in this module. `relaunchHere` reads
+      // `getActiveDocumentPath()` and treats `null` not as absence but as a
+      // second, distinct user intent: on the `cwdRequired: false` path a null
+      // cwd skips the guard, reaches a `confirm()` (a global the facade cannot
+      // revalidate) naming a destination the user never chose, and on accept
+      // POSTs a real relaunch that SIGTERMs Claude into the server's configured
+      // directory — with every toast and the #1282 re-probe dropped. The drop
+      // it was meant to replace was "nothing happens"; the placeholder turned it
+      // into a destructive restart at an unrequested location, silently.
+      //
+      // Throwing abandons the body at its FIRST post-teardown touch, which is
+      // the only safe moment. `run` classifies this as a drop, not a failure.
+      if (state.disposed) throw new ExecutorDisposedError(key);
       return (state.deps[key] as (...a: unknown[]) => unknown)(...args);
     };
   }
@@ -287,25 +334,20 @@ export function mountActionExecutor(deps: ActionDeps): ActionExecutor {
 
   const impl: ExecutorImpl = {
     facade,
+    // No entry-time `state.disposed` guard: `runBoundAction` resolves `current`,
+    // and a disposed impl is never `current` (dispose either nulls it or the
+    // impl was already superseded and unreachable). A branch that cannot be
+    // taken is not a safety net, it is a claim nothing can check — the facade's
+    // per-call check is the real one.
     run(id, fn) {
-      if (state.disposed) {
-        report(id, new Error("action invoked on a disposed executor"), null);
-        return;
-      }
       let result: void | Promise<void>;
       try {
         result = fn(facade);
       } catch (err) {
-        report(id, err, state.disposed ? null : state.deps);
+        settle(id, err);
         return;
       }
-      if (isThenable(result)) {
-        result.then(undefined, (err: unknown) => {
-          // Re-read disposal in the continuation: the App that would show the
-          // toast may have gone away while the promise was in flight.
-          report(id, err, state.disposed ? null : state.deps);
-        });
-      }
+      if (isThenable(result)) result.then(undefined, (err: unknown) => settle(id, err));
     },
     dispose() {
       state.disposed = true;
@@ -332,6 +374,44 @@ export function currentActionDeps(): ActionDeps | null {
 }
 
 /**
+ * Push a user-facing toast, or report the drop when there is nowhere to push it.
+ *
+ * The optional-chained `currentActionDeps()?.notify(...)` this replaces was a
+ * silent failure of exactly the kind this unit exists to remove: with no bag
+ * mounted the message evaporated and nothing anywhere recorded that it had.
+ * That matters most for the messages that are themselves failure reports — the
+ * integrity advisory ("some content may not have been preserved") is the one
+ * whose disappearance is worst, because the user's next signal is a file that
+ * quietly lost content.
+ *
+ * A missing bag is genuinely possible: `triggerSave` is driven from the Ctrl+S
+ * dispatch and the activity-tray retry, and its fetch can settle after an
+ * ErrorBoundary recovery has torn the old App down. So this is a report, not an
+ * assertion — the console line plus a crash report is what turns an invisible
+ * drop into a diagnosable one.
+ */
+export function notifyUser(
+  severity: "info" | "warning" | "error",
+  message: string,
+  opts?: ActionNotifyOptions,
+): void {
+  const deps = currentActionDeps();
+  if (!deps) {
+    console.warn(`[actions] no App mounted — dropped ${severity} toast:`, message);
+    try {
+      reportError(new Error(`dropped ${severity} toast: ${message}`), {
+        source: "actionExecutor",
+        droppedToast: severity,
+      });
+    } catch (reportErr) {
+      console.warn("[actions] crash reporting is unavailable:", reportErr);
+    }
+    return;
+  }
+  deps.notify(severity, message, opts);
+}
+
+/**
  * Run an action body against the live dependency bag.
  *
  * Resolves `current` at call time, never a captured reference — that is what
@@ -343,7 +423,7 @@ export function runBoundAction(id: string, fn: (d: ActionDeps) => void | Promise
     // Unreachable by user gesture in a shipped build: the bag is installed in
     // App's script scope, before any child — CommandPalette included — exists.
     // Kept, and kept loud, as a developer assertion rather than a contract.
-    report(id, new Error("action invoked before the App mounted — no deps wired"), null);
+    report(id, new Error("action invoked before the App mounted — no deps wired"));
     return;
   }
   impl.run(id, fn);
@@ -363,10 +443,10 @@ export function runAction(action: Action): void {
   try {
     result = action.run();
   } catch (err) {
-    report(action.id, err, currentActionDeps());
+    settle(action.id, err);
     return;
   }
   if (isThenable(result)) {
-    result.then(undefined, (err: unknown) => report(action.id, err, currentActionDeps()));
+    result.then(undefined, (err: unknown) => settle(action.id, err));
   }
 }
