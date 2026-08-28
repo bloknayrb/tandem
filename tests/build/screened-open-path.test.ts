@@ -4,8 +4,8 @@
  *
  * **The guarantee itself is a compile error, not an assertion in this file.**
  * `ScreenedOpenPath`'s tuple field is private to `src-tauri/src/open_candidate.rs`,
- * so no other module in the crate — `lib.rs` included, all ~6,900 lines and
- * eight `#[cfg(test)]` submodules of it — can wrap an unscreened path. rustc
+ * so no other module in the crate — `lib.rs` included, and every module Unit 11
+ * has split out of it — can wrap an unscreened path. rustc
  * enforces that on every build, on every CI leg. Two `compile_fail` doctests on
  * the type cover the same boundary as seen from OUTSIDE the crate (that is all
  * a doctest can reach; `trybuild` would be no different, since it also compiles
