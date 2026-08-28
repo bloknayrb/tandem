@@ -229,19 +229,42 @@ describe("#1320 the invariant is actually mounted", () => {
     );
     expect(invariant).toBeGreaterThan(auth);
 
-    // All five, not just the first. Pinning only `registerApiRoutes` would stay
-    // green while the mount slid below the channel, integrations, launcher or
-    // models registrars — silently un-gating everything those register.
-    for (const registrar of [
-      "registerApiRoutes(",
-      "registerChannelRoutes(",
-      "registerIntegrationsRoutes(",
-      "registerLauncherRoutes(",
-      "registerModelsRoutes(",
-    ]) {
-      const at = serverSrc.indexOf(registrar);
-      expect(at, `${registrar} not found in server.ts`).toBeGreaterThan(-1);
-      expect(at, `${registrar} must run after the invariant is mounted`).toBeGreaterThan(invariant);
+    // Every registrar, **derived from the file rather than listed here**.
+    //
+    // This used to be a hardcoded list of the five that existed when it was
+    // written. That closes the direction it names below — the mount sliding
+    // *down* past a known registrar — and leaves the mirror image wide open: a
+    // sixth `registerAnythingRoutes(app, …)` added *above* line 691 mounts its
+    // routes ungated and this test stays green, because a name absent from the
+    // list is never looked for. The guard's bug is its scope, not its matching.
+    // Deriving the list is what makes "before EVERY registrar" mean every one.
+    const registrars = [...serverSrc.matchAll(/\bregister\w*Routes\s*\(/g)];
+    expect(
+      registrars.length,
+      "the registrar scan found nothing — it is broken, not server.ts. Zero " +
+        "registrars satisfies the loop below perfectly.",
+    ).toBeGreaterThanOrEqual(5);
+    for (const known of ["registerApiRoutes(", "registerChannelRoutes("]) {
+      expect(
+        registrars.some((m) => m[0].replace(/\s+/g, "") === known),
+        `the scan must still find ${known} — a regex that stopped matching would ` +
+          "leave this assertion vacuously true",
+      ).toBe(true);
+    }
+    for (const m of registrars) {
+      expect(m.index, `${m[0].trim()} must run after the invariant is mounted`).toBeGreaterThan(
+        invariant,
+      );
+    }
+
+    // The other way to add an ungated route: skip the registrar convention and
+    // write `app.post("/api/…", …)` straight into server.ts above the mount.
+    for (const m of serverSrc.matchAll(/\bapp\.(get|post|put|patch|delete|all)\(\s*"\/api/g)) {
+      expect(
+        m.index,
+        `a direct ${m[1].toUpperCase()} /api route is registered above the ` +
+          "enforceLoopbackMutation mount, so it is ungated",
+      ).toBeGreaterThan(invariant);
     }
   });
 });
