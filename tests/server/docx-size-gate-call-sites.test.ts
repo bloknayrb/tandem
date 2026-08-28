@@ -51,13 +51,14 @@ vi.mock("../../src/server/integrations/acl-win.js", () => ({
 import { Document, Packer, Paragraph, TextRun } from "docx";
 import JSZip from "jszip";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
+import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { docBackupsRoot } from "../../src/server/file-io/doc-backup.js";
 import { applyTrackedChanges } from "../../src/server/file-io/docx-apply.js";
 import { DocxTooLargeError, MAX_DOCX_PART_BYTES } from "../../src/server/file-io/docx-size-gate.js";
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import { openFileByPath, restoreDocumentFromBackup } from "../../src/server/mcp/file-opener.js";
+import { restoreDocumentFromBackup } from "../../src/server/mcp/file-opener.js";
 import { resolveAppDataDir } from "../../src/server/platform.js";
 
 /**
@@ -123,7 +124,7 @@ describe("call site 3 — restoreDocumentFromBackup", () => {
       }),
     )) as Buffer;
     await fs.writeFile(filePath, good);
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
 
     // A snapshot predating the gate is an ordinary route to hostile bytes, so plant one directly
     // (the shape `docBackupSnapshotPath` accepts).

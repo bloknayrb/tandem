@@ -17,7 +17,7 @@ import {
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { isPlaintextFormat } from "../../shared/plaintext-format.js";
-import type { ExternalConflictState, FidelityReport } from "../../shared/types.js";
+import type { FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash } from "../annotations/doc-hash.js";
@@ -27,6 +27,8 @@ import {
   migrateTombstoneLedger,
   persistSnapshot,
 } from "../annotations/sync.js";
+import { wireAnnotationStore } from "../documents/annotation-wiring.js";
+import { readPendingConflict } from "../documents/conflict.js";
 import {
   clearDirtyState,
   isDirty,
@@ -34,6 +36,8 @@ import {
   markCleanIfUnchanged,
   snapshotDirtyVersion,
 } from "../documents/dirty.js";
+import { openFromRestore } from "../documents/open.js";
+import { wireFileWatcher } from "../documents/watcher.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
@@ -142,24 +146,6 @@ export function canSaveToDisk(format: string): boolean {
  * matched in two places.
  */
 export const EXTERNAL_CONFLICT_SKIP_REASON = "External conflict pending";
-
-/**
- * Read a document's pending external-conflict flag, if any (#1238).
- *
- * Deliberately a read at the *call site's* moment rather than something
- * `saveSession` does for itself: on the success path `saveSession` runs before
- * the flag is cleared, so a self-read there would persist a conflict the save
- * just resolved and re-raise the banner on a clean, in-sync document.
- *
- * Routed through `narrowConflict` (review finding): the raw Y.Map value is as
- * untrusted as a restored session's JSON — any WS peer with room access can
- * set `Y_MAP_EXTERNAL_CONFLICT` via Hocuspocus, and this return value feeds
- * save-blocking decisions and round-trips into the on-disk session file
- * verbatim. A bare cast would take a forged/malformed value on trust.
- */
-export function readPendingConflict(doc: Y.Doc): ExternalConflictState | undefined {
-  return narrowConflict(doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT));
-}
 
 /** The persisted fidelity report, defensively typed: it is server-written but
  * survives session restore un-revalidated, so every read tolerates a legacy or
@@ -378,7 +364,7 @@ export async function saveDocumentToDisk(
 
     // Guard against overwriting external modifications.
     // Safe FS sink (CodeQL js/path-injection): `docState.filePath` is the
-    // registry's server-managed path (only ever set by openFileByPath /
+    // registry's server-managed path (only ever set by openFromDisk /
     // resolveAndValidatePath / a validated rename or save-as) — never raw user
     // input. An alert here is a false positive; dismiss per issue #1042.
     try {
@@ -862,7 +848,6 @@ export async function saveDocumentAsToDisk(
         // second Save-As is rejected with NOT_PROMOTABLE before reaching here. The
         // first promote is safe because a scratchpad/upload doc has no prior
         // file-sync context to dispose (openScratchpad skips wireAnnotationStore).
-        const { wireAnnotationStore } = await import("./file-opener.js");
         await wireAnnotationStore(docId, doc, resolved);
 
         // The doc is now a real file — its channel observers were attached as an
@@ -1089,7 +1074,6 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
   // cycle (same pattern as saveDocumentAsToDisk).
   try {
     savingDocs.add(docId);
-    const { wireAnnotationStore, wireFileWatcher } = await import("./file-opener.js");
     const doc = getOrCreateDocument(docId);
 
     // --- Phase 1: reversible prep (flush, keep observer ATTACHED) ---
@@ -1116,7 +1100,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
 
     // --- Phase 2: commit (point of no return) ---
     // Safe FS sink (CodeQL js/path-injection): `oldPath` is the registry's
-    // server-managed `docState.filePath` (only ever set by openFileByPath /
+    // server-managed `docState.filePath` (only ever set by openFromDisk /
     // resolveAndValidatePath); `newPath` was built from path.dirname(oldPath) +
     // path.basename(newName) and then cleared validateRenameFilename, the inline
     // separator/null-byte guard, rejectUnsafeWindowsPrefix, and assertPathSafe
@@ -1621,9 +1605,6 @@ export function broadcastStoreReadOnly(readOnly: boolean): void {
  * Called during startup to restore the working set.
  */
 export async function restoreOpenDocuments(previousActiveDocId: string | null): Promise<number> {
-  // Import dynamically to avoid circular dependency (file-opener imports document-service)
-  const { openFileByPath } = await import("./file-opener.js");
-
   const sessions = await listSessionFilePaths();
   if (sessions.length === 0) return 0;
 
@@ -1633,7 +1614,7 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
       // Carry the persisted read-only flag back through: without it every
       // restored document takes `resolveAndValidatePath`'s hardcoded `false`,
       // and a read-only tab (View Changelog) comes back writable.
-      await openFileByPath(filePath, { readOnly });
+      await openFromRestore({ filePath, readOnly });
       restoredCount++;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;

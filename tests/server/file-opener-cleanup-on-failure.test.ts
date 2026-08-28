@@ -77,10 +77,10 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
   return { ...actual, pushNotification: vi.fn() };
 });
 
+import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import { openFileByPath } from "../../src/server/mcp/file-opener.js";
 import { pushNotification } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
@@ -133,7 +133,7 @@ describe("populateDocFromContent — cleanup on populate failure", () => {
 
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(openFileByPath(filePath)).rejects.toThrow(
+    await expect(openFromDisk(filePath)).rejects.toThrow(
       "simulated populate failure after partial write",
     );
 
@@ -198,7 +198,7 @@ describe("populateDocFromContent — injectCommentsAsAnnotations mid-throw", () 
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     // The inner catch swallows the inject throw — populate succeeds.
-    await expect(openFileByPath(filePath)).resolves.toBeDefined();
+    await expect(openFromDisk(filePath)).resolves.toBeDefined();
 
     errSpy.mockRestore();
 
@@ -244,7 +244,7 @@ describe("populateDocFromContent — extractDocxComments failure", () => {
     const doc = getOrCreateDocument(docId);
 
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(openFileByPath(filePath)).resolves.toBeDefined();
+    await expect(openFromDisk(filePath)).resolves.toBeDefined();
     errSpy.mockRestore();
 
     // HTML content lands; no annotations.
