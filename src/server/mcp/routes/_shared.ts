@@ -135,6 +135,10 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "SOURCE_MISSING":
       return 404;
     case "INVALID_PATH":
+    // A symlink at the backup destination is a bad caller-supplied path, not a
+    // server fault — 500 would read as "Tandem broke" for something the caller
+    // can fix by passing a different `backupPath`.
+    case "BACKUP_SYMLINK":
     case "UNSUPPORTED_FORMAT":
     case "NO_SUGGESTIONS":
     case "INVALID_ARGUMENT":
@@ -181,6 +185,7 @@ export function errorCodeToLabel(code: string): string {
     case "SOURCE_MISSING":
       return "NOT_FOUND";
     case "INVALID_PATH":
+    case "BACKUP_SYMLINK":
       return "INVALID_PATH";
     case "UNSUPPORTED_FORMAT":
     case "NO_SUGGESTIONS":

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import render from "dom-serializer";
 import JSZip from "jszip";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { listDocBackups } from "../../src/server/file-io/doc-backup.js";
@@ -980,7 +980,7 @@ describe("applyChangesCore — write guards", () => {
     expect(await onDisk()).toEqual(before);
   });
 
-  // The two tests in this block that expect applyChangesCore to RESOLVE get
+  // The tests in this block that expect applyChangesCore to RESOLVE get
   // explicit headroom over the project's 15s default. They are the only ones
   // here that perform a real .docx apply -- measured in isolation at 1977ms and
   // 463ms, against 20-24ms for the refusals, which return before doing any
@@ -1039,25 +1039,29 @@ describe("applyChangesCore — write guards", () => {
     REAL_APPLY_TIMEOUT_MS,
   );
 
-  it("leaves savedAtVersion STALE so a save before the reload is refused", async () => {
-    // The inverse of every other write path, and deliberate. What lands on disk is
-    // tracked-changes markup the Y.Doc cannot represent — mammoth drops revisions on
-    // import — so until the watcher's reload the Y.Doc is genuinely older than the
-    // file, and an explicit Ctrl+S in that window would export it over the revisions
-    // just written. The stale baseline is what makes saveDocumentToDisk refuse.
-    const baseline = Date.now() - 60_000;
-    const meta = getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META);
-    meta.set(Y_MAP_SAVED_AT_VERSION, baseline);
-    // Not a drift refusal: touch the file back to the baseline first, so the apply
-    // itself is what moves mtime past it.
-    await fsp.utimes(docPath, new Date(baseline), new Date(baseline));
+  it(
+    "leaves savedAtVersion STALE so a save before the reload is refused",
+    async () => {
+      // The inverse of every other write path, and deliberate. What lands on disk is
+      // tracked-changes markup the Y.Doc cannot represent — mammoth drops revisions on
+      // import — so until the watcher's reload the Y.Doc is genuinely older than the
+      // file, and an explicit Ctrl+S in that window would export it over the revisions
+      // just written. The stale baseline is what makes saveDocumentToDisk refuse.
+      const baseline = Date.now() - 60_000;
+      const meta = getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META);
+      meta.set(Y_MAP_SAVED_AT_VERSION, baseline);
+      // Not a drift refusal: touch the file back to the baseline first, so the apply
+      // itself is what moves mtime past it.
+      await fsp.utimes(docPath, new Date(baseline), new Date(baseline));
 
-    await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
+      await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
 
-    expect(meta.get(Y_MAP_SAVED_AT_VERSION)).toBe(baseline);
-    const stat = await fsp.stat(docPath);
-    expect(stat.mtimeMs).toBeGreaterThan(baseline + 1000);
-  });
+      expect(meta.get(Y_MAP_SAVED_AT_VERSION)).toBe(baseline);
+      const stat = await fsp.stat(docPath);
+      expect(stat.mtimeMs).toBeGreaterThan(baseline + 1000);
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
 
   it("reports a source file deleted mid-apply as SOURCE_MISSING, not an fs crash", async () => {
     // An ordinary state (the user moved or deleted the file), so it has to come back
@@ -1070,11 +1074,179 @@ describe("applyChangesCore — write guards", () => {
     await expect(applyChangesCore(DOC_ID)).rejects.toMatchObject({ code: "SOURCE_MISSING" });
   });
 
-  it("takes a pre-overwrite snapshot, not just the sidecar backup", async () => {
-    // The `.backup.docx` sidecar lands wherever the CALLER says. The snapshot is
-    // the swept, capped, app-data copy every other write path takes.
-    await applyChangesCore(DOC_ID);
-    const backups = await listDocBackups(docPath, resolveAppDataDir());
-    expect(backups.length).toBe(1);
+  it(
+    "takes a pre-overwrite snapshot, not just the sidecar backup",
+    async () => {
+      // The `.backup.docx` sidecar lands wherever the CALLER says. The snapshot is
+      // the swept, capped, app-data copy every other write path takes.
+      await applyChangesCore(DOC_ID);
+      const backups = await listDocBackups(docPath, resolveAppDataDir());
+      expect(backups.length).toBe(1);
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// applyChangesCore — the backup sidecar
+//
+// This whole block is new because NOTHING exercised the anti-clobber branch at
+// `docx-apply.ts:249-258`. No existing spec creates a pre-existing backup
+// destination, so every line of it was unreached, and two defects sat there in
+// a file with 46 passing tests.
+//
+// Each spec was run against the unfixed code and shown red, because a green
+// suite is evidence only if a broken version would have looked different — with
+// one honest exception. The symlink spec is `runIf(!win32)` and the machine this
+// was written on has no symlink privilege, so its red run happened on CI, not
+// here. If you change that spec, you cannot verify it locally on Windows.
+// ---------------------------------------------------------------------------
+
+describe("applyChangesCore — the backup sidecar", () => {
+  let counter = 0;
+  let DOC_ID: string;
+  let docPath: string;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+    setActiveDocId(null);
+
+    counter += 1;
+    DOC_ID = `backup-test-doc-${counter}`;
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-apply-backup-"));
+    docPath = path.join(tmpDir, "doc.docx");
+    await fsp.writeFile(
+      docPath,
+      await createTestDocx(wrapBody("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")),
+    );
+
+    const doc = getOrCreateDocument(DOC_ID);
+    doc.getXmlFragment("default").insert(0, [makeYParagraph("Hello world")]);
+    doc.getMap(Y_MAP_ANNOTATIONS).set("a1", {
+      id: "a1",
+      type: "comment",
+      author: "claude",
+      status: "accepted",
+      range: { from: 0, to: 5 },
+      content: "swap it",
+      suggestedText: "Howdy",
+      textSnapshot: "Hello",
+      timestamp: Date.now(),
+    });
+
+    addDoc(DOC_ID, {
+      id: DOC_ID,
+      filePath: docPath,
+      format: "docx",
+      readOnly: false,
+      source: "file",
+    });
+    setActiveDocId(DOC_ID);
   });
+
+  // Same headroom, same reason as the write-guards block above: these perform a
+  // real .docx apply, measured at ~21s on a dev machine against a 15s default.
+  // Without it they fail as timeouts rather than as assertions.
+  const REAL_APPLY_TIMEOUT_MS = 60_000;
+
+  it(
+    "keeps an extensionless backupPath absolute instead of resolving it against cwd",
+    async () => {
+      // The `slice(0, -0)` bug. `path.extname` returns "" for an extensionless
+      // path and `-0 === 0`, so `slice(0, -ext.length)` returned the empty
+      // string and the backup name became a bare "-<timestamp>" — RELATIVE, so
+      // resolved against the server process cwd, discarding the `path.resolve`
+      // sanitizing done on the way in.
+      //
+      // It reported success either way: the size check downstream stats the
+      // file that was actually written, so the sizes always matched. That is
+      // what makes this worth a test rather than a glance.
+      const backupPath = path.join(tmpDir, "sidecar-no-extension");
+      await fsp.writeFile(backupPath, "an earlier backup");
+
+      const strays: string[] = [];
+      try {
+        const result = await applyChangesCore(DOC_ID, undefined, backupPath);
+        expect(
+          path.isAbsolute(result.backupPath as string),
+          `backup landed at a relative path (${result.backupPath}), which fs.copyFile ` +
+            "resolves against the server cwd rather than next to the document",
+        ).toBe(true);
+        expect(path.dirname(result.backupPath as string)).toBe(tmpDir);
+      } finally {
+        // In `finally`, not after the assertion: on the red run the assertion
+        // throws first and the junk file survives in the repo root, which is
+        // the vitest cwd.
+        for (const name of await fsp.readdir(process.cwd())) {
+          if (/^-\d{10,}/.test(name)) {
+            strays.push(name);
+            await fsp.rm(path.join(process.cwd(), name), { force: true });
+          }
+        }
+      }
+      expect(strays, "the fix must not produce a cwd-relative backup").toEqual([]);
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a symlinked backup destination instead of writing through it",
+    async () => {
+      // The write-through. `fs.access` follows symlinks, so a DANGLING link at
+      // the destination reported ENOENT, took the "no existing backup" branch,
+      // and `fs.copyFile` — which opens O_WRONLY|O_CREAT|O_TRUNC — created the
+      // target and filled it with the user document.
+      //
+      // POSIX-only, and worth being blunt: the ubuntu `check` job is the only
+      // leg that runs this, so Windows has no coverage of it at all. Creating a
+      // symlink on Windows needs a privilege the dev machine lacks.
+      const target = path.join(tmpDir, "attacker-chosen.txt");
+      const link = path.join(tmpDir, "doc.backup.docx");
+      await fsp.symlink(target, link);
+
+      await expect(applyChangesCore(DOC_ID)).rejects.toMatchObject({ code: "BACKUP_SYMLINK" });
+      await expect(
+        fsp.access(target),
+        "the symlink target was created, so the copy wrote through the link",
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
+
+  it(
+    "retries a colliding backup name a bounded number of times, without compounding",
+    async () => {
+      // The old code passed no COPYFILE_EXCL, so EEXIST could not arise from a
+      // real filesystem, and the uniquified name embeds Date.now() so it cannot
+      // be pre-created either. A spy is the only way to reach this path.
+      //
+      // Asserting only the terminal BACKUP_FAILED would be satisfied whether or
+      // not the retry compounds — which is the actual hazard, since recomputing
+      // from an already-uniquified name walks toward ENAMETOOLONG, not an
+      // EEXIST, and would escape raw. So assert the destinations.
+      const dests: string[] = [];
+      const spy = vi.spyOn(fsp, "copyFile").mockImplementation(async (_src, dest) => {
+        dests.push(String(dest));
+        throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+      });
+      try {
+        await expect(applyChangesCore(DOC_ID)).rejects.toMatchObject({ code: "BACKUP_FAILED" });
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(dests.length, "the retry must be bounded").toBe(5);
+      for (const dest of dests) {
+        expect(path.dirname(dest)).toBe(tmpDir);
+        expect(
+          path.basename(dest),
+          `retry compounded onto an already-uniquified name (${dest}) instead of ` +
+            "recomputing from the original base",
+        ).toMatch(/^doc\.backup(-\d+-[0-9a-f]{8})?\.docx$/);
+      }
+      expect(new Set(dests).size, "a bare Date.now() collides within one millisecond").toBe(5);
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
 });
