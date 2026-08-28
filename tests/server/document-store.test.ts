@@ -278,4 +278,48 @@ describe("getDocumentStore factory", () => {
     clearOpenDocs();
     expect(getDocumentStore()).toBeNull();
   });
+
+  it("returns a FRESH store each call — memoizing it would outlive a doc swap", () => {
+    // `YDocStore` now caches an `AnnotationLifecycle` in its constructor, and
+    // that lifecycle captures `ydoc.getMap(Y_MAP_ANNOTATIONS)`. The only thing
+    // making that safe is this factory building a new store per handler call:
+    // Hocuspocus replaces the Y.Doc in `onLoadDocument` and destroys the old
+    // one, so a memoized store would write into a destroyed doc with nothing to
+    // observe it. Memoizing by `doc.id` is a natural-looking optimization and
+    // left every other suite green.
+    setupDoc("factory-fresh", "Hello world");
+    const first = getDocumentStore();
+    const second = getDocumentStore();
+    expect(first).not.toBeNull();
+    expect(second).not.toBe(first);
+    expect(second!.lifecycle).not.toBe(first!.lifecycle);
+  });
+
+  it("accept/dismiss delegate to the lifecycle and keep its tagged arms", () => {
+    // ADR-035 Unit 8b re-pointed these two at `this.lifecycle`. The arms are the
+    // contract the MCP handlers branch on, so a delegation that threw or
+    // returned a bare boolean instead would be invisible to the parity floor.
+    const ydoc = setupDoc("factory-arms", "Hello world");
+    const store = getDocumentStore()!;
+    expect(store.acceptAnnotation("no-such-id")).toStrictEqual({
+      kind: "not-found",
+      id: "no-such-id",
+    });
+
+    const id = createAnnotation(
+      ydoc.getMap(Y_MAP_ANNOTATIONS),
+      ydoc,
+      "comment",
+      rangeOf(0, 5, ydoc),
+      "x",
+    );
+    expect(store.acceptAnnotation(id)).toMatchObject({ kind: "ok" });
+    // Now non-pending: the second call must report the current status, not
+    // silently succeed again.
+    expect(store.dismissAnnotation(id)).toStrictEqual({
+      kind: "not-pending",
+      id,
+      currentStatus: "accepted",
+    });
+  });
 });

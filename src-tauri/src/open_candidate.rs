@@ -3,9 +3,10 @@
 //! built.
 //!
 //! Everything here was lifted verbatim out of `lib.rs` (#1415). The move is the
-//! mechanism, not tidying: `lib.rs` is ~6,900 lines in a single module, so a
-//! newtype declared there would have a "private" field visible to every one of
-//! those lines and to all eight of its `#[cfg(test)]` submodules. The standing
+//! mechanism, not tidying: `lib.rs` was ~6,900 lines in a single module when
+//! this was written and is ~4,300 after Unit 11, so a newtype declared there
+//! would have a "private" field visible to every one of those lines and to all
+//! of its `#[cfg(test)]` submodules. The standing
 //! proof that this is not theoretical is `PendingOpens`, whose nominally
 //! private field `lib.rs`'s own tests wrote straight through
 //! (`state.0.lock().unwrap().push(PathBuf::from("a"))`).

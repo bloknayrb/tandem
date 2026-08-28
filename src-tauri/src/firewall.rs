@@ -303,7 +303,7 @@ impl std::error::Error for FirewallError {}
 ///
 /// Timing out here is nearly free: the pre-flight is advisory and never replaces
 /// the enable path's own check, so failing fast is strictly better than making
-/// the user watch a spinner. Matches `PORT_HOLDER_LOOKUP_TIMEOUT` in `lib.rs`,
+/// the user watch a spinner. Matches `PORT_HOLDER_LOOKUP_TIMEOUT` in `sidecar.rs`,
 /// this crate's other bounded external-process lookup.
 pub const SUBNET_PROBE_TIMEOUT_ADVISORY: Duration = Duration::from_secs(5);
 

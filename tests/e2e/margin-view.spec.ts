@@ -13,6 +13,7 @@ import {
   RAIL_HANDLE_TESTID,
   selectTextStable,
   setRailVisible,
+  submitAnnotation,
 } from "./helpers";
 
 /**
@@ -106,7 +107,7 @@ async function seedNoteViaPopup(
   await selectTextStable(editor.locator("p").first());
   await openAnnotatePopup(page);
   await page.locator("[data-testid='popup-annotation-input']").fill(text);
-  await page.locator("[data-testid='popup-note-submit']").click();
+  await submitAnnotation(page, "note");
   // Read the id from the new note's EDITOR decoration (always visible inline text).
   // Scoped to `.tiptap` so it can't resolve to a rail/margin card root — since #999
   // those also carry `data-annotation-id`, and a hidden one would fail toBeVisible.
@@ -430,7 +431,7 @@ test("PR2: Claude cannot make a note bubble expose replies (ADR-027)", async ({ 
   await openAnnotatePopup(page);
   const popupInput = page.locator("[data-testid='popup-annotation-input']");
   await popupInput.fill("private note");
-  await page.locator("[data-testid='popup-note-submit']").click();
+  await submitAnnotation(page, "note");
 
   // Grab the freshly-created note's id from the editor decoration so we can
   // address its bubble directly. Multiple decorations exist (one per text

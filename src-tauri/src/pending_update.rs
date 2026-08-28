@@ -195,8 +195,8 @@ fn clear_pending_update_marker(dir: &std::path::Path) -> bool {
 /// Same buffer-then-payload-free-nudge shape and the same reason: this is
 /// classified in `setup()`, before `App.svelte` exists at all, let alone its
 /// listener. Emitting an event there drops silently on the exact failure mode it
-/// is meant to surface. See `STARTUP_REJECTION` above for why "the WebView is
-/// surely up by now" is not an inference we are allowed to make.
+/// is meant to surface. See `startup_rejection::STARTUP_REJECTION` for why "the
+/// WebView is surely up by now" is not an inference we are allowed to make.
 static PENDING_UPDATE_HINT: Mutex<Option<String>> = Mutex::new(None);
 
 /// Run `f` against the hint buffer, recovering from (and reporting) a poisoned
