@@ -178,51 +178,79 @@ describe("the redirect invariant (Unit 6)", () => {
    * `file-opener.ts` requires saying its name. The symbol check is then a
    * second, narrower layer over the handful of files allowed to say it.
    */
-  it("only sanctioned modules name the legacy file-opener specifier", async () => {
-    const files = (await walk(srcRoot)).filter((f) => /\.(ts|svelte)$/.test(f));
+  /**
+   * Corpus-walk budget, well above the project's 15s default.
+   *
+   * This spec reads every `.ts`/`.svelte` file under `src/`. Alone that is a
+   * couple of seconds; inside the full suite on Windows, where vitest's own
+   * transforms are already saturating the disk, it runs long enough to blow
+   * the default and fail as a timeout — which reads exactly like the redirect
+   * invariant being violated, rather than like the machine being busy. That is
+   * the most expensive kind of false alarm, and it has already cost a push.
+   *
+   * `tests/docs/loopback-gate-claims.test.ts` reached the same conclusion for
+   * the same reason and settled on 90s; this is the same number so the two
+   * corpus walks stop disagreeing. Generous on purpose: it exists so load
+   * cannot decide the outcome, and should only ever fail if the walk is
+   * genuinely broken.
+   */
+  const CORPUS_TIMEOUT_MS = 90_000;
 
-    // Controls. An empty or truncated sweep satisfies every assertion below
-    // vacuously, which is how this class of guard usually dies.
-    expect(files.length, "control: the sweep found the source tree").toBeGreaterThan(50);
-    expect(files, "control: the seam and its implementation are both in scope").toEqual(
-      expect.arrayContaining([seam, impl]),
-    );
+  it(
+    "only sanctioned modules name the legacy file-opener specifier",
+    async () => {
+      const files = (await walk(srcRoot)).filter((f) => /\.(ts|svelte)$/.test(f));
 
-    const referencing: string[] = [];
-    for (const file of files) {
-      if (file === seam || file === impl) continue;
-      const body = stripComments(await fs.readFile(file, "utf8"));
-      if (/["'][^"']*file-opener\.js["']/.test(body)) referencing.push(rel(file));
-    }
+      // Controls. An empty or truncated sweep satisfies every assertion below
+      // vacuously, which is how this class of guard usually dies.
+      expect(files.length, "control: the sweep found the source tree").toBeGreaterThan(50);
+      expect(files, "control: the seam and its implementation are both in scope").toEqual(
+        expect.arrayContaining([seam, impl]),
+      );
 
-    expect(
-      referencing.sort(),
-      "a module that reaches mcp/file-opener.ts must either move to documents/open.js or be added to SANCTIONED with the symbols it needs — adding a row is a deliberate decision, not a formality",
-    ).toEqual(Object.keys(SANCTIONED).sort());
-  });
+      const referencing: string[] = [];
+      for (const file of files) {
+        if (file === seam || file === impl) continue;
+        const body = stripComments(await fs.readFile(file, "utf8"));
+        if (/["'][^"']*file-opener\.js["']/.test(body)) referencing.push(rel(file));
+      }
 
-  it("sanctioned modules take only the symbols they are sanctioned for", async () => {
-    // The file-level gate above is what syntax cannot evade. This narrows what
-    // the five survivors may do with their access — including through a
-    // namespace alias, since `fo.openFileByPath` still spells the bare name.
-    for (const [relPath, allowed] of Object.entries(SANCTIONED)) {
-      const body = stripCommentsAndStrings(await fs.readFile(path.join(srcRoot, relPath), "utf8"));
-      const used = ENTRIES.filter((name) => new RegExp(`\\b${name}\\b`).test(body));
-      const forbidden = used.filter((name) => !allowed.includes(name));
-      expect(forbidden, `${relPath} may not use ${forbidden.join(", ")}`).toEqual([]);
-    }
+      expect(
+        referencing.sort(),
+        "a module that reaches mcp/file-opener.ts must either move to documents/open.js or be added to SANCTIONED with the symbols it needs — adding a row is a deliberate decision, not a formality",
+      ).toEqual(Object.keys(SANCTIONED).sort());
+    },
+    CORPUS_TIMEOUT_MS,
+  );
 
-    // Positive control for the symbol matcher itself: the one sanctioned use of
-    // an entry point must actually be visible to it. Without this, a matcher
-    // that found nothing anywhere would report a clean bill of health.
-    const restore = stripCommentsAndStrings(
-      await fs.readFile(path.join(srcRoot, "server/mcp/document-service.ts"), "utf8"),
-    );
-    expect(
-      /\bopenFileByPath\b/.test(restore),
-      "control: the sanctioned restore call is where this test thinks it is",
-    ).toBe(true);
-  });
+  it(
+    "sanctioned modules take only the symbols they are sanctioned for",
+    async () => {
+      // The file-level gate above is what syntax cannot evade. This narrows what
+      // the five survivors may do with their access — including through a
+      // namespace alias, since `fo.openFileByPath` still spells the bare name.
+      for (const [relPath, allowed] of Object.entries(SANCTIONED)) {
+        const body = stripCommentsAndStrings(
+          await fs.readFile(path.join(srcRoot, relPath), "utf8"),
+        );
+        const used = ENTRIES.filter((name) => new RegExp(`\\b${name}\\b`).test(body));
+        const forbidden = used.filter((name) => !allowed.includes(name));
+        expect(forbidden, `${relPath} may not use ${forbidden.join(", ")}`).toEqual([]);
+      }
+
+      // Positive control for the symbol matcher itself: the one sanctioned use of
+      // an entry point must actually be visible to it. Without this, a matcher
+      // that found nothing anywhere would report a clean bill of health.
+      const restore = stripCommentsAndStrings(
+        await fs.readFile(path.join(srcRoot, "server/mcp/document-service.ts"), "utf8"),
+      );
+      expect(
+        /\bopenFileByPath\b/.test(restore),
+        "control: the sanctioned restore call is where this test thinks it is",
+      ).toBe(true);
+    },
+    CORPUS_TIMEOUT_MS,
+  );
 
   it("scans every executable file under src/, so a new extension cannot hide", async () => {
     // The sweep filters on `.ts`/`.svelte`. That is complete today and has no

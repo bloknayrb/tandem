@@ -60,11 +60,22 @@ the names promise more than they deliver (#1293):
   the origin allowlist never gets a say; a browser on the user's machine is loopback, so
   `enforceLoopbackMutation` passes and `authMiddleware` skips the token check entirely; and
   `express.json` (no `type` option) leaves `req.body` undefined, which those three handlers
-  tolerated and then defaulted every field from. **`/api/save` was reachable
-  unconditionally** — any page the user visited could overwrite their open document on
-  disk, and for an open `.docx` re-export it through mammoth over the original, because
-  `source === "manual"` skips the binary carve-out. `/api/convert` and `/api/apply-changes`
-  are the same shape but conditional on the active document being an on-disk `.docx`.
+  tolerated and then defaulted every field from. **`/api/save` needed only the steady
+  state** — any page the user visited could overwrite their open document on disk, with no
+  user interaction, no guessed filename and no attacker-controlled field. Not
+  *unconditional*: `saveDocumentToDisk` has ten skip returns (open, on disk rather than
+  `upload://`, not read-only, saveable format with an available adapter, no save in
+  progress, no unresolved external conflict, no external modification since the last save),
+  but there is no dirty check, so the ordinary case writes.
+
+  For an open `.docx` the write re-exports through mammoth over the original and loses what
+  the converter cannot represent. The binary carve-out at `document-service.ts:307` does not
+  stop it — and was never meant to: it is scoped to `source === "auto-save"`, while
+  `routes/save.ts:127` passes `"manual"`, the same value the user's own Ctrl+S carries. So
+  the attack does what a legitimate explicit save does rather than slipping past a guard
+  aimed at it, and the `.docx` branch's post-write `SaveVerificationError` narrows it
+  further. `/api/convert` and `/api/apply-changes` are the same shape but conditional on the
+  active document being an on-disk `.docx`.
   Measured, not inferred (express 5.2.1): `text/plain`, `application/x-www-form-urlencoded`,
   `multipart/form-data` and a missing Content-Type all leave `req.body` undefined, so an
   attacker reaches the handler but cannot inject a single field.
