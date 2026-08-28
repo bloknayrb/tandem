@@ -1,3 +1,13 @@
+> **RESOLVED 2026-08-28 — read this before the analysis below.** The decision was
+> **narrow, do not contain**: `tandem_exportAnnotations` now pins the sidecar basename
+> to `.annotations.{md,json}` and `tandem_convertToMarkdown`'s `outputPath` is
+> directory-only, so no site accepts a caller-named write *leaf*. Root/directory
+> containment was rejected — confining to the document's own directory **aims at** the
+> surviving target (a project `CLAUDE.md` is a bare filename in that very directory)
+> rather than blocking it. Statements below asserting that these sites have "no
+> extension pin", and any line-cited analysis of the pre-fix code, are superseded.
+> #1654 is Accepted (bounded) in `docs/security.md`; CodeQL alert 16 stays open.
+
 # Caller-supplied write destinations, and a CSRF hole found while investigating them
 
 **Status:** rewritten 2026-08-28 after adversarial review demolished the first draft
