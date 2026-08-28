@@ -28,6 +28,19 @@ export default defineConfig({
           name: "client",
           environment: "happy-dom",
           include: ["tests/client/**/*.test.ts"],
+          // Same reason the node project below carries 15s, and the same
+          // number: under vitest's parallel pool this project's specs exceed
+          // the 5s default while doing nothing unusual. `useTauriFileDrop`
+          // runs 18 specs in 2.9s alone (~160ms each) and times out at 5s when
+          // the machine is loaded -- a ~30x spread, so the ceiling was
+          // measuring contention, not the code.
+          //
+          // The asymmetry was the bug: the node project was given headroom
+          // when it hit this and the client project never was, so every
+          // developer running the suite alongside anything else lost time to
+          // a red run that reproduced nowhere. Tests that genuinely hang still
+          // surface at 15s.
+          testTimeout: 15_000,
         },
       },
       {
