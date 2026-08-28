@@ -3,6 +3,7 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { TextSelection } from "prosemirror-state";
 import { onMount } from "svelte";
 import type { Annotation } from "../../shared/types.js";
+import { runAction } from "../actions/executor.js";
 import { type Action, getActionsMap } from "../actions/registry.svelte.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
@@ -307,7 +308,10 @@ function runResult(result: PaletteResult) {
   opener = null;
   if (result.kind === "action") {
     close();
-    void result.action.run();
+    // NOT `void action.run()`. `Action.run` is `() => void | Promise<void>`, so
+    // `void` discarded every async action's promise and each one was a live
+    // unhandled-rejection site. `runAction` is the central catch.
+    runAction(result.action);
   } else if (result.kind === "heading") {
     close();
     const ed = editor;

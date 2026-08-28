@@ -21,8 +21,8 @@ import {
   startFreshClaudeCode,
   triggerSave,
   triggerSaveAs,
-  wireActionDeps,
 } from "./actions/builtin.svelte.js";
+import { mountActionExecutor } from "./actions/executor.js";
 import { effectiveBindingLabels } from "./actions/keybindings.js";
 import { scrollFade } from "./actions/scrollFade.svelte.js";
 import { buildOverrides } from "./actions/shortcut-conflicts.js";
@@ -1007,21 +1007,37 @@ function focusChat(): void {
   );
 }
 
-// Wire action dependencies for builtin actions (save, settings, find, mode)
-// after the reactive state they depend on is available.
-wireActionDeps({
+// Bind the builtin actions' dependency bag to THIS App instance's lifetime.
+//
+// Constructed here in script scope, not in `onMount`: builtins are registered at
+// module import time and are reachable before mount, so deferring the bind would
+// widen the window in which an action can find no deps. Every member below is an
+// un-called arrow, so building the literal reads no `$state`.
+//
+// The `onDestroy` release is the half that matters. `Root.svelte` wraps `<App />`
+// in `ErrorBoundary`, whose "Try to recover" button calls `reset()` — a real
+// production remount. Without the release, actions (and in-flight ones that
+// captured the bag before teardown) keep writing into the destroyed instance's
+// closures, and their toasts vanish with no trace.
+const actionExecutor = mountActionExecutor({
   getActiveTabId: () => yjsSync.activeTabId,
   getActiveDocumentPath: () => {
     const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
     return tab && !isUploadPath(tab.filePath) ? tab.filePath : null;
   },
-  notify: (severity, message) => {
+  // `opts` lets a non-launcher caller (the executor's failure funnel) classify
+  // its toast correctly instead of inheriting `type: "launcher"`, and supply a
+  // deterministic id. The default id is millisecond-keyed and ToastContainer
+  // keys its `{#each}` on it, so two toasts pushed in the same millisecond are
+  // an `each_key_duplicate` throw.
+  notify: (severity, message, opts) => {
     notifications.push({
-      id: `launcher-${Date.now()}`,
-      type: "launcher",
+      id: opts?.id ?? `launcher-${Date.now()}`,
+      type: opts?.type ?? "launcher",
       severity,
       message,
       timestamp: Date.now(),
+      dedupKey: opts?.dedupKey,
     });
   },
   afterLauncherAction: refreshAiReadinessAfterLauncherAction,
@@ -1060,10 +1076,10 @@ wireActionDeps({
     const id = yjsSync.activeTabId;
     if (id) closeTabAndRecord(id);
   },
-  openFileDialog: () => void requestOpenFile(),
+  openFileDialog: () => requestOpenFile(),
   toggleLeftPanel: () => toggleLeftPanel(),
   toggleRightPanel: () => toggleRightPanel(),
-  reopenClosedTab: () => void reopenClosedTab(),
+  reopenClosedTab: () => reopenClosedTab(),
   annotationNext: () => {
     const sorted = sortAnnotationsByPosition(visibleAnnotations);
     const nextId = nextAnnotationId(sorted, activeAnnotationId);
@@ -1096,13 +1112,14 @@ wireActionDeps({
     settingsState.updateSettings({
       formattingBarVisible: !settingsState.settings.formattingBarVisible,
     }),
-  toggleSourceView: () => void requestToggleSourceView(),
+  toggleSourceView: () => requestToggleSourceView(),
   focusChat,
   save: async () => saveDocumentTarget(yjsSync.activeTabId, "save"),
   saveAs: async () => {
     await saveDocumentTarget(yjsSync.activeTabId, "save-as");
   },
 });
+onDestroy(() => actionExecutor.dispose());
 
 // Toggle authorship visibility, auto-unmuting in one updateSettings call when
 // the master overlay is on — same coherence rule as the per-type Decorations

@@ -2,11 +2,17 @@
  * Built-in action registrations for the command palette.
  *
  * Action shapes are registered at module import time so the Shortcuts settings
- * tab has a non-empty list on first paint. The `run()` functions reference
- * lazily-resolved dependency getters; if a getter hasn't been wired yet (App
- * hasn't mounted) the action logs a warning and no-ops rather than crashing.
+ * tab has a non-empty list on first paint. Execution has the opposite lifetime:
+ * every `run()` body goes through `runBoundAction` (`./executor.js`), which
+ * resolves the App-bound dependency bag at call time and centrally awaits and
+ * reports failures. `App.svelte` binds that bag with `mountActionExecutor` and
+ * releases it in `onDestroy`.
  *
- * Wire the getters by calling wireActionDeps() from App.svelte after mount.
+ * Registration itself is torn down only on Vite HMR (see the bottom of this
+ * file). It is deliberately NOT wired to a component lifecycle: this module
+ * body runs once per page load, so an `onDestroy`-driven teardown would empty
+ * the palette of all its builtins after an ErrorBoundary recovery remounted
+ * App, with nothing to put them back.
  */
 
 import {
@@ -28,94 +34,8 @@ import { clearDriftNudgeOptOut, driftNudgeOptedOut } from "../status/cwdDriftDis
 import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
-import { type Action, registerAction } from "./registry.svelte.js";
-
-// ---------------------------------------------------------------------------
-// Dependency injection — App.svelte calls wireActionDeps on mount
-// ---------------------------------------------------------------------------
-
-interface ActionDeps {
-  getActiveTabId: () => string | null;
-  /** Absolute filesystem path of the active doc, or null for upload://,
-   * scratchpads, or app-internal docs. Launcher palette actions use this
-   * to derive a cwd for `/relaunch-here`. */
-  getActiveDocumentPath: () => string | null;
-  /** Push a transient toast notification (info/warning/error). */
-  notify: (severity: "info" | "warning" | "error", message: string) => void;
-  /**
-   * Re-poll launcher-derived state after an action that moves or restarts
-   * Claude (#1282).
-   *
-   * Called by every exported launcher action here, rather than left to callers.
-   * It used to be the callers' job and they did not all do it: `App.svelte`
-   * wrapped the status-pill and empty-state paths, while the command palette
-   * invoked the same relaunch directly and never re-probed. The #1282 drift probe
-   * re-arms on the document path and an explicit refresh, neither of which a
-   * relaunch changes — so after a palette relaunch the amber pill went on naming
-   * the folder Claude had just left, indefinitely, which is precisely what that
-   * refresh exists to prevent. Owning it here makes "every launcher action
-   * re-probes" true by construction instead of by everyone remembering.
-   *
-   * Fired from the `finally` of `relaunchHere` / `startFreshConversation` — NOT
-   * from the exported wrappers. The wrappers used to call it beside their
-   * `void`-ed invocation, which runs the moment the async function suspends at
-   * its first `await`, i.e. before the blocking `confirm()`. That put the
-   * staggered re-probes ahead of the mutation they were meant to observe, so a
-   * user who read the dialog for a few seconds got two answers describing the
-   * world before the relaunch. Keep it at the mutation.
-   */
-  afterLauncherAction: () => void;
-  /** Open the Settings modal (the single consolidated settings surface). */
-  openSettings: () => void;
-  toggleSoloMode: () => void;
-  openFindBar: () => void;
-  openFindBarTabs: () => void;
-  findNext: () => void;
-  findPrev: () => void;
-  closeActiveTab: () => void;
-  openFileDialog: () => void;
-  toggleLeftPanel: () => void;
-  toggleRightPanel: () => void;
-  reopenClosedTab: () => void;
-  annotationNext: () => void;
-  annotationPrev: () => void;
-  annotationAccept: () => void;
-  annotationDismiss: () => void;
-  selectBlock: () => void;
-  toggleAuthorship: () => void;
-  toggleFormattingBar: () => void;
-  /**
-   * Toggle the raw-markdown source view for the active document (#1021). A
-   * no-op when the active doc isn't an editable .md (the App-level handler
-   * guards on format + read-only).
-   */
-  toggleSourceView: () => void;
-  /** Reveal Chat and focus its composer. */
-  focusChat: () => void;
-  /**
-   * Save the active document under a new file path. Used to promote an
-   * ephemeral scratchpad (or any `upload://`-backed doc) into a real file.
-   * Resolves once the save attempt completes (success or failure) so action
-   * runners can chain notifications.
-   */
-  saveAs: () => Promise<void>;
-  /** Save the active target, promoting upload-backed documents through Save As. */
-  save: () => Promise<void>;
-}
-
-let deps: ActionDeps | null = null;
-
-export function wireActionDeps(d: ActionDeps): void {
-  deps = d;
-}
-
-function guardedRun(id: string, fn: (d: ActionDeps) => void | Promise<void>) {
-  if (!deps) {
-    console.warn(`[actions] "${id}" invoked before App mounted — deps not wired yet`);
-    return;
-  }
-  fn(deps);
-}
+import { type ActionDeps, currentActionDeps, runBoundAction } from "./executor.js";
+import { type Action, registerActions } from "./registry.svelte.js";
 
 // ---------------------------------------------------------------------------
 // Save — mirrors useSaveShortcut.svelte.ts logic
@@ -181,9 +101,23 @@ export async function createScratchpad(): Promise<void> {
         "[Tandem] New Scratchpad failed:",
         (body as Record<string, string>).message ?? res.statusText,
       );
+      // Without this the palette entry is the exact shape this module's
+      // executor exists to remove: the user presses it, nothing happens, and
+      // the only record is a console they cannot see. It never rejects, so no
+      // central funnel can cover for it.
+      currentActionDeps()?.notify(
+        "error",
+        "Couldn't create a new scratchpad — the server refused the request.",
+        { type: "general-error", dedupKey: "scratchpad-failed", id: "scratchpad-failed" },
+      );
     }
   } catch (err) {
     console.warn("[Tandem] New Scratchpad request failed:", err);
+    currentActionDeps()?.notify(
+      "error",
+      "Couldn't create a new scratchpad — check your connection and try again.",
+      { type: "general-error", dedupKey: "scratchpad-failed", id: "scratchpad-failed" },
+    );
   } finally {
     scratchpadInflight = false;
   }
@@ -278,7 +212,7 @@ interface SaveAsOptions {
  * `{ serialize: true, format }` and triggers an anchor download with the
  * returned bytes.
  *
- * Exported so App.svelte's `wireActionDeps({ saveAs })` can bind it. The
+ * Exported so App.svelte's action dependency bag can bind it as `saveAs`. The
  * inflight flag is module-scoped so the palette action and the Ctrl+Shift+S
  * keybinding cannot race.
  */
@@ -440,13 +374,15 @@ export async function triggerSave(activeDocId: string | null): Promise<boolean> 
       const body = await resp.json().catch(() => ({}));
       const message = (body as Record<string, string>).message ?? resp.statusText;
       console.warn("[Tandem] Save failed:", message);
-      deps?.notify("error", `Save failed: ${message}`);
+      currentActionDeps()?.notify("error", `Save failed: ${message}`);
     } else {
       // Surface export-fidelity downgrades (#1145, 0c). The server already
       // returns these on a .docx save (SaveResult.fidelityWarnings) but the
       // success body was previously dropped here. The persistent fidelity
       // notice carries the specifics; this is the immediate "it happened" nudge.
-      // `deps?.` guards the pre-mount window (deps is wired in App.onMount).
+      // `currentActionDeps()?.` guards two windows at once: before App has
+      // bound the bag, and after it has released it (this fetch can settle
+      // long after an ErrorBoundary recovery tore the old App down).
       const json = (await resp.json().catch(() => null)) as {
         data?: {
           status?: "saved" | "skipped" | "error";
@@ -465,18 +401,18 @@ export async function triggerSave(activeDocId: string | null): Promise<boolean> 
       //
       const result = json?.data;
       if (result?.status === "skipped") {
-        deps?.notify("warning", saveSkippedMessage(result.skipCode, result.reason));
+        currentActionDeps()?.notify("warning", saveSkippedMessage(result.skipCode, result.reason));
         return false;
       }
       if (result?.status === "error") {
-        deps?.notify(
+        currentActionDeps()?.notify(
           "error",
           `Save failed: ${result.reason ?? "The document could not be saved."}`,
         );
         return false;
       }
       if (result?.status !== "saved") {
-        deps?.notify("error", "Save failed: the server returned an invalid result.");
+        currentActionDeps()?.notify("error", "Save failed: the server returned an invalid result.");
         return false;
       }
       ok = true;
@@ -486,7 +422,7 @@ export async function triggerSave(activeDocId: string | null): Promise<boolean> 
       // Deliberately NOT folded into the "N features simplified" line below.
       const integrity = json?.data?.integrityWarnings?.length ?? 0;
       if (integrity > 0) {
-        deps?.notify(
+        currentActionDeps()?.notify(
           "error",
           'Saved, but some content may not have been preserved — your original is backed up. See the document notice, or run "Restore a backup of this document…" from the command palette.',
         );
@@ -508,17 +444,17 @@ export async function triggerSave(activeDocId: string | null): Promise<boolean> 
       const downgraded = json?.data?.fidelityWarnings?.length ?? 0;
       const unpreserved = json?.data?.unpreservedImports ?? 0;
       if (downgraded > 0 && unpreserved > 0) {
-        deps?.notify(
+        currentActionDeps()?.notify(
           "warning",
           `Saved — ${downgraded} Word feature${downgraded === 1 ? " was" : "s were"} simplified on export, and the backed-up original has features this file doesn't. See the document notice for details.`,
         );
       } else if (downgraded > 0) {
-        deps?.notify(
+        currentActionDeps()?.notify(
           "warning",
           `Saved — ${downgraded} Word feature${downgraded === 1 ? " was" : "s were"} simplified on export; see the document notice for details.`,
         );
       } else if (unpreserved > 0) {
-        deps?.notify(
+        currentActionDeps()?.notify(
           "warning",
           "Saved — the backed-up original has Word features this file doesn't. Your original can still be restored; see the document notice for details.",
         );
@@ -526,7 +462,7 @@ export async function triggerSave(activeDocId: string | null): Promise<boolean> 
     }
   } catch (err) {
     console.warn("[Tandem] Save request failed:", err);
-    deps?.notify("error", "Save failed — check your connection and try again.");
+    currentActionDeps()?.notify("error", "Save failed — check your connection and try again.");
   } finally {
     inflight = false;
     lastSaveOk = ok;
@@ -847,9 +783,10 @@ async function relaunchHere(
  * are not all gated on having a tab, and one of them can only ever run without.
  */
 export function relaunchClaudeCode(): void {
-  guardedRun("launcher-relaunch-here", (d) => {
-    void relaunchHere(d, { cwdRequired: false });
-  });
+  // Reports under its own id, NOT the palette command's: this is the chip /
+  // empty-state path, and a central failure report naming
+  // "launcher-relaunch-here" would point a reader at the wrong surface.
+  runBoundAction("launcher-relaunch", (d) => relaunchHere(d, { cwdRequired: false }));
 }
 
 /**
@@ -863,15 +800,11 @@ export function relaunchClaudeCode(): void {
  * is that intent exactly — a chip that recovers a crashed Claude is not.
  */
 export function relaunchClaudeHere(): void {
-  guardedRun("launcher-relaunch-here", (d) => {
-    void relaunchHere(d, { cwdRequired: true });
-  });
+  runBoundAction("launcher-relaunch-here", (d) => relaunchHere(d, { cwdRequired: true }));
 }
 
 export function startFreshClaudeCode(): void {
-  guardedRun("launcher-start-fresh", (d) => {
-    void startFreshConversation(d);
-  });
+  runBoundAction("launcher-start-fresh", (d) => startFreshConversation(d));
 }
 
 async function startFreshConversation(d: ActionDeps): Promise<void> {
@@ -1020,7 +953,7 @@ const BUILTINS: Action[] = [
     group: "document",
     shortcut: "Ctrl+S",
     run() {
-      guardedRun("save", (d) => void d.save());
+      runBoundAction("save", (d) => d.save());
     },
   },
   {
@@ -1029,7 +962,7 @@ const BUILTINS: Action[] = [
     group: "view",
     shortcut: "Ctrl+,",
     run() {
-      guardedRun("settings", (d) => d.openSettings());
+      runBoundAction("settings", (d) => d.openSettings());
     },
   },
   {
@@ -1038,7 +971,7 @@ const BUILTINS: Action[] = [
     group: "document",
     shortcut: "Ctrl+Shift+M",
     run() {
-      guardedRun("toggle-mode", (d) => d.toggleSoloMode());
+      runBoundAction("toggle-mode", (d) => d.toggleSoloMode());
     },
   },
   {
@@ -1047,7 +980,7 @@ const BUILTINS: Action[] = [
     group: "document",
     shortcut: "Ctrl+N",
     run() {
-      void createScratchpad();
+      runBoundAction("new-scratchpad", () => createScratchpad());
     },
   },
   {
@@ -1056,7 +989,7 @@ const BUILTINS: Action[] = [
     group: "document",
     shortcut: "Ctrl+Shift+S",
     run() {
-      guardedRun("save-as", (d) => void d.saveAs());
+      runBoundAction("save-as", (d) => d.saveAs());
     },
   },
   {
@@ -1065,7 +998,7 @@ const BUILTINS: Action[] = [
     group: "view",
     shortcut: "Ctrl+Shift+J",
     run() {
-      guardedRun("focus-chat", (d) => d.focusChat());
+      runBoundAction("focus-chat", (d) => d.focusChat());
     },
   },
   {
@@ -1074,7 +1007,7 @@ const BUILTINS: Action[] = [
     group: "document",
     shortcut: "Ctrl+W",
     run() {
-      guardedRun("close-tab", (d) => d.closeActiveTab());
+      runBoundAction("close-tab", (d) => d.closeActiveTab());
     },
   },
   {
@@ -1083,7 +1016,7 @@ const BUILTINS: Action[] = [
     group: "document",
     shortcut: "Ctrl+O",
     run() {
-      guardedRun("open-file", (d) => d.openFileDialog());
+      runBoundAction("open-file", (d) => d.openFileDialog());
     },
   },
   {
@@ -1092,7 +1025,7 @@ const BUILTINS: Action[] = [
     group: "navigation",
     shortcut: "Ctrl+F",
     run() {
-      guardedRun("find", (d) => d.openFindBar());
+      runBoundAction("find", (d) => d.openFindBar());
     },
   },
   {
@@ -1101,7 +1034,7 @@ const BUILTINS: Action[] = [
     group: "navigation",
     shortcut: "Ctrl+Shift+F",
     run() {
-      guardedRun("find-in-tabs", (d) => d.openFindBarTabs());
+      runBoundAction("find-in-tabs", (d) => d.openFindBarTabs());
     },
   },
   {
@@ -1110,7 +1043,7 @@ const BUILTINS: Action[] = [
     group: "navigation",
     shortcut: "Ctrl+G",
     run() {
-      guardedRun("find-next", (d) => d.findNext());
+      runBoundAction("find-next", (d) => d.findNext());
     },
   },
   {
@@ -1119,7 +1052,7 @@ const BUILTINS: Action[] = [
     group: "navigation",
     shortcut: "Ctrl+Shift+G",
     run() {
-      guardedRun("find-previous", (d) => d.findPrev());
+      runBoundAction("find-previous", (d) => d.findPrev());
     },
   },
   {
@@ -1128,7 +1061,7 @@ const BUILTINS: Action[] = [
     group: "view",
     shortcut: "Alt+Shift+Left",
     run() {
-      guardedRun("toggle-left-panel", (d) => d.toggleLeftPanel());
+      runBoundAction("toggle-left-panel", (d) => d.toggleLeftPanel());
     },
   },
   {
@@ -1137,7 +1070,7 @@ const BUILTINS: Action[] = [
     group: "view",
     shortcut: "Alt+Shift+Right",
     run() {
-      guardedRun("toggle-right-panel", (d) => d.toggleRightPanel());
+      runBoundAction("toggle-right-panel", (d) => d.toggleRightPanel());
     },
   },
   {
@@ -1146,7 +1079,7 @@ const BUILTINS: Action[] = [
     group: "document",
     shortcut: "Ctrl+Alt+T",
     run() {
-      guardedRun("reopen-closed-tab", (d) => d.reopenClosedTab());
+      runBoundAction("reopen-closed-tab", (d) => d.reopenClosedTab());
     },
   },
   {
@@ -1155,7 +1088,7 @@ const BUILTINS: Action[] = [
     group: "annotations",
     shortcut: "Alt+]",
     run() {
-      guardedRun("annotation-next", (d) => d.annotationNext());
+      runBoundAction("annotation-next", (d) => d.annotationNext());
     },
   },
   {
@@ -1164,7 +1097,7 @@ const BUILTINS: Action[] = [
     group: "annotations",
     shortcut: "Alt+[",
     run() {
-      guardedRun("annotation-previous", (d) => d.annotationPrev());
+      runBoundAction("annotation-previous", (d) => d.annotationPrev());
     },
   },
   {
@@ -1173,7 +1106,7 @@ const BUILTINS: Action[] = [
     group: "annotations",
     shortcut: "Ctrl+Enter",
     run() {
-      guardedRun("annotation-accept", (d) => d.annotationAccept());
+      runBoundAction("annotation-accept", (d) => d.annotationAccept());
     },
   },
   {
@@ -1182,7 +1115,7 @@ const BUILTINS: Action[] = [
     group: "annotations",
     shortcut: "Ctrl+Shift+Enter",
     run() {
-      guardedRun("annotation-dismiss", (d) => d.annotationDismiss());
+      runBoundAction("annotation-dismiss", (d) => d.annotationDismiss());
     },
   },
   // Note: comment-on-selection (Ctrl+Alt+M) is intentionally NOT registered as
@@ -1195,7 +1128,7 @@ const BUILTINS: Action[] = [
     group: "editor",
     shortcut: "Alt+L",
     run() {
-      guardedRun("select-block", (d) => d.selectBlock());
+      runBoundAction("select-block", (d) => d.selectBlock());
     },
   },
   {
@@ -1204,7 +1137,7 @@ const BUILTINS: Action[] = [
     group: "view",
     shortcut: "Ctrl+Alt+A",
     run() {
-      guardedRun("toggle-authorship", (d) => d.toggleAuthorship());
+      runBoundAction("toggle-authorship", (d) => d.toggleAuthorship());
     },
   },
   {
@@ -1215,7 +1148,7 @@ const BUILTINS: Action[] = [
     label: "Toggle formatting bar",
     group: "view",
     run() {
-      guardedRun("toggle-formatting-bar", (d) => d.toggleFormattingBar());
+      runBoundAction("toggle-formatting-bar", (d) => d.toggleFormattingBar());
     },
   },
   {
@@ -1224,7 +1157,7 @@ const BUILTINS: Action[] = [
     group: "view",
     shortcut: "Ctrl+Shift+E",
     run() {
-      guardedRun("toggle-source-view", (d) => d.toggleSourceView());
+      runBoundAction("toggle-source-view", (d) => d.toggleSourceView());
     },
   },
   {
@@ -1234,7 +1167,7 @@ const BUILTINS: Action[] = [
     label: "Restore a backup of this document…",
     group: "document",
     run() {
-      guardedRun("restore-backup", (d) => void restoreBackupOfActiveDoc(d));
+      runBoundAction("restore-backup", (d) => restoreBackupOfActiveDoc(d));
     },
   },
   {
@@ -1267,7 +1200,7 @@ const BUILTINS: Action[] = [
     label: "Show working-folder reminders again",
     group: "claude",
     run() {
-      guardedRun("launcher-cwd-nudge-enable", (d) => {
+      runBoundAction("launcher-cwd-nudge-enable", (d) => {
         if (!driftNudgeOptedOut()) {
           d.notify("info", "Working-folder reminders are already on.");
           return;
@@ -1294,13 +1227,25 @@ const BUILTINS: Action[] = [
           label: "Show in file explorer",
           group: "document",
           run() {
-            guardedRun("show-in-file-explorer", (d) => void showInFileManager(d));
+            runBoundAction("show-in-file-explorer", (d) => showInFileManager(d));
           },
         } satisfies Action,
       ]
     : []),
 ];
 
-for (const action of BUILTINS) {
-  registerAction(action);
+const builtinRegistration = registerActions(BUILTINS);
+
+// HMR is the ONLY teardown for registration, and it is the only place a
+// re-registration can actually happen: this module body re-runs on module
+// re-import, not when a component remounts. Without this, every edit during
+// `npm run dev` re-enters `registerActions` against a registry that still
+// holds the previous copies, which throws on the DEV id-collision path.
+//
+// Deliberately NOT exported and never wired to `onDestroy`: an App remount
+// (ErrorBoundary's "Try to recover") does not re-run this module, so a
+// lifecycle-driven dispose would empty the palette of all its builtins for
+// the rest of the session, silently.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => builtinRegistration.dispose());
 }

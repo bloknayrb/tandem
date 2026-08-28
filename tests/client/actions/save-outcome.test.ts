@@ -3,8 +3,9 @@ import {
   saveSkippedMessage,
   saveStore,
   triggerSave,
-  wireActionDeps,
 } from "../../../src/client/actions/builtin.svelte";
+import { type ActionExecutor, mountActionExecutor } from "../../../src/client/actions/executor.js";
+import { makeActionDeps } from "./deps-bag.js";
 
 /** A 200 response carrying a specific SaveResult body. */
 function fetchWith(data: Record<string, unknown>) {
@@ -26,36 +27,24 @@ function fetchFail() {
   );
 }
 
-const baseDeps = {
-  getActiveTabId: () => "doc-1",
-  afterLauncherAction: () => {},
-  openSettings: () => {},
-  toggleSoloMode: () => {},
-  openFindBar: () => {},
-  openFindBarTabs: () => {},
-  findNext: () => {},
-  findPrev: () => {},
-  closeActiveTab: () => {},
-  openFileDialog: () => {},
-  toggleLeftPanel: () => {},
-  toggleRightPanel: () => {},
-  reopenClosedTab: () => {},
-  annotationNext: () => {},
-  annotationPrev: () => {},
-  annotationAccept: () => {},
-  annotationDismiss: () => {},
-  selectBlock: () => {},
-  toggleAuthorship: () => {},
-  toggleFormattingBar: () => {},
-  toggleSourceView: () => {},
-  focusChat: () => {},
-  save: async () => {},
-  saveAs: async () => {},
+/** Bind the action deps with a document path (the only field that varies).
+ *
+ * `triggerSave` is exported and driven directly here, NOT through an action —
+ * it reaches `notify` via `currentActionDeps()`, which is exactly why that
+ * accessor exists. Routing this file through `mountActionExecutor` is what
+ * proves the accessor covers the non-action callers. */
+let executor: ActionExecutor | null = null;
+const wireDeps = (notify: (...args: unknown[]) => void, path: string): void => {
+  executor = mountActionExecutor(makeActionDeps({ notify, getActiveDocumentPath: () => path }));
 };
 
-/** Wire the action deps with a document path (the only field that varies). */
-const wireDeps = (notify: (...args: unknown[]) => void, path: string): void =>
-  wireActionDeps({ ...baseDeps, notify, getActiveDocumentPath: () => path });
+// File-level, not per-describe: every block here binds an executor, and a leaked
+// one stays module-global and would leak `notify` into the next file.
+afterEach(() => {
+  executor?.dispose();
+  executor = null;
+  vi.unstubAllGlobals();
+});
 
 describe("triggerSave / saveStore.lastSaveOk", () => {
   const notify = vi.fn();
@@ -137,8 +126,6 @@ describe("triggerSave — docx fidelity toasts", () => {
     notify.mockClear();
     wireDeps(notify, "/tmp/doc.docx");
   });
-
-  afterEach(() => vi.unstubAllGlobals());
 
   const warnings = () => notify.mock.calls.filter(([level]) => level === "warning");
 

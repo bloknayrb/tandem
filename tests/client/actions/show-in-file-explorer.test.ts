@@ -29,6 +29,7 @@
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Action } from "../../../src/client/actions/registry.svelte.js";
+import { makeActionDeps } from "./deps-bag.js";
 
 const invokeSpy = vi.fn(async () => undefined);
 
@@ -38,46 +39,22 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeSpy }));
 
 const ACTION_ID = "show-in-file-explorer";
 
-/** Build the full ActionDeps bag. `docPath` drives the enable/disable gate. */
+/** `docPath` drives the enable/disable gate; `notify` is what the specs read.
+ * `makeActionDeps` imports the `ActionDeps` TYPE only, so it pulls no executor
+ * module into this file's pre-reset realm. */
 function depsBag(
   docPath: string | null,
   notify: ReturnType<
     typeof vi.fn<(severity: "info" | "warning" | "error", message: string) => void>
   >,
 ) {
-  return {
-    getActiveTabId: () => "doc-1",
-    getActiveDocumentPath: () => docPath,
-    notify,
-    afterLauncherAction: vi.fn(),
-    openSettings: vi.fn(),
-    toggleSoloMode: vi.fn(),
-    openFindBar: vi.fn(),
-    openFindBarTabs: vi.fn(),
-    findNext: vi.fn(),
-    findPrev: vi.fn(),
-    closeActiveTab: vi.fn(),
-    openFileDialog: vi.fn(),
-    toggleLeftPanel: vi.fn(),
-    toggleRightPanel: vi.fn(),
-    reopenClosedTab: vi.fn(),
-    annotationNext: vi.fn(),
-    annotationPrev: vi.fn(),
-    annotationAccept: vi.fn(),
-    annotationDismiss: vi.fn(),
-    selectBlock: vi.fn(),
-    toggleAuthorship: vi.fn(),
-    toggleFormattingBar: vi.fn(),
-    toggleSourceView: vi.fn(),
-    focusChat: vi.fn(),
-    save: vi.fn(async () => {}),
-    saveAs: vi.fn(async () => {}),
-  };
+  return makeActionDeps({ getActiveDocumentPath: () => docPath, notify });
 }
 
 // Module seams captured once from an isolated import with the Tauri sentinel set.
-let wireActionDeps: (deps: ReturnType<typeof depsBag>) => void;
+let mountActionExecutor: (deps: ReturnType<typeof depsBag>) => { dispose(): void };
 let getActionsMap: () => ReadonlyMap<string, Action>;
+let executor: { dispose(): void } | null = null;
 
 beforeAll(async () => {
   (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
@@ -86,9 +63,18 @@ beforeAll(async () => {
   // sentinel). resetModules + a single re-import is safe here: this file never
   // re-runs the registration loop a second time, so there is no id collision.
   vi.resetModules();
-  const builtin = await import("../../../src/client/actions/builtin.svelte.js");
+  // Imported for its side effect only — registration is a top-level statement
+  // of the module body, and the sentinel above is what gates the action in.
+  await import("../../../src/client/actions/builtin.svelte.js");
   const registry = await import("../../../src/client/actions/registry.svelte.js");
-  wireActionDeps = builtin.wireActionDeps;
+  // The executor seam MUST come from this same post-reset realm. `current` is
+  // module-level state: a static import would bind the bag on the PRE-reset
+  // executor module while the post-reset `builtin` reads a different instance's
+  // `current`, so every action would report "before App mounted" and no-op —
+  // and the two negative specs below would then pass vacuously while only the
+  // positive one failed.
+  const executorModule = await import("../../../src/client/actions/executor.js");
+  mountActionExecutor = executorModule.mountActionExecutor as typeof mountActionExecutor;
   getActionsMap = registry.getActionsMap;
 });
 
@@ -97,6 +83,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  executor?.dispose();
+  executor = null;
   vi.restoreAllMocks();
 });
 
@@ -110,7 +98,7 @@ describe("show-in-file-explorer — run behavior", () => {
 
   it("invokes show_in_file_manager with the active document path", async () => {
     const notify = vi.fn<(severity: "info" | "warning" | "error", message: string) => void>();
-    wireActionDeps(depsBag("/home/user/project/notes.md", notify));
+    executor = mountActionExecutor(depsBag("/home/user/project/notes.md", notify));
 
     const action = getActionsMap().get(ACTION_ID) as Action;
     action.run();
@@ -124,7 +112,7 @@ describe("show-in-file-explorer — run behavior", () => {
 
   it("notifies and does NOT invoke when the doc has no on-disk path", async () => {
     const notify = vi.fn<(severity: "info" | "warning" | "error", message: string) => void>();
-    wireActionDeps(depsBag(null, notify));
+    executor = mountActionExecutor(depsBag(null, notify));
 
     const action = getActionsMap().get(ACTION_ID) as Action;
     action.run();
@@ -138,7 +126,7 @@ describe("show-in-file-explorer — run behavior", () => {
   it("notifies an error when the native invoke rejects", async () => {
     invokeSpy.mockRejectedValueOnce(new Error("explorer not found"));
     const notify = vi.fn<(severity: "info" | "warning" | "error", message: string) => void>();
-    wireActionDeps(depsBag("/home/user/project/notes.md", notify));
+    executor = mountActionExecutor(depsBag("/home/user/project/notes.md", notify));
 
     const action = getActionsMap().get(ACTION_ID) as Action;
     action.run();
