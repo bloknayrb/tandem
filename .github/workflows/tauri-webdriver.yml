@@ -333,7 +333,7 @@ jobs:
       # aren't staged next to it), so it can't spawn its own Node sidecar and
       # :3479 never comes up — the WebView then thrashes reconnecting and the
       # WebDriver session destabilizes. So pre-start the server: the app's
-      # debug-only health-gate (src-tauri/src/lib.rs ~1569, platform-neutral) sees
+      # debug-only health-gate (start_sidecar in src-tauri/src/sidecar.rs, platform-neutral) sees
       # :3479 healthy and skips its spawn, so the WebView connects to this one.
       #
       # The server is started INSIDE this step (not a prior one): a detached node
