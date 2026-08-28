@@ -111,7 +111,7 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
 
     it("does not treat a TIME_WAIT row as a listener (headline case: killed sidecar's lingering connection)", () => {
       // Mirrors `finds_a_lingering_connection_when_there_is_no_listener` in
-      // src-tauri/src/lib.rs — same row, same claim: the old sidecar is gone
+      // src-tauri/src/sidecar.rs — same row, same claim: the old sidecar is gone
       // (no LISTENING row) but its connections sit in TIME_WAIT with owner PID
       // 0, and freePortWindows must not try to taskkill PID 0. The Rust and TS
       // parsers must agree here or the dialog names one thing and the kill
@@ -208,7 +208,7 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
 
     // Pins the DEFAULT timeout (no explicit argument). Uses fake timers so the
     // 15s ceiling costs no wall clock. The default is coupled to HEALTH_TIMEOUT
-    // in src-tauri/src/lib.rs — the Tauri shell times this wait from outside the
+    // in src-tauri/src/sidecar.rs — the Tauri shell times this wait from outside the
     // process, so lowering one without the other resurrects the post-update
     // "Server failed to start after 3 restart attempts" failure.
     it("defaults to a 15s ceiling", async () => {

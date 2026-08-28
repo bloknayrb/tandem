@@ -173,6 +173,17 @@ describe("Tauri command registration, which only source-scanning can pin", () =>
     }
     // The control: a scan that found nothing would satisfy the loop below.
     expect(defined.size, "the #[tauri::command] scan found almost nothing").toBeGreaterThan(20);
+    // A size floor is not enough, because losing ONE entry is invisible against it.
+    // The regex has to tolerate `pub(crate)` sitting between the attribute list and
+    // the item — the exact shape every Unit 11 extraction introduces, and the one
+    // that broke three assertions in 11c by being anchored on adjacency. If it ever
+    // stopped matching, this map would silently shed a command and the loop below
+    // would iterate one fewer time, still green. Named without its file, so a later
+    // unit may move it again for free.
+    expect(
+      [...defined.keys()],
+      "the #[tauri::command] regex must still match a `pub(crate)` command",
+    ).toContain("restart_sidecar");
 
     const registered = new Set(registeredCommands());
     for (const [name, rel] of [...defined].sort()) {
