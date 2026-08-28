@@ -123,11 +123,9 @@ export function stripRustTestModules(src: string): string {
   let i = 0;
   for (;;) {
     const at = nextTestCfg(src, i);
-    if (at === -1) return out + src.slice(i);
-    const open = src.indexOf("{", at);
-    if (open === -1) return out + src.slice(i);
-    out += src.slice(i, at);
-    i = matchRustBrace(src, open) + 1;
+    if (at === null) return out + src.slice(i);
+    out += src.slice(i, at.attr);
+    i = at.inline ? matchRustBrace(src, at.body) + 1 : at.body + 1;
   }
 }
 
@@ -149,16 +147,75 @@ export function stripRustTestModules(src: string): string {
  * is to leave a block in (a scan that reads too much fails loud on the extra
  * match) rather than to remove one (a scan that reads too little passes
  * silently).
+ *
+ * **The attribute must gate a `mod`, and checking that is not pedantry — it is
+ * the difference between this function stripping test modules and stripping
+ * two-thirds of a file's declarations.** A test-gated attribute can sit on any
+ * item, and the crate has eight such sites that are not modules. The caller
+ * jumps to the next `{` after the attribute and brace-matches from there, so a
+ * `#[cfg(test)] static COWORK_ENV_LOCK: Mutex<()> = Mutex::new(());` — which has
+ * no brace of its own — made it match the `pub use open_candidate::{…}` group
+ * forty lines later and delete everything in between. Measured, not reasoned:
+ * `lib.rs`'s `code` view was missing `pub mod open_candidate;`, every
+ * `#[cfg(target_os = "windows")] mod …` declaration and every crate-root
+ * re-export, so `rustSourceDefining` could never have located a construct there
+ * and any claim about them would have passed by finding nothing. Found by
+ * adversarial plan review for Unit 11f, which is the unit that adds re-exports
+ * to exactly that region.
  */
-function nextTestCfg(src: string, from: number): number {
+function nextTestCfg(src: string, from: number): TestModuleSite | null {
   for (let i = src.indexOf("#[cfg(", from); i !== -1; i = src.indexOf("#[cfg(", i + 1)) {
     const close = src.indexOf(")]", i);
-    if (close === -1) return -1;
+    if (close === -1) return null;
     const predicate = src.slice(i + "#[cfg(".length, close);
     if (predicate.includes("not(")) continue;
-    if (/(^|[^A-Za-z0-9_])test([^A-Za-z0-9_]|$)/.test(predicate)) return i;
+    if (!/(^|[^A-Za-z0-9_])test([^A-Za-z0-9_]|$)/.test(predicate)) continue;
+    const site = testModuleAt(src, close + ")]".length);
+    if (site) return { ...site, attr: i };
   }
-  return -1;
+  return null;
+}
+
+interface TestModuleSite {
+  /** Index of the `#[cfg(…)]` that opens the gated module. */
+  attr: number;
+  /** Index of the module's `{` (when `inline`) or of its terminating `;`. */
+  body: number;
+  /** `mod t { … }` rather than `mod t;`. */
+  inline: boolean;
+}
+
+/**
+ * The test module starting at `from` (after any further attributes), or `null`.
+ *
+ * Two shapes, and **both were wrong before Unit 11f**:
+ *
+ * - Attributes stack, so `#[cfg(test)] #[allow(dead_code)] mod t { … }` has to
+ *   be recognised past the second attribute.
+ * - `mod t;` is a *declaration*, with no brace of its own. `lib.rs` carries one
+ *   (`#[cfg(test)] mod integrations_probe;`), and jumping to "the next `{`"
+ *   from there landed on the `pub use open_candidate::{…}` group fifteen lines
+ *   later and deleted everything between. That is why the terminator is
+ *   returned rather than assumed.
+ *
+ * Anything that is not a `mod` at all — a `static`, a `use`, a `fn` — yields
+ * `null`, because this function's whole contract is test *modules*.
+ */
+function testModuleAt(src: string, from: number): Omit<TestModuleSite, "attr"> | null {
+  let i = from;
+  for (;;) {
+    while (i < src.length && /\s/.test(src[i])) i++;
+    if (!src.startsWith("#[", i)) break;
+    const end = src.indexOf("]", i);
+    if (end === -1) return null;
+    i = end + 1;
+  }
+  const head = /^(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*/.exec(src.slice(i));
+  if (!head) return null;
+  const body = i + head[0].length;
+  if (src[body] === "{") return { body, inline: true };
+  if (src[body] === ";") return { body, inline: false };
+  return null;
 }
 
 /** Index of the `}` closing the `{` at `open`. Throws if the block never closes. */

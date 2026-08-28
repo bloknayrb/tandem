@@ -165,6 +165,65 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
       () => stripRustTestModules("#[cfg(test)]\nmod t {\n    fn f() {\n"),
       "an unbalanced block must throw, not silently drop the rest of the file",
     ).toThrow(/ran off the end/);
+
+    // A test-gated attribute can sit on any item, and until Unit 11f this
+    // stripper assumed it always gated a module WITH A BODY. Both assumptions
+    // were false in `lib.rs`, and both failures ate production declarations
+    // rather than announcing themselves — the `code` view was missing
+    // `pub mod open_candidate;`, every Windows `mod` declaration and every
+    // crate-root re-export, so `rustSourceDefining` could not have located a
+    // construct there and any claim about that region would have passed by
+    // finding nothing. Both shapes, both directions.
+    const gatedStatic = [
+      "#[cfg(test)]",
+      "pub(crate) static LOCK: Mutex<()> = Mutex::new(());",
+      "pub mod open_candidate;",
+      "pub use open_candidate::{ a, b };",
+    ].join("\n");
+    expect(
+      stripRustTestModules(gatedStatic),
+      "a test-gated STATIC has no brace of its own — jumping to the next `{` " +
+        "swallows every declaration up to some unrelated group import",
+    ).toContain("pub mod open_candidate;");
+
+    const gatedDecl = ["#[cfg(test)]", "mod probe;", "pub mod real;"].join("\n");
+    const declStripped = stripRustTestModules(gatedDecl);
+    expect(declStripped, "`mod probe;` is a test module and must still go").not.toContain(
+      "mod probe;",
+    );
+    expect(
+      declStripped,
+      "`mod t;` terminates at its semicolon — brace-matching past it deletes what follows",
+    ).toContain("pub mod real;");
+
+    // ...and the strip must still happen for the shapes that DO gate a module,
+    // including one behind a second attribute. Without this the fix above could
+    // be "never strip anything", which passes every assertion built on it.
+    const stacked = ["#[cfg(test)]", "#[allow(dead_code)]", "mod t {", "    fn f() {}", "}"].join(
+      "\n",
+    );
+    expect(
+      stripRustTestModules(stacked),
+      "attributes stack — a test module behind a second attribute must still be stripped",
+    ).not.toContain("fn f()");
+
+    // The measurement on the real file, not on a fixture. Both declarations
+    // below sit AFTER `lib.rs`'s test-gated static and its test-gated `mod`
+    // declaration, which is exactly why each was absent from `code` before the
+    // fix — a declaration ahead of them would have passed with the bug present
+    // and been no control at all.
+    //
+    // They are also both `open_candidate`, deliberately: it predates Unit 11 and
+    // is the `ScreenedOpenPath` seam, so it is about as rename-stable as a name
+    // in this crate gets. An earlier draft of this control named a module Unit
+    // 11f had just created, and a rename probe in that unit's mutation battery
+    // reddened it — a guard that fails on a rename breaking no claim here is
+    // noise, and this file spent its effort removing exactly that.
+    const lib = rustSources().find((f) => f.rel === "src-tauri/src/lib.rs");
+    expect(lib, "lib.rs left the walk").toBeDefined();
+    for (const decl of ["pub mod open_candidate;", "pub use open_candidate::{"]) {
+      expect(lib?.code, `the code view of lib.rs must reach ${decl}`).toContain(decl);
+    }
   });
 
   it("gives every Rust wire code an explicit case in the client's message map", () => {
