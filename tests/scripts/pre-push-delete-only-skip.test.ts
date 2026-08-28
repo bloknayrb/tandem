@@ -127,9 +127,10 @@ describe("pre-push delete-only skip", () => {
     //
     // A second exit is not forbidden, only unreviewable in silence: adding one
     // means adding its specs here.
-    const decisionRegion = hookLines().slice(
+    const lines = hookLines();
+    const decisionRegion = lines.slice(
       0,
-      hookLines().findIndex((line) => CHECK_COMMAND.test(line)),
+      lines.findIndex((line) => CHECK_COMMAND.test(line)),
     );
     const exits = decisionRegion.filter((line) => /\bexit\b/.test(line));
     expect(exits, "the hook gained or lost an early exit before the checks").toHaveLength(1);
