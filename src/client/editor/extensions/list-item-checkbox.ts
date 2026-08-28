@@ -37,6 +37,42 @@ const checkboxPluginKey = new PluginKey("listItemCheckbox");
 const TASK_INPUT_RULE = /^\[([ xX])\]\s$/;
 
 export const ListItemCheckbox = ListItem.extend({
+  /**
+   * Widened from Tiptap's default `paragraph block*` (#1664).
+   *
+   * `paragraph block*` requires a list item's FIRST child to be a paragraph.
+   * CommonMark has no such rule, so `- ![shot](a.png)`, `- > quoted`,
+   * `- # Section`, a fenced block as the whole item, and a text-less parent
+   * carrying only a sub-list (`- - nested`) all parse to `listItem > <block>`
+   * — a shape `loadMarkdown` builds faithfully and this schema then rejected.
+   *
+   * Rejecting it was not inert. `createNodeFromYElement` builds children, calls
+   * `schema.node(...)` (→ `NodeType.createChecked`, which throws on invalid
+   * content), and its catch assumes the throw is a concurrency artifact:
+   *
+   *     (el.doc).transact((tr) => { (el._item).delete(tr); }, ySyncPluginKey)
+   *
+   * That is a real write to the shared Y.Doc. It replicates over Hocuspocus and
+   * autosave persists it, and the eviction CASCADES — an emptied `listItem`
+   * leaves its list failing `listItem+`, which evicts the list, up to the
+   * fragment root. So merely OPENING one of those files blanked the whole
+   * document and saved the blank back. No guard could see it: the origin is
+   * `ySyncPluginKey` (so `installUntaggedWriteWarning` stays quiet), it is not
+   * `browser` (so no channel event), and the catch logs nothing.
+   *
+   * Widening rather than normalizing the content, deliberately. Injecting an
+   * empty leading paragraph server-side would fix the schema but move flat
+   * offsets (an extra FLAT_SEPARATOR per item) and rewrite the user's file on
+   * open — and it does not even hold: `- alpha\n-\n  ## A heading` re-serializes
+   * to `- alpha\n- ## A heading`, i.e. straight back to the rejected shape on
+   * the next load. Widening moves no offset and touches no file.
+   *
+   * `block+` (not `paragraph block*` relaxed to `block block*`) so an item whose
+   * only child is a list or an image is expressible, which is the case that
+   * destroyed whole documents.
+   */
+  content: "block+",
+
   addAttributes() {
     return {
       // Preserve any attributes the base ListItem declares.
