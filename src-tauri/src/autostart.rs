@@ -1,4 +1,5 @@
-//! Start-at-login commands (#1236).
+//! Start-at-login: the OS registration commands and the launch-mode
+//! detection that reads what they wrote (#1236, ADR-046).
 //!
 //! Thin wrappers over `tauri-plugin-autostart` rather than the plugin's own JS
 //! API. Two reasons the indirection earns its keep:
@@ -192,5 +193,282 @@ mod tests {
             json,
             r#"{"enabled":true,"trayAvailable":false,"error":"readback-mismatch"}"#
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Launch-mode detection (#1236, ADR-046) — moved here from `lib.rs` by Unit 11f.
+//
+// The registration half above and the detection half below are one feature: the
+// argv flag this code reads is the flag `autostart_set_enabled` writes onto the
+// OS entry, and `should_start_hidden`'s `tray_available` is the same bit
+// `AutostartStatus` reports. They were split across two files only because the
+// commands were extracted first.
+//
+// `has_argv_flag` deliberately stayed at the crate root: `uninstall_scrub.rs`
+// calls it for its own flag, and its doc comment is explicit that one
+// definition of the skip-argv0 rule is the point. Importing it keeps
+// `is_autostart_launch`'s body byte-identical to the original.
+// ---------------------------------------------------------------------------
+
+use crate::has_argv_flag;
+
+/// argv flag the OS autostart registration carries, so a login-triggered launch
+/// is distinguishable from a user-initiated one. An argv flag rather than an env
+/// var because the registration itself (Run value / plist / .desktop Exec line)
+/// is the only thing the OS lets us control, and it survives being inspected in
+/// Task Manager → Startup where an env var would be invisible.
+///
+/// `extract_file_arg` already skips `-`-prefixed args, so this can never be
+/// mistaken for a file-association path — `autostart_flag_is_not_a_file_arg`
+/// pins that.
+pub(crate) const AUTOSTART_FLAG: &str = "--tandem-autostart";
+
+/// Debug escape hatch: forces a launch to behave as a normal one (always show
+/// the window, never defer the Claude launcher) even when the OS passed
+/// `--tandem-autostart`. Mirrors `TANDEM_DISABLE_LAUNCHER` in spirit — every
+/// other lifecycle behavior here has an env opt-out.
+pub(crate) const AUTOSTART_DISABLE_ENV: &str = "TANDEM_DISABLE_AUTOSTART";
+
+/// True when this process was started by the OS at login.
+pub(crate) fn is_autostart_launch(args: &[String]) -> bool {
+    has_argv_flag(args, AUTOSTART_FLAG)
+}
+
+/// Resolve the effective autostart state for this process: the flag, minus the
+/// env kill switch. Deliberately does not log — it is called before the log
+/// plugin is registered (see the `setup()` ordering comment), so the one
+/// interesting case (the override actually firing) is logged at the call site
+/// once logging is live.
+pub(crate) fn resolve_autostart_launch(args: &[String], disable_env: Option<&str>) -> bool {
+    if disable_env == Some("1") {
+        return false;
+    }
+    is_autostart_launch(args)
+}
+
+/// Whether a boot launch should stay hidden in the tray.
+///
+/// The tray guard is load-bearing, not cosmetic: on Linux without
+/// libappindicator `TrayIconBuilder::build()` fails and `CloseRequested` exits
+/// the process instead of hiding. A hidden window with no tray icon would be an
+/// unreachable zombie still holding :3478/:3479 with no way to quit it short of
+/// a task manager.
+pub(crate) fn should_start_hidden(autostart: bool, tray_available: bool) -> bool {
+    autostart && tray_available
+}
+
+/// Marker recording that at least one autostart launch has already happened.
+/// Lives beside the session data in the app data dir.
+#[cfg(target_os = "linux")]
+const AUTOSTART_SEEN_MARKER: &str = "autostart-seen";
+
+/// Linux-only backstop for the residual hole in `should_start_hidden`.
+///
+/// `TrayIconBuilder::build()` *succeeding* does not prove the icon is visible —
+/// on GNOME without a status-icon extension it constructs fine and renders
+/// nothing, which is exactly the unreachable-process case the tray guard exists
+/// to prevent. So the first-ever autostart launch always shows the window,
+/// giving the user one guaranteed chance to see Tandem running and turn the
+/// setting off. Subsequent launches trust the tray.
+///
+/// Returns whether a prior autostart launch was recorded, and writes the marker
+/// as a side effect. Any I/O failure is reported as "not seen", which fails
+/// toward showing the window — always recoverable, unlike failing toward hidden.
+#[cfg(target_os = "linux")]
+pub(crate) fn autostart_seen_and_mark(dir: &std::path::Path) -> bool {
+    let marker = dir.join(AUTOSTART_SEEN_MARKER);
+    if marker.exists() {
+        return true;
+    }
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        log::warn!("Could not create app data dir for autostart marker: {e}");
+        return false;
+    }
+    if let Err(e) = std::fs::write(&marker, b"1") {
+        log::warn!("Could not write autostart marker: {e}");
+        return false;
+    }
+    false
+}
+#[cfg(test)]
+mod autostart_tests {
+    use super::*;
+    use crate::{extract_file_arg, RejectionReason, LAUNCHER_DEFERRED};
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn detects_the_flag_anywhere_after_argv0() {
+        assert!(is_autostart_launch(&[
+            "tandem".into(),
+            AUTOSTART_FLAG.into()
+        ]));
+        assert!(is_autostart_launch(&[
+            "tandem".into(),
+            "--other".into(),
+            AUTOSTART_FLAG.into(),
+        ]));
+    }
+
+    #[test]
+    fn absent_flag_is_a_normal_launch() {
+        assert!(!is_autostart_launch(&["tandem".into()]));
+        assert!(!is_autostart_launch(&["tandem".into(), "doc.md".into()]));
+        // Prefix/suffix collisions must not match — exact comparison only.
+        assert!(!is_autostart_launch(&[
+            "tandem".into(),
+            "--tandem-autostart-please".into(),
+        ]));
+        assert!(!is_autostart_launch(&["tandem".into(), "-tandem-autostart".into()]));
+    }
+
+    #[test]
+    fn argv0_is_never_read_as_the_flag() {
+        // An executable renamed to the flag string must not self-trigger.
+        assert!(!is_autostart_launch(&[AUTOSTART_FLAG.into()]));
+    }
+
+    #[test]
+    fn env_kill_switch_downgrades_to_a_normal_launch() {
+        let args = vec!["tandem".to_string(), AUTOSTART_FLAG.to_string()];
+        assert!(resolve_autostart_launch(&args, None));
+        assert!(resolve_autostart_launch(&args, Some("0")));
+        assert!(resolve_autostart_launch(&args, Some("")));
+        assert!(!resolve_autostart_launch(&args, Some("1")));
+        // The kill switch can only ever downgrade — it never invents an
+        // autostart launch out of a normal one.
+        let plain = vec!["tandem".to_string()];
+        assert!(!resolve_autostart_launch(&plain, Some("1")));
+        assert!(!resolve_autostart_launch(&plain, None));
+    }
+
+    #[test]
+    fn hides_only_when_autostart_and_a_tray_exists() {
+        assert!(should_start_hidden(true, true));
+        // The trapdoor case: hiding here would leave an unreachable process
+        // holding :3478/:3479 with no tray icon and no window to close.
+        assert!(!should_start_hidden(true, false));
+        assert!(!should_start_hidden(false, true));
+        assert!(!should_start_hidden(false, false));
+    }
+
+    #[test]
+    fn autostart_flag_is_not_a_file_arg() {
+        // extract_file_arg skips `-`-prefixed args, so the flag can never be
+        // resolved as a path. Pin it rather than relying on it by accident.
+        let cwd = std::path::Path::new("/tmp");
+        let args = vec!["tandem".to_string(), AUTOSTART_FLAG.to_string()];
+        assert!(matches!(extract_file_arg(&args, cwd), Ok(None)));
+    }
+
+    #[test]
+    fn autostart_flag_does_not_shadow_a_real_file_arg() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("doc.md");
+        std::fs::write(&file, b"# hi").expect("write");
+
+        let args = vec![
+            "tandem".to_string(),
+            AUTOSTART_FLAG.to_string(),
+            file.to_string_lossy().to_string(),
+        ];
+        let resolved = extract_file_arg(&args, dir.path()).expect("should resolve");
+        assert_eq!(resolved.as_deref(), Some(file.as_path()));
+    }
+
+    #[test]
+    fn autostart_flag_alongside_a_bad_extension_still_rejects() {
+        // The flag must not mask the existing rejection path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("payload.exe");
+        std::fs::write(&file, b"x").expect("write");
+
+        let args = vec![
+            "tandem".to_string(),
+            AUTOSTART_FLAG.to_string(),
+            file.to_string_lossy().to_string(),
+        ];
+        assert!(matches!(
+            extract_file_arg(&args, dir.path()),
+            Err(RejectionReason::UnsupportedExtension { .. })
+        ));
+    }
+
+    // Serialize the tests that mutate LAUNCHER_DEFERRED (a process-wide static).
+    static DEFERRAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn deferral_latch_releases_exactly_once() {
+        let _guard = DEFERRAL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        LAUNCHER_DEFERRED.store(true, Ordering::Release);
+
+        // `swap` is what makes concurrent shows safe: only the first caller
+        // sees `true`, so the start POST can never be issued twice.
+        assert!(LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel));
+        assert!(!LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel));
+        assert!(!LAUNCHER_DEFERRED.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn deferral_latch_is_off_for_a_normal_launch() {
+        let _guard = DEFERRAL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // Mirrors setup(): the latch is stored from the resolved autostart
+        // state, so a normal launch never defers and never posts.
+        LAUNCHER_DEFERRED.store(resolve_autostart_launch(&["tandem".into()], None), Ordering::Release);
+        assert!(!LAUNCHER_DEFERRED.load(Ordering::Acquire));
+        assert!(!LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel));
+    }
+
+    #[test]
+    fn a_failed_release_re_arms_the_latch_for_the_next_signal() {
+        let _guard = DEFERRAL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        LAUNCHER_DEFERRED.store(true, Ordering::Release);
+
+        // `note_user_presence` claims the latch with `swap` before it knows
+        // whether the POST will succeed. If the sidecar never came up, or the
+        // request failed, it must put the claim back — otherwise a transient
+        // failure permanently strands the launcher, which is exactly the bug
+        // the health-gating was added to prevent.
+        let claimed = LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel);
+        assert!(claimed, "the first signal claims the latch");
+        assert!(!LAUNCHER_DEFERRED.load(Ordering::Acquire));
+
+        // ...release fails...
+        LAUNCHER_DEFERRED.store(true, Ordering::Release);
+
+        // ...so a later presence signal can still claim it.
+        assert!(LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel));
+    }
+
+    #[test]
+    fn deferral_latch_survives_a_sidecar_restart_until_released() {
+        let _guard = DEFERRAL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        LAUNCHER_DEFERRED.store(true, Ordering::Release);
+
+        // start_sidecar re-reads the latch on every spawn attempt, so a crash
+        // loop before the user opens the window keeps deferring...
+        for _attempt in 0..3 {
+            assert!(LAUNCHER_DEFERRED.load(Ordering::Acquire));
+        }
+        // ...and once released, a later restart does NOT re-defer. This is the
+        // regression a statically captured env var would have shipped.
+        LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel);
+        for _attempt in 0..3 {
+            assert!(!LAUNCHER_DEFERRED.load(Ordering::Acquire));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_marker_reports_unseen_once_then_seen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("nested/appdata");
+
+        // First autostart launch: no marker yet -> show the window once.
+        assert!(!autostart_seen_and_mark(&root));
+        assert!(root.join(AUTOSTART_SEEN_MARKER).exists());
+        // Every launch after that trusts the tray.
+        assert!(autostart_seen_and_mark(&root));
+        assert!(autostart_seen_and_mark(&root));
     }
 }

@@ -7,7 +7,7 @@
  *
  *   unescape -> countOccurrences -> (clamp occ->1 iff occ>1 and count===1) ->
  *   findOccurrence -> anchoredRange({rejectHeadingOverlap}) ->
- *   createAnnotation / addReplyToAnnotation   (wrapped in withMcp)
+ *   AnnotationCreator.create / addReplyToAnnotation   (wrapped in withMcp)
  *
  * Anchor/validation failures are returned to the model as structured tool errors
  * so it can retry with a tighter quote (the bounded repair is loop-level, via
@@ -30,7 +30,12 @@ import type * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { withMcp } from "../../shared/origins.js";
 import type { AgentIdentity } from "../../shared/types.js";
-import { addReplyToAnnotation, captureSnapshot, createAnnotation } from "../mcp/annotations.js";
+import {
+  type AnnotationCreator,
+  type CreateExtras,
+  createAnnotationLifecycle,
+} from "../annotations/lifecycle.js";
+import { addReplyToAnnotation, captureSnapshot } from "../mcp/annotations.js";
 import { getOutline, getSection } from "../mcp/document.js";
 import { extractText } from "../mcp/document-model.js";
 import { licenseGate } from "../mcp/license-gate.js";
@@ -211,7 +216,7 @@ function resolveAnchor(ydoc: Y.Doc, rawQuote: string, rawOcc: number) {
 
 /**
  * Create a comment- or replacement-kind annotation from a quote anchor. The two
- * mutating annotate tools share the resolve→createAnnotation→effect shape; they
+ * mutating annotate tools share the resolve→creator.create→effect shape; they
  * differ only in the effect `kind`, the annotation body, and whether a
  * `suggestedText` extra rides along (replacement only). The stored annotation
  * type is always "comment" — a replacement is a comment carrying suggestedText.
@@ -219,10 +224,10 @@ function resolveAnchor(ydoc: Y.Doc, rawQuote: string, rawOcc: number) {
 function annotateFromQuote(
   kind: "comment" | "replacement",
   ydoc: Y.Doc,
-  annotations: Y.Map<unknown>,
+  creator: AnnotationCreator,
   args: Record<string, unknown>,
   body: string,
-  extra?: Parameters<typeof createAnnotation>[5],
+  extra?: CreateExtras,
   agentIdentity?: AgentIdentity,
 ): ToolOutcome {
   const quoted = asString(args.quoted_text);
@@ -254,13 +259,20 @@ function annotateFromQuote(
     // #1123 M3: stamp the authoring agent.
     ...(agentIdentity ? { agentIdentity } : {}),
   };
-  const id = createAnnotation(annotations, ydoc, "comment", r.anchored, body, mergedExtra);
+  // ADR-035 (Unit 8b): the create goes through the lifecycle seam. The loop
+  // gets `AnnotationCreator`, not the full lifecycle — it has no accept or
+  // dismiss tool and this unit must not hand it one.
+  const { annotation } = creator.create({
+    anchored: r.anchored,
+    content: body,
+    extras: mergedExtra,
+  });
   return {
-    result: { ok: true, annotation_id: id },
+    result: { ok: true, annotation_id: annotation.id },
     effect: {
       kind,
       ok: true,
-      annotationId: id,
+      annotationId: annotation.id,
       anchor: { quoted_text: quoted, occurrence_index: r.occ },
       resolvedSpan: r.span,
       fullyAnchored: r.anchored.fullyAnchored,
@@ -275,6 +287,12 @@ export function dispatch(
 ): ToolOutcome {
   const { ydoc } = ctx;
   const annotations = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  // Built per dispatch, never cached on `ctx`. Two reasons, both silent if
+  // broken: a lifecycle outliving a Hocuspocus `onLoadDocument` doc swap writes
+  // into a destroyed doc, and a lifecycle injected alongside a different `ydoc`
+  // would resolve flat offsets against one document and write them into
+  // another (Critical Rule 4) with nothing to typecheck the mismatch.
+  const creator: AnnotationCreator = createAnnotationLifecycle(ydoc);
 
   if (args == null) {
     return {
@@ -314,7 +332,7 @@ export function dispatch(
       return annotateFromQuote(
         "comment",
         ydoc,
-        annotations,
+        creator,
         args,
         asString(args.comment),
         undefined,
@@ -324,7 +342,7 @@ export function dispatch(
       return annotateFromQuote(
         "replacement",
         ydoc,
-        annotations,
+        creator,
         args,
         asString(args.rationale) || "Suggested replacement.",
         { suggestedText: asString(args.suggested_text) },

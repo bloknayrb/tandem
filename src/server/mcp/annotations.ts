@@ -24,12 +24,10 @@ import {
   HighlightColorSchema,
   toFlatOffset,
 } from "../../shared/types.js";
-import {
-  generateAnnotationId,
-  generateNotificationId,
-  generateReplyId,
-} from "../../shared/utils.js";
+import { generateNotificationId, generateReplyId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
+import type { MintExtras } from "../annotations/lifecycle.js";
+import { mintAnnotation } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev, REPLY_TEXT_MAX } from "../annotations/schema.js";
 import { exportAnnotations } from "../file-io/docx.js";
@@ -364,51 +362,27 @@ export function captureSnapshot(
   return { text: kept, truncated: capped, breaks };
 }
 
-/** Create an annotation from an anchored range result and store it in the Y.Map.
- *  The ydoc parameter is required for origin-tagged transactions (prevents channel echo). */
+/**
+ * Create an annotation from an anchored range result and store it in the Y.Map.
+ * The ydoc parameter is required for origin-tagged transactions (prevents
+ * channel echo).
+ *
+ * **Compatibility surface (ADR-035, Unit 8b).** The seam is now
+ * `AnnotationLifecycle.create`, which mints a comment and nothing else. This
+ * wide-typed entry point survives for the families that have not migrated yet
+ * (Units 8c–8h) and for the existing test floor, which constructs `note` and
+ * `highlight` fixtures through it. Unit 8j deletes it. New production callers
+ * go through the lifecycle.
+ */
 export function createAnnotation(
   map: Y.Map<unknown>,
   ydoc: Y.Doc,
   type: AnnotationType,
   anchored: AnchoredRangeResult,
   content: string,
-  extras?: Partial<Annotation>,
+  extras?: MintExtras,
 ): string {
-  const id = generateAnnotationId();
-
-  const annotation = {
-    id,
-    author: "claude" as const,
-    type,
-    // Claude-created annotations are always outbound (visible to Claude); extras may override
-    audience: "outbound" as const,
-    range: anchored.range,
-    ...(anchored.relRange ? { relRange: anchored.relRange } : {}),
-    content,
-    status: "pending" as const,
-    timestamp: Date.now(),
-    rev: nextRev(),
-    ...extras,
-  } as Annotation;
-  withMcp(ydoc, () => map.set(id, annotation));
-
-  const snippet = annotation.textSnapshot
-    ? `: "${annotation.textSnapshot.slice(0, 60)}${annotation.textSnapshot.length > 60 ? "…" : ""}"`
-    : "";
-  // Derive notification label from field presence, not raw type
-  const label =
-    annotation.suggestedText !== undefined ? "Replacement" : type[0].toUpperCase() + type.slice(1);
-  const dedupSuffix = annotation.suggestedText !== undefined ? "replacement" : type;
-  pushNotification({
-    id: generateNotificationId(),
-    type: "review-pending",
-    severity: "info",
-    message: `New ${label}${snippet}`,
-    dedupKey: `review-pending:${dedupSuffix}`,
-    timestamp: Date.now(),
-  });
-
-  return id;
+  return mintAnnotation(ydoc, map, type, anchored, content, extras).id;
 }
 
 export { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
@@ -522,16 +496,23 @@ export function registerAnnotationTools(server: McpServer): void {
             return rangeFailureToError(result);
           }
           const snap = captureSnapshot(store.ydoc, result.range.from, result.range.to);
-          const id = store.createAnnotation("comment", result, text, {
-            textSnapshot: snap.text,
-            ...(snap.truncated ? { textSnapshotTruncated: true } : {}),
-            // Dropped when empty rather than stored as `[]`: the single-block
-            // annotation is the overwhelming majority, and an empty array on
-            // every record is bytes on disk that say nothing.
-            ...(snap.breaks.length > 0 ? { textSnapshotBreaks: snap.breaks } : {}),
-            ...(suggestedText !== undefined ? { suggestedText } : {}),
+          // ADR-035: creates go through the lifecycle seam, not the store.
+          // `create` has no `type` parameter — it mints a comment, which is
+          // the only thing Claude may author.
+          const { annotation } = store.lifecycle.create({
+            anchored: result,
+            content: text,
+            extras: {
+              textSnapshot: snap.text,
+              ...(snap.truncated ? { textSnapshotTruncated: true } : {}),
+              // Dropped when empty rather than stored as `[]`: the single-block
+              // annotation is the overwhelming majority, and an empty array on
+              // every record is bytes on disk that say nothing.
+              ...(snap.breaks.length > 0 ? { textSnapshotBreaks: snap.breaks } : {}),
+              ...(suggestedText !== undefined ? { suggestedText } : {}),
+            },
           });
-          return mcpSuccess({ annotationId: id });
+          return mcpSuccess({ annotationId: annotation.id });
         });
       },
     ),
