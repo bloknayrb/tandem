@@ -19,7 +19,7 @@ import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
-import { openFromDisk, openScratchpad } from "../documents/open.js";
+import { type OpenFileResult, openFromDisk, openScratchpad } from "../documents/open.js";
 import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast } from "../file-io/mdast-ydoc.js";
@@ -134,6 +134,34 @@ export interface OutlineEntry {
   level: number;
   text: string;
   index: number;
+}
+
+/**
+ * The user-facing sentence `tandem_open` returns for a successful open.
+ *
+ * Extracted verbatim from the inline ternary it used to be, with no wording
+ * change, because it is a **second copy of `kindOfOpenResult`'s precedence**
+ * (`documents/open.ts:828-833`) and nothing tied the two together. Two
+ * independent orderings that agree only by inspection is what a
+ * characterization step exists to catch before a refactor promotes one of them
+ * to a discriminator.
+ *
+ * **`readOnly` is a fifth discriminator, and the chain is `else if`.** So it is
+ * consulted only when the other three are false — a restored, already-open or
+ * force-reloaded document that is ALSO read-only says nothing about being read
+ * only. That is today's behaviour and this function preserves it exactly;
+ * `tests/server/open-result-message.test.ts` pins all eight
+ * `(kind × readOnly)` combinations so the gap is recorded rather than
+ * rediscovered. Changing the wording is a behaviour change and belongs in its
+ * own PR.
+ */
+export function openResultMessage(result: OpenFileResult): string {
+  if (result.forceReloaded) return `Force-reloaded from disk: ${result.fileName}`;
+  if (result.alreadyOpen) return `Switched to already-open document: ${result.fileName}`;
+  if (result.restoredFromSession)
+    return `Session restored: ${result.fileName} (annotations preserved)`;
+  if (result.readOnly) return `Document opened (review only): ${result.fileName}`;
+  return `Document opened: ${result.fileName}`;
 }
 
 /** Extract document outline (headings). Pure logic exported for testing. */
@@ -339,18 +367,7 @@ export function registerDocumentTools(server: McpServer): void {
             stampClaudeAuthorshipWholeDoc(loaded.doc);
           }
         }
-        return mcpSuccess({
-          ...result,
-          message: result.forceReloaded
-            ? `Force-reloaded from disk: ${result.fileName}`
-            : result.alreadyOpen
-              ? `Switched to already-open document: ${result.fileName}`
-              : result.restoredFromSession
-                ? `Session restored: ${result.fileName} (annotations preserved)`
-                : result.readOnly
-                  ? `Document opened (review only): ${result.fileName}`
-                  : `Document opened: ${result.fileName}`,
-        });
+        return mcpSuccess({ ...result, message: openResultMessage(result) });
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
         if (e.code === "ENOENT" || e.code === "FILE_NOT_FOUND") {
