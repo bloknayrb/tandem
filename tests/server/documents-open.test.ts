@@ -198,11 +198,29 @@ describe("the redirect invariant (Unit 6)", () => {
    * `file-opener.ts` requires saying its name. The symbol check is then a
    * second, narrower layer over the handful of files allowed to say it.
    */
-  // 60s rather than the 15s default: this walks the whole source tree and runs
-  // `stripComments` over every file, measured at ~850ms alone and at the 15s
-  // ceiling under full-suite worker parallelism. Its assertion is about which
-  // files name a specifier, never about how fast the sweep runs, so the
-  // headroom costs the gate nothing.
+  /**
+   * Corpus-walk budget, well above the project's 15s default.
+   *
+   * These specs read every `.ts`/`.svelte` file under `src/`. Alone that is a
+   * couple of seconds; inside the full suite on Windows, where vitest's own
+   * transforms are already saturating the disk, they run long enough to blow
+   * the default and fail as a timeout -- which reads exactly like the redirect
+   * invariant being violated, rather than like the machine being busy. That is
+   * the most expensive kind of false alarm, and it has already cost a push.
+   *
+   * `tests/docs/loopback-gate-claims.test.ts` reached the same conclusion for
+   * the same reason and settled on 90s; this is the same number so the two
+   * corpus walks stop disagreeing. Generous on purpose: it exists so load
+   * cannot decide the outcome, and should only ever fail if the walk is
+   * genuinely broken.
+   *
+   * Via `timeoutMs` rather than a bare literal: an explicit second
+   * argument to `it` beats `--testTimeout`, so a coverage run (1.1-1.5x
+   * instrumented) would otherwise fail these on a clock for a reason
+   * unrelated to what they check.
+   */
+  const CORPUS_TIMEOUT_MS = timeoutMs(90_000, 300_000);
+
   it(
     "only sanctioned modules name the legacy file-opener specifier",
     async () => {
@@ -227,49 +245,64 @@ describe("the redirect invariant (Unit 6)", () => {
         "a module that reaches mcp/file-opener.ts must either move to documents/open.js or be added to SANCTIONED with the symbols it needs — adding a row is a deliberate decision, not a formality",
       ).toEqual(Object.keys(SANCTIONED).sort());
     },
-    timeoutMs(60_000, 300_000),
+    CORPUS_TIMEOUT_MS,
   );
 
-  it("sanctioned modules take only the symbols they are sanctioned for", async () => {
-    // The file-level gate above is what syntax cannot evade. This narrows what
-    // the four survivors may do with their access — including through a
-    // namespace alias, since `fo.openFromDisk` still spells the bare name.
-    for (const [relPath, allowed] of Object.entries(SANCTIONED)) {
-      const body = stripCommentsAndStrings(await fs.readFile(path.join(srcRoot, relPath), "utf8"));
-      const used = ENTRIES.filter((name) => new RegExp(`\\b${name}\\b`).test(body));
-      const forbidden = used.filter((name) => !allowed.includes(name));
-      expect(forbidden, `${relPath} may not use ${forbidden.join(", ")}`).toEqual([]);
+  it(
+    "sanctioned modules take only the symbols they are sanctioned for",
+    async () => {
+      // The file-level gate above is what syntax cannot evade. This narrows what
+      // the four survivors may do with their access — including through a
+      // namespace alias, since `fo.openFromDisk` still spells the bare name.
+      for (const [relPath, allowed] of Object.entries(SANCTIONED)) {
+        const body = stripCommentsAndStrings(
+          await fs.readFile(path.join(srcRoot, relPath), "utf8"),
+        );
+        const used = ENTRIES.filter((name) => new RegExp(`\\b${name}\\b`).test(body));
+        const forbidden = used.filter((name) => !allowed.includes(name));
+        expect(forbidden, `${relPath} may not use ${forbidden.join(", ")}`).toEqual([]);
 
-      // Positive control, per row rather than once for the suite. This was a
-      // single anchor naming `openFileByPath` in `document-service.ts` — which
-      // Unit 7a legitimately removed, so the control failed on a correct change
-      // while proving nothing about the other four rows.
-      //
-      // Checking each row instead means a row can never go quiet: if a module's
-      // sanctioned symbol stops appearing, the row has stopped constraining
-      // anything and should be deleted, not left sitting there reading like a
-      // rule. It also keeps the matcher honest — one that found nothing
-      // anywhere would fail here rather than report a clean bill of health.
+        // Positive control, per row rather than once for the suite. This was a
+        // single anchor naming `openFileByPath` in `document-service.ts` — which
+        // Unit 7a legitimately removed, so the control failed on a correct change
+        // while proving nothing about the other four rows.
+        //
+        // Checking each row instead means a row can never go quiet: if a module's
+        // sanctioned symbol stops appearing, the row has stopped constraining
+        // anything and should be deleted, not left sitting there reading like a
+        // rule. It also keeps the matcher honest — one that found nothing
+        // anywhere would fail here rather than report a clean bill of health.
+        expect(
+          used,
+          `${relPath} no longer uses any sanctioned symbol — delete the row rather than leaving it`,
+        ).not.toEqual([]);
+      }
+    },
+    CORPUS_TIMEOUT_MS,
+  );
+
+  // Budgeted for the same reason as the two above, and it carried no budget
+  // on EITHER side of this merge: it walks the same corpus. Two specs were
+  // observed failing under load and two got funded; three do the expensive
+  // thing. Naming the set is only worth anything if the set is the thing
+  // that gets funded.
+  it(
+    "scans every executable file under src/, so a new extension cannot hide",
+    async () => {
+      // The sweep filters on `.ts`/`.svelte`. That is complete today and has no
+      // guard against a `.mts`/`.cts`/`.tsx` appearing — the exact drift that has
+      // already cost this repo twice (see the typecheck:tests orphan sweep).
+      const unscanned = (await walk(srcRoot))
+        .filter((f) => /\.(mts|cts|tsx|jsx|mjs|cjs|js)$/.test(f))
+        .map(rel);
+
       expect(
-        used,
-        `${relPath} no longer uses any sanctioned symbol — delete the row rather than leaving it`,
-      ).not.toEqual([]);
-    }
-  });
-
-  it("scans every executable file under src/, so a new extension cannot hide", async () => {
-    // The sweep filters on `.ts`/`.svelte`. That is complete today and has no
-    // guard against a `.mts`/`.cts`/`.tsx` appearing — the exact drift that has
-    // already cost this repo twice (see the typecheck:tests orphan sweep).
-    const unscanned = (await walk(srcRoot))
-      .filter((f) => /\.(mts|cts|tsx|jsx|mjs|cjs|js)$/.test(f))
-      .map(rel);
-
-    expect(
-      unscanned,
-      "these are executable and the redirect sweep does not read them — widen the extension filter above",
-    ).toEqual([]);
-  });
+        unscanned,
+        "these are executable and the redirect sweep does not read them — widen the extension filter above",
+      ).toEqual([]);
+    },
+    CORPUS_TIMEOUT_MS,
+  );
 });
 
 describe("kindOfOpenResult", () => {

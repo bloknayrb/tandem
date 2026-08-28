@@ -189,4 +189,63 @@ describe("POST /api/rotate-token — route handler", () => {
     // No old token → grace slot should NOT be set
     expect(getPreviousToken()).toBeUndefined();
   });
+
+  // --- CSRF: the simple-request vector -------------------------------------
+  //
+  // These four run the ACTUAL attack rather than asserting a guard exists.
+  // Each sends a CORS-safelisted content type, which is what makes the request
+  // "simple" and skips the preflight entirely; the socket is loopback, so
+  // neither enforceLoopbackMutation nor authMiddleware objects. Before the fix
+  // every one of them rotated the token and armed the grace window.
+  for (const [label, contentType] of [
+    ["text/plain", "text/plain"],
+    ["form-urlencoded", "application/x-www-form-urlencoded"],
+    ["multipart", "multipart/form-data; boundary=x"],
+    ["no Content-Type at all", ""],
+  ] as const) {
+    it(`refuses a simple-request POST (${label}) and leaves the grace window unarmed`, async () => {
+      const headers: Record<string, string> = {
+        Host: `127.0.0.1:${port}`,
+        Authorization: `Bearer ${KNOWN_TOKEN}`,
+      };
+      if (contentType) headers["Content-Type"] = contentType;
+
+      const res = await fetch(`http://127.0.0.1:${port}/api/rotate-token`, {
+        method: "POST",
+        headers,
+        body: "irrelevant",
+      });
+
+      expect(res.status).toBe(400);
+      // The status alone would be satisfied by a route that 400s everything --
+      // and the control below is what rules that out. This assertion is the
+      // one that matters: the SIDE EFFECT must not have happened.
+      expect(
+        getPreviousToken(),
+        "the grace window was armed, so the refusal came after the rotation",
+      ).toBeUndefined();
+      expect(_readTokenFromFileSpy).not.toHaveBeenCalled();
+    });
+  }
+
+  it("still accepts the CLI's shape — application/json with {} — and rotates", async () => {
+    // Required-GREEN control. The CLI (src/cli/rotate-token.ts:73-80) sends
+    // exactly this, and it sends NO Origin header, which is why the fix above
+    // is a body check and not assertOriginAllowlisted: that gate fails closed
+    // on a missing Origin and would 403 every real rotation, after which the
+    // CLI rolls the new token back off disk.
+    const res = await fetch(`http://127.0.0.1:${port}/api/rotate-token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Host: `127.0.0.1:${port}`,
+        Authorization: `Bearer ${KNOWN_TOKEN}`,
+        // deliberately no Origin
+      },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(200);
+    expect(_readTokenFromFileSpy).toHaveBeenCalledOnce();
+  });
 });

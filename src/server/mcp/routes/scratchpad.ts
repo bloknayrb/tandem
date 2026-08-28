@@ -10,8 +10,20 @@ import { sendApiError } from "./_shared.js";
 const MAX_SCRATCHPAD_CONTENT_BYTES = 1024 * 1024;
 
 export async function handleScratchpad(req: Request, res: Response): Promise<void> {
-  // #1295 L1: this was the ONLY mutating route with neither gate. Every sibling
-  // calls assertOriginAllowlisted; this one called nothing, and the omission is
+  // #1295 L1. This comment used to say scratchpad was the ONLY mutating route
+  // with neither gate, and that every sibling called assertOriginAllowlisted.
+  // Both halves were false when written: a later sweep found NINE routes calling
+  // neither, and three of them (`save`, `convert`, `apply-changes`) were
+  // reachable by the very attack written out below — `/api/save`
+  // unconditionally, overwriting the user's open document. Those three are gated
+  // now; `open`, `upload`, `close`, `annotation-reply`, `remove-annotation` and
+  // `rotate-token` still call neither, for the reasons in CLAUDE.md.
+  //
+  // Keeping the corrected version rather than deleting it: a fix comment that
+  // overstates how isolated its bug was is how the same bug gets rediscovered
+  // three surfaces later.
+  //
+  // The attack, unchanged and still the clearest statement of the class —
   // reachable by any page the user visits:
   //
   //   fetch('http://127.0.0.1:3479/api/scratchpad', {method:'POST',

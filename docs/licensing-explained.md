@@ -277,10 +277,12 @@ family plus `/api/events` and `/api/wake` — rows 4 and 5.
 Worth stating plainly, because the opposite reading is available and alarming: *"the reshape deletes
 seven middleware mounts and Surface A, so an unlicensed install serves `POST /api/apply-changes`
 ungated."* It does, and that is correct — but for a narrower reason than "the caller owns the
-document", which these routes do not establish. `apply-changes`, `annotation-reply` and
-`remove-annotation` are three of the **nine** routes that call neither `assertLoopbackForMutation`
-nor `assertOriginAllowlisted` (the inventory in `CLAUDE.md`); what stands behind them is the
-**path-wide loopback invariant** and nothing else. So the accurate claim is *any loopback-local
+document", which these routes do not establish. `annotation-reply` and `remove-annotation` are two of the
+**six** routes that call neither `assertLoopbackForMutation` nor `assertOriginAllowlisted` (the
+inventory in `CLAUDE.md`); what stands behind them is the **path-wide loopback invariant** and
+nothing else. `apply-changes` was a third until it gained `assertOriginAllowlisted` to close a
+simple-request CSRF, so it now holds two layers — which does not change the argument here, since
+the loopback invariant is still what the licensing claim rests on. So the accurate claim is *any loopback-local
 process*, which is the same trust boundary they have today — the licence gate was never what kept
 them safe, and removing it takes nothing away. Critical Rule 9 pairs an MCP tool with its `/api`
 twin to stop a **content write** slipping past a content-write gate; once the gate is about

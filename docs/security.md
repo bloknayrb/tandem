@@ -49,11 +49,47 @@ the names promise more than they deliver (#1293):
   and the genuinely exposed configuration was the token-authenticated LAN bind that
   `bind-check.ts` permits whenever a token exists.
 
-  It governs the routes that **call** it, and **nine** mutating routes registered in
-  `src/server/mcp/api-routes.ts` call neither gate: `open`, `save` (save-as), `convert`,
-  `upload` — the four taking a caller-supplied filesystem path, the higher-blast-radius
-  subset #1320 was filed over — plus `close`, `apply-changes`, `annotation-reply`,
-  `remove-annotation` and `rotate-token`. (`scratchpad` was the tenth until #1318 gated it.)
+  It governs the routes that **call** it, and **six** mutating routes registered in
+  `src/server/mcp/api-routes.ts` call neither gate: `open` and `upload` — which take a
+  caller-supplied filesystem path, the higher-blast-radius subset #1320 was filed over —
+  plus `close`, `annotation-reply`, `remove-annotation` and `rotate-token`.
+  (`scratchpad` was the tenth of the original ten until #1318 gated it.)
+
+  It was nine until `save`, `convert` and `apply-changes` were gated to close a
+  simple-request CSRF: a `text/plain` POST is a SIMPLE request, so no preflight fires and
+  the origin allowlist never gets a say; a browser on the user's machine is loopback, so
+  `enforceLoopbackMutation` passes and `authMiddleware` skips the token check entirely; and
+  `express.json` (no `type` option) leaves `req.body` undefined, which those three handlers
+  tolerated and then defaulted every field from. **`/api/save` needed only the steady
+  state** — any page the user visited could overwrite their open document on disk, with no
+  user interaction, no guessed filename and no attacker-controlled field. Not
+  *unconditional*: `saveDocumentToDisk` has ten skip returns (open, on disk rather than
+  `upload://`, not read-only, saveable format with an available adapter, no save in
+  progress, no unresolved external conflict, no external modification since the last save),
+  but there is no dirty check, so the ordinary case writes.
+
+  For an open `.docx` the write re-exports through mammoth over the original and loses what
+  the converter cannot represent. The binary carve-out at `document-service.ts:307` does not
+  stop it — and was never meant to: it is scoped to `source === "auto-save"`, while
+  `routes/save.ts:127` passes `"manual"`, the same value the user's own Ctrl+S carries. So
+  the attack does what a legitimate explicit save does rather than slipping past a guard
+  aimed at it, and the `.docx` branch's post-write `SaveVerificationError` narrows it
+  further. `/api/convert` and `/api/apply-changes` are the same shape but conditional on the
+  active document being an on-disk `.docx`.
+  Measured, not inferred (express 5.2.1): `text/plain`, `application/x-www-form-urlencoded`,
+  `multipart/form-data` and a missing Content-Type all leave `req.body` undefined, so an
+  attacker reaches the handler but cannot inject a single field.
+
+  **Two of the six must never be given the origin gate**, and this is the trap in the
+  obvious fix: the Tauri sidecar POSTs `open` via reqwest and the CLI POSTs `rotate-token`
+  via Node `fetch`, neither sending an `Origin` header, and `assertOriginAllowlisted` fails
+  closed on a missing one. For `rotate-token` the CLI reads the resulting non-2xx as
+  `serverRejected` and **rolls the new token back off disk**, so the gate would break
+  rotation outright. `rotate-token` instead requires a parsed JSON body — a positive proof
+  that a preflight was passed rather than a header check. That route's exposure was
+  hardening rather than a hole: in the steady state the disk token already equals the
+  in-memory one, so the swap is a no-op, and the route 409s before any state touch whenever
+  `TANDEM_AUTH_TOKEN` is set, which is the whole Tauri desktop build.
   Since #1320 a LAN peer can no longer reach any of them, but they hold **one** layer rather
   than two, which is why the enumeration survives as the review inventory. It is pinned
   against source by `tests/docs/loopback-gate-claims.test.ts`, so a newly-added ungated
@@ -149,6 +185,34 @@ It lives here rather than in `CLAUDE.md` deliberately. `CLAUDE.md` is auto-loade
 
 Open as of v0.22.1:
 
+- **Caller-named write destinations are not root-confined — four sites, and the decision is OPEN (found 2026-08-28; [#1654](https://github.com/bloknayrb/tandem/issues/1654), CodeQL alert 16).** `tandem_convertToMarkdown`'s `outputPath` (`src/server/mcp/convert.ts`) is caller-controlled and reaches a write, screened for absoluteness (`:96-103`) and UNC/device prefixes but with **no extension pin** — the `.md` at `:127` applies only when the target resolves to an existing directory. `tandem_exportAnnotations` (`src/server/mcp/annotations.ts:801-936`) is the same shape and **also lacks `findAvailablePath`**, because overwrite-on-collision is intentional and documented there (`:769`, `:909`); that missing collision check, not the extension, is what makes it strictly the more capable primitive. The `.docx` `backupPath` (`docx-apply.ts:61`, `path.resolve`d — so a *relative* path is accepted and resolves against the server CWD) and Save-As's `targetPath` complete the four. **None has root containment.**
+
+  **Rename is deliberately not in this set**, and an earlier draft of this entry wrongly counted it as a fifth. `document-service.ts:1033` builds the target as `path.dirname(oldPath)` + `path.basename(newName)` behind `validateRenameFilename`, an extension pin (`:1011-1019`) and an explicit separator/NUL guard (`:1023-1031`). It is pinned to the existing file's own directory; the caller names a filename, not a path.
+
+  **Save-As rejects containment deliberately — but its written rationale does not cover the whole surface.** `document-service.ts:711-728` widens `allowedRoots` to the filesystem root with the reasoning that "the path came from the native Save dialog". `src/server/mcp/routes/save.ts:53-54`, `:91-103` takes `targetPath` straight from the request body and calls `saveDocumentAsToDisk`, so on the HTTP surface that premise does not hold. Quoting the rationale as the bound therefore leaves the bound unbounded — which is a reason to decide the question, not a reason to treat the current posture as accidental.
+
+  **Who the attacker is, because omitting it inflates the finding.** For `convert` and `exportAnnotations` the caller is the MCP client — i.e. an already-prompt-injected Claude, not a web page. A simple-request CSRF against these routes leaves `req.body === undefined` (measured, express 5.2.1), so a browser cannot supply `outputPath` at all. The finding is about what a compromised or misled agent session can write, and that is a real threat in this product rather than a theoretical one.
+
+  **The threat is product-specific, but an earlier version of this entry overstated it on three of four counts and named the wrong remedy. Corrected 2026-08-28 after a four-agent debate, three of whom reached the correction independently.** The claim was that anything able to create `*.md` at an arbitrary path can write `~/.claude/CLAUDE.md`, a project `CLAUDE.md`, `.claude/agents/*.md` or `~/.claude/skills/*/SKILL.md`, "all auto-loaded into future Claude Code sessions as instructions, all in directories that already exist". What actually holds:
+
+  - **`~/.claude/skills/*/SKILL.md` is impossible.** It needs a new subdirectory, and `atomicWrite` (`file-io/index.ts:349-353`) is `fs.writeFile` + rename with **no `mkdir`**. ENOENT.
+  - **`.claude/agents/*.md` is not instruction injection.** Only the frontmatter `description` enters the system prompt; the body loads only if the main model actually spawns that agent. It also needs valid YAML with `name` and `description`, and a pre-existing `.claude/agents/` directory.
+  - **`~/.claude/CLAUDE.md` normally already exists** for anyone who has configured Claude Code — so `findAvailablePath` (`convert.ts:21-45`) refuses it on the `convert` path. It is reachable only by a tool that *overwrites*, which destroys the user's own instructions.
+  - **What survives is a project `CLAUDE.md` written into a repo that lacks one.** Full body, auto-loaded, no user action beyond starting a session in that directory. That is the finding, and it is one target class rather than four.
+
+  **Both proposed remedies were no-ops against it, which is why neither shipped.** An extension pin resolves to `.md` — the extension the vector *requires*, and the only thing `convert` legitimately emits (`convert.ts:126`). Root containment at `assertPathSafe`'s default `[homedir(), tmpdir()]` (`apply.ts:579`) contains nothing: `~/.claude/**` and every project `CLAUDE.md` under `$HOME` are inside that root. Containment to the document's own directory fails too, since the document usually *is* in the repo whose `CLAUDE.md` is the target. Each would have shipped a security-shaped changelog line closing nothing — the same failure mode this entry congratulates itself for catching once already, recurring.
+
+  **And the marginal capability is smaller than it looks, which is what settles the severity at Low.** `resolveAndValidatePath` applies no root containment, so an MCP client can already `tandem_open` any existing allowlisted file at any absolute path, `tandem_edit` it and `tandem_save` it — arbitrary *content* into any existing `.md` on the machine, today. What `convert` and `exportAnnotations` add on top is only the ability to create a file that does not yet exist.
+
+  **The one Medium sub-case is `tandem_exportAnnotations`, not the tool CodeQL flagged.** `convert` is the loudest of the sites: its body is `extractMarkdown()` of the open document, so controlling the content means first visibly rewriting the user's document, and it then opens a tab at the destination. `exportAnnotations` is the opposite — no tab, no notification, `writtenPath` returned to Claude alone, **no collision check at all** (`annotations.ts:909`), so it overwrites; and its body is annotation text Claude authored via `tandem_comment`. Its own description already promises "next to the document" while its schema accepts anywhere. Narrowing that schema to a filename within the document's directory — the shape `tandem_rename` already uses (`document-service.ts:1033`) — is an allowlist by construction and costs nothing, since **no first-party caller passes `outputPath` at all**. A denylist of `.claude` segments and `CLAUDE.md`/`AGENTS.md` basenames was the debate's most popular answer and is rejected here: it bounds names while the attack composes what survives, and `.cursorrules`, `.github/copilot-instructions.md` and this repo's own root `AGENTS.md` survive it immediately.
+
+  **Three things a fix must not assume**, all three established by review after earlier drafts asserted the opposite. (i) `assertPathSafe` does **not** walk symlinked components — it `lstat`s exactly one, the deepest existing ancestor, then breaks (`integrations/apply.ts:584-600`). **Its own comment at `:579-581` says it fails on any walked-through symlink, and that comment is stale**; a reader who checks the citation hits the comment first. (ii) Widening `allowedRoots` to the filesystem root removes the containment test at `:602-607` and **only** that — the unconditional UNC/device screen at `:573-576` and the symlink check on the deepest existing component still fire. An earlier draft said it "leaves nothing", which contradicts the very comment it cited approvingly. (iii) **Adding `assertPathSafe` at the convert and export sites would NOT be dead code** — and this point was itself invalidated between being written and being merged, which is recorded rather than quietly edited because it is the more useful fact. As written it said both sites `realpath` the **target**, not its parent (`convert.ts:118-134`, `annotations.ts:874-896`), inside a `try` whose `catch` swallows `ENOENT` — the normal fresh-write case — so on the common path nothing was canonicalized and a symlinked parent went uncaught. **True when written; fixed by the entry two bullets below**, which canonicalizes `path.dirname` and screens that at both sites. What survives is the weaker form: `assertPathSafe` would still add **root containment**, which neither site has and which is the actual open question — but it would no longer be adding canonicalization, because that is now there. Note also that after the rejoin the caller's spelling is discarded entirely, so any containment check added later must apply to the canonical path rather than the supplied argument, or it will be checking a string the code no longer uses.
+
+  **And what an MCP caller actually sees is not `INVALID_PATH`:** `document.ts:1073-1080`, `docx-apply.ts:348` and `docx-apply.ts:483-485` all map it to `FORMAT_ERROR`, which would tell an AI caller to retry the *document* format when the *path* was rejected. `PathRejectedError` (`apply.ts:284-293`) carries no `.code` at all, so a naive catch chain lets it escape to a 500.
+
+  **Save-As is also not in the MCP threat model at all**, which the first version of this entry missed. `saveDocumentAsToDisk` has exactly one caller — `routes/save.ts:103` — and an MCP client has no HTTP verb, so counting it inflated the site set by one for the stated attacker. It additionally carries a real extension pin (`document-service.ts:701-708`) immediately before its widened-roots call, so the codebase's two most carefully-reasoned sites already implement *"the user names the place, the product names the type"*.
+
+  **The open question, stated plainly because it is Bryan's and not mine:** should a caller-named export or backup destination be confined to a root set? The debate's answer was no — containment closes nothing here that is not already open through `tandem_open` — so alert 16 is `won't fix` with this reasoning, **not** `false positive`, which would record the opposite of what the code says. The `exportAnnotations` narrowing above is a separate, smaller change and does not depend on that answer. Full analysis: `docs/plans/2026-08-28-caller-supplied-write-destinations.md`.
 - **Symlink-following in the `.docx` backup and restore pair — FIXED, recorded here because the class is what matters.** `tandem_applyChanges` probed its backup destination with `fs.access`, which follows symlinks, so a **dangling** link there reported ENOENT, took the "no existing backup" branch, and `fs.copyFile` — `O_WRONLY|O_CREAT|O_TRUNC` — created the link's target and filled it with the user's document. `tandem_restoreBackup`'s `.docx` fallback had the worse half: the same `fs.access` at the sidecar path succeeded through a planted link, `fs.copyFile` read **through** it and overwrote the user's document with an attacker-chosen file, and the size verification compared the link's target against the file it had just written from that same target — identical by construction, so it verified and returned `Restored <name> from backup.` A silent whole-document replacement reported as a success. **Preconditions, which is the honest bound:** a local process already able to write next to the user's document, and for the restore half, an empty doc-backups store for that file (a freshly started server). **Fixed** by `lstat`-and-refuse on both sides, with the `catch` narrowed to ENOENT so an EACCES on the parent is no longer read as "nothing there", and `COPYFILE_EXCL` on the write to close the check-then-act. **No CodeQL alert points at either site** — the restore half was found by an adversarial review of the fix for the write half, which is the reason it is written down here rather than left in a PR body. The general lesson for this codebase: `fs.access` as an existence probe is a symlink-follow wherever the answer decides what gets written.
 
 - **The post-`realpath` prefix re-check in the two export paths never ran on create-new — NARROWED, not closed.** `convert.ts` and `annotations.ts` canonicalize a caller-supplied `outputPath` and then re-screen it for UNC and `\\?\` prefixes, so a legitimately symlinked export directory resolves through while a symlink swap into a network location does not. Both swallowed the `ENOENT` that `realpath` throws when the **leaf** does not exist yet — which is the normal case for an export — so the re-check ran on overwrite and never on the create-new path it exists to guard. CodeQL alert 94 is `convert.ts:119`; `annotations.ts` carries the same defect with no alert, because `tandem_exportAnnotations` has no `/api` route and CodeQL modelled only the `/api` sources. **Fixed** by canonicalizing `path.dirname` and screening that, in both files. **Residual, and it is smaller than the first version of this entry said.** That version was corrected 2026-08-28 after review; it is worth recording what it got wrong, because each error made the remainder read as larger than it is. It described the junction-to-UNC shape in the present tense, as what still gets through — but that was the **pre-fix** bound. `fs.realpath` resolves reparse points on win32, so a junction targeting a UNC share now comes back as `\\server\share\…` and is refused by `rejectUnsafeWindowsPrefix` (`windows-path-safety.ts:81-83`). It also said the window lets "the junction" be repointed, which is a no-op post-fix: `convert.ts:162` and `annotations.ts:886` rejoin onto `realParent` and **discard the caller's spelling entirely**, so every later operation — `findAvailablePath`, `snapshotBeforeFirstWrite`, `atomicWrite`'s temp sibling — runs against the canonical path. What remains is a race on a component of the *resolved* path (rename the real directory aside, recreate it as a link), which needs a rename-plus-create rather than a reparse-point rewrite.
@@ -275,6 +339,65 @@ bound in full, and the conditions that void the acceptance.
   - **The server's accepted-token source moves into a file any `apply.ts` writer touches.** This is the load-bearing invariant: `rotate-token.ts` and `src/server/auth/token-store.ts` write the token file independently of every config writer, and that separation is the single fact keeping a lost update from resurrecting a *live* credential in the rotation case. It is pinned by the same guard test, which scans all of `src/` for it rather than the two directories above — a directory-scoped check would be blind to `token-store.ts` by construction.
 
   At the review date the outcome must be keep, replace or retire. "Revisit again" is not one of them.
+
+## CodeQL dispositions, and why they do not survive a refactor
+
+**A dismissal is keyed to an alert number, and an alert number is keyed to a
+location.** Move the code and the scanner retires the alert and opens a new one
+at the new line, carrying none of the dismissal or its reasoning. This is not
+hypothetical: Unit 7a ([#1645](https://github.com/bloknayrb/tandem/pull/1645),
+unmerged at the time of writing — `openFileByPath` and `resolveAndValidatePath`
+are still in `src/server/mcp/file-opener.ts` on master) moves the open pipeline
+into `src/server/documents/`, and that opened eight fresh `js/path-injection`
+alerts on its PR branch against sinks whose master-side twins had just been
+dismissed. Each matched its twin at the same **column**, which is what made the
+mapping checkable rather than assumed; it is recorded in that PR's comments.
+
+So the reasoning lives here, keyed by **sink and argument** rather than by
+number. Re-dismissing after a move should be a lookup against this list plus a
+check that the named screen still runs first — not a fresh investigation, and
+not a reflex "it was dismissed before".
+
+- **Paths reaching a file open through `resolveAndValidatePath`.** It is called
+  unconditionally at the head of `openFileByPath` and screens UNC/extended-length
+  prefixes on the raw, resolved *and* `realpath`'d forms, enforces the extension
+  allowlist and the size cap. **Bound: screened, but NOT confined to any
+  directory** — opening any allowlisted-extension file by absolute path is the
+  product's intended behaviour, so a containment-shaped alert here is a policy
+  question — see "Caller-named write destinations are not root-confined" under
+  Open findings — not a false positive.
+- **Paths from the server-owned `OpenDoc` registry, and rename targets.** Request
+  input contributes only a document-id map key, `path.basename`'d before lookup;
+  a rename target is pinned to the existing file's own directory and extension.
+- **`assertPathSafe`'s own ancestor-walk probes.** CodeQL flags the sanitizer.
+  They run after its unconditional UNC screen and terminate in its `allowedRoots`
+  containment test.
+- **Sinks preceded by `rejectUnsafeWindowsPrefix` on the same value.** The screen
+  must be on *that* value and immediately before the sink; a screen on a
+  different form of the path does not carry.
+- **General-purpose path helpers that validate nothing themselves** — the
+  session-store and path-join helpers. These are false positives **for the
+  current caller set only**, and that phrasing is deliberate: the safety property
+  belongs to the callers, not to the flagged code. A new caller must screen
+  before calling, so verify the call site rather than trusting the disposition.
+- **`js/tainted-format-string` on `sessionPath` interpolations.** The flagged
+  argument genuinely *is* the format string (a template literal), so the rule
+  reads the shape correctly. The disposition rests on the value: the
+  caller-controlled segment passes through `encodeURIComponent`, and every `%` it
+  emits is followed by two **uppercase** hex digits, while no `util.format`
+  specifier (`s d i f j o O c`) is an uppercase hex digit — the argument survives
+  only because case matters, since `c` is a specifier and `C` is a hex digit. The
+  specifier list is complete for the Node version this project pins; `%%` is the
+  only omission and `%XX` output cannot produce it. **The one unencoded segment is
+  the process's own `SESSION_DIR`** (`platform.ts:42`, derived from `homedir()` or
+  `TANDEM_APP_DATA_DIR`), so a `%` in a Windows username or in that env var does
+  reach the format string unencoded. Bounded but not zero: the impact ceiling is a
+  garbled stderr line, since JS format strings have no memory-safety dimension.
+
+**A disappearing alert is not evidence of a fix.** When the uncontained
+`fs.copyFile` write moved into `copyBackupExclusive`, CodeQL lost the trace and
+the alert vanished from the master-ref listing while the condition was unchanged.
+Read a shrinking alert list as a scanner outcome until the code says otherwise.
 
 ## Reporting security issues
 

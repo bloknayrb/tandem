@@ -81,8 +81,24 @@ function ungatedMutatingRouteModules(): string[] {
     .sort();
 }
 
-/** The four that additionally take a caller-supplied filesystem path (#1320). */
-const PATH_TAKING = ["convert", "open", "save", "upload"];
+/**
+ * The path-taking routes that are STILL ungated, and this list is the
+ * derivation's only positive control -- if the parser silently returns nothing,
+ * the enumeration assertions below are all vacuously true.
+ *
+ * It was `["convert", "open", "save", "upload"]`. `save` and `convert` left the
+ * ungated set when they gained `assertOriginAllowlisted` to close the
+ * simple-request CSRF, so keeping them here would fail this spec before the doc
+ * comparison ever ran.
+ *
+ * **Shrinking this weakens the control**, which is the cost of that fix and is
+ * recorded rather than absorbed: two anchors instead of four. Do not let it
+ * reach one -- if `open` or `upload` is ever gated, replace this with an anchor
+ * that cannot empty out (assert `derived.length` against a separately-derived
+ * count of `app.post|put|patch|delete` registrations, so "found nothing" and
+ * "found everything gated" stop looking alike).
+ */
+const PATH_TAKING = ["open", "upload"];
 
 /**
  * Budget for the corpus walk, well above vitest's 15s default.

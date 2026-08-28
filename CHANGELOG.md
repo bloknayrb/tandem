@@ -27,6 +27,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The check that follows a symlinked export folder now runs when the file is new, which is the usual case.** Exporting a conversion or an annotation summary to a custom location canonicalizes that location and re-checks it for network and extended-length Windows paths. That re-check quietly skipped whenever the destination file did not exist yet — so it ran when you overwrote an existing export and never when you created a fresh one, which is nearly always. **Stated honestly:** the location had already been checked once before this point, so what this closes is narrow and Windows-specific, and it narrows rather than eliminates it — the folder can still be repointed between the check and the write.
 
+- **A web page you visited could overwrite the document you had open in Tandem.** Tandem's
+  local server trusts anything connecting from your own machine, and a browser on your machine
+  counts — so a page could quietly send a request that Tandem accepted as if you had clicked
+  Save yourself. It never had to guess a filename or read anything back; it just triggered the
+  save, and Tandem wrote whatever was in the editor over the file on disk. For a Word document
+  the rewrite also went through Tandem's `.docx` converter, so formatting the converter cannot
+  represent would have been lost from the original file.
+
+  Two related actions were reachable the same way — the "convert to Markdown" step and applying
+  tracked changes — each only when the open document was a Word file. All three now refuse a
+  request that did not come from Tandem's own window, and refuse it before doing anything.
+
+  Nothing here let a page read your documents or steal credentials; the limitation that made
+  the attack possible also stopped the page from seeing any response. Two other routes could
+  not be fixed the same way, because the Tandem CLI and the desktop app legitimately call them
+  without the marker the check looks for; the one that mattered now requires a request shape a
+  web page cannot produce.
+
 - **Tandem is stricter about which annotations it announces to Claude, and refuses anything it cannot identify.** Two changes, neither of which alters what Tandem does with an annotation it understands.
 
   Announcements are now decided in exactly one place in the code, and that place is the only one that can produce a value the announcement machinery will accept — so a future change that forgets to check cannot compile rather than quietly announcing something private. Alongside the existing rule that a personal note is never sent, Tandem now also requires the annotation to be marked as intended for Claude. No comment Tandem writes today fails that second check, so for comments it guards against damaged or very old records rather than closing a live leak — with one real exception: a reply on an imported Word comment you had not yet triaged, stored in a shape earlier versions used, could reach Claude before you had approved it. It no longer can.

@@ -6,6 +6,28 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ANNOTATION_SCAN_MAX_FILES } from "../../src/cli/annotation-store-scan.js";
+
+// The file-cap spec writes ANNOTATION_SCAN_MAX_FILES + 1 (513) files
+// synchronously and then scans them, so its cost scales with that constant and
+// is dominated by filesystem I/O rather than by anything under test. Against
+// vitest's 15s default it sat close enough to the ceiling to time out under a
+// loaded full-suite run while passing in ~4s alone -- a failure that reads as a
+// defect in doctor and is not one. Same budget and same reasoning as the corpus
+// walks in tests/server/documents-open.test.ts and
+// tests/docs/loopback-gate-claims.test.ts -- 90s in all three, because three
+// files disagreeing about one class of budget is how one of them ends up the
+// under-funded one.
+//
+// Duration is not the property under test: the assertions are about the
+// report's contents, so headroom turns a load-flaky gate into a slower real
+// one rather than blunting it. Where duration IS the assertion, see
+// tests/helpers/timing.ts -- do not copy this pattern there.
+//
+// Via `timeoutMs` rather than a bare literal: an explicit second argument to
+// `it` beats `--testTimeout`, so a coverage run (1.1-1.5x instrumented) would
+// otherwise fail this on a clock for a reason unrelated to what it checks.
+const SCAN_CAP_TIMEOUT_MS = timeoutMs(90_000, 300_000);
+
 import {
   CWD_DEPENDENT_CHECKS,
   evaluateAbsentChannelEntry,
@@ -230,16 +252,8 @@ describe("runDoctor", () => {
       expect(incomplete?.data?.limit).toBe("files");
       expect(incomplete?.data?.examined).toBe(ANNOTATION_SCAN_MAX_FILES);
       expect(incomplete?.data?.docCount).toBe(ANNOTATION_SCAN_MAX_FILES + 1);
-      // Headroom over the 15s default, for the same reason as the real-apply
-      // tests in `docx-apply.test.ts`: this writes ANNOTATION_SCAN_MAX_FILES + 1
-      // real files and then scans all of them, so it is the most I/O-bound spec
-      // in the suite and it is what hits the ceiling first when the machine is
-      // busy. Duration is not the property under test here -- the assertions are
-      // about the report's contents -- so raising it turns a load-flaky gate into
-      // a slower real one rather than blunting it. (Where duration IS the
-      // assertion, see `tests/helpers/timing.ts`; do not copy this there.)
     },
-    timeoutMs(60_000, 300_000),
+    SCAN_CAP_TIMEOUT_MS,
   );
 
   it("surfaces annotation files parked as .future by a newer Tandem", async () => {

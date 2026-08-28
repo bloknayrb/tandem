@@ -294,8 +294,8 @@ export function registerIntegrationsRoutes(
  * Scope: this governs the routes that call it — and since #1320 that is no
  * longer the same question as whether `/api` is loopback-only. That property now
  * holds structurally, from `enforceLoopbackMutation` mounted `app.use("/api", …)`
- * in `server.ts`, which covers every non-GET request including the nine routes
- * that call neither helper. The 23 call sites here are the second layer, kept
+ * in `server.ts`, which covers every non-GET request including the six routes
+ * that call neither helper. The call sites here are the second layer, kept
  * because they carry route-specific copy (the license route's buyer-facing 403)
  * and because a single mounted middleware is a single thing to get wrong.
  *
