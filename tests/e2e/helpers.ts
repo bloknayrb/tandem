@@ -244,7 +244,11 @@ export async function selectTextStable(target: Locator): Promise<void> {
  * highlight swatches + Annotate button); clicking Annotate reveals the
  * textarea-bearing annotate mode (`popup-annotation-input`,
  * `popup-comment-submit`, `popup-note-submit`). Tests that interact with the
- * textarea or submit buttons must call this helper after selecting text.
+ * textarea or the footer controls must call this helper after selecting text.
+ *
+ * To actually CREATE the annotation, follow this with `submitAnnotation` — the
+ * two `*-submit` ids above now sit on audience-toggle segments and no longer
+ * submit anything on their own.
  */
 export async function openAnnotatePopup(page: Page): Promise<void> {
   const annotateBtn = page.locator("[data-testid='popup-annotate-btn']");
@@ -253,6 +257,34 @@ export async function openAnnotatePopup(page: Page): Promise<void> {
   await expect(page.locator("[data-testid='popup-annotation-input']")).toBeVisible({
     timeout: 3_000,
   });
+}
+
+/**
+ * Submit the annotate composer's draft to one audience.
+ *
+ * `popup-note-submit` / `popup-comment-submit` are no longer submit buttons.
+ * They are the two segments of an audience toggle, and the composer commits
+ * through a single `popup-annotation-submit` button. Their names are kept
+ * because the testid set may gain selectors but never lose one (Critical
+ * Rule 7) — so a bare `.click()` on either now *silently* selects an audience
+ * and submits nothing, which is why every call site routes through here.
+ *
+ * Two properties this asserts rather than assumes, because both are what a
+ * "toggle plus commit" split can get wrong and neither fails loudly:
+ *   - the segment actually took (`aria-pressed`), rather than the click
+ *     landing on the sliding thumb, which is `pointer-events: none` for
+ *     exactly this reason;
+ *   - the commit button is enabled, so an empty-draft test that expects a
+ *     no-op cannot pass by clicking a dead button.
+ */
+export async function submitAnnotation(page: Page, audience: "note" | "comment"): Promise<void> {
+  const segment = page.locator(`[data-testid='popup-${audience}-submit']`);
+  await segment.click();
+  await expect(segment).toHaveAttribute("aria-pressed", "true", { timeout: 3_000 });
+
+  const commit = page.locator("[data-testid='popup-annotation-submit']");
+  await expect(commit).toBeEnabled({ timeout: 3_000 });
+  await commit.click();
 }
 
 /**

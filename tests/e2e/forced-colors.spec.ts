@@ -6,6 +6,7 @@ import {
   createFixtureDir,
   McpTestClient,
   openAnnotatePopup,
+  submitAnnotation,
 } from "./helpers";
 
 /**
@@ -326,11 +327,32 @@ test("destination markers stay distinguishable by shape, not colour", async ({ p
   );
   expect(noteAlpha, `the private marker must have no fill; got ${shapes.note.background}`).toBe(0);
 
+  // The audience toggle's SELECTED state. Under forcing, the sliding thumb's
+  // --tandem-surface and the track's --tandem-surface-sunk both map to Canvas,
+  // so the fill that shows which audience is active disappears and this outline
+  // is the only thing left saying so. Its ModeToggle twin carries an identical
+  // rule and an in-source note that this spec pins it; without the assertion
+  // below, deleting the rule here would stay green.
+  const pressedOutline = await page
+    .locator("[data-testid='popup-comment-submit']")
+    .evaluate((el) => getComputedStyle(el).outlineWidth);
+  const unpressedOutline = await page
+    .locator("[data-testid='popup-note-submit']")
+    .evaluate((el) => getComputedStyle(el).outlineWidth);
+  expect(
+    parseFloat(pressedOutline),
+    "the selected audience segment must carry a forced-colors outline — it is the only selection indicator there",
+  ).toBeGreaterThan(0);
+  expect(
+    parseFloat(unpressedOutline),
+    "the unselected segment must NOT be outlined, or the indicator distinguishes nothing",
+  ).toBe(0);
+
   // The card's Send carries the same disc, and has no other E2E coverage at
   // all. It renders only for a USER-authored pending note — an imported one
   // takes the Accept/Reject branch instead and has no marker.
   await page.locator("[data-testid='popup-annotation-input']").fill("marker check");
-  await page.locator("[data-testid='popup-note-submit']").click();
+  await submitAnnotation(page, "note");
 
   const cardSend = page.locator("[data-testid^='send-to-claude-btn-']").first();
   await expect(cardSend).toBeVisible({ timeout: 10_000 });

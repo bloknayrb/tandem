@@ -34,7 +34,7 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
 });
 
 // Mock node:crypto's randomUUID so the upload-path test can pre-compute the
-// synthetic docId that openFileFromContent will mint, then pre-subscribe to
+// synthetic docId that openFromUpload will mint, then pre-subscribe to
 // the matching Y.Doc before invoking the opener. The mock falls through to
 // the real implementation unless an explicit one-shot return is queued.
 const cryptoMocks = vi.hoisted(() => ({ randomUUID: vi.fn() }));
@@ -50,10 +50,10 @@ vi.mock("node:crypto", async (importOriginal) => {
   };
 });
 
+import { openFromDisk, openFromUpload } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import { openFileByPath, openFileFromContent } from "../../src/server/mcp/file-opener.js";
 import { pushNotification } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
@@ -114,7 +114,7 @@ function buildStressMarkdown(sectionCount: number): string {
   return sections.join("\n");
 }
 
-// Pre-subscribe to the Y.Doc that openFileByPath will reuse, so we capture every
+// Pre-subscribe to the Y.Doc that openFromDisk will reuse, so we capture every
 // update event during the open. getOrCreateDocument returns the same instance
 // the opener later picks up via the same docId.
 async function captureUpdatesDuringOpen(
@@ -124,7 +124,7 @@ async function captureUpdatesDuringOpen(
   const doc = getOrCreateDocument(docId);
   const { records: updates, detach } = listenForTransactions(doc);
   try {
-    await openFileByPath(filePath);
+    await openFromDisk(filePath);
   } finally {
     detach();
   }
@@ -132,7 +132,7 @@ async function captureUpdatesDuringOpen(
 }
 
 // Same as above for the upload path. Pre-stubs randomUUID so we can pre-resolve
-// the synthetic docId that openFileFromContent will mint.
+// the synthetic docId that openFromUpload will mint.
 async function captureUpdatesDuringOpenFromContent(
   fileName: string,
   content: string | Buffer,
@@ -144,7 +144,7 @@ async function captureUpdatesDuringOpenFromContent(
   const doc = getOrCreateDocument(docId);
   const { records: updates, detach } = listenForTransactions(doc);
   try {
-    await openFileFromContent(fileName, content);
+    await openFromUpload(fileName, content);
   } finally {
     detach();
   }
@@ -240,7 +240,7 @@ describe("loadContentIntoDoc — batching contract (#609)", () => {
   });
 });
 
-describe("openFileFromContent — batching contract (#609)", () => {
+describe("openFromUpload — batching contract (#609)", () => {
   it("md upload: populate is batched into one XmlFragment transaction", async () => {
     const content = buildStressMarkdown(80);
     const { updates, doc } = await captureUpdatesDuringOpenFromContent("stress.md", content);

@@ -146,7 +146,7 @@ pub(crate) fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
 ///
 /// Pure and free of the Windows-only firewall/workspace-scan types around its
 /// call site, so it's testable without them — same reasoning as
-/// `parse_netstat_listening_pid` in `lib.rs` ("kept out of the cfg(windows) block
+/// `parse_netstat_listening_pid` in `sidecar.rs` ("kept out of the cfg(windows) block
 /// so its tests run on every CI platform; the allow keeps a non-Windows
 /// release build warning-free"). **Caveat that reasoning doesn't cover: this
 /// function's own body is close to the assertion it's tested against — the

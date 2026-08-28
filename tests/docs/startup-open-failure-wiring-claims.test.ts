@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   REPO_ROOT,
   RUST_SRC,
+  rustSourceDefining,
   rustSources,
   stripRustComments,
   stripRustTestModules,
@@ -42,7 +43,6 @@ import {
  * mistaken for one that is present.
  */
 
-const LIB_RS = join(RUST_SRC, "lib.rs");
 const CLIENT_MAP = join(REPO_ROOT, "src", "client", "utils", "startup-rejection.ts");
 
 function stripTsComments(src: string): string {
@@ -50,12 +50,37 @@ function stripTsComments(src: string): string {
 }
 
 describe("#1416 open-failure wiring that only source-scanning can pin", () => {
-  const lib = stripRustComments(readFileSync(LIB_RS, "utf8"));
+  // Both constructs below were read out of a hardcoded `src-tauri/src/lib.rs` until
+  // Unit 11e. Measured, not assumed: with the hardcoded path, moving
+  // `show_server_error_dialog` to another module turns this file RED rather than
+  // quiet -- each spec asserts it FOUND its construct before asserting anything
+  // about it, so the failure is loud. That is the good half. The bad half is what
+  // the loud failure then costs: the only way to green it is to RE-POINT the path
+  // at the new file, and a re-pointed path is armed to break again on the next
+  // extraction. Units 11a, 11c and 11d each paid that toll in turn.
+  //
+  // So each construct is located by a pattern that IS its subject.
+  // `rustSourceDefining` asserts exactly one Rust source matches -- zero and
+  // two-or-more both fail loudly -- which keeps every real deletion detectable
+  // while making a harmless MOVE free. Splitting one of these constructs across
+  // two modules still reddens, deliberately.
+  //
+  // `.code` rather than `stripRustComments(text)`: it also strips `#[cfg(test)]`
+  // modules, closing the hole where a test satisfies a claim about production
+  // routing. Both claims here are about code, never about attributes.
+  const dialog = rustSourceDefining(
+    /fn show_server_error_dialog\(/,
+    "show_server_error_dialog, whose Close branch is the cold-start latch",
+  ).code;
+  const appleEvents = rustSourceDefining(
+    /fn handle_opened_urls\(/,
+    "handle_opened_urls, the macOS Apple-Event entry point",
+  ).code;
 
   it("latches the give-up when the user declines the retry dialog", () => {
     // The `!retry` arm, through to its `return`. Anchored on `if !retry` so a
     // `report_pending_opens_with` elsewhere in the file cannot satisfy it.
-    const declineArm = lib.match(/if !retry \{[\s\S]{0,900}?\n\s*\}/);
+    const declineArm = dialog.match(/if !retry \{[\s\S]{0,900}?\n\s*\}/);
     expect(declineArm, "show_server_error_dialog's `if !retry` arm not found").not.toBeNull();
     const arm = declineArm?.[0] ?? "";
     expect(
@@ -77,7 +102,7 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
   it("records a gave-up open into the Apple-Event batch", () => {
     // macOS-only code: compiled by one CI leg, executed by none.
     expect(
-      /OpenRoute::ServerUnavailable\s*=>\s*rejected\.record\(/.test(lib),
+      /OpenRoute::ServerUnavailable\s*=>\s*rejected\.record\(/.test(appleEvents),
       "handle_opened_urls must record ServerUnavailable into the batch, or an open " +
         "arriving after the app gave up is refused silently — no tab, no toast.",
     ).toBe(true);

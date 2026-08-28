@@ -4,7 +4,7 @@
  * A document opened read-only (Settings → View Changelog) came back writable
  * after a restart: `SessionData` had no `readOnly` field, `listSessionFilePaths`
  * projected the record to `{filePath, lastAccessed}`, and `restoreOpenDocuments`
- * called `openFileByPath(filePath)` with no options — so every restored document
+ * called `openFromDisk(filePath)` with no options — so every restored document
  * took `resolveAndValidatePath`'s hardcoded `readOnly = false`.
  *
  * The flag cannot be recovered from the persisted `ydocState`: `writeDocMeta`
@@ -52,12 +52,12 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 
 import * as Y from "yjs";
 import { markDirty, resetForTesting as resetDirtyState } from "../../src/server/documents/dirty.js";
+import { openFromDisk } from "../../src/server/documents/open.js";
 import {
   autoSaveAllToDisk,
   getOpenDocs,
   restoreOpenDocuments,
 } from "../../src/server/mcp/document-service.js";
-import { openFileByPath } from "../../src/server/mcp/file-opener.js";
 import { SESSION_DIR } from "../../src/server/platform.js";
 import { listSessionFilePaths, saveSession, sessionKey } from "../../src/server/session/manager.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
@@ -125,7 +125,7 @@ afterEach(async () => {
 describe("read-only survives a session restore", () => {
   it("records readOnly:true for a read-only document and restores it read-only", async () => {
     const filePath = await writeFixture("changelog.md", "# Changelog\n\nEntry.\n");
-    const opened = await openFileByPath(filePath, { readOnly: true });
+    const opened = await openFromDisk(filePath, { readOnly: true });
     expect(opened.readOnly).toBe(true);
 
     await saveOpenedSession(filePath, opened);
@@ -142,7 +142,7 @@ describe("read-only survives a session restore", () => {
 
   it("leaves a writable document's record byte-identical to the pre-fix shape", async () => {
     const filePath = await writeFixture("notes.md", "# Notes\n\nBody.\n");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     expect(opened.readOnly).toBe(false);
 
     await saveOpenedSession(filePath, opened);
@@ -167,7 +167,7 @@ describe("read-only survives a session restore", () => {
 
   it("restores a legacy record (no readOnly field) writable", async () => {
     const filePath = await writeFixture("legacy.md", "# Legacy\n\nBody.\n");
-    const opened = await openFileByPath(filePath, { readOnly: true });
+    const opened = await openFromDisk(filePath, { readOnly: true });
     await saveOpenedSession(filePath, opened);
     // Strip the field to reproduce a record written before it existed.
     await tamperReadOnly(filePath, undefined);
@@ -185,7 +185,7 @@ describe("read-only survives a session restore", () => {
     ["an object", {}],
   ])("restores writable when readOnly is %s off disk", async (_label, value) => {
     const filePath = await writeFixture("tampered.md", "# Tampered\n\nBody.\n");
-    const opened = await openFileByPath(filePath, { readOnly: true });
+    const opened = await openFromDisk(filePath, { readOnly: true });
     await saveOpenedSession(filePath, opened);
     await tamperReadOnly(filePath, value);
 
@@ -199,7 +199,7 @@ describe("read-only survives a session restore", () => {
   it("autosave refuses to write a restored read-only document to disk", async () => {
     const original = "# Changelog\n\nOriginal.\n";
     const filePath = await writeFixture("autosave.md", original);
-    const opened = await openFileByPath(filePath, { readOnly: true });
+    const opened = await openFromDisk(filePath, { readOnly: true });
     await saveOpenedSession(filePath, opened);
 
     resetDirtyState();

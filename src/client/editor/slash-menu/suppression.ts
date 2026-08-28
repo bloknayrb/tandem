@@ -5,8 +5,11 @@
  *   - Find bar focused (testid `find-input`)
  *   - Command palette open (testid `command-palette`)
  *   - Selection BubbleMenu / annotation popup visible (one of the
- *     `popup-annotation-input`, `popup-note-submit`, `popup-comment-submit`,
- *     or `popup-highlight-{yellow|green|blue|pink}` testids)
+ *     `popup-annotation-input`, `popup-annotation-submit`, `popup-note-submit`,
+ *     `popup-comment-submit`, or `popup-highlight-{yellow|green|blue|pink}`
+ *     testids). The list is presence-probed, so it must name every element the
+ *     composer can render -- a control missing from it is a hole through which
+ *     `/` opens the slash menu on top of the open popup.
  *
  * Reverse direction is wired in `App.svelte` -- the selection toolbar suppresses
  * itself when `slashCommandMenuOpen` is true (see `suppressSelectionToolbar` prop
@@ -20,6 +23,7 @@
 
 const POPUP_TESTIDS = [
   "popup-annotation-input",
+  "popup-annotation-submit",
   "popup-note-submit",
   "popup-comment-submit",
   "popup-highlight-yellow",
