@@ -329,8 +329,6 @@ export async function restoreDocumentFromBackup(
   };
 }
 
-// --- Extracted helpers for openFileByPath ---
-
 /**
  * Resolve a pending external-conflict (#1069). Invoked by
  * POST /api/external-conflict/resolve from the client banner.
@@ -405,10 +403,14 @@ export async function resolveExternalConflict(
     const canSave = canSaveToDisk(existing.format);
     // Safe FS sink (CodeQL js/path-injection): `resolvedFilePath` is derived
     // from `existing.filePath`, the OpenDoc registry's server-managed path
-    // (only ever set by openFileByPath / resolveAndValidatePath / a validated
-    // rename or save-as) — never raw request input. Same established
-    // false-positive class as document-service.ts's FS sinks; dismiss per
-    // issue #1042.
+    // (only ever set by openFromDisk / resolveAndValidatePath / a validated
+    // rename or save-as / an upload) — never raw request input.
+    // `openFromUpload` is the fourth setter and the one this enumeration used
+    // to omit: it registers a synthetic `upload://<uuid>/<name>` whose only
+    // caller-controlled segment is reduced by `crossBasename` before it is
+    // joined, and `isUploadPath` diverts that path from every fs sink anyway.
+    // Same established false-positive class as document-service.ts's FS
+    // sinks; dismiss per issue #1042.
     const stat = canSave ? await fs.stat(resolvedFilePath).catch(() => null) : null;
     withInternal(doc, () => {
       // Guarded, not unconditional (review finding): the fs.stat above was

@@ -49,6 +49,7 @@ import {
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { removeDocument } from "../../src/server/yjs/provider.js";
+import { timeoutMs } from "../helpers/timing.js";
 
 afterAll(async () => {
   const appDataDir = process.env.TANDEM_APP_DATA_DIR;
@@ -197,28 +198,37 @@ describe("the redirect invariant (Unit 6)", () => {
    * `file-opener.ts` requires saying its name. The symbol check is then a
    * second, narrower layer over the handful of files allowed to say it.
    */
-  it("only sanctioned modules name the legacy file-opener specifier", async () => {
-    const files = (await walk(srcRoot)).filter((f) => /\.(ts|svelte)$/.test(f));
+  // 60s rather than the 15s default: this walks the whole source tree and runs
+  // `stripComments` over every file, measured at ~850ms alone and at the 15s
+  // ceiling under full-suite worker parallelism. Its assertion is about which
+  // files name a specifier, never about how fast the sweep runs, so the
+  // headroom costs the gate nothing.
+  it(
+    "only sanctioned modules name the legacy file-opener specifier",
+    async () => {
+      const files = (await walk(srcRoot)).filter((f) => /\.(ts|svelte)$/.test(f));
 
-    // Controls. An empty or truncated sweep satisfies every assertion below
-    // vacuously, which is how this class of guard usually dies.
-    expect(files.length, "control: the sweep found the source tree").toBeGreaterThan(50);
-    expect(files, "control: the seam and its implementation are both in scope").toEqual(
-      expect.arrayContaining([seam, impl]),
-    );
+      // Controls. An empty or truncated sweep satisfies every assertion below
+      // vacuously, which is how this class of guard usually dies.
+      expect(files.length, "control: the sweep found the source tree").toBeGreaterThan(50);
+      expect(files, "control: the seam and its implementation are both in scope").toEqual(
+        expect.arrayContaining([seam, impl]),
+      );
 
-    const referencing: string[] = [];
-    for (const file of files) {
-      if (file === seam || file === impl) continue;
-      const body = stripComments(await fs.readFile(file, "utf8"));
-      if (/["'][^"']*file-opener\.js["']/.test(body)) referencing.push(rel(file));
-    }
+      const referencing: string[] = [];
+      for (const file of files) {
+        if (file === seam || file === impl) continue;
+        const body = stripComments(await fs.readFile(file, "utf8"));
+        if (/["'][^"']*file-opener\.js["']/.test(body)) referencing.push(rel(file));
+      }
 
-    expect(
-      referencing.sort(),
-      "a module that reaches mcp/file-opener.ts must either move to documents/open.js or be added to SANCTIONED with the symbols it needs — adding a row is a deliberate decision, not a formality",
-    ).toEqual(Object.keys(SANCTIONED).sort());
-  });
+      expect(
+        referencing.sort(),
+        "a module that reaches mcp/file-opener.ts must either move to documents/open.js or be added to SANCTIONED with the symbols it needs — adding a row is a deliberate decision, not a formality",
+      ).toEqual(Object.keys(SANCTIONED).sort());
+    },
+    timeoutMs(60_000, 300_000),
+  );
 
   it("sanctioned modules take only the symbols they are sanctioned for", async () => {
     // The file-level gate above is what syntax cannot evade. This narrows what

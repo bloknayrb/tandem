@@ -872,8 +872,37 @@ export function registerAnnotationTools(server: McpServer): void {
                   `Could not resolve outputPath: ${(err as Error).message}`,
                 );
               }
-              // ENOENT — fresh write to a path that doesn't exist yet. Keep
-              // the already-resolved `sidecarPath` as-is.
+              // ENOENT — the leaf does not exist yet, which is the first
+              // export to any given outputPath. Keeping `sidecarPath` as-is
+              // skipped the post-realpath prefix re-check above on exactly
+              // that path, so a symlinked parent was never followed. Same
+              // defect as `convert.ts`, one file away; the shapes differ only
+              // in that this surface returns mcpError rather than throwing.
+              const parent = path.dirname(sidecarPath);
+              try {
+                const realParent = await fs.realpath(parent);
+                const parentReason = rejectUnsafeWindowsPrefix(realParent);
+                if (parentReason) return mcpError("INVALID_PATH", parentReason);
+                sidecarPath = path.join(realParent, path.basename(sidecarPath));
+              } catch (parentErr) {
+                // FILE_NOT_FOUND, matching `convert.ts` for the identical
+                // condition. INVALID_PATH tells an AI caller the path is
+                // MALFORMED, so it reformats the path instead of creating the
+                // directory — the one action that would work. And the message
+                // is written rather than interpolated from the errno: a raw
+                // Node error string is exactly what the response scrubber
+                // exists to keep out of responses.
+                if ((parentErr as NodeJS.ErrnoException).code !== "ENOENT") {
+                  return mcpError(
+                    "INVALID_PATH",
+                    `Could not resolve the directory for outputPath: ${path.dirname(sidecarPath)}`,
+                  );
+                }
+                return mcpError(
+                  "FILE_NOT_FOUND",
+                  `Output directory does not exist: ${path.dirname(sidecarPath)}`,
+                );
+              }
             }
           }
           const contents = isJson

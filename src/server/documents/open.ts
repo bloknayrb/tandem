@@ -76,6 +76,7 @@ import {
   Y_MAP_READ_ONLY,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
+import { crossBasename } from "../../shared/cross-basename.js";
 import { withInternal } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { ExternalConflictState } from "../../shared/types.js";
@@ -303,9 +304,29 @@ export async function openFromDisk(
  * Used when the browser drag-and-drops or selects a file.
  */
 export async function openFromUpload(
-  fileName: string,
+  rawFileName: string,
   content: string | Buffer,
 ): Promise<OpenFileResult> {
+  // `fileName` arrives straight off `req.body` (routes/upload.ts), typed as a
+  // string and nothing more, and it used to be interpolated verbatim into the
+  // synthetic registry path below. `../` segments landed in a registry
+  // `filePath`. Nothing reachable consumed them -- `isUploadPath` diverts the
+  // path at every filesystem sink and uploads are read-only -- but that is a
+  // reachability accident, not a barrier, and the next sink added would not
+  // know it was relying on one.
+  //
+  // `crossBasename` is what the repo already declares canonical for exactly
+  // this question. `path.basename` is win32 on Windows and posix on Linux, and
+  // CI is ubuntu-only, so the platform-dependent one behaves differently under
+  // test than in the desktop app; `path.posix.basename` fixes that but splits
+  // on `/` only, so a Windows-spelled name comes back whole. `crossBasename`
+  // splits on both, which is the strictly safer answer for a value that
+  // arrives off the wire and whose spelling we do not control.
+  //
+  // Applied once here rather than at the interpolation site, because the same
+  // value becomes the display name, the doc metadata and the returned
+  // `fileName` -- the surfaces a user actually sees.
+  const fileName = crossBasename(rawFileName);
   const ext = path.extname(fileName).toLowerCase();
   if (!SUPPORTED_EXTENSIONS.has(ext)) {
     throw Object.assign(

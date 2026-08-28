@@ -229,19 +229,80 @@ describe("#1320 the invariant is actually mounted", () => {
     );
     expect(invariant).toBeGreaterThan(auth);
 
-    // All five, not just the first. Pinning only `registerApiRoutes` would stay
-    // green while the mount slid below the channel, integrations, launcher or
-    // models registrars — silently un-gating everything those register.
-    for (const registrar of [
-      "registerApiRoutes(",
-      "registerChannelRoutes(",
-      "registerIntegrationsRoutes(",
-      "registerLauncherRoutes(",
-      "registerModelsRoutes(",
+    // Every registrar, **derived from the file rather than listed here**.
+    //
+    // This used to be a hardcoded list of the five that existed when it was
+    // written. That closes the direction it names below — the mount sliding
+    // *down* past a known registrar — and leaves the mirror image wide open: a
+    // sixth `registerAnythingRoutes(app, …)` added *above* line 691 mounts its
+    // routes ungated and this test stays green, because a name absent from the
+    // list is never looked for. The guard's bug is its scope, not its matching.
+    // Deriving the list is what makes "before EVERY registrar" mean every one.
+    const registrars = [...serverSrc.matchAll(/\bregister\w*Routes\s*\(/g)];
+    expect(
+      registrars.length,
+      "the registrar scan found nothing — it is broken, not server.ts. Zero " +
+        "registrars satisfies the loop below perfectly.",
+    ).toBeGreaterThanOrEqual(5);
+    for (const known of ["registerApiRoutes(", "registerChannelRoutes("]) {
+      expect(
+        registrars.some((m) => m[0].replace(/\s+/g, "") === known),
+        `the scan must still find ${known} — a regex that stopped matching would ` +
+          "leave this assertion vacuously true",
+      ).toBe(true);
+    }
+    for (const m of registrars) {
+      expect(m.index, `${m[0].trim()} must run after the invariant is mounted`).toBeGreaterThan(
+        invariant,
+      );
+    }
+
+    // The other way to add an ungated route: skip the registrar convention and
+    // write the route straight into server.ts above the mount.
+    //
+    // The first version of this scan looked only for a bare string literal --
+    // `app.post("/api/...", ...)`. Measured against server.ts it matched
+    // **zero** things, so the loop body never ran and the check was the same
+    // zero-of-zero it was written to replace. This project spells every route
+    // with a path constant (`app.post(API_OPEN, ...)`, the idiom used ~25 times
+    // in api-routes.ts), which is the one spelling that regex could not see.
+    //
+    // So: literal OR `API_*` identifier, and `use` in the alternation too --
+    // `app.use("/api/x", router)` mounts routes just as effectively as
+    // `app.post` registers one.
+    const DIRECT_ROUTE_RE =
+      /\bapp\.(get|post|put|patch|delete|all|use)\(\s*(?:"\/api|'\/api|`\/api|API_[A-Z0-9_]*)/g;
+
+    // A scan over a file that legitimately contains zero matches cannot be
+    // controlled by the file. Control the *regex* instead: it has to see each
+    // idiom it claims to cover, or a later rewrite can silently narrow it back
+    // to what it was without any assertion noticing.
+    for (const sample of [
+      'app.post("/api/thing", h);',
+      "app.post(API_OPEN, h);",
+      "app.use('/api/sub', router);",
+      "app.get(`/api/x`, h);",
+      "app.delete(\n  API_CLOSE,\n  h,\n);",
     ]) {
-      const at = serverSrc.indexOf(registrar);
-      expect(at, `${registrar} not found in server.ts`).toBeGreaterThan(-1);
-      expect(at, `${registrar} must run after the invariant is mounted`).toBeGreaterThan(invariant);
+      expect(
+        new RegExp(DIRECT_ROUTE_RE.source).test(sample),
+        `the direct-route scan no longer matches \`${sample}\` -- it has narrowed`,
+      ).toBe(true);
+    }
+
+    // `app.use("/api", authMiddleware)` and the invariant mount itself match the
+    // pattern and are *supposed* to sit at or above the mount: they are the
+    // middleware chain, not routes. Exempt them by handler name, so anything
+    // else mounted on /api above the invariant still reports.
+    const MIDDLEWARE_MOUNTS = ["authMiddleware", "enforceLoopbackMutation"];
+    for (const m of serverSrc.matchAll(DIRECT_ROUTE_RE)) {
+      const tail = serverSrc.slice(m.index, m.index + 120);
+      if (MIDDLEWARE_MOUNTS.some((name) => tail.includes(name))) continue;
+      expect(
+        m.index,
+        `a direct ${m[1].toUpperCase()} /api route is registered above the ` +
+          "enforceLoopbackMutation mount, so it is ungated",
+      ).toBeGreaterThan(invariant);
     }
   });
 });
