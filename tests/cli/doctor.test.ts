@@ -6,6 +6,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ANNOTATION_SCAN_MAX_FILES } from "../../src/cli/annotation-store-scan.js";
+
+// The file-cap spec writes ANNOTATION_SCAN_MAX_FILES + 1 (513) files
+// synchronously and then scans them, so its cost scales with that constant and
+// is dominated by filesystem I/O rather than by anything under test. Against
+// vitest's 15s default it sat close enough to the ceiling to time out under a
+// loaded full-suite run while passing in ~4s alone -- a failure that reads as a
+// defect in doctor and is not one. Same budget and same reasoning as the corpus
+// walks in tests/server/documents-open.test.ts and
+// tests/docs/loopback-gate-claims.test.ts.
+const SCAN_CAP_TIMEOUT_MS = 90_000;
+
 import {
   CWD_DEPENDENT_CHECKS,
   evaluateAbsentChannelEntry,
@@ -198,36 +209,40 @@ describe("runDoctor", () => {
    * override exists for the scanner's own suite and cannot prove the check
    * wired the reporting to it.
    */
-  it("warns that a scan stopped at its file cap", async () => {
-    const annDir = join(dataDir, "annotations");
-    mkdirSync(annDir, { recursive: true });
-    const doc = JSON.stringify({
-      schemaVersion: 1,
-      docHash: "h",
-      meta: { filePath: "/tmp/d.md", lastUpdated: 0 },
-      annotations: [],
-      tombstones: [],
-      replies: [],
-    });
-    for (let i = 0; i <= ANNOTATION_SCAN_MAX_FILES; i++) {
-      writeFileSync(join(annDir, `doc-${i}.json`), doc);
-    }
+  it(
+    "warns that a scan stopped at its file cap",
+    async () => {
+      const annDir = join(dataDir, "annotations");
+      mkdirSync(annDir, { recursive: true });
+      const doc = JSON.stringify({
+        schemaVersion: 1,
+        docHash: "h",
+        meta: { filePath: "/tmp/d.md", lastUpdated: 0 },
+        annotations: [],
+        tombstones: [],
+        replies: [],
+      });
+      for (let i = 0; i <= ANNOTATION_SCAN_MAX_FILES; i++) {
+        writeFileSync(join(annDir, `doc-${i}.json`), doc);
+      }
 
-    const report = await runDoctor();
-    // Two results carry `scan: "incomplete"`: the headline and the dedicated
-    // detail line. Both must warn — a passing headline over a partial scan is
-    // the failure this check exists to stop.
-    const carrying = report.results.filter(
-      (r) => r.check === "annotation-store" && r.data?.scan === "incomplete",
-    );
-    expect(carrying).toHaveLength(2);
-    expect(carrying.map((r) => r.status)).toEqual(["warn", "warn"]);
-    const incomplete = carrying.find((r) => "limit" in (r.data ?? {}));
-    expect(incomplete?.status).toBe("warn");
-    expect(incomplete?.data?.limit).toBe("files");
-    expect(incomplete?.data?.examined).toBe(ANNOTATION_SCAN_MAX_FILES);
-    expect(incomplete?.data?.docCount).toBe(ANNOTATION_SCAN_MAX_FILES + 1);
-  });
+      const report = await runDoctor();
+      // Two results carry `scan: "incomplete"`: the headline and the dedicated
+      // detail line. Both must warn — a passing headline over a partial scan is
+      // the failure this check exists to stop.
+      const carrying = report.results.filter(
+        (r) => r.check === "annotation-store" && r.data?.scan === "incomplete",
+      );
+      expect(carrying).toHaveLength(2);
+      expect(carrying.map((r) => r.status)).toEqual(["warn", "warn"]);
+      const incomplete = carrying.find((r) => "limit" in (r.data ?? {}));
+      expect(incomplete?.status).toBe("warn");
+      expect(incomplete?.data?.limit).toBe("files");
+      expect(incomplete?.data?.examined).toBe(ANNOTATION_SCAN_MAX_FILES);
+      expect(incomplete?.data?.docCount).toBe(ANNOTATION_SCAN_MAX_FILES + 1);
+    },
+    SCAN_CAP_TIMEOUT_MS,
+  );
 
   it("surfaces annotation files parked as .future by a newer Tandem", async () => {
     // Neither `.json` nor `.corrupt.`, so the previous check saw nothing at
