@@ -95,15 +95,18 @@ export interface ActionRegistration {
  *   the middle.
  *
  * `{ replace: true }` suppresses the *pre-existing-entry* collision only. A
- * duplicate id WITHIN one batch is always an authoring bug — the later entry
- * would win, the disposer's identity check would then decline to remove the
- * earlier one, and the array would silently be one action shorter than it reads.
+ * duplicate id WITHIN one batch is always an authoring bug: the later entry
+ * wins, so the registry holds one fewer action than the array reads, and in a
+ * production build (where `reportCollision` warns rather than throws) the
+ * earlier entry then trips the disposer's superseded-by-someone-else branch and
+ * files a crash report blaming a second owner that does not exist. Hence
+ * `owned` is de-duplicated below rather than being `actions.slice()`.
  */
 export function registerActions(actions: Action[], opts: RegisterOptions = {}): ActionRegistration {
-  const seen = new Set<string>();
+  const seen = new Map<string, Action>();
   for (const action of actions) {
     if (seen.has(action.id)) reportCollision(action.id);
-    seen.add(action.id);
+    seen.set(action.id, action);
     if (actionsMap.has(action.id) && !opts.replace) reportCollision(action.id);
   }
 
@@ -111,13 +114,18 @@ export function registerActions(actions: Action[], opts: RegisterOptions = {}): 
   for (const action of actions) next.set(action.id, action);
   actionsMap = next;
 
-  let owned: Action[] | null = actions.slice();
+  // The de-duplicated view, not `actions.slice()`. In PROD an intra-batch
+  // duplicate survives the warning above, and keeping both copies here would
+  // make teardown report a phantom rival owner for the loser (see the doc
+  // comment). `seen` holds the winner per id, which is exactly what was written.
+  let owned: Action[] | null = [...seen.values()];
   return {
     dispose() {
-      // Idempotent. `BUILTINS` is a module-level const array, so a
-      // register→dispose→register cycle hands the SAME object references back;
-      // without this a stale disposer called twice would delete the second
-      // batch's live entries.
+      // Idempotent. A register→dispose→register cycle over the same array hands
+      // the SAME object references back (an HMR re-import does mint fresh ones,
+      // so this is about repeat calls within one module instance, not across
+      // them); without the latch a stale disposer called twice would delete the
+      // second batch's live entries.
       if (!owned) return;
       const mine = owned;
       owned = null;

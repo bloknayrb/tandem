@@ -12,6 +12,15 @@
  * read by iterating inside a `$derived.by`, so under a mutating delete they
  * would keep rendering a removed action. Only a derived observer — this — can
  * fail on that.
+ *
+ * There is deliberately no `runs()` counter. An earlier version had one,
+ * documented as "how many times the derived has re-run", and it could not
+ * measure that: the `$effect` reads a `$derived` **boolean**, and Svelte
+ * short-circuits a derived that recomputes to an equal value, so the effect
+ * re-runs only when presence FLIPS. A spec written against it — say, asserting
+ * that a batch registration is ONE reassignment rather than N — would score a
+ * per-id loop identically. A counter that cannot distinguish the two cases it
+ * exists to distinguish is worse than none.
  */
 
 import { flushSync } from "svelte";
@@ -20,20 +29,16 @@ import { type Action, getActionsMap } from "../../src/client/actions/registry.sv
 export interface RegistryObserver {
   /** Whether a `$derived` over the map currently sees the id. */
   present(): boolean;
-  /** How many times the derived has re-run. */
-  runs(): number;
   stop(): void;
 }
 
 export function observeRegistry(id: string): RegistryObserver {
   let present = false;
-  let runs = 0;
 
   const stop = $effect.root(() => {
     const found = $derived(Array.from(getActionsMap().values()).some((a: Action) => a.id === id));
     $effect(() => {
       present = found;
-      runs += 1;
     });
   });
   flushSync();
@@ -42,10 +47,6 @@ export function observeRegistry(id: string): RegistryObserver {
     present() {
       flushSync();
       return present;
-    },
-    runs() {
-      flushSync();
-      return runs;
     },
     stop,
   };

@@ -21,16 +21,26 @@
  * `onDestroy` beside it — and requires that `onDestroy` to dispose *that
  * identifier*.
  *
+ * ## What else is in this file
+ *
+ * The App matcher is one of four describes. The others sweep the whole client
+ * for a rival mount site and for a re-export that would hide one, pin the shape
+ * of the builtin registration, and pin the three call sites that opt into an
+ * announced re-entry — that last one because the DEFAULT is easy to test and the
+ * opt-ins are the actual user-facing fix, so deleting them is otherwise silent.
+ *
  * ## The controls are the load-bearing half
  *
  * A contract check that cannot fail is not a check. The same extracted matcher
- * is run over five synthetic sources, each a way this could regress:
+ * is run over seven synthetic sources plus two positive controls (the good
+ * shape, and a block-bodied `onDestroy` arrow), each a way this could regress:
  * a missing `onDestroy`; disposing a different identifier; two mounts; a mount
- * nested inside a function body; and a mount hoisted into `<script module>`,
- * which is at column 0 and so defeats the indentation test while running once
- * per module load rather than once per App instance. Each must be rejected.
- * Without them this file would be green against a matcher that returned `true`
- * unconditionally.
+ * nested inside a function body; a mount hoisted into `<script module>` or its
+ * legacy `context="module"` spelling, both at column 0 and so past the
+ * indentation test while running once per module load rather than once per App
+ * instance; and a second mount sitting in markup next to an apostrophe, which
+ * used to blank the rest of the file. Each must be rejected. Without them this
+ * file would be green against a matcher that returned `true` unconditionally.
  */
 
 import { execFileSync } from "node:child_process";
@@ -47,11 +57,86 @@ interface ContractResult {
 }
 
 /**
- * Blank comments and string literals to spaces before matching, so a mention of
+ * The `<script>` spans of a Svelte file, as [from, to) offsets into `src`.
+ * A file with no `<script` tag at all is one span covering everything — the
+ * synthetic controls below are bare JavaScript.
+ */
+function scriptSpans(src: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  for (const tag of src.matchAll(/<script\b[^>]*>/g)) {
+    const from = tag.index + tag[0].length;
+    const close = src.indexOf("</script>", from);
+    spans.push([from, close === -1 ? src.length : close]);
+  }
+  return spans.length > 0 ? spans : [[0, src.length]];
+}
+
+/** The `<script>` blocks that run once per MODULE rather than per instance. */
+/**
+ * Blank an HTML comment span to spaces, newlines preserved. Markup comments are
+ * where most of the stray apostrophes live, and they are not code in any sense.
+ */
+function blankHtmlComments(src: string): string {
+  return src.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+}
+
+/**
+ * One source string ready to match against: HTML comments gone, script spans
+ * lexed as JavaScript, markup lexed without `'` as a string delimiter.
+ * Offsets are preserved throughout, so `moduleScriptRanges` (which reads the RAW
+ * source) and this can be compared directly.
+ */
+function prepare(rawSource: string): string {
+  const src = blankHtmlComments(rawSource);
+  const spans = scriptSpans(src);
+  let out = "";
+  let cursor = 0;
+  for (const [from, to] of spans) {
+    out += blankNonCode(src.slice(cursor, from), '"`');
+    out += blankNonCode(src.slice(from, to));
+    cursor = to;
+  }
+  out += blankNonCode(src.slice(cursor), '"`');
+  return out;
+}
+
+/** The `<script>` blocks that run once per MODULE rather than per instance. */
+function moduleScriptRanges(src: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  // Read off the RAW source: `blankNonCode` would have blanked the quotes in
+  // `context="module"`, which is exactly how the legacy spelling used to slip
+  // past this check while the comment claimed it was covered.
+  for (const tag of src.matchAll(/<script\b([^>]*)>/g)) {
+    const attrs = tag[1];
+    if (!/\bmodule\b/.test(attrs) && !/\bcontext\s*=\s*["']module["']/.test(attrs)) continue;
+    const from = tag.index;
+    const close = src.indexOf("</script>", from);
+    ranges.push([from, close === -1 ? src.length : close]);
+  }
+  return ranges;
+}
+
+/**
+ * Blank comments and string literals to spaces, so a mention of
  * `mountActionExecutor` inside a comment cannot satisfy — or, worse, break — a
  * count. Offsets are preserved so line/column reasoning stays valid.
+ *
+ * `quotes` is the load-bearing parameter and the reason this takes one at all.
+ * Svelte markup is not JavaScript: an apostrophe in template prose or in an
+ * `<!-- -->` comment ("the stack's wrapper", "#1431's fix") opens a pseudo-
+ * string that runs to the next apostrophe, often a hundred lines later.
+ * Measured with `'` enabled everywhere: 74 of 301 files under `src/client/` had
+ * real code blanked, `App.svelte` 700 of 3064 lines — and those spans are the
+ * input to BOTH the "exactly one mount" count and the repo-wide sweep, so a
+ * rival `mountActionExecutor(` inside one was simply invisible.
+ *
+ * Blanking markup wholesale is not the fix either: `onclick={() => mount(…)}`
+ * is a template expression, and it is real code. So `'` is a delimiter inside
+ * `<script>` and not outside it. The residue is that a single-quoted string in
+ * a template expression stays visible — which fails toward REPORTING, the safe
+ * direction for this check.
  */
-function blankNonCode(src: string): string {
+function blankNonCode(src: string, quotes = "\"'`"): string {
   let out = "";
   let i = 0;
   while (i < src.length) {
@@ -68,7 +153,7 @@ function blankNonCode(src: string): string {
       }
       out += "  ";
       i += 2;
-    } else if (src[i] === '"' || src[i] === "'" || src[i] === "`") {
+    } else if (quotes.includes(src[i])) {
       const quote = src[i];
       out += " ";
       i++;
@@ -97,7 +182,7 @@ function blankNonCode(src: string): string {
  * same code — a control that exercised a different path would prove nothing.
  */
 export function checkActionMountContract(rawSource: string): ContractResult {
-  const src = blankNonCode(rawSource);
+  const src = prepare(rawSource);
 
   // `[ \t]*`, never `\s*`: `\s` matches newlines, so a greedy run would swallow
   // the blank line above the statement and report phantom indentation.
@@ -116,17 +201,15 @@ export function checkActionMountContract(rawSource: string): ContractResult {
   // per module load, not per component instance — so a mount hoisted there is
   // at column 0, passes the indentation test below, and still never re-binds
   // after an ErrorBoundary recovery remounts App. That is precisely the failure
-  // this contract exists to prevent, wearing the shape of a pass.
-  const moduleScript = /<script\b[^>]*\b(module\b|context\s*=\s*.module.)[^>]*>/.exec(src);
-  if (moduleScript) {
-    const end = src.indexOf("</script>", moduleScript.index);
-    const stop = end === -1 ? src.length : end;
-    if (anyMountCall[0].index >= moduleScript.index && anyMountCall[0].index < stop) {
-      return {
-        ok: false,
-        reason: "mountActionExecutor is in the module script, not the instance script",
-      };
-    }
+  // this contract exists to prevent, wearing the shape of a pass. Both spellings
+  // have a control below; the legacy one is there because an earlier version of
+  // this check read the blanked source and silently covered only the modern one.
+  const offset = anyMountCall[0].index;
+  if (moduleScriptRanges(rawSource).some(([from, to]) => offset >= from && offset < to)) {
+    return {
+      ok: false,
+      reason: "mountActionExecutor is in the module script, not the instance script",
+    };
   }
 
   const [, , indent, identifier] = mounts[0];
@@ -173,6 +256,29 @@ describe("App.svelte action-executor composition contract", () => {
 });
 
 describe("the executor has exactly one mount site in the whole client", () => {
+  it("is not re-exported, so no barrel can hide a call site from the sweep", () => {
+    // The one hole `git grep` cannot cover: `export const bind =
+    // mountActionExecutor;` in a barrel means the CALLING file never contains
+    // the name at all, so it is never a candidate. Forbidding the re-export is
+    // what keeps the candidate list complete.
+    const out = execFileSync("git", ["grep", "-l", "--", "mountActionExecutor", "src/"], {
+      cwd: ROOT,
+      encoding: "utf-8",
+    });
+    const reexporters = out
+      .split("\n")
+      .filter(Boolean)
+      .map((f) => f.trim().replace(/\\/g, "/"))
+      .filter((rel) => {
+        const src = prepare(readFileSync(join(ROOT, rel), "utf-8"));
+        return (
+          /export\s*\{[^}]*\bmountActionExecutor\b[^}]*\}/.test(src) ||
+          /export\s+(?:const|let|var)\s+\w+\s*=\s*mountActionExecutor\b/.test(src)
+        );
+      });
+    expect(reexporters).toEqual([]);
+  });
+
   it("nothing outside App.svelte mounts an executor", () => {
     // The App.svelte matcher above is scoped to one file, so a second
     // `mountActionExecutor` in some other component would install a rival
@@ -193,11 +299,28 @@ describe("the executor has exactly one mount site in the whole client", () => {
       .map((f) => f.trim().replace(/\\/g, "/"));
 
     const callers = candidates.filter((rel) => {
-      const src = blankNonCode(readFileSync(join(ROOT, rel), "utf-8"));
+      const src = prepare(readFileSync(join(ROOT, rel), "utf-8"));
+      // Key on the LOCAL BINDING, not the export name. `import { X as bind }`
+      // then `bind({...})` installs a rival executor while a name-keyed scan
+      // reports the file as a non-caller and drops it — the file still appears
+      // in `git grep` (its import line names X), so the sweep goes green with
+      // two executors live. The sibling `client-log-callsites.test.ts` already
+      // guards its own scan this way.
+      const names = new Set<string>();
+      for (const imp of src.matchAll(
+        /import\s*\{([^}]*)\}\s*from\s*"[^"]*actions\/executor[^"]*"/g,
+      )) {
+        for (const spec of imp[1].split(",")) {
+          const m = /^\s*mountActionExecutor(?:\s+as\s+(\w+))?\s*$/.exec(spec);
+          if (m) names.add(m[1] ?? "mountActionExecutor");
+        }
+      }
+      // A file with no import of it can still be the declaring module.
+      if (names.size === 0) names.add("mountActionExecutor");
       // Negative lookbehind so the DECLARATION in executor.ts is not counted as
       // a call site; without it the declaring module is indistinguishable from
       // a rival binder.
-      return /(?<!function\s+)mountActionExecutor\s*\(/.test(src);
+      return [...names].some((n) => new RegExp(`(?<!function\\s+)\\b${n}\\s*\\(`).test(src));
     });
 
     // executor.ts declares it; App.svelte calls it. Nothing else may.
@@ -209,7 +332,7 @@ describe("builtin registration shape", () => {
   const BUILTIN = join(ROOT, "src", "client", "actions", "builtin.svelte.ts");
   // Comments and strings blanked: this file explains BOTH rejected designs in
   // prose, so a raw `toContain` reports the explanation as the violation.
-  const source = blankNonCode(readFileSync(BUILTIN, "utf-8"));
+  const source = prepare(readFileSync(BUILTIN, "utf-8"));
 
   it("declares its re-registration instead of relying on an HMR disposer", () => {
     // vite keys HMR disposers by `ownerPath` and looks them up by
@@ -218,6 +341,37 @@ describe("builtin registration shape", () => {
     // reintroduced one would read as working teardown while doing nothing.
     expect(source).not.toContain("import.meta.hot");
     expect(source).toMatch(/registerActions\(BUILTINS,\s*\{\s*replace:\s*true\s*\}\)/);
+  });
+
+  it("keeps the three user-initiated scratchpad call sites opting in", () => {
+    // The DEFAULT (silent) is unit-tested; the OPT-INS are the user-facing fix,
+    // and nothing else notices if they go. Deleting `{ announceBusy: true }`
+    // from the palette entry, the Ctrl+N dispatch and the tab menu restores the
+    // silent double-press with every spec still green.
+    const sites: Array<[string, RegExp]> = [
+      [
+        "src/client/actions/builtin.svelte.ts",
+        /createScratchpad\(\{\s*announceBusy:\s*true\s*\}\)/,
+      ],
+      ["src/client/App.svelte", /createScratchpad\(\{\s*announceBusy:\s*true\s*\}\)/],
+      ["src/client/tabs/DocumentTabs.svelte", /createScratchpad\(\{\s*announceBusy:\s*true\s*\}\)/],
+    ];
+    for (const [rel, pattern] of sites) {
+      expect(prepare(readFileSync(join(ROOT, rel), "utf-8")), rel).toMatch(pattern);
+    }
+    // And the debounced auto-open must NOT opt in — it has no gesture behind it.
+    const app = prepare(readFileSync(join(ROOT, "src", "client", "App.svelte"), "utf-8"));
+    expect(app.match(/createScratchpad\(/g)).toHaveLength(2);
+    expect(app.match(/createScratchpad\(\{\s*announceBusy:\s*true\s*\}\)/g)).toHaveLength(1);
+  });
+
+  it("keeps the activity-tray Retry announcing an in-flight save", () => {
+    // Same class: `triggerSave`'s guard backs a BUTTON, and the opt-in is one
+    // deletable object literal away from a click that says nothing.
+    const app = prepare(readFileSync(join(ROOT, "src", "client", "App.svelte"), "utf-8"));
+    expect(app).toMatch(
+      /triggerSave\(\s*action\.documentId\s*,\s*\{\s*announceBusy:\s*true\s*\}\s*\)/,
+    );
   });
 
   it("does not bind registration to a component lifecycle", () => {
@@ -272,6 +426,26 @@ describe("the contract matcher can actually fail", () => {
         "const actionExecutor = mountActionExecutor({});",
         "onDestroy(() => actionExecutor.dispose());",
         "</script>",
+      ].join("\n"),
+    ],
+    [
+      "mount hoisted into the LEGACY module script",
+      [
+        '<script context="module">',
+        "const actionExecutor = mountActionExecutor({});",
+        "onDestroy(() => actionExecutor.dispose());",
+        "</script>",
+      ].join("\n"),
+    ],
+    [
+      "a second mount hidden in markup that an apostrophe would have blanked",
+      [
+        "<script>",
+        "const actionExecutor = mountActionExecutor({});",
+        "onDestroy(() => actionExecutor.dispose());",
+        "</script>",
+        "<!-- the tab's own wrapper -->",
+        "<button onclick={() => mountActionExecutor({})}>go</button>",
       ].join("\n"),
     ],
   ];

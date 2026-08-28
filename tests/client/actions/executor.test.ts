@@ -250,6 +250,22 @@ describe("failure reporting", () => {
     unregisterAction("executor-label-probe");
   });
 
+  it("does not send the user to a developer console the desktop build has none of", () => {
+    // The release desktop build ships no devtools, so "the details are in the
+    // developer console" pointed the primary distribution at a place it cannot
+    // reach. The replacement has to stay actionable without one.
+    const notify = vi.fn();
+    mount(depsBag(notify));
+
+    runBoundAction("save", () => {
+      throw new Error("boom");
+    });
+
+    const message = String(notify.mock.calls[0][1]);
+    expect(message).not.toMatch(/developer console|devtools|inspector/i);
+    expect(message).toContain("Try again");
+  });
+
   it("never shows a raw action id to the user for an unregistered reporting id", () => {
     // `relaunchClaudeCode` reports under "launcher-relaunch" so its telemetry is
     // distinguishable from the palette command it shares code with — and that id
@@ -305,7 +321,8 @@ describe("failure reporting", () => {
     // failure before it ever touches `notify`, so that expectation is satisfied
     // whether or not the notify throw was caught. The load-bearing assertions
     // are the SECOND console line (only the catch emits it) and the absence of
-    // a fresh unhandled rejection.
+    // a fresh unhandled rejection. Both lines come from `logClientError`, which
+    // writes the console AND the diagnostics buffer the user can actually send.
     const notify = vi.fn(() => {
       throw new Error("notify exploded");
     });
@@ -317,8 +334,8 @@ describe("failure reporting", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       const lines = consoleError.mock.calls.map((c: unknown[]) => String(c[0]));
-      expect(lines.some((l: string) => l.includes('"save" failed'))).toBe(true);
-      expect(lines.some((l: string) => l.includes('reporting "save" failed'))).toBe(true);
+      expect(lines.some((l: string) => l.includes("action-failed"))).toBe(true);
+      expect(lines.some((l: string) => l.includes("failure-toast-threw"))).toBe(true);
       expect(seen).toHaveLength(0);
     });
   });
@@ -436,7 +453,8 @@ describe("revalidating facade", () => {
 
   it("classifies a dropped call as a DROP, never as an action failure", async () => {
     // The distinction is user-visible: a drop is not something that went wrong
-    // with the command, so it must not raise an error toast on the successor.
+    // with the command, so the successor gets an INFO "interrupted" notice
+    // rather than an error toast saying the command failed.
     const executor = mount(depsBag());
     const successorNotify = vi.fn();
 
@@ -462,7 +480,11 @@ describe("revalidating facade", () => {
       expect.anything(),
       expect.objectContaining({ actionId: "save" }),
     );
-    expect(successorNotify).not.toHaveBeenCalled();
+    // Told, not silently abandoned: the command may have half-completed, and the
+    // App that would have reported it is gone.
+    expect(successorNotify).toHaveBeenCalledTimes(1);
+    expect(successorNotify.mock.calls[0][0]).toBe("info");
+    expect(String(successorNotify.mock.calls[0][1])).toContain("interrupted");
   });
 });
 
@@ -480,6 +502,25 @@ describe("notifyUser", () => {
     expect(notify).toHaveBeenCalledWith("warning", "heads up", { dedupKey: "k" });
   });
 
+  it("does not let a throwing notify escape into the caller", async () => {
+    // `triggerSave` pushes up to two toasts in sequence and its `finally` has
+    // already recorded the save as successful by then. An unguarded throw on the
+    // first would skip the rest and unwind into the funnel, leaving the status
+    // bar flashing "Saved" beside a toast saying the command did not finish.
+    const notify = vi.fn(() => {
+      throw new Error("each_key_duplicate");
+    });
+    mount(depsBag(notify as unknown as Notify));
+
+    await withRejectionListener(async (seen) => {
+      expect(() => notifyUser("warning", "saved with caveats")).not.toThrow();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(seen).toHaveLength(0);
+    });
+
+    expect(consoleError.mock.calls.flat().join(" ")).toContain("toast-threw");
+  });
+
   it("REPORTS the drop when no App is mounted rather than swallowing it", () => {
     // The optional-chained `currentActionDeps()?.notify(...)` this replaced was
     // a silent failure. The integrity advisory ("some content may not have been
@@ -488,7 +529,7 @@ describe("notifyUser", () => {
 
     notifyUser("error", "some content may not have been preserved");
 
-    expect(consoleWarn.mock.calls.flat().join(" ")).toContain("no App mounted");
+    expect(consoleWarn.mock.calls.flat().join(" ")).toContain("toast-dropped");
     expect(reportErrorSpy).toHaveBeenCalledWith(
       expect.any(Error),
       expect.objectContaining({ droppedToast: "error" }),

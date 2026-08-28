@@ -207,17 +207,16 @@ describe("launcher reporting identity", () => {
     // its `finally`, unconditionally, so throwing there reaches the central
     // funnel no matter which branch the launcher fetches took. That keeps this
     // spec deterministic rather than dependent on the fetch shape.
-    const notify = vi.fn();
-    mount({
-      notify,
-      afterLauncherAction: vi.fn(() => {
-        throw new Error("refresh blew up");
-      }),
+    // `notify` is the forcing function, and it has to be: `afterLauncherAction`
+    // is now called inside a try/catch (a throw from a `finally` would replace
+    // the propagating exception), so it can no longer reach the funnel. The
+    // success toast sits OUTSIDE `postLauncherMutation`'s try — deliberately, so
+    // a throw there is not misreported as a failed request — which makes it the
+    // one deterministic route from a completed relaunch into the central catch.
+    const notify = vi.fn((severity: string) => {
+      if (severity === "info") throw new Error("toast exploded");
     });
-    // The launcher has to reach its mutation for the `finally` to run at all:
-    // `checkLauncherAvailable` returns early on a status failure, before the
-    // try/finally exists. So status says available, the nonce resolves, and the
-    // relaunch POST is what fails.
+    mount({ notify: notify as unknown as ActionDeps["notify"] });
     vi.stubGlobal(
       "confirm",
       vi.fn(() => true),
@@ -241,7 +240,12 @@ describe("launcher reporting identity", () => {
             }),
           );
         }
-        return Promise.resolve(new Response("{}", { status: 500 }));
+        return Promise.resolve(
+          new Response(JSON.stringify({ cwd: "/home/user" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
       }),
     );
 
@@ -258,7 +262,9 @@ describe("launcher reporting identity", () => {
     const ids = reportErrorSpy.mock.calls
       .map(([, ctx]) => (ctx as Record<string, unknown>)?.actionId)
       .filter((id): id is string => typeof id === "string");
-    expect(ids).toContain("launcher-relaunch");
-    expect(ids).not.toContain("launcher-relaunch-here");
+    // One assertion, not two. `expect(ids).not.toContain("launcher-relaunch-here")`
+    // read as a second guard and was not one: nothing in this realm can register
+    // that id, so it could only fail where the line above has already failed.
+    expect(ids).toEqual(["launcher-relaunch"]);
   });
 });

@@ -2913,7 +2913,10 @@ const shouldShowModelPicker = $derived(
         // The failed doc may have been closed since the error fired; triggerSave
         // would silently skip a closed doc, so tell the user to reopen instead.
         if (yjsSync.tabs.some((t) => t.id === action.documentId)) {
-          void triggerSave(action.documentId);
+          // `announceBusy`: this is a BUTTON. A save already in flight would
+          // otherwise leave the click with no effect and no message, which is
+          // exactly what a broken retry looks like.
+          void triggerSave(action.documentId, { announceBusy: true });
         } else {
           notifications.push({
             // Deterministic per-doc id (matches the dedupKey) so repeat clicks

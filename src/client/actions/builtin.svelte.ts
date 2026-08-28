@@ -31,6 +31,7 @@ import {
   type LauncherStatus,
 } from "../../shared/launcher/contract.js";
 import { clearDriftNudgeOptOut, driftNudgeOptedOut } from "../status/cwdDriftDismiss.svelte.js";
+import { logClientWarning } from "../utils/client-log.js";
 import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
@@ -178,7 +179,13 @@ async function resolveSaveAsDefaultPath(fileName: string): Promise<string> {
   try {
     const { join } = await import("@tauri-apps/api/path");
     return await join(dir, fileName);
-  } catch {
+  } catch (err) {
+    // Recorded, not swallowed. Falling back to the bare filename means the
+    // Save-As dialog silently stops honouring the user's configured save folder
+    // and opens in the OS default — which looks exactly like never having set
+    // it. Not a toast: the dialog is about to open anyway, and this is a
+    // diagnosis, not a decision the user can act on mid-gesture.
+    logClientWarning("save-as", "default-dir-unavailable", err);
     return fileName;
   }
 }
@@ -381,8 +388,27 @@ async function runBrowserSaveAs(
   }
 }
 
-export async function triggerSave(activeDocId: string | null): Promise<boolean> {
-  if (!activeDocId || inflight) return false;
+/**
+ * `announceBusy` follows the same rule as `createScratchpad`'s: silence on a
+ * re-entry is fine for a programmatic caller and reads as a broken button for a
+ * human one. The activity-tray **Retry** action is the caller that made this
+ * matter — a save fails, the user clicks Retry while a save is already in
+ * flight, and nothing happens and nothing is said.
+ */
+export async function triggerSave(
+  activeDocId: string | null,
+  { announceBusy = false }: { announceBusy?: boolean } = {},
+): Promise<boolean> {
+  if (!activeDocId) return false;
+  if (inflight) {
+    if (announceBusy) {
+      notifyUser("info", "A save is already in progress…", {
+        dedupKey: "save-inflight",
+        id: "save-inflight",
+      });
+    }
+    return false;
+  }
   inflight = true;
   saving = true;
   let ok = false;
@@ -542,7 +568,13 @@ async function fetchLauncherStatus(): Promise<FetchResult<LauncherStatus>> {
   // Outside the try above, so a malformed body used to reject past every
   // caller's FetchResult handling and land in the generic funnel as a crash.
   const body = (await res.json().catch(() => null)) as LauncherStatus | null;
-  if (!body) return { ok: false, kind: "server-error", detail: "malformed status response" };
+  if (!body) {
+    // Recorded, because moving this parse inside the FetchResult contract also
+    // removed the unhandled rejection that used to carry it to crash reporting.
+    // Trading a stack for a toast would be a net telemetry loss.
+    logClientWarning("launcher", "malformed-status-response");
+    return { ok: false, kind: "server-error", detail: "malformed status response" };
+  }
   return { ok: true, value: body };
 }
 
@@ -557,6 +589,7 @@ async function fetchLauncherNonce(): Promise<FetchResult<string>> {
   if (!res.ok) return { ok: false, kind: "server-error", detail: `HTTP ${res.status}` };
   const body = (await res.json().catch(() => null)) as { nonce?: unknown } | null;
   if (typeof body?.nonce !== "string") {
+    logClientWarning("launcher", "malformed-nonce-response");
     return { ok: false, kind: "server-error", detail: "malformed nonce response" };
   }
   return { ok: true, value: body.nonce };
@@ -613,6 +646,7 @@ async function postLauncherMutation(
     return null;
   }
   const nonce = nonceResult.value;
+  let success: string;
   try {
     const res = await fetch(`${API_BASE}${endpoint}`, {
       method: "POST",
@@ -627,32 +661,53 @@ async function postLauncherMutation(
       d.notify("error", `${labels.failPrefix}: ${body.message ?? res.statusText}`);
       return null;
     }
-    if (typeof labels.successMessage === "string") {
-      d.notify("info", labels.successMessage);
-    } else {
-      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      d.notify("info", labels.successMessage(body));
-    }
+    // Resolved inside the try (it is still a response read); DELIVERED outside.
+    success =
+      typeof labels.successMessage === "string"
+        ? labels.successMessage
+        : labels.successMessage((await res.json().catch(() => ({}))) as Record<string, unknown>);
   } catch (err) {
     d.notify("error", `${labels.requestFailPrefix}: ${err instanceof Error ? err.message : err}`);
+    return null;
   }
+  // Outside the try, deliberately. The mutation has ALREADY happened by this
+  // point — Claude has been SIGTERMed and respawned — so a throw from `notify`
+  // caught by the block above would tell the user "Relaunch request failed"
+  // about a relaunch that succeeded. They click again, and Claude is killed a
+  // second time. A throw here is not hypothetical: neither launcher call site
+  // passes a toast `id`, and App mints `launcher-${Date.now()}`, so two toasts
+  // in the same millisecond collide on ToastContainer's `{#each}` key.
+  d.notify("info", success);
   return null;
 }
 
-/** Guards that both palette actions share: in-flight check + availability
- * probe. Returns true when the caller should proceed, false when it
- * should bail (caller need not notify — guards notify when appropriate). */
-async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
-  // The one guard here that used to bail without saying anything. Harmless
-  // while these were palette-only commands; this branch now backs visible
-  // buttons in the empty state, including a "Restart Claude anyway" offered to
-  // someone who has just been told to install software they believe they have.
-  // That is a double-click waiting to happen, and the second click landing on
-  // silence reads as a broken button.
+/**
+ * Claim the launcher for this gesture, or report that it is already claimed.
+ *
+ * SYNCHRONOUS and ahead of every `await`, which is the whole point. The check
+ * used to live inside `checkLauncherAvailable`, behind the status fetch — so a
+ * second press arriving while the first was still awaiting that fetch saw
+ * `launcherInflight === false`, and both went on to confirm and relaunch:
+ * Claude SIGTERMed twice, the user's task killed twice. (`confirm()` blocks the
+ * event loop, so the modal is NOT the vulnerable window; the fetch before it is.)
+ *
+ * These branches back visible buttons in the empty state, including a "Restart
+ * Claude anyway" offered to someone who has just been told to install software
+ * they believe they have — so the refusal says why rather than reading as a
+ * broken button.
+ */
+function claimLauncher(d: ActionDeps): boolean {
   if (launcherInflight) {
     d.notify("info", "Already restarting Claude — hang on.");
     return false;
   }
+  launcherInflight = true;
+  return true;
+}
+
+/** Availability probe. Returns true when the caller should proceed, false when
+ * it should bail (the probe notifies on every bail). */
+async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
   const result = await fetchLauncherStatus();
   if (!result.ok) {
     if (result.kind === "not-built") {
@@ -708,7 +763,47 @@ async function relaunchHere(
   d: ActionDeps,
   { cwdRequired }: { cwdRequired: boolean },
 ): Promise<void> {
-  if (!(await checkLauncherAvailable(d))) return;
+  if (!claimLauncher(d)) return;
+  let attempted = false;
+  try {
+    if (!(await checkLauncherAvailable(d))) return;
+    await relaunchConfirmed(d, { cwdRequired });
+    attempted = true;
+  } finally {
+    launcherInflight = false;
+    // Re-probe from HERE, not from the click. The callers used to fire this
+    // synchronously alongside `void relaunchHere(...)`, which runs the instant
+    // this function suspends at its first `await` — i.e. BEFORE the blocking
+    // `confirm()`, whose four lines a user may spend ten seconds reading while
+    // the staggered +2s/+5s refresh timers advance on wall clock. Both would
+    // then fire before the POST completed, answer with the pre-relaunch cwd, and
+    // leave the drift pill asserting Claude is in a folder it has already left —
+    // with nothing to re-arm it, since the drift effect keys only on document
+    // path and epoch.
+    //
+    // Gated on `attempted` so a cancelled confirm or an unavailable launcher
+    // probes nothing, and WRAPPED because a throw from a `finally` REPLACES the
+    // exception that was propagating: after teardown this facade member throws
+    // `ExecutorDisposedError`, which would discard whatever real error was on
+    // its way to the funnel and misreport the dropped member as this one rather
+    // than the first actually touched. The executor reports that drop itself.
+    if (attempted) {
+      try {
+        d.afterLauncherAction();
+      } catch {
+        // Reported by the executor's facade; see above.
+      }
+    }
+  }
+}
+
+/** The half of `relaunchHere` that runs once the launcher is claimed and known
+ * available: derive the folder, confirm, POST. Split out so the claim/release
+ * pair above is one readable `try`/`finally` rather than nested ones. */
+async function relaunchConfirmed(
+  d: ActionDeps,
+  { cwdRequired }: { cwdRequired: boolean },
+): Promise<void> {
   const cwd = deriveCwdFromDocPath(d.getActiveDocumentPath());
   if (!cwd && cwdRequired) {
     d.notify(
@@ -743,54 +838,35 @@ async function relaunchHere(
     successMessage: (body: Record<string, unknown>) =>
       typeof body?.cwd === "string" ? `Claude restarting in ${body.cwd}.` : "Claude restarting.",
   };
-  launcherInflight = true;
-  try {
-    // A derived cwd is a guess: it is `dirname` of whatever tab happens to be
-    // active, and the server home-confines it (`resolveRouteCwd`). Tandem
-    // itself auto-opens CHANGELOG.md after an upgrade and sample/welcome.md on
-    // first run, both from inside the app bundle — so on the two states every
-    // desktop user passes through, the guess is guaranteed to be rejected. A
-    // doc on an external drive, a network share, or in a since-deleted folder
-    // rejects the same way. None of that should sink a recovery action whose
-    // caller already said the cwd is optional, so re-send without it.
-    // `persistCwd` tracks `cwdRequired`, and that is the whole distinction:
-    // only the palette's "relaunch here" means "move Claude to this folder",
-    // so only it may rewrite the integration's workingDirectory. The chip's
-    // derived guess moves Claude for this spawn and nothing more — clicking a
-    // RECOVERY button with a stray note open must not repoint Claude forever.
-    const rejected =
-      cwd && !cwdRequired
-        ? await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, { cwd }, labels, {
-            retryOnCode: LAUNCHER_ERROR_PATH_REJECTED,
-          })
-        : await postLauncherMutation(
-            d,
-            API_LAUNCHER_RELAUNCH,
-            cwd ? { cwd, persistCwd: true } : {},
-            labels,
-          );
-    // Fresh nonce, not a replay: the server rotates it on every attempt,
-    // including the rejected one. `postLauncherMutation` acquires its own.
-    if (rejected !== null) {
-      await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, {}, labels);
-    }
-  } finally {
-    launcherInflight = false;
-    // Re-probe from HERE, not from the click. The callers used to fire this
-    // synchronously alongside `void relaunchHere(...)`, which runs the instant
-    // this function suspends at its first `await` — i.e. BEFORE the blocking
-    // `confirm()` above, whose four lines a user may spend ten seconds reading
-    // while the staggered +2s/+5s refresh timers advance on wall clock. Both
-    // would then fire before the POST completed, answer with the pre-relaunch
-    // cwd, and leave the drift pill asserting Claude is in a folder it has
-    // already left — with nothing to re-arm it, since the drift effect keys only
-    // on document path and epoch.
-    //
-    // In `finally` rather than after the POST so a thrown request still
-    // re-probes: a relaunch that failed midway is exactly when the displayed
-    // state is least trustworthy. Placed inside this try, so a cancelled confirm
-    // (which returns before `launcherInflight = true`) still probes nothing.
-    d.afterLauncherAction();
+  // A derived cwd is a guess: it is `dirname` of whatever tab happens to be
+  // active, and the server home-confines it (`resolveRouteCwd`). Tandem itself
+  // auto-opens CHANGELOG.md after an upgrade and sample/welcome.md on first run,
+  // both from inside the app bundle — so on the two states every desktop user
+  // passes through, the guess is guaranteed to be rejected. A doc on an external
+  // drive, a network share, or in a since-deleted folder rejects the same way.
+  // None of that should sink a recovery action whose caller already said the cwd
+  // is optional, so re-send without it.
+  //
+  // `persistCwd` tracks `cwdRequired`, and that is the whole distinction: only
+  // the palette's "relaunch here" means "move Claude to this folder", so only it
+  // may rewrite the integration's workingDirectory. The chip's derived guess
+  // moves Claude for this spawn and nothing more — clicking a RECOVERY button
+  // with a stray note open must not repoint Claude forever.
+  const rejected =
+    cwd && !cwdRequired
+      ? await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, { cwd }, labels, {
+          retryOnCode: LAUNCHER_ERROR_PATH_REJECTED,
+        })
+      : await postLauncherMutation(
+          d,
+          API_LAUNCHER_RELAUNCH,
+          cwd ? { cwd, persistCwd: true } : {},
+          labels,
+        );
+  // Fresh nonce, not a replay: the server rotates it on every attempt, including
+  // the rejected one. `postLauncherMutation` acquires its own.
+  if (rejected !== null) {
+    await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, {}, labels);
   }
 }
 
@@ -832,12 +908,16 @@ export function startFreshClaudeCode(): void {
 }
 
 async function startFreshConversation(d: ActionDeps): Promise<void> {
-  if (!(await checkLauncherAvailable(d))) return;
-  if (!confirm("Drop Claude's saved conversation and restart fresh. This cannot be undone.")) {
-    return;
-  }
-  launcherInflight = true;
+  // Claimed synchronously, ahead of every `await` — same window as
+  // `relaunchHere`'s, and the same two SIGTERMs if it is claimed any later.
+  if (!claimLauncher(d)) return;
+  let attempted = false;
   try {
+    if (!(await checkLauncherAvailable(d))) return;
+    if (!confirm("Drop Claude's saved conversation and restart fresh. This cannot be undone.")) {
+      return;
+    }
+    attempted = true;
     await postLauncherMutation(
       d,
       API_LAUNCHER_START_FRESH,
@@ -851,8 +931,16 @@ async function startFreshConversation(d: ActionDeps): Promise<void> {
   } finally {
     launcherInflight = false;
     // Same reason as `relaunchHere`'s: measured from the mutation, not from a
-    // click that precedes an unbounded modal.
-    d.afterLauncherAction();
+    // click that precedes an unbounded modal. Gated and wrapped for the same two
+    // reasons — a cancel sent no request, and a throw from a `finally` replaces
+    // the propagating exception.
+    if (attempted) {
+      try {
+        d.afterLauncherAction();
+      } catch {
+        // Reported by the executor's facade; see `relaunchHere`.
+      }
+    }
   }
 }
 
@@ -896,6 +984,7 @@ async function restoreBackupOfActiveDoc(d: ActionDeps): Promise<void> {
     return;
   }
   restoreBackupInflight = true;
+  let restored: string | null = null;
   try {
     const listRes = await fetch(
       `${API_BASE}${API_BACKUPS}?documentId=${encodeURIComponent(activeDocId)}`,
@@ -908,7 +997,17 @@ async function restoreBackupOfActiveDoc(d: ActionDeps): Promise<void> {
     const listJson = (await listRes.json().catch(() => null)) as {
       data?: { backups?: BackupSnapshot[] };
     } | null;
-    const backups = listJson?.data?.backups ?? [];
+    if (!listJson) {
+      // Split from the empty-list branch below, and this is the highest-stakes
+      // split in the file. Collapsing a parse failure into "no backups exist"
+      // states the most reassuring of three possibilities as fact — to someone
+      // who arrived here because a save told them "some content may not have
+      // been preserved — your original is backed up". They stop looking, and the
+      // backup is on disk the whole time.
+      d.notify("error", "Couldn't read the list of backups — please try again.");
+      return;
+    }
+    const backups = listJson.data?.backups ?? [];
     if (backups.length === 0) {
       d.notify(
         "info",
@@ -937,12 +1036,18 @@ async function restoreBackupOfActiveDoc(d: ActionDeps): Promise<void> {
       d.notify("error", `Restore failed: ${body.message ?? restoreRes.statusText}`);
       return;
     }
-    d.notify("info", `Restored backup from ${formatBackupTimestamp(newest.timestamp)}.`);
+    restored = formatBackupTimestamp(newest.timestamp);
   } catch (err) {
     d.notify("error", `Restore request failed: ${err instanceof Error ? err.message : err}`);
   } finally {
     restoreBackupInflight = false;
   }
+  // Outside the try for the same reason as `postLauncherMutation`'s: the file on
+  // disk has already been replaced by this point, so a throw from `notify`
+  // caught above would say "Restore request failed" about a restore that
+  // happened — and the user would restore again, or give up believing their
+  // document was never recovered.
+  if (restored) d.notify("info", `Restored backup from ${restored}.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1279,9 +1384,9 @@ const BUILTINS: Action[] = [
 // it never fires. Re-registration is the legitimate outcome of a module
 // re-execution, so it is declared rather than policed.
 //
-// The returned handle is deliberately NOT exported and never wired to
-// `onDestroy`: an App remount (ErrorBoundary's "Try to recover") does not re-run
-// this module, so a lifecycle-driven dispose would empty the palette of all its
-// builtins for the rest of the session, silently. Action *execution* is what is
-// lifecycle-bound, and that lives in `executor.ts`.
+// The teardown handle is deliberately DISCARDED rather than stored: an App
+// remount (ErrorBoundary's "Try to recover") does not re-run this module, so a
+// lifecycle-driven dispose would empty the palette of all its builtins for the
+// rest of the session, silently. Action *execution* is what is lifecycle-bound,
+// and that lives in `executor.ts`.
 registerActions(BUILTINS, { replace: true });

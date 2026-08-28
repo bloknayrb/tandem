@@ -76,6 +76,7 @@
  */
 
 import { reportError } from "../sentry.js";
+import { logClientError, logClientWarning } from "../utils/client-log.js";
 import { type Action, getActionsMap } from "./registry.svelte.js";
 
 /** Optional routing for a toast pushed by the executor rather than by App. */
@@ -213,13 +214,21 @@ function failureMessage(id: string): string {
  * `reportError` from also swallowing the user-facing toast.
  */
 function report(id: string, err: unknown): void {
-  console.error(`[actions] "${id}" failed:`, err);
+  // `logClientError`, not a bare `console.error`. Both write the console line,
+  // but only this one also lands in the ring buffer that Copy Diagnostics and
+  // Report-a-bug drain — and on the primary distribution the console reaches
+  // nobody, which is the same argument `failureMessage` makes twenty lines up.
+  // The action id is deliberately NOT interpolated into `event`: that parameter
+  // is a static literal by contract (`client-log.ts`, pinned by
+  // `tests/client/client-log-callsites.test.ts`), and the id travels on the
+  // crash report and the toast instead.
+  logClientError("actions", "action-failed", err);
   try {
     reportError(err, { source: "actionExecutor", actionId: id });
   } catch (reportErr) {
     // reportError is internally guarded, so reaching here means crash reporting
     // itself is broken — worth one line rather than nothing.
-    console.warn("[actions] crash reporting is unavailable:", reportErr);
+    logClientWarning("actions", "crash-reporting-unavailable", reportErr);
   }
   // The LIVE bag, deliberately — not the failing executor's. An ErrorBoundary
   // recovery is the motivating scenario for this whole module, and it ends with
@@ -228,7 +237,13 @@ function report(id: string, err: unknown): void {
   // facade belongs to the successor, so this still never writes into a dead
   // closure.
   const deps = currentActionDeps();
-  if (!deps) return;
+  if (!deps) {
+    // Recorded, not returned silently. The failure itself is already logged and
+    // reported above, but the toast vanishing is its own fact — and an
+    // unrecorded drop is precisely the shape this module exists to remove.
+    logClientWarning("actions", "failure-toast-dropped");
+    return;
+  }
   try {
     deps.notify(
       "error",
@@ -238,7 +253,7 @@ function report(id: string, err: unknown): void {
       { type: "general-error", dedupKey: `action-failed-${id}`, id: `action-failed-${id}` },
     );
   } catch (notifyErr) {
-    console.error(`[actions] reporting "${id}" failed:`, notifyErr);
+    logClientError("actions", "failure-toast-threw", notifyErr);
   }
 }
 
@@ -258,14 +273,30 @@ class ExecutorDisposedError extends Error {
   }
 }
 
-/** One `console.warn` + crash report for a body abandoned after teardown. */
+/**
+ * Record a body abandoned after teardown, and tell the user it was abandoned.
+ *
+ * The user-facing half is not decoration. The motivating scenario ends with a
+ * WORKING App on screen — someone clicked "Try to recover" — and the command
+ * they ran before the crash may have half-completed (the relaunch POST can land
+ * before the touch that throws). Saying nothing leaves them guessing about the
+ * state of their Claude session. It is deliberately `info`, not `error`: nothing
+ * went wrong with the command, its App went away.
+ */
 function reportDroppedCall(err: ExecutorDisposedError): void {
-  console.warn(err.message);
+  logClientWarning("actions", "post-teardown-drop", err);
   try {
     reportError(err, { source: "actionExecutor", droppedMember: err.member });
   } catch (reportErr) {
-    console.warn("[actions] crash reporting is unavailable:", reportErr);
+    logClientWarning("actions", "crash-reporting-unavailable", reportErr);
   }
+  // The LIVE bag — the successor App, if one is up. `notifyUser` handles the
+  // no-App case by recording the drop, so this cannot become a silent one.
+  notifyUser(
+    "info",
+    "That command was interrupted while Tandem recovered, so it may not have finished. Run it again if you still need it.",
+    { dedupKey: "action-interrupted", id: "action-interrupted" },
+  );
 }
 
 /**
@@ -397,18 +428,30 @@ export function notifyUser(
 ): void {
   const deps = currentActionDeps();
   if (!deps) {
-    console.warn(`[actions] no App mounted — dropped ${severity} toast:`, message);
+    logClientWarning("actions", "toast-dropped");
     try {
+      // The message text rides along deliberately: without it the report says
+      // only that *a* toast was lost, which does not distinguish a dropped
+      // integrity advisory from a dropped "saved" nudge.
       reportError(new Error(`dropped ${severity} toast: ${message}`), {
         source: "actionExecutor",
         droppedToast: severity,
       });
     } catch (reportErr) {
-      console.warn("[actions] crash reporting is unavailable:", reportErr);
+      logClientWarning("actions", "crash-reporting-unavailable", reportErr);
     }
     return;
   }
-  deps.notify(severity, message, opts);
+  try {
+    deps.notify(severity, message, opts);
+  } catch (notifyErr) {
+    // Same reasoning as `report()`'s wrapper, and it is load-bearing here for a
+    // different reason: `triggerSave` pushes up to two toasts in sequence, so an
+    // unguarded throw on the first would skip the rest AND unwind past the
+    // `finally` that has already recorded the save as successful — leaving the
+    // status bar flashing "Saved" beside a funnel toast saying it did not finish.
+    logClientError("actions", "toast-threw", notifyErr);
+  }
 }
 
 /**

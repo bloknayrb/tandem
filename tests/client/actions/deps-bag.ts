@@ -26,8 +26,9 @@ import type { ActionDeps } from "../../../src/client/actions/executor.js";
  * actually asserts on (typically `notify` plus an active-document path).
  *
  * The three members typed `() => void | Promise<void>` default to ASYNC spies,
- * not bare `vi.fn()`: their promise arm is the one the executor has to await,
- * and a synchronous default would exercise only the arm that cannot fail. */
+ * not bare `vi.fn()` — `executor.test.ts`'s "awaits a dependency that returns a
+ * promise" spec drives one of them and asserts the rejection reaches the funnel,
+ * which is the arm a synchronous default would never exercise. */
 export function makeActionDeps(overrides: Partial<ActionDeps> = {}): ActionDeps {
   return {
     getActiveTabId: () => "doc-1",

@@ -8,18 +8,21 @@
  * `isTauriRuntime()` — it exists in the registry only inside the Tauri desktop
  * runtime (detected via `window.__TAURI_INTERNALS__`). Registration is a
  * top-level side effect of importing the module, so we set the runtime sentinel
- * BEFORE the single dynamic import. A one-shot `vi.resetModules()` gives this
- * file its own module realm so the sentinel is observed at registration time
- * even though sibling action tests (e.g. launcher-commands) import the same
- * module without it. It is done ONCE, in `beforeAll`, not per test: each reset
- * re-runs the BUILTINS registration against the shared registry, and while
- * `{ replace: true }` makes that legal it also silently repoints every id at a
- * fresh realm's action objects, which the sibling suites are still holding.
+ * BEFORE the single dynamic import, and `vi.resetModules()` discards any copy
+ * this file's own earlier imports may already have cached.
+ *
+ * The reset happens ONCE, in `beforeAll`, and the reason is realm identity
+ * WITHIN this file — not cross-file leakage. Vitest isolates per test *file* by
+ * default, so a sibling suite could never have cached anything into this realm.
+ * What a second reset would break is local: `getActionsMap` and the executor
+ * seam are captured from the post-reset realm, so resetting again would repoint
+ * `builtin.svelte.ts`'s registration at a third realm's registry and leave those
+ * captured references reading an empty map.
  *
  * The Tauri-vs-browser *gating* (action present on desktop, hidden in the
  * browser) is asserted by the Playwright/claude-in-chrome E2E recipe for #299,
- * not here — toggling the sentinel across a shared module realm is what the
- * isolated import above avoids.
+ * not here — toggling the sentinel after the module body has already read it
+ * would have no effect, which is what the single pre-import assignment avoids.
  *
  * `showInFileManager` is module-private; we reach it through the registered
  * action's `run()`. The `@tauri-apps/api/core` `invoke` is mocked so we assert

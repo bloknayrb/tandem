@@ -45,7 +45,21 @@ function plant(action: Action): Action {
   return action;
 }
 
+/** Every observer's `$effect.root`, torn down in `afterEach`.
+ *
+ * Not `watcher.stop()` at the end of each spec: `stop()` sits after assertions
+ * that can throw, so a FIRST failure would leave a live root subscribed to
+ * `actionsMap` for the rest of the file — every later registration re-runs it,
+ * and the second failure is then caused by the first. */
+const watchers: Array<() => void> = [];
+function watch(id: string) {
+  const observer = observeRegistry(id);
+  watchers.push(observer.stop);
+  return observer;
+}
+
 afterEach(() => {
+  for (const stop of watchers.splice(0)) stop();
   for (const id of planted.splice(0)) unregisterAction(id);
   reportErrorSpy.mockClear();
   vi.restoreAllMocks();
@@ -56,14 +70,13 @@ describe("unregisterAction", () => {
     const id = uniqueId();
     registerAction(plant(makeAction(id)));
 
-    const watcher = observeRegistry(id);
+    const watcher = watch(id);
     expect(watcher.present()).toBe(true);
 
     expect(unregisterAction(id)).toBe(true);
 
     // The half a mutating `.delete()` would fail: the derived must re-run.
     expect(watcher.present()).toBe(false);
-    watcher.stop();
   });
 
   it("returns false and leaves the cell alone for an unknown id", () => {
@@ -76,12 +89,11 @@ describe("registerActions", () => {
     const id = uniqueId();
     const reg = registerActions([plant(makeAction(id))]);
 
-    const watcher = observeRegistry(id);
+    const watcher = watch(id);
     expect(watcher.present()).toBe(true);
 
     reg.dispose();
     expect(watcher.present()).toBe(false);
-    watcher.stop();
   });
 
   it("removes exactly its own ids and leaves everything else standing", () => {
@@ -120,9 +132,11 @@ describe("registerActions", () => {
   it("rejects a duplicate id WITHIN one batch even with { replace: true }", () => {
     // `replace` says "this batch owns ids that already exist" — a legitimate
     // claim on an HMR re-run. It says nothing about an array that names the same
-    // id twice, which is always an authoring bug: the later entry wins, the
-    // disposer's identity check then declines to remove the earlier one, and the
-    // batch is silently one action shorter than it reads.
+    // id twice, which is always an authoring bug: the later entry wins, so the
+    // registry holds one fewer action than the array reads, and in a PRODUCTION
+    // build (where the collision warns rather than throws) the loser then trips
+    // the disposer's superseded-by-someone-else branch and files a crash report
+    // blaming a rival owner that does not exist.
     const dup = uniqueId();
     expect(() =>
       registerActions([makeAction(dup, "first"), makeAction(dup, "second")], { replace: true }),
