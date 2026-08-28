@@ -57,6 +57,7 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 
 import type { Request, Response } from "express";
 import { resetForTesting as resetDirtyState } from "../../src/server/documents/dirty.js";
+import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { suppressNextChange, watchFile } from "../../src/server/file-watcher.js";
@@ -72,7 +73,6 @@ import {
   saveDocumentToDisk,
 } from "../../src/server/mcp/document-service.js";
 import {
-  openFileByPath,
   reloadDocumentFromMarkdown,
   resolveExternalConflict,
 } from "../../src/server/mcp/file-opener.js";
@@ -188,7 +188,7 @@ describe("docx watcher — external change with unsaved edits", () => {
     const filePath = path.join(tmpDir, "conflict.docx");
     await fs.writeFile(filePath, await buildSimpleDocx("Original body"));
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
 
@@ -216,7 +216,7 @@ describe("docx watcher — external change with unsaved edits", () => {
     const filePath = path.join(tmpDir, "clean-reload.docx");
     await fs.writeFile(filePath, await buildSimpleDocx("First version"));
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     expect(extractText(doc)).toContain("First version");
@@ -245,7 +245,7 @@ describe("docx own-save suppression", () => {
     const filePath = path.join(tmpDir, "own-save.docx");
     await fs.writeFile(filePath, await buildSimpleDocx("Save me"));
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     makeDirty(doc);
 
@@ -269,7 +269,7 @@ describe("resolveExternalConflict", () => {
   async function flaggedSetup() {
     const filePath = path.join(tmpDir, "resolve.docx");
     await fs.writeFile(filePath, await buildSimpleDocx("Disk body"));
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     makeDirty(doc);
@@ -321,7 +321,7 @@ describe("resolveExternalConflict", () => {
   it("is a no-op success when no conflict is pending", async () => {
     const filePath = path.join(tmpDir, "no-conflict.docx");
     await fs.writeFile(filePath, await buildSimpleDocx("Quiet"));
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     makeDirty(doc);
     const textBefore = extractText(doc);
@@ -424,7 +424,7 @@ describe("handleResolveExternalConflict — route doc selection", () => {
   async function flaggedDocx(name: string, diskBody: string) {
     const filePath = path.join(tmpDir, name);
     await fs.writeFile(filePath, await buildSimpleDocx("Original"));
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi
       .mocked(watchFile)
@@ -445,7 +445,7 @@ describe("handleResolveExternalConflict — route doc selection", () => {
     // read-only CHANGELOG.md opened on upgrade).
     const otherPath = path.join(tmpDir, "active-other.docx");
     await fs.writeFile(otherPath, await buildSimpleDocx("Other doc"));
-    const other = await openFileByPath(otherPath);
+    const other = await openFromDisk(otherPath);
     setActiveDocId(other.documentId);
     expect(hasDoc(docxId)).toBe(true);
 
@@ -615,14 +615,14 @@ describe("docx session restore (#1069)", () => {
     const filePath = path.join(tmpDir, "restore-unchanged.docx");
     await fs.writeFile(filePath, await buildSimpleDocx("Stable disk"));
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
     makeDirty(doc);
     await saveSession(filePath, "docx", doc, { dirty: true });
     removeDoc(first.documentId);
     setActiveDocId(null);
 
-    const second = await openFileByPath(filePath);
+    const second = await openFromDisk(filePath);
     expect(second.restoredFromSession).toBe(true);
     const restoredDoc = getOrCreateDocument(second.documentId);
     expect(conflictOf(restoredDoc)).toMatchObject({
@@ -645,7 +645,7 @@ describe("docx session restore (#1069)", () => {
     const filePath = path.join(tmpDir, "restore-changed.docx");
     await fs.writeFile(filePath, await buildSimpleDocx("Old disk"));
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
     makeDirty(doc);
     await saveSession(filePath, "docx", doc, { dirty: true });
@@ -656,7 +656,7 @@ describe("docx session restore (#1069)", () => {
     await fs.writeFile(filePath, await buildSimpleDocx("New disk"));
     await fs.utimes(filePath, new Date(), new Date(Date.now() + 10_000));
 
-    const second = await openFileByPath(filePath);
+    const second = await openFromDisk(filePath);
     expect(second.restoredFromSession).toBe(true); // session is the only copy of the edits
     const restoredDoc = getOrCreateDocument(second.documentId);
     expect(extractText(restoredDoc)).toContain("local unsaved edit");
@@ -687,7 +687,7 @@ describe("docx session restore (#1069)", () => {
     const filePath = path.join(tmpDir, "restore-clean.docx");
     await fs.writeFile(filePath, await buildSimpleDocx("Old disk"));
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
     await saveSession(filePath, "docx", doc); // no dirty flag
     removeDoc(first.documentId);
@@ -696,7 +696,7 @@ describe("docx session restore (#1069)", () => {
     await fs.writeFile(filePath, await buildSimpleDocx("New disk"));
     await fs.utimes(filePath, new Date(), new Date(Date.now() + 10_000));
 
-    const second = await openFileByPath(filePath);
+    const second = await openFromDisk(filePath);
     expect(second.restoredFromSession).toBe(false);
     expect(conflictOf(getOrCreateDocument(second.documentId))).toBeUndefined();
   });
@@ -705,7 +705,7 @@ describe("docx session restore (#1069)", () => {
     const filePath = path.join(tmpDir, "restore-md.md");
     await fs.writeFile(filePath, "# Markdown");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
     await saveSession(filePath, "md", doc, { dirty: true });
     removeDoc(first.documentId);
@@ -715,7 +715,7 @@ describe("docx session restore (#1069)", () => {
     // than "docx only". `.md` is autosaveable and the disk didn't change, so
     // the next 60s tick persists the restored edits with nothing to choose
     // between. A prompt here would be a choice with only one branch.
-    const second = await openFileByPath(filePath);
+    const second = await openFromDisk(filePath);
     expect(second.restoredFromSession).toBe(true);
     expect(conflictOf(getOrCreateDocument(second.documentId))).toBeUndefined();
   });
@@ -753,7 +753,7 @@ describe("watcher — external change with unsaved edits (.md, #1238)", () => {
     const filePath = path.join(tmpDir, "conflict.md");
     await fs.writeFile(filePath, "# Original body");
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
 
@@ -781,7 +781,7 @@ describe("watcher — external change with unsaved edits (.md, #1238)", () => {
     const filePath = path.join(tmpDir, "clean-reload.md");
     await fs.writeFile(filePath, "# First version");
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
 
@@ -800,7 +800,7 @@ describe("watcher — external change with unsaved edits (.md, #1238)", () => {
     const filePath = path.join(tmpDir, "readonly.md");
     await fs.writeFile(filePath, "# Read only original");
 
-    const opened = await openFileByPath(filePath, { readOnly: true });
+    const opened = await openFromDisk(filePath, { readOnly: true });
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     makeDirty(doc);
@@ -824,7 +824,7 @@ describe("conflict flag blocks saves (#1238)", () => {
   async function flaggedWithinTolerance() {
     const filePath = path.join(tmpDir, "gate.md");
     await fs.writeFile(filePath, "# Disk body");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     makeDirty(doc);
@@ -881,14 +881,14 @@ describe("conflict flag blocks saves (#1238)", () => {
     const filePath = path.join(tmpDir, "restore-then-save.docx");
     await fs.writeFile(filePath, await buildSimpleDocx("Stable disk"));
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
     makeDirty(doc);
     await saveSession(filePath, "docx", doc, { dirty: true });
     removeDoc(first.documentId);
     setActiveDocId(null);
 
-    const second = await openFileByPath(filePath);
+    const second = await openFromDisk(filePath);
     const restoredDoc = getOrCreateDocument(second.documentId);
     expect(conflictOf(restoredDoc)).toMatchObject({
       kind: "unsaved-restore",
@@ -908,7 +908,7 @@ describe("session restore across a restart (#1238)", () => {
     const filePath = path.join(tmpDir, "restore-changed.md");
     await fs.writeFile(filePath, "# Old disk");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
     makeDirty(doc);
     await saveSession(filePath, "md", doc, { dirty: true });
@@ -918,7 +918,7 @@ describe("session restore across a restart (#1238)", () => {
     await fs.writeFile(filePath, "# New disk");
     await fs.utimes(filePath, new Date(), new Date(Date.now() + 10_000));
 
-    const second = await openFileByPath(filePath);
+    const second = await openFromDisk(filePath);
     // Pre-#1238 this took disk and silently dropped the session — the same
     // data loss as the watcher path, just at the restart boundary.
     expect(second.restoredFromSession).toBe(true);
@@ -939,7 +939,7 @@ describe("session restore across a restart (#1238)", () => {
     const filePath = path.join(tmpDir, "carry.md");
     await fs.writeFile(filePath, "# Disk body");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     makeDirty(doc);
@@ -957,7 +957,7 @@ describe("session restore across a restart (#1238)", () => {
     setActiveDocId(null);
     // Note: the file is NOT touched again — the whole point is that the
     // restore path has no disk-level evidence a conflict ever happened.
-    const second = await openFileByPath(filePath);
+    const second = await openFromDisk(filePath);
     const restoredDoc = getOrCreateDocument(second.documentId);
 
     // Re-flagged verbatim, not rewritten to "unsaved-restore".
@@ -982,7 +982,7 @@ describe("session restore across a restart (#1238)", () => {
     const filePath = path.join(tmpDir, "resolved.md");
     await fs.writeFile(filePath, "# Disk body");
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     makeDirty(doc);
@@ -1000,7 +1000,7 @@ describe("session restore across a restart (#1238)", () => {
     const filePath = path.join(tmpDir, "rename-carry.md");
     await fs.writeFile(filePath, "# Disk body");
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     makeDirty(doc);
@@ -1016,7 +1016,7 @@ describe("session restore across a restart (#1238)", () => {
 
     removeDoc(opened.documentId);
     setActiveDocId(null);
-    const second = await openFileByPath(newPath);
+    const second = await openFromDisk(newPath);
     expect(conflictOf(getOrCreateDocument(second.documentId))).toMatchObject({
       kind: "external-edit",
     });
@@ -1032,7 +1032,7 @@ describe("session restore across a restart (#1238)", () => {
     const filePath = path.join(tmpDir, "readonly-carry.md");
     await fs.writeFile(filePath, "# Disk body");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     makeDirty(doc);
@@ -1043,7 +1043,7 @@ describe("session restore across a restart (#1238)", () => {
     setActiveDocId(null);
 
     // Reopen read-only, then let a session write happen while it is open.
-    const ro = await openFileByPath(filePath, { readOnly: true });
+    const ro = await openFromDisk(filePath, { readOnly: true });
     expect(conflictOf(getOrCreateDocument(ro.documentId))).toMatchObject({
       kind: "external-edit",
     });
@@ -1053,7 +1053,7 @@ describe("session restore across a restart (#1238)", () => {
     setActiveDocId(null);
 
     // Reopen writable: the conflict must still be there, and still blocking.
-    const rw = await openFileByPath(filePath);
+    const rw = await openFromDisk(filePath);
     expect(conflictOf(getOrCreateDocument(rw.documentId))).toMatchObject({
       kind: "external-edit",
     });
@@ -1076,7 +1076,7 @@ describe("session restore across a restart (#1238)", () => {
     const filePath = path.join(tmpDir, "readonly-composition.md");
     await fs.writeFile(filePath, "# Disk body");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
     makeDirty(doc);
     await fs.writeFile(filePath, "# External rewrite");
@@ -1086,7 +1086,7 @@ describe("session restore across a restart (#1238)", () => {
     setActiveDocId(null);
 
     // Reopen read-only: carries the conflict (per the previous test).
-    const ro = await openFileByPath(filePath, { readOnly: true });
+    const ro = await openFromDisk(filePath, { readOnly: true });
     const roDoc = getOrCreateDocument(ro.documentId);
     expect(conflictOf(roDoc)).toMatchObject({ kind: "external-edit" });
     const contentBeforeThirdWrite = extractText(roDoc);
@@ -1110,7 +1110,7 @@ describe("session restore across a restart (#1238)", () => {
     const filePath = path.join(tmpDir, "race.md");
     await fs.writeFile(filePath, "# Disk body v1");
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     makeDirty(doc);
     await fs.writeFile(filePath, "# Disk body v2 (external edit A)");
@@ -1155,7 +1155,7 @@ describe("session restore across a restart (#1238)", () => {
     const filePath = path.join(tmpDir, "race-save.md");
     await fs.writeFile(filePath, "# Disk body v1");
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     // No conflict pending yet — saveDocumentToDisk's own gate only blocks when
     // one IS pending; this exercises the race for a save that starts clean.
@@ -1196,14 +1196,14 @@ describe("session restore across a restart (#1238)", () => {
     const filePath = path.join(tmpDir, "restore.html");
     await fs.writeFile(filePath, "<p>Stable disk</p>");
 
-    const first = await openFileByPath(filePath);
+    const first = await openFromDisk(filePath);
     const doc = getOrCreateDocument(first.documentId);
     makeDirty(doc);
     await saveSession(filePath, "html", doc, { dirty: true });
     removeDoc(first.documentId);
     setActiveDocId(null);
 
-    const second = await openFileByPath(filePath);
+    const second = await openFromDisk(filePath);
     expect(second.restoredFromSession).toBe(true);
     expect(conflictOf(getOrCreateDocument(second.documentId))).toMatchObject({
       kind: "unsaved-restore",
@@ -1220,7 +1220,7 @@ describe("conflict-adjacent surfaces", () => {
   async function flagged(name: string) {
     const filePath = path.join(tmpDir, name);
     await fs.writeFile(filePath, "# Disk body");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     makeDirty(doc);
@@ -1258,7 +1258,7 @@ describe("conflict-adjacent surfaces", () => {
     // newer, real conflict for content this commit never saw.
     const filePath = path.join(tmpDir, "sourceview-race.md");
     await fs.writeFile(filePath, "# Disk body");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const id = opened.documentId;
     const doc = getOrCreateDocument(id);
     expect(conflictOf(doc)).toBeUndefined();
@@ -1297,7 +1297,7 @@ describe("conflict-adjacent surfaces", () => {
     // async gap, the commit still resolves cleanly (baseline behavior).
     const filePath = path.join(tmpDir, "sourceview-no-race.md");
     await fs.writeFile(filePath, "# Disk body");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const id = opened.documentId;
     const doc = getOrCreateDocument(id);
 
@@ -1321,7 +1321,7 @@ describe("conflict-adjacent surfaces", () => {
 
     // And it must actually round-trip: reopening restores the edits with the
     // conflict still pending.
-    const reopened = await openFileByPath(filePath);
+    const reopened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(reopened.documentId);
     expect(extractText(doc)).toContain("local unsaved edit");
     expect(conflictOf(doc)).toMatchObject({ kind: "external-edit" });
@@ -1330,7 +1330,7 @@ describe("conflict-adjacent surfaces", () => {
   it("still deletes the session when an unconflicted tab is closed", async () => {
     const filePath = path.join(tmpDir, "close-clean.md");
     await fs.writeFile(filePath, "# Disk body");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
 
     await closeDocumentById(opened.documentId);
 
@@ -1344,7 +1344,7 @@ describe("conflict-adjacent surfaces", () => {
     // only in memory, since saveDocumentToDisk refuses .html outright.
     const filePath = path.join(tmpDir, "keep.html");
     await fs.writeFile(filePath, "<p>Disk body</p>");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     makeDirty(doc);
@@ -1410,7 +1410,7 @@ describe("tandem_save on a conflicted document (#1238)", () => {
     const filePath = path.join(tmpDir, "mcp-save.md");
     await fs.writeFile(filePath, "# Disk body");
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     makeDirty(doc);
@@ -1476,7 +1476,7 @@ describe("POST /api/save on a conflicted document (#1238)", () => {
     const filePath = path.join(tmpDir, "api-save.md");
     await fs.writeFile(filePath, "# Disk body");
 
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
     makeDirty(doc);
@@ -1504,7 +1504,7 @@ describe("POST /api/save on a conflicted document (#1238)", () => {
   it("does not write a stray session carry on an ordinary successful save", async () => {
     const filePath = path.join(tmpDir, "api-save-ok.md");
     await fs.writeFile(filePath, "# Disk body");
-    const opened = await openFileByPath(filePath);
+    const opened = await openFromDisk(filePath);
     const doc = getOrCreateDocument(opened.documentId);
     makeDirty(doc);
 

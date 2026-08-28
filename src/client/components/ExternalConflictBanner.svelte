@@ -76,7 +76,7 @@ $effect(() => {
     // buttons, or A's eventual failure text attached to B). `detectedAt` is a
     // stable per-episode id (a carried flag is re-raised with its ORIGINAL
     // detectedAt, but that path only fires for a document not currently open
-    // — see file-opener.ts's openFileByPath — so it can't collide with a live
+    // — see documents/open.ts's openFromDisk — so it can't collide with a live
     // banner's in-flight request).
     if (next?.detectedAt !== lastDetectedAt) {
       error = null;

@@ -52,10 +52,10 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
   return { ...actual, pushNotification: vi.fn() };
 });
 
+import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import { openFileByPath } from "../../src/server/mcp/file-opener.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
@@ -100,11 +100,11 @@ async function setupOpenedFile(initialText: string): Promise<{
 }> {
   const filePath = path.join(tmpDir, "doc.md");
   await fs.writeFile(filePath, initialText, "utf-8");
-  await openFileByPath(filePath);
+  await openFromDisk(filePath);
 
   const doc = getOrCreateDocument(docIdFromPath(filePath));
   const lastCall = watcherMocks.watchFile.mock.calls.at(-1);
-  if (!lastCall) throw new Error("watchFile was not called by openFileByPath");
+  if (!lastCall) throw new Error("watchFile was not called by openFromDisk");
   const onChanged = lastCall[1] as (p: string) => Promise<void>;
   return { filePath, doc, triggerReload: () => onChanged(filePath) };
 }
