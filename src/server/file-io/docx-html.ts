@@ -341,11 +341,24 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
 
     case "ul": {
       const el = new Y.XmlElement("bulletList");
+      // Counted rather than re-read from `el.length`: the element is detached,
+      // and yjs warns on every length read of a detached type (see
+      // `ensureBlockChild` in mdast-ydoc.ts).
+      let itemCount = 0;
       for (const child of node.children) {
         if (isElement(child) && child.tagName.toLowerCase() === "li") {
-          el.insert(el.length, [buildListItem(child, deferred)]);
+          el.insert(itemCount, [buildListItem(child, deferred)]);
+          itemCount++;
         }
       }
+      // `bulletList` is `listItem+`, so a childless one is schema-invalid, and
+      // invalid is not inert (#1664): the client deletes it out of the shared
+      // Y.Doc and can cascade to the fragment root. Drop it here instead.
+      // Dropping rather than filling, unlike `collectBlockChildren` below: an
+      // `<li>` is a bullet the reader can see, so it earns an empty paragraph,
+      // whereas an empty `<ul>` displays nothing and inventing a bullet for it
+      // would add content the Word file never had.
+      if (itemCount === 0) return [];
       return [el];
     }
 
@@ -355,11 +368,14 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
       if (start !== 1) {
         el.setAttribute("start", start as any);
       }
+      let itemCount = 0;
       for (const child of node.children) {
         if (isElement(child) && child.tagName.toLowerCase() === "li") {
-          el.insert(el.length, [buildListItem(child, deferred)]);
+          el.insert(itemCount, [buildListItem(child, deferred)]);
+          itemCount++;
         }
       }
+      if (itemCount === 0) return []; // `listItem+` — see the `ul` case (#1664).
       return [el];
     }
 
@@ -367,9 +383,8 @@ function domNodeToYxml(node: ChildNode, deferred: DeferredText[]): Y.XmlElement[
       const el = new Y.XmlElement("table");
       // Walk tbody/thead/tfoot or direct tr children
       const rows = collectTableRows(node);
-      for (const row of rows) {
-        el.insert(el.length, [buildTableRow(row, deferred)]);
-      }
+      rows.forEach((row, i) => el.insert(i, [buildTableRow(row, deferred)]));
+      if (rows.length === 0) return []; // `tableRow+` — see the `ul` case (#1664).
       return [el];
     }
 

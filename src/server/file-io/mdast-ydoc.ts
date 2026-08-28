@@ -158,7 +158,7 @@ function blockToYxml(
           insertIndex++;
         }
       }
-      ensureBlockChild(el, deferred);
+      ensureBlockChild(el, insertIndex);
       return [el];
     }
 
@@ -197,7 +197,7 @@ function blockToYxml(
             itemIndex++;
           }
         }
-        ensureBlockChild(listItem, deferred);
+        ensureBlockChild(listItem, itemIndex);
         el.insert(listIndex, [listItem]);
         listIndex++;
       }
@@ -313,20 +313,28 @@ function blockToYxml(
  * as the same bare `-` it read, so nothing rewrites the user's file. Both are
  * asserted rather than assumed, in `tests/client/list-ydoc-sync.test.ts`.
  *
- * Deferred population keeps the two-pass contract (CLAUDE.md: attach the
- * Y.XmlText before populating it) even though the text is empty, so this stays
- * correct if it ever carries content.
+ * Takes the child count rather than reading `el.length`, and that is not a
+ * micro-optimization. `el` is still DETACHED here, and yjs's
+ * `YXmlFragment.get length()` opens with `this.doc ?? warnPrematureAccess()` —
+ * so an `el.length` guard emits a `console.warn` for every list item and
+ * blockquote in the document, measured at 795 on `CHANGELOG.md` alone. Beyond
+ * the cost, CLAUDE.md documents "Invalid access" as a harmless y-prosemirror
+ * artifact and `index.ts` suppresses it by pattern; manufacturing thousands
+ * deterministically would destroy what signal that channel has left. Both
+ * callers already track the count for their insert index, so it is free.
+ *
+ * No `deferred` entry, unlike every other builder here. The two-pass rule exists
+ * because a DETACHED `Y.XmlText` reverses segment order on attach — and there
+ * are no segments to reverse. `new Y.XmlText("")` bakes the (empty) content in
+ * at construction, the same reasoning `imageToYxml` gives for taking no
+ * `deferred`; routing it through pass 2 would only reach `insert(0, "")`, which
+ * yjs returns from immediately.
  */
-function ensureBlockChild(
-  el: Y.XmlElement,
-  deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }>,
-): void {
-  if (el.length > 0) return;
+function ensureBlockChild(el: Y.XmlElement, childCount: number): void {
+  if (childCount > 0) return;
   const para = new Y.XmlElement("paragraph");
-  const text = new Y.XmlText();
-  para.insert(0, [text]);
+  para.insert(0, [new Y.XmlText("")]);
   el.insert(0, [para]);
-  deferred.push({ xmlText: text, plainText: "" });
 }
 
 /**
