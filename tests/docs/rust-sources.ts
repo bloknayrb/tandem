@@ -122,13 +122,43 @@ export function stripRustTestModules(src: string): string {
   let out = "";
   let i = 0;
   for (;;) {
-    const at = src.indexOf("#[cfg(test)]", i);
+    const at = nextTestCfg(src, i);
     if (at === -1) return out + src.slice(i);
     const open = src.indexOf("{", at);
     if (open === -1) return out + src.slice(i);
     out += src.slice(i, at);
     i = matchRustBrace(src, open) + 1;
   }
+}
+
+/**
+ * Index of the next `#[cfg(…)]` that gates on `test`, or -1.
+ *
+ * **`#[cfg(test)]` is not the only spelling, and keying on that literal was a
+ * real hole.** The crate carries two `#[cfg(all(test, target_os = "windows"))]`
+ * modules — `workspace_entry_written_tests` and `cowork_heal_pass_tests`, in
+ * `lib.rs` when this was written and in `cowork_commands.rs` since Unit 11d
+ * moved them — and the substring scan this replaced matched neither, so the
+ * "a `#[cfg(test)]` mock defeats the locator identically" defense that
+ * `rustSourceDefining` documents simply did not fire for them. Found by review
+ * while planning Unit 11d, which is the first unit to move a file containing
+ * that spelling into this scan's path.
+ *
+ * `not(` anywhere in the predicate means **don't strip**, and that asymmetry is
+ * deliberate: `#[cfg(not(test))]` gates production code, and the safe error here
+ * is to leave a block in (a scan that reads too much fails loud on the extra
+ * match) rather than to remove one (a scan that reads too little passes
+ * silently).
+ */
+function nextTestCfg(src: string, from: number): number {
+  for (let i = src.indexOf("#[cfg(", from); i !== -1; i = src.indexOf("#[cfg(", i + 1)) {
+    const close = src.indexOf(")]", i);
+    if (close === -1) return -1;
+    const predicate = src.slice(i + "#[cfg(".length, close);
+    if (predicate.includes("not(")) continue;
+    if (/(^|[^A-Za-z0-9_])test([^A-Za-z0-9_]|$)/.test(predicate)) return i;
+  }
+  return -1;
 }
 
 /** Index of the `}` closing the `{` at `open`. Throws if the block never closes. */

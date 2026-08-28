@@ -6,6 +6,33 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege for every job here (CodeQL `actions/missing-workflow-permissions`).
+# Without this block each job gets the repository's default token scopes, which on
+# a repo configured for read/write is far more than any of them uses.
+#
+# `contents: read` is the whole set, and it is not the reflex answer — it is what
+# the jobs were audited to need. Nothing in this file comments on a PR, publishes a
+# check run, pushes a ref, or calls the API: there is no `secrets.`, `GITHUB_TOKEN`,
+# `github.token` or `gh` invocation anywhere in it. The cache and artifact services
+# (`Swatinem/rust-cache`, `setup-node`'s `cache: npm`, `upload-artifact` v4+)
+# authenticate with ACTIONS_RUNTIME_TOKEN rather than GITHUB_TOKEN, so they need no
+# scope of their own.
+#
+# **`contents: read` is load-bearing, not decorative.** Besides `actions/checkout`,
+# the `check` job runs `git fetch --no-tags --depth=1 origin tag v0.21.0` over the
+# credential checkout persists — the acceptance harness reads its immutable skill
+# baseline from that tag via `git show`, and `actions/checkout` is depth-1 and
+# tagless. `permissions: {}` would 403 there, and the failure would look like a
+# harness bug rather than a permissions one.
+#
+# Declared at workflow level rather than per job, deliberately: all five jobs need
+# the identical minimum, and inheritance means a job added later is least-privileged
+# by default instead of silently reacquiring the repo default. A future job needing
+# more takes a job-level block — which REPLACES rather than merges, so such an
+# override must restate `contents: read` if it still checks out code.
+permissions:
+  contents: read
+
 jobs:
   rust-test:
     # macos-latest is here for coverage, not parity: the `NativeHost::MacOs`

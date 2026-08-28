@@ -25,7 +25,7 @@ export type InvokeFn = <T = unknown>(cmd: string, args?: Record<string, unknown>
 export const TAURI_NOT_AVAILABLE = "Tauri runtime not available";
 
 /**
- * Mirrors `WINDOWS_ONLY_ERR` in `src-tauri/src/lib.rs`.
+ * Mirrors `WINDOWS_ONLY_ERR` in `src-tauri/src/cowork_commands.rs`.
  *
  * Since #1436 this string SELECTS BEHAVIOUR, not just a log level: it is what
  * routes the non-Windows rejection to `unavailable` (silent) rather than
@@ -174,7 +174,7 @@ export async function coworkPreflightSubnet(invoke: InvokeFn): Promise<SubnetPre
       // not parse as JSON with a string `kind`. Keep that ordering if this is
       // ever restructured, and do not widen the logging to the parsed variants.
       //
-      // One caveat, so nobody reads that as stronger than it is. `lib.rs` sends
+      // One caveat, so nobody reads that as stronger than it is. The Rust side sends
       // `serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())`, and the
       // `Display` fallback DOES embed `stderr_tail` while not being JSON — so
       // it would take this branch. Serialising this enum cannot actually fail
