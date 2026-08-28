@@ -1,4 +1,5 @@
 <script lang="ts">
+import "../editor/toolbar/toolbar-chrome.css";
 import { clickOutside } from "../actions/clickOutside.svelte";
 import { ESCAPE_OWNER_ATTR } from "../utils/escape-owner";
 import { focusMenuEntryPoint, handleMenuArrowKeys } from "../utils/menuKeys";
@@ -89,9 +90,9 @@ function chooseSettings() {
 <!-- Both split halves AND the dropdown live inside one clickOutside node:
      clickOutside uses node.contains(), so a separate wrapper would treat a
      click on the eye/caret as "outside" and instantly re-close. NOT portaled.
-     Rendered flat (no own pill chrome): the embedding FormattingBar pill
-     already supplies the surface/border/shadow, so the eye+caret read as
-     toolbar segments rather than a nested pill-in-a-pill. -->
+     The split carries its OWN raised chrome (see `.split` in the styles below);
+     it used to render flat to avoid a pill inside the FormattingBar's pill, and
+     that trade was reversed deliberately — the rationale is with the rule. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="split menu-wrap"
@@ -104,7 +105,7 @@ function chooseSettings() {
 >
   <button
     type="button"
-    class="ib half-main"
+    class="ib tandem-toolbar-ctl half-main"
     class:on={!decorationsMuted}
     data-testid="decorations-mute-toggle"
     aria-pressed={!decorationsMuted}
@@ -112,16 +113,28 @@ function chooseSettings() {
     aria-label={decorationsMuted ? "Restore decorations" : "Mute decorations"}
     onclick={toggleMute}
   >
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
+    {#if decorationsMuted}
+      <!-- Crossed-out eye: the button is RAISED (unpressed) in this state, so
+           the glyph has to carry the "hidden" meaning on its own — a plain eye
+           on an unpressed button reads as "decorations are on". -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M10.6 6.2A9.9 9.9 0 0 1 12 6c6.5 0 10 6 10 6a15.6 15.6 0 0 1-2.6 3.3" />
+        <path d="M6.6 6.6A15.4 15.4 0 0 0 2 12s3.5 6 10 6a9.7 9.7 0 0 0 3.4-.6" />
+        <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+        <path d="M3 3l18 18" />
+      </svg>
+    {:else}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    {/if}
   </button>
   <span class="split-div" aria-hidden="true"></span>
   <button
     bind:this={caretBtn}
     type="button"
-    class="ib half-caret"
+    class="ib tandem-toolbar-ctl half-caret"
     data-testid="decorations-menu-caret"
     aria-haspopup="menu"
     aria-expanded={menuOpen}
@@ -129,8 +142,8 @@ function chooseSettings() {
     aria-label="Decoration options"
     onclick={() => (menuOpen = !menuOpen)}
   >
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="m6 9 6 6 6-6" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M6 9l6 6 6-6" />
     </svg>
   </button>
 
@@ -236,34 +249,66 @@ function chooseSettings() {
 </div>
 
 <style>
-  /* split button: eye (mute/restore all) + caret (open options). Flat — the
-     host FormattingBar pill provides the surface chrome. */
+  /* Split button: eye (mute/restore all) + caret (open options).
+     `1.11-titlebar-decorations.html:78-82` gives it its own container
+     (`.fpill.split { gap: 0; padding: 2px }` with 20px halves inside), so the
+     pill silhouette exists at REST — not only when the eye is on. That is the
+     point of the treatment: this is one compound control, and it has to look
+     like one whether decorations are on or off.
+
+     Deviation from the preview, and it is deliberate: the preview is a
+     stand-alone TITLE-BAR control, so it wears the full floating-pill recipe
+     (surface + border + shadow). Here the control is embedded inside the
+     FormattingBar's own `.tandem-floating-pill`, where that would be a literal
+     pill-in-pill. A sunk tray reads as recessed rather than as a second
+     floating surface.
+
+     RAISED, not sunk. The control is a physical button that segments press
+     INTO — not a recessed tray holding two flat glyphs. That is what makes the
+     three states legible without a legend: the eye is pressed while
+     decorations are on and raised (with a crossed-out glyph) while they are
+     muted; the caret is raised except while it is held or its menu is open.
+     A sunk container cannot express "pressed" at all, because there is nothing
+     for a segment to press into.
+
+     The press is NEUTRAL — sunk fill plus an inset shadow, no accent. In this
+     bar the accent marks formatting actively applied to the selection, so
+     tinting a persistent view toggle with it made the control read as a
+     category rather than as a pressed key.
+
+     This IS a pill inside the FormattingBar's pill, which earlier revisions of
+     this file avoided on purpose. Accepted deliberately: the shadow is
+     `--tandem-shadow-1` (0 1px 2px) rather than the floating-pill
+     `--tandem-shadow-2` (0 8px 24px), so it reads as a raised key on a surface
+     rather than as a second card floating over the document.
+
+     The 2px padding and the halves' 20px height are load-bearing together:
+     20 + 2*2 padding + 2*1 border = the bar's 26px. Changing one without the
+     others makes this control the odd height out in a bar where everything
+     else is exactly 26px. */
   .split {
     display: inline-flex;
     align-items: center;
     gap: 0;
+    padding: 2px;
+    border: 1px solid var(--tandem-border);
+    background: var(--tandem-surface);
+    border-radius: var(--tandem-r-pill);
+    box-shadow: var(--tandem-shadow-1);
   }
 
   .menu-wrap {
     position: relative;
   }
 
+  /* Resting metrics come from .tandem-toolbar-ctl (toolbar-chrome.css). The
+     split halves below re-declare padding and radius on purpose — they are a
+     mated pair, not two independent controls. Two further deltas are
+     deliberate and inert today: `gap` converged 5px -> 4px and `font: inherit`
+     became the shared type ramp, both invisible while each half holds a single
+     icon child. */
   .ib {
-    height: 26px;
-    min-width: 26px;
-    padding: 0 6px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--tandem-fg-muted);
-    border-radius: var(--tandem-r-pill);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    cursor: pointer;
-    transition: background 120ms, color 120ms;
-    font: inherit;
-    font-size: 12px;
+    transition: background 120ms, color 120ms, box-shadow 120ms;
   }
   /* The icon button's hover/active tint fades only for polish; the `.on` state
      still reads from the final colours, so reduced motion drops the fade. */
@@ -275,13 +320,12 @@ function chooseSettings() {
       transition: none;
     }
   }
+  /* Hover must NOT look pressed — the halves sit on a raised surface, so a
+     sunk fill here would read as a click that already happened. A light tint
+     keeps the raised read while still acknowledging the pointer. */
   .ib:hover {
-    background: var(--tandem-surface-sunk);
+    background: var(--tandem-surface-muted);
     color: var(--tandem-fg);
-  }
-  .ib.on {
-    background: var(--tandem-accent-bg);
-    color: var(--tandem-accent-fg-strong);
   }
   .ib:focus-visible {
     outline: 2px solid var(--tandem-accent);
@@ -293,12 +337,51 @@ function chooseSettings() {
     display: block;
   }
 
+  /* PRESSED. The inset shadow is the whole signal — there is deliberately no
+     accent here (see .split's header), so removing the inset leaves the two
+     states indistinguishable rather than merely less colourful. Paired with the
+     raised container it gives the control three distinguishable states.
+
+     `--tandem-shadow-inset` is shared with every other toggle that used to
+     wear the accent (ToolbarButton, .fmtbar-source, the two Find & Replace
+     toggles) — it carries a dark-theme override a literal here would not. */
+  .half-main.on,
+  .half-main.on:hover {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+    box-shadow: var(--tandem-shadow-inset);
+  }
+  /* The caret presses only transiently — while held, and for as long as its
+     menu is open. `aria-expanded` is the menu-open source of truth already
+     bound in the markup, so this needs no extra state. */
+  .half-caret:active,
+  .half-caret[aria-expanded="true"],
+  .half-caret[aria-expanded="true"]:hover {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+    box-shadow: var(--tandem-shadow-inset);
+  }
+  .half-main:active {
+    box-shadow: var(--tandem-shadow-inset);
+  }
+
+  /* The two halves form ONE pill: outer corners round, inner corners SQUARE.
+     They were r-2 (4px) on the inside, which rounded both sides of the 1px
+     seam — so the `.on` tint ended in a curve and the pair read as two
+     detached chips rather than a segmented control. The outer silhouette is
+     the only rounding this control gets; it has no container chrome by
+     design (see the markup comment). */
+  .half-main,
+  .half-caret {
+    /* See .split — 20 + padding + border is what lands this on 26px. */
+    height: 20px;
+  }
   .half-main {
-    border-radius: var(--tandem-r-pill) var(--tandem-r-2) var(--tandem-r-2) var(--tandem-r-pill);
+    border-radius: var(--tandem-r-pill) 0 0 var(--tandem-r-pill);
     padding: 0 5px 0 9px;
   }
   .half-caret {
-    border-radius: var(--tandem-r-2) var(--tandem-r-pill) var(--tandem-r-pill) var(--tandem-r-2);
+    border-radius: 0 var(--tandem-r-pill) var(--tandem-r-pill) 0;
     padding: 0 6px;
     min-width: 20px;
   }
@@ -313,9 +396,7 @@ function chooseSettings() {
     background: var(--tandem-border);
     flex-shrink: 0;
   }
-  .half-main.on + .split-div {
-    background: color-mix(in srgb, var(--tandem-accent-fg-strong) 30%, transparent);
-  }
+
 
   /* dropdown */
   .menu {
@@ -326,7 +407,7 @@ function chooseSettings() {
     background: var(--tandem-surface);
     border: 1px solid var(--tandem-border);
     border-radius: var(--tandem-r-3);
-    box-shadow: var(--tandem-shadow-3);
+    box-shadow: var(--tandem-shadow-2);
     padding: var(--tandem-space-1);
     z-index: var(--tandem-z-dropdown);
   }

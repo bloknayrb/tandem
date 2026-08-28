@@ -1,6 +1,8 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
 
+import "./toolbar-chrome.css";
+
 interface Props {
   /** When provided as a snippet, the snippet is rendered inside the button.
    * Otherwise `label` is rendered as a plain string. */
@@ -15,10 +17,13 @@ interface Props {
   ariaPressed?: boolean;
   onMouseDown?: (e: MouseEvent) => void;
   onClick?: (e: MouseEvent) => void;
-  /** Layout/typography escape hatch only (font-weight, font-style, font-family,
-   * width quirks). Do NOT inject background, color, border, or border-radius
-   * via this prop — those properties belong to the .toolbar-btn CSS rules so
-   * :hover, .is-active, :disabled, and :focus-visible can win the cascade. */
+  /** Layout/typography escape hatch only (font-size, font-weight, font-style,
+   * font-family, width quirks). B/I/S ride font-size through here: the design
+   * sizes a child element (`.b strong`), but these buttons pass `label` as a
+   * bare string, so there is no child to target. Do NOT inject background,
+   * color, border, or border-radius via this prop — those properties belong to
+   * the .toolbar-btn CSS rules so :hover, .is-active, :disabled, and
+   * :focus-visible can win the cascade. */
   style?: string;
   /** For dropdown-trigger buttons: set to "menu" or "dialog" to advertise
    *  the popup type to assistive technology. */
@@ -54,7 +59,7 @@ const titleAttr = $derived(
 
 <button
   type="button"
-  class="toolbar-btn"
+  class="toolbar-btn tandem-toolbar-ctl"
   class:is-active={active}
   data-testid={testId}
   {disabled}
@@ -71,22 +76,11 @@ const titleAttr = $derived(
 </button>
 
 <style>
+  /* Resting metrics (height, padding, radius, type, gap) live in
+     toolbar-chrome.css as .tandem-toolbar-ctl. Only the transition and the
+     interaction states stay here — see that file's header for why. */
   .toolbar-btn {
-    height: 26px;
-    min-width: 26px;
-    padding: 0 6px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--tandem-fg-muted);
-    border-radius: var(--tandem-r-pill);
-    font-size: 12px;
-    font-family: inherit;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    cursor: pointer;
-    transition: background 120ms, color 120ms;
+    transition: background 120ms, color 120ms, box-shadow 120ms;
   }
   /* Reduced motion: literal 120ms tweens — no timing token to zero, so the guard
      has to be re-declared here. Dual guard: the in-app
@@ -104,9 +98,15 @@ const titleAttr = $derived(
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
   }
+  /* Active = PRESSED, not accent-coloured. The surrounding pill is the raised
+     surface these press into. The inset is the signal, so dropping it leaves
+     active and hover indistinguishable rather than merely less colourful —
+     hover is the same sunk fill WITHOUT the inset, which is what makes it read
+     as previewing the press. */
   .toolbar-btn.is-active {
-    background: var(--tandem-accent-bg);
-    color: var(--tandem-accent-fg-strong);
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+    box-shadow: var(--tandem-shadow-inset);
   }
   .toolbar-btn:disabled {
     cursor: not-allowed;

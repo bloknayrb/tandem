@@ -40,6 +40,8 @@ import {
 } from "./selection-toolbar";
 // A26 morph (#798): shared timing tokens + reduced-motion token-zeroing.
 import "../../panels/morphTiming.css";
+// Shared toolbar resting metrics (.tandem-toolbar-ctl / .tandem-toolbar-sep).
+import "./toolbar-chrome.css";
 
 interface Props {
   editor: TiptapEditor | null;
@@ -902,7 +904,7 @@ function handleComposerKeyDown(e: KeyboardEvent) {
         <div class="pill-row tandem-floating-pill" data-testid="popup-format-row">
           <FormattingToolbar {editor} variant="popup" {onNotify} />
           {#if onUpdateDecorations}
-            <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
+            <div class="tandem-toolbar-sep"></div>
             <!-- preventDefault on mousedown keeps the editor selection alive while
                  interacting with the (onclick-based) Decorations control, so a
                  toggle can't dismiss the popup before a follow-up Annotate.
@@ -926,15 +928,13 @@ function handleComposerKeyDown(e: KeyboardEvent) {
           {/if}
           {#if onToggleFormattingBar}
             <!-- A8 swap: persistent hide/show-bar toggle at the far right of the
-                 format row. Chevron-up = hide (bar shown), chevron-down = show
-                 (bar hidden) — mirrors the bar's own hide button, opposite
-                 direction. Always present (unlike the old show-only affordance),
+                 format row. Always present (unlike the old show-only affordance),
                  so the bar is both hideable and reachable from the popup. testid
                  kept for the E2E contract though it now toggles both ways.
                  onmousedown preventDefault keeps the editor selection alive so
                  toggling doesn't dismiss the popup mid-interaction; onclick
                  (filtered to keyboard activation) covers Enter/Space. -->
-            <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
+            <div class="tandem-toolbar-sep"></div>
             <button
               type="button"
               data-testid="popup-show-formatbar-btn"
@@ -945,17 +945,36 @@ function handleComposerKeyDown(e: KeyboardEvent) {
                 onToggleFormattingBar?.();
               }}
               onclick={onKeyActivate(() => onToggleFormattingBar?.())}
-              style="height: 26px; min-width: 26px; padding: 0 6px; border: 1px solid transparent; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-pill); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;"
+              class="popup-swap-btn tandem-toolbar-ctl"
             >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d={formattingBarVisible ? "m18 15-6-6-6 6" : "m6 9 6 6 6-6"} />
-              </svg>
+              <!-- A8: hide is a chevron collapsing onto a baseline; show is the
+                   bar itself. Two distinct glyphs rather than an up/down pair,
+                   so the control reads as "put formatting on a bar" instead of
+                   a generic direction. Inside an aria-hidden svg, so the
+                   accessible name is untouched. The hide glyph is shared with
+                   FormattingBar.svelte's own .fmtbar-hide button — same
+                   affordance from a different place, keep them identical. -->
+              {#if formattingBarVisible}
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M18 15l-6-6-6 6" />
+                  <path d="M4 20h16" opacity="0.4" />
+                </svg>
+              {:else}
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3" y="6" width="18" height="5" rx="2.5" />
+                  <path d="M7 8.5h6" opacity="0.5" />
+                </svg>
+              {/if}
             </button>
           {/if}
         </div>
         <!-- Capsule 2: highlight swatches + Annotate. -->
-        <div class="pill-row tandem-floating-pill" data-testid="popup-annotate-row">
-          <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
+        <div class="pill-row is-annotate-row tandem-floating-pill" data-testid="popup-annotate-row">
+          <!-- role="group" is load-bearing: an aria-label on a roleless div is
+               ignored by AT, so the swatch strip had no accessible name at all.
+               Must NOT be role="button" — toolbar-redesign asserts exactly four
+               buttons matching /Highlight /. -->
+          <div class="popup-swatch-tray" role="group" aria-label="Highlight colors">
             <!-- A8: the strip leads with a "none" swatch so clearing a highlight
                  is one click (any color), not a same-color re-click. preventDefault
                  keeps the selection alive; clearHighlight resolves PM→flat inside
@@ -974,7 +993,7 @@ function handleComposerKeyDown(e: KeyboardEvent) {
                 handleClearHighlight();
                 editor?.chain().focus().run();
               })}
-              style="width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface); cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center;"
+              class="popup-swatch popup-swatch-none"
             >
               <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
                 <line x1="3.5" y1="12.5" x2="12.5" y2="3.5" stroke="var(--tandem-fg-muted)" stroke-width="1.5" stroke-linecap="round" />
@@ -995,11 +1014,11 @@ function handleComposerKeyDown(e: KeyboardEvent) {
                   handleHighlight(color);
                   editor?.chain().focus().run();
                 })}
-                style={`width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLOR_VARS[color]}; cursor: pointer; padding: 0;`}
+                class="popup-swatch"
+                style:background={HIGHLIGHT_COLOR_VARS[color]}
               ></button>
             {/each}
           </div>
-          <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
           <button
             type="button"
             data-testid="popup-annotate-btn"
@@ -1009,10 +1028,10 @@ function handleComposerKeyDown(e: KeyboardEvent) {
               openAnnotateMode();
             }}
             onclick={onKeyActivate(() => openAnnotateMode())}
-            style="height: 24px; padding: 0 12px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-pill); font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;"
+            class="popup-annotate-btn tandem-toolbar-ctl"
           >
             <!-- A8: leading pencil icon on the Annotate affordance. -->
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M12 20h9" />
               <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
             </svg>
@@ -1221,7 +1240,7 @@ function handleComposerKeyDown(e: KeyboardEvent) {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 5px;
+    gap: 6px;
   }
   .popup-format-col .pill-row {
     display: flex;
@@ -1229,6 +1248,124 @@ function handleComposerKeyDown(e: KeyboardEvent) {
     gap: 1px;
     padding: 4px 6px;
     width: max-content;
+  }
+  /* Capsule 2 carries its own budget (design `.row.annot`): a wider gap doing
+     the separating that capsule 1 needs a rule for, hence no divider here. */
+  .popup-format-col .pill-row.is-annotate-row {
+    gap: 8px;
+    padding: 5px 8px;
+  }
+
+  /* The bar-swap control is quieter than a formatting button — it changes where
+     formatting lives, it is not itself formatting. Resting metrics come from
+     .tandem-toolbar-ctl; only the colour shift and the transition live here so
+     the reduced-motion guards stay co-located (see toolbar-chrome.css). */
+  .popup-swap-btn {
+    color: var(--tandem-fg-faint);
+    flex-shrink: 0;
+    transition: background 120ms, color 120ms;
+  }
+  :global(body.tandem-reduce-motion) .popup-swap-btn {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .popup-swap-btn {
+      transition: none;
+    }
+  }
+  .popup-swap-btn:hover {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .popup-swap-btn:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+
+  /* Swatch tray. The sunk fill groups the five chips into one object so the
+     Annotate button reads as the row's other half rather than a sixth swatch. */
+  .popup-swatch-tray {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 7px;
+    border-radius: var(--tandem-r-pill);
+    background: var(--tandem-surface-sunk);
+  }
+  /* The four COLOUR chips set `background` inline (it is dynamic) and an inline
+     style beats every author rule regardless of specificity — so never move
+     their background into a rule here, and never add one to :hover: it would
+     silently no-op. `.popup-swatch-none` below is the exception and owns its
+     background in CSS, because it has no inline one to lose to. */
+  .popup-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: var(--tandem-r-2);
+    border: 1px solid var(--tandem-border);
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 120ms, box-shadow 120ms;
+  }
+  :global(body.tandem-reduce-motion) .popup-swatch {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .popup-swatch {
+      transition: none;
+    }
+  }
+  /* transform stays on the chip and never on the tray or the capsule: a
+     transform on either would create a stacking context and trap capsule-1's
+     dropdowns behind capsule 2 (see the .popup-format-col note above). */
+  .popup-swatch:hover {
+    transform: scale(1.12);
+    box-shadow: var(--tandem-shadow-1);
+  }
+  .popup-swatch:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+  .popup-swatch-none {
+    background: var(--tandem-surface);
+    border-color: var(--tandem-border-strong);
+  }
+
+  /* Colour-neutral by #1444's rule: authorship/destination colour belongs only
+     on controls that set or change `audience`. Annotate sets none — it opens a
+     composer that defaults to outbound (openAnnotateMode clears the intent and
+     defaultAnnotationIntent resolves null → "comment"), so the private/you blue
+     it used to wear asserted the opposite of what the button does. */
+  /* Resting metrics come from .tandem-toolbar-ctl (toolbar-chrome.css); only
+     the deltas live here. Scoped selectors are (0,2,0) against the shared
+     (0,1,0), so every override below wins on specificity, not order. */
+  .popup-annotate-btn {
+    padding: 0 15px;
+    border-color: var(--tandem-border-strong);
+    color: var(--tandem-fg);
+    font-weight: 600;
+    gap: 6px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 120ms, color 120ms;
+  }
+  :global(body.tandem-reduce-motion) .popup-annotate-btn {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .popup-annotate-btn {
+      transition: none;
+    }
+  }
+  .popup-annotate-btn:hover {
+    background: var(--tandem-surface-sunk);
+  }
+  .popup-annotate-btn:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
   }
 
   /* P2. Each block animates its grid row 0fr→1fr — to the NATURAL content
@@ -1247,6 +1384,23 @@ function handleComposerKeyDown(e: KeyboardEvent) {
   }
   .morph-block.is-active {
     grid-template-rows: 1fr;
+  }
+  /* A collapsed block must stop contributing WIDTH, not just height.
+     `grid-template-rows: 0fr` zeroes the row, so the block is invisible — but it
+     keeps its full inline size, and `.selection-popup` is a column flex box, so
+     the popup sized itself to whichever block was WIDER regardless of which one
+     was showing. In practice that meant the annotate composer was stretched to
+     the format row: measured at 452.6px against a footer needing 278px, with
+     `.composer-card`'s `max-width: 420px` (documented as vestigial) silently
+     becoming the thing that set the card's width. The design gives the composer
+     its own 300px modal, independent of the format row
+     (1.11-selection-converged.html:82).
+
+     Symmetric on purpose — whichever block is collapsed yields the width, so
+     each state sizes to its own content. */
+  .morph-block:not(.is-active) {
+    width: 0;
+    min-width: 0;
   }
   .morph-block-inner {
     min-height: 0;
@@ -1309,17 +1463,22 @@ function handleComposerKeyDown(e: KeyboardEvent) {
     gap: var(--tandem-space-2);
     padding: var(--tandem-space-3) var(--tandem-space-3) var(--tandem-space-2);
     min-width: 260px;
-    /* 420px, inherited from #1444 and now VESTIGIAL — it is kept as a ceiling,
-       not as a fitting constraint, and nothing here is sized to it.
+    /* 420px, inherited from #1444. It is a ceiling, not a fitting constraint.
+       NOTE — it stopped being vestigial for a while and nobody noticed: because
+       a `0fr`-collapsed `.morph-block` still contributed its full width, the
+       card was stretched to the format row, and once the A8 icon redraw pushed
+       that row past 420px this cap became the thing actually setting the card's
+       width (measured 420/420). `.morph-block:not(.is-active)` now zeroes the
+       collapsed block's width, so the card is content-sized again (278.6px
+       measured) and this is a true ceiling once more.
 
        #1444 raised this from 360 because the footer was two labelled pills in a
        `justify-content: flex-end` row that clipped on its LEFT when they
        overflowed (a silent truncation, since `.morph-block` is `overflow:
        clip`). The audience toggle deleted that geometry. Measured in the
        running app: the footer needs 254px of content — toggle 149 + gap 8 +
-       commit 97 — plus 24px of card padding, against a card that renders at
-       414px because the shell pins it to the format row's natural width. Some
-       142px of slack, and the card is not content-sized in the first place.
+       commit 97 — plus 24px of card padding, and the card now renders at that
+       width rather than at the format row's.
 
        #1123's longer agent names do not bring the old risk back. The segments
        are `minmax(0, 1fr)`, so they stay equal (72px each here) and a longer

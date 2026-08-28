@@ -113,7 +113,7 @@ function handleColorSelect(color: HighlightColor) {
   <button
     bind:this={toggleEl}
     type="button"
-    class="highlight-swatch-toggle"
+    class="highlight-swatch-toggle tandem-toolbar-ctl"
     data-testid="toolbar-highlight-color-toggle"
     {disabled}
     aria-haspopup="menu"
@@ -198,16 +198,8 @@ function handleColorSelect(color: HighlightColor) {
     gap: 1px;
     position: relative;
   }
+  /* Resting metrics come from .tandem-toolbar-ctl (toolbar-chrome.css). */
   .highlight-swatch-toggle {
-    height: 26px;
-    padding: 0 6px;
-    border: 1px solid transparent;
-    border-radius: var(--tandem-r-pill);
-    background: transparent;
-    color: var(--tandem-fg-muted);
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
     transition: background 120ms, color 120ms;
   }
   /* Reduced motion: literal 120ms tweens, no timing token to zero. Dual guard:
@@ -263,7 +255,7 @@ function handleColorSelect(color: HighlightColor) {
     margin-top: 8px;
     background: var(--tandem-surface);
     border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-4);
+    border-radius: var(--tandem-r-3);
     padding: 6px;
     display: flex;
     gap: 4px;

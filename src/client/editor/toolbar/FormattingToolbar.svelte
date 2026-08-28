@@ -1,4 +1,5 @@
 <script lang="ts">
+import "./toolbar-chrome.css";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { yUndoPluginKey } from "y-prosemirror";
 import type { TandemNotification } from "../../../shared/types.js";
@@ -254,9 +255,9 @@ function dismissLinkInput() {
         onClick={onKeyActivate(handleUndo)}
       >
         {#snippet children()}
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-            <path d="M4 7L1 4l3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-            <path d="M1 4h9a5 5 0 0 1 0 10H7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+            <path d="M9 14 4 9l5-5" />
+            <path d="M4 9h11a5 5 0 0 1 0 10h-4" />
           </svg>
         {/snippet}
       </ToolbarButton>
@@ -268,13 +269,13 @@ function dismissLinkInput() {
         onClick={onKeyActivate(handleRedo)}
       >
         {#snippet children()}
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 7l3-3-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-            <path d="M15 4H6a5 5 0 0 0 0 10h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+            <path d="m15 14 5-5-5-5" />
+            <path d="M20 9H9a5 5 0 0 0 0 10h4" />
           </svg>
         {/snippet}
       </ToolbarButton>
-      <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
+      <div class="tandem-toolbar-sep"></div>
     {/if}
 
     <ToolbarButton
@@ -284,7 +285,7 @@ function dismissLinkInput() {
       active={isActiveBold}
       onMouseDown={handleBold}
       onClick={onKeyActivate(handleBold)}
-      style="font-weight: 700;"
+      style="font-size: 13px; font-weight: 700;"
     />
     <ToolbarButton
       label="I"
@@ -293,7 +294,7 @@ function dismissLinkInput() {
       active={isActiveItalic}
       onMouseDown={handleItalic}
       onClick={onKeyActivate(handleItalic)}
-      style="font-style: italic;"
+      style="font-size: 13px; font-style: italic;"
     />
     <ToolbarButton
       label="S"
@@ -302,7 +303,7 @@ function dismissLinkInput() {
       active={isActiveStrike}
       onMouseDown={handleStrike}
       onClick={onKeyActivate(handleStrike)}
-      style="text-decoration: line-through;"
+      style="font-size: 13px; text-decoration: line-through;"
     />
     <ToolbarButton
       label="<>"
@@ -311,7 +312,7 @@ function dismissLinkInput() {
       active={isActiveCode}
       onMouseDown={handleCode}
       onClick={onKeyActivate(handleCode)}
-      style="font-family: monospace;"
+      style="font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); letter-spacing: -0.02em;"
     />
 
     <!-- Link (A8: stays in the inline-marks group, right after Code). -->
@@ -338,9 +339,9 @@ function dismissLinkInput() {
         onClick={onKeyActivate(handleLinkMouseDown)}
       >
         {#snippet children()}
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-            <path d="M6.5 8.5a3.5 3.5 0 0 0 5 0l2-2a3.5 3.5 0 0 0-5-5l-1 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-            <path d="M9.5 7.5a3.5 3.5 0 0 0-5 0l-2 2a3.5 3.5 0 0 0 5 5l1-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+            <path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1" />
+            <path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" />
           </svg>
         {/snippet}
       </ToolbarButton>
@@ -356,7 +357,7 @@ function dismissLinkInput() {
       />
     </div>
 
-    <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
+    <div class="tandem-toolbar-sep"></div>
 
     <!-- Heading dropdown (A8: leads the block group). -->
     <!-- Claims Escape while open — see the link wrapper above. -->
@@ -391,7 +392,12 @@ function dismissLinkInput() {
           <span style="font-family: var(--tandem-font-serif); font-weight: 600; font-size: 13.5px; line-height: 1;"
             >{headingLabel}</span
           >
-          <span aria-hidden="true" style="color: var(--tandem-fg-faint); font-size: 10px; line-height: 1;">▾</span>
+          <!-- Drawn, not a glyph: U+2304 (the design's caret) is not reliably
+               covered by the bundled faces, and a per-glyph fallback silently
+               swaps typeface in the packaged WebView. -->
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: var(--tandem-fg-faint);">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
         {/snippet}
       </ToolbarButton>
       {#if showHeadingMenu}
@@ -402,10 +408,10 @@ function dismissLinkInput() {
           aria-label="Heading level"
           tabindex="-1"
           onkeydown={handleMenuArrowKeys}
-            style="position: absolute; top: 100%; left: 0; margin-top: 4px;
+            style="position: absolute; top: 100%; left: 0; margin-top: 8px;
             background: var(--tandem-surface); border: 1px solid var(--tandem-border);
             border-radius: var(--tandem-r-3); padding: 4px; display: flex; flex-direction: column;
-            gap: 2px; z-index: var(--tandem-z-dropdown); box-shadow: var(--tandem-shadow-1);"
+            gap: 2px; z-index: var(--tandem-z-dropdown); box-shadow: var(--tandem-shadow-2);"
         >
           {#each HEADING_LEVELS as level (level)}
             {@const headingHandler = handleHeadingToggle(level)}
@@ -418,7 +424,7 @@ function dismissLinkInput() {
                 style="padding: 4px 12px; font-size: 13px; border: none;
                 border-radius: var(--tandem-r-2);
                 background: {activeHeading === level ? 'var(--tandem-accent-bg)' : 'transparent'};
-                color: {activeHeading === level ? 'var(--tandem-accent)' : 'var(--tandem-fg)'};
+                color: {activeHeading === level ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg)'};
                 cursor: pointer; text-align: left;
                 font-weight: {HEADING_FONT_WEIGHTS[level]}; white-space: nowrap;"
             >
@@ -438,13 +444,11 @@ function dismissLinkInput() {
       onClick={onKeyActivate(handleBulletList)}
     >
       {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="2" cy="4" r="1.5" fill="currentColor" />
-          <circle cx="2" cy="8" r="1.5" fill="currentColor" />
-          <circle cx="2" cy="12" r="1.5" fill="currentColor" />
-          <rect x="5" y="3" width="9" height="2" rx="1" fill="currentColor" />
-          <rect x="5" y="7" width="9" height="2" rx="1" fill="currentColor" />
-          <rect x="5" y="11" width="9" height="2" rx="1" fill="currentColor" />
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="4" cy="7" r="1.1" fill="currentColor" stroke="none" />
+          <circle cx="4" cy="12" r="1.1" fill="currentColor" stroke="none" />
+          <circle cx="4" cy="17" r="1.1" fill="currentColor" stroke="none" />
+          <path d="M9 7h11M9 12h11M9 17h11" />
         </svg>
       {/snippet}
     </ToolbarButton>
@@ -457,13 +461,10 @@ function dismissLinkInput() {
       onClick={onKeyActivate(handleOrderedList)}
     >
       {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <rect x="5" y="3" width="9" height="2" rx="1" fill="currentColor" />
-          <rect x="5" y="7" width="9" height="2" rx="1" fill="currentColor" />
-          <rect x="5" y="11" width="9" height="2" rx="1" fill="currentColor" />
-          <text x="0" y="5.5" font-size="4.5" fill="currentColor" font-family="monospace" font-weight="bold">1.</text>
-          <text x="0" y="9.5" font-size="4.5" fill="currentColor" font-family="monospace" font-weight="bold">2.</text>
-          <text x="0" y="13.5" font-size="4.5" fill="currentColor" font-family="monospace" font-weight="bold">3.</text>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+          <path d="M9 7h11M9 12h11M9 17h11" />
+          <path d="M3.4 5.4h1.3V9M3.4 9h2.6" />
+          <path d="M3.5 14.4c0-.6.6-1 1.2-1s1.2.4 1.2 1c0 1.1-2.4 1.4-2.4 3h2.6" />
         </svg>
       {/snippet}
     </ToolbarButton>
@@ -476,11 +477,8 @@ function dismissLinkInput() {
       onClick={onKeyActivate(handleBlockquote)}
     >
       {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <rect x="0" y="2" width="3" height="12" rx="1.5" fill="currentColor" />
-          <rect x="5" y="4" width="9" height="2" rx="1" fill="currentColor" opacity="0.7" />
-          <rect x="5" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7" />
-          <rect x="5" y="12" width="8" height="2" rx="1" fill="currentColor" opacity="0.7" />
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+          <path d="M6 7h4v5c0 2-1 4-3 5M14 7h4v5c0 2-1 4-3 5" />
         </svg>
       {/snippet}
     </ToolbarButton>
@@ -501,10 +499,9 @@ function dismissLinkInput() {
       onClick={onKeyActivate(handleCodeBlock)}
     >
       {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <path d="M5 4L1 8l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M11 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M9 2l-2 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+          <path d="M8 5c-2.2 0-1.8 5-3.5 7 1.7 2 1.3 7 3.5 7" />
+          <path d="M16 5c2.2 0 1.8 5 3.5 7-1.7 2-1.3 7-3.5 7" />
         </svg>
       {/snippet}
     </ToolbarButton>

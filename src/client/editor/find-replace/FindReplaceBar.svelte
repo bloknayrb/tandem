@@ -709,7 +709,7 @@ async function handleReplaceAll() {
     font-weight: 500;
     line-height: 1;
     cursor: pointer;
-    transition: background 100ms, color 100ms, border-color 100ms;
+    transition: background 100ms, color 100ms, border-color 100ms, box-shadow 100ms;
     display: inline-grid;
     place-items: center;
   }
@@ -727,9 +727,10 @@ async function handleReplaceAll() {
     color: var(--tandem-fg);
   }
   .fr-toggle.on {
-    background: var(--tandem-accent-bg);
-    border-color: var(--tandem-accent-border);
-    color: var(--tandem-accent-fg-strong);
+    background: var(--tandem-surface-sunk);
+    border-color: var(--tandem-border);
+    color: var(--tandem-fg);
+    box-shadow: var(--tandem-shadow-inset);
   }
 
   .spacer {
@@ -892,7 +893,7 @@ async function handleReplaceAll() {
     font-family: var(--tandem-font-sans);
     font-size: var(--tandem-text-xs);
     cursor: pointer;
-    transition: background 100ms, color 100ms, border-color 100ms;
+    transition: background 100ms, color 100ms, border-color 100ms, box-shadow 100ms;
   }
   /* Guards the scope pills' hover and selected-state tint. */
   :global(body.tandem-reduce-motion) .fr-scope-pill {
@@ -908,9 +909,10 @@ async function handleReplaceAll() {
     color: var(--tandem-fg);
   }
   .fr-scope-pill.on {
-    background: var(--tandem-accent-bg);
-    border-color: var(--tandem-accent-border);
-    color: var(--tandem-accent-fg-strong);
+    background: var(--tandem-surface-sunk);
+    border-color: var(--tandem-border);
+    color: var(--tandem-fg);
+    box-shadow: var(--tandem-shadow-inset);
   }
 
   /* ── Inline message strips (regex error / partial-replace warning) ── */
