@@ -405,3 +405,42 @@ describe("openFileByPath — UNC paths are rejected BEFORE canonicalization", ()
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe("openFileFromContent — the uploaded filename is not a path", () => {
+  // `fileName` arrives straight off `req.body` in `routes/upload.ts`, typed as
+  // a string and nothing else, and it used to be interpolated verbatim into the
+  // synthetic `upload://<uuid>/<fileName>` registry path. Separators landed in
+  // a registry `filePath`.
+  //
+  // Nothing reachable consumed them — `isUploadPath` diverts at every
+  // filesystem sink and uploads are read-only — so this is hardening, not a
+  // live hole. Worth a gate anyway: that is a reachability accident, and the
+  // next sink added would be relying on one without knowing it.
+
+  it("strips path segments from the synthetic registry path and the display name", async () => {
+    const result = await openFileFromContent("../../evil.md", "# Notes");
+
+    expect(result.filePath, "traversal segments survived into the registry filePath").not.toContain(
+      "..",
+    );
+    // Both, deliberately. Asserting only `filePath` would pass a fix applied at
+    // the interpolation site alone, leaving `..` in the name the user is shown.
+    expect(result.fileName, "traversal segments survived into the display name").toBe("evil.md");
+  });
+
+  it("uses posix semantics, so a backslash name behaves the same on every platform", async () => {
+    // `path.basename` is win32 on Windows and posix on Linux, and CI is
+    // ubuntu-only — so the platform-dependent one would behave differently
+    // under test than in the desktop app. The synthetic path is an `upload://`
+    // URI whose only structural separator is `/`, and a backslash is an
+    // ordinary filename character there. Pinning that keeps the two platforms
+    // from disagreeing about what this function returns.
+    //
+    // Honest limit, because it is the inverse of the usual one: on ubuntu
+    // `path.basename` IS the posix one, so a regression back to it leaves this
+    // spec green. Only a Windows run discriminates — the pre-push hook, not
+    // `check`. Verified by mutation on Windows; unverifiable on CI.
+    const result = await openFileFromContent("a\\b.md", "# Notes");
+    expect(result.fileName).toBe("a\\b.md");
+  });
+});

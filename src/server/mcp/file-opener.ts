@@ -278,9 +278,26 @@ export async function openFileByPath(
  * Used when the browser drag-and-drops or selects a file.
  */
 export async function openFileFromContent(
-  fileName: string,
+  rawFileName: string,
   content: string | Buffer,
 ): Promise<OpenFileResult> {
+  // `fileName` arrives straight off `req.body` (routes/upload.ts), typed as a
+  // string and nothing more, and it used to be interpolated verbatim into the
+  // synthetic registry path below. `../` segments landed in a registry
+  // `filePath`. Nothing reachable consumed them — `isUploadPath` diverts the
+  // path at every filesystem sink and uploads are read-only — but that is a
+  // reachability accident, not a barrier, and the next sink added would not
+  // know it was relying on one.
+  //
+  // `path.posix.basename`, not `path.basename`: the latter is win32 on Windows
+  // and posix on Linux, and CI is ubuntu-only, so the platform-dependent one
+  // would behave differently under test than in the desktop app. The synthetic
+  // path is an `upload://` URI whose only structural separator is `/`.
+  //
+  // Applied once here rather than at the interpolation site, because the same
+  // value becomes the display name, the doc metadata and the returned
+  // `fileName` — the surfaces a user actually sees.
+  const fileName = path.posix.basename(rawFileName);
   const ext = path.extname(fileName).toLowerCase();
   if (!SUPPORTED_EXTENSIONS.has(ext)) {
     throw Object.assign(
