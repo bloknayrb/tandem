@@ -253,6 +253,15 @@ block is gated on `if (outputPath)` (`:873`).
 
 ## §4 Two things to fix that are not alerts
 
+> **Anchors in this plan predate Unit 7a (#1645) and no longer resolve.** 7a split the open
+> pipeline out of `src/server/mcp/file-opener.ts` into `src/server/documents/`, and every
+> `file-opener.ts:NNNN` citation below was written against the pre-split file. The two that
+> matter: the upload path described in this section is now `openFromUpload` in
+> `src/server/documents/open.ts` (the function was `openFileFromContent`), and
+> `resolveAndValidatePath` is in the same file rather than `file-opener.ts:685-743`. The
+> citations are left as written rather than rewritten, because this is the record of what was
+> read at the time; check them against `origin/master` before treating any as current.
+
 **`file-opener.ts:302`** builds an upload's synthetic registry path as
 `` `${UPLOAD_PREFIX}${randomUUID()}/${fileName}` `` with `fileName` taken raw from `req.body`
 (`routes/upload.ts:8-11`, string-typed only). `../` segments land verbatim in a registry
