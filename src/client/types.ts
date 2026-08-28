@@ -89,7 +89,7 @@ export interface CoworkStatus {
 
 /**
  * The `Ok` payload of the `cowork_toggle_integration` Tauri command (#1438).
- * Mirrors `CoworkToggleReport` in `src-tauri/src/lib.rs`.
+ * Mirrors `CoworkToggleReport` in `src-tauri/src/cowork_commands.rs`.
  *
  * The command encodes *degraded success* — a partial multi-workspace install on
  * enable, a leftover firewall rule or a partial uninstall on disable. Those used

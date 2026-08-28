@@ -169,7 +169,7 @@ async function handleToggleOn(): Promise<void> {
 
 // #1437 (invoke-resolved-treated-as-success): the `readBack`-only gate above
 // is sound BECAUSE `cowork_toggle_integration`'s enable arm now fails loud on
-// every partial commit (`enable_persist_outcome` in `src-tauri/src/lib.rs`) —
+// every partial commit (`enable_persist_outcome` in `src-tauri/src/cowork_commands.rs`) —
 // a resolved ENABLE now really does mean the intent was met. The disable arm
 // makes the weaker promise; `handleToggleOff` below says which and copes.
 //
@@ -180,22 +180,19 @@ async function handleToggleOn(): Promise<void> {
 //   3. `IntegrationWizardModal.svelte`'s `enableCowork`, and
 //   4. `CoworkOnboardingStep.svelte`'s `handleEnable`. Same contract, no
 //      changes needed: both already treat a thrown invoke correctly.
-//   5. `cowork_retry_admin_elevation` (`src-tauri/src/lib.rs`, tail-calls
-//      `cowork_toggle_integration(true)`; reached from
-//      `CoworkAdminDeclinedModal.svelte`'s Retry button). It clears
-//      `uac_declined_*` in its OWN earlier, separate `cowork_meta::update`
-//      before ever reaching the toggle, so a failure there splits in two and
-//      only one half self-heals:
-//        - that first update SUCCEEDED and the toggle then rejected: the clear
-//          is on disk, while the modal's local `status` is stale (the throw
-//          skips the `refetch()` after it) and keeps the modal up with a
-//          "Retry failed" error. The next 30s poll catches up and closes it.
-//        - that first update FAILED: it rejects at its own `.map_err(...)?`
-//          and the toggle is never reached, so `uac_declined` stays set and
-//          the modal (`visible = uacDeclined && !dismissed`) stays up
-//          indefinitely. NOT self-healing — and under the canonical shared
-//          cause, an unwritable `cowork-meta.json`, this is the branch you
-//          get. Out of scope for #1437; recorded so it isn't re-derived.
+//   5. `cowork_retry_admin_elevation` (`src-tauri/src/cowork_commands.rs`,
+//      tail-calls `cowork_toggle_integration(true)`; reached from
+//      `CoworkAdminDeclinedModal.svelte`'s Retry button). Its whole body is
+//      that tail call — #1560 deleted the `cowork_meta::update` it used to
+//      perform first, because an unwritable `cowork-meta.json` (the canonical
+//      reason that update fails, and the state the admin-declined modal is up
+//      in) short-circuited the command and the enable was never attempted.
+//      `tests/build/cowork-retry-delegates.test.ts` pins the stronger
+//      invariant that replaced it: this command writes no meta at all. So a
+//      Retry failure is now one branch, not two — the toggle rejected, the
+//      modal's local `status` is stale (the throw skips the `refetch()` after
+//      it) and it stays up with a "Retry failed" error until the next 30s poll
+//      catches up. Self-healing.
 //   6. `CoworkAdminDeclinedModal.svelte`'s `handleDisable`, calling
 //      `coworkToggleIntegration(invoke, false)` directly. Same DISABLE arm as
 //      `handleToggleOff` below, and it keeps its `refetch()` inside the
@@ -237,7 +234,7 @@ async function handleToggleOff(box: HTMLInputElement): Promise<void> {
   // The read-back runs OUTSIDE the `withInvoke` callback, for the same reason
   // `handleToggleLanIp` below does it: on this arm a REJECTED invoke does not
   // mean nothing changed. `cowork_toggle_integration`'s disable arm persists
-  // `enabled = false` (its `meta_persist` write, `src-tauri/src/lib.rs`) and
+  // `enabled = false` (its `meta_persist` write, `src-tauri/src/cowork_commands.rs`) and
   // only THEN returns `Err` if every workspace failed to uninstall — so on
   // that path the write landed and the command still rejected. With the
   // read-back inside the callback, the throw skipped it entirely, the sentinel
@@ -261,7 +258,7 @@ async function handleToggleOff(box: HTMLInputElement): Promise<void> {
   // #1437 was this same family on the ENABLE side, in the mirror direction —
   // resolve-but-unchanged rather than reject-but-changed — and that half was
   // fixed at its source instead of here: the enable arm's meta-persist step
-  // now fails loud (`enable_persist_outcome`, `src-tauri/src/lib.rs`) rather
+  // now fails loud (`enable_persist_outcome`, `src-tauri/src/cowork_commands.rs`) rather
   // than warning and falling through to `Ok`.
   //
   // #1438's warnings ride alongside this, not through it: the list is cleared

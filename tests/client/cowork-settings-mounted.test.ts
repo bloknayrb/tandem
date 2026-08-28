@@ -592,7 +592,7 @@ describe("CoworkSettings — enable confirm wiring (#1375)", () => {
     // pre-existing gap this investigation surfaced, not proof of the #1437
     // fix itself. This test already passes on unmodified `CoworkSettings.svelte`;
     // the load-bearing test for #1437 is the Rust one
-    // (`enable_persist_outcome_tests` in `src-tauri/src/lib.rs`), since the
+    // (`enable_persist_outcome_tests` in `src-tauri/src/cowork_commands.rs`), since the
     // fix is that a partial-commit enable now REJECTS instead of resolving,
     // and this file mocks `coworkToggleIntegration` — it cannot observe that
     // Rust-side change either way.
