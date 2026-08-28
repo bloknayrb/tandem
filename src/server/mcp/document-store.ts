@@ -13,11 +13,20 @@
  * `YDocStore` is the one implementation. It is intentionally a thin wrapper:
  * it delegates to the same standalone helpers the handlers used before
  * (`createAnnotation`, `collectAnnotations`, `addReplyToAnnotation`,
- * `removeAnnotationById`, `acceptPending`/`dismissPending`, `refreshAllRanges`).
- * That delegation is the parity contract: the underlying Y.Map structures and
- * origin tagging (`withMcp`, ADR-031) are byte-identical to the pre-refactor
- * behavior. The helpers stay exported because the HTTP routes and the existing
- * test suite (the parity floor) still call them directly.
+ * `removeAnnotationById`, `refreshAllRanges`) and, for the families that have
+ * migrated, to {@link DocumentStore.lifecycle}. That delegation is the parity
+ * contract: the underlying Y.Map structures and origin tagging (`withMcp`,
+ * ADR-031) are byte-identical to the pre-refactor behavior. The helpers stay
+ * exported because the HTTP routes and the existing test suite (the parity
+ * floor) still call them directly.
+ *
+ * **Direction of travel (ADR-035).** This store is a compatibility shell, not
+ * the destination. Unit 8b settled that `AnnotationLifecycle` is the seam
+ * callers program against and that Unit 8j collapses or deletes this file. Two
+ * consequences for anyone editing here: new mutation work goes on the
+ * lifecycle, not on a new method here; and `ydoc` / `transactMcp` are the
+ * escape hatches ADR-035 exists to remove, so nothing new should reach for
+ * them.
  *
  * Scope note: this wraps the *in-memory* Y.Doc/Y.Map layer the MCP handlers
  * touch — NOT the durable annotation file-store (`src/server/annotations/`).
@@ -38,7 +47,12 @@ import type {
   ReplyAuthor,
 } from "../../shared/types.js";
 import { docHash } from "../annotations/doc-hash.js";
-import { acceptPending, dismissPending, type LifecycleResult } from "../annotations/lifecycle.js";
+import {
+  type AnnotationLifecycle,
+  type CreateExtras,
+  createAnnotationLifecycle,
+  type LifecycleResult,
+} from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev } from "../annotations/schema.js";
 import { refreshAllRanges, refreshRange } from "../positions.js";
@@ -62,6 +76,21 @@ import { getCurrentDoc } from "./document-service.js";
 export interface DocumentStore {
   /** Underlying Y.Doc — escape hatch for range anchoring and text extraction. */
   readonly ydoc: Y.Doc;
+  /**
+   * The ADR-035 mutation seam for this document (Unit 8b).
+   *
+   * **This is the interface callers program against from here on; the store is
+   * a compatibility shell Unit 8j deletes.** It is reached through the store
+   * only because document *resolution* still lives here — moving
+   * `getCurrentDoc` / `getOrCreateDocument` into `annotations/lifecycle.ts`
+   * would make `annotations/ → mcp/` an import cycle. 8j moves the lookup.
+   *
+   * Per the lifecycle's lifetime rule this is safe only because
+   * {@link getDocumentStore} constructs a fresh store per handler call. Do not
+   * cache a store — or this lifecycle — across an `await` that could span a
+   * Hocuspocus `onLoadDocument` doc swap.
+   */
+  readonly lifecycle: AnnotationLifecycle;
   /** Absolute (or `upload://`) path of the backing document. */
   readonly filePath: string;
   /** Stable hash of `filePath`, used to key migration-log relays. */
@@ -81,12 +110,17 @@ export interface DocumentStore {
   /**
    * Create a Claude-authored annotation from an already-anchored range and
    * store it in the annotations Y.Map. Returns the new annotation ID.
+   *
+   * @deprecated ADR-035 Unit 8b — use {@link DocumentStore.lifecycle}`.create`.
+   * This wide-typed method survives for the families that have not migrated
+   * (Units 8c–8h) and for the test floor, which builds `note` and `highlight`
+   * fixtures through it. Unit 8j removes it.
    */
   createAnnotation(
     type: AnnotationType,
     anchored: AnchoredRangeResult,
     content: string,
-    extras?: Partial<Annotation>,
+    extras?: CreateExtras,
   ): string;
 
   /**
@@ -185,6 +219,7 @@ export class YDocStore implements DocumentStore {
   readonly documentId: string;
   /** Annotations Y.Map — kept private; the seam is the method surface. */
   private readonly map: Y.Map<unknown>;
+  readonly lifecycle: AnnotationLifecycle;
 
   constructor(ydoc: Y.Doc, filePath: string, documentId: string) {
     this.ydoc = ydoc;
@@ -192,6 +227,7 @@ export class YDocStore implements DocumentStore {
     this.documentId = documentId;
     this.docHash = docHash(filePath);
     this.map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    this.lifecycle = createAnnotationLifecycle(ydoc);
   }
 
   private onLossy(event: SanitizationEvent): void {
@@ -202,11 +238,12 @@ export class YDocStore implements DocumentStore {
     return extractText(this.ydoc);
   }
 
+  /** @deprecated see {@link DocumentStore.createAnnotation}. */
   createAnnotation(
     type: AnnotationType,
     anchored: AnchoredRangeResult,
     content: string,
-    extras?: Partial<Annotation>,
+    extras?: CreateExtras,
   ): string {
     return createAnnotation(this.map, this.ydoc, type, anchored, content, extras);
   }
@@ -249,11 +286,11 @@ export class YDocStore implements DocumentStore {
   }
 
   acceptAnnotation(id: string): LifecycleResult<Annotation> {
-    return acceptPending(id, this.ydoc, this.map);
+    return this.lifecycle.accept(id);
   }
 
   dismissAnnotation(id: string): LifecycleResult<Annotation> {
-    return dismissPending(id, this.ydoc, this.map);
+    return this.lifecycle.dismiss(id);
   }
 
   removeAnnotation(
