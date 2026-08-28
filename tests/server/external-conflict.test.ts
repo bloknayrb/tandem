@@ -1460,7 +1460,16 @@ describe("POST /api/save on a conflicted document (#1238)", () => {
   }
 
   function makeReq(body: unknown): Request {
-    return { body } as unknown as Request;
+    // headers/socket are not decoration: handleSave now calls
+    // assertOriginAllowlisted, which reads req.headers.origin. A bare { body }
+    // threw a TypeError here rather than 403-ing, which is why this stub had to
+    // grow rather than the specs being rewritten -- they are about save
+    // behaviour, not about the gate.
+    return {
+      body,
+      headers: { origin: "http://127.0.0.1:5173" },
+      socket: { remoteAddress: "127.0.0.1" },
+    } as unknown as Request;
   }
 
   it("leaves the session carrying dirty + conflict after a skipped save", async () => {

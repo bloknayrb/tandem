@@ -51,7 +51,16 @@ const CARVE_OUTS = [
   { method: "DELETE", path: API_CHAT },
 ] as const;
 
-/** Mutating routes that had no gate at all before #1320. */
+/**
+ * Mutating routes that had no gate at all before #1320.
+ *
+ * Historical by design — do NOT prune it as routes gain handler gates. This
+ * suite registers stub handlers, so membership here says nothing about a
+ * route's current gating; what it pins is that the path-wide invariant covers
+ * these paths regardless. `save`, `convert` and `apply-changes` have since
+ * gained `assertOriginAllowlisted` (simple-request CSRF) and are still listed,
+ * because the property under test is the mount, not the handler.
+ */
 const PREVIOUSLY_UNGATED = [
   API_OPEN,
   API_SAVE,

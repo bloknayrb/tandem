@@ -58,8 +58,16 @@ function mockRes(): Response & { _status: number; _json: unknown } {
   return res as unknown as Response & { _status: number; _json: unknown };
 }
 
-const reqWith = (body: unknown, remoteAddress = "192.168.1.50") =>
-  ({ body, headers: {}, socket: { remoteAddress } }) as unknown as Request;
+// An allowlisted Origin is now required by handleSave/handleConvert/
+// handleApplyChanges (assertOriginAllowlisted). These specs are about path
+// scrubbing, not about the gate, so the stub supplies one and the gate gets its
+// own specs at the bottom of the file. `origin` is overridable so those can
+// omit it.
+const reqWith = (
+  body: unknown,
+  remoteAddress = "192.168.1.50",
+  headers: Record<string, string> = { origin: "http://127.0.0.1:5173" },
+) => ({ body, headers, socket: { remoteAddress } }) as unknown as Request;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -162,5 +170,51 @@ describe("POST /api/apply-changes — derived backupPath", () => {
     const res = mockRes();
     await handleApplyChanges(reqWith({ documentId: "d1" }, "127.0.0.1"), res);
     expect(JSON.stringify(res._json)).toContain("/home/alice/Documents/Q3-plan.backup.docx");
+  });
+});
+
+describe("the simple-request CSRF gate (#1295's class, second instance)", () => {
+  // These run the ACTUAL attack shape rather than asserting a gate exists: no
+  // Origin header, which is what a page's `no-cors` POST looks like from the
+  // handler's side once express.json has declined to parse a `text/plain` body.
+  //
+  // Each asserts BOTH halves, and the second is the load-bearing one. A status
+  // check alone is satisfied by a handler that calls the gate WITHOUT the
+  // `return` -- res.status(403) fires, the handler runs on, the side effect
+  // happens anyway, and the later res.json throws ERR_HTTP_HEADERS_SENT after
+  // the damage. So every spec here also asserts the side-effect mock was never
+  // reached.
+  const noOrigin = (body: unknown) => reqWith(body, "127.0.0.1", {});
+
+  it("refuses handleSave and does not touch the file on disk", async () => {
+    const res = mockRes();
+    await handleSave(noOrigin({ documentId: "d1" }), res);
+    expect(res._status).toBe(403);
+    expect(
+      saveDocumentToDisk,
+      "the save happened before the refusal -- the gate is missing its `return`",
+    ).not.toHaveBeenCalled();
+  });
+
+  it("refuses handleConvert and does not write a new file", async () => {
+    const res = mockRes();
+    await handleConvert(noOrigin({ documentId: "d1" }), res);
+    expect(res._status).toBe(403);
+    expect(convertToMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("refuses handleApplyChanges and does not apply", async () => {
+    const res = mockRes();
+    await handleApplyChanges(noOrigin({ documentId: "d1" }), res);
+    expect(res._status).toBe(403);
+    expect(applyChangesCore).not.toHaveBeenCalled();
+  });
+
+  it("still admits an allowlisted Origin — the required-GREEN control", async () => {
+    // Without this, "refuse everything" passes all three specs above.
+    const res = mockRes();
+    await handleConvert(reqWith({ documentId: "d1" }, "127.0.0.1"), res);
+    expect(res._status).not.toBe(403);
+    expect(convertToMarkdown).toHaveBeenCalled();
   });
 });

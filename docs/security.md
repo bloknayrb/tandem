@@ -49,11 +49,36 @@ the names promise more than they deliver (#1293):
   and the genuinely exposed configuration was the token-authenticated LAN bind that
   `bind-check.ts` permits whenever a token exists.
 
-  It governs the routes that **call** it, and **nine** mutating routes registered in
-  `src/server/mcp/api-routes.ts` call neither gate: `open`, `save` (save-as), `convert`,
-  `upload` — the four taking a caller-supplied filesystem path, the higher-blast-radius
-  subset #1320 was filed over — plus `close`, `apply-changes`, `annotation-reply`,
-  `remove-annotation` and `rotate-token`. (`scratchpad` was the tenth until #1318 gated it.)
+  It governs the routes that **call** it, and **six** mutating routes registered in
+  `src/server/mcp/api-routes.ts` call neither gate: `open` and `upload` — which take a
+  caller-supplied filesystem path, the higher-blast-radius subset #1320 was filed over —
+  plus `close`, `annotation-reply`, `remove-annotation` and `rotate-token`.
+  (`scratchpad` was the tenth of the original ten until #1318 gated it.)
+
+  It was nine until `save`, `convert` and `apply-changes` were gated to close a
+  simple-request CSRF: a `text/plain` POST is a SIMPLE request, so no preflight fires and
+  the origin allowlist never gets a say; a browser on the user's machine is loopback, so
+  `enforceLoopbackMutation` passes and `authMiddleware` skips the token check entirely; and
+  `express.json` (no `type` option) leaves `req.body` undefined, which those three handlers
+  tolerated and then defaulted every field from. **`/api/save` was reachable
+  unconditionally** — any page the user visited could overwrite their open document on
+  disk, and for an open `.docx` re-export it through mammoth over the original, because
+  `source === "manual"` skips the binary carve-out. `/api/convert` and `/api/apply-changes`
+  are the same shape but conditional on the active document being an on-disk `.docx`.
+  Measured, not inferred (express 5.2.1): `text/plain`, `application/x-www-form-urlencoded`,
+  `multipart/form-data` and a missing Content-Type all leave `req.body` undefined, so an
+  attacker reaches the handler but cannot inject a single field.
+
+  **Two of the six must never be given the origin gate**, and this is the trap in the
+  obvious fix: the Tauri sidecar POSTs `open` via reqwest and the CLI POSTs `rotate-token`
+  via Node `fetch`, neither sending an `Origin` header, and `assertOriginAllowlisted` fails
+  closed on a missing one. For `rotate-token` the CLI reads the resulting non-2xx as
+  `serverRejected` and **rolls the new token back off disk**, so the gate would break
+  rotation outright. `rotate-token` instead requires a parsed JSON body — a positive proof
+  that a preflight was passed rather than a header check. That route's exposure was
+  hardening rather than a hole: in the steady state the disk token already equals the
+  in-memory one, so the swap is a no-op, and the route 409s before any state touch whenever
+  `TANDEM_AUTH_TOKEN` is set, which is the whole Tauri desktop build.
   Since #1320 a LAN peer can no longer reach any of them, but they hold **one** layer rather
   than two, which is why the enumeration survives as the review inventory. It is pinned
   against source by `tests/docs/loopback-gate-claims.test.ts`, so a newly-added ungated
