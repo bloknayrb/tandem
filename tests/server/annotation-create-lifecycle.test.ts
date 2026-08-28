@@ -21,6 +21,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
+  type AnnotationCreator,
   type CreateExtras,
   createAnnotationLifecycle,
   mintAnnotation,
@@ -198,7 +199,8 @@ describe("AnnotationLifecycle.create — ADR-027 / ADR-035 privacy", () => {
       rev: 99,
       range: { from: 99, to: 100 },
       relRange: { start: "nonsense", end: "nonsense" },
-      content: "kept",
+      content: "hijacked",
+      textSnapshot: "kept",
     } as unknown as CreateExtras;
 
     const { annotation } = createAnnotationLifecycle(doc).create({
@@ -213,11 +215,44 @@ describe("AnnotationLifecycle.create — ADR-027 / ADR-035 privacy", () => {
     expect(annotation.rev).toBe(1);
     expect(annotation.range).toStrictEqual({ from: 0, to: 5 });
     expect(Object.hasOwn(annotation, "relRange")).toBe(false);
+    // `content` is owned too: `CreateInput.content` is a required parameter and
+    // `extras` is spread last, so an unowned `content` would be a second
+    // spelling of the same field where the optional one silently wins.
+    expect(annotation.content).toBe("original");
     // Positive control: a field the seam does NOT own still comes through, so
     // this is a strip of the named list rather than of extras wholesale.
-    expect(annotation.content).toBe("kept");
-    // And the forged record is refused by the channel for the right reason.
+    expect(annotation.textSnapshot).toBe("kept");
+    // The stripped record then projects normally — it is an ordinary outbound
+    // comment, which is the whole point of stripping rather than rejecting.
     expect(narrowForChannel(map.get(annotation.id))).not.toBeNull();
+  });
+
+  it("the Omit does NOT catch a widened variable — only the runtime strip does", () => {
+    // Excess-property checking is what rejects `extras: { audience: "private" }`
+    // written as a fresh object literal, and it applies to literals only. The
+    // assignment below compiles with no cast and no @ts-expect-error, which is
+    // exactly why `stripOwnedFields` and not `CreateExtras` is the control. A
+    // Unit 8c–8h author who writes only the `Omit` for their own family's
+    // extras type ships a hole that every literal-based type test still passes.
+    const widened: Partial<Annotation> = {
+      type: "note",
+      audience: "private",
+      author: "user",
+    };
+
+    const { annotation } = createAnnotationLifecycle(doc).create({
+      anchored: unanchored(0, 5),
+      content: "body",
+      // No cast and no @ts-expect-error on this line: that it compiles at all
+      // IS the finding. The assertions below are what actually holds the line.
+      extras: widened,
+    });
+
+    expect(annotation.type).toBe("comment");
+    expect(annotation.audience).toBe("outbound");
+    // Guard the guard: the unowned field from the same widened object survived,
+    // so the assertions above are observing a strip and not an empty extras.
+    expect(annotation.author).toBe("user");
   });
 
   it("type-level: the seam cannot mint a note, a highlight, or forge the privacy fields", () => {
@@ -247,6 +282,37 @@ describe("AnnotationLifecycle.create — ADR-027 / ADR-035 privacy", () => {
 
     // @ts-expect-error — `range` is excluded: it comes from `anchored`
     lifecycle.create({ anchored, content: "x", extras: { range: { from: 0, to: 1 } } });
+
+    // @ts-expect-error — `content` is excluded: CreateInput already requires it,
+    // and extras is spread last, so leaving it writable lets the optional
+    // spelling of the field beat the required one
+    lifecycle.create({ anchored, content: "x", extras: { content: "y" } });
+
+    // @ts-expect-error — `color` belongs to the highlight arm; deriving
+    // CreateExtras from `Extract<Annotation, {type:"comment"}>` keeps the
+    // discriminant that a non-distributive Omit over the whole union discards
+    lifecycle.create({ anchored, content: "x", extras: { color: "yellow" } });
+  });
+
+  it("type-level: AnnotationCreator really is create-only", () => {
+    // The narrowing handed to the local-model loop (#1123) is a deliberate
+    // capability boundary: that subsystem has no accept/dismiss tool, and a
+    // three-method lifecycle would grant it resolution for the first time. Until
+    // this spec existed, widening the `Pick` back to the full
+    // `AnnotationLifecycle` passed the whole runtime suite AND typecheck — a
+    // stated boundary with nothing enforcing it. Both directives go unused (and
+    // `typecheck:tests` reports TS2578) the moment the `Pick` is widened.
+    const creator: AnnotationCreator = createAnnotationLifecycle(doc);
+
+    // @ts-expect-error — the loop has no accept tool; the seam must not give it one
+    creator.accept("id");
+
+    // @ts-expect-error — nor dismiss
+    creator.dismiss("id");
+
+    // Guard the guard: `create` IS reachable, so the two errors above are the
+    // narrowing biting and not a broken binding that rejects everything.
+    creator.create({ anchored: unanchored(0, 5), content: "x" });
   });
 });
 
@@ -287,6 +353,43 @@ describe("AnnotationLifecycle.create — review-pending notification", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0].message).toBe("New Replacement");
     expect(seen[0].dedupKey).toBe("review-pending:replacement");
+  });
+
+  it("truncates the snippet at 60 characters and marks it with an ellipsis", () => {
+    // The `slice(0, 60)` and the `…` branch are part of the field-for-field
+    // parity claim against `origin/master`, and both notification specs above
+    // use snapshots far shorter than the boundary — so narrowing the slice to 40
+    // changed nothing observable. Asserting the exact 60-char prefix is what
+    // makes the boundary a number the test knows rather than one it inherits.
+    const snapshot = "A".repeat(61);
+    const seen: Array<{ message: string }> = [];
+    const unsub = notifications.subscribe((n) => seen.push(n));
+    try {
+      createAnnotationLifecycle(doc).create({
+        anchored: unanchored(0, 5),
+        content: "x",
+        extras: { textSnapshot: snapshot },
+      });
+    } finally {
+      unsub();
+    }
+
+    expect(seen[0].message).toBe(`New Comment: "${"A".repeat(60)}…"`);
+
+    // Negative control on the same boundary: exactly 60 gets no ellipsis, so
+    // the assertion above is reading the branch and not just the slice.
+    const exact: Array<{ message: string }> = [];
+    const unsub2 = notifications.subscribe((n) => exact.push(n));
+    try {
+      createAnnotationLifecycle(doc).create({
+        anchored: unanchored(0, 5),
+        content: "x",
+        extras: { textSnapshot: "B".repeat(60) },
+      });
+    } finally {
+      unsub2();
+    }
+    expect(exact[0].message).toBe(`New Comment: "${"B".repeat(60)}"`);
   });
 });
 
@@ -334,6 +437,36 @@ describe("compatibility surface", () => {
 });
 
 describe("local-model create path", () => {
+  it("builds its creator per dispatch, so two documents never cross", () => {
+    // The module header's lifetime rule, and the stated reason `DispatchCtx`
+    // carries no lifecycle field: Hocuspocus replaces the Y.Doc in
+    // `onLoadDocument`, so a creator cached across calls writes into a
+    // destroyed doc. Caching it used to redden this file only incidentally —
+    // the two specs below happen to use different docs and run in order, so the
+    // second threw a TypeError rather than failing an assertion, and filtering
+    // to one spec made the mutation pass. This asserts the isolation in both
+    // directions inside a single test, which no ordering can rescue.
+    const docA = makeDoc("The quick brown fox jumps over the lazy dog.");
+    const docB = makeDoc("The quick brown fox jumps over the lazy dog.");
+    const ctx = (ydoc: Y.Doc) => ({
+      ydoc,
+      isLicenseRestricted: () => false,
+      agentIdentity: undefined,
+    });
+
+    const outA = dispatch("comment_on_quote", { quoted_text: "quick", comment: "a" }, ctx(docA));
+    const outB = dispatch("comment_on_quote", { quoted_text: "brown", comment: "b" }, ctx(docB));
+    const idA = (outA.result as { annotation_id: string }).annotation_id;
+    const idB = (outB.result as { annotation_id: string }).annotation_id;
+
+    // Guard the guard: both dispatches actually minted something, or the two
+    // cross-document assertions below are satisfied by two empty maps.
+    expect(getAnnotationsMap(docA).has(idA)).toBe(true);
+    expect(getAnnotationsMap(docB).has(idB)).toBe(true);
+    expect(getAnnotationsMap(docB).has(idA)).toBe(false);
+    expect(getAnnotationsMap(docA).has(idB)).toBe(false);
+  });
+
   it("routes comment_on_quote through the lifecycle and keeps its unique fields", () => {
     const modelDoc = makeDoc("The quick brown fox jumps over the lazy dog.");
     const modelMap = getAnnotationsMap(modelDoc);

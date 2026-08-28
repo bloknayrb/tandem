@@ -24,12 +24,15 @@
  * - Unit 8's own instruction ends "collapse or delete `DocumentStore`". A seam
  *   scheduled for deletion cannot be the seam callers program against.
  * - `DocumentStore` advertises `readonly ydoc` as an "escape hatch" and
- *   `transactMcp`. Those are exactly what ADR-035 exists to remove. **The
- *   lifecycle must never acquire either** — that is an invariant for Units
- *   8c–8j, not a stylistic note.
+ *   `transactMcp`. Removing exactly those two is Unit 8's own instruction in
+ *   `docs/plans/2026-08-24-ai-assisted-maintainability-remediation.md` — ADR-035
+ *   itself predates the store and never names it. **The lifecycle must never
+ *   acquire either** — that is an invariant for Units 8c–8j, not a stylistic
+ *   note.
  * - `local-model/tools.ts` structurally cannot reach `DocumentStore`: its
- *   `DispatchCtx` carries only a `Y.Doc`. A seam that one of the two
- *   production writers cannot hold is not the seam.
+ *   `DispatchCtx` carries a `Y.Doc`, a license flag and an agent identity, and
+ *   no store. A seam that one of the two production writers cannot hold is not
+ *   the seam.
  *
  * Document *resolution* stays in `mcp/document-store.ts` for now (the
  * `getCurrentDoc` / `getOrCreateDocument` lookup lives there, and importing it
@@ -78,13 +81,18 @@ export type LifecycleResult<T> =
  * a create is refused before the seam is reached, by a type rather than by a
  * runtime branch:
  *
- * - Range validity and heading-markup overlap (Critical Rules 4 and 6) are
- *   settled by `anchoredRange()`, whose failure arms are a *separate* type
- *   (`RangeValidation & {ok: false}`, see `server/positions.ts`).
- *   `AnchoredRangeResult` has only `ok: true` arms, so an unvalidated range
- *   cannot be typed into {@link CreateInput}.
- * - A Claude-authored note (ADR-027) is unconstructible: `create` has no
- *   `type` parameter, and {@link CreateExtras} excludes `type` and `audience`.
+ * - Range validity (Critical Rule 4) is settled by `anchoredRange()`, whose
+ *   failure arms are a *separate* type (`RangeValidation & {ok: false}`, see
+ *   `server/positions.ts`). `AnchoredRangeResult` has only `ok: true` arms, so
+ *   an unvalidated range cannot be typed into {@link CreateInput}. Heading
+ *   overlap is a weaker claim, stated deliberately weakly: rejection is opt-in
+ *   via `anchoredRange`'s `rejectHeadingOverlap`, both production callers pass
+ *   it, and the type cannot tell you whether they did.
+ * - A Claude-authored note (ADR-027) is unconstructible *at runtime*: `create`
+ *   has no `type` parameter, and {@link stripOwnedFields} deletes `type` and
+ *   `audience` from whatever a caller passes. The matching `Omit` in
+ *   {@link CreateExtras} is the legibility half, not the enforcing one — see
+ *   its docblock.
  *
  * Kept a tagged union so Units 8c–8h can add arms without changing the call
  * shape at every site.
@@ -107,10 +115,22 @@ export type CreateResult = { kind: "created"; annotation: Annotation };
  *   structurally. `extras` was the one way to attach a CRDT anchor to a range
  *   that was never fully anchored, which is silent range corruption in the
  *   coordinate system Critical Rule 4 protects.
- * - `range`, `rev`, `id` — the lifecycle computes all three. A caller-supplied
- *   `rev` in particular would let a fresh record land above `rev: 1` and
- *   survive a tombstone merge it should lose (the delete rule is
- *   `stone.rev > ymapRec.rev`).
+ * - `range`, `rev`, `id`, `content` — the lifecycle computes or is handed all
+ *   four. A caller-supplied `rev` in particular would let a fresh record land
+ *   above `rev: 1` and survive a tombstone merge it should lose (the delete
+ *   rule is `stone.rev > ymapAnn.rev`, `annotations/sync.ts`). `content` is
+ *   excluded because {@link CreateInput} already declares it a *required*
+ *   parameter and `extras` is spread last: leaving it writable means two
+ *   spellings of one field where the optional one silently wins.
+ *
+ * **What this type does and does not enforce.** Excess-property checking is
+ * what rejects `extras: { audience: "private" }`, and that applies to a fresh
+ * object literal only. A widened variable —
+ * `const wide: Partial<Annotation> = {...}; create({ ..., extras: wide })` —
+ * compiles with no cast. So the `Omit` catches the common literal spelling and
+ * documents intent, while {@link stripOwnedFields} is what actually holds. Any
+ * Unit 8c–8h author adding an `EditExtras`/`RemoveExtras` needs both halves;
+ * the type alone is not the control.
  *
  * `author` stays writable: tests construct user-authored fixtures through this
  * path, and authorship is not part of the projection predicate. `status` stays
@@ -119,7 +139,23 @@ export type CreateResult = { kind: "created"; annotation: Annotation };
  * Verified against every `createAnnotation` call site in `src/` and `tests/`:
  * none passes any excluded key.
  */
-export type CreateExtras = Omit<Partial<Annotation>, LifecycleOwnedField>;
+export type CreateExtras = Omit<
+  Partial<Extract<Annotation, { type: "comment" }>>,
+  LifecycleOwnedField
+>;
+
+/**
+ * The wide extras of the pre-ADR-035 entry point {@link mintAnnotation}.
+ *
+ * `Omit` is **not** distributive, so `Omit<Partial<Annotation>, …>` flattens the
+ * three-arm union into one object whose `color` and `suggestedText` become
+ * independently settable — which is exactly what the `color?: undefined` arms in
+ * `shared/types.ts` exist to forbid. The seam therefore derives its
+ * {@link CreateExtras} from the comment arm alone, and this wider alias carries
+ * the flattening for the legacy path that genuinely mints a `highlight` (with a
+ * `color`) and a `note`. Unit 8j deletes it along with its one caller.
+ */
+export type MintExtras = Omit<Partial<Annotation>, LifecycleOwnedField>;
 
 /**
  * The excluded fields, written once. {@link CreateExtras} omits them at the
@@ -135,6 +171,7 @@ const LIFECYCLE_OWNED_FIELDS = [
   "relRange",
   "rev",
   "audience",
+  "content",
 ] as const satisfies readonly (keyof Annotation)[];
 
 type LifecycleOwnedField = (typeof LIFECYCLE_OWNED_FIELDS)[number];
@@ -183,6 +220,14 @@ export interface AnnotationLifecycle {
  * tool, so it structurally cannot resolve an annotation today. Handing it a
  * three-method lifecycle would grant that capability for the first time, in a
  * subsystem whose review surface is thin. It gets this instead.
+ *
+ * **Scope of the guarantee.** This binds at the `annotateFromQuote` call
+ * boundary: that function cannot reach `accept`/`dismiss`, and the narrowing is
+ * not recoverable from `creator` without a cast. It is *not* a capability
+ * boundary for the module — `local-model/tools.ts` imports
+ * {@link createAnnotationLifecycle} itself, so a future edit there is one line
+ * from the full lifecycle. Closing that means injecting an `AnnotationCreator`
+ * from `dispatch`'s caller, which is Unit 8j's restructuring, not 8b's.
  */
 export type AnnotationCreator = Pick<AnnotationLifecycle, "create">;
 
@@ -212,23 +257,25 @@ export function createAnnotationLifecycle(ydoc: Y.Doc): AnnotationLifecycle {
 /**
  * Drop the lifecycle-owned fields from a caller's `extras`.
  *
- * **The `Omit` in {@link CreateExtras} is a TypeScript-only guarantee, and this
- * is the JS-level half.** Unit 8a learned the same lesson about its
- * `ChannelEligible` brand: a compile-time-only privacy guard is defeated by
- * anything that reaches the value without going through the compiler — an
- * untyped caller, a cast, a `.js` consumer. Without this, a runtime `extras`
- * carrying `rev` or `audience` would win, because `extras` is spread last.
+ * **This is the enforcing half, not the belt to the `Omit`'s braces.** The
+ * `Omit` in {@link CreateExtras} is an excess-property check on fresh object
+ * literals; a widened variable, a cast, an untyped caller or a `.js` consumer
+ * all reach this function with the same object, and `extras` is spread last, so
+ * without the delete a runtime `extras` carrying `rev` or `audience` would win.
+ * Unit 8a learned the same lesson about its `ChannelEligible` brand.
  *
- * Measured before adding: no call site in `src/` or `tests/` passes any of
- * these keys, so nothing observable changes. Deleting rather than reordering
- * the spread is deliberate — it leaves the key order of every field a caller
- * *does* pass exactly where it was.
+ * Measured before adding: no call site in `src/` passes any of these keys, so
+ * production behaviour is unchanged. The only callers that do are the
+ * runtime-strip specs in `tests/server/annotation-create-lifecycle.test.ts`,
+ * which exist to prove this function fires. Deleting rather than reordering the
+ * spread is deliberate — it leaves the key order of every field a caller *does*
+ * pass exactly where it was.
  */
-function stripOwnedFields(extras: CreateExtras | undefined): CreateExtras {
+function stripOwnedFields(extras: MintExtras | undefined): MintExtras {
   if (!extras) return {};
   const copy = { ...extras } as Record<string, unknown>;
   for (const key of LIFECYCLE_OWNED_FIELDS) delete copy[key];
-  return copy as CreateExtras;
+  return copy as MintExtras;
 }
 
 /**
@@ -256,7 +303,7 @@ export function mintAnnotation(
   type: AnnotationType,
   anchored: AnchoredRangeResult,
   content: string,
-  extras?: CreateExtras,
+  extras?: MintExtras,
 ): Annotation {
   const id = generateAnnotationId();
   const safeExtras = stripOwnedFields(extras);

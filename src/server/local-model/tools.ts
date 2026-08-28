@@ -7,7 +7,7 @@
  *
  *   unescape -> countOccurrences -> (clamp occ->1 iff occ>1 and count===1) ->
  *   findOccurrence -> anchoredRange({rejectHeadingOverlap}) ->
- *   createAnnotation / addReplyToAnnotation   (wrapped in withMcp)
+ *   AnnotationCreator.create / addReplyToAnnotation   (wrapped in withMcp)
  *
  * Anchor/validation failures are returned to the model as structured tool errors
  * so it can retry with a tighter quote (the bounded repair is loop-level, via
@@ -216,7 +216,7 @@ function resolveAnchor(ydoc: Y.Doc, rawQuote: string, rawOcc: number) {
 
 /**
  * Create a comment- or replacement-kind annotation from a quote anchor. The two
- * mutating annotate tools share the resolve→createAnnotation→effect shape; they
+ * mutating annotate tools share the resolve→creator.create→effect shape; they
  * differ only in the effect `kind`, the annotation body, and whether a
  * `suggestedText` extra rides along (replacement only). The stored annotation
  * type is always "comment" — a replacement is a comment carrying suggestedText.

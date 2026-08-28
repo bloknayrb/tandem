@@ -26,7 +26,7 @@ import {
 } from "../../shared/types.js";
 import { generateNotificationId, generateReplyId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
-import type { CreateExtras } from "../annotations/lifecycle.js";
+import type { MintExtras } from "../annotations/lifecycle.js";
 import { mintAnnotation } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev, REPLY_TEXT_MAX } from "../annotations/schema.js";
@@ -380,7 +380,7 @@ export function createAnnotation(
   type: AnnotationType,
   anchored: AnchoredRangeResult,
   content: string,
-  extras?: CreateExtras,
+  extras?: MintExtras,
 ): string {
   return mintAnnotation(ydoc, map, type, anchored, content, extras).id;
 }

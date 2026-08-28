@@ -60,7 +60,10 @@ const SRC_FILES: ReadonlyMap<string, string> = new Map(
 );
 
 function importersOf(identifier: string): string[] {
-  const pattern = new RegExp(`\\b${identifier}\\b`);
+  return filesMatching(new RegExp(`\\b${identifier}\\b`));
+}
+
+function filesMatching(pattern: RegExp): string[] {
   return [...SRC_FILES]
     .filter(([rel, contents]) => rel !== DEFINITION && pattern.test(contents))
     .map(([rel]) => rel)
@@ -93,5 +96,50 @@ describe("annotation create seam — who may mint", () => {
     // caller keeps that width confined to the pre-ADR-035 export Unit 8j
     // deletes; a second would be the width leaking into new code.
     expect(importersOf("mintAnnotation")).toStrictEqual(["src/server/mcp/annotations.ts"]);
+  });
+
+  it("nothing invokes create through an already-built lifecycle it did not import", () => {
+    // The two assertions above key on the *constructor*, which is one whole
+    // class of new caller short: `DocumentStore` exposes `readonly lifecycle`,
+    // so a handler anywhere in `src/server/mcp` can write
+    // `store.lifecycle.create(...)` while importing nothing this census reads.
+    // Keying on the invocation instead is what makes the census answer "who can
+    // mint" rather than "who constructed a minter".
+    expect(filesMatching(/\b(?:lifecycle|creator)\.create\(/)).toStrictEqual([
+      "src/server/local-model/tools.ts",
+      "src/server/mcp/annotations.ts",
+    ]);
+  });
+
+  it("the deprecated wide create path stays confined to its two server files", () => {
+    // `DocumentStore.createAnnotation` still accepts `note` and `highlight`,
+    // which the seam refuses, and it is reachable as `store.createAnnotation(…)`
+    // from any handler — importing nothing that the two assertions above read.
+    // So this keys on the *call shape*, not on a bare identifier: the bare name
+    // also appears in four files' prose, and a census that counts sentences is
+    // one an unrelated comment edit turns red. `\b` does not match inside
+    // `createAnnotationLifecycle` (the next character is a word character).
+    //
+    // `Toolbar.svelte` is listed and is NOT the same function: the client
+    // declares its own local `createAnnotation` and writes under `withBrowser`
+    // against the browser's Y.Doc, never reaching server lifecycle code. It
+    // stays in the expectation rather than being filtered out because the sweep
+    // is deliberately wider than the thing it guards — a filter would also hide
+    // a future `src/client` file that reached the server export for real.
+    expect(filesMatching(/\bcreateAnnotation\(/)).toStrictEqual([
+      "src/client/editor/toolbar/Toolbar.svelte",
+      "src/server/mcp/annotations.ts",
+      "src/server/mcp/document-store.ts",
+    ]);
+  });
+
+  it("acceptPending / dismissPending have no production caller at all", () => {
+    // Not a zero-of-zero check: both identifiers exist and are exported (the
+    // first assertion in this file proves the sweep can see their file). They
+    // are the pre-ADR-035 parity floor that only `tests/` still calls, so an
+    // empty set here is the claim, and a future `src/` caller reaching around
+    // `lifecycle.accept` / `.dismiss` is what turns it red.
+    expect(importersOf("acceptPending")).toStrictEqual([]);
+    expect(importersOf("dismissPending")).toStrictEqual([]);
   });
 });

@@ -25,8 +25,10 @@
  * callers program against and that Unit 8j collapses or deletes this file. Two
  * consequences for anyone editing here: new mutation work goes on the
  * lifecycle, not on a new method here; and `ydoc` / `transactMcp` are the
- * escape hatches ADR-035 exists to remove, so nothing new should reach for
- * them.
+ * escape hatches the Unit 8 epic in
+ * `docs/plans/2026-08-24-ai-assisted-maintainability-remediation.md` exists to
+ * remove (ADR-035 predates this store and never names it), so nothing new
+ * should reach for them.
  *
  * Scope note: this wraps the *in-memory* Y.Doc/Y.Map layer the MCP handlers
  * touch — NOT the durable annotation file-store (`src/server/annotations/`).
@@ -49,9 +51,9 @@ import type {
 import { docHash } from "../annotations/doc-hash.js";
 import {
   type AnnotationLifecycle,
-  type CreateExtras,
   createAnnotationLifecycle,
   type LifecycleResult,
+  type MintExtras,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev } from "../annotations/schema.js";
@@ -112,15 +114,17 @@ export interface DocumentStore {
    * store it in the annotations Y.Map. Returns the new annotation ID.
    *
    * @deprecated ADR-035 Unit 8b — use {@link DocumentStore.lifecycle}`.create`.
-   * This wide-typed method survives for the families that have not migrated
-   * (Units 8c–8h) and for the test floor, which builds `note` and `highlight`
-   * fixtures through it. Unit 8j removes it.
+   * It has **no production callers left**: what survives is the test floor,
+   * which builds `note` and `highlight` fixtures through it and which the seam
+   * deliberately cannot express. (The not-yet-migrated families, Units 8c–8h,
+   * do not reach for this method either — `.docx` import has its own
+   * `withInternal` path.) Unit 8j removes it.
    */
   createAnnotation(
     type: AnnotationType,
     anchored: AnchoredRangeResult,
     content: string,
-    extras?: CreateExtras,
+    extras?: MintExtras,
   ): string;
 
   /**
@@ -243,7 +247,7 @@ export class YDocStore implements DocumentStore {
     type: AnnotationType,
     anchored: AnchoredRangeResult,
     content: string,
-    extras?: CreateExtras,
+    extras?: MintExtras,
   ): string {
     return createAnnotation(this.map, this.ydoc, type, anchored, content, extras);
   }
