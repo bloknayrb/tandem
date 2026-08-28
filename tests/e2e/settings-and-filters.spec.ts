@@ -10,6 +10,7 @@ import {
   openAnnotatePopup,
   openSettingsViaBrandMenu,
   selectTextStable,
+  submitAnnotation,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -739,9 +740,9 @@ test("note filter shows only notes, hides comments (ADR-027 C1)", async ({ page 
   await openAnnotatePopup(page);
   const noteInput = page.locator("[data-testid='popup-annotation-input']");
 
-  // Type note content and submit via "Note to self".
+  // Type note content and submit privately (audience toggle -> commit).
   await noteInput.fill("my private note");
-  await page.locator("[data-testid='popup-note-submit']").click();
+  await submitAnnotation(page, "note");
 
   // Both annotations must sync over Hocuspocus before we filter.
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {

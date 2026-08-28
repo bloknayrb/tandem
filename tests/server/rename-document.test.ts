@@ -70,7 +70,7 @@ const {
   detachObservers,
   resetForTesting: queueReset,
 } = await import("../../src/server/events/queue.js");
-const { wireAnnotationStore } = await import("../../src/server/mcp/file-opener.js");
+const { wireAnnotationStore } = await import("../../src/server/documents/annotation-wiring.js");
 const { getDocumentStore } = await import("../../src/server/mcp/document-store.js");
 const { collectEvents } = await import("../helpers/event-collector.js");
 
@@ -688,9 +688,9 @@ describe("renameDocument — post-commit best-effort (Phase 3)", () => {
     // Make the post-commit annotation-store re-wire throw. fs.rename has already
     // committed by then, so the rename MUST still report success rather than a
     // misleading "Rename failed" (which would revert the tab against on-disk truth).
-    const fileOpener = await import("../../src/server/mcp/file-opener.js");
+    const annotationWiring = await import("../../src/server/documents/annotation-wiring.js");
     const rewireSpy = vi
-      .spyOn(fileOpener, "wireAnnotationStore")
+      .spyOn(annotationWiring, "wireAnnotationStore")
       .mockRejectedValueOnce(new Error("simulated re-wire failure"));
     try {
       const result = await renameDocument(docId, "committed-renamed.md");
@@ -750,9 +750,9 @@ describe("renameDocument — re-wire-FAILURE stale observer disposal (#1040)", (
     // Force the Phase-3 re-wire to THROW so `rewired` stays false and the !rewired
     // guard path runs. The OLD oldHash observer is never disposed by the (failed)
     // re-wire -- only the guard's clearFileSyncContext can dispose it.
-    const fileOpener = await import("../../src/server/mcp/file-opener.js");
+    const annotationWiring = await import("../../src/server/documents/annotation-wiring.js");
     const rewireSpy = vi
-      .spyOn(fileOpener, "wireAnnotationStore")
+      .spyOn(annotationWiring, "wireAnnotationStore")
       .mockRejectedValueOnce(new Error("simulated re-wire failure"));
 
     try {

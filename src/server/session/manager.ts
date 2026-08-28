@@ -458,13 +458,27 @@ export function restoreCtrlDoc(doc: Y.Doc, base64State: string): void {
  * Skips the ctrl session, upload:// paths, and corrupt files.
  * Returns file paths sorted by most recently accessed first.
  */
-export async function listSessionFilePaths(): Promise<
-  Array<{ filePath: string; lastAccessed: number; readOnly: boolean }>
-> {
+/**
+ * One restorable document session, as `listSessionFilePaths` reports it.
+ *
+ * Named rather than inline because `documents/open.ts`'s `openFromRestore`
+ * derives its parameter from it with `Pick`. Losing `readOnly` on the restore
+ * path is a bug that has shipped (#1591), and two independently-written
+ * structural types are exactly how it comes back: the caller destructures the
+ * fields it remembers, the callee declares the fields it remembers, and
+ * nothing makes them disagree out loud.
+ */
+export interface SessionFileEntry {
+  filePath: string;
+  lastAccessed: number;
+  readOnly: boolean;
+}
+
+export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
   try {
     await fs.mkdir(SESSION_DIR, { recursive: true });
     const files = await fs.readdir(SESSION_DIR);
-    const results: Array<{ filePath: string; lastAccessed: number; readOnly: boolean }> = [];
+    const results: SessionFileEntry[] = [];
 
     for (const file of files) {
       if (!file.endsWith(".json")) continue;

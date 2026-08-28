@@ -474,7 +474,7 @@ export interface SessionData {
    * silently downgraded a read-only tab to writable — which is the bug, since
    * the autosave gates stop protecting the file — but that accident was also
    * the only way back to editable, and read-only is otherwise a one-way door
-   * (`openFileByPath` only upgrades; `handleAlreadyOpen` never downgrades).
+   * (`openFromDisk` only upgrades; `handleAlreadyOpen` never downgrades).
    * Accepted knowingly; an explicit downgrade affordance is #1590.
    *
    * Absent means false — that is the shape of every record written before this
