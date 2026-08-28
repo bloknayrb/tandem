@@ -623,7 +623,7 @@ describe("docx session restore (#1069)", () => {
     setActiveDocId(null);
 
     const second = await openFromDisk(filePath);
-    expect(second.restoredFromSession).toBe(true);
+    expect(second.kind).toBe("restored");
     const restoredDoc = getOrCreateDocument(second.documentId);
     expect(conflictOf(restoredDoc)).toMatchObject({
       kind: "unsaved-restore",
@@ -657,7 +657,7 @@ describe("docx session restore (#1069)", () => {
     await fs.utimes(filePath, new Date(), new Date(Date.now() + 10_000));
 
     const second = await openFromDisk(filePath);
-    expect(second.restoredFromSession).toBe(true); // session is the only copy of the edits
+    expect(second.kind).toBe("restored"); // session is the only copy of the edits
     const restoredDoc = getOrCreateDocument(second.documentId);
     expect(extractText(restoredDoc)).toContain("local unsaved edit");
     expect(conflictOf(restoredDoc)).toMatchObject({
@@ -697,7 +697,7 @@ describe("docx session restore (#1069)", () => {
     await fs.utimes(filePath, new Date(), new Date(Date.now() + 10_000));
 
     const second = await openFromDisk(filePath);
-    expect(second.restoredFromSession).toBe(false);
+    expect(second.kind).not.toBe("restored");
     expect(conflictOf(getOrCreateDocument(second.documentId))).toBeUndefined();
   });
 
@@ -716,7 +716,7 @@ describe("docx session restore (#1069)", () => {
     // the next 60s tick persists the restored edits with nothing to choose
     // between. A prompt here would be a choice with only one branch.
     const second = await openFromDisk(filePath);
-    expect(second.restoredFromSession).toBe(true);
+    expect(second.kind).toBe("restored");
     expect(conflictOf(getOrCreateDocument(second.documentId))).toBeUndefined();
   });
 });
@@ -921,7 +921,7 @@ describe("session restore across a restart (#1238)", () => {
     const second = await openFromDisk(filePath);
     // Pre-#1238 this took disk and silently dropped the session — the same
     // data loss as the watcher path, just at the restart boundary.
-    expect(second.restoredFromSession).toBe(true);
+    expect(second.kind).toBe("restored");
     const restoredDoc = getOrCreateDocument(second.documentId);
     expect(extractText(restoredDoc)).toContain("local unsaved edit");
     expect(conflictOf(restoredDoc)).toMatchObject({
@@ -1204,7 +1204,7 @@ describe("session restore across a restart (#1238)", () => {
     setActiveDocId(null);
 
     const second = await openFromDisk(filePath);
-    expect(second.restoredFromSession).toBe(true);
+    expect(second.kind).toBe("restored");
     expect(conflictOf(getOrCreateDocument(second.documentId))).toMatchObject({
       kind: "unsaved-restore",
       diskChanged: false,

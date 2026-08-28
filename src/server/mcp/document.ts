@@ -19,7 +19,7 @@ import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
-import { openFromDisk, openScratchpad } from "../documents/open.js";
+import { type OpenSuccess, openFromDisk, openScratchpad, toWireResult } from "../documents/open.js";
 import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast } from "../file-io/mdast-ydoc.js";
@@ -134,6 +134,49 @@ export interface OutlineEntry {
   level: number;
   text: string;
   index: number;
+}
+
+/**
+ * The user-facing sentence `tandem_open` returns for a successful open.
+ *
+ * This used to be an inline `else if` chain over the three result booleans —
+ * a **second, independent copy of `kindOfOpenResult`'s precedence** that
+ * nothing tied to the first. It now switches on `OpenSuccess["kind"]`, which
+ * the pipeline decided at construction, so there is one ordering rather than
+ * two that agreed by inspection.
+ *
+ * **`readOnly` is a fifth distinction the four kinds do not name**, and the
+ * old chain reached it only when the other three were false. That is preserved
+ * exactly: the `readOnly` split lives under `fresh` alone, so a restored,
+ * already-open or force-reloaded document that is ALSO read-only still says
+ * nothing about being read only. The switch makes that a visible choice
+ * instead of a fall-through consequence, but it is the same behaviour;
+ * `tests/server/open-result-message.test.ts` pins all eight
+ * `(kind × readOnly)` combinations so the gap stays recorded rather than
+ * rediscovered. Changing the wording is a behaviour change and belongs in its
+ * own PR.
+ *
+ * The switch has no `default`. That is deliberate — a fifth arm added to
+ * `OpenSuccess` fails to compile here (TS2366, no ending return) rather than
+ * silently falling through to a generic sentence. It said `OpenResultKind`
+ * until review pointed out that this switches on `OpenSuccess["kind"]` and the
+ * two were separate hand-maintained lists, so adding to `OpenResultKind` alone
+ * compiled everywhere. `OpenResultKind` is now derived from `OpenSuccess`,
+ * which is what makes the sentence true rather than aspirational.
+ */
+export function openResultMessage(result: OpenSuccess): string {
+  switch (result.kind) {
+    case "force-reloaded":
+      return `Force-reloaded from disk: ${result.fileName}`;
+    case "already-open":
+      return `Switched to already-open document: ${result.fileName}`;
+    case "restored":
+      return `Session restored: ${result.fileName} (annotations preserved)`;
+    case "fresh":
+      return result.readOnly
+        ? `Document opened (review only): ${result.fileName}`
+        : `Document opened: ${result.fileName}`;
+  }
 }
 
 /** Extract document outline (headings). Pure logic exported for testing. */
@@ -339,18 +382,7 @@ export function registerDocumentTools(server: McpServer): void {
             stampClaudeAuthorshipWholeDoc(loaded.doc);
           }
         }
-        return mcpSuccess({
-          ...result,
-          message: result.forceReloaded
-            ? `Force-reloaded from disk: ${result.fileName}`
-            : result.alreadyOpen
-              ? `Switched to already-open document: ${result.fileName}`
-              : result.restoredFromSession
-                ? `Session restored: ${result.fileName} (annotations preserved)`
-                : result.readOnly
-                  ? `Document opened (review only): ${result.fileName}`
-                  : `Document opened: ${result.fileName}`,
-        });
+        return mcpSuccess({ ...toWireResult(result), message: openResultMessage(result) });
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
         if (e.code === "ENOENT" || e.code === "FILE_NOT_FOUND") {

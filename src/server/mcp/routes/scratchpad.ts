@@ -6,6 +6,7 @@ import {
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
 import { sendApiError } from "./_shared.js";
+import { sendOpenResult } from "./send-open-result.js";
 
 const MAX_SCRATCHPAD_CONTENT_BYTES = 1024 * 1024;
 
@@ -67,7 +68,7 @@ export async function handleScratchpad(req: Request, res: Response): Promise<voi
   }
   try {
     const result = await openScratchpad(content as string | undefined);
-    res.json({ data: result });
+    sendOpenResult(res, result);
   } catch (err: unknown) {
     sendApiError(res, err);
   }

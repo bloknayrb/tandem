@@ -3,16 +3,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const openScratchpad = vi.hoisted(() =>
   vi.fn(async (content?: string) => ({
+    kind: "fresh" as const,
     documentId: "scratch",
+    filePath: "scratchpad://scratch",
     fileName: "Scratchpad.md",
-    content,
+    format: "md",
+    readOnly: false,
+    source: "upload" as const,
+    tokenEstimate: content?.length ?? 0,
+    pageEstimate: 1,
   })),
 );
 // Mocked at the module the route actually imports (ADR-034 seam), not at the
 // implementation behind it. A partial factory for `file-opener.js` left the
 // seam's other two re-exports resolving to `undefined` — tolerated by Vite's
 // SSR transform, a link error under a real ESM linker.
-vi.mock("../../src/server/documents/open.js", () => ({ openScratchpad }));
+//
+// Spread over `importActual` for the same reason, and it is load-bearing: the
+// route also calls `toWireResult`, and a factory naming only `openScratchpad`
+// made it `undefined`, so every success turned into a 500 the route reported
+// as INTERNAL. Re-stating the projector here instead would be a second copy of
+// the one thing Unit 7b exists to keep single.
+vi.mock("../../src/server/documents/open.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/server/documents/open.js")>()),
+  openScratchpad,
+}));
 
 import { handleScratchpad } from "../../src/server/mcp/routes/scratchpad";
 import { TAURI_HOSTNAME } from "../../src/shared/constants.js";
