@@ -41,10 +41,20 @@ import { describe, expect, it } from "vitest";
  *      in the repo (a list that churns with unrelated work and would be
  *      rubber-stamped), this pins who can reach the *resource* instead.
  *    - `DURABLE_WRITER_FILES` — every file in `src/` that durably writes at
- *      all. Only the FILE SET is pinned, never the per-file counts: counts
- *      outside the scan roots would churn on unrelated work and get
- *      rubber-stamped, while a brand-new durable-writer file is both rare and
- *      exactly the shape of a config writer smuggled outside `SCAN_ROOTS`.
+ *      all, **and how many times**. This said the opposite until 2026-08-28:
+ *      only the file set was pinned, on the reasoning that counts outside the
+ *      scan roots would churn on unrelated work and get rubber-stamped.
+ *
+ *      That reasoning is not wrong, and the cost is accepted rather than
+ *      denied — an unrelated PR adding a durable write to one of these files
+ *      now has to update a number. What changed is the discovery of what
+ *      presence-only cannot see: review of ADR-034 Unit 7c pointed out that a
+ *      write ADDED to a file already on the list is invisible, because the file
+ *      was always there. A refactor that moves a module is precisely where such
+ *      a write can ride along, and "this move is a rename, not a change of set"
+ *      was a claim no test in this repo could check. The churn is the price of
+ *      that check, and the failure message names the two distinct causes so the
+ *      update is a decision rather than a rubber stamp.
  *    - `TOKEN_FILE_REFERENCES` — the load-bearing invariant behind the
  *      acceptance: the server's accepted-token source is written independently
  *      of every config writer, which is what keeps a lost update from
@@ -193,36 +203,48 @@ const CONFIG_API_REFERENCES = [
 ] as const;
 
 /**
- * Every file under `src/` that performs a durable write, by any idiom. Pinned
- * as a SET, not by count: a new entry here is a new durable writer somewhere in
- * the tree, which is how a config writer would arrive outside `SCAN_ROOTS`.
- * Most entries have nothing to do with this acceptance and never will — that is
- * fine, the question this asks is only "is this new, and does it write a config
- * file?".
+ * Every file under `src/` that performs a durable write, by any idiom, keyed
+ * `file` -> call count.
+ *
+ * **Pinned by COUNT, not merely as a set.** It was a bare array, and review of
+ * ADR-034 Unit 7c found what that could not see: a durable write ADDED to a
+ * file already on the list is invisible, because presence never changed. The
+ * per-file counts in `WRITER_SITES` above are the enforcement mechanism inside
+ * `SCAN_ROOTS`, and everything outside them had presence only — so "this move
+ * is a rename, not a change of set" was a sentence no test could check. It can
+ * now: move a file, keep its count, and this stays green; smuggle a write in
+ * with the move and it does not.
+ *
+ * Most entries have nothing to do with the #1599 acceptance and never will.
+ * The questions this asks are "is this writer new?" and "did an existing one
+ * grow?" — a new FILE means a config writer could have arrived outside
+ * `SCAN_ROOTS`; a bumped COUNT means an existing file gained a write. Either
+ * one needs a deliberate answer, and if it writes a Claude config file, a
+ * deliberate widening in `docs/security.md`'s accepted entry.
  */
-const DURABLE_WRITER_FILES = [
-  "src/cli/rotate-token.ts",
-  "src/cli/uninstall-scrub.ts",
-  "src/client/tabs/TabItem.svelte",
-  "src/server/annotations/store.ts",
-  "src/server/auth/token-store.ts",
-  "src/server/file-io/doc-backup.ts",
-  "src/server/file-io/index.ts",
-  "src/server/integrations/apply.ts",
-  "src/server/integrations/install-claude-cli.ts",
-  "src/server/integrations/storage.ts",
-  "src/server/launcher/supervisor.ts",
-  "src/server/license/license-state.ts",
-  "src/server/mcp/annotations.ts",
-  "src/server/mcp/convert.ts",
-  "src/server/mcp/document-service.ts",
-  "src/server/mcp/document.ts",
-  "src/server/mcp/docx-apply.ts",
-  "src/server/mcp/file-opener.ts",
-  "src/server/models/store.ts",
-  "src/server/session/manager.ts",
-  "src/server/version-check.ts",
-] as const;
+const DURABLE_WRITER_FILES: Record<string, number> = {
+  "src/cli/rotate-token.ts": 4,
+  "src/cli/uninstall-scrub.ts": 2,
+  "src/client/tabs/TabItem.svelte": 1,
+  "src/server/annotations/store.ts": 5,
+  "src/server/auth/token-store.ts": 3,
+  "src/server/file-io/doc-backup.ts": 2,
+  "src/server/file-io/index.ts": 3,
+  "src/server/integrations/apply.ts": 10,
+  "src/server/integrations/install-claude-cli.ts": 2,
+  "src/server/integrations/storage.ts": 8,
+  "src/server/launcher/supervisor.ts": 1,
+  "src/server/license/license-state.ts": 2,
+  "src/server/mcp/annotations.ts": 1,
+  "src/server/mcp/convert.ts": 1,
+  "src/server/mcp/document-service.ts": 4,
+  "src/server/mcp/document.ts": 1,
+  "src/server/mcp/docx-apply.ts": 4,
+  "src/server/mcp/file-opener.ts": 2,
+  "src/server/models/store.ts": 1,
+  "src/server/session/manager.ts": 2,
+  "src/server/version-check.ts": 1,
+};
 
 /**
  * Every file under `src/` whose EXECUTABLE code reaches the auth-token file
@@ -368,15 +390,21 @@ describe("resource surfaces (repo-wide, because the writer scan is directory-sco
     ).toEqual([...CONFIG_API_REFERENCES].sort());
   });
 
-  it("pins every file in src/ that durably writes, so a writer cannot hide outside the scan roots", () => {
-    const derived = all.filter((f) => durableWriteSites(f) > 0).sort();
+  it("pins every file in src/ that durably writes, and how many times, so a writer cannot hide outside the scan roots", () => {
+    const derived: Record<string, number> = {};
+    for (const f of all.sort()) {
+      const n = durableWriteSites(f);
+      if (n > 0) derived[f] = n;
+    }
     expect(
       derived,
-      `the set of durable-writer files changed. If a NEW one writes a Claude config ` +
-        `file, it is outside SCAN_ROOTS where the writer set above cannot see it \u2014 ` +
-        `widen the accepted scope in docs/security.md deliberately. If it writes ` +
-        `something else, just add it here.`,
-    ).toEqual([...DURABLE_WRITER_FILES].sort());
+      `the durable-writer census changed. A NEW FILE means a writer appeared outside ` +
+        `SCAN_ROOTS, where the writer set above cannot see it. A CHANGED COUNT means an ` +
+        `existing file gained or lost a durable write \u2014 which is what a move can ` +
+        `smuggle, since the file's presence never changes. Either way: if it writes a ` +
+        `Claude config file, widen the accepted scope in docs/security.md deliberately. ` +
+        `If it writes something else, update the number here.`,
+    ).toEqual(DURABLE_WRITER_FILES);
   });
 
   it("pins exactly which modules reach the auth-token file", () => {

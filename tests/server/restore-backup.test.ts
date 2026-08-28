@@ -13,6 +13,7 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as Y from "yjs";
 
 // vi.mock factories are hoisted before module-level code, so outer `const`s
 // are not accessible inside them (see file-opener-lifecycle.test.ts).
@@ -67,7 +68,7 @@ import { pushNotification } from "../../src/server/notifications.js";
 import { resolveAppDataDir } from "../../src/server/platform.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { withMcp } from "../../src/shared/origins.js";
+import { BROWSER_ORIGIN, INTERNAL_ORIGIN, MCP_ORIGIN, withMcp } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
 
@@ -289,6 +290,44 @@ describe("restoreDocumentFromBackup", () => {
     expect(pushNotificationMock).toHaveBeenCalledWith(
       expect.objectContaining({ type: "file-reloaded", documentId: opened.documentId }),
     );
+  });
+
+  it("tags its saved-baseline write `internal`, so it emits no channel event", async () => {
+    // Critical Rule 2, the second of the two `withInternal` sites in the reload
+    // family. Its sibling in `resolveExternalConflict` is pinned in
+    // `tests/server/external-conflict.test.ts`; a guard covering one of two
+    // identical sites leaves the other one free, which is how this class of
+    // mis-tag survives a move.
+    //
+    // The write re-baselines Y_MAP_SAVED_AT_VERSION so autosave's
+    // external-modification guard does not read the restore as a foreign edit.
+    // That is server-owned bookkeeping: `browser` would emit a channel event
+    // for a write the user did not make, and `mcp` would be a lie about who
+    // wrote it. Written ahead of ADR-034 Unit 7c, which moves this function.
+    const filePath = path.join(tmpDir, "origin-probe.md");
+    await fs.writeFile(filePath, "# One\n");
+    expect(await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() })).toBe(
+      "written",
+    );
+    const [snapshot] = await listDocBackups(filePath, resolveAppDataDir());
+    await fs.writeFile(filePath, "# Two\n");
+    const opened = await openFromDisk(filePath);
+    const doc = getOrCreateDocument(opened.documentId);
+    _resetDocBackupGateForTests();
+
+    const origins: unknown[] = [];
+    doc.on("afterTransaction", (txn: Y.Transaction) => origins.push(txn.origin));
+
+    await restoreDocumentFromBackup(opened.documentId, snapshot.name);
+
+    expect(extractText(doc), "control: the restore actually ran").toContain("One");
+    expect(origins, "control: it wrote at all").not.toEqual([]);
+    expect(origins).toContain(INTERNAL_ORIGIN);
+    expect(origins, "a restore is not a browser edit").not.toContain(BROWSER_ORIGIN);
+    expect(origins, "nor an MCP write").not.toContain(MCP_ORIGIN);
+    // RELOAD_ORIGIN is expected here and deliberately not excluded: the content
+    // replacement goes through `reloadFromDisk`, which tags with `withReload`.
+    // Only the baseline metadata write is this spec's subject.
   });
 
   it("rejects unknown documents", async () => {
