@@ -52,10 +52,11 @@ function stripTsComments(src: string): string {
 
 describe("#1416 open-failure wiring that only source-scanning can pin", () => {
   it("latches the give-up when the user declines the retry dialog", () => {
-    // Located by the construct, not by a path. Until Unit 11f both arms below
+    // Located by the construct, not by a path. Until Unit 11e both arms below
     // were read out of a hardcoded `lib.rs`, which the Unit 11 split turns into
     // a liability: greening a hardcoded path means re-pointing it, and a
-    // re-pointed path is armed to break on the next move.
+    // re-pointed path is armed to break on the next move. Unit 11e replaced the
+    // path with the locator; Unit 11f bounded what the locator hands back.
     //
     // **Read `code`, not `text`.** Moving the locator while the scan still read
     // comment-stripped-but-test-module-retaining text would leave the defeat

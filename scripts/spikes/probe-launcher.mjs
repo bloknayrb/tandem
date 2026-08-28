@@ -25,7 +25,7 @@
 // Fallback resolution: when neither --exe nor --pointer is given, falls
 // back to the bundled Tauri sidecar `src-tauri/binaries/node-sidecar-<triple>{.exe}`
 // invoked with `dist/server/index.js` as the script argument (matching
-// `start_sidecar` in `src-tauri/src/lib.rs`). Requires `npm run build:server`
+// `start_sidecar` in `src-tauri/src/sidecar.rs`). Requires `npm run build:server`
 // to have been run.
 //
 // Security:
@@ -87,7 +87,7 @@ function resolveSidecar({ exe, pointer }) {
     return { exe: json.exe, args };
   }
   // Fallback: bundled Tauri sidecar. The packaged Node runtime requires a
-  // script argument — match `start_sidecar` in src-tauri/src/lib.rs by
+  // script argument — match `start_sidecar` in src-tauri/src/sidecar.rs by
   // passing `dist/server/index.js`.
   const triple = process.env.TANDEM_TARGET_TRIPLE ?? "x86_64-pc-windows-msvc";
   const suffix = process.platform === "win32" ? ".exe" : "";
