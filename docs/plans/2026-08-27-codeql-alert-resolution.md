@@ -306,11 +306,29 @@ by the fix rather than by a note claiming it was never a problem.
   below. An earlier draft said 14 — the arithmetic in this document has now been wrong twice, so
   check it against the live alert list rather than against this line.) The thirteen are 9, 12, 16,
   77, 85, 86, 90, 119, 120, 122, 158, 165, 174.
-- **Alerts 18, 19, 20 and 94** → **`won't fix`, not `false positive`.** The plan establishes
-  genuine defects at these sinks. The fixes do not remove the taint flow from `backupPath` /
-  `outputPath` to the fs sink, and §6 records that `resolveAndValidatePath` applies **no root
-  confinement** — so CodeQL will likely still flag them. Dismissing a line this plan just fixed
-  as "never a problem" is the wrong record.
+- **Alerts 18, 19, 20 and 94 no longer exist. MEASURED, not predicted.** CodeQL re-scanned PR
+  #1650 and reported "3 high" new alerts: **183** (`convert.ts:146`), **184**
+  (`docx-apply.ts:289`) and **185** (`docx-apply.ts:318`), while 18/19/20/94 are absent from that
+  ref. Those are the same sinks at new line numbers — the fixes moved the code, so CodeQL retired
+  the old alerts and opened new ones. Four became three.
+
+  This confirms what this section predicted and is worth stating as fact rather than expectation:
+  **the fixes close the defects, not the taint flow.** `backupPath` and `outputPath` still reach
+  an fs call, and `resolveAndValidatePath` applies no root confinement.
+
+  Their dispositions are not identical, and lumping them together would be the lazy call:
+
+  - **185 — `fs.copyFile` in `docx-apply.ts`** is a real write sink fed by a caller-supplied path
+    with no root confinement. **`won't fix`**, with the residual named.
+  - **183 — `fs.realpath(parent)` in `convert.ts`** and **184 — `fs.lstat` in `docx-apply.ts`**
+    are the *guards themselves*: both read path metadata for the sole purpose of deciding whether
+    to refuse. Neither writes. **`false positive`**, and the text should say that the flagged call
+    is the screen, not the thing being screened — otherwise the next reader removes a guard to
+    silence an alert.
+
+  **The `CodeQL` check fails on new alerts and is not in the required set** (`check`,
+  `rust-test` ×3, `windows-acl-proof`), so it is a visible signal rather than a merge gate. Do not
+  silence it by weakening a guard.
 - **3 `js/tainted-format-string`** → `false positive`. State the reason correctly: `%` **does**
   survive `encodeURIComponent` — it is what `encodeURIComponent` emits. What cannot survive is a
   valid `util.format` *specifier*: the two characters after `%` are uppercase hex, and none of

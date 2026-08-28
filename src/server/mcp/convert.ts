@@ -23,6 +23,14 @@ async function findAvailablePath(basePath: string): Promise<string> {
   const ext = path.extname(basePath);
   const name = path.basename(basePath, ext);
 
+  // `fs.access` follows symlinks, so a dangling link at `candidate` reports
+  // ENOENT and this returns it as "available". That is safe HERE and it is
+  // worth writing down why, because the rule this file's other fix established
+  // is that `fs.access` as an existence probe is a symlink-follow wherever the
+  // answer decides what gets written: `atomicWrite` writes a temp sibling and
+  // RENAMES, and rename replaces a symlink rather than writing through it. The
+  // barrier is the write mechanism, not this check — so if `atomicWrite` ever
+  // stops being rename-based, this needs an `lstat`.
   const MAX_ATTEMPTS = 1000;
   let candidate = basePath;
   let counter = 0;

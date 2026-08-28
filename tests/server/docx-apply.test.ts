@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +25,20 @@ import {
   Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../src/shared/constants.js";
+import { timeoutMs } from "../helpers/timing.js";
+
+/**
+ * Headroom for the specs that perform a REAL .docx apply, measured at ~21s on a
+ * dev machine against the project's 15s default. Duration is not the property
+ * any of them asserts — they assert `applied: 1`, a savedAtVersion, a snapshot
+ * count — so raising the ceiling makes them slower real gates rather than
+ * blunting them. Where duration IS the assertion, see `tests/helpers/timing.ts`.
+ *
+ * Via `timeoutMs` rather than a bare literal: an explicit second argument to
+ * `it` beats `--testTimeout`, so a coverage run (1.1-1.5x instrumented) would
+ * otherwise fail these on a clock for a reason unrelated to what they check.
+ */
+const REAL_APPLY_TIMEOUT_MS = timeoutMs(60_000, 300_000);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -995,7 +1010,6 @@ describe("applyChangesCore — write guards", () => {
   // real gate into a slower real gate that catches nothing; see
   // `tests/helpers/timing.ts`. Proved honoured rather than ignored: set to 1ms,
   // both tests fail with "timed out in 1ms".
-  const REAL_APPLY_TIMEOUT_MS = 60_000;
 
   it(
     "allows an unsaved-restore conflict over an UNCHANGED disk",
@@ -1148,7 +1162,6 @@ describe("applyChangesCore — the backup sidecar", () => {
   // Same headroom, same reason as the write-guards block above: these perform a
   // real .docx apply, measured at ~21s on a dev machine against a 15s default.
   // Without it they fail as timeouts rather than as assertions.
-  const REAL_APPLY_TIMEOUT_MS = 60_000;
 
   it(
     "keeps an extensionless backupPath absolute instead of resolving it against cwd",
@@ -1226,8 +1239,10 @@ describe("applyChangesCore — the backup sidecar", () => {
       // from an already-uniquified name walks toward ENAMETOOLONG, not an
       // EEXIST, and would escape raw. So assert the destinations.
       const dests: string[] = [];
-      const spy = vi.spyOn(fsp, "copyFile").mockImplementation(async (_src, dest) => {
+      const modes: (number | undefined)[] = [];
+      const spy = vi.spyOn(fsp, "copyFile").mockImplementation(async (_src, dest, mode) => {
         dests.push(String(dest));
+        modes.push(mode);
         throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
       });
       try {
@@ -1246,6 +1261,19 @@ describe("applyChangesCore — the backup sidecar", () => {
         ).toMatch(/^doc\.backup(-\d+-[0-9a-f]{8})?\.docx$/);
       }
       expect(new Set(dests).size, "a bare Date.now() collides within one millisecond").toBe(5);
+
+      // Capture the mode, or this whole spec is satisfied by code that does not
+      // pass COPYFILE_EXCL at all: a spy that throws EEXIST unconditionally
+      // produces the retry sequence either way. COPYFILE_EXCL is what makes the
+      // check-then-act atomic -- without it the lstat above only narrows the
+      // race, and nothing here would notice it being deleted.
+      for (const mode of modes) {
+        expect(
+          (mode ?? 0) & fs.constants.COPYFILE_EXCL,
+          "copyFile was called without COPYFILE_EXCL, so the backup write is a " +
+            "check-then-act again and a symlink planted after the lstat is followed",
+        ).toBe(fs.constants.COPYFILE_EXCL);
+      }
     },
     REAL_APPLY_TIMEOUT_MS,
   );

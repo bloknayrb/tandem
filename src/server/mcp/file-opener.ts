@@ -20,6 +20,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
+import { crossBasename } from "../../shared/cross-basename.js";
 import { withFileSync, withInternal, withReload } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import { toFlatOffset } from "../../shared/positions/types.js";
@@ -289,15 +290,18 @@ export async function openFileFromContent(
   // reachability accident, not a barrier, and the next sink added would not
   // know it was relying on one.
   //
-  // `path.posix.basename`, not `path.basename`: the latter is win32 on Windows
-  // and posix on Linux, and CI is ubuntu-only, so the platform-dependent one
-  // would behave differently under test than in the desktop app. The synthetic
-  // path is an `upload://` URI whose only structural separator is `/`.
+  // `crossBasename`, which the repo already declares canonical for exactly this
+  // question. `path.basename` is win32 on Windows and posix on Linux, and CI is
+  // ubuntu-only, so the platform-dependent one behaves differently under test
+  // than in the desktop app; `path.posix.basename` fixes that but splits on `/`
+  // only, so a Windows-spelled name comes back whole. `crossBasename` splits on
+  // both, which is the strictly safer answer for a value that arrives off the
+  // wire and whose spelling we do not control.
   //
   // Applied once here rather than at the interpolation site, because the same
   // value becomes the display name, the doc metadata and the returned
   // `fileName` — the surfaces a user actually sees.
-  const fileName = path.posix.basename(rawFileName);
+  const fileName = crossBasename(rawFileName);
   const ext = path.extname(fileName).toLowerCase();
   if (!SUPPORTED_EXTENSIONS.has(ext)) {
     throw Object.assign(

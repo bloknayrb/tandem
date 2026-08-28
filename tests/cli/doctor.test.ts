@@ -34,6 +34,7 @@ import {
   claudeDesktopConfigPath,
 } from "../../src/shared/integrations/client-config-paths.js";
 import { allocPort } from "../helpers/alloc-port.js";
+import { timeoutMs } from "../helpers/timing.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -198,44 +199,48 @@ describe("runDoctor", () => {
    * override exists for the scanner's own suite and cannot prove the check
    * wired the reporting to it.
    */
-  it("warns that a scan stopped at its file cap", async () => {
-    const annDir = join(dataDir, "annotations");
-    mkdirSync(annDir, { recursive: true });
-    const doc = JSON.stringify({
-      schemaVersion: 1,
-      docHash: "h",
-      meta: { filePath: "/tmp/d.md", lastUpdated: 0 },
-      annotations: [],
-      tombstones: [],
-      replies: [],
-    });
-    for (let i = 0; i <= ANNOTATION_SCAN_MAX_FILES; i++) {
-      writeFileSync(join(annDir, `doc-${i}.json`), doc);
-    }
+  it(
+    "warns that a scan stopped at its file cap",
+    async () => {
+      const annDir = join(dataDir, "annotations");
+      mkdirSync(annDir, { recursive: true });
+      const doc = JSON.stringify({
+        schemaVersion: 1,
+        docHash: "h",
+        meta: { filePath: "/tmp/d.md", lastUpdated: 0 },
+        annotations: [],
+        tombstones: [],
+        replies: [],
+      });
+      for (let i = 0; i <= ANNOTATION_SCAN_MAX_FILES; i++) {
+        writeFileSync(join(annDir, `doc-${i}.json`), doc);
+      }
 
-    const report = await runDoctor();
-    // Two results carry `scan: "incomplete"`: the headline and the dedicated
-    // detail line. Both must warn — a passing headline over a partial scan is
-    // the failure this check exists to stop.
-    const carrying = report.results.filter(
-      (r) => r.check === "annotation-store" && r.data?.scan === "incomplete",
-    );
-    expect(carrying).toHaveLength(2);
-    expect(carrying.map((r) => r.status)).toEqual(["warn", "warn"]);
-    const incomplete = carrying.find((r) => "limit" in (r.data ?? {}));
-    expect(incomplete?.status).toBe("warn");
-    expect(incomplete?.data?.limit).toBe("files");
-    expect(incomplete?.data?.examined).toBe(ANNOTATION_SCAN_MAX_FILES);
-    expect(incomplete?.data?.docCount).toBe(ANNOTATION_SCAN_MAX_FILES + 1);
-    // Headroom over the 15s default, for the same reason as the real-apply
-    // tests in `docx-apply.test.ts`: this writes ANNOTATION_SCAN_MAX_FILES + 1
-    // real files and then scans all of them, so it is the most I/O-bound spec
-    // in the suite and it is what hits the ceiling first when the machine is
-    // busy. Duration is not the property under test here -- the assertions are
-    // about the report's contents -- so raising it turns a load-flaky gate into
-    // a slower real one rather than blunting it. (Where duration IS the
-    // assertion, see `tests/helpers/timing.ts`; do not copy this there.)
-  }, 60_000);
+      const report = await runDoctor();
+      // Two results carry `scan: "incomplete"`: the headline and the dedicated
+      // detail line. Both must warn — a passing headline over a partial scan is
+      // the failure this check exists to stop.
+      const carrying = report.results.filter(
+        (r) => r.check === "annotation-store" && r.data?.scan === "incomplete",
+      );
+      expect(carrying).toHaveLength(2);
+      expect(carrying.map((r) => r.status)).toEqual(["warn", "warn"]);
+      const incomplete = carrying.find((r) => "limit" in (r.data ?? {}));
+      expect(incomplete?.status).toBe("warn");
+      expect(incomplete?.data?.limit).toBe("files");
+      expect(incomplete?.data?.examined).toBe(ANNOTATION_SCAN_MAX_FILES);
+      expect(incomplete?.data?.docCount).toBe(ANNOTATION_SCAN_MAX_FILES + 1);
+      // Headroom over the 15s default, for the same reason as the real-apply
+      // tests in `docx-apply.test.ts`: this writes ANNOTATION_SCAN_MAX_FILES + 1
+      // real files and then scans all of them, so it is the most I/O-bound spec
+      // in the suite and it is what hits the ceiling first when the machine is
+      // busy. Duration is not the property under test here -- the assertions are
+      // about the report's contents -- so raising it turns a load-flaky gate into
+      // a slower real one rather than blunting it. (Where duration IS the
+      // assertion, see `tests/helpers/timing.ts`; do not copy this there.)
+    },
+    timeoutMs(60_000, 300_000),
+  );
 
   it("surfaces annotation files parked as .future by a newer Tandem", async () => {
     // Neither `.json` nor `.corrupt.`, so the previous check saw nothing at

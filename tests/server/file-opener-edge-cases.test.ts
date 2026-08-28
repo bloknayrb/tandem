@@ -428,19 +428,19 @@ describe("openFileFromContent — the uploaded filename is not a path", () => {
     expect(result.fileName, "traversal segments survived into the display name").toBe("evil.md");
   });
 
-  it("uses posix semantics, so a backslash name behaves the same on every platform", async () => {
-    // `path.basename` is win32 on Windows and posix on Linux, and CI is
-    // ubuntu-only — so the platform-dependent one would behave differently
-    // under test than in the desktop app. The synthetic path is an `upload://`
-    // URI whose only structural separator is `/`, and a backslash is an
-    // ordinary filename character there. Pinning that keeps the two platforms
-    // from disagreeing about what this function returns.
+  it("strips a Windows-spelled separator too, on every platform", async () => {
+    // `crossBasename` splits on BOTH separators, which is why it is the right
+    // helper here rather than `path.posix.basename`.
     //
-    // Honest limit, because it is the inverse of the usual one: on ubuntu
-    // `path.basename` IS the posix one, so a regression back to it leaves this
-    // spec green. Only a Windows run discriminates — the pre-push hook, not
-    // `check`. Verified by mutation on Windows; unverifiable on CI.
+    // An earlier version of this spec asserted the opposite — that `a\b.md`
+    // comes back whole — because the first fix used `path.posix.basename`,
+    // which ignores backslashes. That pinned the weaker behaviour as correct,
+    // and it also could only ever have failed on Windows: on ubuntu
+    // `path.basename` IS the posix one, so `check` could not have caught a
+    // regression. This assertion discriminates on both platforms, which is the
+    // second reason to prefer the shared helper.
     const result = await openFileFromContent("a\\b.md", "# Notes");
-    expect(result.fileName).toBe("a\\b.md");
+    expect(result.fileName).toBe("b.md");
+    expect(result.filePath).not.toContain("\\");
   });
 });

@@ -47,6 +47,7 @@ const POSIX = process.platform !== "win32";
  */
 async function symlinkedDir(): Promise<{ realDir: string; linkDir: string }> {
   const base = await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-export-"));
+  await fsp.mkdir(path.join(base, "real"));
   const realDir = await fsp.realpath(path.join(base, "real"));
   const linkDir = path.join(base, "via-link");
   await fsp.symlink(realDir, linkDir);

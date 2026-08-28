@@ -258,8 +258,46 @@ describe("#1320 the invariant is actually mounted", () => {
     }
 
     // The other way to add an ungated route: skip the registrar convention and
-    // write `app.post("/api/…", …)` straight into server.ts above the mount.
-    for (const m of serverSrc.matchAll(/\bapp\.(get|post|put|patch|delete|all)\(\s*"\/api/g)) {
+    // write the route straight into server.ts above the mount.
+    //
+    // The first version of this scan looked only for a bare string literal --
+    // `app.post("/api/...", ...)`. Measured against server.ts it matched
+    // **zero** things, so the loop body never ran and the check was the same
+    // zero-of-zero it was written to replace. This project spells every route
+    // with a path constant (`app.post(API_OPEN, ...)`, the idiom used ~25 times
+    // in api-routes.ts), which is the one spelling that regex could not see.
+    //
+    // So: literal OR `API_*` identifier, and `use` in the alternation too --
+    // `app.use("/api/x", router)` mounts routes just as effectively as
+    // `app.post` registers one.
+    const DIRECT_ROUTE_RE =
+      /\bapp\.(get|post|put|patch|delete|all|use)\(\s*(?:"\/api|'\/api|`\/api|API_[A-Z0-9_]*)/g;
+
+    // A scan over a file that legitimately contains zero matches cannot be
+    // controlled by the file. Control the *regex* instead: it has to see each
+    // idiom it claims to cover, or a later rewrite can silently narrow it back
+    // to what it was without any assertion noticing.
+    for (const sample of [
+      'app.post("/api/thing", h);',
+      "app.post(API_OPEN, h);",
+      "app.use('/api/sub', router);",
+      "app.get(`/api/x`, h);",
+      "app.delete(\n  API_CLOSE,\n  h,\n);",
+    ]) {
+      expect(
+        new RegExp(DIRECT_ROUTE_RE.source).test(sample),
+        `the direct-route scan no longer matches \`${sample}\` -- it has narrowed`,
+      ).toBe(true);
+    }
+
+    // `app.use("/api", authMiddleware)` and the invariant mount itself match the
+    // pattern and are *supposed* to sit at or above the mount: they are the
+    // middleware chain, not routes. Exempt them by handler name, so anything
+    // else mounted on /api above the invariant still reports.
+    const MIDDLEWARE_MOUNTS = ["authMiddleware", "enforceLoopbackMutation"];
+    for (const m of serverSrc.matchAll(DIRECT_ROUTE_RE)) {
+      const tail = serverSrc.slice(m.index, m.index + 120);
+      if (MIDDLEWARE_MOUNTS.some((name) => tail.includes(name))) continue;
       expect(
         m.index,
         `a direct ${m[1].toUpperCase()} /api route is registered above the ` +
