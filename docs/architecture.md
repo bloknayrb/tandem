@@ -1004,7 +1004,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `capabilities/desktop.json` -- Desktop-only permissions: single-instance, window-state save/restore, updater
 - `src/lib.rs` -- The Tauri entry logic (not all of it — the sibling modules below carry a growing share, and Unit 11 of the maintainability programme is still moving clusters out, so this list is authoritative and any count you add to it will not be): plugin registration (single-instance **first**), sidecar lifecycle (spawn, health-poll, exponential backoff, kill on exit), `resolve_channel_dist()` (injects `TANDEM_CHANNEL_DIST` into the sidecar so the channel shim registers from the resource dir; replaced `run_setup()`/`/api/setup` in #477 PR 3c-ii-c), system tray build + event handlers (tray "Setup AI Assistant" emits `open-integration-wizard`), window hide-on-close, auto-updater (launch + periodic 8h), `strip_win_prefix()` for Windows `\\?\` paths, `copy_sample_files()` (first-run copy to app-data dir)
 - `src/main.rs` -- Entry point, delegates to `lib::run()`
-- `src/autostart.rs` -- Start-at-login registration (ADR-046, #1236)
+- `src/autostart.rs` -- Start-at-login: the registration commands (ADR-046, #1236) and, since Unit 11f, the launch-mode detection that reads the `--tandem-autostart` flag those commands write (`is_autostart_launch`, `should_start_hidden`, the Linux first-launch marker)
 - `src/bounded_command.rs`, `src/single_flight.rs` -- Deadline-bounded external process spawns, and the in-flight guard that keeps a slow probe from piling up once it is off the main thread (#1371)
 - `src/context_menu.rs` -- Editor context-menu specifications and their id space (Unit 11b)
 - `src/cowork_commands.rs` -- The eleven Cowork Tauri invoke commands, their non-Windows stubs and the pure decision helpers (Unit 11d). Most of it is `#[cfg(target_os = "windows")]`, and its `use crate::{…}` block is gated to match, because five of the sibling modules it calls are themselves Windows-only `mod` declarations
@@ -1012,6 +1012,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `src/native_theme.rs` -- Native theme application and the app-mode decisions behind it (Unit 11c)
 - `src/open_candidate.rs` -- `ScreenedOpenPath` and the shared validator for argv and macOS `RunEvent::Opened` (#1415)
 - `src/pending_update.rs` -- The post-update marker and its hint surface (#1118, Unit 11a)
+- `src/startup_rejection.rs` -- The one-slot buffer that carries a startup-file rejection code to the WebView, its four wire codes and the `RejectionBatch` that collapses one OS batch into one of them (#630, #1344, #1416, Unit 11f)
 - `src/system_paths.rs` -- Anchored System32 program paths, so no planted `netsh.exe`/`powershell.exe` on PATH is ever spawned
 - `src/firewall.rs` -- `Tandem Cowork*` firewall rule scoping (Windows)
 - `src/integrations_probe.rs` -- Detects installed AI clients for the wizard

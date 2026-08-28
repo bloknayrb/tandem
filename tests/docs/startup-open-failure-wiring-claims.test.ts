@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   REPO_ROOT,
   RUST_SRC,
+  rustSourceDefining,
   rustSources,
   stripRustComments,
   stripRustTestModules,
@@ -42,7 +43,6 @@ import {
  * mistaken for one that is present.
  */
 
-const LIB_RS = join(RUST_SRC, "lib.rs");
 const CLIENT_MAP = join(REPO_ROOT, "src", "client", "utils", "startup-rejection.ts");
 
 function stripTsComments(src: string): string {
@@ -50,12 +50,26 @@ function stripTsComments(src: string): string {
 }
 
 describe("#1416 open-failure wiring that only source-scanning can pin", () => {
-  const lib = stripRustComments(readFileSync(LIB_RS, "utf8"));
-
   it("latches the give-up when the user declines the retry dialog", () => {
-    // The `!retry` arm, through to its `return`. Anchored on `if !retry` so a
-    // `report_pending_opens_with` elsewhere in the file cannot satisfy it.
-    const declineArm = lib.match(/if !retry \{[\s\S]{0,900}?\n\s*\}/);
+    // Located by the construct, not by a path. Until Unit 11f both arms below
+    // were read out of a hardcoded `lib.rs`, which the Unit 11 split turns into
+    // a liability: greening a hardcoded path means re-pointing it, and a
+    // re-pointed path is armed to break on the next move.
+    //
+    // **Read `code`, not `text`.** Moving the locator while the scan still read
+    // comment-stripped-but-test-module-retaining text would leave the defeat
+    // exactly where 11c and 11d each found it: a `#[cfg(test)]` fake of this
+    // arm placed earlier in the file satisfies a `text` scan outright.
+    const dialog = rustSourceDefining(
+      /fn show_server_error_dialog\s*\(/,
+      "show_server_error_dialog",
+    );
+    // ...and sliced from the function, because the match below is a FIRST-hit
+    // search. Unanchored, any other `if !retry` in the same file would satisfy
+    // a claim that is specifically about this dialog's decline branch.
+    const from = dialog.code.indexOf("fn show_server_error_dialog");
+    expect(from, "the locator resolved a file that does not define it").toBeGreaterThanOrEqual(0);
+    const declineArm = dialog.code.slice(from).match(/if !retry \{[\s\S]{0,900}?\n\s*\}/);
     expect(declineArm, "show_server_error_dialog's `if !retry` arm not found").not.toBeNull();
     const arm = declineArm?.[0] ?? "";
     expect(
@@ -75,9 +89,13 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
   });
 
   it("records a gave-up open into the Apple-Event batch", () => {
-    // macOS-only code: compiled by one CI leg, executed by none.
+    // macOS-only code: compiled by one CI leg, executed by none. The
+    // `#[cfg(target_os = "macos")]` gate does not hide it from the locator —
+    // only predicates naming `test` are stripped — so the construct is a valid
+    // anchor on every platform.
+    const opened = rustSourceDefining(/fn handle_opened_urls\s*\(/, "handle_opened_urls");
     expect(
-      /OpenRoute::ServerUnavailable\s*=>\s*rejected\.record\(/.test(lib),
+      /OpenRoute::ServerUnavailable\s*=>\s*rejected\.record\(/.test(opened.code),
       "handle_opened_urls must record ServerUnavailable into the batch, or an open " +
         "arriving after the app gave up is refused silently — no tab, no toast.",
     ).toBe(true);
@@ -95,6 +113,19 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
       "the module holding the excluded wire code must be in scope, or its " +
         "exclusion is asserted against text the scan never read",
     ).toContain("src-tauri/src/pending_update.rs");
+    // Unit 11f moved every wire code this file checks out of `lib.rs`, so the
+    // two names above no longer cover the parity check below: if the walk stops
+    // reaching their new home it has nothing to compare and passes on an empty
+    // set. The control is DERIVED — "the file that declares them is in the
+    // walk" — rather than the file's name, because naming it would rebuild the
+    // hardcoded path this unit spent its effort removing, and would then fail
+    // on a rename that breaks no claim here.
+    const declaring = rustSources().filter((f) => /const CODE_OPEN_FAILED: &str/.test(f.code));
+    expect(
+      declaring.map((f) => f.rel),
+      "exactly one scanned Rust file must declare the startup wire codes, or the " +
+        "parity check below is comparing against a set the walk never assembled",
+    ).toHaveLength(1);
   });
 
   it("strips test modules without eating production code", () => {
@@ -224,6 +255,42 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     for (const decl of ["pub mod open_candidate;", "pub use open_candidate::{"]) {
       expect(lib?.code, `the code view of lib.rs must reach ${decl}`).toContain(decl);
     }
+  });
+
+  it("agrees with the client on the nudge event's name", () => {
+    // The wire-code parity check below keys on `const CODE_*`, so the EVENT
+    // name sat outside every gate in the repo. Changing the Rust literal is
+    // green everywhere — no Rust test asserts it, and the client's own test
+    // asserts the client against itself — while every warm-path toast stops
+    // arriving: the event is a payload-free nudge, so a listener on the old
+    // name simply never fires and the buffered code waits for the next init.
+    // Found while moving these constants in Unit 11f.
+    const rust = rustSourceDefining(
+      /const EVENT_STARTUP_FILE_REJECTED: &str/,
+      "EVENT_STARTUP_FILE_REJECTED",
+    );
+    const declared = rust.code.match(/const EVENT_STARTUP_FILE_REJECTED: &str = "([a-z-]+)";/);
+    expect(
+      declared,
+      "the Rust event constant is not a plain string literal any more",
+    ).not.toBeNull();
+
+    const client = stripTsComments(readFileSync(CLIENT_MAP, "utf8"));
+    const listened = client.match(/const NUDGE_EVENT = "([a-z-]+)";/);
+    expect(
+      listened,
+      "the client's NUDGE_EVENT binding is not a plain literal any more",
+    ).not.toBeNull();
+
+    expect(
+      declared?.[1],
+      "Rust emits one event name and the client listens for another. Nothing else " +
+        "fails on this: the nudge carries no payload, so a mismatch is indistinguishable " +
+        "from no rejection having happened.",
+    ).toBe(listened?.[1]);
+    // The control: both halves must have actually parsed something, or the
+    // equality above is `undefined === undefined`.
+    expect(declared?.[1], "the event-name scan found nothing").toBe("startup-file-rejected");
   });
 
   it("gives every Rust wire code an explicit case in the client's message map", () => {
