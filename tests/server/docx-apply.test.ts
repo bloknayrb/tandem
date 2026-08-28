@@ -980,11 +980,14 @@ describe("applyChangesCore — write guards", () => {
     expect(await onDisk()).toEqual(before);
   });
 
-  // The two tests in this block that expect applyChangesCore to RESOLVE get
-  // explicit headroom over the project's 15s default. They are the only ones
+  // Every test in this block that expects applyChangesCore to RESOLVE gets
+  // explicit headroom over the project's 15s default. Those are the only ones
   // here that perform a real .docx apply -- measured in isolation at 1977ms and
   // 463ms, against 20-24ms for the refusals, which return before doing any
-  // work. Under the full suite's worker parallelism a 7.6x slowdown crosses the
+  // work. There are FOUR of them, not the two the first pass at this covered:
+  // the budget was applied by reading the two specs that had failed rather than
+  // by asking which specs do a real apply, so the other two kept the 15s
+  // ceiling and duly started failing later. Under the full suite's worker parallelism a 7.6x slowdown crosses the
   // ceiling, and it did: three of four full-suite runs on one branch failed
   // here, twice on the same test, including the fastest run of the four with
   // nothing else on the machine. CI is green throughout, so this is wall-clock
@@ -994,7 +997,7 @@ describe("applyChangesCore — write guards", () => {
   // `applied: 1`. Where duration IS the assertion, raising the ceiling turns a
   // real gate into a slower real gate that catches nothing; see
   // `tests/helpers/timing.ts`. Proved honoured rather than ignored: set to 1ms,
-  // both tests fail with "timed out in 1ms".
+  // all four fail with "timed out in 1ms".
   const REAL_APPLY_TIMEOUT_MS = 60_000;
 
   it(
@@ -1039,25 +1042,29 @@ describe("applyChangesCore — write guards", () => {
     REAL_APPLY_TIMEOUT_MS,
   );
 
-  it("leaves savedAtVersion STALE so a save before the reload is refused", async () => {
-    // The inverse of every other write path, and deliberate. What lands on disk is
-    // tracked-changes markup the Y.Doc cannot represent — mammoth drops revisions on
-    // import — so until the watcher's reload the Y.Doc is genuinely older than the
-    // file, and an explicit Ctrl+S in that window would export it over the revisions
-    // just written. The stale baseline is what makes saveDocumentToDisk refuse.
-    const baseline = Date.now() - 60_000;
-    const meta = getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META);
-    meta.set(Y_MAP_SAVED_AT_VERSION, baseline);
-    // Not a drift refusal: touch the file back to the baseline first, so the apply
-    // itself is what moves mtime past it.
-    await fsp.utimes(docPath, new Date(baseline), new Date(baseline));
+  it(
+    "leaves savedAtVersion STALE so a save before the reload is refused",
+    async () => {
+      // The inverse of every other write path, and deliberate. What lands on disk is
+      // tracked-changes markup the Y.Doc cannot represent — mammoth drops revisions on
+      // import — so until the watcher's reload the Y.Doc is genuinely older than the
+      // file, and an explicit Ctrl+S in that window would export it over the revisions
+      // just written. The stale baseline is what makes saveDocumentToDisk refuse.
+      const baseline = Date.now() - 60_000;
+      const meta = getOrCreateDocument(DOC_ID).getMap(Y_MAP_DOCUMENT_META);
+      meta.set(Y_MAP_SAVED_AT_VERSION, baseline);
+      // Not a drift refusal: touch the file back to the baseline first, so the apply
+      // itself is what moves mtime past it.
+      await fsp.utimes(docPath, new Date(baseline), new Date(baseline));
 
-    await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
+      await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
 
-    expect(meta.get(Y_MAP_SAVED_AT_VERSION)).toBe(baseline);
-    const stat = await fsp.stat(docPath);
-    expect(stat.mtimeMs).toBeGreaterThan(baseline + 1000);
-  });
+      expect(meta.get(Y_MAP_SAVED_AT_VERSION)).toBe(baseline);
+      const stat = await fsp.stat(docPath);
+      expect(stat.mtimeMs).toBeGreaterThan(baseline + 1000);
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
 
   it("reports a source file deleted mid-apply as SOURCE_MISSING, not an fs crash", async () => {
     // An ordinary state (the user moved or deleted the file), so it has to come back
@@ -1070,11 +1077,15 @@ describe("applyChangesCore — write guards", () => {
     await expect(applyChangesCore(DOC_ID)).rejects.toMatchObject({ code: "SOURCE_MISSING" });
   });
 
-  it("takes a pre-overwrite snapshot, not just the sidecar backup", async () => {
-    // The `.backup.docx` sidecar lands wherever the CALLER says. The snapshot is
-    // the swept, capped, app-data copy every other write path takes.
-    await applyChangesCore(DOC_ID);
-    const backups = await listDocBackups(docPath, resolveAppDataDir());
-    expect(backups.length).toBe(1);
-  });
+  it(
+    "takes a pre-overwrite snapshot, not just the sidecar backup",
+    async () => {
+      // The `.backup.docx` sidecar lands wherever the CALLER says. The snapshot is
+      // the swept, capped, app-data copy every other write path takes.
+      await applyChangesCore(DOC_ID);
+      const backups = await listDocBackups(docPath, resolveAppDataDir());
+      expect(backups.length).toBe(1);
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
 });

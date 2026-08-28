@@ -22,8 +22,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Importing the module registers the actions as a top-level side effect.
-// `wireActionDeps` is the documented seam for injecting the dependency bag.
-import { relaunchClaudeCode, wireActionDeps } from "../../../src/client/actions/builtin.svelte.js";
+// `mountActionExecutor` is the documented seam for binding the dependency bag.
+import { relaunchClaudeCode } from "../../../src/client/actions/builtin.svelte.js";
+import { type ActionExecutor, mountActionExecutor } from "../../../src/client/actions/executor.js";
 import { type Action, getActionsMap } from "../../../src/client/actions/registry.svelte.js";
 import { API_BASE } from "../../../src/client/utils/fileUpload.js";
 import {
@@ -32,6 +33,7 @@ import {
   API_LAUNCHER_START_FRESH,
   API_LAUNCHER_STATUS,
 } from "../../../src/shared/api-paths.js";
+import { makeActionDeps } from "./deps-bag.js";
 
 const afterLauncherAction = vi.fn();
 
@@ -147,40 +149,26 @@ beforeEach(() => {
  * path varies across these tests, and it is what `deriveCwdFromDocPath` reads
  * to build the cwd — so it is the one knob worth parameterizing. `null` models
  * the empty state: no tab, hence no derivable cwd. */
+let executor: ActionExecutor | null = null;
+
 function wireDeps(activeDocumentPath: string | null): void {
-  wireActionDeps({
-    getActiveTabId: () => (activeDocumentPath ? "doc-1" : null),
-    getActiveDocumentPath: () => activeDocumentPath,
-    notify,
-    // #1282: both relaunch entry points must re-probe launcher-derived state.
-    // Captured so `relaunchClaudeHere`'s call can be asserted.
-    afterLauncherAction,
-    openSettings: vi.fn(),
-    toggleSoloMode: vi.fn(),
-    openFindBar: vi.fn(),
-    openFindBarTabs: vi.fn(),
-    findNext: vi.fn(),
-    findPrev: vi.fn(),
-    closeActiveTab: vi.fn(),
-    openFileDialog: vi.fn(),
-    toggleLeftPanel: vi.fn(),
-    toggleRightPanel: vi.fn(),
-    reopenClosedTab: vi.fn(),
-    annotationNext: vi.fn(),
-    annotationPrev: vi.fn(),
-    annotationAccept: vi.fn(),
-    annotationDismiss: vi.fn(),
-    selectBlock: vi.fn(),
-    toggleAuthorship: vi.fn(),
-    toggleFormattingBar: vi.fn(),
-    toggleSourceView: vi.fn(),
-    focusChat: vi.fn(),
-    save: vi.fn(async () => {}),
-    saveAs: vi.fn(async () => {}),
-  });
+  // Superseding a live executor is a defined operation (HMR and an
+  // ErrorBoundary recovery both produce it), so re-binding mid-test is fine.
+  executor = mountActionExecutor(
+    makeActionDeps({
+      getActiveTabId: () => (activeDocumentPath ? "doc-1" : null),
+      getActiveDocumentPath: () => activeDocumentPath,
+      notify,
+      // #1282: both relaunch entry points must re-probe launcher-derived state.
+      // Captured so `relaunchClaudeHere`'s call can be asserted.
+      afterLauncherAction,
+    }),
+  );
 }
 
 afterEach(() => {
+  executor?.dispose();
+  executor = null;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
