@@ -59,6 +59,25 @@ function registerSection(): string {
   return SECURITY_MD.slice(start, next === -1 ? undefined : next);
 }
 
+/**
+ * The opening of each top-level bullet in the register — where an entry
+ * announces which finding it is about.
+ *
+ * The head slice is what separates an entry from a cross-reference: every real
+ * entry names its issue in the first clause, while a sibling entry citing
+ * another finding does so well into its prose. 240 characters is comfortably
+ * past the longest current opening (#1654's, at ~115) and comfortably short of
+ * where cross-references appear.
+ */
+function entryOpenings(): string[] {
+  const openings = registerSection()
+    .split("\n")
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.slice(0, 240));
+  expect(openings.length, "the register section has no top-level bullets").toBeGreaterThan(0);
+  return openings;
+}
+
 /** The single CLAUDE.md bullet that carries the count and the enumeration. */
 function claimBullet(): string {
   const start = CLAUDE_MD.indexOf("security findings are open");
@@ -104,17 +123,23 @@ describe("open security-findings claims (CLAUDE.md vs docs/security.md)", () => 
     expect(claimBullet()).toContain(`**${word} security findings are open`);
   });
 
-  it("every finding CLAUDE.md calls open has an entry in the register", () => {
-    // Scoped to the register's own section, not the whole file: a number that
-    // appears only in the CodeQL-dispositions section below it is a citation,
-    // not an entry. Both spellings count — most entries are markdown links,
-    // but #1292's is a bare `#1292`, and requiring a link style would be a
-    // formatting rule dressed up as a claim check.
-    const openSection = registerSection();
+  it("every finding CLAUDE.md calls open has its OWN entry in the register", () => {
+    // "The number appears somewhere in the section" is not the claim, and
+    // testing it that way was a real hole: deleting #1609's entry outright
+    // left the suite green, because #1609 is also cited in a prose line about
+    // unit ownership 39 lines further down. An entry is a top-level bullet
+    // that ANNOUNCES the finding, so the ref must fall in the bullet's own
+    // opening — not in an indented continuation, not deep inside a sibling
+    // entry that merely cross-references it.
+    //
+    // Both spellings count. Most entries are markdown links, but #1292's is a
+    // bare `#1292`, and requiring a link style would be a formatting rule
+    // dressed up as a claim check.
+    const openings = entryOpenings();
     const missing = issueRefsAtTopLevel(segments().open).filter(
-      (n) => !openSection.includes(`issues/${n}`) && !new RegExp(`#${n}\\b`).test(openSection),
+      (n) => !openings.some((o) => o.includes(`issues/${n}`) || new RegExp(`#${n}(?!\\d)`).test(o)),
     );
-    expect(missing, "docs/security.md has no entry for these open findings").toEqual([]);
+    expect(missing, "docs/security.md has no entry of its own for these findings").toEqual([]);
   });
 
   it("nothing labelled fixed-but-unverified or accepted is also counted as open", () => {

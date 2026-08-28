@@ -19,14 +19,13 @@ import { describe, expect, it } from "vitest";
 
 const HOOK_PATH = path.resolve(__dirname, "../../.husky/pre-push");
 const RUNNING_MARKER = "pre-push-test: fell through to the checks";
-const SKIP_MESSAGE = "pre-push: delete-only push, skipping checks";
 
 /**
  * Everything up to and including the guard's terminating `fi`. Slicing there
  * rather than copying the logic is what keeps this test honest: an edit to the
  * hook is an edit to the code under test.
  */
-function decisionBlock(): string {
+function decisionBlock(): { block: string; skipMessage: string } {
   const lines = readFileSync(HOOK_PATH, "utf-8").split(/\r?\n/);
   const end = lines.findIndex((line) => line === "fi");
   expect(end, "the hook no longer has a bare `fi` closing its skip guard").toBeGreaterThan(0);
@@ -35,16 +34,24 @@ function decisionBlock(): string {
   // A slice that no longer contains the decision would make every spec below
   // pass vacuously, so make its absence the failure.
   expect(block, "sliced prefix lost the stdin read loop").toContain("while read -r");
-  expect(block, "sliced prefix lost the skip branch").toContain(SKIP_MESSAGE);
   expect(block, "sliced prefix swallowed a check command").not.toContain("npx biome");
-  return block;
+
+  // Read the skip message OUT of the hook instead of hardcoding it. A copy
+  // edit to that echo string is not a behaviour change, and an earlier version
+  // of this file — which pinned the wording — turned a comma-to-dash reword
+  // into six red specs. The sanity check that exists to stop vacuous passing
+  // must not itself become the brittle part.
+  const echoed = /echo "([^"]+)"/.exec(block);
+  expect(echoed, "sliced prefix lost the skip branch's echo").not.toBeNull();
+  return { block, skipMessage: (echoed as RegExpExecArray)[1] };
 }
 
 /** Runs the guard with `stdin` and reports what the hook would have done. */
 function runGuard(stdin: string): { skipped: boolean; ranChecks: boolean } {
-  const script = `${decisionBlock()}\necho "${RUNNING_MARKER}"\n`;
+  const { block, skipMessage } = decisionBlock();
+  const script = `${block}\necho "${RUNNING_MARKER}"\n`;
   const out = execFileSync("sh", ["-c", script], { input: stdin, encoding: "utf-8" });
-  return { skipped: out.includes(SKIP_MESSAGE), ranChecks: out.includes(RUNNING_MARKER) };
+  return { skipped: out.includes(skipMessage), ranChecks: out.includes(RUNNING_MARKER) };
 }
 
 const ZERO_OID = "0".repeat(40);
