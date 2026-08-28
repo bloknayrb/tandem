@@ -38,6 +38,18 @@ central proposal was a no-op that would have shipped looking like a fix.
 4. **A `.docx` pin would break the regression test for this PR's own §1 fix.**
    `docx-apply.test.ts:1166-1187` passes an extensionless `backupPath` and expects success — it is
    the pin for the `slice(0, -0)` bug. Pinning the extension retires it.
+
+   **Corrected 2026-08-28: that citation does not resolve on master, and saying so without the
+   qualifier made this doc look like it was fabricating.** `tests/server/docx-apply.test.ts` is
+   **1080 lines** on `origin/master` with no extensionless-`backupPath` spec anywhere. The test is
+   real but lives only on **this PR's own unmerged branch** (`security/codeql-alert-resolution`,
+   ~`:1167-1204`). Two reviewers independently flagged it as a third factual error before working
+   out it was an unlanded-branch citation. The same mistake produced a second one: the
+   `slice(0, -0)` bug is often described here as fixed, and it is — *on that branch*
+   (`const stem = ext ? base.slice(0, -ext.length) : base`). On master it is **live** at
+   `docx-apply.ts:255-257`, where an extensionless backup that already exists yields a bare
+   `-<timestamp>`, a **relative** path resolving against the server CWD. Cite the branch when the
+   evidence is on the branch.
 5. **`INVALID_PATH` is not what an MCP caller sees.** `document.ts:1073-1080`,
    `docx-apply.ts:348` and `docx-apply.ts:483-485` all map it to `FORMAT_ERROR` (an earlier
    draft cited `:463`, which is an unrelated `FILE_NOT_FOUND`). Every proposed spec asserted the internal
