@@ -39,16 +39,43 @@ const NUMBER_WORDS = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Sev
 function issueRefsAtTopLevel(passage: string): number[] {
   const refs: number[] = [];
   let depth = 0;
-  for (let i = 0; i < passage.length; i++) {
-    const ch = passage[i];
+  const text = blankCodeSpans(passage);
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
     if (ch === "(") depth++;
     else if (ch === ")") depth = Math.max(0, depth - 1);
     else if (ch === "#" && depth === 0) {
-      const m = /^#(\d+)/.exec(passage.slice(i));
+      const m = /^#(\d+)/.exec(text.slice(i));
       if (m) refs.push(Number(m[1]));
     }
   }
   return [...new Set(refs)];
+}
+
+/**
+ * Replace the contents of backtick code spans with spaces, preserving length.
+ *
+ * A single unbalanced paren inside a code span — `stripOwnedFields(extras` —
+ * pins the depth counter above zero for the rest of the passage and silently
+ * drops every remaining finding. This repo's prose quotes partial calls
+ * constantly, so that is a live hazard rather than a theoretical one; it was
+ * demonstrated against this parser, not imagined. Blanking rather than deleting
+ * keeps every offset intact, so nothing downstream shifts.
+ */
+function blankCodeSpans(text: string): string {
+  return text.replace(/`[^`]*`/g, (span) => " ".repeat(span.length));
+}
+
+/** Index of `marker` outside every parenthetical, or -1. Offsets are preserved. */
+function indexAtTopLevel(haystack: string, marker: string): number {
+  const text = blankCodeSpans(haystack);
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "(") depth++;
+    else if (text[i] === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && text.startsWith(marker, i)) return i;
+  }
+  return -1;
 }
 
 /** `docs/security.md`'s "## Open findings" section, up to the next `##`. */
@@ -97,9 +124,17 @@ function segments(): { open: string; notCounted: string } {
 
   // Both trailing labels are optional in principle — there may be no accepted
   // or no fixed-but-unverified finding — so take the earliest that is present.
+  //
+  // Only at paren depth zero, and only outside code spans. A plain `indexOf`
+  // was defeated: an aside INSIDE an open finding's own parenthetical that
+  // happens to bold the word "Accepted" pre-empted the real label, silently
+  // reclassifying the findings after it. They then vanished from the derived
+  // open set entirely, so the register and double-count specs stopped checking
+  // them while still reporting green. A real label never sits inside a
+  // parenthetical, which is what makes depth the discriminator.
   const tailMarkers = ["**Fixed but unverified:**", "**Accepted"];
   const tailAt = tailMarkers
-    .map((m) => bullet.indexOf(m))
+    .map((m) => indexAtTopLevel(bullet, m))
     .filter((i) => i > openStart)
     .sort((a, b) => a - b)[0];
   expect(tailAt, "no trailing label separates the open set from the rest").toBeGreaterThan(

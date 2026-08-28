@@ -13,14 +13,24 @@
 # makes the two cases distinguishable, and a line with an empty oid does not
 # count as a ref: a stray blank line would otherwise carry no non-zero char and
 # read as one more deletion.
+# `|| [ -n "$local_ref" ]` is not decoration, and neither is clearing `local_ref`
+# at the end of the body. POSIX `read` returns failure at EOF-without-newline, so
+# a plain `while read` silently DROPS a final unterminated line — after already
+# assigning the variables. A deletion followed by an unterminated real update
+# therefore skipped every check: the same fail-open in a second disguise. Git
+# terminates its lines, but the whole point of this guard is that git is not the
+# only thing that ever feeds the hook. The clear is what stops the retry
+# condition from staying true forever and spinning on the last line.
 saw_ref=0
 only_deletes=1
-while read -r _local_ref local_oid _remote_ref _remote_oid; do
-	[ -n "$local_oid" ] || continue
-	saw_ref=1
-	case "$local_oid" in
-		*[!0]*) only_deletes=0 ;; # any non-zero char => a real ref update
-	esac
+while read -r local_ref local_oid _remote_ref _remote_oid || [ -n "$local_ref" ]; do
+	if [ -n "$local_oid" ]; then
+		saw_ref=1
+		case "$local_oid" in
+			*[!0]*) only_deletes=0 ;; # any non-zero char => a real ref update
+		esac
+	fi
+	local_ref=""
 done
 if [ "$saw_ref" -eq 1 ] && [ "$only_deletes" -eq 1 ]; then
 	echo "pre-push: delete-only push, skipping checks"
