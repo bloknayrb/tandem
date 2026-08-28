@@ -178,6 +178,11 @@ describe("the redirect invariant (Unit 6)", () => {
    * `file-opener.ts` requires saying its name. The symbol check is then a
    * second, narrower layer over the handful of files allowed to say it.
    */
+  // 60s rather than the 15s default: this walks the whole source tree and runs
+  // `stripComments` over every file, measured at ~850ms alone and at the 15s
+  // ceiling under full-suite worker parallelism. Its assertion is about which
+  // files name a specifier, never about how fast the sweep runs, so the
+  // headroom costs the gate nothing.
   it("only sanctioned modules name the legacy file-opener specifier", async () => {
     const files = (await walk(srcRoot)).filter((f) => /\.(ts|svelte)$/.test(f));
 
@@ -199,7 +204,7 @@ describe("the redirect invariant (Unit 6)", () => {
       referencing.sort(),
       "a module that reaches mcp/file-opener.ts must either move to documents/open.js or be added to SANCTIONED with the symbols it needs — adding a row is a deliberate decision, not a formality",
     ).toEqual(Object.keys(SANCTIONED).sort());
-  });
+  }, 60_000);
 
   it("sanctioned modules take only the symbols they are sanctioned for", async () => {
     // The file-level gate above is what syntax cannot evade. This narrows what

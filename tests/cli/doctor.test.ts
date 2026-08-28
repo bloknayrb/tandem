@@ -227,7 +227,15 @@ describe("runDoctor", () => {
     expect(incomplete?.data?.limit).toBe("files");
     expect(incomplete?.data?.examined).toBe(ANNOTATION_SCAN_MAX_FILES);
     expect(incomplete?.data?.docCount).toBe(ANNOTATION_SCAN_MAX_FILES + 1);
-  });
+    // Headroom over the 15s default, for the same reason as the real-apply
+    // tests in `docx-apply.test.ts`: this writes ANNOTATION_SCAN_MAX_FILES + 1
+    // real files and then scans all of them, so it is the most I/O-bound spec
+    // in the suite and it is what hits the ceiling first when the machine is
+    // busy. Duration is not the property under test here -- the assertions are
+    // about the report's contents -- so raising it turns a load-flaky gate into
+    // a slower real one rather than blunting it. (Where duration IS the
+    // assertion, see `tests/helpers/timing.ts`; do not copy this there.)
+  }, 60_000);
 
   it("surfaces annotation files parked as .future by a newer Tandem", async () => {
     // Neither `.json` nor `.corrupt.`, so the previous check saw nothing at
