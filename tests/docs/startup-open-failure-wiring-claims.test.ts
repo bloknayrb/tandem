@@ -136,6 +136,30 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     ).toContain("CODE_AFTER_THE_TEST_MODULE");
     expect(survivor, "the test module itself must still be stripped").not.toContain("not json");
 
+    // `#[cfg(test)]` is not the only spelling. `lib.rs` carries two
+    // `#[cfg(all(test, target_os = "windows"))]` modules, and the substring scan
+    // this stripper used until Unit 11d matched NEITHER — so a scan reading that
+    // file saw their bodies as production code. Both directions are asserted,
+    // because a stripper that fixed the `all(...)` form by matching any cfg
+    // mentioning `test` would eat `#[cfg(not(test))]`, which gates production.
+    const cfgForms = [
+      '#[cfg(all(test, target_os = "windows"))]',
+      '#[cfg(all(test, feature = "x"))]',
+      "#[cfg(test)]",
+    ];
+    for (const attr of cfgForms) {
+      const stripped = stripRustTestModules(
+        [attr, "mod t {", "    fn f() {}", "}", "const AFTER: u8 = 1;"].join("\n"),
+      );
+      expect(stripped, `${attr} must be recognised as a test gate`).not.toContain("fn f()");
+      expect(stripped, `${attr} must not eat what follows it`).toContain("const AFTER");
+    }
+    const production = ["#[cfg(not(test))]", "mod real {", "    fn keep_me() {}", "}"].join("\n");
+    expect(
+      stripRustTestModules(production),
+      "#[cfg(not(test))] gates PRODUCTION code — stripping it would hollow the scan silently",
+    ).toContain("keep_me");
+
     // ...and a block that genuinely never closes fails loud rather than truncating.
     expect(
       () => stripRustTestModules("#[cfg(test)]\nmod t {\n    fn f() {\n"),
