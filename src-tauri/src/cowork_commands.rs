@@ -18,10 +18,16 @@
 //! `single_flight` is the one genuine exception: `SUBNET_PROBE_FLIGHT` is a
 //! module-level static outside any cfg.
 //!
-//! The gated `use` block is what lets the 54 bare `cowork_meta::` /
-//! `cowork_installer::` / ... call sites stay byte-identical to their `lib.rs`
+//! The gated `use` block is what lets the bare `cowork_meta::` /
+//! `cowork_installer::` / ... paths stay byte-identical to their `lib.rs`
 //! originals. Qualifying each one instead would have destroyed the property
-//! that makes a move this size reviewable.
+//! that makes a move this size reviewable. There are 56 of them across the six
+//! gated modules -- 45 at expression position and 11 in function-local `use`
+//! statements, counting outside comments and excluding `crate::`-prefixed
+//! paths. (The rule is stated because it is what makes the number checkable:
+//! two reviewers counting this reached different totals, one of them mine,
+//! purely by disagreeing on whether the two ungated `single_flight::` uses
+//! belong in it. They do not.)
 //!
 //! `PathBuf` and `Mutex` come in gated for the same reason `lib.rs` gated
 //! `PathBuf`: their only users here are the Windows self-heal pass and its test
@@ -39,11 +45,17 @@
 //! the Retry command delegates, it does not bookkeep) and
 //! `tests/build/cowork-subnet-probe-contract.test.ts` (#1371: the subnet probe
 //! stays off the main thread) both pin properties of this module as source
-//! text, because the code they pin is `#[cfg(target_os = "windows")]` and no
-//! test on any CI leg executes it. Both find this file by searching for a
-//! command's declaration rather than by naming it, so **renaming this module is
-//! free but moving either subject out of it turns them red** -- which is the
-//! point, and is what a hardcoded path would have failed to do quietly.
+//! text, because nothing on any CI leg executes the code they pin -- most of it
+//! is `#[cfg(target_os = "windows")]`, and `cowork_detect_vethernet_subnet` is
+//! the deliberate ungated exception whose blocking *body* carries the cfg split
+//! instead (#1371).
+//!
+//! Both locate this file by searching for a command's declaration rather than
+//! by naming it, so **moving the anchor is free by construction; SPLITTING a
+//! cluster is what turns them red** -- either arm of the Retry pair leaving, or
+//! `cowork_toggle_integration` / `detect_subnet_advisory_blocking` moving away
+//! from the probe. Renaming this module is free, which is the point; a
+//! hardcoded path would instead have gone quiet on every one of those.
 
 #[cfg(target_os = "windows")]
 use std::path::PathBuf;
@@ -134,7 +146,7 @@ pub(crate) fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
 ///
 /// Pure and free of the Windows-only firewall/workspace-scan types around its
 /// call site, so it's testable without them — same reasoning as
-/// `parse_netstat_listening_pid` above ("kept out of the cfg(windows) block
+/// `parse_netstat_listening_pid` in `lib.rs` ("kept out of the cfg(windows) block
 /// so its tests run on every CI platform; the allow keeps a non-Windows
 /// release build warning-free"). **Caveat that reasoning doesn't cover: this
 /// function's own body is close to the assertion it's tested against — the
@@ -339,7 +351,8 @@ const COWORK_LEFTOVER_FIREWALL_WARNING: &str =
 ///
 /// Kept outside the `cfg(target_os = "windows")` gate so its tests run on every
 /// CI leg; the allow keeps a non-Windows release build warning-free. Direct
-/// precedent: `parse_netstat_listening_pid` and its siblings above.
+/// precedent: `parse_netstat_listening_pid` and its siblings, which stayed in
+/// `lib.rs` when Unit 11d moved this cluster out.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn partial_workspace_warning(
     verb: &str,
