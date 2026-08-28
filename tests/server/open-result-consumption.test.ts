@@ -20,10 +20,10 @@ import { describe, expect, it } from "vitest";
  *      whole payload goes to a client. `res.json` takes `unknown` and the MCP
  *      payload is built from a spread, so shipping the internal union straight
  *      out would put `kind` on the wire and drop the three booleans every
- *      existing clients reads — with nothing in this repo going red. A site
- *      that only ever reads NAMED FIELDS off the result never puts the object
- *      anywhere, so it can neither ship `kind` nor drop a boolean; that, and
- *      not a list of trusted modules, is what the guard treats as safe.
+ *      existing clients reads — with nothing in this repo going red. The check
+ *      is on the RESPONSE BODY, not on the module: whatever is in it after the
+ *      projection is blanked out must name no open result. A site that reads
+ *      named fields off one passes, because it leaves nothing behind.
  *
  * So the guard keys on the structural fact — WHICH modules call these — rather
  * than on any text shape inside them. A new call site is what needs a human to
@@ -143,16 +143,16 @@ describe("reloadFromDisk's skipped-reload return has to be consumed (#1641)", ()
   });
 });
 
+const ENTRY_POINTS = "openFromDisk|openFromUpload|openScratchpad|openFromRestore";
+
 /**
  * Modules that hand an open result to a client, derived rather than listed.
  *
  * A module qualifies when it both calls an open entry point AND writes a
- * response — `res.json` for the HTTP wire, `mcpSuccess` for the MCP one. That
- * is the structural fact "this module ships an open result", and it is the
- * thing the projection obligation attaches to.
+ * response — `res.json` for the HTTP wire, `mcpSuccess` for the MCP one.
  */
 function shippingModules(): Array<{ rel: string; code: string }> {
-  const ENTRY = /(?<![\w$.])(openFromDisk|openFromUpload|openScratchpad|openFromRestore)\s*\(/;
+  const ENTRY = new RegExp(`(?<![\\w$.])(${ENTRY_POINTS})\\s*\\(`);
   const RESPONDS = /(?<![\w$.])(res\s*(\.\w+\s*\([^)]*\))?\.json|mcpSuccess)\s*\(/;
   return sourceFiles()
     .map((f) => ({ rel: f.rel, code: stripNonCode(f.text) }))
@@ -160,75 +160,119 @@ function shippingModules(): Array<{ rel: string; code: string }> {
     .sort((a, b) => a.rel.localeCompare(b.rel));
 }
 
-/** Names bound to the result of an open entry point, e.g. `const result = await openFromDisk(…)`. */
-function openResultBindings(code: string): string[] {
-  const decl =
-    /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:openFromDisk|openFromUpload|openScratchpad|openFromRestore)\s*\(/g;
-  return [...code.matchAll(decl)].map((m) => m[1] as string);
+/** The argument text of every `res.json(…)` / `mcpSuccess(…)` call, paren-balanced. */
+function responseArguments(code: string): string[] {
+  const open = /(?<![\w$.])(res\s*(\.\w+\s*\([^)]*\))?\.json|mcpSuccess)\s*\(/g;
+  const out: string[] = [];
+  for (const m of code.matchAll(open)) {
+    let depth = 1;
+    let i = (m.index ?? 0) + m[0].length;
+    const from = i;
+    while (i < code.length && depth > 0) {
+      if (code[i] === "(") depth += 1;
+      else if (code[i] === ")") depth -= 1;
+      i += 1;
+    }
+    out.push(code.slice(from, i - 1));
+  }
+  return out;
 }
 
 /**
- * Uses of `name` that are NOT a member access — i.e. the whole value, not one
- * field of it. `result.fileName` is a cherry-pick; `{ data: result }` and
- * `...result` are the whole payload.
+ * Calls that provably do not put an `OpenSuccess` anywhere, blanked out before
+ * the response argument is inspected.
+ *
+ * Three names, each earning its place: `toWireResult` and `sendOpenResult` are
+ * the projection, and `openResultMessage` returns a **string**. Anything else
+ * receiving an open result inside a response argument is the thing this guard
+ * is looking for, so the list stays this short on purpose — every addition is a
+ * new way for the object to reach a client unprojected.
  */
-function wholeValueUses(code: string, name: string): number {
-  const decl = new RegExp(`(?:const|let|var)\\s+${name}\\s*=`, "g");
-  const any = new RegExp(`(?<![\\w$.])${name}(?![\\w$])(\\s*\\??\\.)?`, "g");
-  let whole = 0;
-  for (const m of code.matchAll(any)) {
-    if (m[1]) continue; // member access
-    whole += 1;
+const SAFE_CONSUMERS = "toWireResult|sendOpenResult|openResultMessage";
+
+function blankSafeConsumers(text: string): string {
+  // Paren-balanced, not `\([^()]*\)`. A regex that cannot cross a nested paren
+  // reported `res.json({ data: toWireResult(await openFromDisk(p)) })` — a
+  // CORRECT projection — as a leak: the projector call never matched, so the
+  // inner entry-point call was left standing. A guard whose job is to fail on
+  // the leak must not fail on the fix; that error trains the next reader to
+  // edit the guard.
+  const head = new RegExp(`(?<![\\w$.])(${SAFE_CONSUMERS})\\s*\\(`, "g");
+  const chars = [...text];
+  for (const m of text.matchAll(head)) {
+    let depth = 1;
+    let i = (m.index ?? 0) + m[0].length;
+    while (i < text.length && depth > 0) {
+      if (text[i] === "(") depth += 1;
+      else if (text[i] === ")") depth -= 1;
+      i += 1;
+    }
+    for (let j = m.index ?? 0; j < i; j += 1) chars[j] = " ";
   }
-  return whole - [...code.matchAll(decl)].length; // the declaration itself is not a use
+  return chars.join("");
 }
 
-describe("a module that ships an open result projects it", () => {
+/** Names bound to an open result, e.g. `const result = await openFromDisk(…)`. */
+function openResultBindings(code: string): string[] {
+  const decl = new RegExp(
+    `(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*(?:await\\s+)?(?:${ENTRY_POINTS})\\s*\\(`,
+    "g",
+  );
+  return [...code.matchAll(decl)].map((m) => m[1] as string);
+}
+
+describe("an open result reaches a client only through the projection", () => {
   /**
-   * The obligation, per module that ships one.
+   * The obligation, checked where it actually binds: the response argument.
    *
-   * **This half had the wrong polarity and three reviewers said so.** It used
-   * to assert which modules CALL `toWireResult` — which goes red when a new
-   * *correct* projector appears, and stays green for the leak named in this
-   * file's header. A fourth route writing `res.json({ data: result })` calls
-   * the projector zero times, so the set never changed and the guard never
-   * fired. A census pointed at the fix instead of the failure is not a census.
+   * **Three drafts, three defeats, and the shape of all three is why this one
+   * looks nothing like them.** The first asserted which modules CALL
+   * `toWireResult` — the wrong polarity, red on a new *correct* projector and
+   * green on the leak. The second derived the shipping modules correctly but
+   * exempted `mcp/convert.ts` BY MODULE, and a mutation planting a real leak
+   * inside that module stayed green. The third scoped the check to declared
+   * bindings and skipped any file containing a projector call anywhere — which
+   * is the same module-wide exemption again, in a shape I did not recognize
+   * because I had just written a comment claiming to have removed it. It lost
+   * to both `res.json({ data: await openFromDisk(p) })` (no binding to find)
+   * and to a second handler added to `mcp/document.ts` (whose `tandem_open`
+   * already calls the projector, so the whole file was skipped).
    *
-   * **The first rewrite was still defeated, by its own escape hatch.** It
-   * exempted `mcp/convert.ts` BY MODULE for cherry-picking two fields — and a
-   * mutation planting a real leak inside that module stayed green, because a
-   * module-wide exemption exempts everything the module later does. The
-   * exemption was also unnecessary: `convert.ts` returns its payload to the
-   * tool layer rather than writing a response, so it never entered the
-   * derivation to begin with. An escape hatch nothing needed, wide enough to
-   * hide the failure the census exists for.
-   *
-   * So there is no module list. A non-projecting shipper is allowed exactly
-   * when it never uses an open result as a WHOLE VALUE — every reference is
-   * `result.someField`. Cherry-picking named fields cannot ship `kind` and
-   * cannot drop the booleans, because it never puts the object anywhere. That
-   * is the actual reason those sites are safe, so it is what gets checked.
+   * Every one of those failures came from checking a MODULE. So this checks
+   * the response argument itself: whatever is left in it after blanking the
+   * three calls that provably do not emit an `OpenSuccess` must contain no open
+   * entry-point call and no open-result binding. Cherry-picking passes because
+   * `result.fileName` leaves no bare `result`; the projection passes because it
+   * is blanked; a raw union in either form fails.
    */
-  it("every module that ships an open result projects it or only ever cherry-picks fields", () => {
+  it("no response body carries an unprojected open result", () => {
+    const bare = new RegExp(`(?<![\\w$.])(${ENTRY_POINTS})\\s*\\(`);
     const offenders: string[] = [];
     for (const { rel, code } of shippingModules()) {
-      if (/(?<![\w$.])(toWireResult|sendOpenResult)\s*\(/.test(code)) continue;
-      for (const name of openResultBindings(code)) {
-        const whole = wholeValueUses(code, name);
-        if (whole > 0) offenders.push(`${rel}: \`${name}\` used as a whole value ${whole}x`);
+      const names = openResultBindings(code);
+      for (const arg of responseArguments(code)) {
+        const rest = blankSafeConsumers(arg);
+        if (bare.test(rest)) {
+          offenders.push(`${rel}: opens inline inside a response body`);
+          continue;
+        }
+        for (const name of names) {
+          if (new RegExp(`(?<![\\w$.])${name}(?![\\w$\\s]*\\.)`).test(rest)) {
+            offenders.push(`${rel}: \`${name}\` reaches a response body unprojected`);
+          }
+        }
       }
     }
     expect(
       offenders,
-      "this module hands a whole open result to a client without projecting it — call sendOpenResult (HTTP) or toWireResult (MCP), or read named fields off it instead",
+      "an open result must be projected (sendOpenResult for HTTP, toWireResult for MCP) or read field-by-field before it goes in a response body",
     ).toEqual([]);
   });
 
   it("finds the modules that ship one at all", () => {
-    // A derivation that derives nothing satisfies the filter above no matter
-    // how broken it is. This is the positive anchor: the four known shippers
-    // must be in the derived set, so a regex that stops matching turns this red
-    // rather than quietly making the guard vacuous.
+    // A derivation that derives nothing satisfies the check above no matter how
+    // broken it is. The positive anchor: a regex that stops matching turns this
+    // red rather than quietly making the guard vacuous.
     const rels = shippingModules().map((m) => m.rel);
     expect(rels).toContain("server/mcp/document.ts");
     expect(rels).toContain("server/mcp/routes/open.ts");
@@ -236,31 +280,60 @@ describe("a module that ships an open result projects it", () => {
     expect(rels).toContain("server/mcp/routes/scratchpad.ts");
   });
 
-  it("tells a cherry-pick apart from a whole-value use", () => {
-    // The allowance above has no instance in `src/` today — every shipper
-    // projects — so the rule that decides who may skip the projector is
-    // otherwise asserted by nobody. `mcp/convert.ts` looked like the instance
-    // and is not one: it hands its payload back to the tool layer rather than
-    // writing a response, so it never enters the derivation at all. An earlier
-    // draft exempted it BY MODULE anyway, and a mutation planting a real leak
-    // inside that module stayed green — a module-wide exemption exempts
-    // everything the module later does. Hence a rule, checked directly.
-    const cherry = "const result = await openFromDisk(p); return { id: result.documentId };";
-    const whole = "const result = await openFromDisk(p); res.json({ data: result });";
-    const spread = "const result = await openFromDisk(p); res.json({ ...result });";
+  it("reads the response bodies it claims to read", () => {
+    // The second anchor, on the extractor rather than the derivation: a
+    // paren-balanced scan that returned nothing would make the check above
+    // pass no matter what `src/` contained.
+    //
+    // Deliberately NOT "one of document.ts's bodies contains `toWireResult`",
+    // which an earlier draft asserted. That goes red on a refactor hoisting the
+    // projection to `const wire = toWireResult(result)` one line up — a legal,
+    // behaviour-identical edit. An anchor that fires on a legal edit teaches
+    // the next reader to edit the anchor.
+    const doc = shippingModules().find((m) => m.rel === "server/mcp/document.ts");
+    expect(
+      responseArguments(doc?.code ?? "").length,
+      "document.ts writes several response bodies",
+    ).toBeGreaterThan(1);
 
-    expect(openResultBindings(cherry)).toEqual(["result"]);
-    expect(wholeValueUses(cherry, "result"), "field reads are not whole-value uses").toBe(0);
-    expect(wholeValueUses(whole, "result"), "passing the object is").toBe(1);
-    // `stripNonCode` normalizes `...` to a space, which is how the spread
-    // reaches this function in a real sweep.
-    expect(wholeValueUses(stripNonCode(spread), "result"), "so is spreading it").toBe(1);
+    // And the nesting the real bodies depend on, pinned deterministically.
+    expect(responseArguments("mcpSuccess({ a: f(g(1)), b: 2 }) res.json({ c: 3 })")).toEqual([
+      "{ a: f(g(1)), b: 2 }",
+      "{ c: 3 }",
+    ]);
+  });
+
+  it("tells a cherry-pick, a projection and a leak apart", () => {
+    // The rule itself, on synthetic input — the three cases `src/` does not
+    // currently contain all at once, so the discrimination is asserted by
+    // something rather than inferred from an empty offender list.
+    const check = (body: string, names: string[]) => {
+      // Through `stripNonCode` first, exactly as the real sweep does. Skipping
+      // it made the `...toWireResult(result)` row read as a leak: the blanking
+      // regex has a `(?<![\w$.])` lookbehind so that `foo.toWireResult(` — a
+      // different function sharing the name — is not treated as the projector,
+      // and a literal spread's third dot trips it. `stripNonCode` normalizes
+      // `...` to a space, which is why production code passes and only this
+      // hand-written input did not.
+      const rest = blankSafeConsumers(stripNonCode(body));
+      const bare = new RegExp(`(?<![\\w$.])(${ENTRY_POINTS})\\s*\\(`);
+      if (bare.test(rest)) return "leak";
+      for (const n of names) {
+        if (new RegExp(`(?<![\\w$.])${n}(?![\\w$\\s]*\\.)`).test(rest)) return "leak";
+      }
+      return "ok";
+    };
+    expect(check("{ id: result.documentId }", ["result"]), "cherry-pick").toBe("ok");
+    expect(check("{ ...toWireResult(result) }", ["result"]), "projection").toBe("ok");
+    expect(check("{ data: result }", ["result"]), "bare binding").toBe("leak");
+    expect(check("{ ...result }", ["result"]), "spread binding").toBe("leak");
+    expect(check("{ data: await openFromDisk(p) }", []), "inline open").toBe("leak");
   });
 
   it("the three HTTP routes go through the shared sender, not their own res.json", () => {
-    // Narrower than the derivation above and still worth keeping: a route may
-    // satisfy the obligation by calling `toWireResult` itself, which is correct
-    // but re-opens the three-places-to-forget problem `sendOpenResult` closed.
+    // Narrower than the check above and still worth keeping: a route may meet
+    // the obligation by calling `toWireResult` itself, which is correct but
+    // re-opens the three-places-to-forget problem `sendOpenResult` closed.
     for (const route of ["open", "upload", "scratchpad"]) {
       const text = stripNonCode(
         readFileSync(path.join(SRC, "server/mcp/routes", `${route}.ts`), "utf-8"),
