@@ -131,6 +131,36 @@ export async function convertToMarkdown(
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") throw err; // Only swallow "doesn't exist"
+      // ENOENT here means the LEAF does not exist yet — which is the normal
+      // case for an export, and was therefore the one case this whole block
+      // never ran on. Swallowing it left `resolvedOutput` uncanonicalized and
+      // skipped the post-realpath prefix re-check above, so a symlinked or
+      // junctioned parent was never followed on exactly the create-new path
+      // the check exists to guard. Canonicalize the parent instead.
+      //
+      // The parent, not the deepest existing ancestor: `atomicWrite` does no
+      // mkdir, so an export into a missing directory already fails, and
+      // walking further up has no caller.
+      const parent = path.dirname(resolvedOutput);
+      try {
+        const realParent = await fs.realpath(parent);
+        const parentReason = rejectUnsafeWindowsPrefix(realParent);
+        if (parentReason) {
+          throw Object.assign(new Error(parentReason), { code: "INVALID_PATH" });
+        }
+        // Safe to rejoin: `resolvedOutput` is already `path.resolve`d, so its
+        // basename is normalised and separator-free and cannot reintroduce the
+        // prefix just screened off `realParent`.
+        resolvedOutput = path.join(realParent, path.basename(resolvedOutput));
+      } catch (parentErr: unknown) {
+        if ((parentErr as NodeJS.ErrnoException).code !== "ENOENT") throw parentErr;
+        // The parent is missing too. This already failed downstream in
+        // `atomicWrite`, but as a raw ENOENT surfacing as a 500 / INTERNAL —
+        // a caller-fixable path mistake reported as a server fault.
+        throw Object.assign(new Error(`Output directory does not exist: ${parent}`), {
+          code: "FILE_NOT_FOUND",
+        });
+      }
     }
   } else {
     const baseName = path.basename(docState.filePath, path.extname(docState.filePath));

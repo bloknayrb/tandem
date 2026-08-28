@@ -891,8 +891,24 @@ export function registerAnnotationTools(server: McpServer): void {
                   `Could not resolve outputPath: ${(err as Error).message}`,
                 );
               }
-              // ENOENT — fresh write to a path that doesn't exist yet. Keep
-              // the already-resolved `sidecarPath` as-is.
+              // ENOENT — the leaf does not exist yet, which is the first
+              // export to any given outputPath. Keeping `sidecarPath` as-is
+              // skipped the post-realpath prefix re-check above on exactly
+              // that path, so a symlinked parent was never followed. Same
+              // defect as `convert.ts`, one file away; the shapes differ only
+              // in that this surface returns mcpError rather than throwing.
+              const parent = path.dirname(sidecarPath);
+              try {
+                const realParent = await fs.realpath(parent);
+                const parentReason = rejectUnsafeWindowsPrefix(realParent);
+                if (parentReason) return mcpError("INVALID_PATH", parentReason);
+                sidecarPath = path.join(realParent, path.basename(sidecarPath));
+              } catch (parentErr) {
+                return mcpError(
+                  "INVALID_PATH",
+                  `Could not resolve the directory for outputPath: ${(parentErr as Error).message}`,
+                );
+              }
             }
           }
           const contents = isJson
