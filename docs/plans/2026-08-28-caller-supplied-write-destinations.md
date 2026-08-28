@@ -9,12 +9,22 @@ Recording this first, because the corrections are the useful part and because th
 central proposal was a no-op that would have shipped looking like a fix.
 
 1. **`assertPathSafe` does not walk symlinked path components.** It `lstat`s exactly one — the
-   deepest existing ancestor — then `break`s (`integrations/apply.ts:580-601`). What actually
+   deepest existing ancestor — then `break`s (`integrations/apply.ts:584-600`). Its own comment at
+   `:579-581` claims it fails on any walked-through symlink; that comment is **stale**. What
    catches a symlinked intermediate is `realpathSync` plus the `allowedRoots` containment test at
-   `:602-608`. Widen `allowedRoots` to the filesystem root and nothing is left. At both proposed
-   sites the parent is **already** `realpath`'d (`convert.ts:130`, `:154-162`;
-   `docx-apply.ts:330`), so the call would have been provably dead code. The draft's "ship the
-   symlink walk, defer containment" had it exactly inverted: containment *is* the whole value.
+   `:602-607`. Widening `allowedRoots` to the filesystem root removes that test and only that —
+   the unconditional UNC screen at `:573-576` and the symlink check on the deepest existing
+   component still fire, so "nothing is left" was itself an overstatement.
+
+   **A later review pass reversed the rest of this item, and the reversal is the load-bearing
+   part.** This draft claimed the call would be "provably dead code because the parent is already
+   `realpath`'d". Both sites `realpath` the **target**, not its parent (`convert.ts:118-134`,
+   `annotations.ts:874-896`), inside a `try` whose `catch` swallows `ENOENT` — the normal
+   fresh-write case, as their own comments state. So on the common path **nothing is
+   canonicalized**, and `assertPathSafe`'s `lstat` of the deepest existing ancestor would catch a
+   symlinked parent directory that these sites miss today. It is not dead code. What remains true
+   from this item is only that containment, not the symlink walk, is what a containment-shaped
+   alert is actually about.
 2. **Save-As and rename do not have containment either.** Both call
    `assertPathSafe(resolved, { allowedRoots: [path.parse(resolved).root] })` — the same widening
    the draft proposed — with a written rationale that Save-As is user-driven
@@ -28,17 +38,26 @@ central proposal was a no-op that would have shipped looking like a fix.
 4. **A `.docx` pin would break the regression test for this PR's own §1 fix.**
    `docx-apply.test.ts:1166-1187` passes an extensionless `backupPath` and expects success — it is
    the pin for the `slice(0, -0)` bug. Pinning the extension retires it.
-5. **`INVALID_PATH` is not what an MCP caller sees.** `document.ts:1073-1080` and
-   `docx-apply.ts:463` both map it to `FORMAT_ERROR`. Every proposed spec asserted the internal
+5. **`INVALID_PATH` is not what an MCP caller sees.** `document.ts:1073-1080`,
+   `docx-apply.ts:348` and `docx-apply.ts:483-485` all map it to `FORMAT_ERROR` (an earlier
+   draft cited `:463`, which is an unrelated `FILE_NOT_FOUND`). Every proposed spec asserted the internal
    thrown code, so none could have passed even after the fix — and `FORMAT_ERROR` would tell an AI
    caller to retry the *document* format when the *path* was rejected. Also
    `PathRejectedError` (`apply.ts:284-293`) carries no `.code` at all, so both catch chains would
    have let it escape to a 500.
 6. The four-row table's line citations were drifted by 5–8 lines throughout.
 
-**The corrected picture: none of the five sites has root containment, and two have no extension
-pin.** That is a coherent product posture, not an oversight — which changes this from "fix a bug"
-to "propose a policy change", and makes it Bryan's call rather than mine.
+**The corrected picture: none of the four sites has root containment, two have no extension pin,
+and one of those also has no collision check.** That is a coherent product posture, not an
+oversight — which changes this from "fix a bug" to "propose a policy change", and makes it Bryan's
+call rather than mine.
+
+**Corrected again, 2026-08-28: rename is not one of them, and this doc said it was.** The count was
+five because rename was miscounted. `document-service.ts:1033` builds its target as
+`path.dirname(oldPath)` + `path.basename(newName)`, behind `validateRenameFilename`, an extension
+pin (`:1011-1019`) and an explicit separator/NUL guard (`:1023-1031`) — the caller names a
+filename, not a path. Item 3 above is still right that `tandem_exportAnnotations` is the fifth
+*thing found*; it is the fourth *site*, because rename was never one.
 
 ## The part that is unambiguous, and ships: CSRF on three mutating routes
 
