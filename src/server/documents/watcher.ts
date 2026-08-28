@@ -330,10 +330,22 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
         // yields false when a concurrent reload holds the guard, and this
         // callback used to discard that and toast anyway — telling the user a
         // reload happened for a pass that did nothing, sometimes while the
-        // in-flight reload was still mid-transaction. The in-flight one lands
-        // its own content and pushes its own toast, so suppressing this one
-        // loses nothing. `resolveExternalConflict` already gated on the same
-        // value; this was the only caller that did not.
+        // in-flight reload was still mid-transaction. Both callers of
+        // `reloadFromDisk` in `mcp/file-opener.ts` already gated on this value;
+        // this was the only one that did not.
+        //
+        // What suppression costs, stated precisely rather than as "nothing",
+        // because the guard has FOUR holders and they do not all toast:
+        // a sibling watcher pass and `resolveExternalConflict` push their own
+        // reload toast, so the user still hears about it; `restoreDocumentFromBackup`
+        // pushes a restore toast that never mentions the external edit; and
+        // `reloadDocumentFromMarkdown` (which takes the guard directly, across
+        // a clear+repopulate and a disk save) pushes no reload toast at all.
+        // In that last window a genuine third-party write is dropped with no
+        // signal. The staleness itself is pre-existing — master skipped the
+        // reload too and merely lied about it — and the save guard still
+        // catches the consequence, since the reload records the PRE-write
+        // mtime as the baseline. Only the false claim is gone.
         if (!(await reloadFromDisk(id, filePath, format))) return;
         pushNotification({
           id: generateNotificationId(),

@@ -115,10 +115,15 @@ import { wireFileWatcher } from "./watcher.js";
  * `toWireResult` is the only sanctioned way to produce one, and its three
  * booleans are an encoding of `OpenSuccess["kind"]`, not independent state.
  *
- * It keeps its name and its exact key set because six sites ship it verbatim
- * (`mcp/document.ts`, `routes/{open,upload,scratchpad}.ts`, plus field
- * cherry-picks in `mcp/document.ts`'s scratchpad tool and `mcp/convert.ts`).
- * Every field is on the wire today, including `warnings` and the two
+ * It keeps its name and its exact key set because **four sites ship it
+ * whole** — `mcp/document.ts`'s `tandem_open` and the three routes, via
+ * `sendOpenResult`. Two more ship a subset, reading named fields straight off
+ * `OpenSuccess` without projecting: `mcp/document.ts`'s `tandem_scratchpad`
+ * (`documentId`/`fileName`/`format`) and `mcp/convert.ts`
+ * (`documentId`/`fileName`). Those two are legitimate and deliberately not
+ * routed through the projector — they ship no booleans to encode.
+ *
+ * Every field here is on the wire today, including `warnings` and the two
  * estimates, which no code in this repo reads — the MCP payload's consumer is
  * the calling model, which no grep here can see. Unread-by-us is not unread:
  * changing a key is a breaking change with nothing in this repo to fail.
@@ -134,7 +139,8 @@ export interface OpenFileResult extends OpenSuccessPayload {
  *
  * `warnings` lives here, not on a failure arm: `buildResult` emits the
  * large/very-large document warnings on the SUCCESS path, computed from the
- * populated Y.Doc. So does every field below it.
+ * populated Y.Doc — as it computes `tokenEstimate` and `pageEstimate`, from
+ * the same `extractText` call.
  *
  * `OpenFileResult` above **extends** this rather than re-listing the fields,
  * and the direction is the load-bearing part: the wire shape is the payload
@@ -170,21 +176,56 @@ export interface OpenSuccessPayload {
  * have would be worse. The actual win is that `kind` is **computed once, at
  * construction**, by the code that knows which path it took — replacing two
  * independent re-derivations of the same precedence that agreed by inspection
- * only. It is written as four explicit arms rather than
- * `OpenSuccessPayload & { kind: OpenResultKind }` because only a real union
- * lets `Extract` narrow it, which is what `FreshOpen` needs.
+ * only.
  *
- * **One success outcome this still does not express**, and a type whose job is
- * to describe the success contract precisely should say so: "opened, but
- * flagged for external-conflict resolution" rides a Y.Map side channel
- * (`flagExternalConflict`) entirely outside this type. Pre-existing, not this
- * unit's to fix, but do not read the union as the complete picture.
+ * **Why four explicit arms and not `OpenSuccessPayload & { kind: OpenResultKind }`.**
+ * Not for `Extract`: `FreshOpen` is expressible as the intersection directly,
+ * so citing `Extract` argues in a circle and would lead a reader to conclude
+ * the arms are redundant. The real difference is the `const _x: never = r`
+ * exhaustiveness idiom — a genuine union narrows to `never` once every arm is
+ * handled, and the intersection form does not, so it cannot express
+ * "I have handled them all" anywhere except a switch's return type.
+ *
+ * **Two things this still does not express**, and a type whose job is to
+ * describe the success contract precisely should name them rather than assert
+ * them away:
+ *
+ *   - "Opened, but flagged for external-conflict resolution" rides a Y.Map
+ *     side channel (`flagExternalConflict`) entirely outside the result type.
+ *   - `handleAlreadyOpen` can **upgrade** a document to read-only on the way
+ *     through, so `readOnly: true` on an `already-open` result means either
+ *     "was already read-only" or "this call made it so" — a distinction the
+ *     code computes and then discards. It is left out because nothing consumes
+ *     it and putting it on the wire is a compatibility change, not because the
+ *     domain lacks it. That is the one place "every arm carries the identical
+ *     payload" is a statement about the type rather than about the world.
+ *
+ * Both are pre-existing and neither is this unit's to fix; do not read the
+ * union as the complete picture of what an open can produce.
  */
 export type OpenSuccess =
   | (OpenSuccessPayload & { kind: "fresh" })
   | (OpenSuccessPayload & { kind: "restored" })
   | (OpenSuccessPayload & { kind: "already-open" })
   | (OpenSuccessPayload & { kind: "force-reloaded" });
+
+/**
+ * Which kind of open produced a result. Since ADR-034 Unit 7b this is a real
+ * discriminator, decided at construction by the code that knows which path it
+ * took — not derived after the fact.
+ *
+ *   - `fresh`            — first time this session; content loaded from disk or
+ *                          upload, or seeded from a scratchpad's optional content
+ *   - `restored`         — disk-cached session state was applied; no disk re-read
+ *   - `already-open`     — caller asked for a doc that's already tracked; no-op switch
+ *   - `force-reloaded`   — caller passed `force: true`; doc state replaced from disk
+ *
+ * **Derived from `OpenSuccess`, not written out again.** It was a second hand-
+ * maintained literal list, and nothing tied the two together: adding a fifth
+ * member here compiled everywhere, because the arms are what
+ * `openResultMessage` switches on. One list cannot drift from itself.
+ */
+export type OpenResultKind = OpenSuccess["kind"];
 
 /**
  * The only kind `openFromUpload` and `openScratchpad` can produce.
@@ -202,11 +243,35 @@ export type OpenSuccess =
 export type FreshOpen = Extract<OpenSuccess, { kind: "fresh" }>;
 
 /**
+ * The boolean encoding of each kind, as a table rather than three comparisons.
+ *
+ * `Record<OpenResultKind, …>` is the point: three `kind === "…"` comparisons
+ * are legal for any union member, so a fifth kind would have compiled clean
+ * here and shipped as `false/false/false` — byte-identical to `fresh`, and
+ * decoded back as `fresh` by `kindOfOpenResult`. A new outcome silently
+ * mislabelled as a first-time open is exactly the correspondence bug this unit
+ * exists to prevent, and it was reachable through its own projector. A
+ * `Record` cannot be missing a key.
+ */
+const WIRE_FLAGS: Record<
+  OpenResultKind,
+  Pick<OpenFileResult, "restoredFromSession" | "alreadyOpen" | "forceReloaded">
+> = {
+  fresh: { restoredFromSession: false, alreadyOpen: false, forceReloaded: false },
+  restored: { restoredFromSession: true, alreadyOpen: false, forceReloaded: false },
+  "already-open": { restoredFromSession: false, alreadyOpen: true, forceReloaded: false },
+  "force-reloaded": { restoredFromSession: false, alreadyOpen: false, forceReloaded: true },
+};
+
+/**
  * Project the internal union back onto the wire shape, unchanged.
  *
- * **All six wire sites go through here.** Six independent projections would be
- * six chances to drift, and a spec would then be pinning the projector rather
- * than what each site emits.
+ * **Every site that ships the whole payload goes through here** — `tandem_open`
+ * and, via `sendOpenResult`, the three HTTP routes. Four independent
+ * projections would be four chances to drift, and a spec would then be pinning
+ * the projector rather than what each site emits. The two cherry-picking sites
+ * (`tandem_scratchpad`, `mcp/convert.ts`) read named payload fields off
+ * `OpenSuccess` and correctly do not project: they ship no booleans to encode.
  *
  * `warnings` is spread conditionally rather than assigned, because the key is
  * ABSENT when there are none today — assigning `undefined` would add a key to
@@ -217,9 +282,7 @@ export function toWireResult(result: OpenSuccess): OpenFileResult {
   const { kind, warnings, ...payload } = result;
   return {
     ...payload,
-    restoredFromSession: kind === "restored",
-    alreadyOpen: kind === "already-open",
-    forceReloaded: kind === "force-reloaded",
+    ...WIRE_FLAGS[kind],
     ...(warnings !== undefined ? { warnings } : {}),
   };
 }
@@ -908,19 +971,6 @@ export async function openFromRestore(
 ): Promise<OpenSuccess> {
   return await openFromDisk(entry.filePath, { readOnly: entry.readOnly });
 }
-
-/**
- * Which kind of open produced a result. Since ADR-034 Unit 7b this is a real
- * discriminator on `OpenSuccess`, decided at construction by the code that
- * knows which path it took — not derived after the fact.
- *
- *   - `fresh`            — first time this session; content loaded from disk or
- *                          upload, or seeded from a scratchpad's optional content
- *   - `restored`         — disk-cached session state was applied; no disk re-read
- *   - `already-open`     — caller asked for a doc that's already tracked; no-op switch
- *   - `force-reloaded`   — caller passed `force: true`; doc state replaced from disk
- */
-export type OpenResultKind = "fresh" | "restored" | "already-open" | "force-reloaded";
 
 /**
  * Recover the kind from a wire result — the inverse of `toWireResult`'s

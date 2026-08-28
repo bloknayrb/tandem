@@ -1,7 +1,8 @@
 import type { Request, Response } from "express";
 import { openFromUpload } from "../../documents/open.js";
 import { detectFormat } from "../document-model.js";
-import { sendApiError, sendOpenResult } from "./_shared.js";
+import { sendApiError } from "./_shared.js";
+import { sendOpenResult } from "./send-open-result.js";
 
 export async function handleUpload(req: Request, res: Response): Promise<void> {
   const { fileName, content } = (req.body ?? {}) as Record<string, unknown>;

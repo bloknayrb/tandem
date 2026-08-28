@@ -84,6 +84,7 @@ import {
   resetForTesting as notificationsReset,
 } from "../../src/server/notifications.js";
 import { SESSION_DIR } from "../../src/server/platform.js";
+import { saveSession } from "../../src/server/session/manager.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import {
   CHARS_PER_PAGE,
@@ -702,6 +703,34 @@ describe("file-watcher reload notification", () => {
     expect(pair.toasts, "…and now exactly one toast to match it").toBe(1);
   });
 
+  it("still toasts twice for two reloads that do not overlap", async () => {
+    // The negative control for the fix above, and the thing a green
+    // "exactly one toast" cannot distinguish on its own: suppressing the toast
+    // whenever `reloadFromDisk` returns false is correct, but suppressing it
+    // permanently after the first — a latch, a stuck `reloadInProgress`, a
+    // guard never released — looks identical in the concurrent case. Two
+    // callbacks fired one after the other, each awaited, are two REAL reloads
+    // and owe the user two notifications.
+    const filePath = path.join(tmpDir, "watched-sequential.md");
+    await fs.writeFile(filePath, "# Watched\n");
+    const opened = await openFromDisk(filePath);
+
+    const registered = vi.mocked(watchFile).mock.calls.find(([p]) => p === filePath);
+    expect(registered, "control: the open actually registered a watcher").toBeDefined();
+    const onChange = registered?.[1] as () => Promise<void>;
+
+    notificationsReset();
+    await fs.writeFile(filePath, "# Watched, once\n");
+    await onChange();
+    await fs.writeFile(filePath, "# Watched, twice\n");
+    await onChange();
+
+    const toasts = getBuffer().filter(
+      (n) => n.type === "file-reloaded" && n.documentId === opened.documentId,
+    ).length;
+    expect(toasts, "two separate reloads, two notifications").toBe(2);
+  });
+
   it("reports a failure when the reload throws", async () => {
     const filePath = path.join(tmpDir, "doomed.md");
     await fs.writeFile(filePath, "# Doomed\n");
@@ -726,7 +755,7 @@ describe("file-watcher reload notification", () => {
 // The wire shape does not change (Unit 7b §5)
 // ---------------------------------------------------------------------------
 
-describe("toWireResult keeps the payload the six wire sites already ship", () => {
+describe("toWireResult keeps the payload the wire sites already ship", () => {
   /**
    * The whole safety argument for Unit 7b.
    *
@@ -842,6 +871,37 @@ describe("toWireResult keeps the payload the six wire sites already ship", () =>
 
     expect(keysOf(wire)).toEqual(WIRE_KEYS);
     expect(wire.source).toBe("upload");
+  });
+
+  it("encodes a genuinely restored open as restoredFromSession, through the real pipeline", async () => {
+    // The `restored` arm is the one the unit tests hardest and exercises least:
+    // every other kind has a wire spec above driven by a real entry point,
+    // while `restored` was pinned only against a fixture this file builds
+    // itself — which can only confirm my model of what the pipeline emits.
+    // `kind: "restored"` is decided inside `openFromDisk` from
+    // `maybeRestoreSession`, so the only honest witness is a real second open
+    // over a real session file.
+    const filePath = path.join(tmpDir, "restored.md");
+    await fs.writeFile(filePath, "# Restored\n");
+    const first = await openFromDisk(filePath);
+    expect(first.kind, "control: the first open is fresh").toBe("fresh");
+    await saveSession(filePath, "md", getOrCreateDocument(first.documentId));
+
+    // Drop every trace of the open document, so the reopen takes the restore
+    // path rather than `handleAlreadyOpen`.
+    removeDoc(first.documentId);
+    removeDocument(first.documentId);
+
+    const second = await openFromDisk(filePath);
+    expect(second.kind, "the session file is what the second open reads").toBe("restored");
+
+    const wire = toWireResult(second);
+    expect(keysOf(wire)).toEqual(WIRE_KEYS);
+    expect([wire.restoredFromSession, wire.alreadyOpen, wire.forceReloaded]).toEqual([
+      true,
+      false,
+      false,
+    ]);
   });
 
   it("still exposes the three fields the cherry-picking sites name", async () => {

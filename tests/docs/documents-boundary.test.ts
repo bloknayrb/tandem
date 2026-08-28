@@ -294,11 +294,18 @@ const FAN_IN = [
   "server/mcp/document-service.ts -> server/documents/open.ts (value) x1",
   "server/mcp/presence-expiry.ts -> server/documents/registry.ts (value) x1",
   // Route infrastructure reaching the open seam, added by ADR-034 Unit 7b.
-  // `_shared.ts` owns `sendOpenResult`, the one place the three open routes
-  // project `OpenSuccess` onto the wire — the alternative was three routes
-  // each importing `toWireResult` themselves, which is three edges instead of
-  // one and three places to forget the projection.
-  "server/mcp/routes/_shared.ts -> server/documents/open.ts (value) x1",
+  // `send-open-result.ts` owns `sendOpenResult`, the one place the three open
+  // routes project `OpenSuccess` onto the wire — the alternative was three
+  // routes each importing `toWireResult` themselves, which is three edges
+  // instead of one and three places to forget the projection.
+  //
+  // It is deliberately NOT in `_shared.ts`, where it first landed: every route
+  // imports that module, so the edge below would be inherited by all of them
+  // and pull `open.ts -> autosave.ts -> mcp/document-service.ts` into their
+  // module init. `rename-route.test.ts` went red on exactly that. A leaf every
+  // route imports has to stay a leaf, and this inventory is where a future
+  // "just put it in _shared" would show up as a widened edge.
+  "server/mcp/routes/send-open-result.ts -> server/documents/open.ts (value) x1",
   "server/mcp/routes/backups.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-raw.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-reload.ts -> server/documents/registry.ts (value) x1",

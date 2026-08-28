@@ -156,9 +156,13 @@ export interface OutlineEntry {
  * rediscovered. Changing the wording is a behaviour change and belongs in its
  * own PR.
  *
- * The switch has no `default`. That is deliberate — a fifth kind added to
- * `OpenResultKind` must fail to compile here rather than silently fall through
- * to a generic sentence.
+ * The switch has no `default`. That is deliberate — a fifth arm added to
+ * `OpenSuccess` fails to compile here (TS2366, no ending return) rather than
+ * silently falling through to a generic sentence. It said `OpenResultKind`
+ * until review pointed out that this switches on `OpenSuccess["kind"]` and the
+ * two were separate hand-maintained lists, so adding to `OpenResultKind` alone
+ * compiled everywhere. `OpenResultKind` is now derived from `OpenSuccess`,
+ * which is what makes the sentence true rather than aspirational.
  */
 export function openResultMessage(result: OpenSuccess): string {
   switch (result.kind) {

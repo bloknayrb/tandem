@@ -301,6 +301,8 @@ describe("the redirect invariant (Unit 6)", () => {
 });
 
 // `kindOfOpenResult`'s precedence is pinned in
-// `tests/server/open-result-message.test.ts`, over the full 2^3 cross product and
-// tied to the message chain that is its second copy. It lived here as four
-// reachable cases; one fixture in two files is what drifts.
+// `tests/server/open-result-message.test.ts`, over the full 2^3 cross product.
+// It lived here as four reachable cases; one fixture in two files is what
+// drifts. The message chain that USED to be a second copy of that precedence
+// now switches on `kind`, so the two are pinned as a round trip rather than as
+// two orderings that happen to agree.

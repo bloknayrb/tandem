@@ -44,10 +44,31 @@ const PAYLOAD: OpenSuccessPayload = {
   pageEstimate: 0,
 };
 
-const ALL_KINDS: OpenResultKind[] = ["fresh", "restored", "already-open", "force-reloaded"];
+/**
+ * Every kind, exhaustive at the TYPE level.
+ *
+ * This was an array literal, and TypeScript does not require one to cover a
+ * union — so a fifth kind was untested by construction while every spec here
+ * kept passing. `satisfies Record<OpenResultKind, …>` makes the omission a
+ * compile error instead, and `tests/` is typechecked (`npm run typecheck:tests`),
+ * so the spec that has to grow is the thing that stops building.
+ */
+const ALL_KINDS = Object.keys({
+  fresh: true,
+  restored: true,
+  "already-open": true,
+  "force-reloaded": true,
+} satisfies Record<OpenResultKind, true>) as OpenResultKind[];
 
-function success(kind: OpenResultKind, over: Partial<OpenSuccessPayload> = {}): OpenSuccess {
-  return { ...PAYLOAD, ...over, kind } as OpenSuccess;
+function success<K extends OpenResultKind>(
+  kind: K,
+  over: Partial<OpenSuccessPayload> = {},
+): OpenSuccessPayload & { kind: K } {
+  // Generic rather than `as OpenSuccess`: the cast hides nothing today, since
+  // all four arms carry the identical payload, but the union's own doc comment
+  // anticipates an arm gaining a field — and on that day the cast would let
+  // every spec here keep passing against a value the type forbids.
+  return { ...PAYLOAD, ...over, kind };
 }
 
 /** The three legacy booleans alone - the table rows carry bookkeeping fields too. */
@@ -214,9 +235,15 @@ describe("toWireResult and kindOfOpenResult are a round trip", () => {
 
   it("only ever emits combinations the decoder reads back unambiguously", () => {
     // The encoder can only produce disjoint flags, so every encoded result
-    // lands on a REACHABLE row of COMBINATIONS. This is what ties the two
-    // tables together: a new kind that forgot to set its boolean would collide
-    // with `fresh` here rather than passing quietly.
+    // lands on a REACHABLE row of COMBINATIONS — which ties the two tables
+    // together.
+    //
+    // It does NOT catch a new kind that forgot its boolean: `false/false/false`
+    // is itself a reachable row, so such a kind passes here and is decoded as
+    // `fresh`. The spec above ("exactly one boolean") is what catches it, and
+    // `toWireResult`'s `Record<OpenResultKind, …>` table is what makes it
+    // impossible to write in the first place. This comment claimed the
+    // opposite until review checked it.
     const reachable = new Set(
       COMBINATIONS.filter((c) => c.reachable).map(
         (c) => `${c.forceReloaded}${c.alreadyOpen}${c.restoredFromSession}`,

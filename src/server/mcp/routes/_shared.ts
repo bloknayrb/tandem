@@ -1,7 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { crossBasename } from "../../../shared/cross-basename.js";
 import { isLoopback } from "../../auth/middleware.js";
-import { type OpenSuccess, toWireResult } from "../../documents/open.js";
 
 /** Express middleware/handler function type (Express 5 compatible). */
 export type Handler = (req: Request, res: Response, next: NextFunction) => void;
@@ -302,22 +301,3 @@ export const ERROR_LABELS = [
   "PERMISSION_DENIED",
   "INTERNAL",
 ] as const;
-
-/**
- * Send a successful open to an HTTP caller.
- *
- * The three open routes shipped `res.json({ data: toWireResult(result) })`
- * character-for-character, and the projection is the kind of step that
- * compiles perfectly well when you forget it — `res.json` takes `unknown`, so
- * sending the internal `OpenSuccess` straight out would put `kind` on the wire
- * and drop the three booleans every existing client reads, with nothing in
- * this repo going red. One helper is one place to forget instead of three.
- *
- * `tandem_open` deliberately does NOT route through here: it is on the MCP
- * wire, not the HTTP one, and attaches `openResultMessage`. Its projection is
- * pinned by the same census as this one
- * (`tests/server/open-result-consumption.test.ts`).
- */
-export function sendOpenResult(res: Response, result: OpenSuccess): void {
-  res.json({ data: toWireResult(result) });
-}

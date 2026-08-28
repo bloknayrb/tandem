@@ -5,7 +5,8 @@ import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
-import { sendApiError, sendOpenResult } from "./_shared.js";
+import { sendApiError } from "./_shared.js";
+import { sendOpenResult } from "./send-open-result.js";
 
 const MAX_SCRATCHPAD_CONTENT_BYTES = 1024 * 1024;
 
