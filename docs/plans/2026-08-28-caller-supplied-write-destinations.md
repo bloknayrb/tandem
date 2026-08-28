@@ -46,10 +46,13 @@ central proposal was a no-op that would have shipped looking like a fix.
    ~`:1167-1204`). Two reviewers independently flagged it as a third factual error before working
    out it was an unlanded-branch citation. The same mistake produced a second one: the
    `slice(0, -0)` bug is often described here as fixed, and it is — *on that branch*
-   (`const stem = ext ? base.slice(0, -ext.length) : base`). On master it is **live** at
-   `docx-apply.ts:255-257`, where an extensionless backup that already exists yields a bare
-   `-<timestamp>`, a **relative** path resolving against the server CWD. Cite the branch when the
-   evidence is on the branch.
+   (`const stem = ext ? base.slice(0, -ext.length) : base`). At the time this was written it was
+   **live** on master at `docx-apply.ts:255-257`, where an extensionless backup that already
+   exists yields a bare `-<timestamp>`, a **relative** path resolving against the server CWD.
+   Cite the branch when the evidence is on the branch. **Superseded 2026-08-28:** that branch
+   merged as #1650, so the guard is on master — `uniqueBackupPath` in `docx-apply.ts` — and
+   this paragraph is history, not a live defect. It merged still reading "live", which is the
+   same failure it is about: a claim tensed to the branch it was written on.
 5. **`INVALID_PATH` is not what an MCP caller sees.** `document.ts:1073-1080`,
    `docx-apply.ts:348` and `docx-apply.ts:483-485` all map it to `FORMAT_ERROR` (an earlier
    draft cited `:463`, which is an unrelated `FILE_NOT_FOUND`). Every proposed spec asserted the internal
@@ -161,6 +164,17 @@ Claude Code sessions as instructions, all in directories that already exist. `fi
 blocks overwrite but not creation, and a *new* `.claude/agents/evil.md` is sufficient. So in this
 product `.md` is close to the worst extension to leave unpinned, and **an extension pin reduces
 surface without removing the primitive.** Any pin must be sold that way.
+
+> **Corrected 2026-08-28 — the paragraph above is overstated on three of four counts, and
+> [docs/security.md](../security.md#open-findings) holds the corrected version.** A four-agent
+> debate, three of them reaching it independently, found: `~/.claude/skills/*/SKILL.md` is
+> **impossible**, because it needs a new subdirectory and `atomicWrite` is `fs.writeFile` + rename
+> with no `mkdir`; `.claude/agents/*.md` is **not instruction injection**, since only the
+> frontmatter `description` enters the system prompt and the body loads only if that agent is
+> actually spawned; and `~/.claude/CLAUDE.md` normally **already exists**, which is precisely the
+> case `findAvailablePath` refuses. A project `CLAUDE.md` in a directory that has none is what
+> survives. Read the register entry, not this paragraph — it is kept only so the correction has
+> something to point at.
 
 **The open question for Bryan**, stated plainly because it is a policy choice and not a bug:
 should a caller-named export or backup destination be confined to a root set? Save-As and rename
