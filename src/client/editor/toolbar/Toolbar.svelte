@@ -1128,6 +1128,8 @@ function handleComposerKeyDown(e: KeyboardEvent) {
           <button
             type="button"
             class="composer-btn"
+            class:to-self={primaryAnnotationIntent === "note"}
+            class:to-agent={primaryAnnotationIntent === "comment"}
             data-testid="popup-annotation-submit"
             aria-label={primaryAnnotationIntent === "note"
               ? "Add private note (Ctrl+Enter)"
@@ -1566,16 +1568,17 @@ function handleComposerKeyDown(e: KeyboardEvent) {
       outline: 2px solid ButtonText;
     }
   }
-  /* #1444: one rule, both buttons — there is no primary variant to override it.
-     #1385's `flex: 1` removal stands (content-sized, so the row's width is the
-     sum of two labels). The border is unconditional now: #1385 made it
+  /* #1385's `flex: 1` removal stands (content-sized, so the row's width is the
+     sum of two labels). The border is unconditional: #1385 made it
      `transparent` so the row would not reflow when a `.is-primary` variant
-     swapped in an opaque one, and with no variants left there is nothing to
-     reflow against.
+     swapped in an opaque one, and the destination variants below swap only its
+     COLOUR, never its width, so there is still nothing to reflow against.
 
-     muted -> sunk on hover darkens in every theme and always AWAY from the
-     --tandem-surface card behind it, which is why rest is `muted` rather than
-     the `sunk` an earlier draft used. */
+     The neutral `surface-muted` / `border-strong` pair here is now the fallback
+     rather than the shipped look — `primaryAnnotationIntent` is never null, so
+     one of .to-self / .to-agent is always on. It is kept because a variant that
+     inherits height, radius, type and layout from one base and overrides two
+     colours is the whole reason the two states cannot drift apart. */
   .composer-btn {
     border: 1px solid var(--tandem-border-strong);
     background: var(--tandem-surface-muted);
@@ -1607,8 +1610,16 @@ function handleComposerKeyDown(e: KeyboardEvent) {
     /* space-1, not space-2: at 26px the marker, label and key chip are one
        tight cluster. `.aca-btn--send` uses 6px for the same reason. */
     gap: var(--tandem-space-1);
+    /* Declared at rest so the hover scrim below has a from-value to tween from;
+       an undeclared box-shadow makes hover snap in and fade out asymmetrically. */
+    box-shadow: inset 0 0 0 100px transparent;
+    /* `border-color`, not `border` — animating the shorthand would tween the
+       1px width too, and a sub-pixel border renders as a lighter line rather
+       than a thinner one, so the pill would appear to flicker on every flip. */
     transition:
       background 120ms,
+      border-color 120ms,
+      box-shadow 120ms,
       color 120ms;
   }
   /* Reduced motion: literal 120ms tweens with no --morph-* term, so the token
@@ -1632,8 +1643,64 @@ function handleComposerKeyDown(e: KeyboardEvent) {
     outline: 2px solid var(--tandem-accent);
     outline-offset: 1px;
   }
+  /* The commit button carries the destination as colour, in the SAME two
+     authorship families as the toggle's markers 8px to its left: coral =
+     outbound to the agent, blue = private to you. Both tints are 10% of their
+     author colour, both hairlines are that author colour at full strength, and
+     the label stays --tandem-fg in both — so this is colour *coding*, not the
+     primary/secondary hierarchy #1444 removed. That distinction is the whole
+     licence for reintroducing colour here: #1444 killed a filled cobalt Send
+     because it recommended one audience over the other, and two equally
+     weighted tints recommend neither.
+
+     Text is --tandem-fg rather than each family's `-fg-strong` on purpose. It
+     keeps the two states one button species instead of two, and it is the half
+     of this that is already contrast-enforced: tests/e2e/token-contrast.spec.ts
+     sweeps every de-emphasis tier — `fg` included — against every surface in
+     SURFACES, and `author-user-bg` / `author-claude-bg` are both in that list,
+     in all three themes. Reaching for `--tandem-author-claude-fg-strong` (which
+     exists, orphaned since #1444) would need a blue twin that does not, and
+     would put the pair outside the instrument that currently covers it.
+
+     NO hover background swap, unlike the neutral base: that is the app's
+     existing idiom for a tinted action button — `.aca-btn--accept` and
+     `--reject` in AnnotationCardActions carry a family tint and no hover at
+     all, while only the neutral `--ghost` / `--send` move to `surface-sunk`.
+     Hover instead composites a neutral scrim over whatever tint is showing.
+
+     Under forced colors both tints resolve to Canvas and both hairlines to
+     CanvasText, so this button's destination signal collapses — deliberately.
+     WCAG 1.4.1 is satisfied without it: the toggle beside it distinguishes the
+     audiences by SHAPE (ring vs disc, forcing-exempt `transparent`) plus the
+     `ButtonText` outline on the pressed segment, and the button's own
+     aria-label names the destination in words. A marker dot on the button too
+     was considered and dropped — it would restate, 8px away and at the same
+     size, the marker already showing inside the active segment. */
+  .composer-btn.to-agent {
+    background: var(--tandem-author-claude-bg);
+    border-color: var(--tandem-author-claude);
+  }
+  .composer-btn.to-self {
+    background: var(--tandem-author-user-bg);
+    border-color: var(--tandem-author-user);
+  }
+  /* A scrim, not a colour: an inset shadow spread far enough to flood the pill,
+     tinted with --tandem-fg at low alpha. It composites over whichever tint is
+     underneath, so one rule covers both destinations AND the neutral fallback,
+     and because --tandem-fg flips per theme it darkens in light and lightens in
+     dark — the direction hover should go on each ground. A background-color
+     hover cannot do that without a `-bg-hover` token per family, and none of
+     the six families has one.
+
+     This is NOT the color-mix-in-dark trap: that rule is about deriving an
+     opaque SURFACE by mixing into the dark neutral, which washes out. Mixing
+     into `transparent` produces an alpha overlay, which is the intended use.
+
+     `inset` + a spread larger than the 26px pill fills it edge to edge and
+     respects border-radius; box-shadow transitions where background-image would
+     not. */
   .composer-btn:hover:not(:disabled) {
-    background: var(--tandem-surface-sunk);
+    box-shadow: inset 0 0 0 100px color-mix(in srgb, var(--tandem-fg) 7%, transparent);
   }
   /* #1444 destination marker. Filled disc = the agent, ring = yourself.
      SHAPE, not just colour: --tandem-author-user and --tandem-author-claude
@@ -1671,17 +1738,25 @@ function handleComposerKeyDown(e: KeyboardEvent) {
     background: transparent;
   }
   /* A chip, not bare text — the design system's annotation popup sets its key
-     hint on its own tinted ground, and on a neutral pill that is what stops the
-     glyphs reading as part of the label.
+     hint on its own tinted ground, and that is what stops the glyphs reading as
+     part of the label.
 
-     `surface-sunk` is the same token the button's own hover uses, so a hovered
-     button and its chip converge to one surface instead of the chip staying a
-     lighter island. The reference tints with a white alpha, which would vanish
-     on the dark theme's muted pill; a token holds in both. */
+     An ALPHA scrim rather than `--tandem-surface-sunk`, which is what this was
+     while the button was neutral. An opaque neutral sat fine on a neutral pill,
+     but the pill is now one of two authorship tints, and a grey chip on a coral
+     or blue ground reads as a pasted-on island — most visibly in dark, where
+     `surface-sunk` is a cold grey against `#4d2419`. Mixing --tandem-fg into
+     transparent instead lets the chip take its colour from whatever tint is
+     under it, in every theme, with one declaration. Same mechanism and same
+     reasoning as the hover scrim above; the reference's white alpha is the
+     light-theme-only version of it.
+
+     10%, one step up from the hover scrim's 7%, so a hovered button and its
+     chip stay distinguishable instead of converging to one flat surface. */
   .composer-kbd {
     font-family: var(--tandem-font-mono);
     font-size: var(--tandem-text-2xs);
-    background: var(--tandem-surface-sunk);
+    background: color-mix(in srgb, var(--tandem-fg) 10%, transparent);
     border-radius: var(--tandem-r-2);
     padding: 1px var(--tandem-space-1);
     /* -muted, not -subtle. With the primary treatment gone this hint is the

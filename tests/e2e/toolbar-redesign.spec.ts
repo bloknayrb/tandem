@@ -256,6 +256,76 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
   await expect(commit).toHaveCount(0);
 });
 
+// The commit button is colour-coded by destination, in the same two authorship
+// families as the toggle's markers. Asserting "the colour changed" alone would
+// pass on any two arbitrary colours, so this pins each state to the specific
+// token it is supposed to be wearing.
+//
+// Both sides of the comparison are read as a COMPUTED `background-color`: the
+// probe carries `var(--tandem-author-claude-bg)` and the button carries it via
+// a class, so the two strings go through the same used-value serialization.
+// Comparing the button's computed colour against the *custom property's* value
+// would not work — `getPropertyValue('--tandem-author-claude-bg')` returns the
+// unresolved `color-mix(...)` text, not a colour. (token-contrast.spec.ts hits
+// the neighbouring version of this trap and documents it at length: Chromium
+// serialises `oklch()` as `color(srgb …)`, and reading those 0-1 floats as
+// 0-255 silently reports near-black for everything.)
+test("the commit button wears the destination's authorship colour", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await editor.click();
+  await selectTextStable(editor.locator("p").first());
+  await openAnnotatePopup(page);
+
+  /** Computed colour of a token, serialized the way the button's own will be. */
+  const token = (name: string) =>
+    page.evaluate((n) => {
+      const probe = document.createElement("div");
+      probe.style.backgroundColor = `var(${n})`;
+      document.body.appendChild(probe);
+      const value = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return value;
+    }, name);
+
+  const commit = page.locator("[data-testid='popup-annotation-submit']");
+  /** Poll rather than read once — the 120ms tween would otherwise be raced. */
+  const settlesTo = async (prop: "backgroundColor" | "borderTopColor", expected: string) =>
+    expect
+      .poll(async () => commit.evaluate((el, p) => getComputedStyle(el)[p], prop), {
+        timeout: 3_000,
+      })
+      .toBe(expected);
+
+  const claudeBg = await token("--tandem-author-claude-bg");
+  const claudeLine = await token("--tandem-author-claude");
+  const userBg = await token("--tandem-author-user-bg");
+  const userLine = await token("--tandem-author-user");
+
+  // Guards the degenerate pass: if both families resolved to the same colour
+  // (a botched token edit, or forced-colors, where both DO collapse to Canvas)
+  // every assertion below would hold while the button conveyed nothing.
+  expect(claudeBg).not.toBe(userBg);
+  expect(claudeLine).not.toBe(userLine);
+
+  // The composer opens outbound — defaultAnnotationIntent(null) === "comment".
+  await settlesTo("backgroundColor", claudeBg);
+  await settlesTo("borderTopColor", claudeLine);
+
+  await page.locator("[data-testid='popup-note-submit']").click();
+  await expect(page.locator("[data-testid='popup-note-submit']")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await settlesTo("backgroundColor", userBg);
+  await settlesTo("borderTopColor", userLine);
+});
+
 // The regression this pins is invisible: nothing throws, nothing looks wrong,
 // and the draft is simply gone one scroll later. Clicking an audience segment
 // must NOT move DOM focus off the textarea, because five separate guards in
