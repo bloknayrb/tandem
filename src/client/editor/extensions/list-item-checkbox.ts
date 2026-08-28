@@ -70,6 +70,14 @@ export const ListItemCheckbox = ListItem.extend({
    * `block+` (not `paragraph block*` relaxed to `block block*`) so an item whose
    * only child is a list or an image is expressible, which is the case that
    * destroyed whole documents.
+   *
+   * This closes the "first child is not a paragraph" half of #1664 and NOT the
+   * whole class: `block+` still requires one child, so a ZERO-child `listItem`
+   * (`- a\n-\n- b`) is evicted by the same mechanism — as is an empty
+   * `blockquote`, which is not a list at all. That half is fixed at the loader,
+   * in `ensureBlockChild` (`src/server/file-io/mdast-ydoc.ts`), where injecting
+   * an empty paragraph is measurably free; the two halves are covered together
+   * by `tests/client/list-ydoc-sync.test.ts`.
    */
   content: "block+",
 
@@ -155,6 +163,22 @@ export const ListItemCheckbox = ListItem.extend({
       // by a test below.
       Enter: () => {
         const { $from } = this.editor.state.selection;
+        // Widening `listItem` to `block+` (#1664) made splitting a list item
+        // legal with the cursor inside a code block, and that silently changed
+        // what Enter does there. Under the old `paragraph block*`, the split's
+        // second item would have begun with a `codeBlock`, so `canSplit` failed,
+        // `splitListItem` returned false, and the keymap chain fell through to
+        // `newlineInCode` — Enter inserted a newline, as it must. Once the split
+        // became legal this override consumed the key first: Enter mid-block
+        // TORE one fenced block into two bullets, and at the end of the block it
+        // started a new bullet. `- text` plus an indented fence is an everyday
+        // shape (this repo's own docs are full of it), and with `hardBreak`
+        // absent from `codeBlock`'s `text*` content there was then no key at all
+        // that could add a line to such a block.
+        //
+        // Bail so the chain reaches `newlineInCode`. Keyed on `spec.code` rather
+        // than the `codeBlock` node name so any future code-ish node inherits it.
+        if ($from.parent.type.spec.code) return false;
         let checked: unknown;
         for (let depth = $from.depth; depth > 0; depth--) {
           const node = $from.node(depth);

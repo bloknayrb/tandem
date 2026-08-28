@@ -158,6 +158,7 @@ function blockToYxml(
           insertIndex++;
         }
       }
+      ensureBlockChild(el, deferred);
       return [el];
     }
 
@@ -196,6 +197,7 @@ function blockToYxml(
             itemIndex++;
           }
         }
+        ensureBlockChild(listItem, deferred);
         el.insert(listIndex, [listItem]);
         listIndex++;
       }
@@ -286,6 +288,45 @@ function blockToYxml(
       return serialized.length > 0 ? [rawBlockParagraph(serialized, deferred)] : [];
     }
   }
+}
+
+/**
+ * Guarantee a block container has at least one child (#1664).
+ *
+ * `listItem` and `blockquote` are `block+` / `block+` in the editor schema, so a
+ * ZERO-child one is invalid — and invalid is not inert. `createNodeFromYElement`
+ * reads a schema rejection as a concurrency artifact and deletes the node out of
+ * the shared Y.Doc, cascading to the fragment root; autosave then persists the
+ * result. Widening `listItem` to `block+` fixed the "first child is not a
+ * paragraph" half of that bug and does nothing for this half, because `block+`
+ * still requires ONE.
+ *
+ * Legal CommonMark reaches here: `- a\n-\n- b` (an empty item between two
+ * others) and a bare `>` both parse to an empty container, and a document whose
+ * only block is one of those was blanked entirely.
+ *
+ * Normalizing here is free in a way the general case is not, which is why this
+ * is a loader fix and the sibling half was a schema fix. An empty paragraph
+ * contributes no characters and no FLAT_SEPARATOR (`collectElementFlat` only
+ * emits one BETWEEN siblings), so no flat offset moves and no annotation
+ * re-anchors; and `remark-stringify` renders an item holding one empty paragraph
+ * as the same bare `-` it read, so nothing rewrites the user's file. Both are
+ * asserted rather than assumed, in `tests/client/list-ydoc-sync.test.ts`.
+ *
+ * Deferred population keeps the two-pass contract (CLAUDE.md: attach the
+ * Y.XmlText before populating it) even though the text is empty, so this stays
+ * correct if it ever carries content.
+ */
+function ensureBlockChild(
+  el: Y.XmlElement,
+  deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }>,
+): void {
+  if (el.length > 0) return;
+  const para = new Y.XmlElement("paragraph");
+  const text = new Y.XmlText();
+  para.insert(0, [text]);
+  el.insert(0, [para]);
+  deferred.push({ xmlText: text, plainText: "" });
 }
 
 /**

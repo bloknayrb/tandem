@@ -42,9 +42,31 @@ const FIRST_CHILD_NOT_PARAGRAPH: Array<[string, string]> = [
 ];
 
 /**
- * Shapes that were already valid. They are the half that proves a fix is a fix
- * rather than a blanket "stop validating" — a schema widened too far would keep
- * these green while a regression in the paragraph-first path went unnoticed.
+ * Containers with NO children — the other half of the same eviction (#1664),
+ * and the half a schema widening cannot reach: `block+` still requires one
+ * child. Fixed at the loader instead (`ensureBlockChild` in `mdast-ydoc.ts`).
+ *
+ * The empty blockquote is here deliberately: it is not a list bug at all, which
+ * is why "widening `listItem` closes the class" was the wrong claim to make.
+ */
+const EMPTY_CONTAINERS: Array<[string, string]> = [
+  ["empty item between two others", "- a\n-\n- b\n"],
+  ["empty ordered item", "1.\n2. b\n"],
+  ["empty item among other blocks", "# T\n\n-\n\nTail.\n"],
+  ["document that is only an empty item", "-\n"],
+  ["empty blockquote", ">\n"],
+  ["empty blockquote among other blocks", "# T\n\n>\n\nTail.\n"],
+];
+
+/**
+ * Regression controls for the paragraph-first path — items that were already
+ * valid and must stay valid.
+ *
+ * They cannot detect over-widening, and it would be wrong to imply otherwise:
+ * every row here passes under `paragraph block*`, under `block+`, and under any
+ * wider expression. Over-widening is bounded by the schema instead — `listItem`
+ * is not in the `block` group, so `listItem > listItem` stays inexpressible —
+ * and by the round-trip assertions above.
  */
 const ALREADY_VALID: Array<[string, string]> = [
   ["paragraph then code block", "- text\n\n  ```\n  code\n  ```\n"],
@@ -90,14 +112,55 @@ describe("Y.Doc → ProseMirror list corpus (#1664)", () => {
       expect(afterMd, "document was emptied by the editor bind").not.toBe("");
       expect(afterMd).toBe(beforeMd);
     });
+  });
 
-    it.each(FIRST_CHILD_NOT_PARAGRAPH)("%s — flat offsets do not move", (_label, md) => {
-      // The fix must not move the annotation coordinate system. The rejected
-      // alternative (injecting an empty leading paragraph server-side) would
-      // add one FLAT_SEPARATOR per normalized item and silently re-anchor every
-      // annotation after it.
-      const { beforeFlat, afterFlat } = bindEditor(md);
-      expect(afterFlat).toBe(beforeFlat);
+  describe("a container with no children survives the bind", () => {
+    it.each(EMPTY_CONTAINERS)("%s", (_label, md) => {
+      const { beforeMd, afterMd } = bindEditor(md);
+      expect(afterMd, "document was emptied by the editor bind").not.toBe("");
+      expect(afterMd).toBe(beforeMd);
+    });
+
+    it.each(EMPTY_CONTAINERS)("%s — normalization rewrites no bytes", (_label, md) => {
+      // `ensureBlockChild` runs at LOAD, so it must be invisible on the way back
+      // out: an item holding one empty paragraph has to re-serialize as the same
+      // bare `-` that was read, or every open would rewrite the user's file.
+      const doc = new Y.Doc();
+      try {
+        loadMarkdown(doc, md);
+        expect(saveMarkdown(doc)).toBe(md);
+      } finally {
+        doc.destroy();
+      }
+    });
+  });
+
+  /**
+   * The coordinate system, pinned against fixed values.
+   *
+   * Deliberately NOT `expect(afterFlat).toBe(beforeFlat)` over a bind: both
+   * sides of that comparison come from the same `loadMarkdown`, so a loader that
+   * injected characters would shift them together and the assertion would stay
+   * green while every annotation silently re-anchored. Only a literal expected
+   * string can catch that, so `ensureBlockChild`'s "contributes no characters"
+   * claim is asserted here rather than assumed.
+   */
+  describe("flat offsets", () => {
+    it.each([
+      ["- a\n-\n- b\n", "a\n\nb"],
+      ["-\n", ""],
+      [">\n", ""],
+      ["# T\n\n-\n\nTail.\n", "# T\n\nTail."],
+      ["- ![shot](a.png)\n- ![shot2](b.png)\n", "\n"],
+      ["- > note this\n- normal\n", "note this\nnormal"],
+    ])("%j projects to %j", (md, expectedFlat) => {
+      const doc = new Y.Doc();
+      try {
+        loadMarkdown(doc, md);
+        expect(extractText(doc)).toBe(expectedFlat);
+      } finally {
+        doc.destroy();
+      }
     });
   });
 

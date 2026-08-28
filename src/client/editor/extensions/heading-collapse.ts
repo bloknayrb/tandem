@@ -167,9 +167,13 @@ export function walkHeadings(doc: PmNode): HeadingEntry[] {
 
   doc.descendants((node, pos, parent) => {
     if (node.type.name !== "heading") return true;
-    // Only top-level headings (direct children of doc). Headings can't legally
-    // nest in ProseMirror's schema, but guard anyway so the chevron only renders
+    // Only top-level headings (direct children of doc), so the chevron renders
     // for what the user perceives as document sections.
+    //
+    // This guard used to be belt-and-braces ("headings can't legally nest in
+    // ProseMirror's schema"). That is no longer true: since #1664 widened
+    // `listItem` to `block+`, `- # Section` is a loadable shape and a heading
+    // really can appear nested. The guard is now load-bearing, not defensive.
     if (parent !== doc) return false;
 
     const level = (node.attrs.level as number) ?? 1;
