@@ -38,11 +38,23 @@ async function loadFreshHook() {
   return await import("../../src/client/hooks/useTauriFileDrop.svelte.js");
 }
 
+/**
+ * Explicit budget for this file, because every spec calls `loadFreshHook()` and
+ * that is a `vi.resetModules()` plus a re-import of the hook's whole module
+ * graph. The cost tracks the size of that graph, not the code under test, and at
+ * the 5s default it timed out inside a loaded run while passing in isolation.
+ * Sized for a loaded Windows machine.
+ *
+ * Verified to bind by setting it to `1` and confirming the failures name that
+ * value — an unread third argument is exactly the shape this needs to not be.
+ */
+const RELOAD_BUDGET_MS = 20_000;
+
 async function flushMicrotasks() {
   await new Promise((r) => setTimeout(r, 0));
 }
 
-describe("useTauriFileDrop", () => {
+describe("useTauriFileDrop", { timeout: RELOAD_BUDGET_MS }, () => {
   beforeEach(() => {
     registered = null;
     onDragDropEventSpy.mockClear();
