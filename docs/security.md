@@ -297,7 +297,7 @@ avoid. It is equally not `Closed since`, whose entries all narrate a real code
 change. Every entry here carries who accepted it, when, its tracked issue, the
 bound in full, and the conditions that void the acceptance.
 
-- **[#1654](https://github.com/bloknayrb/tandem/issues/1654) — caller-named write destinations are not root-confined. ACCEPTED 2026-08-28 (narrowed, not contained); revisit by 2027-02-28, tracked as **[#1671](https://github.com/bloknayrb/tandem/issues/1671)** because #1654 itself is closed and a date in a closed issue surfaces in no `gh issue list`. CodeQL alert 16 stays OPEN.** Four sites take a caller-supplied write path: `tandem_convertToMarkdown`'s `outputPath` (`src/server/mcp/convert.ts`), `tandem_exportAnnotations`'s `outputPath` (`src/server/mcp/annotations.ts`), the `.docx` `backupPath` (`docx-apply.ts:119`, `path.resolve`d) and Save-As's `targetPath`. None is root-confined and none became so.
+- **[#1654](https://github.com/bloknayrb/tandem/issues/1654) — caller-named write destinations are not root-confined. ACCEPTED 2026-08-28 (narrowed, not contained); revisit by 2027-02-28, tracked as [#1671](https://github.com/bloknayrb/tandem/issues/1671) because #1654 itself is closed and a date in a closed issue surfaces in no `gh issue list`. CodeQL alert 16 stays OPEN.** Four sites take a caller-supplied write path: `tandem_convertToMarkdown`'s `outputPath` (`src/server/mcp/convert.ts`), `tandem_exportAnnotations`'s `outputPath` (`src/server/mcp/annotations.ts`), the `.docx` `backupPath` (`docx-apply.ts:119`, `path.resolve`d) and Save-As's `targetPath`. None is root-confined and none became so.
 
   **The target is one class, not four.** An earlier draft claimed anything able to create `*.md` at an arbitrary path reaches `~/.claude/CLAUDE.md`, a project `CLAUDE.md`, `.claude/agents/*.md` and `~/.claude/skills/*/SKILL.md`. Three of those do not hold: `SKILL.md` needs a new subdirectory and `atomicWrite` (`file-io/index.ts:349-353`) does no `mkdir`; `.claude/agents/*.md` puts only the frontmatter `description` in the system prompt and needs valid YAML; `~/.claude/CLAUDE.md` normally already exists, so `findAvailablePath` (`convert.ts:21-53`) refuses it. **What survives is a project `CLAUDE.md` written into a repo that lacks one** — full body, auto-loaded, no user action beyond starting a session there. Creation, not overwrite, is the capability it needs.
 
@@ -350,12 +350,18 @@ at the new line, carrying none of the dismissal or its reasoning. This is not
 hypothetical: Unit 7a ([#1645](https://github.com/bloknayrb/tandem/pull/1645),
 **merged 2026-08-28**) moved the open pipeline into `src/server/documents/`,
 and that opened eight fresh `js/path-injection` alerts on its PR branch against
-sinks whose master-side twins had just been dismissed. The move also retired
-`openFileByPath`, which since then has existed nowhere in `src/` — this
-paragraph described it as still on master for a month after it stopped being
-true, which is the same staleness the dismissals themselves suffer from and the
-reason the entries below are keyed by sink and argument rather than by name. Each matched its twin at the same **column**, which is what made the
-mapping checkable rather than assumed; it is recorded in that PR's comments.
+sinks whose master-side twins had just been dismissed. Each matched its twin at
+the same **column**, which is what made the mapping checkable rather than
+assumed; it is recorded in that PR's comments.
+
+**The prose describing that move went stale the same way the dismissals do,
+which is the argument for this section rather than a footnote to it.** This
+paragraph called #1645 unmerged and placed `openFileByPath` on master for a
+month after both stopped being true, and the entry below cited that same
+retired name as the caller of `resolveAndValidatePath` — a symbol that has
+since existed nowhere in `src/`. A reader checking the dismissal against the
+source would have found no such function and had no way to tell whether the
+screen had moved or been deleted.
 
 So the reasoning lives here, keyed by **sink and argument** rather than by
 number. Re-dismissing after a move should be a lookup against this list plus a
