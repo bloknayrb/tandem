@@ -340,9 +340,25 @@ function updateSelectionAffordance(ed: TiptapEditor) {
       anchorY: latchedAnchorY ?? caretAnchorY,
       // A26 morph (#798): decide placement with a CONSTANT height-reserve, not
       // the live (animating) `toolbarHeight`. Keeps above/below stable across
-      // the morph and lets the height-independent edge-anchor grow the popup
-      // without any reposition — so the ResizeObserver recompute below is a
-      // no-op during the morph and no freeze flag is needed.
+      // the morph and lets the height-independent edge-anchor grow the popup.
+      //
+      // HEIGHT is height-independent; WIDTH is not, and the morph is no longer
+      // width-neutral — since `.morph-block:not(.is-active)` stopped the
+      // collapsed block contributing width, the format and annotate states
+      // measure ~452px and ~278px. `maxLeft` below is derived from
+      // `toolbarWidth`, so that difference does reach positioning.
+      //
+      // What keeps it stable is `updateToolbarMetrics`' early return while the
+      // textarea holds focus, and `openAnnotateMode` rAF-focuses the textarea:
+      // rAF callbacks run before ResizeObserver delivery in the same frame, so
+      // the narrower width is never written and `toolbarWidth` stays frozen at
+      // the format width for the whole composer session. That over-constrains
+      // `maxLeft` by ~174px on a reposition while the composer is open (window
+      // resize is the only reachable trigger — the audience segments all
+      // preventDefault on mousedown, so they cannot blur the textarea). It
+      // errs toward keeping the popup inside the viewport, which is the safe
+      // direction, but it is frame-ordering luck rather than design. Do not
+      // "simplify" the focus early-return without re-deriving this.
       toolbarHeight: SELECTION_POPUP_HEIGHT_RESERVE,
       toolbarWidth,
       viewportHeight,
@@ -1229,7 +1245,7 @@ function handleComposerKeyDown(e: KeyboardEvent) {
 
   /* A8 two-pill: format-state column of two capsules. The gap lives HERE (inside
      morph-format), never on .selection-popup — a shell-level flex gap would
-     render a phantom 5px against the 0fr-collapsed annotate block. Capsules are
+     render a phantom 6px against the 0fr-collapsed annotate block. Capsules are
      width:max-content so the narrower annotate row doesn't stretch to the format
      row's width (column children stretch by default). Each capsule pulls its
      chrome from the global .tandem-floating-pill class; here we add only layout.
@@ -1292,11 +1308,14 @@ function handleComposerKeyDown(e: KeyboardEvent) {
     border-radius: var(--tandem-r-pill);
     background: var(--tandem-surface-sunk);
   }
-  /* The four COLOUR chips set `background` inline (it is dynamic) and an inline
-     style beats every author rule regardless of specificity — so never move
-     their background into a rule here, and never add one to :hover: it would
-     silently no-op. `.popup-swatch-none` below is the exception and owns its
-     background in CSS, because it has no inline one to lose to. */
+  /* The four COLOUR chips set `background` inline (it is dynamic), and a
+     non-important inline style outranks any author rule here regardless of
+     specificity — so never move their background into a rule, and never add one
+     to :hover. The failure is worse than a no-op: `.popup-swatch-none` below
+     owns its background in CSS and has no inline one to lose to, so a
+     `.popup-swatch:hover { background }` would take effect on the none-chip and
+     be swallowed by the other four, leaving the strip visibly inconsistent
+     under the pointer. */
   .popup-swatch {
     width: 18px;
     height: 18px;
@@ -1397,7 +1416,26 @@ function handleComposerKeyDown(e: KeyboardEvent) {
      (1.11-selection-converged.html:82).
 
      Symmetric on purpose — whichever block is collapsed yields the width, so
-     each state sizes to its own content. */
+     each state sizes to its own content.
+
+     KNOWN COST, accepted: `width` is not in the transition list above and
+     cannot be, because both endpoints are `auto` (the `:not()` rule stops
+     matching outright rather than animating to a length, and `auto` does not
+     interpolate). So on format -> annotate the outgoing capsules clip to zero
+     width in ONE frame and the remaining P2 wipes an already-empty box, while
+     P1 is still tweening the shell chrome. Before this rule the outgoing
+     content stayed visible and wiped vertically. The trade is deliberate: the
+     stretched composer was a defect in a RESTING state every annotate shows,
+     and the wipe is 480ms of polish. Revisit with a real cross-fade if it
+     grates; do not "fix" it by restoring the width contribution.
+
+     Two load-bearing facts, both invisible from here. This only works because
+     `.morph-block-inner` sets `overflow: clip` — that is what zeroes its
+     `min-width: auto` automatic minimum size. Relax that clip to `visible` and
+     the grid track refuses to shrink below the content's min-content width and
+     this rule silently stops doing anything. And
+     `.morph-format.is-active > .morph-block-inner { overflow: visible }` below
+     is safe only because it is gated on `is-active`. */
   .morph-block:not(.is-active) {
     width: 0;
     min-width: 0;
@@ -1485,9 +1523,9 @@ function handleComposerKeyDown(e: KeyboardEvent) {
        family name widens the toggle by a few px per segment rather than pushing
        a sibling off the start edge. "GPT-5 Codex" lands around 278px total.
 
-       Left in place rather than deleted because it still bounds the card if the
-       shell ever stops governing, and `computeSelectionToolbarPosition` derives
-       maxLeft from the MEASURED toolbarWidth either way, so a wider card is
+       Left in place as a genuine ceiling rather than deleted: nothing sizes to
+       it today, and `computeSelectionToolbarPosition` derives maxLeft from the
+       MEASURED toolbarWidth either way, so a card that did reach 420px would be
        clamped into the viewport rather than overflowing it. */
     max-width: 420px;
   }

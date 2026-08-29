@@ -283,6 +283,7 @@ function dismissLinkInput() {
       shortcut="Ctrl+B"
       disabled={isDisabled}
       active={isActiveBold}
+      ariaPressed={isActiveBold}
       onMouseDown={handleBold}
       onClick={onKeyActivate(handleBold)}
       style="font-size: 13px; font-weight: 700;"
@@ -292,6 +293,7 @@ function dismissLinkInput() {
       shortcut="Ctrl+I"
       disabled={isDisabled}
       active={isActiveItalic}
+      ariaPressed={isActiveItalic}
       onMouseDown={handleItalic}
       onClick={onKeyActivate(handleItalic)}
       style="font-size: 13px; font-style: italic;"
@@ -301,6 +303,7 @@ function dismissLinkInput() {
       shortcut="Ctrl+Shift+X"
       disabled={isDisabled}
       active={isActiveStrike}
+      ariaPressed={isActiveStrike}
       onMouseDown={handleStrike}
       onClick={onKeyActivate(handleStrike)}
       style="font-size: 13px; text-decoration: line-through;"
@@ -310,6 +313,7 @@ function dismissLinkInput() {
       shortcut="Ctrl+E"
       disabled={isDisabled}
       active={isActiveCode}
+      ariaPressed={isActiveCode}
       onMouseDown={handleCode}
       onClick={onKeyActivate(handleCode)}
       style="font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); letter-spacing: -0.02em;"
@@ -413,6 +417,14 @@ function dismissLinkInput() {
             border-radius: var(--tandem-r-3); padding: 4px; display: flex; flex-direction: column;
             gap: 2px; z-index: var(--tandem-z-dropdown); box-shadow: var(--tandem-shadow-2);"
         >
+          <!-- These keep `--tandem-accent-bg` while the bar's toggles moved to
+               the pressed idiom, and the difference is the point: a
+               `menuitemradio` marks WHICH of a set is current, exactly like the
+               theme swatches and the highlight picker's selected chip. A
+               depressed key is the wrong metaphor for a one-of-N choice.
+               Recorded in ACCENT_SELECTION_INDICATORS in
+               tests/design-system-impl/pressed-toggle-state.test.ts, whose
+               markup sweep reaches this inline style. -->
           {#each HEADING_LEVELS as level (level)}
             {@const headingHandler = handleHeadingToggle(level)}
             <button
@@ -440,6 +452,7 @@ function dismissLinkInput() {
       shortcut="Ctrl+Shift+8"
       disabled={isDisabled}
       active={isActiveBulletList}
+      ariaPressed={isActiveBulletList}
       onMouseDown={handleBulletList}
       onClick={onKeyActivate(handleBulletList)}
     >
@@ -457,6 +470,7 @@ function dismissLinkInput() {
       shortcut="Ctrl+Shift+7"
       disabled={isDisabled}
       active={isActiveOrderedList}
+      ariaPressed={isActiveOrderedList}
       onMouseDown={handleOrderedList}
       onClick={onKeyActivate(handleOrderedList)}
     >
@@ -473,6 +487,7 @@ function dismissLinkInput() {
       shortcut="Ctrl+Shift+B"
       disabled={isDisabled}
       active={isActiveBlockquote}
+      ariaPressed={isActiveBlockquote}
       onMouseDown={handleBlockquote}
       onClick={onKeyActivate(handleBlockquote)}
     >
@@ -495,6 +510,7 @@ function dismissLinkInput() {
       ariaLabel="Code block"
       disabled={isDisabled}
       active={isActiveCodeBlock}
+      ariaPressed={isActiveCodeBlock}
       onMouseDown={handleCodeBlock}
       onClick={onKeyActivate(handleCodeBlock)}
     >

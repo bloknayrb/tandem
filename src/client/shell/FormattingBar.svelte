@@ -302,7 +302,12 @@ function handleHighlight(color: HighlightColor) {
     }
   }
   /* Resting metrics come from .tandem-toolbar-ctl; the mono treatment is this
-     control's own. */
+     control's own. One deleted declaration is worth knowing about: this rule
+     used to carry `min-width: 32px` and now inherits the shared 26px. Inert
+     today — `</>` at 11px/600 mono measures ~36px of glyph plus padding, so
+     neither floor engages — but this is the one control in the bar whose label
+     is three narrow characters, so a future type change could reach the floor
+     and find it lower than it was. */
   .fmtbar-source {
     flex-shrink: 0;
     font-family: var(--tandem-font-mono);
@@ -329,6 +334,13 @@ function handleHighlight(color: HighlightColor) {
     border-color: var(--tandem-border);
     color: var(--tandem-fg);
     box-shadow: var(--tandem-shadow-inset);
+  }
+  /* See ToolbarButton's matching block: forced colors drops the inset and
+     overrides the fill, so the press needs a border it cannot suppress. */
+  @media (forced-colors: active) {
+    .fmtbar-source.on {
+      border-color: Highlight;
+    }
   }
   .fmtbar-source:focus-visible {
     outline: 2px solid var(--tandem-accent);

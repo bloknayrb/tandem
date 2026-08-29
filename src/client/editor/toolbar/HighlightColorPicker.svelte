@@ -5,6 +5,7 @@ import { onOutsideEvent } from "../../utils/dismiss-outside";
 import { ESCAPE_OWNER_ATTR } from "../../utils/escape-owner";
 import { onKeyActivate } from "./handlers.js";
 import ToolbarButton from "./ToolbarButton.svelte";
+import "./toolbar-chrome.css";
 
 const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> = [
   { value: "yellow", label: "Yellow" },

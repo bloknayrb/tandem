@@ -170,12 +170,28 @@ test("every bar control renders on the shared 26px control metrics", async ({ pa
     SPLIT_HALVES,
   );
 
-  // Fail closed on an empty or gutted set: a selector that silently matches
-  // nothing would otherwise make this whole test vacuous.
+  // Fail closed on an EXACT count. A floor is the wrong shape here: it makes the
+  // sweep vacuous-proof but not deletion-proof, and 13 — the first draft's
+  // value — happened to be exactly FormattingToolbar's own button count, so four
+  // of the bar's controls could disappear without reddening anything.
+  //
+  // 17, with the two split halves excluded above:
+  //   13 from FormattingToolbar — undo, redo, B, I, S, `<>`, link, heading,
+  //      bullet list, ordered list, blockquote, horizontal rule, code block
+  //    2 from HighlightColorPicker — the apply button AND the colour toggle
+  //      (it is two controls, not one; that is the count this first got wrong)
+  //    1 formatbar-source-toggle
+  //    1 formatbar-hide-btn
+  //
+  // Count, not an id list: the heading button's accessible name tracks the
+  // level under the cursor ("Heading 1"), so pinning names here would couple
+  // this geometry sweep to the fixture document's structure.
   expect(
-    measured.length,
-    "formatting bar rendered too few buttons to be a real sweep",
-  ).toBeGreaterThanOrEqual(13);
+    measured.map((m) => m.id).sort(),
+    "the formatting bar's control set changed. If you ADDED or REMOVED a control " +
+      "deliberately, update this count; otherwise a control has gone missing from " +
+      "the bar and nothing else in the suite asserts bar geometry",
+  ).toHaveLength(17);
 
   // The UA default is a 2px border; every styled control here uses 1px
   // (transparent at rest). That is the tell that the class went missing.
@@ -350,35 +366,49 @@ test("the formatting bar does not truncate at the 800px desktop minimum", async 
   expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
 });
 
+/**
+ * Reduced motion is what makes the widths below settled BY CONSTRUCTION rather
+ * than by waiting. `popupEnter` animates width 0 -> natural over
+ * ENTER_POPUP_MS (440ms) and `motionOff()` in cardMotion.ts checks
+ * `matchMedia("(prefers-reduced-motion: reduce)")`, returning `{ duration: 0 }`
+ * under it; the P1/P2 morph transitions are guarded the same way.
+ *
+ * The alternative — polling for two consecutive equal width samples — looks
+ * rigorous and is not: `popupEnter` eases OUT, so dw/dt approaches zero at the
+ * tail and two rounded samples repeat well before the animation ends. That
+ * version passed only because Playwright's default poll ladder
+ * (100/250/500/1000ms) happens to land a sample at ~850ms, past the entrance.
+ * Configure `expect.timeout`, or take a Playwright default change, and it
+ * silently starts measuring mid-animation.
+ *
+ * This test measures settled geometry, not motion, so nothing of value is lost.
+ */
 test("the annotate composer is sized to its own content, not the format row", async ({ page }) => {
+  // Emulated on the PAGE rather than declared via `test.use({ reducedMotion })`:
+  // the fixture form is rejected by this project's resolved Playwright test
+  // types, and page-level emulation is the narrower tool anyway — it scopes the
+  // preference to this one test instead of a whole describe block. Set before
+  // navigation because the CSS media queries are live and `motionOff()` reads
+  // matchMedia at animation time.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+
   const editor = await openDoc(page);
   await selectFirstParagraph(editor);
 
   const popup = page.locator(".selection-popup");
   const measureWidth = () => popup.evaluate((el) => el.getBoundingClientRect().width);
 
-  // `popupEnter` animates width 0 -> natural over ENTER_POPUP_MS, so a width
-  // read on the first frame is meaningless (it returns ~2px). Wait for two
-  // consecutive equal samples rather than for a threshold — the settled value
-  // is what this test compares against and it must not be a mid-animation one.
-  const settledWidth = async () => {
-    let last = -1;
-    await expect
-      .poll(async () => {
-        const now = Math.round(await measureWidth());
-        const stable = now > 50 && now === last;
-        last = now;
-        return stable;
-      })
-      .toBe(true);
-    return measureWidth();
-  };
-
-  const formatWidth = await settledWidth();
+  const formatWidth = Math.round(await measureWidth());
+  // Fail closed: a popup that measured ~0 would satisfy every comparison below.
+  expect(
+    formatWidth,
+    "the format-state popup measured near zero — it is not rendered, or reduced " +
+      "motion stopped collapsing the entrance animation",
+  ).toBeGreaterThan(200);
 
   await page.locator("[data-testid='popup-annotate-btn']").click();
   await expect(popup).toHaveClass(/is-annotate/);
-  const annotateWidth = await settledWidth();
+  const annotateWidth = Math.round(await measureWidth());
 
   // A `0fr`-collapsed .morph-block keeps its full inline size, and
   // .selection-popup is a column flex box — so the composer was stretched to

@@ -14,14 +14,19 @@ const PROBE_TIMEOUT_MS = 5_000;
 /**
  * The served-module probe needs its own, larger budget. Playwright's health
  * check only proves Vite is answering; this probe asks it to TRANSFORM a module
- * for the first time, which on a cold `node_modules/.vite` is a different order
- * of work. Measured on a loaded dev machine: 4627ms against the 5000ms shared
- * bound — close enough that the guard refused three runs in a row while the
- * thing it guards was perfectly healthy.
+ * for the first time, which pays the plugin-container warm-up the health check
+ * never touches. (Not the dependency pre-bundle: the module under probe imports
+ * only `shared/constants`, so nothing in its graph reads `node_modules/.vite`.)
+ *
+ * Timed at 4627ms on one healthy run on a loaded dev machine — inside the
+ * 5000ms shared bound, but with no margin. Three consecutive runs refused when
+ * load pushed it over; those failing durations were not captured, so 4627 is
+ * the near-miss that explains the refusals rather than one of them.
  *
  * Because a timeout here is a REFUSAL rather than a warning, a bound that tight
- * converts machine load into a failed suite. The fast health probes keep the
- * 5s bound; only the transform gets the slack.
+ * converts machine load into a failed suite. `probeForeignServer` — the only
+ * other consumer, and a cheap port-squatter check — keeps the 5s bound; only
+ * the transform gets the slack.
  */
 const TRANSFORM_PROBE_TIMEOUT_MS = 30_000;
 

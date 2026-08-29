@@ -18,12 +18,18 @@ interface Props {
   onMouseDown?: (e: MouseEvent) => void;
   onClick?: (e: MouseEvent) => void;
   /** Layout/typography escape hatch only (font-size, font-weight, font-style,
-   * font-family, width quirks). B/I/S ride font-size through here: the design
-   * sizes a child element (`.b strong`), but these buttons pass `label` as a
-   * bare string, so there is no child to target. Do NOT inject background,
-   * color, border, or border-radius via this prop — those properties belong to
-   * the .toolbar-btn CSS rules so :hover, .is-active, :disabled, and
-   * :focus-visible can win the cascade. */
+   * font-family, letter-spacing, width quirks). Four buttons ride font-size
+   * through here — B/I/S because the design sizes a child element (`.b strong`)
+   * while these pass `label` as a bare string, so there is no child to target;
+   * and `<>`, where the design sizes the button itself (`.b.mono`) and this is
+   * simply the same declaration by another route.
+   *
+   * Do NOT inject background, color, border, or border-radius via this prop.
+   * An inline style beats every author rule regardless of specificity, so a
+   * `background` here would silently defeat `.toolbar-btn.is-active`'s pressed
+   * fill — the state signal this control depends on — as well as :hover,
+   * :disabled and :focus-visible. `tests/design-system-impl/toolbar-chrome-cascade.test.ts`
+   * scans every call site for exactly those four properties. */
   style?: string;
   /** For dropdown-trigger buttons: set to "menu" or "dialog" to advertise
    *  the popup type to assistive technology. */
@@ -107,6 +113,17 @@ const titleAttr = $derived(
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
     box-shadow: var(--tandem-shadow-inset);
+  }
+  /* Forced colors suppresses `box-shadow` entirely and overrides
+     `background-color`, so BOTH signals above vanish there while the resting
+     border is transparent. The accent state this replaced survived HCM because
+     `--tandem-accent-fg-strong` remapped to HighlightText; the pressed idiom
+     has no such fallback, so it needs an explicit forced border. Callers also
+     pass `ariaPressed`, so the state is conveyed programmatically either way. */
+  @media (forced-colors: active) {
+    .toolbar-btn.is-active {
+      border-color: Highlight;
+    }
   }
   .toolbar-btn:disabled {
     cursor: not-allowed;

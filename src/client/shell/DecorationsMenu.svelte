@@ -96,7 +96,6 @@ function chooseSettings() {
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="split menu-wrap"
-  class:open={menuOpen}
   data-testid="decorations-menu"
   data-tauri-drag-region="false"
   {...(menuOpen ? { [ESCAPE_OWNER_ATTR]: "" } : {})}
@@ -250,18 +249,12 @@ function chooseSettings() {
 
 <style>
   /* Split button: eye (mute/restore all) + caret (open options).
-     `1.11-titlebar-decorations.html:78-82` gives it its own container
-     (`.fpill.split { gap: 0; padding: 2px }` with 20px halves inside), so the
+     `1.11-titlebar-decorations.html:55,78-82` gives it its own container
+     (`.fpill` supplies surface + border + radius + shadow; `.fpill.split`
+     overrides only `gap: 0; padding: 2px`, with 20px halves inside), so the
      pill silhouette exists at REST — not only when the eye is on. That is the
      point of the treatment: this is one compound control, and it has to look
      like one whether decorations are on or off.
-
-     Deviation from the preview, and it is deliberate: the preview is a
-     stand-alone TITLE-BAR control, so it wears the full floating-pill recipe
-     (surface + border + shadow). Here the control is embedded inside the
-     FormattingBar's own `.tandem-floating-pill`, where that would be a literal
-     pill-in-pill. A sunk tray reads as recessed rather than as a second
-     floating surface.
 
      RAISED, not sunk. The control is a physical button that segments press
      INTO — not a recessed tray holding two flat glyphs. That is what makes the
@@ -281,6 +274,18 @@ function chooseSettings() {
      `--tandem-shadow-1` (0 1px 2px) rather than the floating-pill
      `--tandem-shadow-2` (0 8px 24px), so it reads as a raised key on a surface
      rather than as a second card floating over the document.
+
+     KNOWN WEAKNESS in dark, unresolved. `--tandem-shadow-1` is defined once in
+     `index.html` with no `[data-theme="dark"]` override, and 0.08-alpha black
+     over the dark surface is close to invisible — the same reasoning that gave
+     `--tandem-shadow-inset` its dark override. So in dark the container's RAISE
+     is carried by the 1px border alone. Pressed-vs-raised still reads (the sunk
+     fill and the dark inset both survive); what is weaker is the split standing
+     off the bar. Not fixed here because `--tandem-shadow-1` reaches seven
+     surfaces including the title bar and tab strip, so giving it a dark value
+     is a design decision well outside this control. The E2E assertion only
+     checks the shadow is not `none`, so it passes in dark and cannot catch
+     this.
 
      The 2px padding and the halves' 20px height are load-bearing together:
      20 + 2*2 padding + 2*1 border = the bar's 26px. Changing one without the
@@ -302,8 +307,10 @@ function chooseSettings() {
   }
 
   /* Resting metrics come from .tandem-toolbar-ctl (toolbar-chrome.css). The
-     split halves below re-declare padding and radius on purpose — they are a
-     mated pair, not two independent controls. Two further deltas are
+     split halves below re-declare HEIGHT, padding and radius on purpose — they
+     are a mated pair, not two independent controls, and the 20px height is the
+     load-bearing one (see .split's arithmetic). `.half-main` deliberately does
+     NOT re-declare `min-width`, so it keeps the shared 26px. Two further deltas are
      deliberate and inert today: `gap` converged 5px -> 4px and `font: inherit`
      became the shared type ramp, both invisible while each half holds a single
      icon child. */
@@ -337,10 +344,13 @@ function chooseSettings() {
     display: block;
   }
 
-  /* PRESSED. The inset shadow is the whole signal — there is deliberately no
-     accent here (see .split's header), so removing the inset leaves the two
-     states indistinguishable rather than merely less colourful. Paired with the
-     raised container it gives the control three distinguishable states.
+  /* PRESSED. There is deliberately no accent here (see .split's header), so
+     the press is carried by the sunk fill plus the inset. Unlike ToolbarButton
+     — where hover and active declare the identical fill, making the inset the
+     ONLY difference — hover here is a lighter `--tandem-surface-muted` (see
+     `.ib:hover` above). So dropping the inset would still leave the states
+     distinguishable, just a shade apart rather than reading as PRESSED.
+     Paired with the raised container it gives the control three states.
 
      `--tandem-shadow-inset` is shared with every other toggle that used to
      wear the accent (ToolbarButton, .fmtbar-source, the two Find & Replace
@@ -364,13 +374,26 @@ function chooseSettings() {
   .half-main:active {
     box-shadow: var(--tandem-shadow-inset);
   }
+  /* Forced colors suppresses `box-shadow` outright and overrides
+     `background-color`, so BOTH of the pressed signals above are gone there
+     while the resting border is transparent. A forced border is the only
+     channel left. `.fmtbar-source.on` and the two Find & Replace toggles
+     already set `border-color`, so this keeps the new idiom legible in the one
+     place it otherwise would not be. */
+  @media (forced-colors: active) {
+    .half-main.on,
+    .half-caret:active,
+    .half-caret[aria-expanded="true"] {
+      border-color: Highlight;
+    }
+  }
 
   /* The two halves form ONE pill: outer corners round, inner corners SQUARE.
      They were r-2 (4px) on the inside, which rounded both sides of the 1px
      seam — so the `.on` tint ended in a curve and the pair read as two
-     detached chips rather than a segmented control. The outer silhouette is
-     the only rounding this control gets; it has no container chrome by
-     design (see the markup comment). */
+     detached chips rather than a segmented control. The pair reads as one
+     segmented control INSIDE `.split`'s pill — `.split` owns the outer
+     silhouette and the chrome, and these two own only the seam. */
   .half-main,
   .half-caret {
     /* See .split — 20 + padding + border is what lands this on 26px. */
@@ -385,7 +408,13 @@ function chooseSettings() {
     padding: 0 6px;
     min-width: 20px;
   }
-  .half-caret svg {
+  /* Doubled class on purpose. Svelte 5 emits the scoping class on a
+     DESCENDANT compound inside `:where()`, which adds no specificity — so this
+     and `.ib svg` above are both (0,2,1) and the 12px chevron would win on
+     source order alone. `.half-caret.half-caret` makes it (0,3,1), so moving
+     this rule above `.ib svg` can no longer inflate the chevron to 16px and
+     break the 20px half's geometry. */
+  .half-caret.half-caret svg {
     width: 12px;
     height: 12px;
   }
@@ -396,7 +425,6 @@ function chooseSettings() {
     background: var(--tandem-border);
     flex-shrink: 0;
   }
-
 
   /* dropdown */
   .menu {
