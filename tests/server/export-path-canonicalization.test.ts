@@ -94,15 +94,34 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
       return id;
     }
 
-    async function exportTo(outputPath: string): Promise<Record<string, unknown>> {
+    /** The whole `{ error, code, message, data }` envelope. */
+    async function exportEnvelope(outputPath: string): Promise<Record<string, unknown>> {
       const client = await mcpClient();
       const result = (await client.callTool({
         name: "tandem_exportAnnotations",
         arguments: { outputPath, format: "json", writeToDisk: true },
       })) as { content: Array<{ type: string; text?: string }> };
       const text = result.content.find((c) => c.type === "text")?.text;
-      // The tool wraps its payload as { error, data }.
-      return text ? (JSON.parse(text).data ?? {}) : {};
+      return text ? JSON.parse(text) : {};
+    }
+
+    async function exportTo(outputPath: string): Promise<Record<string, unknown>> {
+      const envelope = await exportEnvelope(outputPath);
+      return (envelope.data as Record<string, unknown>) ?? {};
+    }
+
+    /**
+     * Assert a rejection BY ITS CODE AND MESSAGE, never by an absent
+     * `writtenPath`. An unrelated failure -- a bad fixture, a symlink that was
+     * never created, a doc that never opened -- also produces no `writtenPath`,
+     * so the weaker assertion is satisfied by a test that never exercised the
+     * pin at all.
+     */
+    async function expectSuffixRejection(outputPath: string): Promise<void> {
+      const envelope = await exportEnvelope(outputPath);
+      expect(envelope.error, `expected a rejection, got: ${JSON.stringify(envelope)}`).toBe(true);
+      expect(envelope.code).toBe("INVALID_PATH");
+      expect(String(envelope.message)).toContain(".annotations.json");
     }
 
     it("writes a fresh sidecar at all (the control)", async () => {
@@ -114,6 +133,73 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
       expect(body.writtenPath, `export failed outright: ${JSON.stringify(body)}`).toBeTruthy();
       await expect(fsp.access(body.writtenPath as string)).resolves.toBeUndefined();
     });
+
+    // #1654 suffix pin. Each negative below kills a specific weaker pin:
+    // a bare `CLAUDE.md` reject is satisfied by almost anything, so it alone
+    // proves nothing about WHICH pin shipped.
+    it("refuses a caller-named CLAUDE.md, and does not create it", async () => {
+      openDoc();
+      const base = await makeDir();
+      const target = path.join(base, "real", "CLAUDE.md");
+
+      await expectSuffixRejection(target);
+      await expect(fsp.access(target)).rejects.toBeTruthy();
+    });
+
+    it("refuses a same-extension non-sidecar name (kills an extension-only pin)", async () => {
+      openDoc();
+      const base = await makeDir();
+      // `format: "json"` and the target ends in `.json`, so an `extname`-shaped
+      // pin accepts this. Only the `.annotations.json` SUFFIX refuses it.
+      await expectSuffixRejection(path.join(base, "real", "settings.json"));
+    });
+
+    it("refuses the other format's suffix (kills an either-suffix pin)", async () => {
+      openDoc();
+      const base = await makeDir();
+      // `exportTo` sends `format: "json"`. A pin accepting either suffix would
+      // let this through; the format-matched pin does not.
+      await expectSuffixRejection(path.join(base, "real", "notes.annotations.md"));
+    });
+
+    it("accepts a conforming name in an arbitrary directory (the positive control)", async () => {
+      openDoc();
+      const base = await makeDir();
+      // Without this, a pin that refuses EVERYTHING passes every negative above.
+      // It also pins the half the narrowing deliberately keeps: the destination
+      // directory is unrestricted; only the leaf name is.
+      const out = path.join(base, "real", "anywhere.annotations.json");
+      const body = await exportTo(out);
+      expect(body.writtenPath).toBe(out);
+    });
+
+    it("accepts a case variant of the suffix", async () => {
+      openDoc();
+      const base = await makeDir();
+      const out = path.join(base, "real", "Cased.Annotations.JSON");
+      const body = await exportTo(out);
+      expect(body.writtenPath).toBe(out);
+    });
+
+    it.runIf(POSIX)(
+      "refuses a conforming leaf that is a symlink to a non-conforming target",
+      async () => {
+        openDoc();
+        const { realDir } = await symlinkedDir();
+        const victim = path.join(realDir, "CLAUDE.md");
+        await fsp.writeFile(victim, "original");
+        const leaf = path.join(realDir, "laundered.annotations.json");
+        await fsp.symlink(victim, leaf);
+
+        // THE placement test. `annotations.ts` assigns `sidecarPath = real` when
+        // realpath hits an existing leaf, so a pin on the caller's string --
+        // even one line earlier -- accepts `laundered.annotations.json` and then
+        // writes CLAUDE.md. Every other negative in this file passes against
+        // that mutation; only this one fails.
+        await expectSuffixRejection(leaf);
+        expect(await fsp.readFile(victim, "utf-8")).toBe("original");
+      },
+    );
 
     it.runIf(POSIX)("resolves a symlinked parent when the leaf does not exist", async () => {
       openDoc();
@@ -144,21 +230,40 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
       return id;
     }
 
-    it("converts to a fresh path at all (the control)", async () => {
+    it("converts into a fresh directory at all (the control)", async () => {
       const base = await makeDir();
       const id = openDocxDoc(base);
-      const out = path.join(base, "real", "fresh.md");
 
-      const result = await convertToMarkdown(id, out);
-      expect(result.outputPath).toBeTruthy();
+      // #1654: `outputPath` names a DIRECTORY. The leaf is derived from the
+      // source document, so the caller cannot choose the created filename.
+      const result = await convertToMarkdown(id, path.join(base, "real"));
+      expect(result.outputPath).toBe(path.join(base, "real", `${id}.md`));
       await expect(fsp.access(result.outputPath)).resolves.toBeUndefined();
     });
 
-    it.runIf(POSIX)("resolves a symlinked parent when the leaf does not exist", async () => {
+    it("refuses a caller-named file path (#1654)", async () => {
+      const base = await makeDir();
+      const id = openDocxDoc(base);
+
+      // The pre-#1654 spelling. It is refused as a NON-DIRECTORY rather than
+      // silently reinterpreted, so a caller cannot name the file created --
+      // which is what a project CLAUDE.md in a repo lacking one requires.
+      await fsp.writeFile(path.join(base, "real", "decoy.md"), "x");
+      await expect(
+        convertToMarkdown(id, path.join(base, "real", "decoy.md")),
+      ).rejects.toMatchObject({ code: "INVALID_PATH" });
+    });
+
+    it.runIf(POSIX)("resolves a symlinked output directory", async () => {
       const { realDir, linkDir } = await symlinkedDir();
       const id = openDocxDoc(realDir);
 
-      const result = await convertToMarkdown(id, path.join(linkDir, "fresh.md"));
+      // #1654 made `outputPath` directory-only, so the ENOENT-on-leaf case the
+      // #1650 fix canonicalized cannot arise here any more -- the leaf is
+      // always derived. What still must hold, and is what that fix was really
+      // protecting, is that a symlinked DESTINATION is canonicalized before the
+      // prefix re-check and before the write.
+      const result = await convertToMarkdown(id, linkDir);
 
       // Deliberately not asserting a throw. `resolveAndValidatePath` realpaths
       // and does NOT reject symlinks, so the unfixed code succeeded — it just
@@ -178,9 +283,9 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
       // Previously this escaped `atomicWrite` as a bare ENOENT and surfaced as
       // 500 / INTERNAL — a caller-fixable path mistake reported as a server
       // fault.
-      await expect(
-        convertToMarkdown(id, path.join(base, "no-such-dir", "out.md")),
-      ).rejects.toMatchObject({ code: "FILE_NOT_FOUND" });
+      await expect(convertToMarkdown(id, path.join(base, "no-such-dir"))).rejects.toMatchObject({
+        code: "FILE_NOT_FOUND",
+      });
     });
   });
 });
