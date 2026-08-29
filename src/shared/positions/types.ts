@@ -88,7 +88,7 @@ export interface ElementPosition {
  * cross-item range as a same-block one and edits with offsets measured against
  * two different elements — inside the transaction, which Y.js does not roll
  * back. The two questions have distinct tests: "is this top-level?" is
- * `path.length === 1`, and "same block?" is full path equality (`samePath`).
+ * `path.length === 1`, and "same block?" is full path equality (`sameTextblock`).
  */
 export interface TextblockPosition {
   /** Child indices from the fragment root down to the textblock. Never empty. */
@@ -104,8 +104,14 @@ export interface TextblockPosition {
   clampedFromPrefix: boolean;
 }
 
-/** Whether two resolved positions land in the very same textblock. */
-export function samePath(a: TextblockPosition, b: TextblockPosition): boolean {
+/**
+ * Whether two resolved positions land in the very same textblock.
+ *
+ * Named for the block rather than the path because `samePath` is already taken
+ * by an unrelated filesystem-path comparison in `launcher/supervisor.ts`, and
+ * two exported `samePath`s with different meanings is a trap.
+ */
+export function sameTextblock(a: TextblockPosition, b: TextblockPosition): boolean {
   return a.path.length === b.path.length && a.path.every((v, i) => v === b.path[i]);
 }
 

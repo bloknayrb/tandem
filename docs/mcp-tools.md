@@ -314,6 +314,7 @@ tandem_appendContent({ content: "# Notes\n\n- First point\n- Second point\n\nA c
 - Appended text is attributed to Claude (authorship overlay), matching `tandem_edit`.
 - Markdown documents only. Non-markdown documents are rejected with `FORMAT_ERROR` -- the check is the document's format, not its read-only flag.
 - To add an item **inside** an existing list rather than at the end of the document, use `tandem_editList`.
+- For arbitrary mid-document insertion of a **non-list** block, there is still no direct path: use `tandem_edit` per block, or open the file after writing it. `tandem_editList` closes this gap for list items only -- its `insertAfter`/`insertBefore`/`remove` machinery is general, but the tool deliberately refuses a target outside a list.
 
 ---
 
@@ -339,6 +340,8 @@ Target an item by a flat offset anywhere inside it. Flat text is structurally bl
 **Errors:** `FORMAT_ERROR` (read-only; a plaintext format, which has no list structure; or `setChecked` on a `.docx`, since Word lists have no checkbox state), `INVALID_RANGE` (offset is not inside a list -- the message names `tandem_edit` and `tandem_appendContent` as the alternatives), `INVALID_ARGUMENT` (missing `markdown` or `checked`), `FILE_TOO_LARGE`, `EMPTY_DOCUMENT`, `NO_DOCUMENT`
 
 **Format support:** markdown **and `.docx`** -- Word documents hold real bulleted and numbered lists and Tandem writes them back on save, so the ops apply there too; only `setChecked` is markdown-only. Plaintext formats (`.txt`, `.csv`, `.html`, unknown extensions) have no list model at all.
+
+**No `move` or list-type conversion, deliberately -- and reordering by hand is lossy.** Yjs has no move primitive and `nodeName` is immutable, so relocating an item or switching a list between bulleted and numbered means delete-and-rebuild, which destroys the annotations, authorship and CRDT anchors on everything it touches -- the same loss the range-replace design was rejected for. Composing `remove` + `insertAfter` to reorder has exactly that cost: **the moved item's annotations and authorship do not survive**, and nothing warns you. Prefer leaving the item where it is, or accept the loss knowingly.
 
 **Why path-addressed rather than range-replacing:** a `replaceBlock(from, to, markdown)` shape was drafted and withdrawn. It would make the caller re-emit every block it touched, but `extractText` strips inline marks and there is no per-block markdown reader -- so every call that meant to *preserve* a sibling would have silently deleted that sibling's bold, links and code spans. Each op here touches only what changes: `setChecked` is a single attribute write, and an insert never rebuilds a neighbour.
 

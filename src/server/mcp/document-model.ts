@@ -6,6 +6,7 @@ import {
   getElementTextLength,
   getHeadingPrefixLength,
   isHardBreakElement,
+  TEXTBLOCK_NODES,
 } from "../../shared/positions/ydoc.js";
 import { saveMarkdown } from "../file-io/markdown.js";
 
@@ -15,7 +16,13 @@ import { saveMarkdown } from "../file-io/markdown.js";
 // from here because ~20 call sites and a dozen test files import them from this
 // path, and a refactor that forces test edits cannot demonstrate it was
 // behaviour-preserving.
-export { findXmlTextAtOffset, getElementTextLength, getHeadingPrefixLength, isHardBreakElement };
+export {
+  findXmlTextAtOffset,
+  getElementTextLength,
+  getHeadingPrefixLength,
+  isHardBreakElement,
+  TEXTBLOCK_NODES,
+};
 
 /**
  * Detect file format from extension.
@@ -340,6 +347,67 @@ export interface BlockInfo {
 }
 
 /**
+ * The flat length of the whole document, without building the string.
+ *
+ * `extractText(doc).length` materializes the entire projection to read one
+ * number — 460 KB and ~3.5 ms on this repo's CHANGELOG, which made it the most
+ * expensive step in a bounds check. Same top-level accounting as
+ * `extractTextWithBreaks`: heading prefix plus text, one separator between
+ * emitted elements.
+ */
+export function flatDocLength(doc: Y.Doc): number {
+  const fragment = doc.getXmlFragment("default");
+  let len = 0;
+  let emitted = 0;
+  for (let i = 0; i < fragment.length; i++) {
+    const node = fragment.get(i);
+    if (!(node instanceof Y.XmlElement)) continue;
+    if (emitted > 0) len += FLAT_SEPARATOR.length;
+    len += getHeadingPrefixLength(node) + getElementTextLength(node);
+    emitted++;
+  }
+  return len;
+}
+
+/**
+ * Flat offset of `index` within `container`, relative to the container's start.
+ * Counts the one separator that sits between each pair of block children.
+ */
+export function flatOffsetWithinList(container: Y.XmlElement, index: number): number {
+  let offset = 0;
+  for (let i = 0; i < index && i < container.length; i++) {
+    const child = container.get(i);
+    if (!(child instanceof Y.XmlElement)) continue;
+    if (i > 0) offset += FLAT_SEPARATOR.length;
+    offset += getElementTextLength(child);
+  }
+  return index > 0 ? offset + FLAT_SEPARATOR.length : offset;
+}
+
+/**
+ * Absolute flat span of `count` consecutive children starting at `start`.
+ * `containerStart` is the container's own flat offset. Returns null when the
+ * range names nothing (an empty insert).
+ */
+export function flatSpanOfChildren(
+  container: Y.XmlElement,
+  start: number,
+  count: number,
+  containerStart: number,
+): { from: number; to: number } | null {
+  if (count <= 0) return null;
+  const from = containerStart + flatOffsetWithinList(container, start);
+  let span = 0;
+  for (let i = start; i < start + count && i < container.length; i++) {
+    const child = container.get(i);
+    if (!(child instanceof Y.XmlElement)) continue;
+    if (i > start) span += FLAT_SEPARATOR.length;
+    span += getElementTextLength(child);
+  }
+  return { from, to: from + span };
+}
+
+/**
  * Enumerate the document's leaf textblocks with their flat ranges.
  *
  * Exists because the flat projection is structurally blind: `- [ ] task item`
@@ -348,9 +416,19 @@ export interface BlockInfo {
  * state. Without this the list-editing tools are undiscoverable — the AI has no
  * way to know a line is a list item in the first place.
  *
- * Shares this module's traversal rather than restating it, because the offsets
- * it reports must agree with `extractText` exactly. Two subtleties that a
- * hand-rolled walker gets wrong, both already encoded here:
+ * MIRRORS this module's traversal rather than sharing it — deliberately, and
+ * worth stating plainly because an earlier draft of this comment claimed the
+ * stronger thing. `collectElementFlat` is the hot path behind every
+ * `extractText`, and the list metadata below (list kind, item ordinal, the
+ * `checked` tri-state) is orthogonal to text projection; threading it through
+ * that walker would complicate the riskiest traversal in the module to serve an
+ * opt-in read. The cost is that the separator contract is encoded twice, so the
+ * agreement is pinned by tests rather than by construction: `collect-blocks`
+ * asserts every range slices its own text out of `extractText`, and
+ * `resolve-textblock` asserts this enumeration and `resolveToTextblock` agree on
+ * which block owns an offset.
+ *
+ * Two subtleties a hand-rolled walker gets wrong, both encoded here:
  *
  *  - A TOP-LEVEL heading contributes `headingPrefix(level)` and has its newlines
  *    flattened to spaces; a NESTED heading is traversed by `collectElementFlat`
@@ -374,7 +452,9 @@ export function collectBlocks(doc: Y.Doc): BlockInfo[] {
       // Mirrors extractTextWithBreaks: prefix, then flattened text, no traversal.
       const level = Number(node.getAttribute("level") ?? 1);
       const prefixLen = headingPrefix(level).length;
-      const textLen = flattenHeadingText(getElementText(node)).length;
+      // `flattenHeadingText` is length-preserving (character class, not /\r?\n/),
+      // so the length is available without building the string.
+      const textLen = getElementTextLength(node);
       blocks.push({
         from: cursor + prefixLen,
         to: cursor + prefixLen + textLen,
@@ -449,16 +529,12 @@ function collectBlocksIn(
     let next = inherited;
     if (child.nodeName === "listItem") {
       itemOrdinal++;
-      // Cast for the same reason `yDocToMdast` does: yjs stores the tri-state as
-      // a real boolean (ContentAny), but `getAttribute` is typed `string`, and
-      // the value round-trips as a string on some paths. Read both spellings.
+      // Both spellings, for the reason `buildListItem` documents (#982).
       const checkedAttr = child.getAttribute("checked") as boolean | string | undefined;
       next = {
         container: "listItem",
         ...(listType ? { listType } : {}),
         listItemIndex: itemOrdinal,
-        // Stored only when set, and tolerantly read: mdast-ydoc writes a real
-        // boolean, but the attribute round-trips as a string on some paths.
         ...(checkedAttr === true || checkedAttr === "true"
           ? { checked: true }
           : checkedAttr === false || checkedAttr === "false"
@@ -531,8 +607,6 @@ export function findXmlText(element: Y.XmlElement): Y.XmlText | null {
   }
   return null;
 }
-
-export const TEXTBLOCK_NODES = new Set(["paragraph", "heading", "codeBlock"]);
 
 type DeltaSegment = { insert: string | object; attributes?: Record<string, unknown> };
 

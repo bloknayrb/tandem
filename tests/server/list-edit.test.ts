@@ -2,16 +2,21 @@ import type { Root } from "mdast";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { loadMarkdown, mdParser, saveMarkdown } from "../../src/server/file-io/markdown.js";
-import { extractText } from "../../src/server/mcp/document.js";
+import { buildListItemsFromTree } from "../../src/server/file-io/mdast-ydoc.js";
+import { extractText, flatDocLength } from "../../src/server/mcp/document.js";
 import {
   attachItems,
-  buildItems,
   findListTarget,
   listFormatRefusal,
   removeItemAndCollapse,
 } from "../../src/server/mcp/list-edit.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import { resolveToTextblock } from "../../src/shared/positions/ydoc.js";
+
+/** The guard `tandem_editList` applies to `at`, mirrored for the table below. */
+function isRejected(at: number, flatLength: number): boolean {
+  return !Number.isInteger(at) || at < 0 || at > flatLength;
+}
 
 /**
  * `tandem_editList` — the structural half of list editing.
@@ -83,7 +88,7 @@ describe("insert", () => {
     // Build OUTSIDE the transaction, attach inside — a detached Y.XmlText
     // reverses segment order on attach, and a throw during the build would
     // otherwise land mid-transaction.
-    const { items, deferred } = buildItems(mdParser.parse(markdown) as Root);
+    const { items, deferred } = buildListItemsFromTree(mdParser.parse(markdown) as Root);
     doc.transact(() =>
       attachItems(target.list, after ? target.index + 1 : target.index, items, deferred),
     );
@@ -183,25 +188,40 @@ describe("remove, and the containers it empties", () => {
 });
 
 describe("out-of-range offsets", () => {
-  // `resolveToElement` CLAMPS: an offset past the end resolves to the last
-  // element and one below zero to the first. Without a bounds check that makes
-  // `remove` delete an item the caller never named and report success —
-  // measured, on a 16-character document: `at: 999` removed "gamma", `at: -5`
-  // removed "alpha". A stale offset is exactly what the tool's own description
-  // warns about, so the guard has to be explicit rather than inherited.
-  it.each([999, -5, 1.5, Number.NaN])("clamping would mis-target at %s", (at) => {
+  // `resolveToElement` CLAMPS, so without a bounds check `remove` deletes an
+  // item the caller never named and reports success. Measured before the guard,
+  // on this 16-character document: `at: 999` removed "gamma", `at: -5` removed
+  // "alpha".
+  //
+  // These assert the CLAMP — the thing the guard exists to defend against —
+  // rather than re-typing the guard expression. An earlier draft did the latter
+  // and was worthless: it asserted that a boolean it had just written was true,
+  // never reached production code, and would have stayed green with the guard
+  // deleted outright.
+  it.each([
+    [999, "gamma", 2],
+    [-5, "alpha", 0],
+  ])("offset %i silently resolves to the %s item without a bounds check", (at, _label, index) => {
     const doc = docFor("- alpha\n- beta\n- gamma\n");
-    const flatLength = extractText(doc).length;
-    const rejected = !Number.isInteger(at) || at < 0 || at > flatLength;
-    expect(rejected, `${at} must be rejected before it reaches the resolver`).toBe(true);
+    const frag = doc.getXmlFragment("default");
+    const pos = resolveToTextblock(frag, toFlatOffset(at));
+    expect(pos, "the resolver clamps rather than refusing").not.toBeNull();
+    const target = findListTarget(frag, pos!.path);
+    if ("error" in target) throw new Error(target.error);
+    expect(target.index, "clamped to the wrong item — this is what the guard prevents").toBe(index);
     doc.destroy();
   });
 
-  it("accepts the boundary offsets a valid caller can produce", () => {
-    const doc = docFor("- alpha\n- beta\n");
-    const flatLength = extractText(doc).length;
-    for (const at of [0, flatLength]) {
-      expect(Number.isInteger(at) && at >= 0 && at <= flatLength).toBe(true);
+  it("the guard rejects exactly the offsets the clamp would mis-resolve", () => {
+    const doc = docFor("- alpha\n- beta\n- gamma\n");
+    const flatLength = flatDocLength(doc);
+    // `flatDocLength` must agree with the projection it is standing in for.
+    expect(flatLength).toBe(extractText(doc).length);
+    for (const bad of [999, -5, 1.5, Number.NaN]) {
+      expect(isRejected(bad, flatLength), `${bad} must be rejected`).toBe(true);
+    }
+    for (const ok of [0, 1, flatLength]) {
+      expect(isRejected(ok, flatLength), `${ok} must be accepted`).toBe(false);
     }
     doc.destroy();
   });
@@ -216,7 +236,7 @@ describe("hard breaks in an inserted item", () => {
     const doc = docFor("- alpha\n");
     const { target } = targetFor(doc, "alpha");
     if ("error" in target) throw new Error(target.error);
-    const { items, deferred } = buildItems(mdParser.parse("- one\\\ntwo") as Root);
+    const { items, deferred } = buildListItemsFromTree(mdParser.parse("- one\\\ntwo") as Root);
     doc.transact(() => attachItems(target.list, target.index + 1, items, deferred));
 
     let sawEmbed = false;
@@ -271,7 +291,7 @@ describe("offsets stay usable after an edit", () => {
     const doc = docFor("- alpha\n- beta\n");
     const { target } = targetFor(doc, "alpha");
     if ("error" in target) throw new Error(target.error);
-    const { items, deferred } = buildItems(mdParser.parse("- inserted") as Root);
+    const { items, deferred } = buildListItemsFromTree(mdParser.parse("- inserted") as Root);
     doc.transact(() => attachItems(target.list, target.index + 1, items, deferred));
     // The flat projection now carries the new item, and every item is still
     // addressable — the property a caller relies on for a follow-up call.

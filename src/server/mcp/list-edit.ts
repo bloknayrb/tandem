@@ -1,11 +1,8 @@
 import * as Y from "yjs";
 import { isPlaintextFormat } from "../../shared/plaintext-format.js";
+import { chainAtPath } from "../../shared/positions/ydoc.js";
 import { normalizeHardBreaks } from "../file-io/hardbreak-normalize.js";
-import {
-  buildListItemsFromTree,
-  type DeferredText,
-  populateDeferredText,
-} from "../file-io/mdast-ydoc.js";
+import { type DeferredText, populateDeferredText } from "../file-io/mdast-ydoc.js";
 
 /** A list container and the item within it that an op targets. */
 export interface ListTarget {
@@ -17,6 +14,8 @@ export interface ListTarget {
   index: number;
   /** Path to the list itself, for parent lookups. */
   listPath: number[];
+  /** Every element from the fragment root down to the targeted block. */
+  chain: Y.XmlElement[];
 }
 
 /**
@@ -30,16 +29,8 @@ export function findListTarget(
   fragment: Y.XmlFragment,
   path: number[],
 ): ListTarget | { error: string } {
-  // Re-walk the path collecting ancestors. `elementAtPath` gives only the leaf.
-  const chain: Y.XmlElement[] = [];
-  let container: { get(i: number): unknown; length: number } = fragment;
-  for (const index of path) {
-    if (index < 0 || index >= container.length) return { error: "Path does not name a node." };
-    const child = container.get(index);
-    if (!(child instanceof Y.XmlElement)) return { error: "Path does not name an element." };
-    chain.push(child);
-    container = child;
-  }
+  const chain = chainAtPath(fragment, path);
+  if (!chain) return { error: "Path does not name an element." };
   // Nearest enclosing listItem, and the list holding it.
   for (let i = chain.length - 1; i >= 0; i--) {
     if (chain[i].nodeName !== "listItem") continue;
@@ -48,8 +39,11 @@ export function findListTarget(
     if (!list || (list.nodeName !== "bulletList" && list.nodeName !== "orderedList")) {
       return { error: "List item is not inside a list." };
     }
-    // The item's index within its list is the path element at this depth.
-    return { list, item, index: path[i], listPath: path.slice(0, i) };
+    // The item's index within its list is the path element at this depth. The
+    // ancestor chain rides along so `removeItemAndCollapse` need not re-derive
+    // it — re-walking after a mutation, from a path captured before it, is
+    // correct only by accident.
+    return { list, item, index: path[i], listPath: path.slice(0, i), chain };
   }
   return {
     error:
@@ -73,24 +67,15 @@ export function findListTarget(
  */
 export function removeItemAndCollapse(fragment: Y.XmlFragment, target: ListTarget): void {
   target.list.delete(target.index, 1);
-  if (target.list.length > 0) return;
-
-  // The list is now empty. Walk back up deleting whatever it empties in turn.
-  let path = target.listPath;
-  while (path.length > 0) {
-    const parentPath = path.slice(0, -1);
-    const childIndex = path[path.length - 1];
-    let parent: { get(i: number): unknown; length: number; delete(i: number, n: number): void } =
-      fragment as unknown as typeof parent;
-    for (const idx of parentPath) {
-      const next = parent.get(idx);
-      if (!(next instanceof Y.XmlElement)) return;
-      parent = next as unknown as typeof parent;
-    }
-    parent.delete(childIndex, 1);
-    if (parent.length > 0) return;
-    if (parentPath.length === 0) return; // the fragment itself may be empty
-    path = parentPath;
+  // Walk the ancestor chain outward, deleting each container the previous
+  // deletion emptied. `Y.XmlElement extends Y.XmlFragment`, so the root and
+  // every element below it share one binding — no structural type and no cast,
+  // which also keeps `.delete` type-checked.
+  for (let k = target.listPath.length - 1; k >= 0; k--) {
+    const emptied = target.chain[k];
+    if (emptied.length > 0) return;
+    const parent: Y.XmlFragment = k > 0 ? target.chain[k - 1] : fragment;
+    parent.delete(target.listPath[k], 1);
   }
 }
 
@@ -110,14 +95,6 @@ export function listFormatRefusal(format: string | undefined): string | null {
     "not items, so there is nothing to insert into or remove from. Edit the lines with " +
     "tandem_edit (one call per line), or ask the user whether this should be a .md file."
   );
-}
-
-/** Build items outside any transaction, then attach and populate inside one. */
-export function buildItems(tree: Parameters<typeof buildListItemsFromTree>[0]): {
-  items: Y.XmlElement[];
-  deferred: DeferredText[];
-} {
-  return buildListItemsFromTree(tree);
 }
 
 /**

@@ -82,7 +82,7 @@ function insertBlocks(doc: Y.Doc, tree: Root, index: number): void {
   const fragment = doc.getXmlFragment("default");
 
   // Pass 1 collects deferred text operations while building the element tree.
-  const deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }> = [];
+  const deferred: DeferredText[] = [];
   const allElements: Y.XmlElement[] = [];
   for (const node of tree.children) {
     allElements.push(...blockToYxml(node, deferred));
@@ -94,13 +94,7 @@ function insertBlocks(doc: Y.Doc, tree: Root, index: number): void {
   }
 
   // Pass 2: populate text now that elements are attached to the Y.Doc
-  for (const { xmlText, nodes, plainText } of deferred) {
-    if (nodes) {
-      processInline(xmlText, nodes, {});
-    } else if (plainText != null) {
-      xmlText.insert(0, plainText);
-    }
-  }
+  populateDeferredText(deferred);
 
   // Convert hardBreak embeds into sibling elements y-prosemirror can render (else
   // they surface as literal <hardbreak></hardbreak>). Covers both mdastToYDoc and
@@ -118,7 +112,7 @@ function insertBlocks(doc: Y.Doc, tree: Root, index: number): void {
  * an already-attached element into a new parent throws. Building the items
  * directly is the only shape that works.
  */
-export function buildListItem(item: ListItem, deferred: DeferredText[]): Y.XmlElement {
+function buildListItem(item: ListItem, deferred: DeferredText[]): Y.XmlElement {
   const listItem = new Y.XmlElement("listItem");
   if (item.spread) listItem.setAttribute("spread", true as any);
   // GFM task list: a list item with non-null `checked` carries the tri-state as

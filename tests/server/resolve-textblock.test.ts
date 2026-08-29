@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { loadMarkdown, saveMarkdown } from "../../src/server/file-io/markdown.js";
 import { extractText } from "../../src/server/mcp/document.js";
-import { replaceFlatRangeInElement } from "../../src/server/mcp/document-model.js";
-import { isTopLevel, samePath, toFlatOffset } from "../../src/shared/positions/types.js";
+import { collectBlocks, replaceFlatRangeInElement } from "../../src/server/mcp/document-model.js";
+import { isTopLevel, sameTextblock, toFlatOffset } from "../../src/shared/positions/types.js";
 import {
   elementAtPath,
   getElementTextLength,
@@ -50,7 +50,7 @@ function editOutcome(
   if (!sp || !ep) return "unresolved";
   const sn = elementAtPath(frag, sp.path);
   if (!sn) return "unresolved";
-  if (samePath(sp, ep)) {
+  if (sameTextblock(sp, ep)) {
     doc.transact(() => replaceFlatRangeInElement(sn, sp.textOffset, ep.textOffset, newText));
     return "same-block";
   }
@@ -117,6 +117,33 @@ describe("resolveToTextblock", () => {
         expect(deep.path, `offset ${i}`).toEqual([shallow.elementIndex]);
         expect(deep.textOffset, `offset ${i}`).toBe(shallow.textOffset);
         expect(deep.clampedFromPrefix, `offset ${i}`).toBe(shallow.clampedFromPrefix);
+      }
+    });
+  });
+
+  it.each(
+    SHAPES,
+  )("%s — agrees with collectBlocks about which block owns an offset", (_label, md) => {
+    // The two walkers this feature adds encode the same separator contract
+    // twice: `descendToTextblock` searches for one offset, `collectBlocks`
+    // enumerates every block. Nothing else pins them together, and they can
+    // drift with both suites green — the failure mode being `tandem_edit`
+    // writing at an offset the caller read out of `blocks[]`, which is exactly
+    // the round trip the tools tell callers to make.
+    withDoc(md, (doc) => {
+      const frag = doc.getXmlFragment("default");
+      const blocks = collectBlocks(doc);
+      const flat = extractText(doc);
+      for (let i = 0; i <= flat.length; i++) {
+        const pos = resolveToTextblock(frag, toFlatOffset(i));
+        if (!pos) continue;
+        // The block whose half-open range contains `i`, if any. Offsets on a
+        // separator belong to no block; the resolver clamps them to the
+        // preceding one, so only assert where a block genuinely owns the offset.
+        const owner = blocks.find((b) => i >= b.from && i < b.to);
+        if (!owner) continue;
+        expect(pos.path, `offset ${i} in ${JSON.stringify(md)}`).toEqual(owner.path);
+        expect(i - owner.from, `offset ${i} within its block`).toBe(pos.textOffset);
       }
     });
   });

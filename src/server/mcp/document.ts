@@ -15,7 +15,8 @@ import {
 import { flattenHeadingText, headingPrefix } from "../../shared/offsets.js";
 import { withMcp } from "../../shared/origins.js";
 import { isPlaintextFormat } from "../../shared/plaintext-format.js";
-import { isTopLevel, samePath } from "../../shared/positions/types.js";
+import type { FlatOffset } from "../../shared/positions/types.js";
+import { isTopLevel, sameTextblock } from "../../shared/positions/types.js";
 import { elementAtPath, resolveToTextblock } from "../../shared/positions/ydoc.js";
 import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
@@ -24,7 +25,7 @@ import { isStoreReadOnly } from "../annotations/store.js";
 import { type OpenSuccess, openFromDisk, openScratchpad, toWireResult } from "../documents/open.js";
 import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
-import { appendMdast } from "../file-io/mdast-ydoc.js";
+import { appendMdast, buildListItemsFromTree } from "../file-io/mdast-ydoc.js";
 // Position system
 import { anchoredRange, validateRange } from "../positions.js";
 import { saveSession } from "../session/manager.js";
@@ -34,6 +35,9 @@ import { convertToMarkdown } from "./convert.js";
 import {
   collectBlocks,
   extractText,
+  flatDocLength,
+  flatOffsetWithinList,
+  flatSpanOfChildren,
   getElementText,
   getElementTextLength,
   getHeadingPrefixLength,
@@ -58,7 +62,6 @@ import {
 import { gatedTool, licenseGate } from "./license-gate.js";
 import {
   attachItems,
-  buildItems,
   findListTarget,
   listFormatRefusal,
   removeItemAndCollapse,
@@ -109,6 +112,7 @@ export {
   extractText,
   findXmlText,
   findXmlTextAtOffset,
+  flatDocLength,
   getElementText,
   getElementTextLength,
   getHeadingPrefixLength,
@@ -345,6 +349,34 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void 
     for (const { key, entry } of entries) {
       authorshipMap.set(key, entry);
     }
+  });
+}
+
+/**
+ * Anchor a flat range and record it as Claude-authored, in one place.
+ *
+ * Both `tandem_edit` and `tandem_editList` need this, and the entry shape — in
+ * particular `relRange` being present only when the anchor is FULL — is the kind
+ * of detail that goes quietly wrong when it is written twice.
+ *
+ * Deliberately not `stampClaudeAuthorshipWholeDoc`: that walks top level only,
+ * keys entries `claude-block-${i}` by fragment index and has no end bound, so a
+ * mid-document write would re-key every later block.
+ */
+function stampClaudeRange(doc: Y.Doc, from: FlatOffset, to: FlatOffset): void {
+  if (to <= from) return;
+  const anchored = anchoredRange(doc, from, to);
+  if (!anchored.ok) return;
+  const authorshipMap = doc.getMap(Y_MAP_AUTHORSHIP);
+  const rangeId = generateAuthorshipId("claude");
+  withMcp(doc, () => {
+    authorshipMap.set(rangeId, {
+      id: rangeId,
+      author: "claude",
+      range: anchored.range,
+      relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
+      timestamp: Date.now(),
+    } satisfies AuthorshipRange);
   });
 }
 
@@ -638,7 +670,7 @@ export function registerDocumentTools(server: McpServer): void {
 
           // Every rejection below MUST precede the first `withMcp` — Y.js does not
           // roll back a transaction on throw, so a late bail is a partial commit.
-          if (samePath(startPos, endPos)) {
+          if (sameTextblock(startPos, endPos)) {
             // Same textblock at any depth: a list item, a nested item, a table
             // cell, a blockquote paragraph. `replaceFlatRangeInElement` already
             // handles multi-XmlText/hardBreak interiors, so depth costs nothing.
@@ -651,7 +683,7 @@ export function registerDocumentTools(server: McpServer): void {
             // middle items of this list", so refuse rather than corrupt — and name
             // both retry ranges so the caller's next call is mechanical.
             //
-            // NB: the test is `isTopLevel` on BOTH ends plus `samePath` above, never
+            // NB: the test is `isTopLevel` on BOTH ends plus `sameTextblock` above, never
             // top-level-index equality. Two different list items share a top-level
             // index, so an index test reads a cross-item range as same-block and
             // edits with offsets measured against two different elements.
@@ -683,10 +715,9 @@ export function registerDocumentTools(server: McpServer): void {
               );
 
               // 2. Delete the whole in-between elements.
+              // One call, not a loop: Y.XmlFragment.delete takes a length.
               const deleteCount = endIndex - startIndex - 1;
-              for (let i = 0; i < deleteCount; i++) {
-                fragment.delete(startIndex + 1, 1);
-              }
+              if (deleteCount > 0) fragment.delete(startIndex + 1, deleteCount);
 
               // 3. Trim the end element's head: delete [0, endOffset).
               const tailNode = fragment.get(startIndex + 1) as Y.XmlElement;
@@ -719,23 +750,7 @@ export function registerDocumentTools(server: McpServer): void {
           // remote Y update into the gap. Adding an `await` in this span would
           // create one.
           if (newText.length > 0) {
-            const newFrom = from;
-            const newTo = toFlatOffset(newFrom + newText.length);
-            const anchored = anchoredRange(r.doc, newFrom, newTo);
-            if (anchored.ok) {
-              const authorshipMap = r.doc.getMap(Y_MAP_AUTHORSHIP);
-              const rangeId = generateAuthorshipId("claude");
-              const entry: AuthorshipRange = {
-                id: rangeId,
-                author: "claude",
-                range: anchored.range,
-                relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
-                timestamp: Date.now(),
-              };
-              withMcp(r.doc, () => {
-                authorshipMap.set(rangeId, entry);
-              });
-            }
+            stampClaudeRange(r.doc, from, toFlatOffset(from + newText.length));
           }
 
           return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
@@ -767,7 +782,9 @@ export function registerDocumentTools(server: McpServer): void {
         .describe(
           "insertAfter / insertBefore add new item(s) next to the target and need `markdown`. " +
             "remove deletes the target item and everything nested under it. setChecked ticks or " +
-            "unticks its checkbox and needs `checked`.",
+            "unticks its checkbox and needs `checked`. There is no move op: reordering by " +
+            "composing remove + insertAfter loses the item's annotations and authorship, " +
+            "because Yjs cannot move a node and the rebuild drops its anchors.",
         ),
       markdown: z
         .string()
@@ -816,7 +833,7 @@ export function registerDocumentTools(server: McpServer): void {
         // `op: "remove"` would then delete an item the caller never named and
         // report success. A stale offset is exactly the case this tool's own
         // description warns about, so it must fail loudly rather than guess.
-        const flatLength = extractText(r.doc).length;
+        const flatLength = flatDocLength(r.doc);
         if (!Number.isInteger(at) || at < 0 || at > flatLength) {
           return mcpError(
             "INVALID_RANGE",
@@ -878,7 +895,7 @@ export function registerDocumentTools(server: McpServer): void {
         // during the build would land mid-transaction with the delete already
         // applied and nothing replacing it.
         const tree = mdParser.parse(markdown) as Root;
-        const { items, deferred } = buildItems(tree);
+        const { items, deferred } = buildListItemsFromTree(tree);
         if (items.length === 0) {
           return mcpError("INVALID_ARGUMENT", "markdown parsed to no list items.");
         }
@@ -896,34 +913,15 @@ export function registerDocumentTools(server: McpServer): void {
         // the user's existing item — `insertAfter` puts the new items after it,
         // so a span starting at the target covers text Claude did not write, and
         // claiming authorship over the user's prose is worse than claiming none.
-        const insertedBlocks = collectBlocks(r.doc).filter((b) => {
-          if (b.path.length <= target.listPath.length) return false;
-          for (let i = 0; i < target.listPath.length; i++) {
-            if (b.path[i] !== target.listPath[i]) return false;
-          }
-          const itemIndex = b.path[target.listPath.length];
-          return itemIndex >= insertAt && itemIndex < insertAt + items.length;
-        });
-        const anchored =
-          insertedBlocks.length > 0
-            ? anchoredRange(
-                r.doc,
-                toFlatOffset(Math.min(...insertedBlocks.map((b) => b.from))),
-                toFlatOffset(Math.max(...insertedBlocks.map((b) => b.to))),
-              )
-            : null;
-        if (anchored?.ok) {
-          const authorshipMap = r.doc.getMap(Y_MAP_AUTHORSHIP);
-          const rangeId = generateAuthorshipId("claude");
-          withMcp(r.doc, () => {
-            authorshipMap.set(rangeId, {
-              id: rangeId,
-              author: "claude",
-              range: anchored.range,
-              relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
-              timestamp: Date.now(),
-            } satisfies AuthorshipRange);
-          });
+        // Scoped to the target list, not the document: the span is a question
+        // about `target.list`'s children, and enumerating every block in the
+        // file to answer it costs a full traversal plus an allocation per block
+        // (1041 of them on this repo's CHANGELOG) — on the long lists this tool
+        // exists for, that dominates the mutation itself.
+        const listStart = at - pos.textOffset - flatOffsetWithinList(target.list, target.index);
+        const insertedSpan = flatSpanOfChildren(target.list, insertAt, items.length, listStart);
+        if (insertedSpan) {
+          stampClaudeRange(r.doc, toFlatOffset(insertedSpan.from), toFlatOffset(insertedSpan.to));
         }
 
         return mcpSuccess({
