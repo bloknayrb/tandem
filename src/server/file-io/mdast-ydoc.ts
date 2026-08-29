@@ -1,8 +1,15 @@
-import type { AlignType, PhrasingContent, Root, RootContent, Table } from "mdast";
+import type { AlignType, ListItem, PhrasingContent, Root, RootContent, Table } from "mdast";
 import * as Y from "yjs";
 import { sanitizeImageSrc } from "../../shared/image-src-safety.js";
 import { normalizeHardBreaks } from "./hardbreak-normalize.js";
 import { serializeMdastBlock, serializeMdastInline } from "./markdown.js";
+
+/** A pass-2 text population op: attach the Y.XmlText first, then run these. */
+export type DeferredText = {
+  xmlText: Y.XmlText;
+  nodes?: PhrasingContent[];
+  plainText?: string;
+};
 
 export const MARKDOWN_HTML_ATTR = "markdownHtml";
 /**
@@ -101,6 +108,83 @@ function insertBlocks(doc: Y.Doc, tree: Root, index: number): void {
   normalizeHardBreaks(allElements);
 }
 
+/**
+ * Build one detached `listItem` from an mdast list item.
+ *
+ * Extracted from the `list` case so `tandem_editList` can build items WITHOUT
+ * building a list around them. That is not a stylistic preference: a detached
+ * `Y.XmlElement`'s `.get(i)` returns `undefined` (prelim content is unreadable),
+ * so items cannot be lifted back out of a built-but-unattached list, and moving
+ * an already-attached element into a new parent throws. Building the items
+ * directly is the only shape that works.
+ */
+export function buildListItem(item: ListItem, deferred: DeferredText[]): Y.XmlElement {
+  const listItem = new Y.XmlElement("listItem");
+  if (item.spread) listItem.setAttribute("spread", true as any);
+  // GFM task list: a list item with non-null `checked` carries the tri-state as
+  // an attribute on the ordinary listItem (#982). `null` (plain bullet) stores
+  // no attribute so the editor's PM-default `null` reconciles without a phantom
+  // transaction. Stored as a real boolean — the same representation
+  // y-prosemirror writes when a user toggles the checkbox — so it round-trips
+  // byte-identically (yjs ContentAny).
+  if (item.checked != null) {
+    listItem.setAttribute("checked", item.checked as any);
+  }
+  let itemIndex = 0;
+  for (const child of item.children) {
+    for (const c of blockToYxml(child, deferred)) {
+      listItem.insert(itemIndex, [c]);
+      itemIndex++;
+    }
+  }
+  ensureBlockChild(listItem, itemIndex);
+  return listItem;
+}
+
+/**
+ * Build detached `listItem`s from a parsed markdown tree, for insertion into an
+ * EXISTING list.
+ *
+ * Total by construction: a parsed `list` contributes its items; any other block
+ * (a paragraph, a heading, a fenced block) is wrapped as one item. `listItem` is
+ * `block+` since #1664, so a non-paragraph first child is legal and needs no
+ * filler — before that fix, wrapping a heading here would have produced a node
+ * the client schema rejected, and a rejection is answered by deleting the node
+ * out of the shared Y.Doc.
+ *
+ * Returns the items and the deferred text ops. The caller MUST attach the items
+ * first and only then run `populateDeferredText` — a detached `Y.XmlText`
+ * reverses segment order on attach (ADR-001).
+ */
+export function buildListItemsFromTree(tree: Root): {
+  items: Y.XmlElement[];
+  deferred: DeferredText[];
+} {
+  const deferred: DeferredText[] = [];
+  const items: Y.XmlElement[] = [];
+  for (const node of tree.children) {
+    if (node.type === "list") {
+      for (const item of node.children) items.push(buildListItem(item, deferred));
+    } else {
+      items.push(
+        buildListItem({ type: "listItem", spread: false, children: [node] } as ListItem, deferred),
+      );
+    }
+  }
+  return { items, deferred };
+}
+
+/** Run the pass-2 text population for elements that are now attached. */
+export function populateDeferredText(deferred: DeferredText[]): void {
+  for (const { xmlText, nodes, plainText } of deferred) {
+    if (nodes) {
+      processInline(xmlText, nodes, {});
+    } else if (plainText != null) {
+      xmlText.insert(0, plainText);
+    }
+  }
+}
+
 /** Convert a block-level MDAST node to one or more Y.XmlElements */
 function blockToYxml(
   node: RootContent,
@@ -178,27 +262,7 @@ function blockToYxml(
       if (node.spread) el.setAttribute("spread", true as any);
       let listIndex = 0;
       for (const item of node.children) {
-        const listItem = new Y.XmlElement("listItem");
-        if (item.spread) listItem.setAttribute("spread", true as any);
-        // GFM task list: a list item with non-null `checked` carries the
-        // tri-state as an attribute on the ordinary listItem (#982). `null`
-        // (plain bullet) stores no attribute so the editor's PM-default `null`
-        // reconciles without a phantom transaction. Stored as a real boolean —
-        // the same representation y-prosemirror writes when a user toggles the
-        // checkbox — so it round-trips byte-identically (yjs ContentAny).
-        if (item.checked != null) {
-          listItem.setAttribute("checked", item.checked as any);
-        }
-        let itemIndex = 0;
-        for (const child of item.children) {
-          const childEls = blockToYxml(child, deferred);
-          for (const c of childEls) {
-            listItem.insert(itemIndex, [c]);
-            itemIndex++;
-          }
-        }
-        ensureBlockChild(listItem, itemIndex);
-        el.insert(listIndex, [listItem]);
+        el.insert(listIndex, [buildListItem(item, deferred)]);
         listIndex++;
       }
       return [el];

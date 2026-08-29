@@ -2,7 +2,7 @@
 
 These tools are exposed over the MCP protocol. **Claude Code is Tandem's default and most-tested client** ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), but the tools are available to any MCP-capable client connecting to `http://127.0.0.1:3479/mcp`.
 
-Tandem exposes 32 tools via MCP HTTP (29 active, 3 deprecated stubs that return MCP error responses with code `DEPRECATED`). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 33 tools via MCP HTTP (30 active, 3 deprecated stubs that return MCP error responses with code `DEPRECATED`). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -287,6 +287,43 @@ Append **structured** markdown to the end of the document. Unlike `tandem_edit` 
 // Seed an empty scratchpad, then add a section:
 tandem_scratchpad()
 tandem_appendContent({ content: "# Notes\n\n- First point\n- Second point\n\nA closing paragraph." })
+```
+
+---
+
+### tandem_editList
+
+Change the **shape** of a list: add an item, remove one, or tick a checkbox. Does not change the wording of an item -- `tandem_edit` does that, and since it resolves to the textblock owning an offset it reaches inside list items, blockquotes and table cells.
+
+Target an item by a flat offset anywhere inside it. Flat text is structurally blind (`- [ ] task item` reads as bare `task item`), so call `tandem_getOutline({ includeBlocks: true })` first to see which lines are items, their nesting, and their checkbox state.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `at` | number | yes | Flat offset anywhere inside the target list item. |
+| `op` | string | yes | `insertAfter` \| `insertBefore` \| `remove` \| `setChecked`. |
+| `markdown` | string | insert only | The NEW item(s), one per line (`- text`); indent two spaces to nest. A non-list block is wrapped as an item. Never re-send the target item's own text. |
+| `checked` | boolean \| null | `setChecked` only | `true` ticks, `false` unticks, `null` removes the checkbox and leaves a plain bullet. |
+| `documentId` | string | no | Target document ID (defaults to active document) |
+
+**Returns:**
+```json
+{ "edited": true, "op": "insertAfter", "insertedCount": 1, "atItemIndex": 2 }
+```
+
+**Errors:** `FORMAT_ERROR` (read-only; a plaintext format, which has no list structure; or `setChecked` on a `.docx`, since Word lists have no checkbox state), `INVALID_RANGE` (offset is not inside a list -- the message names `tandem_edit` and `tandem_appendContent` as the alternatives), `INVALID_ARGUMENT` (missing `markdown` or `checked`), `FILE_TOO_LARGE`, `EMPTY_DOCUMENT`, `NO_DOCUMENT`
+
+**Format support:** markdown **and `.docx`** -- Word documents hold real bulleted and numbered lists and Tandem writes them back on save, so the ops apply there too; only `setChecked` is markdown-only. Plaintext formats (`.txt`, `.csv`, `.html`, unknown extensions) have no list model at all.
+
+**Why path-addressed rather than range-replacing:** a `replaceBlock(from, to, markdown)` shape was drafted and withdrawn. It would make the caller re-emit every block it touched, but `extractText` strips inline marks and there is no per-block markdown reader -- so every call that meant to *preserve* a sibling would have silently deleted that sibling's bold, links and code spans. Each op here touches only what changes: `setChecked` is a single attribute write, and an insert never rebuilds a neighbour.
+
+**Example:**
+```
+// See the list, then add an item after the second one:
+tandem_getOutline({ includeBlocks: true })
+tandem_editList({ at: 42, op: "insertAfter", markdown: "- A new point" })
+
+// Tick a task off:
+tandem_editList({ at: 42, op: "setChecked", checked: true })
 ```
 
 **Notes:**

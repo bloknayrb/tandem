@@ -16,7 +16,11 @@ import { flattenHeadingText, headingPrefix } from "../../shared/offsets.js";
 import { withMcp } from "../../shared/origins.js";
 import { isPlaintextFormat } from "../../shared/plaintext-format.js";
 import { isTopLevel, samePath } from "../../shared/positions/types.js";
-import { elementAtPath, resolveToTextblock } from "../../shared/positions/ydoc.js";
+import {
+  elementAtPath,
+  getElementTextLength as getElTextLen,
+  resolveToTextblock,
+} from "../../shared/positions/ydoc.js";
 import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
@@ -56,6 +60,13 @@ import {
   toDocListEntry,
 } from "./document-service.js";
 import { gatedTool, licenseGate } from "./license-gate.js";
+import {
+  attachItems,
+  buildItems,
+  findListTarget,
+  listFormatRefusal,
+  removeItemAndCollapse,
+} from "./list-edit.js";
 import {
   getTextContentOutputShape,
   listDocumentsOutputShape,
@@ -740,6 +751,162 @@ export function registerDocumentTools(server: McpServer): void {
   // 1 MB inline cap — mdParser.parse is synchronous and blocks the event loop;
   // the 50 MB file cap is far too loose for an inline MCP argument.
   const MAX_APPEND_CONTENT_BYTES = 1_000_000;
+
+  server.tool(
+    "tandem_editList",
+    "Change the SHAPE of a list: add an item, remove one, or tick a checkbox. Does not change " +
+      "the wording of an item — use tandem_edit for that. Target an item by a flat offset " +
+      "anywhere inside it; call tandem_getOutline({ includeBlocks: true }) to see the list's " +
+      "items and their offsets. Markdown and .docx documents only.",
+    {
+      at: z
+        .number()
+        .describe(
+          "A flat character offset anywhere inside the target list item. Take it from a blocks[] " +
+            "entry in tandem_getOutline({ includeBlocks: true }) — do not reuse one from before " +
+            "your last edit.",
+        ),
+      op: z
+        .enum(["insertAfter", "insertBefore", "remove", "setChecked"])
+        .describe(
+          "insertAfter / insertBefore add new item(s) next to the target and need `markdown`. " +
+            "remove deletes the target item and everything nested under it. setChecked ticks or " +
+            "unticks its checkbox and needs `checked`.",
+        ),
+      markdown: z
+        .string()
+        .optional()
+        .describe(
+          "insertAfter / insertBefore only. One item per line as markdown (`- text`); indent two " +
+            "spaces to nest under the line above. A block that is not a list item is wrapped as " +
+            "one. Only the NEW items — never re-send the text of the item you are targeting, " +
+            "which is left untouched.",
+        ),
+      checked: z
+        .union([z.boolean(), z.null()])
+        .optional()
+        .describe(
+          "setChecked only. true ticks the box, false unticks it, null removes the checkbox and " +
+            "leaves an ordinary bullet. Markdown only — Word lists have no checkbox state.",
+        ),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Target document ID (defaults to active document)"),
+    },
+    gatedTool("tandem_editList", async ({ at, op, markdown, checked, documentId }) => {
+      return withTypingPresence({ tool: "tandem_editList", documentId }, async () => {
+        const r = requireDocument(documentId);
+        if (!r) return noDocumentError();
+
+        const docState = getCurrentDoc(documentId);
+        if (docState?.readOnly) {
+          return mcpError("FORMAT_ERROR", "Document is read-only — cannot edit lists.");
+        }
+        const refusal = listFormatRefusal(docState?.format);
+        if (refusal) return mcpError("FORMAT_ERROR", refusal);
+
+        const fragment = r.doc.getXmlFragment("default");
+        if (fragment.length === 0) {
+          return mcpError(
+            "EMPTY_DOCUMENT",
+            "Document is empty — no list to edit. Seed content with tandem_appendContent.",
+          );
+        }
+
+        const pos = resolveToTextblock(fragment, toFlatOffset(at));
+        if (!pos) {
+          return mcpError("INVALID_RANGE", `Cannot resolve offset ${at} to a block.`);
+        }
+        const target = findListTarget(fragment, pos.path);
+        if ("error" in target) return mcpError("INVALID_RANGE", target.error);
+
+        // Everything that can refuse must refuse BEFORE the transaction — Y.js
+        // does not roll back on throw, so a late bail is a partial commit.
+        if (op === "setChecked") {
+          if (checked === undefined) {
+            return mcpError(
+              "INVALID_ARGUMENT",
+              "setChecked requires `checked` (true, false or null).",
+            );
+          }
+          if (docState?.format === "docx") {
+            return mcpError(
+              "FORMAT_ERROR",
+              "Word lists have no checkbox state, so setChecked does not apply to a .docx. " +
+                "The other ops work on this document.",
+            );
+          }
+          withMcp(r.doc, () => {
+            if (checked === null) target.item.removeAttribute("checked");
+            // Stored as a real boolean, matching what y-prosemirror writes when a
+            // user toggles the checkbox, so it round-trips byte-identically.
+            else target.item.setAttribute("checked", checked as any);
+          });
+          return mcpSuccess({ edited: true, op, itemIndex: target.index + 1, checked });
+        }
+
+        if (op === "remove") {
+          withMcp(r.doc, () => removeItemAndCollapse(fragment, target));
+          return mcpSuccess({ edited: true, op, removedItemIndex: target.index + 1 });
+        }
+
+        // insertAfter / insertBefore
+        if (!markdown || markdown.trim() === "") {
+          return mcpError("INVALID_ARGUMENT", `${op} requires \`markdown\` for the new item(s).`);
+        }
+        if (Buffer.byteLength(markdown, "utf-8") > MAX_APPEND_CONTENT_BYTES) {
+          return mcpError(
+            "FILE_TOO_LARGE",
+            `markdown exceeds the ${MAX_APPEND_CONTENT_BYTES}-byte limit.`,
+          );
+        }
+
+        // Parse AND build outside the transaction. Parsing alone is not enough:
+        // `blockToYxml`'s default arm calls the remark stringifier, so a throw
+        // during the build would land mid-transaction with the delete already
+        // applied and nothing replacing it.
+        const tree = mdParser.parse(markdown) as Root;
+        const { items, deferred } = buildItems(tree);
+        if (items.length === 0) {
+          return mcpError("INVALID_ARGUMENT", "markdown parsed to no list items.");
+        }
+
+        const insertAt = op === "insertAfter" ? target.index + 1 : target.index;
+        withMcp(r.doc, () => attachItems(target.list, insertAt, items, deferred));
+
+        // Stamp the inserted items as Claude's, using the per-range scheme
+        // tandem_edit uses. `stampClaudeAuthorshipWholeDoc` is unusable here: it
+        // walks top level only, keys entries by fragment index, and has no end
+        // bound, so a mid-document insert would re-key every later block.
+        const stampFrom = toFlatOffset(at - pos.textOffset);
+        const stampTo = toFlatOffset(
+          stampFrom + items.reduce((n, el) => n + getElTextLen(el) + 1, 0),
+        );
+        const anchored = anchoredRange(r.doc, stampFrom, stampTo);
+        if (anchored.ok) {
+          const authorshipMap = r.doc.getMap(Y_MAP_AUTHORSHIP);
+          const rangeId = generateAuthorshipId("claude");
+          withMcp(r.doc, () => {
+            authorshipMap.set(rangeId, {
+              id: rangeId,
+              author: "claude",
+              range: anchored.range,
+              relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
+              timestamp: Date.now(),
+            } satisfies AuthorshipRange);
+          });
+        }
+
+        return mcpSuccess({
+          edited: true,
+          op,
+          insertedCount: items.length,
+          atItemIndex: insertAt + 1,
+        });
+      });
+    }),
+  );
 
   server.tool(
     "tandem_appendContent",
