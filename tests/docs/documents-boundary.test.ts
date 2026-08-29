@@ -293,6 +293,19 @@ const FAN_IN = [
   // the cycle being gone rather than deferred.
   "server/mcp/document-service.ts -> server/documents/open.ts (value) x1",
   "server/mcp/presence-expiry.ts -> server/documents/registry.ts (value) x1",
+  // Route infrastructure reaching the open seam, added by ADR-034 Unit 7b.
+  // `send-open-result.ts` owns `sendOpenResult`, the one place the three open
+  // routes project `OpenSuccess` onto the wire — the alternative was three
+  // routes each importing `toWireResult` themselves, which is three edges
+  // instead of one and three places to forget the projection.
+  //
+  // It is deliberately NOT in `_shared.ts`, where it first landed: every route
+  // imports that module, so the edge below would be inherited by all of them
+  // and pull `open.ts -> autosave.ts -> mcp/document-service.ts` into their
+  // module init. `rename-route.test.ts` went red on exactly that. A leaf every
+  // route imports has to stay a leaf, and this inventory is where a future
+  // "just put it in _shared" would show up as a widened edge.
+  "server/mcp/routes/send-open-result.ts -> server/documents/open.ts (value) x1",
   "server/mcp/routes/backups.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-raw.ts -> server/documents/registry.ts (value) x1",
   "server/mcp/routes/document-reload.ts -> server/documents/registry.ts (value) x1",
@@ -587,14 +600,19 @@ describe("runtime export surfaces", () => {
     const mod = await import("../../src/server/documents/open.js");
     expect(
       Object.keys(mod).sort(),
-      "the seam's own surface — 7a added openFromRestore here and 7b adds the result discriminator",
+      "the seam's own surface — 7a added openFromRestore here, 7b added toWireResult",
     ).toEqual(
       [
+        // `toWireResult` is the single projector from the internal `OpenSuccess`
+        // union onto the flat JSON six sites put on the wire. It is exported
+        // because those six live in three other modules — a second copy of the
+        // projection is exactly what Unit 7b exists to prevent.
         "kindOfOpenResult",
         "openFromDisk",
         "openFromRestore",
         "openFromUpload",
         "openScratchpad",
+        "toWireResult",
       ].sort(),
     );
   });

@@ -115,10 +115,10 @@ describe("openFromDisk — duplicate detection", () => {
     await fs.writeFile(f, "# Dup");
 
     const first = await openFromDisk(f);
-    expect(first.alreadyOpen).toBe(false);
+    expect(first.kind).not.toBe("already-open");
 
     const second = await openFromDisk(f);
-    expect(second.alreadyOpen).toBe(true);
+    expect(second.kind).toBe("already-open");
     expect(second.documentId).toBe(first.documentId);
   });
 
@@ -130,7 +130,7 @@ describe("openFromDisk — duplicate detection", () => {
     const oldPath = path.join(tmpDir, "before.md");
     await fs.writeFile(oldPath, "# Body");
     const first = await openFromDisk(oldPath);
-    expect(first.alreadyOpen).toBe(false);
+    expect(first.kind).not.toBe("already-open");
 
     // Rename on disk + reflect the promote-in-place registry state (same id).
     const newPath = path.join(tmpDir, "after.md");
@@ -140,7 +140,7 @@ describe("openFromDisk — duplicate detection", () => {
     addDoc(first.documentId, { ...state, filePath: newPath });
 
     const second = await openFromDisk(newPath);
-    expect(second.alreadyOpen).toBe(true);
+    expect(second.kind).toBe("already-open");
     expect(second.documentId).toBe(first.documentId);
     // Exactly one tab for this file — the fallback prevented a duplicate.
     const fileDocs = [...getOpenDocs().values()].filter(
@@ -237,7 +237,7 @@ describe("openFromDisk — readOnly option", () => {
     const result = await openFromDisk(f, { readOnly: true });
 
     expect(result.readOnly).toBe(true);
-    expect(result.alreadyOpen).toBe(false);
+    expect(result.kind).not.toBe("already-open");
     // Y.Doc metadata should also reflect the flag
     const doc = getOrCreateDocument(result.documentId);
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
@@ -263,7 +263,7 @@ describe("openFromDisk — readOnly option", () => {
 
     // Re-open with readOnly:true — should upgrade in-place
     const second = await openFromDisk(f, { readOnly: true });
-    expect(second.alreadyOpen).toBe(true);
+    expect(second.kind).toBe("already-open");
     expect(second.readOnly).toBe(true);
 
     // Open-docs registry should reflect the upgrade
@@ -285,7 +285,7 @@ describe("openFromDisk — readOnly option", () => {
 
     // Re-open without specifying readOnly — should NOT downgrade
     const second = await openFromDisk(f);
-    expect(second.alreadyOpen).toBe(true);
+    expect(second.kind).toBe("already-open");
     // readOnly reflects the re-open's derived value (false for .md), but the
     // registry and Y.Doc should NOT have been downgraded
     const openDocs = getOpenDocs();
@@ -357,6 +357,9 @@ describe("handleOpen — readOnly propagation", () => {
 
     await handleOpen(req, res);
 
+    // Reads the WIRE shape, not the union: the route ships `toWireResult`'s
+    // flat booleans, so this stays `alreadyOpen` on purpose. The one assertion
+    // in this file that must NOT be migrated to `kind`.
     const data = (capturedBody as { data: { readOnly: boolean; alreadyOpen: boolean } }).data;
     expect(data.alreadyOpen).toBe(true);
     expect(data.readOnly).toBe(true);

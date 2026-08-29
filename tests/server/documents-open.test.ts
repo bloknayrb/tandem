@@ -40,12 +40,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   return { ...original, SESSION_DIR: pathMod.join(appDataDir, "sessions") };
 });
 
-import {
-  kindOfOpenResult,
-  type OpenFileResult,
-  openFromUpload,
-  openScratchpad,
-} from "../../src/server/documents/open.js";
+import { openFromUpload, openScratchpad } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { removeDocument } from "../../src/server/yjs/provider.js";
@@ -305,43 +300,9 @@ describe("the redirect invariant (Unit 6)", () => {
   );
 });
 
-describe("kindOfOpenResult", () => {
-  function baseResult(overrides: Partial<OpenFileResult>): OpenFileResult {
-    return {
-      documentId: "doc-1",
-      filePath: "/tmp/doc-1.md",
-      fileName: "doc-1.md",
-      format: "md",
-      readOnly: false,
-      source: "file",
-      tokenEstimate: 0,
-      pageEstimate: 0,
-      restoredFromSession: false,
-      alreadyOpen: false,
-      forceReloaded: false,
-      ...overrides,
-    };
-  }
-
-  it("returns 'force-reloaded' when forceReloaded is true (highest priority)", () => {
-    expect(
-      kindOfOpenResult(
-        baseResult({ forceReloaded: true, alreadyOpen: true, restoredFromSession: true }),
-      ),
-    ).toBe("force-reloaded");
-  });
-
-  it("returns 'already-open' when alreadyOpen is true but not force-reloaded", () => {
-    expect(kindOfOpenResult(baseResult({ alreadyOpen: true, restoredFromSession: true }))).toBe(
-      "already-open",
-    );
-  });
-
-  it("returns 'restored' when only restoredFromSession is true", () => {
-    expect(kindOfOpenResult(baseResult({ restoredFromSession: true }))).toBe("restored");
-  });
-
-  it("returns 'fresh' when none of the flags are set", () => {
-    expect(kindOfOpenResult(baseResult({}))).toBe("fresh");
-  });
-});
+// `kindOfOpenResult`'s precedence is pinned in
+// `tests/server/open-result-message.test.ts`, over the full 2^3 cross product.
+// It lived here as four reachable cases; one fixture in two files is what
+// drifts. The message chain that USED to be a second copy of that precedence
+// now switches on `kind`, so the two are pinned as a round trip rather than as
+// two orderings that happen to agree.
