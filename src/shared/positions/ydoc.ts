@@ -29,7 +29,13 @@
 
 import * as Y from "yjs";
 import { headingPrefixLength as sharedHeadingPrefixLength } from "../offsets.js";
-import type { ElementPosition, FlatOffset, RelativeRange, SerializedRelPos } from "./types.js";
+import type {
+  ElementPosition,
+  FlatOffset,
+  RelativeRange,
+  SerializedRelPos,
+  TextblockPosition,
+} from "./types.js";
 import { toSerializedRelPos } from "./types.js";
 
 /**
@@ -139,9 +145,131 @@ export function getHeadingPrefixLength(node: Y.XmlElement): number {
   return 0;
 }
 
+/** True for the block types that own text directly and may be edited in place. */
+export function isTextblockName(name: string): boolean {
+  return name === "paragraph" || name === "heading" || name === "codeBlock";
+}
+
 /**
- * Resolve a flat character offset to a Y.Doc element position.
- * Needed by tandem_edit for cross-element deletion logic.
+ * Descend into a container to find the textblock owning `offsetInElement`.
+ *
+ * Mirrors `collectElementFlat`'s separator contract exactly, and it has to:
+ * a fourth independent walker over that contract is how the three existing ones
+ * would drift. Sibling container children cost one FLAT_SEPARATOR between them
+ * (the `hasPriorContent` gate); a `hardBreak` costs 1 and REPLACES the
+ * separator; a nested heading contributes NO prefix.
+ *
+ * Returns the path suffix (child indices) and the offset within the textblock,
+ * or null when the descent cannot land in one (an image-only list item, an
+ * empty container).
+ */
+function descendToTextblock(
+  element: Y.XmlElement,
+  offsetInElement: number,
+): { suffix: number[]; textOffset: number } | null {
+  if (isTextblockName(element.nodeName)) {
+    return { suffix: [], textOffset: offsetInElement };
+  }
+
+  let accumulated = 0;
+  let hasPriorContent = false;
+  let lastChild: { index: number; el: Y.XmlElement; len: number } | null = null;
+
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      // Inline text directly under a container (mixed content). Not a textblock,
+      // but it occupies flat characters, so keep the accumulator honest.
+      accumulated += child.length;
+      hasPriorContent = true;
+      continue;
+    }
+    if (!(child instanceof Y.XmlElement)) continue;
+    if (isHardBreakElement(child)) {
+      accumulated += 1;
+      hasPriorContent = true;
+      continue;
+    }
+    if (hasPriorContent) {
+      if (accumulated === offsetInElement && lastChild) {
+        // The offset sits ON the separator — resolve to the END of the block
+        // before it, matching resolveToElement's own boundary behaviour.
+        const tail = descendToTextblock(lastChild.el, lastChild.len);
+        return tail
+          ? { suffix: [lastChild.index, ...tail.suffix], textOffset: tail.textOffset }
+          : null;
+      }
+      accumulated += 1;
+    }
+    const childLen = getElementTextLength(child);
+    if (accumulated + childLen >= offsetInElement) {
+      const inner = descendToTextblock(child, offsetInElement - accumulated);
+      if (inner) return { suffix: [i, ...inner.suffix], textOffset: inner.textOffset };
+    }
+    accumulated += childLen;
+    hasPriorContent = true;
+    lastChild = { index: i, el: child, len: childLen };
+  }
+
+  // Past the end: clamp to the last block child, as resolveToElement does.
+  if (lastChild) {
+    const tail = descendToTextblock(lastChild.el, lastChild.len);
+    if (tail) return { suffix: [lastChild.index, ...tail.suffix], textOffset: tail.textOffset };
+  }
+  return null;
+}
+
+/**
+ * Resolve a flat character offset to the TEXTBLOCK that owns it, at any depth.
+ *
+ * `resolveToElement` stops at the fragment's direct children, so every offset
+ * inside a list resolves to the `bulletList` container — which is why
+ * `tandem_edit` could not touch a list item and told callers to "edit a specific
+ * paragraph or list item instead", advice no tool could follow.
+ *
+ * Returns null when the offset cannot land in a textblock at all (an empty
+ * document, or a container holding only an image).
+ */
+export function resolveToTextblock(
+  fragment: Y.XmlFragment,
+  charOffset: FlatOffset,
+): TextblockPosition | null {
+  const top = resolveToElement(fragment, charOffset);
+  if (!top) return null;
+  const node = fragment.get(top.elementIndex);
+  if (!(node instanceof Y.XmlElement)) return null;
+
+  const inner = descendToTextblock(node, top.textOffset);
+  if (!inner) return null;
+  return {
+    path: [top.elementIndex, ...inner.suffix],
+    textOffset: inner.textOffset,
+    clampedFromPrefix: top.clampedFromPrefix,
+  };
+}
+
+/** Walk a `TextblockPosition.path` back to the element it names. */
+export function elementAtPath(fragment: Y.XmlFragment, path: number[]): Y.XmlElement | null {
+  let node: Y.XmlElement | null = null;
+  let container: { get(i: number): unknown; length: number } = fragment;
+  for (const index of path) {
+    if (index < 0 || index >= container.length) return null;
+    const child = container.get(index);
+    if (!(child instanceof Y.XmlElement)) return null;
+    node = child;
+    container = child;
+  }
+  return node;
+}
+
+/**
+ * Resolve a flat character offset to a top-level Y.Doc element position.
+ *
+ * Kept top-level deliberately: the cross-element `tandem_edit` path needs
+ * `fragment.delete` indices, and `relPosToFlatOffset` / `anchoredRange` /
+ * `stampClaudeAuthorshipWholeDoc` all walk the fragment's direct children.
+ * `resolveToTextblock` is the one to reach for when you need the block that
+ * actually owns the text.
  */
 export function resolveToElement(
   fragment: Y.XmlFragment,

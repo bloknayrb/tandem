@@ -74,6 +74,46 @@ export interface ElementPosition {
   clampedFromPrefix: boolean;
 }
 
+/**
+ * A flat offset resolved all the way down to the textblock that owns it.
+ *
+ * `ElementPosition` stops at the top level, which is right for the cross-element
+ * edit path (it needs `fragment.delete` indices) and wrong for everything else:
+ * an offset inside a list resolves to the `bulletList` CONTAINER, whose flat
+ * span covers every item. This carries the deepest textblock instead.
+ *
+ * There is deliberately no `topIndex` convenience field. It would be `path[0]`,
+ * and an equality test on it is a corruption trap: two different list items
+ * share a top-level index, so `startPos.topIndex === endPos.topIndex` reads a
+ * cross-item range as a same-block one and edits with offsets measured against
+ * two different elements — inside the transaction, which Y.js does not roll
+ * back. The two questions have distinct tests: "is this top-level?" is
+ * `path.length === 1`, and "same block?" is full path equality (`samePath`).
+ */
+export interface TextblockPosition {
+  /** Child indices from the fragment root down to the textblock. Never empty. */
+  path: number[];
+  /** Flat offset relative to the textblock's own start. */
+  textOffset: number;
+  /**
+   * True if the offset fell inside a heading prefix and was clamped to 0.
+   * Top-level headings only — `extractTextWithBreaks` emits a prefix in its own
+   * top-level loop, while a nested heading is traversed by `collectElementFlat`,
+   * which emits none.
+   */
+  clampedFromPrefix: boolean;
+}
+
+/** Whether two resolved positions land in the very same textblock. */
+export function samePath(a: TextblockPosition, b: TextblockPosition): boolean {
+  return a.path.length === b.path.length && a.path.every((v, i) => v === b.path[i]);
+}
+
+/** Whether a resolved position is a direct child of the fragment root. */
+export function isTopLevel(p: TextblockPosition): boolean {
+  return p.path.length === 1;
+}
+
 /** Resolution method used by annotationToPmRange, for diagnostic observability. */
 export type ResolutionMethod = "rel" | "flat";
 

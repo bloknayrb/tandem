@@ -15,6 +15,8 @@ import {
 import { flattenHeadingText, headingPrefix } from "../../shared/offsets.js";
 import { withMcp } from "../../shared/origins.js";
 import { isPlaintextFormat } from "../../shared/plaintext-format.js";
+import { isTopLevel, samePath } from "../../shared/positions/types.js";
+import { elementAtPath, resolveToTextblock } from "../../shared/positions/ydoc.js";
 import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
@@ -24,7 +26,7 @@ import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast } from "../file-io/mdast-ydoc.js";
 // Position system
-import { anchoredRange, resolveToElement, validateRange } from "../positions.js";
+import { anchoredRange, validateRange } from "../positions.js";
 import { saveSession } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { convertToMarkdown } from "./convert.js";
@@ -36,7 +38,6 @@ import {
   getHeadingPrefixLength,
   mergeInlineTail,
   replaceFlatRangeInElement,
-  TEXTBLOCK_NODES,
 } from "./document-model.js";
 // Document service (state management)
 import {
@@ -582,43 +583,68 @@ export function registerDocumentTools(server: McpServer): void {
           }
 
           const fragment = r.doc.getXmlFragment("default");
-          const startPos = resolveToElement(fragment, from);
-          const endPos = resolveToElement(fragment, to);
+          // Resolve to the TEXTBLOCK that owns each offset, at any depth. The old
+          // `resolveToElement` pair stopped at the fragment's direct children, so
+          // every offset inside a list resolved to the `bulletList` CONTAINER and
+          // was rejected with "edit a specific paragraph or list item instead" —
+          // advice no tool could follow, because none could address a nested block.
+          const startPos = resolveToTextblock(fragment, from);
+          const endPos = resolveToTextblock(fragment, to);
 
           if (!startPos || !endPos) {
+            return mcpError(
+              "INVALID_RANGE",
+              `Cannot resolve offset range [${from}, ${to}] to editable text. The range may cover only a container or an image.`,
+            );
+          }
+
+          const startNode = elementAtPath(fragment, startPos.path);
+          const endNode = elementAtPath(fragment, endPos.path);
+          if (!startNode || !endNode) {
             return mcpError(
               "INVALID_RANGE",
               `Cannot resolve offset range [${from}, ${to}] in document.`,
             );
           }
 
-          // Guard: only textblock elements (paragraph, heading, codeBlock) may be
-          // edited. This must reject before the transaction to prevent partial-commit
-          // corruption — Y.js transactions don't roll back on throw.
-          const startNode = fragment.get(startPos.elementIndex);
-          if (!(startNode instanceof Y.XmlElement) || !TEXTBLOCK_NODES.has(startNode.nodeName)) {
+          // Every rejection below MUST precede the first `withMcp` — Y.js does not
+          // roll back a transaction on throw, so a late bail is a partial commit.
+          if (samePath(startPos, endPos)) {
+            // Same textblock at any depth: a list item, a nested item, a table
+            // cell, a blockquote paragraph. `replaceFlatRangeInElement` already
+            // handles multi-XmlText/hardBreak interiors, so depth costs nothing.
+            withMcp(r.doc, () => {
+              replaceFlatRangeInElement(startNode, startPos.textOffset, endPos.textOffset, newText);
+            });
+          } else if (!isTopLevel(startPos) || !isTopLevel(endPos)) {
+            // Cross-block where either end is nested. The top-level algorithm below
+            // is keyed on `fragment.delete` indices and cannot express "delete the
+            // middle items of this list", so refuse rather than corrupt — and name
+            // both retry ranges so the caller's next call is mechanical.
+            //
+            // NB: the test is `isTopLevel` on BOTH ends plus `samePath` above, never
+            // top-level-index equality. Two different list items share a top-level
+            // index, so an index test reads a cross-item range as same-block and
+            // edits with offsets measured against two different elements.
+            const startEnd = toFlatOffset(
+              from + (getElementTextLength(startNode) - startPos.textOffset),
+            );
+            const endStart = toFlatOffset(to - endPos.textOffset);
             return mcpError(
               "INVALID_RANGE",
-              `Target element is a container (${startNode instanceof Y.XmlElement ? startNode.nodeName : "unknown"}) — edit a specific paragraph or list item instead.`,
+              `Range [${from}, ${to}] spans two blocks and at least one is nested (inside a list, ` +
+                `blockquote or table). tandem_edit replaces text within a single block. Edit them ` +
+                `separately — the first ends at ${startEnd}, the second starts at ${endStart} — or ` +
+                `use tandem_appendContent for new block structure.`,
             );
-          }
-          if (startPos.elementIndex !== endPos.elementIndex) {
-            const endNode = fragment.get(endPos.elementIndex);
-            if (!(endNode instanceof Y.XmlElement) || !TEXTBLOCK_NODES.has(endNode.nodeName)) {
-              return mcpError(
-                "INVALID_RANGE",
-                `Target end element is a container (${endNode instanceof Y.XmlElement ? endNode.nodeName : "unknown"}) — edit a specific paragraph or list item instead.`,
-              );
-            }
-          }
-
-          if (startPos.elementIndex !== endPos.elementIndex) {
+          } else {
+            const startIndex = startPos.path[0];
+            const endIndex = endPos.path[0];
             withMcp(r.doc, () => {
-              // Cross-element edit. Each textblock may hold multiple Y.XmlText
-              // children split by sibling hardBreaks, so trims/merges go through the
-              // multi-XmlText helpers — the old first-XmlText-only path dropped the
-              // tail's breaks and later runs (and could throw mid-transaction).
-              const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
+              // Cross-element edit, both ends top-level. Each textblock may hold
+              // multiple Y.XmlText children split by sibling hardBreaks, so
+              // trims/merges go through the multi-XmlText helpers — the old
+              // first-XmlText-only path dropped the tail's breaks and later runs.
               // 1. Trim the start element's tail: delete [startOffset, end).
               replaceFlatRangeInElement(
                 startNode,
@@ -628,14 +654,14 @@ export function registerDocumentTools(server: McpServer): void {
               );
 
               // 2. Delete the whole in-between elements.
-              const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
+              const deleteCount = endIndex - startIndex - 1;
               for (let i = 0; i < deleteCount; i++) {
-                fragment.delete(startPos.elementIndex + 1, 1);
+                fragment.delete(startIndex + 1, 1);
               }
 
               // 3. Trim the end element's head: delete [0, endOffset).
-              const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
-              replaceFlatRangeInElement(endNode, 0, endPos.textOffset, "");
+              const tailNode = fragment.get(startIndex + 1) as Y.XmlElement;
+              replaceFlatRangeInElement(tailNode, 0, endPos.textOffset, "");
 
               // 4. Insert newText at the join (end of start), then fold the end
               //    element's surviving children onto start → [start][newText][end].
@@ -646,15 +672,10 @@ export function registerDocumentTools(server: McpServer): void {
                 const joinAt = startPos.textOffset;
                 replaceFlatRangeInElement(startNode, joinAt, joinAt, newText);
               }
-              mergeInlineTail(startNode, endNode);
+              mergeInlineTail(startNode, tailNode);
 
               // 5. Remove the now-emptied end element.
-              fragment.delete(startPos.elementIndex + 1, 1);
-            });
-          } else {
-            withMcp(r.doc, () => {
-              const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
-              replaceFlatRangeInElement(node, startPos.textOffset, endPos.textOffset, newText);
+              fragment.delete(startIndex + 1, 1);
             });
           }
 
