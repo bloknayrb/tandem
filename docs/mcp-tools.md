@@ -204,10 +204,11 @@ tandem_getTextContent({ section: "Cost Summary" })
 
 ### tandem_getOutline
 
-Get document structure (headings only) without full content. Low token cost.
+Get document structure without full content. Headings only by default (low token cost); pass `includeBlocks` to also list every block with the character offsets `tandem_edit` and `tandem_editList` take.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
+| `includeBlocks` | boolean | no | Also return every block: node type, flat `[from, to)` range, nesting path and depth, position within its list, and checkbox state. Roughly one entry per block -- omit on large documents unless you need to edit inside a list or a table. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
@@ -223,7 +224,25 @@ Get document structure (headings only) without full content. Low token cost.
 }
 ```
 
-**Best practice:** Call this first on large documents to understand structure, then use `getTextContent(section)` for targeted reads.
+**With `includeBlocks: true`**, a `blocks` array is added. For `- [ ] todo one` / `- [x] done two`:
+```json
+{
+  "blocks": [
+    { "from": 0, "to": 8,  "node": "paragraph", "path": [0, 0, 0], "depth": 2,
+      "container": "listItem", "listType": "bullet", "listItemIndex": 1, "checked": false },
+    { "from": 9, "to": 17, "node": "paragraph", "path": [0, 1, 0], "depth": 2,
+      "container": "listItem", "listType": "bullet", "listItemIndex": 2, "checked": true }
+  ]
+}
+```
+
+**Why this exists:** the flat text those offsets index is structurally blind -- the list above reads as `"todo one\ndone two"`, with no markers, no nesting and no checkbox state. Without `blocks` there is no way to tell a list item from a paragraph, so the list-editing tools are undiscoverable.
+
+Two details worth knowing, because they are asymmetries in the coordinate system rather than in this tool:
+- A **top-level** heading's `from` points *past* its `"## "` prefix; a **nested** heading (`- # Section`) starts at its text, because the flat projection emits a prefix only at top level.
+- `checked` is **absent** for a plain bullet rather than `false` -- a plain bullet stores no attribute, and reporting `false` would claim an unticked checkbox that is not in the document.
+
+**Best practice:** Call this first on large documents to understand structure, then use `getTextContent(section)` for targeted reads. Call it with `includeBlocks: true` before any `tandem_editList` call, and re-read after an edit rather than reusing stale offsets.
 
 ---
 
@@ -289,6 +308,13 @@ tandem_scratchpad()
 tandem_appendContent({ content: "# Notes\n\n- First point\n- Second point\n\nA closing paragraph." })
 ```
 
+**Notes:**
+- Content is **appended at the end** — it never deletes or overwrites existing content. To replace text, use `tandem_edit`; to reload a file wholesale, use `tandem_open({ force: true })`.
+- Appending shifts no existing offsets, so existing annotations and authorship ranges stay valid.
+- Appended text is attributed to Claude (authorship overlay), matching `tandem_edit`.
+- Markdown documents only. Non-markdown documents are rejected with `FORMAT_ERROR` -- the check is the document's format, not its read-only flag.
+- To add an item **inside** an existing list rather than at the end of the document, use `tandem_editList`.
+
 ---
 
 ### tandem_editList
@@ -325,13 +351,6 @@ tandem_editList({ at: 42, op: "insertAfter", markdown: "- A new point" })
 // Tick a task off:
 tandem_editList({ at: 42, op: "setChecked", checked: true })
 ```
-
-**Notes:**
-- Content is **appended at the end** — it never deletes or overwrites existing content. To replace text, use `tandem_edit`; to reload a file wholesale, use `tandem_open({ force: true })`.
-- Appending shifts no existing offsets, so existing annotations and authorship ranges stay valid.
-- Appended text is attributed to Claude (authorship overlay), matching `tandem_edit`.
-- Markdown documents only in v1. Non-markdown documents are rejected with `FORMAT_ERROR` -- the check is the document's format, not its read-only flag.
-- For arbitrary mid-document insertion (not just append), use `tandem_edit` per block, or open the file after writing it.
 
 ---
 

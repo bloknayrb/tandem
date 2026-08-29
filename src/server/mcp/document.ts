@@ -16,11 +16,7 @@ import { flattenHeadingText, headingPrefix } from "../../shared/offsets.js";
 import { withMcp } from "../../shared/origins.js";
 import { isPlaintextFormat } from "../../shared/plaintext-format.js";
 import { isTopLevel, samePath } from "../../shared/positions/types.js";
-import {
-  elementAtPath,
-  getElementTextLength as getElTextLen,
-  resolveToTextblock,
-} from "../../shared/positions/ydoc.js";
+import { elementAtPath, resolveToTextblock } from "../../shared/positions/ydoc.js";
 import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
@@ -814,6 +810,21 @@ export function registerDocumentTools(server: McpServer): void {
           );
         }
 
+        // Bounds-check BEFORE resolving. `resolveToElement` clamps out-of-range
+        // offsets to the first/last element, so an `at` past the end silently
+        // targets the LAST item and one below zero targets the FIRST — and
+        // `op: "remove"` would then delete an item the caller never named and
+        // report success. A stale offset is exactly the case this tool's own
+        // description warns about, so it must fail loudly rather than guess.
+        const flatLength = extractText(r.doc).length;
+        if (!Number.isInteger(at) || at < 0 || at > flatLength) {
+          return mcpError(
+            "INVALID_RANGE",
+            `Offset ${at} is outside the document (0..${flatLength}). Re-read the list with ` +
+              "tandem_getOutline({ includeBlocks: true }) — an offset from before your last " +
+              "edit may no longer point where you expect.",
+          );
+        }
         const pos = resolveToTextblock(fragment, toFlatOffset(at));
         if (!pos) {
           return mcpError("INVALID_RANGE", `Cannot resolve offset ${at} to a block.`);
@@ -879,12 +890,29 @@ export function registerDocumentTools(server: McpServer): void {
         // tandem_edit uses. `stampClaudeAuthorshipWholeDoc` is unusable here: it
         // walks top level only, keys entries by fragment index, and has no end
         // bound, so a mid-document insert would re-key every later block.
-        const stampFrom = toFlatOffset(at - pos.textOffset);
-        const stampTo = toFlatOffset(
-          stampFrom + items.reduce((n, el) => n + getElTextLen(el) + 1, 0),
-        );
-        const anchored = anchoredRange(r.doc, stampFrom, stampTo);
-        if (anchored.ok) {
+        //
+        // The range is derived from the document AFTER insertion rather than
+        // from the target block's own start. Deriving it from the target stamps
+        // the user's existing item — `insertAfter` puts the new items after it,
+        // so a span starting at the target covers text Claude did not write, and
+        // claiming authorship over the user's prose is worse than claiming none.
+        const insertedBlocks = collectBlocks(r.doc).filter((b) => {
+          if (b.path.length <= target.listPath.length) return false;
+          for (let i = 0; i < target.listPath.length; i++) {
+            if (b.path[i] !== target.listPath[i]) return false;
+          }
+          const itemIndex = b.path[target.listPath.length];
+          return itemIndex >= insertAt && itemIndex < insertAt + items.length;
+        });
+        const anchored =
+          insertedBlocks.length > 0
+            ? anchoredRange(
+                r.doc,
+                toFlatOffset(Math.min(...insertedBlocks.map((b) => b.from))),
+                toFlatOffset(Math.max(...insertedBlocks.map((b) => b.to))),
+              )
+            : null;
+        if (anchored?.ok) {
           const authorshipMap = r.doc.getMap(Y_MAP_AUTHORSHIP);
           const rangeId = generateAuthorshipId("claude");
           withMcp(r.doc, () => {

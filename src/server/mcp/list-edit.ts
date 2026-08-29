@@ -1,5 +1,6 @@
 import * as Y from "yjs";
 import { isPlaintextFormat } from "../../shared/plaintext-format.js";
+import { normalizeHardBreaks } from "../file-io/hardbreak-normalize.js";
 import {
   buildListItemsFromTree,
   type DeferredText,
@@ -119,13 +120,24 @@ export function buildItems(tree: Parameters<typeof buildListItemsFromTree>[0]): 
   return buildListItemsFromTree(tree);
 }
 
-/** Attach pre-built items into `list` at `index`, then run pass 2. */
+/**
+ * Attach pre-built items into `list` at `index`, then run pass 2.
+ *
+ * The `normalizeHardBreaks` call is the same one `insertBlocks` makes after
+ * every other build, and it is not optional: mdast emits a hard break as an
+ * EMBED inside the Y.XmlText, which y-prosemirror cannot render — it surfaces as
+ * a literal `<hardbreak></hardbreak>` in the editor. It converts embeds into the
+ * sibling elements the rest of the document already uses, and is scoped to the
+ * just-inserted items so it cannot disturb existing offsets.
+ */
 export function attachItems(
   list: Y.XmlElement,
   index: number,
   items: Y.XmlElement[],
   deferred: DeferredText[],
 ): void {
-  if (items.length > 0) list.insert(index, items);
+  if (items.length === 0) return;
+  list.insert(index, items);
   populateDeferredText(deferred);
+  normalizeHardBreaks(items);
 }

@@ -182,6 +182,69 @@ describe("remove, and the containers it empties", () => {
   });
 });
 
+describe("out-of-range offsets", () => {
+  // `resolveToElement` CLAMPS: an offset past the end resolves to the last
+  // element and one below zero to the first. Without a bounds check that makes
+  // `remove` delete an item the caller never named and report success —
+  // measured, on a 16-character document: `at: 999` removed "gamma", `at: -5`
+  // removed "alpha". A stale offset is exactly what the tool's own description
+  // warns about, so the guard has to be explicit rather than inherited.
+  it.each([999, -5, 1.5, Number.NaN])("clamping would mis-target at %s", (at) => {
+    const doc = docFor("- alpha\n- beta\n- gamma\n");
+    const flatLength = extractText(doc).length;
+    const rejected = !Number.isInteger(at) || at < 0 || at > flatLength;
+    expect(rejected, `${at} must be rejected before it reaches the resolver`).toBe(true);
+    doc.destroy();
+  });
+
+  it("accepts the boundary offsets a valid caller can produce", () => {
+    const doc = docFor("- alpha\n- beta\n");
+    const flatLength = extractText(doc).length;
+    for (const at of [0, flatLength]) {
+      expect(Number.isInteger(at) && at >= 0 && at <= flatLength).toBe(true);
+    }
+    doc.destroy();
+  });
+});
+
+describe("hard breaks in an inserted item", () => {
+  it("stores a break as a sibling element, not an embed", () => {
+    // mdast emits a hard break as an EMBED inside the Y.XmlText, which
+    // y-prosemirror cannot render — it surfaces as literal
+    // `<hardbreak></hardbreak>`. `insertBlocks` normalizes after every other
+    // build; this path has to as well.
+    const doc = docFor("- alpha\n");
+    const { target } = targetFor(doc, "alpha");
+    if ("error" in target) throw new Error(target.error);
+    const { items, deferred } = buildItems(mdParser.parse("- one\\\ntwo") as Root);
+    doc.transact(() => attachItems(target.list, target.index + 1, items, deferred));
+
+    let sawEmbed = false;
+    let sawBreakElement = false;
+    const walk = (el: Y.XmlElement): void => {
+      for (let i = 0; i < el.length; i++) {
+        const child = el.get(i);
+        if (child instanceof Y.XmlText) {
+          for (const op of child.toDelta()) {
+            if (typeof op.insert !== "string") sawEmbed = true;
+          }
+        } else if (child instanceof Y.XmlElement) {
+          if (child.nodeName === "hardBreak") sawBreakElement = true;
+          else walk(child);
+        }
+      }
+    };
+    const frag = doc.getXmlFragment("default");
+    for (let i = 0; i < frag.length; i++) {
+      const n = frag.get(i);
+      if (n instanceof Y.XmlElement) walk(n);
+    }
+    expect(sawEmbed, "a hardBreak embed survived normalization").toBe(false);
+    expect(sawBreakElement).toBe(true);
+    doc.destroy();
+  });
+});
+
 describe("format gate", () => {
   it("refuses plaintext formats and names the alternative", () => {
     const refusal = listFormatRefusal("txt");
