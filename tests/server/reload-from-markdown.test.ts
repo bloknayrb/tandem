@@ -40,6 +40,7 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
 
 import { openFromDisk, openScratchpad } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { reloadDocumentFromMarkdown } from "../../src/server/documents/reload-family.js";
 import {
   acquireReloadGuard,
   isReloadInProgress,
@@ -47,7 +48,6 @@ import {
 } from "../../src/server/documents/watcher.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import { reloadDocumentFromMarkdown } from "../../src/server/mcp/file-opener.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";

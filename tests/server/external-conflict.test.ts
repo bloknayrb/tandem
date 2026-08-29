@@ -59,6 +59,10 @@ import type { Request, Response } from "express";
 import { resetForTesting as resetDirtyState } from "../../src/server/documents/dirty.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import {
+  reloadDocumentFromMarkdown,
+  resolveExternalConflict,
+} from "../../src/server/documents/reload-family.js";
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { suppressNextChange, watchFile } from "../../src/server/file-watcher.js";
 import { registerDocumentTools } from "../../src/server/mcp/document.js";
@@ -72,10 +76,6 @@ import {
   saveCurrentSession,
   saveDocumentToDisk,
 } from "../../src/server/mcp/document-service.js";
-import {
-  reloadDocumentFromMarkdown,
-  resolveExternalConflict,
-} from "../../src/server/mcp/file-opener.js";
 import { handleResolveExternalConflict } from "../../src/server/mcp/routes/external-conflict.js";
 import { handleSave } from "../../src/server/mcp/routes/save.js";
 import {

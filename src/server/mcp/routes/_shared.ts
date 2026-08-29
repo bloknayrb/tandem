@@ -233,7 +233,7 @@ export function errorCodeToLabel(code: string): string {
 }
 
 /**
- * Map error codes from file-opener to HTTP responses.
+ * Map error codes from the open pipeline (`documents/open.ts`) to HTTP responses.
  *
  * #1294: a raw `fs` error message embeds the absolute path Node was operating
  * on, so echoing `e.message` put the app-data layout in the body of any failed

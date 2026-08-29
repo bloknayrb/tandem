@@ -273,20 +273,29 @@ const FAN_IN = [
   // The deduped version of this list could not see the second statement.
   "server/mcp/document-service.ts -> server/documents/registry.ts (value) x2",
   "server/mcp/document.ts -> server/documents/open.ts (value) x1",
-  "server/mcp/file-opener.ts -> server/documents/autosave.ts (value) x1",
-  "server/mcp/file-opener.ts -> server/documents/registry.ts (value) x1",
-  // The reload family reaching for the shared content machinery. This edge is
-  // the point of the split: leaving `prepareContent`/`clearDocMaps` behind in
-  // file-opener.ts would have made `documents/` import back into `mcp/`.
-  "server/mcp/file-opener.ts -> server/documents/populate.ts (value) x1",
-  "server/mcp/file-opener.ts -> server/documents/annotation-wiring.ts (value) x1",
-  "server/mcp/file-opener.ts -> server/documents/conflict.ts (value) x1",
+  // The reload family's four consumers, reaching it by its name on the seam.
+  //
+  // These four rows REPLACED six of the opposite shape
+  // (`mcp/file-opener.ts -> documents/{autosave,registry,populate,
+  // annotation-wiring,conflict,watcher}.ts`), whose written rationale was that
+  // leaving the shared content machinery behind in `mcp/` would have made
+  // `documents/` import back into `mcp/`. Unit 7c settled that differently and
+  // better: the reload family moved INTO `documents/`, so those six are now
+  // intra-directory calls that no inventory needs to sanction, and what crosses
+  // the boundary is four consumers asking for a published entry point. The
+  // direction reversed, and reversing it is the improvement.
+  //
+  // Which symbols each may take is a separate, narrower question, kept in
+  // `tests/server/documents-open.test.ts`'s SANCTIONED map.
+  "server/mcp/docx-apply.ts -> server/documents/reload-family.ts (value) x1",
+  "server/mcp/routes/backups.ts -> server/documents/reload-family.ts (value) x1",
+  "server/mcp/routes/document-reload.ts -> server/documents/reload-family.ts (value) x1",
+  "server/mcp/routes/external-conflict.ts -> server/documents/reload-family.ts (value) x1",
   // document-service reaching in is the point of the conflict split: it read
   // `Y_MAP_EXTERNAL_CONFLICT` through a helper it owned, so the watcher had to
   // import document-service to ask a question about a map it writes itself.
   "server/mcp/document-service.ts -> server/documents/annotation-wiring.ts (value) x1",
   "server/mcp/document-service.ts -> server/documents/conflict.ts (value) x1",
-  "server/mcp/file-opener.ts -> server/documents/watcher.ts (value) x1",
   "server/mcp/document-service.ts -> server/documents/watcher.ts (value) x1",
   // The restore path, by its name on the seam. This edge replaced a dynamic
   // import whose only purpose was breaking the cycle; a static edge here is
@@ -347,12 +356,33 @@ const FAN_OUT = [
   "server/documents/conflict.ts -> shared/origins.ts (value) x1",
   "server/documents/conflict.ts -> shared/types.ts (type) x1",
   "server/documents/conflict.ts -> shared/utils.ts (value) x1",
-  // Autosave is the ONLY thing in documents/ still reaching
-  // document-service, and it is why `ensureAutoSave` got its own module
-  // instead of riding the open seam: leaving it in open.ts would have put
-  // this edge back on the pipeline that just shed it.
+  // TWO things in documents/ still reach document-service, and they leave
+  // together or not at all. Autosave is why `ensureAutoSave` got its own
+  // module instead of riding the open seam: leaving it in open.ts would have
+  // put this edge back on the pipeline that just shed it. The reload family
+  // brought the second one in with it (Unit 7c) for `canSaveToDisk` /
+  // `saveDocumentToDisk` — a known, deliberate cost of that move, not a
+  // regression. Both disappear when `autoSaveAllToDisk` moves out of
+  // document-service; neither disappears before that.
+  //
+  // This comment read "Autosave is the ONLY thing" until 7c made it false.
   "server/documents/autosave.ts -> server/mcp/document-service.ts (value) x1",
   "server/documents/autosave.ts -> server/session/manager.ts (value) x1",
+  // The reload family, moved here by Unit 7c. Eight of these eleven are new
+  // edges OUT of documents/ that did not exist before, because the code that
+  // makes them used to live in mcp/ — they are the accounting cost of turning
+  // six inbound rows into four, and every one is one-directional.
+  "server/documents/reload-family.ts -> server/file-io/doc-backup.ts (value) x1",
+  "server/documents/reload-family.ts -> server/file-io/docx-size-gate.ts (value) x1",
+  "server/documents/reload-family.ts -> server/file-io/index.ts (value) x1",
+  "server/documents/reload-family.ts -> server/file-watcher.ts (value) x1",
+  "server/documents/reload-family.ts -> server/mcp/document-service.ts (value) x1",
+  "server/documents/reload-family.ts -> server/notifications.ts (value) x1",
+  "server/documents/reload-family.ts -> server/platform.ts (value) x1",
+  "server/documents/reload-family.ts -> server/yjs/provider.ts (value) x1",
+  "server/documents/reload-family.ts -> shared/constants.ts (value) x1",
+  "server/documents/reload-family.ts -> shared/origins.ts (value) x1",
+  "server/documents/reload-family.ts -> shared/utils.ts (value) x1",
   "server/documents/autosave.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/open.ts -> server/file-io/index.ts (value) x1",
   // Two edges from the seam back into mcp/, both ADR-034 residue: format
@@ -586,11 +616,11 @@ describe("runtime export surfaces", () => {
    * `export *`, an aliased path, or a two-hop launder through a new compat
    * module — puts the laundered name back on this list.
    */
-  it("mcp/file-opener.ts exports exactly what is written down", async () => {
-    const mod = await import("../../src/server/mcp/file-opener.js");
+  it("documents/reload-family.ts exports exactly what is written down", async () => {
+    const mod = await import("../../src/server/documents/reload-family.js");
     expect(
       Object.keys(mod).sort(),
-      "ADR-034 shrinks this surface: Unit 7a moves the open entries out, 7c deletes the module. A name reappearing here is the seam being undone, whatever syntax put it there",
+      "ADR-034 shrank this surface to three: Unit 7a moved the open entries out of what was then mcp/file-opener.ts, and 7c moved the remaining reload family here and deleted that module. A name reappearing here is the seam being undone, whatever syntax put it there",
     ).toEqual(
       ["reloadDocumentFromMarkdown", "resolveExternalConflict", "restoreDocumentFromBackup"].sort(),
     );

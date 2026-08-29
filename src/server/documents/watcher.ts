@@ -331,7 +331,7 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
         // callback used to discard that and toast anyway — telling the user a
         // reload happened for a pass that did nothing, sometimes while the
         // in-flight reload was still mid-transaction. Both callers of
-        // `reloadFromDisk` in `mcp/file-opener.ts` already gated on this value;
+        // `reloadFromDisk` in `documents/reload-family.ts` already gated on this value;
         // this was the only one that did not.
         //
         // What suppression costs, stated precisely rather than as "nothing",

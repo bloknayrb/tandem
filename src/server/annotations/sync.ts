@@ -246,8 +246,9 @@ export type ObserverCleanupPhase = "swap" | "close";
  * debounced write doesn't serialize `tombstones: []` after the old observer
  * has been torn down.
  *
- * Callers (the file-opener, via the queue indirection) invoke cleanup with
- * the appropriate phase on doc close or Y.Doc swap.
+ * Callers (the open pipeline and the reload family, via the queue
+ * indirection) invoke cleanup with the appropriate phase on doc close or
+ * Y.Doc swap.
  */
 export function registerAnnotationObserver(
   ctx: SyncContext,
@@ -481,9 +482,9 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
 
 /**
  * Load the on-disk annotation envelope for this doc and merge it with the
- * current Y.Doc state. Called by the file-opener AFTER session restore
- * populates the Y.Doc but BEFORE Hocuspocus starts accepting browser
- * connections for this doc.
+ * current Y.Doc state. Called by the open pipeline (`documents/open.ts`)
+ * AFTER session restore populates the Y.Doc but BEFORE Hocuspocus starts
+ * accepting browser connections for this doc.
  *
  * Algorithm (see the Phase 1 plan §"Merge rules" for background):
  *

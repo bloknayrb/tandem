@@ -8,8 +8,12 @@
  * watcher had to reach into document-service to ask a question about a map it
  * writes itself.
  *
- * Resolution deliberately stays in `mcp/file-opener.ts`: clearing the flag
- * runs the reload lifecycle, which is a different dependency set entirely.
+ * Resolution deliberately lives elsewhere — `resolveExternalConflict` in
+ * `documents/reload-family.ts`: clearing the flag runs the reload lifecycle,
+ * which is a different dependency set entirely. (It was in
+ * `mcp/file-opener.ts` until Unit 7c moved the whole reload family here and
+ * deleted that module; the reason for the split did not change, only the
+ * address.)
  */
 
 import path from "path";

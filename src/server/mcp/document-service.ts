@@ -632,7 +632,7 @@ export interface SaveAsResult {
  * Does NOT wire a file watcher for the new path; that's an intentional v1
  * limitation since scratchpads are typically saved to fresh locations and
  * the existing file-watch attach point (`finalizeDocOpen`) is in
- * file-opener.ts. Auto-save still picks the promoted doc up.
+ * `documents/open.ts`. Auto-save still picks the promoted doc up.
  */
 export async function saveDocumentAsToDisk(
   docId: string,
@@ -1072,11 +1072,12 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
   const newHash = docHash(newPath);
   const format = docState.format;
 
-  // Acquire the lock and resolve the dynamic import INSIDE the try so the finally
-  // always releases the lock — if either threw outside it, the lock would leak and
-  // permanently block this doc's future saves/renames with RENAME_IN_PROGRESS.
-  // file-opener imports document-service statically; the dynamic import avoids the
-  // cycle (same pattern as saveDocumentAsToDisk).
+  // Acquire the lock INSIDE the try so the finally always releases it — taking it
+  // outside and then throwing would leak it and permanently block this doc's future
+  // saves/renames with RENAME_IN_PROGRESS. This paragraph also described a dynamic
+  // import resolved in the same place, to dodge the file-opener/document-service
+  // cycle; ADR-034 Unit 7a removed that import and Unit 7c deleted file-opener, so
+  // only the lock half is left.
   try {
     savingDocs.add(docId);
     const doc = getOrCreateDocument(docId);

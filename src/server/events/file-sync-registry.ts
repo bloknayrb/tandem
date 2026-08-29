@@ -42,7 +42,8 @@ function safeCleanup(
 
 /**
  * Register the durable-annotation sync context for a document. Called by the
- * file-opener after `loadAndMerge` returns its observer cleanup. The cleanup
+ * open pipeline (`documents/open.ts`) after `loadAndMerge` returns its
+ * observer cleanup. The cleanup
  * passed here is what gets invoked on `clearFileSyncContext` or the next
  * `reattachObservers` call.
  *

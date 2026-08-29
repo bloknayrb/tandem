@@ -28,25 +28,25 @@ import {
 } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
-import { wireAnnotationStore } from "../documents/annotation-wiring.js";
-import { ensureAutoSave } from "../documents/autosave.js";
-import { readPendingConflict } from "../documents/conflict.js";
-import { clearAndReload } from "../documents/populate.js";
-import { broadcastOpenDocs, getOpenDocs } from "../documents/registry.js";
+import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
+import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
+import { atomicWrite, atomicWriteBuffer } from "../file-io/index.js";
+import { recordSelfWrite, suppressNextChange } from "../file-watcher.js";
+import { canSaveToDisk, saveDocumentToDisk } from "../mcp/document-service.js";
+import { pushNotification } from "../notifications.js";
+import { resolveAppDataDir } from "../platform.js";
+import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
+import { wireAnnotationStore } from "./annotation-wiring.js";
+import { ensureAutoSave } from "./autosave.js";
+import { readPendingConflict } from "./conflict.js";
+import { clearAndReload } from "./populate.js";
+import { broadcastOpenDocs, getOpenDocs } from "./registry.js";
 import {
   acquireReloadGuard,
   isReloadInProgress,
   releaseReloadGuard,
   reloadFromDisk,
-} from "../documents/watcher.js";
-import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
-import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
-import { atomicWrite, atomicWriteBuffer } from "../file-io/index.js";
-import { recordSelfWrite, suppressNextChange } from "../file-watcher.js";
-import { pushNotification } from "../notifications.js";
-import { resolveAppDataDir } from "../platform.js";
-import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
-import { canSaveToDisk, saveDocumentToDisk } from "./document-service.js";
+} from "./watcher.js";
 
 /**
  * Replace an open document's content from a user-supplied markdown string

@@ -240,7 +240,7 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/server/mcp/document-service.ts": 4,
   "src/server/mcp/document.ts": 1,
   "src/server/mcp/docx-apply.ts": 4,
-  "src/server/mcp/file-opener.ts": 2,
+  "src/server/documents/reload-family.ts": 2,
   "src/server/models/store.ts": 1,
   "src/server/session/manager.ts": 2,
   "src/server/version-check.ts": 1,

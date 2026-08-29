@@ -107,7 +107,7 @@ describe("reloadFromDisk's skipped-reload return has to be consumed (#1641)", ()
    */
   const CALLERS: Record<string, string> = {
     "server/documents/watcher.ts": "suppresses the file-reloaded toast (#1641)",
-    "server/mcp/file-opener.ts": "throws RELOAD_IN_PROGRESS / withholds its own toast",
+    "server/documents/reload-family.ts": "throws RELOAD_IN_PROGRESS / withholds its own toast",
   };
 
   it("is called from exactly the modules that are known to handle a skip", () => {

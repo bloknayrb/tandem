@@ -4,7 +4,7 @@ import path from "path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 
-// Isolated app-data dir, mirroring file-opener-transact-batching.test.ts.
+// Isolated app-data dir, mirroring open-pipeline-transact-batching.test.ts.
 vi.mock("../../src/server/platform", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");

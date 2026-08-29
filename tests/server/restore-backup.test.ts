@@ -16,7 +16,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type * as Y from "yjs";
 
 // vi.mock factories are hoisted before module-level code, so outer `const`s
-// are not accessible inside them (see file-opener-lifecycle.test.ts).
+// are not accessible inside them (see open-pipeline-lifecycle.test.ts).
 
 vi.mock("../../src/server/platform", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
@@ -52,6 +52,7 @@ import { Document, Packer, Paragraph, TextRun } from "docx";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { restoreDocumentFromBackup } from "../../src/server/documents/reload-family.js";
 import {
   _resetDocBackupGateForTests,
   docBackupSnapshotPath,
@@ -63,7 +64,6 @@ import { suppressNextChange } from "../../src/server/file-watcher.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerApplyTools } from "../../src/server/mcp/docx-apply.js";
-import { restoreDocumentFromBackup } from "../../src/server/mcp/file-opener.js";
 import { pushNotification } from "../../src/server/notifications.js";
 import { resolveAppDataDir } from "../../src/server/platform.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";

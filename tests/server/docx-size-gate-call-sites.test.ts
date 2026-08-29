@@ -53,12 +53,12 @@ import JSZip from "jszip";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { restoreDocumentFromBackup } from "../../src/server/documents/reload-family.js";
 import { docBackupsRoot } from "../../src/server/file-io/doc-backup.js";
 import { applyTrackedChanges } from "../../src/server/file-io/docx-apply.js";
 import { DocxTooLargeError, MAX_DOCX_PART_BYTES } from "../../src/server/file-io/docx-size-gate.js";
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import { restoreDocumentFromBackup } from "../../src/server/mcp/file-opener.js";
 import { resolveAppDataDir } from "../../src/server/platform.js";
 
 /**

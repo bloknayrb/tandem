@@ -95,12 +95,12 @@ describe("the redirect invariant (Unit 6)", () => {
    * A name list cannot see a symbol nobody has heard of yet — the same
    * argument `registry-primitive-containment.test.ts` makes for pinning an
    * exact exported surface. Deriving it means a NEW export from
-   * `file-opener.ts` is in scope automatically, and every row constrains
+   * `reload-family.ts` is in scope automatically, and every row constrains
    * something.
    */
   let ENTRIES: string[] = [];
   beforeAll(async () => {
-    ENTRIES = Object.keys(await import("../../src/server/mcp/file-opener.js"));
+    ENTRIES = Object.keys(await import("../../src/server/documents/reload-family.js"));
     // A derived vocabulary that derives to nothing satisfies every filter
     // below. This was a `> 3` count, which was really the old export surface's
     // size wearing a control's clothing: Unit 7a shrank that surface to exactly
@@ -120,14 +120,25 @@ describe("the redirect invariant (Unit 6)", () => {
 
   /**
    * Written down here, not derived: this is the review inventory. Every module
-   * under `src/` that may reach `mcp/file-opener.ts` at all, and the symbols it
-   * may take. Adding a row is a decision someone has to make deliberately.
+   * under `src/` that may reach `documents/reload-family.ts` at all, and the
+   * symbols it may take. Adding a row is a decision someone has to make
+   * deliberately.
+   *
+   * **Migrated, not emptied, when Unit 7c deleted `mcp/file-opener.ts`.** The
+   * obvious move was to empty the list along with the module that motivated it
+   * — and review caught that the spec below loops `Object.entries(SANCTIONED)`,
+   * so an empty map runs zero assertions. The defeat it named: give
+   * `routes/backups.ts` an import of `resolveExternalConflict`, which it is not
+   * entitled to, and stay green forever. The module moved; the reason for the
+   * inventory did not, so the inventory moved with it.
    *
    * Keys are src-relative, forward-slashed — the same source tree must not
    * produce a different verdict on Windows than on CI's Linux runner.
    */
   const SANCTIONED: Record<string, string[]> = {
-    // Reload-family entries the ADR-034 seam does not name.
+    // The reload family — replacing the content of an ALREADY-open document.
+    // Since Unit 7c these live in `documents/reload-family.ts`; the four
+    // consumers and their entitlements are unchanged by that move.
     "server/mcp/routes/backups.ts": ["restoreDocumentFromBackup"],
     "server/mcp/docx-apply.ts": ["restoreDocumentFromBackup"],
     "server/mcp/routes/document-reload.ts": ["reloadDocumentFromMarkdown"],
@@ -144,7 +155,7 @@ describe("the redirect invariant (Unit 6)", () => {
 
   const srcRoot = path.resolve(fileURLToPath(import.meta.url), "../../../src");
   const seam = path.join(srcRoot, "server", "documents", "open.ts");
-  const impl = path.join(srcRoot, "server", "mcp", "file-opener.ts");
+  const impl = path.join(srcRoot, "server", "documents", "reload-family.ts");
 
   async function walk(dir: string): Promise<string[]> {
     const out: string[] = [];
@@ -217,7 +228,7 @@ describe("the redirect invariant (Unit 6)", () => {
   const CORPUS_TIMEOUT_MS = timeoutMs(90_000, 300_000);
 
   it(
-    "only sanctioned modules name the legacy file-opener specifier",
+    "only sanctioned modules import the reload family directly",
     async () => {
       const files = (await walk(srcRoot)).filter((f) => /\.(ts|svelte)$/.test(f));
 
@@ -232,12 +243,12 @@ describe("the redirect invariant (Unit 6)", () => {
       for (const file of files) {
         if (file === seam || file === impl) continue;
         const body = stripComments(await fs.readFile(file, "utf8"));
-        if (/["'][^"']*file-opener\.js["']/.test(body)) referencing.push(rel(file));
+        if (/["'][^"']*reload-family\.js["']/.test(body)) referencing.push(rel(file));
       }
 
       expect(
         referencing.sort(),
-        "a module that reaches mcp/file-opener.ts must either move to documents/open.js or be added to SANCTIONED with the symbols it needs — adding a row is a deliberate decision, not a formality",
+        "a module that reaches documents/reload-family.ts must either use documents/open.js instead or be added to SANCTIONED with the symbols it needs — adding a row is a deliberate decision, not a formality",
       ).toEqual(Object.keys(SANCTIONED).sort());
     },
     CORPUS_TIMEOUT_MS,
