@@ -32,6 +32,7 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 import { convertToMarkdown } from "./convert.js";
 // Document model (pure logic)
 import {
+  collectBlocks,
   extractText,
   getElementText,
   getElementTextLength,
@@ -469,19 +470,40 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_getOutline",
-    "Get document structure (headings, sections) without full content. Low token cost.",
+    "Get document structure without full content. Headings only by default (low token cost); " +
+      "pass includeBlocks to also list every block — paragraphs, list items, their nesting and " +
+      "checkbox state — with the character offsets tandem_edit takes.",
     {
+      includeBlocks: z
+        .boolean()
+        .optional()
+        .describe(
+          "Also return every block, not just headings: node type, flat [from,to) range, nesting " +
+            "path, position within its list, and checkbox state. Flat text alone cannot show " +
+            "this — a list item reads as bare prose — so pass this before editing inside a list " +
+            "or a table. Roughly one entry per block; omit on large documents.",
+        ),
       documentId: z
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_getOutline", async ({ documentId }) => {
+    withErrorBoundary("tandem_getOutline", async ({ includeBlocks, documentId }) => {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
       const fragment = r.doc.getXmlFragment("default");
       const outline = getOutline(fragment);
-      return mcpSuccess({ outline, totalNodes: fragment.length });
+      // Opt-in: the outline is the documented cheap read, and `blocks` is
+      // roughly one entry per block. Lives here rather than on
+      // `tandem_getTextContent` because that tool carries an `outputSchema`
+      // (so an unlisted container node would fail validation on a real
+      // document) and its `section` branch returns early, which would make
+      // structure unobtainable for a section read.
+      return mcpSuccess({
+        outline,
+        totalNodes: fragment.length,
+        ...(includeBlocks ? { blocks: collectBlocks(r.doc) } : {}),
+      });
     }),
   );
 

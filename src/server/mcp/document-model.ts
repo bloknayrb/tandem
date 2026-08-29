@@ -313,6 +313,171 @@ export function extractTextWithBreaks(doc: Y.Doc): { text: string; breaks: FlatB
 }
 
 /**
+ * One leaf textblock, with the flat range it occupies and the structure the flat
+ * projection throws away.
+ */
+export interface BlockInfo {
+  /** Flat offset of the block's text (AFTER any top-level heading prefix). */
+  from: number;
+  /** Flat offset just past the block's text. */
+  to: number;
+  /** paragraph | heading | codeBlock. */
+  node: string;
+  /** Child indices from the fragment root to this block. */
+  path: number[];
+  /** Container nesting depth: 0 for a top-level block. */
+  depth: number;
+  /** Immediate container's node name, when nested (e.g. "listItem", "blockquote"). */
+  container?: string;
+  /** Enclosing list kind, when inside one. */
+  listType?: "bullet" | "ordered";
+  /** 1-based position of the enclosing item within its list. */
+  listItemIndex?: number;
+  /** GFM task tri-state of the enclosing item. Absent = plain bullet. */
+  checked?: boolean;
+  /** Heading level, for a heading block. */
+  headingLevel?: number;
+}
+
+/**
+ * Enumerate the document's leaf textblocks with their flat ranges.
+ *
+ * Exists because the flat projection is structurally blind: `- [ ] task item`
+ * reads as bare `task item`, so an MCP caller cannot tell a list item from a
+ * paragraph, cannot see nesting depth or ordered-ness, and cannot see checkbox
+ * state. Without this the list-editing tools are undiscoverable — the AI has no
+ * way to know a line is a list item in the first place.
+ *
+ * Shares this module's traversal rather than restating it, because the offsets
+ * it reports must agree with `extractText` exactly. Two subtleties that a
+ * hand-rolled walker gets wrong, both already encoded here:
+ *
+ *  - A TOP-LEVEL heading contributes `headingPrefix(level)` and has its newlines
+ *    flattened to spaces; a NESTED heading is traversed by `collectElementFlat`
+ *    and contributes neither. `from` therefore points past the prefix at top
+ *    level and at the text itself when nested.
+ *  - A zero-text top-level element (`image`, `horizontalRule`) still consumes a
+ *    separator, so the cursor must advance for it even though it emits no block.
+ */
+export function collectBlocks(doc: Y.Doc): BlockInfo[] {
+  const fragment = doc.getXmlFragment("default");
+  const blocks: BlockInfo[] = [];
+  let cursor = 0;
+  let emitted = 0;
+
+  for (let i = 0; i < fragment.length; i++) {
+    const node = fragment.get(i);
+    if (!(node instanceof Y.XmlElement)) continue;
+    if (emitted > 0) cursor += FLAT_SEPARATOR.length;
+
+    if (node.nodeName === "heading") {
+      // Mirrors extractTextWithBreaks: prefix, then flattened text, no traversal.
+      const level = Number(node.getAttribute("level") ?? 1);
+      const prefixLen = headingPrefix(level).length;
+      const textLen = flattenHeadingText(getElementText(node)).length;
+      blocks.push({
+        from: cursor + prefixLen,
+        to: cursor + prefixLen + textLen,
+        node: "heading",
+        path: [i],
+        depth: 0,
+        headingLevel: level,
+      });
+      cursor += prefixLen + textLen;
+    } else {
+      cursor = collectBlocksIn(node, cursor, [i], 0, undefined, blocks);
+    }
+    emitted++;
+  }
+  return blocks;
+}
+
+/**
+ * Recurse a container, mirroring `collectElementFlat`'s separator contract.
+ * Returns the flat cursor just past `element`.
+ */
+function collectBlocksIn(
+  element: Y.XmlElement,
+  start: number,
+  path: number[],
+  depth: number,
+  inherited: Pick<BlockInfo, "container" | "listType" | "listItemIndex" | "checked"> | undefined,
+  out: BlockInfo[],
+): number {
+  if (TEXTBLOCK_NODES.has(element.nodeName)) {
+    const len = getElementTextLength(element);
+    out.push({
+      from: start,
+      to: start + len,
+      node: element.nodeName,
+      path,
+      depth,
+      ...(inherited ?? {}),
+      ...(element.nodeName === "heading"
+        ? { headingLevel: Number(element.getAttribute("level") ?? 1) }
+        : {}),
+    });
+    return start + len;
+  }
+
+  const isList = element.nodeName === "bulletList" || element.nodeName === "orderedList";
+  const listType: "bullet" | "ordered" | undefined = isList
+    ? element.nodeName === "orderedList"
+      ? "ordered"
+      : "bullet"
+    : undefined;
+
+  let cursor = start;
+  let hasPriorContent = false;
+  let itemOrdinal = 0;
+
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      cursor += child.length;
+      hasPriorContent = true;
+      continue;
+    }
+    if (!(child instanceof Y.XmlElement)) continue;
+    if (isHardBreakElement(child)) {
+      cursor += 1;
+      hasPriorContent = true;
+      continue;
+    }
+    if (hasPriorContent) cursor += FLAT_SEPARATOR.length;
+
+    let next = inherited;
+    if (child.nodeName === "listItem") {
+      itemOrdinal++;
+      // Cast for the same reason `yDocToMdast` does: yjs stores the tri-state as
+      // a real boolean (ContentAny), but `getAttribute` is typed `string`, and
+      // the value round-trips as a string on some paths. Read both spellings.
+      const checkedAttr = child.getAttribute("checked") as boolean | string | undefined;
+      next = {
+        container: "listItem",
+        ...(listType ? { listType } : {}),
+        listItemIndex: itemOrdinal,
+        // Stored only when set, and tolerantly read: mdast-ydoc writes a real
+        // boolean, but the attribute round-trips as a string on some paths.
+        ...(checkedAttr === true || checkedAttr === "true"
+          ? { checked: true }
+          : checkedAttr === false || checkedAttr === "false"
+            ? { checked: false }
+            : {}),
+      };
+    } else if (!TEXTBLOCK_NODES.has(child.nodeName)) {
+      next = { ...(inherited ?? {}), container: child.nodeName };
+    } else if (inherited === undefined) {
+      next = { container: element.nodeName };
+    }
+
+    cursor = collectBlocksIn(child, cursor, [...path, i], depth + 1, next, out);
+    hasPriorContent = true;
+  }
+  return cursor;
+}
+
+/**
  * Extract readable markdown from a Y.Doc via remark serialization.
  * NOT used by resolveToElement or tandem_edit (those use extractText).
  */
