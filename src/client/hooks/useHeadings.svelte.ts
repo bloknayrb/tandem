@@ -1,5 +1,5 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
-import { type HeadingEntry, walkHeadings } from "../utils/headings.js";
+import { type HeadingEntry, walkSectionHeadings } from "../utils/headings.js";
 
 export interface HeadingsState {
   readonly headings: HeadingEntry[];
@@ -12,11 +12,11 @@ export interface CreateHeadingsOpts {
 /**
  * Single source of truth for the document's heading outline (#832).
  *
- * Previously `OutlinePanel` computed this itself — `walkHeadings(editor)` in
+ * Previously `OutlinePanel` computed this itself — a heading walk in
  * an `$effect` plus its own `ed.on("update")` subscription. PeekStrip's left
  * peek needs the same data (real tick levels instead of five hardcoded
  * literals), and instantiating this hook a second time inside PeekStrip would
- * leave two live `update` subscriptions running `walkHeadings()` per
+ * leave two live `update` subscriptions running the walk per
  * keystroke. Instantiate ONCE in App.svelte and thread the result down to
  * both OutlinePanel and PeekStrip as a prop.
  *
@@ -36,10 +36,10 @@ export function createHeadings(opts: CreateHeadingsOpts): HeadingsState {
       return;
     }
 
-    headings = walkHeadings(ed);
+    headings = walkSectionHeadings(ed);
 
     const handler = () => {
-      headings = walkHeadings(ed);
+      headings = walkSectionHeadings(ed);
     };
     ed.on("update", handler);
 

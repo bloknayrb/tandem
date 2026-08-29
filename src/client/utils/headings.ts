@@ -3,31 +3,51 @@ import type { Editor } from "@tiptap/core";
 export type HeadingEntry = { text: string; level: number; pos: number };
 
 /**
- * Top-level headings, for the outline panel.
+ * Every heading in the document, nested ones included — for NAVIGATION.
  *
- * The `parent === doc` test is not cosmetic. `OutlinePanel` treats consecutive
- * entries as section boundaries (`sectionEnd = headings[i + 1].pos`) to bucket
- * annotations, so any heading admitted here becomes a document section. Since
- * #1664 widened `listItem` to `block+`, a heading nested in a list item
- * (`- # Section`) is a loadable shape, and counting one as a section would both
- * list a bullet as a document heading and skew every bucket after it.
+ * The command palette's `#` jump uses this: a heading inside a list item or a
+ * blockquote is still a heading the reader can see and wants to jump to, so
+ * excluding it would drop a destination for no benefit.
  *
- * A nested heading was already reachable before that change as a non-first child
- * (`- text` then an indented `## Sub`), so the guard was always needed; #1664
- * made the ordinary CommonMark spelling loadable and the case common.
- *
- * Mirrors the same guard in `heading-collapse.ts`, which walks for the collapse
- * chevron — the two must agree on what a section is.
- *
- * `forEach` rather than `descendants`, which makes "top-level only" structural
- * instead of a filter applied after visiting everything: `descendants` walks
- * every node in the document when nothing but a direct child of `doc` can ever
- * be accepted. That matters because this is a per-keystroke path —
- * `useHeadings.svelte.ts` re-runs it on every editor `update` — and the walk is
- * ~5-13x the work on real documents. `forEach`'s offset IS the absolute position
- * for a direct child of `doc`, so `pos` is unchanged.
+ * `descendants`, not `forEach`, precisely because nested headings must be found.
+ * That is affordable here — the palette walks on demand, only while the `#`
+ * prefix is active — which is why this is a separate function from
+ * `walkSectionHeadings` rather than a flag on one.
  */
 export function walkHeadings(ed: Editor): HeadingEntry[] {
+  const result: HeadingEntry[] = [];
+  ed.state.doc.descendants((node, pos) => {
+    if (node.type.name !== "heading") return true;
+    if (node.attrs.level <= 3) {
+      result.push({ text: node.textContent, level: node.attrs.level as number, pos });
+    }
+    // A heading holds only inline content — nothing under it can be a heading.
+    return false;
+  });
+  return result;
+}
+
+/**
+ * Top-level headings only — for anything treating a heading as a SECTION.
+ *
+ * `OutlinePanel` derives section boundaries from consecutive entries
+ * (`sectionEnd = headings[i + 1].pos`) to bucket annotations, so every entry it
+ * receives becomes a document section. A heading nested in a list item is not a
+ * section: counting one would list a bullet as a document heading and skew every
+ * bucket after it.
+ *
+ * A nested heading was always reachable — `- text` followed by an indented
+ * `## Sub` has always parsed — so this distinction was always needed; #1664
+ * widening `listItem` to `block+` made the ordinary spelling (`- # Section`)
+ * loadable and the case common. `heading-collapse.ts` applies the same rule for
+ * its chevron; the two must agree on what a section is.
+ *
+ * `forEach` rather than `descendants` makes "top-level only" structural instead
+ * of a filter applied after visiting everything, which matters because
+ * `useHeadings.svelte.ts` re-runs this on every editor `update` — per keystroke.
+ * `forEach`'s offset IS the absolute position for a direct child of `doc`.
+ */
+export function walkSectionHeadings(ed: Editor): HeadingEntry[] {
   const result: HeadingEntry[] = [];
   ed.state.doc.forEach((node, offset) => {
     if (node.type.name !== "heading") return;

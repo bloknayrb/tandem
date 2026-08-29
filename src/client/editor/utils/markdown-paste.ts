@@ -134,13 +134,16 @@ function imageFallbackToken(state: MdCoreState, tok: MdToken): MdToken {
  * safety only matters for the solo-hoist decision: a mixed paragraph
  * downgrades its images regardless of safety either way.
  *
- * Accepted limitation (F5, not fixed): a solo image hoisted inside a
- * `listItem` (not a table cell) yields `listItem(paragraph(empty), image)`
- * — the client `listItem` node requires a `paragraph` head, so
- * `createAndFill` inserts an empty one alongside the hoisted `image`. Left
- * alone deliberately: downgrading loses the image entirely (worse), and the
- * server's own `.docx` import path independently produces `listItem >
- * image` — the two shapes converge after a save/reload round-trip anyway.
+ * F5, no longer a limitation (#1664): a solo image hoisted inside a `listItem`
+ * used to yield `listItem(paragraph(empty), image)`, because the client
+ * `listItem` required a `paragraph` head and `createAndFill` supplied one. The
+ * note here reasoned that the server's `.docx` import independently produces a
+ * bare `listItem > image` and the two "converge after a save/reload anyway".
+ * They did not converge: that bare shape was the one the schema REJECTED, and a
+ * rejection is answered by deleting the node out of the shared Y.Doc. `listItem`
+ * is now `block+`, so no filler is inserted and paste produces the same bare
+ * `listItem > image` the importer does — the convergence is real, and this path
+ * needs no special case.
  */
 function normalizeImagesForPaste(state: MdCoreState): void {
   const tokens = state.tokens;

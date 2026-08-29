@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { initProseMirrorDoc } from "y-prosemirror";
 import * as Y from "yjs";
+import { exportYDocToDocx } from "../../src/server/file-io/docx-export.js";
 import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
 import { loadMarkdown, saveMarkdown } from "../../src/server/file-io/markdown.js";
 import { extractText } from "../../src/server/mcp/document.js";
+import { anchoredRange } from "../../src/server/positions.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { toFlatOffset } from "../../src/shared/positions/types.js";
 import { productionSchema } from "./editor-roundtrip-harness.js";
 
 /**
@@ -196,6 +200,56 @@ describe("Y.Doc → ProseMirror list corpus (#1664)", () => {
         initProseMirrorDoc(doc.getXmlFragment("default"), SCHEMA);
         expect(saveMarkdown(doc)).toBe(beforeMd);
       } finally {
+        doc.destroy();
+      }
+    });
+  });
+
+  /**
+   * Exported Word-comment anchors (#1664 fallout).
+   *
+   * `blockToDocx` charged `getHeadingPrefixLength` for every heading, but the
+   * flat projection carries a `"## "` prefix only for a TOP-LEVEL one — so a
+   * nested heading walked 2-4 characters the document does not contain and
+   * displaced every comment anchor after it. Reachable before as `> # Quoted`;
+   * the widening made the everyday `- # Section` spelling loadable.
+   */
+  describe("docx export cursor tracks the flat projection (#1664)", () => {
+    it.each([
+      ["heading inside a list item", "- # Section\n- tail text\n"],
+      ["heading inside a blockquote", "> # Quoted\n\ntail text\n"],
+      ["top-level heading (control: prefix IS charged)", "# Top\n\ntail text\n"],
+    ])("%s", async (_label, md) => {
+      const doc = new Y.Doc();
+      const drift: string[] = [];
+      const warn = console.warn;
+      const error = console.error;
+      console.warn = console.error = (...a: unknown[]) => {
+        if (String(a[0]).includes("cursor drift")) drift.push(String(a[0]));
+      };
+      try {
+        loadMarkdown(doc, md);
+        const flat = extractText(doc);
+        const at = flat.indexOf("tail");
+        const anchored = anchoredRange(doc, toFlatOffset(at), toFlatOffset(at + 4));
+        expect(anchored.ok).toBe(true);
+        if (anchored.ok) {
+          doc.getMap(Y_MAP_ANNOTATIONS).set("c1", {
+            id: "c1",
+            author: "claude",
+            type: "comment",
+            content: "x",
+            status: "pending",
+            timestamp: 1,
+            range: anchored.range,
+            relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
+          });
+        }
+        await exportYDocToDocx(doc);
+        expect(drift, drift[0] ?? "").toEqual([]);
+      } finally {
+        console.warn = warn;
+        console.error = error;
         doc.destroy();
       }
     });
