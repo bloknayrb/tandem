@@ -51,6 +51,7 @@ import { openFromUpload, openScratchpad } from "../../src/server/documents/open.
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { removeDocument } from "../../src/server/yjs/provider.js";
+import { isSourceFile } from "../helpers/source-extensions.js";
 import { timeoutMs } from "../helpers/timing.js";
 
 afterAll(async () => {
@@ -209,8 +210,16 @@ describe("the redirect invariant (Unit 6)", () => {
    * So this keys on the structural fact instead: **which files name the
    * module specifier at all.** Most syntax cannot route around that — reaching
    * `reload-family.ts` requires saying its name, in `import * as`, in a
-   * dynamic `import()`, in a destructure. The symbol check is then a second,
-   * narrower layer over the handful of files allowed to say it.
+   * dynamic `import()` — quoted OR backticked, the latter added after review
+   * found the pattern read only `["']` while this sentence promised both —
+   * in a destructure. The symbol check is then a second, narrower layer over
+   * the handful of files allowed to say it.
+   *
+   * What still gets through, stated so it is not rediscovered: a specifier
+   * assembled at runtime (`import(`../documents/${dir}/x.js`)`) names nothing
+   * this can match. Nothing in `src/` does that, and a static guard cannot
+   * close it — but a reader deserves to know the boundary rather than infer
+   * a stronger one from silence.
    *
    * **"Most" is doing work, and the exception is written down rather than
    * discovered again.** A guard keyed on an EDGE is defeated by anything that
@@ -250,7 +259,15 @@ describe("the redirect invariant (Unit 6)", () => {
   it(
     "only sanctioned modules import the reload family directly",
     async () => {
-      const files = (await walk(srcRoot)).filter((f) => /\.(ts|svelte)$/.test(f));
+      // The vocabulary is shared with `documents-boundary.test.ts`, whose
+      // docblock defers bare `export { X };` laundering to THIS file. That
+      // deferral was only as good as the extension set behind it: this walk
+      // was `ts|svelte` while the boundary file's was `ts|tsx|mts|cts|svelte`,
+      // so a `.mts` consumer bare-re-exporting a sanctioned symbol was
+      // invisible to both at once. Sharing the constant makes them equal by
+      // construction; `helpers/source-extensions.ts` carries the case fix and
+      // its negative control.
+      const files = (await walk(srcRoot)).filter(isSourceFile);
 
       // Controls. An empty or truncated sweep satisfies every assertion below
       // vacuously, which is how this class of guard usually dies.
@@ -275,7 +292,15 @@ describe("the redirect invariant (Unit 6)", () => {
         // loop builds, so a file that never enters `referencing` is never checked
         // for which symbols it takes either — one dropped extension defeated both
         // layers, and the second layer's silence looked identical to a pass.
-        if (/["'][^"']*reload-family(?:\.[a-z]+)?["']/.test(body)) referencing.push(rel(file));
+        // The backtick is in the class because a template literal is a legal
+        // module specifier for a dynamic import: `await import(`…/reload-family.js`)`
+        // typechecks, runs, and carried no quote for the old pattern to find.
+        // The prose above claimed dynamic `import()` was covered; it was covered
+        // only in its quoted form, which is the overclaim this file has now
+        // produced twice.
+        if (/["'`][^"'`]*reload-family(?:\.[a-z]+)?["'`]/.test(body)) {
+          referencing.push(rel(file));
+        }
       }
 
       expect(
@@ -330,9 +355,19 @@ describe("the redirect invariant (Unit 6)", () => {
       // Scoped to the sanctioned four rather than all of `src/`, because they
       // are the only modules that HAVE the symbols to re-export — anywhere else,
       // the specifier sweep above already fires.
+      //
+      // `export *` is refused outright rather than analysed. A star re-export
+      // from a sanctioned consumer republishes whatever it imported without
+      // naming anything, so no name-keyed check can see it; and these four are
+      // route modules with no legitimate need for one. Refusing the construct
+      // is a rule a reader can hold, where "a star export whose target
+      // transitively re-exports the family" is not.
       const offenders: string[] = [];
       for (const relPath of Object.keys(SANCTIONED)) {
         const body = stripComments(await fs.readFile(path.join(srcRoot, relPath), "utf8"));
+        if (/export\s*\*/.test(body)) {
+          offenders.push(`${relPath} uses \`export *\`, which republishes without naming`);
+        }
         for (const name of ENTRIES) {
           // `export { x }`, `export { x as y }`, `export { a, x }` — with or
           // without a `from` clause, since the bare form is the one that was
@@ -340,6 +375,35 @@ describe("the redirect invariant (Unit 6)", () => {
           // names are defined in reload-family.ts, not in a consumer.
           const re = new RegExp(`export\\s*\\{[^}]*(?<![\\w$])${name}(?![\\w$])[^}]*\\}`);
           if (re.test(body)) offenders.push(`${relPath} re-exports ${name}`);
+
+          // Matching the ORIGINAL name is not enough, and review demonstrated
+          // both ways round it. `import { restoreDocumentFromBackup as _r }`
+          // followed by `export { _r };` contains the original name only in the
+          // import, which this file is entitled to have — so the export carries
+          // the capability under a name the loop above never looks for. Resolve
+          // the local binding first, then ask what leaves under it.
+          const bound = new RegExp(
+            `import\\s*\\{([^}]*)\\}\\s*from\\s*["'\`][^"'\`]*reload-family`,
+          ).exec(body);
+          const localNames = (bound?.[1] ?? "")
+            .split(",")
+            .map((clause) => clause.trim())
+            .filter((clause) => new RegExp(`(?<![\\w$])${name}(?![\\w$])`).test(clause))
+            .map((clause) => {
+              const asMatch = /\bas\s+([\w$]+)/.exec(clause);
+              return asMatch ? asMatch[1] : clause;
+            })
+            .filter((local) => local && local !== name);
+          for (const local of localNames) {
+            const leaks = [
+              new RegExp(`export\\s*\\{[^}]*(?<![\\w$])${local}(?![\\w$])[^}]*\\}`),
+              new RegExp(`export\\s+(?:const|let|var)\\s+[\\w$]+\\s*=\\s*${local}(?![\\w$])`),
+              new RegExp(`export\\s+default\\s+${local}(?![\\w$])`),
+            ];
+            if (leaks.some((re2) => re2.test(body))) {
+              offenders.push(`${relPath} re-exports ${name} as ${local}`);
+            }
+          }
         }
       }
       expect(

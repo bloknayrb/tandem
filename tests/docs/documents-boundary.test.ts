@@ -52,8 +52,9 @@
  */
 
 import { readdirSync, readFileSync, statSync } from "fs";
-import { join, posix, relative } from "path";
+import { extname, join, posix, relative } from "path";
 import { describe, expect, it } from "vitest";
+import { hasExtension, isSourceFile, SOURCE_EXTENSIONS } from "../helpers/source-extensions.js";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const SRC = join(REPO_ROOT, "src");
@@ -171,7 +172,11 @@ function sourceFiles(): string[] {
     for (const name of readdirSync(dir)) {
       const full = join(dir, name);
       if (statSync(full).isDirectory()) walk(full);
-      else if (/\.(ts|tsx|mts|cts|svelte)$/.test(name) && !/\.d\.[mc]?ts$/.test(name)) {
+      // Shared with `documents-open.test.ts` rather than spelled twice: the
+      // two guards defer coverage to each other, and a deferral to a guard
+      // that walks a NARROWER set is a hole in both at once. See
+      // `helpers/source-extensions.ts`.
+      else if (isSourceFile(name)) {
         out.push(relative(SRC, full).split("\\").join("/"));
       }
     }
@@ -497,6 +502,48 @@ describe("stripComments", () => {
 describe("the documents/ boundary is an inventory", () => {
   const { edges, unresolved } = buildGraph();
   const files = sourceFiles();
+
+  it("scans every source file type present under src/", () => {
+    // The census guard has had this control for a while; this one did not,
+    // which is the more dangerous of the two arrangements only because the
+    // census guard's version *passed against its own defect* (it lowercased
+    // in the control while matching case-sensitively in the walk). A missing
+    // control at least does not vouch for anything.
+    //
+    // `.css` is listed as non-code rather than swept: it cannot hold an
+    // import edge, which is the only thing this file inventories.
+    const NON_CODE = [".css"];
+    // A RAW walk, deliberately not `sourceFiles()` — that one is already
+    // filtered by the very predicate under test, so deriving the control
+    // from it would make it agree with the filter by construction.
+    const present = new Set<string>();
+    const walkAll = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name);
+        if (statSync(full).isDirectory()) walkAll(full);
+        else present.add(extname(name).toLowerCase());
+      }
+    };
+    walkAll(SRC);
+    const unswept = [...present].filter(
+      (e) => !hasExtension(`x${e}`, SOURCE_EXTENSIONS) && !NON_CODE.includes(e),
+    );
+    expect(
+      unswept,
+      `file types under src/ that this inventory never opens: ${unswept}. Add ` +
+        `them to SOURCE_EXTENSIONS, or to NON_CODE if they cannot hold an import.`,
+    ).toEqual([]);
+    expect(present.has(".ts"), "control: src/ holds .ts at all").toBe(true);
+  });
+
+  it("the extension filter is case-insensitive, so a rename cannot hide a module", () => {
+    // The negative control for the fix above. A half-fix — lowercasing in one
+    // place and not the other — passes the sweep-size control and fails here.
+    expect(isSourceFile("Bypass.TS"), "an uppercased .ts must still be swept").toBe(true);
+    expect(isSourceFile("Widget.SVELTE")).toBe(true);
+    expect(isSourceFile("types.D.TS"), "a declaration file is still excluded").toBe(false);
+    expect(isSourceFile("notes.md"), "control: the filter still rejects").toBe(false);
+  });
 
   it("the sweep and the resolver both actually did something", () => {
     // Every assertion in this file is of the "found nothing unexpected" family,

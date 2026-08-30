@@ -133,8 +133,25 @@ describe("reloadFromDisk's skipped-reload return has to be consumed (#1641)", ()
     /return\s+(?:await\s+)?reloadFromDisk\s*\(/,
     // `if (await f(…))`, `if (!(await f(…)))`, `while (…)`
     /(?:if|while)\s*\(\s*!*\(?\s*(?:await\s+)?reloadFromDisk\s*\(/,
-    // `a && f(…)`, `a ?? f(…)`, `c ? f(…) : x`
-    /(?:&&|\|\||\?\??|:)\s*!*\(?\s*(?:await\s+)?reloadFromDisk\s*\(/,
+    // `const ok = a && await f(…)`, `return a ?? f(…)`, `if (a && f(…))`.
+    //
+    // Anchored to a consuming HEAD on the same line, which the first version
+    // was not: it keyed on what sat immediately left of the call, so the bare
+    // statement `docStillDirty && reloadFromDisk(id, p, fmt);` — a total
+    // discard — matched and was waved through. That is #1641's class reopened
+    // by an `&&` instead of a `.map`, inside the very allowlist written to
+    // close it. An operator says how the value is COMBINED; it never says
+    // whether the combination is kept.
+    /^\s*(?:const|let|var)\s+[\w${}[\],\s:]+=[^;]*(?:&&|\|\||\?\??|:)\s*!*\(?\s*(?:await\s+)?reloadFromDisk\s*\(/,
+    /^\s*[\w$.[\]]+\s*=[^;=]*(?:&&|\|\||\?\??|:)\s*!*\(?\s*(?:await\s+)?reloadFromDisk\s*\(/,
+    /^\s*return\s[^;]*(?:&&|\|\||\?\??|:)\s*!*\(?\s*(?:await\s+)?reloadFromDisk\s*\(/,
+    /^\s*(?:if|while)\s*\([^;]*(?:&&|\|\||\?\??|:)\s*!*\(?\s*(?:await\s+)?reloadFromDisk\s*\(/,
+    // `log(await f(…))`, `results.push(await f(…))` — passing the value on is
+    // consumption, and the first allowlist rejected it, which is the mirror
+    // defect: it would have forced a pointless intermediate `const` to satisfy
+    // a regex. A false positive teaches people to route around the guard, so
+    // it is a defect in the same guard, not a lesser kind of complaint.
+    /[\w$]\s*\(\s*(?:await\s+)?reloadFromDisk\s*\(/,
   ];
 
   const CALL_RE = /(?<![\w$.])reloadFromDisk\s*\(/;
@@ -197,6 +214,8 @@ describe("reloadFromDisk's skipped-reload return has to be consumed (#1641)", ()
       "await Promise.all([reloadFromDisk(id, filePath, format)]);",
       "const tasks = paths.map((p) => reloadFromDisk(p));",
       "setTimeout(() => reloadFromDisk(p), 0);",
+      "docStillDirty && reloadFromDisk(id, filePath, format);",
+      "ok || reloadFromDisk(id, filePath, format);",
       "reloadFromDisk(id, filePath, format).catch(() => {});",
     ];
     for (const line of KNOWN_DISCARDS) {
@@ -215,6 +234,9 @@ describe("reloadFromDisk's skipped-reload return has to be consumed (#1641)", ()
       "if (!(await reloadFromDisk(id, filePath, format))) return false;",
       "return reloadFromDisk(id, filePath, format);",
       "const ok = didWrite && (await reloadFromDisk(id, filePath, format));",
+      "logReloadOutcome(await reloadFromDisk(id, filePath, format));",
+      "results.push(await reloadFromDisk(id, filePath, format));",
+      "return didWrite && (await reloadFromDisk(id, filePath, format));",
     ];
     // The declaration exclusion must skip the definition and NOTHING else.
     expect(
