@@ -264,6 +264,25 @@ describe("YDocStore replies parity", () => {
     expect(replies).toEqual(collectRepliesForAnnotation(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES), id));
   });
 
+  it("tags Claude's reply MCP_ORIGIN, so it is not echoed back at Claude", () => {
+    const ydoc = setupDoc("rep-origin", "Hello world");
+    const store = new YDocStore(ydoc, FILE_PATH, "rep-origin");
+    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
+
+    // Unpinned until Unit 8f. The parity spec above asserts author, text and
+    // list equality and never looks at origin, so flipping this call site to
+    // `withBrowser` survived the entire suite — and `browser` is the one origin
+    // NOT in `CHANNEL_SKIP`, which makes that mutation "Claude's own reply
+    // becomes a channel event delivered back to Claude".
+    let origin: unknown;
+    ydoc.on("afterTransaction", (tr) => {
+      origin = tr.origin;
+    });
+    const r = store.addReply(id, "agreed", "claude");
+    expect(r.ok).toBe(true);
+    expect(origin).toBe(MCP_ORIGIN);
+  });
+
   it("addReply rejects a non-comment parent (ADR-027), matching the helper", () => {
     const ydoc = setupDoc("rep-2", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "rep-2");

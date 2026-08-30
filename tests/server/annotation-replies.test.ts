@@ -13,7 +13,13 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
-import { MCP_ORIGIN, withInternal, withMcp } from "../../src/shared/origins.js";
+import {
+  BROWSER_ORIGIN,
+  MCP_ORIGIN,
+  shouldSkipChannel,
+  withInternal,
+  withMcp,
+} from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
@@ -93,7 +99,7 @@ describe("addReplyToAnnotation", () => {
 });
 
 describe("event emission on reply", () => {
-  it("emits event for user reply (no MCP_ORIGIN)", () => {
+  it("tags a user reply BROWSER_ORIGIN, the one origin that is not skipped", () => {
     const ydoc = setupDoc("evt-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
@@ -106,10 +112,22 @@ describe("event emission on reply", () => {
       }
     });
 
-    // User reply — no origin, so events should fire with null origin
+    // **Positive, and that is the whole point.** This spec asserted
+    // `not.toBe(MCP_ORIGIN)` until Unit 8f, and its comment claimed "no origin,
+    // so events should fire with null origin" — stale since the `withBrowser`
+    // default landed. A negative assertion passes for EVERY other tag, and four
+    // of the five are in `CHANNEL_SKIP`: swap the default to `withInternal` and
+    // every user reply silently stops reaching Claude with this file green. It
+    // passes for a raw untagged `doc.transact` too, the write Critical Rule 2
+    // exists to prevent.
+    //
+    // `browser` is the only origin outside `CHANNEL_SKIP`, so naming it is the
+    // difference between pinning the contract and pinning that something
+    // happened.
     addReplyToAnnotation(ydoc, map, annId, "user says hi", "user");
     expect(events).toHaveLength(1);
-    expect(events[0].origin).not.toBe(MCP_ORIGIN);
+    expect(events[0].origin).toBe(BROWSER_ORIGIN);
+    expect(shouldSkipChannel(BROWSER_ORIGIN), "browser must stay projectable").toBe(false);
   });
 
   it("suppresses event for Claude reply (MCP_ORIGIN)", () => {
