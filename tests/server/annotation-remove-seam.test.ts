@@ -31,7 +31,7 @@ import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { handleRemoveAnnotation } from "../../src/server/mcp/routes/remove-annotation.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { TandemEvent } from "../../src/shared/events/types.js";
-import { BROWSER_ORIGIN, MCP_ORIGIN, withMcp } from "../../src/shared/origins.js";
+import { BROWSER_ORIGIN, MCP_ORIGIN, withBrowser, withMcp } from "../../src/shared/origins.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { unanchored } from "../helpers/positions.js";
 
@@ -208,9 +208,35 @@ describe("the channel observer and a delete", () => {
       doc: ydoc,
       pushEvent: (e) => events.push(e),
     });
-    warn.mockClear();
 
     try {
+      // **Arm the observer first.** Both assertions below are zero-checks, and
+      // review demonstrated the consequence by stubbing `makeAnnotationsObserver`
+      // to `return () => {}` — every spec in this file stayed green. The header
+      // claims this early return is unobservable from any other assertion in
+      // the suite, and a spec that claims that has to prove its own instrument
+      // was running. A browser-origin add of an outbound user comment is the
+      // cheapest thing this observer will actually project.
+      withBrowser(ydoc, () => {
+        map.set("armed", {
+          id: "armed",
+          type: "comment",
+          author: "user",
+          audience: "outbound",
+          status: "pending",
+          range: unanchored(0, 5).range,
+          content: "proof the observer is attached",
+          timestamp: Date.now(),
+          rev: 1,
+        });
+      });
+      expect(
+        events.map((e) => e.type),
+        "control: the observer is attached and projecting",
+      ).toStrictEqual(["annotation:created"]);
+      events.length = 0;
+      warn.mockClear();
+
       removeAnnotationRecord(ydoc, map, id);
     } finally {
       stop();
@@ -312,19 +338,43 @@ describe("who may reach the unguarded mechanism", () => {
       return out;
     }
 
-    const files = (await walk(srcRoot)).filter((f) => /\.(ts|mts|cts|svelte)$/.test(f));
+    // **Every file under `src/`, no extension filter.** An earlier version
+    // filtered to `.ts|.mts|.cts|.svelte`, and review put a caller in a
+    // `.tsx` and then a `.js` — both survived green. There are no such files
+    // in `src/` today, which is exactly why the filter looked harmless. Sweep
+    // wider than the thing you are guarding, the way
+    // `typecheck-tests-wiring.test.ts` does.
+    const files = await walk(srcRoot);
     expect(files.length, "control: the sweep found source files").toBeGreaterThan(100);
+
+    const strip = (src: string) =>
+      src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
 
     const users: string[] = [];
     for (const file of files) {
-      const src = (await fs.readFile(file, "utf-8"))
-        .replace(/\/\*[\s\S]*?\*\//g, " ")
-        .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+      const src = strip(await fs.readFile(file, "utf-8"));
       if (src.includes("removeAnnotationRecord")) {
         users.push(path.relative(srcRoot, file).replace(/\\/g, "/"));
       }
     }
 
     expect(users.sort()).toStrictEqual([...SANCTIONED].sort());
+
+    // **The file-level pin alone is defeated from INSIDE a sanctioned file**,
+    // and review demonstrated it: export a wrapper from `lifecycle.ts` that
+    // calls the mechanism under `withMcp`, import THAT from an MCP-side module,
+    // and every assertion above stays green — the new caller never mentions the
+    // pinned symbol, and the wrapper lives in a file already on the list.
+    //
+    // So pin the call sites too. Exactly two occurrences of the name in
+    // `lifecycle.ts`: the declaration, and the one call inside `removeForClaude`
+    // (the guarded path). A wrapper is a third, and reds this.
+    const lifecycle = strip(
+      await fs.readFile(path.join(srcRoot, "server/annotations/lifecycle.ts"), "utf-8"),
+    );
+    expect(
+      lifecycle.match(/removeAnnotationRecord/g) ?? [],
+      "the declaration and removeForClaude's call — a third is a wrapper around the guard",
+    ).toHaveLength(2);
   });
 });

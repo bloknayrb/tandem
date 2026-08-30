@@ -20,9 +20,11 @@
  * in module-level state, so (1) `resetMigrationLog()` runs before every spec —
  * **this is the one that carries the invariant**; and (2) no spec reads an
  * annotation before the transition, because `listAnnotations` AND the
- * single-record `getAnnotation` both relay under the same key, and
- * `removeAnnotation` calls `getAnnotation` internally, so a read is an
- * invisible consumer.
+ * single-record `getAnnotation` both relay under the same key — and so does a
+ * remove, which sanitizes the record itself inside `AnnotationLifecycle.remove`
+ * to run the ADR-027 guard. So a read is an invisible consumer, and so is a
+ * removal. (Before Unit 8e the remove reached the relay through `getAnnotation`;
+ * the call chain changed, the hazard did not.)
  *
  * The per-spec `filePath` below is redundancy, deliberately not stated as a
  * requirement: `beforeEach` already clears the Set and vitest isolates module

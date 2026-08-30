@@ -817,7 +817,7 @@ copied forward without counting the transactions first.
 2. `src/shared/sanitize.ts` — privacy normalizer (ADR-027): strips `directedAt`, migrates legacy `flag`→`note`, derives audience. Called in three places (read, observer, edit) with different `onLossy` sinks.
 3. `src/server/annotations/schema.ts` (386 LOC) — `nextRev()`, status transitions.
 4. `src/server/annotations/store.ts` (582 LOC) — durable JSON persistence keyed by content hash.
-5. `src/server/annotations/sync.ts` (519 LOC) — file-sync observer; tombstone tracking with a "this ordering is load-bearing" comment around `recordTombstone` that points at a real fragility.
+5. `src/server/annotations/sync.ts` (519 LOC) — file-sync observer; tombstone tracking. ~~with a "this ordering is load-bearing" comment around `recordTombstone` that points at a real fragility.~~ **Also resolved by #700 (2026-05-16)** — the comment and the ordering it guarded are both gone; the observer records from the Y.Map delete event for every origin.
 6. `src/server/events/observers/annotations.ts` — channel projection with author/type cascade and the ADR-027 "drop notes from channel" rule enforced via `if (ann.type !== "comment") continue`.
 
 Changing the annotation shape — adding a field, renaming a state, tightening a privacy rule — forces edits across all six. Three real bugs and risks surfaced during the grilling pass (annotation-model-reviewer second opinion, 2026-05-15):

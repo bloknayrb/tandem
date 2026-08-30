@@ -30,14 +30,13 @@ export function handleRemoveAnnotation(req: Request, res: Response): void {
   // default `withBrowser`, matching `annotation-reply.ts`.
   const result = removeAnnotationRecord(ydoc, annotationsMap, annotationId);
   if (result.kind !== "ok") {
-    // `invalid-note` is unreachable here — the guard is on the member this
-    // route deliberately does not call — so every non-ok arm is a 404. Written
-    // as a message per arm anyway, so adding an arm is a compile error rather
-    // than a silently mislabelled 404.
-    const message =
-      result.kind === "not-found"
-        ? `Annotation ${annotationId} not found`
-        : `Annotation ${annotationId} cannot be removed`;
+    // One arm, and the TYPE is what says so: the mechanism returns
+    // `RemoveMechanismResult`, which subtracts `invalid-note` — the arm only
+    // the guarded member produces. So `result` narrows to `not-found` here and
+    // there is no branch to get wrong. An earlier draft wrote a ternary and a
+    // comment claiming a new arm would be a compile error; a ternary's `else`
+    // absorbs one silently, and two reviewers demonstrated exactly that.
+    const message = `Annotation ${annotationId} not found`;
     console.warn(`[Tandem] API error (404): remove annotation failed: ${message}`);
     pushNotification({
       id: generateNotificationId(),
