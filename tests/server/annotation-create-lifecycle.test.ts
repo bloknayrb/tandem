@@ -22,6 +22,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
   type AnnotationCreator,
+  type AnnotationLifecycle,
   type CreateExtras,
   createAnnotationLifecycle,
   mintAnnotation,
@@ -297,22 +298,48 @@ describe("AnnotationLifecycle.create — ADR-027 / ADR-035 privacy", () => {
   it("type-level: AnnotationCreator really is create-only", () => {
     // The narrowing handed to the local-model loop (#1123) is a deliberate
     // capability boundary: that subsystem has no accept/dismiss tool, and a
-    // three-method lifecycle would grant it resolution for the first time. Until
-    // this spec existed, widening the `Pick` back to the full
-    // `AnnotationLifecycle` passed the whole runtime suite AND typecheck — a
-    // stated boundary with nothing enforcing it. Both directives go unused (and
-    // `typecheck:tests` reports TS2578) the moment the `Pick` is widened.
+    // wider lifecycle would grant it resolution for the first time. Until this
+    // spec existed, widening the `Pick` back to the full `AnnotationLifecycle`
+    // passed the whole runtime suite AND typecheck — a stated boundary with
+    // nothing enforcing it.
+    //
+    // **The first version of this spec was an ENUMERATION, and Unit 8c is the
+    // evidence that enumerations rot.** It named `accept` and `dismiss` as the
+    // methods that must be absent. 8c added `editPending` to
+    // `AnnotationLifecycle` and did not extend that list — so widening the
+    // `Pick` to `"create" | "editPending"` left both directives live, left
+    // `create` reachable, and the spec stayed green. A guard keyed on a list of
+    // names is defeated by whatever the list does not name. This form is keyed
+    // on the SHAPE instead, so every future unit 8d–8h fails closed by default.
+    //
+    // Measured: widening the `Pick` to `"create" | "editPending"` leaves this
+    // file GREEN under vitest and fails `typecheck:tests` with TS2322 at the
+    // line below. That is a real gate (CI runs it), but do not expect a red
+    // test run — the enforcement is the compiler, and the runtime `expect` is
+    // only here so the assertion is visible to a reader scanning the suite.
+    type ExtraKeys = Exclude<keyof AnnotationCreator, "create">;
+    const noExtraKeys: ExtraKeys extends never ? true : never = true;
+    expect(noExtraKeys, "AnnotationCreator grew a key beyond `create`").toBe(true);
+
     const creator: AnnotationCreator = createAnnotationLifecycle(doc);
 
     // @ts-expect-error — the loop has no accept tool; the seam must not give it one
     creator.accept("id");
 
-    // @ts-expect-error — nor dismiss
-    creator.dismiss("id");
-
-    // Guard the guard: `create` IS reachable, so the two errors above are the
+    // Guard the guard: `create` IS reachable, so the error above is the
     // narrowing biting and not a broken binding that rejects everything.
     creator.create({ anchored: unanchored(0, 5), content: "x" });
+
+    // Runtime caveat, stated because the docblock reads stronger than the code:
+    // TypeScript is structural, so this annotation narrows the BINDING, not the
+    // value. `createAnnotationLifecycle` returns the full object and `creator`
+    // carries `accept`, `dismiss` and `editPending` at runtime. The boundary is
+    // a compile-time convention; anything reaching through `as any` or dynamic
+    // dispatch is not stopped by it.
+    expect(
+      typeof (creator as unknown as AnnotationLifecycle).editPending,
+      "documents the runtime hole rather than pretending it is closed",
+    ).toBe("function");
   });
 });
 
