@@ -261,21 +261,29 @@ export class YDocStore implements DocumentStore {
    * Delegates to the lifecycle (ADR-034/035 Unit 8c). The guards, the `rev`
    * bump and the `withMcp` tag all live there now.
    *
-   * **The sink is passed, not defaulted.** `transitionPending` supplies a no-op
-   * whose wiring is deferred to Unit 8d; edit already had a real relay at this
-   * caller, and handing it down is what stops 8d's decision from silently
-   * becoming edit's.
+   * **The sink is passed, not defaulted**, and as of Unit 8d every mutation
+   * method on this store does the same.
    */
   editAnnotation(id: string, patch: EditPatch): EditAnnotationResult {
     return this.lifecycle.editPending(id, patch, (e) => this.onLossy(e));
   }
 
+  /**
+   * Delegates to the lifecycle, passing the store's real relay (Unit 8d).
+   *
+   * `(e) => this.onLossy(e)` rather than `this.onLossy` — the method reads
+   * `this.docHash`, and an unbound reference loses it. That failure is not
+   * loud: `logLegacyMigration` treats an undefined docHash as a reason to skip
+   * dedup and log unconditionally, so the relay would still print and only the
+   * per-document keying would be gone.
+   */
   acceptAnnotation(id: string): LifecycleResult<Annotation> {
-    return this.lifecycle.accept(id);
+    return this.lifecycle.accept(id, (e) => this.onLossy(e));
   }
 
+  /** See {@link acceptAnnotation}. */
   dismissAnnotation(id: string): LifecycleResult<Annotation> {
-    return this.lifecycle.dismiss(id);
+    return this.lifecycle.dismiss(id, (e) => this.onLossy(e));
   }
 
   /**
