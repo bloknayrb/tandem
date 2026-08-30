@@ -27,8 +27,15 @@ import { processInboxAnnotations } from "../../src/server/mcp/awareness.js";
 import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { TUTORIAL_ANNOTATIONS } from "../../src/server/mcp/tutorial-annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES } from "../../src/shared/constants.js";
+import type { OnLossy } from "../../src/shared/sanitize.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { getAnnotationsMap, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
+
+/** No sink: these specs are about the guards and the write, not the relay.
+ *  Named rather than inlined so "does not care" is distinguishable from
+ *  "forgot" at a glance. The relay's own coverage lives in the specs that pass
+ *  a real one. */
+const noRelay: OnLossy = () => {};
 
 let doc: Y.Doc;
 let map: Y.Map<unknown>;
@@ -67,7 +74,7 @@ describe("resolve refuses notes (ADR-027)", () => {
     seed("n1", { type: "note" });
     const before = { ...(map.get("n1") as Annotation) };
 
-    const result = acceptPending("n1", doc, map);
+    const result = acceptPending("n1", doc, map, noRelay);
 
     expect(result).toStrictEqual({ kind: "invalid-note" });
     expect(map.get("n1"), "a guard that returns after the write passes an arm check").toStrictEqual(
@@ -80,7 +87,7 @@ describe("resolve refuses notes (ADR-027)", () => {
     // above. This is the positive control for the guard, not for the harness.
     seed("c1", { type: "comment", author: "claude", audience: "outbound" });
 
-    const result = acceptPending("c1", doc, map);
+    const result = acceptPending("c1", doc, map, noRelay);
 
     expect(result.kind).toBe("ok");
     expect((map.get("c1") as Annotation).status).toBe("accepted");
@@ -93,8 +100,8 @@ describe("resolve refuses notes (ADR-027)", () => {
     // exists and is merely resolved — a disclosure ADR-027 does not make.
     seed("n2", { type: "note", status: "dismissed" });
 
-    expect(acceptPending("n2", doc, map)).toStrictEqual({ kind: "invalid-note" });
-    expect(dismissPending("n2", doc, map)).toStrictEqual({ kind: "invalid-note" });
+    expect(acceptPending("n2", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
+    expect(dismissPending("n2", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
   });
 
   it("refuses a stored `flag`, which is a note only after sanitize", () => {
@@ -104,7 +111,7 @@ describe("resolve refuses notes (ADR-027)", () => {
     // guard sits after sanitize rather than before it.
     seed("f1", { type: "flag" });
 
-    expect(acceptPending("f1", doc, map)).toStrictEqual({ kind: "invalid-note" });
+    expect(acceptPending("f1", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
     expect((map.get("f1") as Annotation).status, "and it is not resolved").toBe("pending");
   });
 
@@ -113,7 +120,7 @@ describe("resolve refuses notes (ADR-027)", () => {
     // swallowed the pending arm for non-notes.
     seed("c2", { type: "comment", author: "claude", audience: "outbound", status: "accepted" });
 
-    expect(acceptPending("c2", doc, map)).toStrictEqual({
+    expect(acceptPending("c2", doc, map, noRelay)).toStrictEqual({
       kind: "not-pending",
       id: "c2",
       currentStatus: "accepted",
@@ -240,8 +247,8 @@ describe("the tutorial note, which is the reachable instance", () => {
     expect(noteId, "and its id is still a constant, not a nonce").toBe("tutorial-note-1");
     seed(noteId, { type: "note" });
 
-    expect(acceptPending(noteId, doc, map)).toStrictEqual({ kind: "invalid-note" });
-    expect(dismissPending(noteId, doc, map)).toStrictEqual({ kind: "invalid-note" });
+    expect(acceptPending(noteId, doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
+    expect(dismissPending(noteId, doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
     expect(store.removeAnnotation(noteId).ok).toBe(false);
     expect(map.has(noteId), "and it is still there").toBe(true);
   });

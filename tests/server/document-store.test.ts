@@ -24,9 +24,16 @@ import { getDocumentStore, YDocStore } from "../../src/server/mcp/document-store
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
+import type { OnLossy } from "../../src/shared/sanitize.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
+
+/** No sink: these specs are about the guards and the write, not the relay.
+ *  Named rather than inlined so "does not care" is distinguishable from
+ *  "forgot" at a glance. The relay's own coverage lives in the specs that pass
+ *  a real one. */
+const noRelay: OnLossy = () => {};
 
 beforeEach(() => {
   clearOpenDocs();
@@ -134,7 +141,7 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, "edit-np");
     const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
-    acceptPending(id, ydoc, map);
+    acceptPending(id, ydoc, map, noRelay);
     expect(store.editAnnotation(id, { content: "y" })).toEqual({
       kind: "not-pending",
       currentStatus: "accepted",
@@ -162,29 +169,55 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
 });
 
 describe("YDocStore lifecycle parity", () => {
-  it("acceptAnnotation matches acceptPending", () => {
-    const a = setupDoc("acc-a", "Hello world");
-    const b = setupDoc("acc-b", "Hello world");
-    const storeA = new YDocStore(a, FILE_PATH, "acc-a");
-    const idA = storeA.createAnnotation("comment", rangeOf(0, 5, a), "x");
-    const idB = createAnnotation(b.getMap(Y_MAP_ANNOTATIONS), b, "comment", rangeOf(0, 5, b), "x");
+  // **Both specs ran against TWO Y.Docs and asserted the parity of nothing.**
+  // `acceptAnnotation matches acceptPending` compared only `resA.kind` to
+  // `resB.kind` — an unconditional `{kind: "ok"}` matches itself — and the
+  // dismiss twin discarded both return values entirely, so deleting its
+  // `dismissPending` call left it green.
+  //
+  // Fixing that by comparing records across two docs does not work and would
+  // make things worse: `relRange` embeds the doc's client id, so a cross-doc
+  // comparison must normalise it away — and normalising `relRange` away is
+  // exactly what the field-survival mutant needs to survive. The create-parity
+  // spec above already solved this by driving both paths against ONE doc, and
+  // says so; these two now do the same.
+  it.each([
+    [
+      "accept",
+      (s: YDocStore, id: string) => s.acceptAnnotation(id),
+      (id: string, d: Y.Doc, m: Y.Map<unknown>) => acceptPending(id, d, m, noRelay),
+      "accepted",
+    ],
+    [
+      "dismiss",
+      (s: YDocStore, id: string) => s.dismissAnnotation(id),
+      (id: string, d: Y.Doc, m: Y.Map<unknown>) => dismissPending(id, d, m, noRelay),
+      "dismissed",
+    ],
+  ])("%sAnnotation writes what the standalone helper writes", (_label, viaStore, viaHelper, want) => {
+    const ydoc = setupDoc(`parity-${want}`, "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const store = new YDocStore(ydoc, FILE_PATH, `parity-${want}`);
 
-    const resA = storeA.acceptAnnotation(idA);
-    const resB = acceptPending(idB, b, b.getMap(Y_MAP_ANNOTATIONS));
-    expect(resA.kind).toBe(resB.kind);
-    expect((a.getMap(Y_MAP_ANNOTATIONS).get(idA) as Annotation).status).toBe("accepted");
-  });
+    const idStore = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
+    const idHelper = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
 
-  it("dismissAnnotation matches dismissPending", () => {
-    const a = setupDoc("dis-a", "Hello world");
-    const b = setupDoc("dis-b", "Hello world");
-    const storeA = new YDocStore(a, FILE_PATH, "dis-a");
-    const idA = storeA.createAnnotation("comment", rangeOf(0, 5, a), "x");
-    const idB = createAnnotation(b.getMap(Y_MAP_ANNOTATIONS), b, "comment", rangeOf(0, 5, b), "x");
+    const resStore = viaStore(store, idStore);
+    const resHelper = viaHelper(idHelper, ydoc, map);
 
-    storeA.dismissAnnotation(idA);
-    dismissPending(idB, b, b.getMap(Y_MAP_ANNOTATIONS));
-    expect((a.getMap(Y_MAP_ANNOTATIONS).get(idA) as Annotation).status).toBe("dismissed");
+    // Both arms, not just their kinds — `.kind` alone is matched by any two
+    // results that happen to succeed.
+    expect(resStore.kind).toBe("ok");
+    expect(resHelper.kind).toBe("ok");
+    if (resStore.kind !== "ok" || resHelper.kind !== "ok") return;
+
+    // The records, modulo the two fields that legitimately differ between any
+    // two annotations minted a moment apart.
+    const norm = (a: Annotation) => ({ ...a, id: "", timestamp: 0 });
+    expect(norm(map.get(idStore) as Annotation)).toStrictEqual(
+      norm(map.get(idHelper) as Annotation),
+    );
+    expect((map.get(idStore) as Annotation).status).toBe(want);
   });
 });
 

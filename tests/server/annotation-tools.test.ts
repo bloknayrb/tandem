@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { acceptPending, dismissPending } from "../../src/server/annotations/lifecycle.js";
 import { exportAnnotations } from "../../src/server/file-io/docx.js";
 import {
   collectAnnotations,
@@ -185,28 +186,23 @@ describe("tandem_getAnnotations tool logic", () => {
 });
 
 describe("tandem_resolveAnnotation tool logic", () => {
-  it("accepts an annotation", () => {
-    const ydoc = setupDoc("ra-1", "Hello world");
+  // **These two hand-wrote `map.set({...ann, status})` and then asserted their
+  // own write**, so deleting `transitionPending` outright left them green under
+  // exactly the title someone searching for resolve coverage would find. They
+  // now drive the real functions. (The hand `map.set` calls were also untagged
+  // raw writes — Critical Rule 2 hygiene, gone with them.)
+  it.each([
+    ["accepts", acceptPending, "accepted"],
+    ["dismisses", dismissPending, "dismissed"],
+  ])("%s an annotation", (_label, op, want) => {
+    const ydoc = setupDoc(`ra-${want}`, "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "review me");
 
-    const ann = map.get(id) as Annotation;
-    map.set(id, { ...ann, status: "accepted" as const });
+    const result = op(id, ydoc, map, () => {});
 
-    const updated = map.get(id) as Annotation;
-    expect(updated.status).toBe("accepted");
-  });
-
-  it("dismisses an annotation", () => {
-    const ydoc = setupDoc("ra-2", "Hello world");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "review me");
-
-    const ann = map.get(id) as Annotation;
-    map.set(id, { ...ann, status: "dismissed" as const });
-
-    const updated = map.get(id) as Annotation;
-    expect(updated.status).toBe("dismissed");
+    expect(result.kind).toBe("ok");
+    expect((map.get(id) as Annotation).status).toBe(want);
   });
 
   it("returns error for non-existent annotation ID", () => {
