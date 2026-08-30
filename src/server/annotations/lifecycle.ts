@@ -161,8 +161,15 @@ export type RemoveRecordResult = { kind: "ok"; id: string } | { kind: "not-found
  *
  * **The third bespoke result family in this file**, and {@link EditResult}
  * labels the convergence onto a shared `LifecycleError` base as *deferred, not
- * rejected*. That deferral covers this one; a fourth family is where it should
- * stop being deferred.
+ * rejected*. That deferral covered this one, and named its own trigger: a fourth
+ * family is where it should stop being deferred.
+ *
+ * **Unit 8f added the fourth and fifth ({@link ReplyResult},
+ * {@link ClaudeReplyResult}), so the trigger has fired.** It is tracked in
+ * #1687 with a date in the title and a criterion answerable from this file —
+ * `not-pending` is currently spelled independently in three families and
+ * `not-found` in four — rather than deferred a fifth time in a comment nothing
+ * reads on a schedule.
  */
 export type RemoveResult = RemoveRecordResult | { kind: "invalid-note" };
 
@@ -203,8 +210,16 @@ export type ClaudeReplyResult = ReplyResult | { kind: "invalid-note" };
 export type ReplyRefusalCode = "NOT_FOUND" | "INVALID_ARGUMENT" | "ANNOTATION_RESOLVED";
 
 /**
- * The single description of a reply refusal — code and message — shared by all
- * three consumers (the MCP tool, the HTTP route, the local-model loop).
+ * The single description of a refusal to WRITE a reply — code and message —
+ * shared by all three consumers (the MCP tool, the HTTP route, the
+ * local-model loop).
+ *
+ * **`Write` is in the name because `annotations/projection.ts` already
+ * exports a `describeReplyRefusal`**, about a refusal to PROJECT a reply onto
+ * the channel. Nothing errors when two exports in one subsystem share a name
+ * and are never imported together — which is precisely the failure mode: the
+ * two read as one concept, and a reader following the wrong one finds a
+ * plausible function that answers a different question.
  *
  * **This is where the `never` anchor lives, and one place is deliberate.** Parts
  * of an earlier draft gave each consumer its own exhaustive switch: three
@@ -221,7 +236,7 @@ export type ReplyRefusalCode = "NOT_FOUND" | "INVALID_ARGUMENT" | "ANNOTATION_RE
  * The three codes are exactly what the ternary produced for the three reachable
  * cases, so 8f changes how the answer is derived and not what it is.
  */
-export function describeReplyRefusal(result: Exclude<ClaudeReplyResult, { kind: "ok" }>): {
+export function describeReplyWriteRefusal(result: Exclude<ClaudeReplyResult, { kind: "ok" }>): {
   code: ReplyRefusalCode;
   message: string;
 } {
@@ -300,6 +315,9 @@ export type CreateResult = { kind: "created"; annotation: Annotation };
  * docblock used to claim — was never true. It is deferred because Unit 8c's
  * whole contract is that behaviour does not change, not because it is
  * expensive. Do not read this paragraph as an argument against doing it.
+ *
+ * Unit 8f made this the FIFTH family and moved the deferral into #1687, which
+ * is where the decision now has to be made rather than restated.
  *
  * Note also that `AnnotationStatus` and `Annotation["status"]` below are the
  * same type spelled two ways; that is drift, not divergence.

@@ -20,7 +20,7 @@ import {
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import type { MintExtras } from "../annotations/lifecycle.js";
-import { describeReplyRefusal, mintAnnotation } from "../annotations/lifecycle.js";
+import { describeReplyWriteRefusal, mintAnnotation } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { atomicWrite } from "../file-io/index.js";
@@ -911,8 +911,8 @@ export function registerAnnotationTools(server: McpServer): void {
           }
           // The wire codes are unchanged from the ternary chain this replaces;
           // what moved is that a new arm now fails to compile inside
-          // `describeReplyRefusal` instead of falling into a catch-all.
-          const { code, message } = describeReplyRefusal(result);
+          // `describeReplyWriteRefusal` instead of falling into a catch-all.
+          const { code, message } = describeReplyWriteRefusal(result);
           return mcpError(code, message);
         },
       );

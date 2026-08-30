@@ -32,7 +32,7 @@ import {
   type AnnotationReplier,
   type CreateExtras,
   createAnnotationLifecycle,
-  describeReplyRefusal,
+  describeReplyWriteRefusal,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { captureSnapshot } from "../mcp/annotations.js";
@@ -360,19 +360,21 @@ export function dispatch(
         (event) => relaySanitizationEvent(undefined, event),
         ctx.agentIdentity,
       );
-      const refusal = reply.kind === "ok" ? undefined : describeReplyRefusal(reply);
+      // Branch once. The earlier shape computed the refusal in one ternary and
+      // read it in another, so every access needed a `?? "REPLY_FAILED"` for a
+      // case that cannot occur — TypeScript will not carry the narrowing across
+      // two expressions, and an unreachable fallback string is indistinguishable
+      // from a reachable one to anyone reading it later.
+      if (reply.kind === "ok") {
+        return {
+          result: { ok: true, reply_id: reply.replyId },
+          effect: { kind: "reply", ok: true, annotationId, replyId: reply.replyId },
+        };
+      }
+      const refusal = describeReplyWriteRefusal(reply);
       return {
-        result:
-          reply.kind === "ok"
-            ? { ok: true, reply_id: reply.replyId }
-            : { error: refusal?.code ?? "REPLY_FAILED", message: refusal?.message ?? "" },
-        effect: {
-          kind: "reply",
-          ok: reply.kind === "ok",
-          annotationId,
-          replyId: reply.kind === "ok" ? reply.replyId : undefined,
-          errorCode: refusal?.code,
-        },
+        result: { error: refusal.code, message: refusal.message },
+        effect: { kind: "reply", ok: false, annotationId, errorCode: refusal.code },
       };
     }
     default:

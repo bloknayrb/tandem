@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { generateNotificationId } from "../../../shared/utils.js";
-import { addUserReply, describeReplyRefusal } from "../../annotations/lifecycle.js";
+import { addUserReply, describeReplyWriteRefusal } from "../../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../../annotations/migration-log.js";
 import { pushNotification } from "../../notifications.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
@@ -38,10 +38,10 @@ export function handleAnnotationReply(req: Request, res: Response): void {
     res.json({ data: { replyId: result.replyId, annotationId } });
     return;
   }
-  const { code, message } = describeReplyRefusal(result);
+  const { code, message } = describeReplyWriteRefusal(result);
   // Status from the CODE, not the arm. The code set is closed and does not
   // grow when the result union does, so this mapping cannot go stale behind
-  // a new arm — the arm is forced through `describeReplyRefusal`'s anchor
+  // a new arm — the arm is forced through `describeReplyWriteRefusal`'s anchor
   // first.
   const status = code === "ANNOTATION_RESOLVED" ? 409 : code === "NOT_FOUND" ? 404 : 400;
   console.warn(`[Tandem] API error (${status}): annotation reply failed: ${message}`);
