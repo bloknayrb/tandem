@@ -28,7 +28,7 @@ import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { TUTORIAL_ANNOTATIONS } from "../../src/server/mcp/tutorial-annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { getAnnotationsMap, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
+import { getAnnotationsMap, makeDoc, noRelay, seedRawAnnotation } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 let map: Y.Map<unknown>;
@@ -42,21 +42,9 @@ beforeEach(() => {
   store = new YDocStore(doc, "C:/tmp/guards.md", "doc-guards");
 });
 
-/** Seed a record RAW so a spec can choose a stored shape the mint path would
- *  never produce — a `flag` in particular, which is a note only post-sanitize. */
+/** Shorthand for the shared raw-record seeder, bound to this file's doc. */
 function seed(id: string, extra: Record<string, unknown>): void {
-  map.set(id, {
-    id,
-    type: "comment",
-    author: "user",
-    audience: "private",
-    status: "pending",
-    range: rangeOf(0, 5, doc).range,
-    content: "private thought",
-    timestamp: Date.now(),
-    rev: 1,
-    ...extra,
-  });
+  seedRawAnnotation(map, doc, id, extra);
 }
 
 describe("resolve refuses notes (ADR-027)", () => {
@@ -67,7 +55,7 @@ describe("resolve refuses notes (ADR-027)", () => {
     seed("n1", { type: "note" });
     const before = { ...(map.get("n1") as Annotation) };
 
-    const result = acceptPending("n1", doc, map);
+    const result = acceptPending("n1", doc, map, noRelay);
 
     expect(result).toStrictEqual({ kind: "invalid-note" });
     expect(map.get("n1"), "a guard that returns after the write passes an arm check").toStrictEqual(
@@ -80,7 +68,7 @@ describe("resolve refuses notes (ADR-027)", () => {
     // above. This is the positive control for the guard, not for the harness.
     seed("c1", { type: "comment", author: "claude", audience: "outbound" });
 
-    const result = acceptPending("c1", doc, map);
+    const result = acceptPending("c1", doc, map, noRelay);
 
     expect(result.kind).toBe("ok");
     expect((map.get("c1") as Annotation).status).toBe("accepted");
@@ -93,8 +81,8 @@ describe("resolve refuses notes (ADR-027)", () => {
     // exists and is merely resolved — a disclosure ADR-027 does not make.
     seed("n2", { type: "note", status: "dismissed" });
 
-    expect(acceptPending("n2", doc, map)).toStrictEqual({ kind: "invalid-note" });
-    expect(dismissPending("n2", doc, map)).toStrictEqual({ kind: "invalid-note" });
+    expect(acceptPending("n2", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
+    expect(dismissPending("n2", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
   });
 
   it("refuses a stored `flag`, which is a note only after sanitize", () => {
@@ -104,7 +92,7 @@ describe("resolve refuses notes (ADR-027)", () => {
     // guard sits after sanitize rather than before it.
     seed("f1", { type: "flag" });
 
-    expect(acceptPending("f1", doc, map)).toStrictEqual({ kind: "invalid-note" });
+    expect(acceptPending("f1", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
     expect((map.get("f1") as Annotation).status, "and it is not resolved").toBe("pending");
   });
 
@@ -113,7 +101,7 @@ describe("resolve refuses notes (ADR-027)", () => {
     // swallowed the pending arm for non-notes.
     seed("c2", { type: "comment", author: "claude", audience: "outbound", status: "accepted" });
 
-    expect(acceptPending("c2", doc, map)).toStrictEqual({
+    expect(acceptPending("c2", doc, map, noRelay)).toStrictEqual({
       kind: "not-pending",
       id: "c2",
       currentStatus: "accepted",
@@ -240,8 +228,8 @@ describe("the tutorial note, which is the reachable instance", () => {
     expect(noteId, "and its id is still a constant, not a nonce").toBe("tutorial-note-1");
     seed(noteId, { type: "note" });
 
-    expect(acceptPending(noteId, doc, map)).toStrictEqual({ kind: "invalid-note" });
-    expect(dismissPending(noteId, doc, map)).toStrictEqual({ kind: "invalid-note" });
+    expect(acceptPending(noteId, doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
+    expect(dismissPending(noteId, doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
     expect(store.removeAnnotation(noteId).ok).toBe(false);
     expect(map.has(noteId), "and it is still there").toBe(true);
   });

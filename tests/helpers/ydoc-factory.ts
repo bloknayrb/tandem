@@ -4,6 +4,7 @@ import { populateYDoc } from "../../src/server/mcp/document.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { type AnchoredRangeResult, toFlatOffset } from "../../src/shared/positions/types.js";
+import type { OnLossy } from "../../src/shared/sanitize.js";
 import type { Annotation } from "../../src/shared/types.js";
 
 /** Create a Y.Doc populated with text content */
@@ -98,4 +99,56 @@ export function rangeOf(from: number, to: number, ydoc: Y.Doc): AnchoredRangeRes
   const result = anchoredRange(ydoc, toFlatOffset(from), toFlatOffset(to));
   if (!result.ok) throw new Error("anchoredRange failed in test helper");
   return result;
+}
+
+/**
+ * Write a RAW annotation record straight into the map, bypassing the mint path.
+ *
+ * The point is to store a shape production never produces — a legacy `flag` or
+ * `question`, an explicit `audience: "outbound"` on a user note — so a spec can
+ * exercise the sanitize-then-guard ordering that only such a record reaches.
+ * `makeAnnotation` above is the opposite tool: it builds a WELL-FORMED record.
+ *
+ * Deliberately untyped in `extra`: a `Partial<Annotation>` would reject exactly
+ * the legacy shapes this exists to write.
+ */
+export function seedRawAnnotation(
+  map: Y.Map<unknown>,
+  doc: Y.Doc,
+  id: string,
+  extra: Record<string, unknown>,
+): void {
+  map.set(id, {
+    id,
+    type: "comment",
+    author: "user",
+    audience: "private",
+    status: "pending",
+    range: rangeOf(0, 5, doc).range,
+    content: "legacy",
+    timestamp: Date.now(),
+    rev: 1,
+    ...extra,
+  });
+}
+
+/**
+ * A sink that discards migration events.
+ *
+ * Named rather than written inline at each call so a reader can tell "this spec
+ * does not care about the relay" from "this spec forgot" — the distinction the
+ * required-not-defaulted `onLossy` parameter exists to make visible in the
+ * first place. Specs that DO care pass their own sink.
+ */
+export const noRelay: OnLossy = () => {};
+
+/**
+ * Drop the two fields that legitimately differ between any two annotations
+ * minted a moment apart, so two records can be compared whole.
+ *
+ * Whole-record comparison rather than a field list on purpose: a list silently
+ * stops covering whatever field is added next.
+ */
+export function normalizeForParity(a: Annotation): Annotation {
+  return { ...a, id: "", timestamp: 0 } as Annotation;
 }
