@@ -52,11 +52,12 @@ import { docHash } from "../annotations/doc-hash.js";
 import {
   type AnnotationLifecycle,
   createAnnotationLifecycle,
+  type EditPatch,
+  type EditResult,
   type LifecycleResult,
   type MintExtras,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
-import { nextRev } from "../annotations/schema.js";
 import { refreshAllRanges, refreshRange } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
@@ -134,10 +135,7 @@ export interface DocumentStore {
    * handler can map it to the right MCP error envelope. The failure-arm
    * order mirrors the pre-seam handler's sequential guards exactly.
    */
-  editAnnotation(
-    id: string,
-    patch: { content?: string; suggestedText?: string },
-  ): EditAnnotationResult;
+  editAnnotation(id: string, patch: EditPatch): EditAnnotationResult;
 
   /** Accept a pending annotation (pending → accepted). */
   acceptAnnotation(id: string): LifecycleResult<Annotation>;
@@ -192,14 +190,21 @@ export interface DocumentStore {
   listReplies(annotationId: string): AnnotationReply[];
 }
 
-/** Tagged outcome of {@link DocumentStore.editAnnotation}. */
-export type EditAnnotationResult =
-  | { kind: "ok"; annotation: Annotation }
-  | { kind: "not-found" }
-  | { kind: "invalid-note" }
-  | { kind: "not-pending"; currentStatus: Annotation["status"] }
-  | { kind: "empty-patch" }
-  | { kind: "invalid-suggestion-target"; annotationType: AnnotationType };
+/**
+ * Tagged outcome of {@link DocumentStore.editAnnotation}.
+ *
+ * @deprecated Use `EditResult` from `annotations/lifecycle.ts`.
+ *
+ * An ALIAS, not a copy. Restating the union here would leave two structurally
+ * identical types free to drift, which is the failure the lifecycle module
+ * exists to prevent.
+ *
+ * It survives only as a name. Review measured that the MCP adapter never
+ * mentions it — `mcp/annotations.ts` switches on `result.kind` off an
+ * unannotated `store.editAnnotation(...)` — so this alias is not load-bearing
+ * for any consumer, and Unit 8j deletes it.
+ */
+export type EditAnnotationResult = EditResult;
 
 /**
  * The lone {@link DocumentStore} implementation. Wraps a document's Y.Doc and
@@ -252,41 +257,17 @@ export class YDocStore implements DocumentStore {
     return createAnnotation(this.map, this.ydoc, type, anchored, content, extras);
   }
 
-  editAnnotation(
-    id: string,
-    patch: { content?: string; suggestedText?: string },
-  ): EditAnnotationResult {
-    const raw = this.map.get(id) as Annotation | undefined;
-    if (!raw) return { kind: "not-found" };
-
-    // Sanitize legacy shapes before editing (matches the pre-seam handler).
-    const ann = sanitizeAnnotation(raw, (e) => this.onLossy(e));
-
-    // ADR-027: notes are user-private. Claude must not modify them via MCP.
-    if (ann.type === "note") return { kind: "invalid-note" };
-
-    if (ann.status !== "pending") return { kind: "not-pending", currentStatus: ann.status };
-
-    // Guard ordering mirrors the pre-seam handler: the empty-patch check sits
-    // after the note / status guards and before the suggestion-target check.
-    if (patch.content === undefined && patch.suggestedText === undefined) {
-      return { kind: "empty-patch" };
-    }
-
-    if (patch.suggestedText !== undefined && ann.type !== "comment") {
-      return { kind: "invalid-suggestion-target", annotationType: ann.type };
-    }
-
-    const updated = {
-      ...ann,
-      ...(patch.content !== undefined ? { content: patch.content } : {}),
-      ...(patch.suggestedText !== undefined ? { suggestedText: patch.suggestedText } : {}),
-      editedAt: Date.now(),
-      rev: nextRev(ann),
-    } as Annotation;
-
-    withMcp(this.ydoc, () => this.map.set(id, updated));
-    return { kind: "ok", annotation: updated };
+  /**
+   * Delegates to the lifecycle (ADR-034/035 Unit 8c). The guards, the `rev`
+   * bump and the `withMcp` tag all live there now.
+   *
+   * **The sink is passed, not defaulted.** `transitionPending` supplies a no-op
+   * whose wiring is deferred to Unit 8d; edit already had a real relay at this
+   * caller, and handing it down is what stops 8d's decision from silently
+   * becoming edit's.
+   */
+  editAnnotation(id: string, patch: EditPatch): EditAnnotationResult {
+    return this.lifecycle.editPending(id, patch, (e) => this.onLossy(e));
   }
 
   acceptAnnotation(id: string): LifecycleResult<Annotation> {
