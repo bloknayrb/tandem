@@ -59,7 +59,9 @@ export interface PerKeyObserverDeps<T> {
  * unsubscribes the listener.
  *
  * Origin skip-set is anchored on ADR-031's `shouldSkipChannel` (skips
- * `mcp` / `file-sync` / `internal` / `reload` / `test`). The optional
+ * `mcp` / `file-sync` / `internal` / `reload` / `mode-release`; note that
+ * `test` is NOT in that set — `TEST_ORIGIN` belongs to `transactForTest`
+ * and reaches the channel like any other unlisted origin). The optional
  * `shouldSkip` predicate is OR'd on top for callers that need to widen.
  */
 export function makePerKeyChangeObserver<T>(deps: PerKeyObserverDeps<T>): () => void {

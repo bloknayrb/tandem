@@ -14,12 +14,19 @@
  *     (`openFromDisk`'s outcomes are covered in the characterization suite,
  *     which drives every entry point through this same seam.)
  *   - **The redirect invariant.** No module under `src/` may reach
- *     `mcp/file-opener.ts` outside a written-down exception list — four
- *     modules today (Unit 7a removed the fifth), each with the symbols it may
- *     take. That is Unit 6's
+ *     `documents/reload-family.ts` outside a written-down exception list —
+ *     four modules today, each with the symbols it may take. That is Unit 6's
  *     actual deliverable, and nothing else observes it: a new route importing
  *     `openFromDisk` would work perfectly and quietly put the seam back to
  *     zero production consumers.
+ *
+ *     The named module has changed twice. It was `mcp/file-opener.ts` when
+ *     this was written; Unit 7a moved the open pipeline out of it, and Unit 7c
+ *     moved the remaining reload family to `documents/reload-family.ts` and
+ *     deleted it. The inventory moved with the module rather than being
+ *     emptied — an empty `SANCTIONED` runs zero assertions through the
+ *     `Object.entries` loop below, which is the shape where a guard reads
+ *     exactly like a pass.
  *
  * Broader behaviour of the open pipelines is characterized in
  * `adr-034-open-characterization.test.ts`.
@@ -40,15 +47,11 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   return { ...original, SESSION_DIR: pathMod.join(appDataDir, "sessions") };
 });
 
-import {
-  kindOfOpenResult,
-  type OpenFileResult,
-  openFromUpload,
-  openScratchpad,
-} from "../../src/server/documents/open.js";
+import { openFromUpload, openScratchpad } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { removeDocument } from "../../src/server/yjs/provider.js";
+import { isSourceFile } from "../helpers/source-extensions.js";
 import { timeoutMs } from "../helpers/timing.js";
 
 afterAll(async () => {
@@ -100,12 +103,12 @@ describe("the redirect invariant (Unit 6)", () => {
    * A name list cannot see a symbol nobody has heard of yet — the same
    * argument `registry-primitive-containment.test.ts` makes for pinning an
    * exact exported surface. Deriving it means a NEW export from
-   * `file-opener.ts` is in scope automatically, and every row constrains
+   * `reload-family.ts` is in scope automatically, and every row constrains
    * something.
    */
   let ENTRIES: string[] = [];
   beforeAll(async () => {
-    ENTRIES = Object.keys(await import("../../src/server/mcp/file-opener.js"));
+    ENTRIES = Object.keys(await import("../../src/server/documents/reload-family.js"));
     // A derived vocabulary that derives to nothing satisfies every filter
     // below. This was a `> 3` count, which was really the old export surface's
     // size wearing a control's clothing: Unit 7a shrank that surface to exactly
@@ -125,14 +128,25 @@ describe("the redirect invariant (Unit 6)", () => {
 
   /**
    * Written down here, not derived: this is the review inventory. Every module
-   * under `src/` that may reach `mcp/file-opener.ts` at all, and the symbols it
-   * may take. Adding a row is a decision someone has to make deliberately.
+   * under `src/` that may reach `documents/reload-family.ts` at all, and the
+   * symbols it may take. Adding a row is a decision someone has to make
+   * deliberately.
+   *
+   * **Migrated, not emptied, when Unit 7c deleted `mcp/file-opener.ts`.** The
+   * obvious move was to empty the list along with the module that motivated it
+   * — and review caught that the spec below loops `Object.entries(SANCTIONED)`,
+   * so an empty map runs zero assertions. The defeat it named: give
+   * `routes/backups.ts` an import of `resolveExternalConflict`, which it is not
+   * entitled to, and stay green forever. The module moved; the reason for the
+   * inventory did not, so the inventory moved with it.
    *
    * Keys are src-relative, forward-slashed — the same source tree must not
    * produce a different verdict on Windows than on CI's Linux runner.
    */
   const SANCTIONED: Record<string, string[]> = {
-    // Reload-family entries the ADR-034 seam does not name.
+    // The reload family — replacing the content of an ALREADY-open document.
+    // Since Unit 7c these live in `documents/reload-family.ts`; the four
+    // consumers and their entitlements are unchanged by that move.
     "server/mcp/routes/backups.ts": ["restoreDocumentFromBackup"],
     "server/mcp/docx-apply.ts": ["restoreDocumentFromBackup"],
     "server/mcp/routes/document-reload.ts": ["reloadDocumentFromMarkdown"],
@@ -149,7 +163,7 @@ describe("the redirect invariant (Unit 6)", () => {
 
   const srcRoot = path.resolve(fileURLToPath(import.meta.url), "../../../src");
   const seam = path.join(srcRoot, "server", "documents", "open.ts");
-  const impl = path.join(srcRoot, "server", "mcp", "file-opener.ts");
+  const impl = path.join(srcRoot, "server", "documents", "reload-family.ts");
 
   async function walk(dir: string): Promise<string[]> {
     const out: string[] = [];
@@ -193,10 +207,31 @@ describe("the redirect invariant (Unit 6)", () => {
    * emits on its own once the list is long enough. Every one of those is a real
    * regrowth of the thing Unit 6 removes, and every one passed.
    *
-   * So this keys on the structural fact instead: **which files name the legacy
-   * module specifier at all.** Syntax cannot route around that — reaching
-   * `file-opener.ts` requires saying its name. The symbol check is then a
-   * second, narrower layer over the handful of files allowed to say it.
+   * So this keys on the structural fact instead: **which files name the
+   * module specifier at all.** Most syntax cannot route around that — reaching
+   * `reload-family.ts` requires saying its name, in `import * as`, in a
+   * dynamic `import()` — quoted OR backticked, the latter added after review
+   * found the pattern read only `["']` while this sentence promised both —
+   * in a destructure. The symbol check is then a second, narrower layer over
+   * the handful of files allowed to say it.
+   *
+   * What still gets through, stated so it is not rediscovered: a specifier
+   * assembled at runtime (`import(`../documents/${dir}/x.js`)`) names nothing
+   * this can match. Nothing in `src/` does that, and a static guard cannot
+   * close it — but a reader deserves to know the boundary rather than infer
+   * a stronger one from silence.
+   *
+   * **"Most" is doing work, and the exception is written down rather than
+   * discovered again.** A guard keyed on an EDGE is defeated by anything that
+   * does not create one. A sanctioned consumer can `export { restoreDocumentFromBackup };`
+   * — a bare re-export of a symbol it is already entitled to — and any module
+   * may then import it from THERE. No new specifier means no new row here and
+   * none in `documents-boundary.test.ts`'s fan-in tally, and the entitlement
+   * layer has nothing to object to because the re-exporting module is listed.
+   * Both layers are satisfied by construction rather than by the code being
+   * safe. (The `export … from "…reload-family.js"` form IS caught, but only
+   * incidentally: it happens to carry a specifier.) The `it` below closes it
+   * by asking a different question — not who imports, but who re-exports.
    */
   /**
    * Corpus-walk budget, well above the project's 15s default.
@@ -222,9 +257,17 @@ describe("the redirect invariant (Unit 6)", () => {
   const CORPUS_TIMEOUT_MS = timeoutMs(90_000, 300_000);
 
   it(
-    "only sanctioned modules name the legacy file-opener specifier",
+    "only sanctioned modules import the reload family directly",
     async () => {
-      const files = (await walk(srcRoot)).filter((f) => /\.(ts|svelte)$/.test(f));
+      // The vocabulary is shared with `documents-boundary.test.ts`, whose
+      // docblock defers bare `export { X };` laundering to THIS file. That
+      // deferral was only as good as the extension set behind it: this walk
+      // was `ts|svelte` while the boundary file's was `ts|tsx|mts|cts|svelte`,
+      // so a `.mts` consumer bare-re-exporting a sanctioned symbol was
+      // invisible to both at once. Sharing the constant makes them equal by
+      // construction; `helpers/source-extensions.ts` carries the case fix and
+      // its negative control.
+      const files = (await walk(srcRoot)).filter(isSourceFile);
 
       // Controls. An empty or truncated sweep satisfies every assertion below
       // vacuously, which is how this class of guard usually dies.
@@ -237,12 +280,32 @@ describe("the redirect invariant (Unit 6)", () => {
       for (const file of files) {
         if (file === seam || file === impl) continue;
         const body = stripComments(await fs.readFile(file, "utf8"));
-        if (/["'][^"']*file-opener\.js["']/.test(body)) referencing.push(rel(file));
+        // The extension is OPTIONAL, and that is the whole point. `tsconfig.json`
+        // sets `moduleResolution: "bundler"` and `tsconfig.server.json` extends it,
+        // so `from "../../documents/reload-family"` typechecks, bundles and ships.
+        // This required a literal `.js` until review demonstrated the gap: an
+        // unsanctioned fifth consumer using the extensionless form passed this
+        // spec, passed `tsc --noEmit`, and produced a successful `tsup` build.
+        //
+        // The miss COMPOUNDED, which is why the extension is the wrong thing to
+        // anchor on. The symbol-entitlement spec below iterates the list this
+        // loop builds, so a file that never enters `referencing` is never checked
+        // for which symbols it takes either — one dropped extension defeated both
+        // layers, and the second layer's silence looked identical to a pass.
+        // The backtick is in the class because a template literal is a legal
+        // module specifier for a dynamic import: `await import(`…/reload-family.js`)`
+        // typechecks, runs, and carried no quote for the old pattern to find.
+        // The prose above claimed dynamic `import()` was covered; it was covered
+        // only in its quoted form, which is the overclaim this file has now
+        // produced twice.
+        if (/["'`][^"'`]*reload-family(?:\.[a-z]+)?["'`]/.test(body)) {
+          referencing.push(rel(file));
+        }
       }
 
       expect(
         referencing.sort(),
-        "a module that reaches mcp/file-opener.ts must either move to documents/open.js or be added to SANCTIONED with the symbols it needs — adding a row is a deliberate decision, not a formality",
+        "a module that reaches documents/reload-family.ts must either use documents/open.js instead or be added to SANCTIONED with the symbols it needs — adding a row is a deliberate decision, not a formality",
       ).toEqual(Object.keys(SANCTIONED).sort());
     },
     CORPUS_TIMEOUT_MS,
@@ -281,6 +344,76 @@ describe("the redirect invariant (Unit 6)", () => {
     CORPUS_TIMEOUT_MS,
   );
 
+  it(
+    "no sanctioned module re-exports its entitlement, which would launder access to anyone",
+    async () => {
+      // Demonstrated, not hypothesised. Appending `export { restoreDocumentFromBackup };`
+      // to `routes/backups.ts` and importing it from an unlisted module passed
+      // every other spec in this file AND the boundary inventory: 25 green with
+      // an arbitrary fifth consumer in place.
+      //
+      // Scoped to the sanctioned four rather than all of `src/`, because they
+      // are the only modules that HAVE the symbols to re-export — anywhere else,
+      // the specifier sweep above already fires.
+      //
+      // `export *` is refused outright rather than analysed. A star re-export
+      // from a sanctioned consumer republishes whatever it imported without
+      // naming anything, so no name-keyed check can see it; and these four are
+      // route modules with no legitimate need for one. Refusing the construct
+      // is a rule a reader can hold, where "a star export whose target
+      // transitively re-exports the family" is not.
+      const offenders: string[] = [];
+      for (const relPath of Object.keys(SANCTIONED)) {
+        const body = stripComments(await fs.readFile(path.join(srcRoot, relPath), "utf8"));
+        if (/export\s*\*/.test(body)) {
+          offenders.push(`${relPath} uses \`export *\`, which republishes without naming`);
+        }
+        for (const name of ENTRIES) {
+          // `export { x }`, `export { x as y }`, `export { a, x }` — with or
+          // without a `from` clause, since the bare form is the one that was
+          // invisible. A local `export function <name>` cannot occur here: these
+          // names are defined in reload-family.ts, not in a consumer.
+          const re = new RegExp(`export\\s*\\{[^}]*(?<![\\w$])${name}(?![\\w$])[^}]*\\}`);
+          if (re.test(body)) offenders.push(`${relPath} re-exports ${name}`);
+
+          // Matching the ORIGINAL name is not enough, and review demonstrated
+          // both ways round it. `import { restoreDocumentFromBackup as _r }`
+          // followed by `export { _r };` contains the original name only in the
+          // import, which this file is entitled to have — so the export carries
+          // the capability under a name the loop above never looks for. Resolve
+          // the local binding first, then ask what leaves under it.
+          const bound = new RegExp(
+            `import\\s*\\{([^}]*)\\}\\s*from\\s*["'\`][^"'\`]*reload-family`,
+          ).exec(body);
+          const localNames = (bound?.[1] ?? "")
+            .split(",")
+            .map((clause) => clause.trim())
+            .filter((clause) => new RegExp(`(?<![\\w$])${name}(?![\\w$])`).test(clause))
+            .map((clause) => {
+              const asMatch = /\bas\s+([\w$]+)/.exec(clause);
+              return asMatch ? asMatch[1] : clause;
+            })
+            .filter((local) => local && local !== name);
+          for (const local of localNames) {
+            const leaks = [
+              new RegExp(`export\\s*\\{[^}]*(?<![\\w$])${local}(?![\\w$])[^}]*\\}`),
+              new RegExp(`export\\s+(?:const|let|var)\\s+[\\w$]+\\s*=\\s*${local}(?![\\w$])`),
+              new RegExp(`export\\s+default\\s+${local}(?![\\w$])`),
+            ];
+            if (leaks.some((re2) => re2.test(body))) {
+              offenders.push(`${relPath} re-exports ${name} as ${local}`);
+            }
+          }
+        }
+      }
+      expect(
+        offenders,
+        "a consumer re-exporting what it is entitled to hands that entitlement to every module in src/, and adds no import edge for any inventory to see",
+      ).toEqual([]);
+    },
+    CORPUS_TIMEOUT_MS,
+  );
+
   // Budgeted for the same reason as the two above, and it carried no budget
   // on EITHER side of this merge: it walks the same corpus. Two specs were
   // observed failing under load and two got funded; three do the expensive
@@ -305,43 +438,9 @@ describe("the redirect invariant (Unit 6)", () => {
   );
 });
 
-describe("kindOfOpenResult", () => {
-  function baseResult(overrides: Partial<OpenFileResult>): OpenFileResult {
-    return {
-      documentId: "doc-1",
-      filePath: "/tmp/doc-1.md",
-      fileName: "doc-1.md",
-      format: "md",
-      readOnly: false,
-      source: "file",
-      tokenEstimate: 0,
-      pageEstimate: 0,
-      restoredFromSession: false,
-      alreadyOpen: false,
-      forceReloaded: false,
-      ...overrides,
-    };
-  }
-
-  it("returns 'force-reloaded' when forceReloaded is true (highest priority)", () => {
-    expect(
-      kindOfOpenResult(
-        baseResult({ forceReloaded: true, alreadyOpen: true, restoredFromSession: true }),
-      ),
-    ).toBe("force-reloaded");
-  });
-
-  it("returns 'already-open' when alreadyOpen is true but not force-reloaded", () => {
-    expect(kindOfOpenResult(baseResult({ alreadyOpen: true, restoredFromSession: true }))).toBe(
-      "already-open",
-    );
-  });
-
-  it("returns 'restored' when only restoredFromSession is true", () => {
-    expect(kindOfOpenResult(baseResult({ restoredFromSession: true }))).toBe("restored");
-  });
-
-  it("returns 'fresh' when none of the flags are set", () => {
-    expect(kindOfOpenResult(baseResult({}))).toBe("fresh");
-  });
-});
+// `kindOfOpenResult`'s precedence is pinned in
+// `tests/server/open-result-message.test.ts`, over the full 2^3 cross product.
+// It lived here as four reachable cases; one fixture in two files is what
+// drifts. The message chain that USED to be a second copy of that precedence
+// now switches on `kind`, so the two are pinned as a round trip rather than as
+// two orderings that happen to agree.

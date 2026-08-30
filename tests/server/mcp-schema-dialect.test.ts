@@ -188,7 +188,7 @@ describe("advertised tool schemas declare no dialect (#1564)", () => {
     // A strip that replaced the schemas with `{}` would satisfy the test above,
     // and one that dropped a few tools would satisfy a `>=` floor.
     // `tests/docs/tool-count-drift.test.ts` pins this number independently.
-    expect(tools.length).toBe(32);
+    expect(tools.length).toBe(33);
     expect(
       tools
         .filter((t) => t.outputSchema)

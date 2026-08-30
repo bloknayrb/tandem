@@ -211,13 +211,17 @@ The MCP half is CI-enforced by `tests/server/license-gate-coverage.test.ts`. **T
 has no test: this enumeration is the review**, referenced by Critical Rule 9 in `CLAUDE.md`.
 Adding a mutating MCP tool or `/api` route means adding it here, in both halves.
 
-**MCP** — `tandem_edit`, `tandem_appendContent`, `tandem_scratchpad`, `tandem_comment`,
+**MCP** — `tandem_edit`, `tandem_appendContent`, `tandem_editList`, `tandem_scratchpad`, `tandem_comment`,
 `tandem_suggest`, `tandem_highlight`, `tandem_flag`, `tandem_editAnnotation`,
 `tandem_annotationReply`, `tandem_removeAnnotation`, `tandem_applyChanges`,
 `tandem_restoreBackup`.
 
 **`/api`** — `apply-changes`, `annotation-reply`, `remove-annotation`, `document/reload`,
 `external-conflict/resolve`, `backups/restore`, `scratchpad`.
+
+`tandem_editList` has no `/api` twin, so the `/api` half of Critical Rule 9 is a no-op
+for it. Stated rather than left silent: this list IS the `/api` half's review, and an
+absence nobody wrote down reads the same as an omission.
 
 Gate each pair together (`tandem_scratchpad` *and* `/api/scratchpad`). The three deprecated
 stubs are gated too, so un-stubbing one cannot silently ship a hole.

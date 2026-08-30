@@ -10,9 +10,16 @@
  * per-document concurrent-reload guard, and it has two callers outside this
  * module (`restoreDocumentFromBackup` and `resolveExternalConflict`, both of
  * which turn a skip into a coded failure rather than reporting a success the
- * Y.Doc does not reflect). Leaving it behind would make this module import
- * back into `mcp/`; duplicating the Set would leave both halves green while
- * silently no longer suppressing anything.
+ * Y.Doc does not reflect). Duplicating the Set would leave both halves green
+ * while silently no longer suppressing anything.
+ *
+ * Those two callers were in `mcp/` when this was written, so the original
+ * reason given here was that leaving the guard behind would make this module
+ * import back into `mcp/`. Unit 7c moved them to `documents/reload-family.ts`,
+ * which retires that argument but NOT the decision: the guard is a published
+ * acquire/release contract with named callers outside this file, and that is
+ * what makes it an interface rather than an internal detail. Do not read the
+ * retired argument as licence to un-export it.
  */
 
 import fs from "fs/promises";
@@ -95,10 +102,11 @@ export function releaseReloadGuard(id: string): void {
  * 5. Reattach event queue observers
  *
  * Returns `true` when the reload ran, `false` when it was skipped because a
- * concurrent reload holds the per-doc guard. The file-watcher caller ignores
- * the result (the in-flight reload reads the same disk state); the
- * backup-restore caller turns a skip into RELOAD_IN_PROGRESS so it never
- * reports success while the Y.Doc still holds pre-restore content.
+ * concurrent reload holds the per-doc guard. **Every caller reads it** (#1641):
+ * the file-watcher and external-conflict callers suppress their success toast
+ * on a skip, and the backup-restore caller turns a skip into
+ * RELOAD_IN_PROGRESS so it never reports success while the Y.Doc still holds
+ * pre-restore content.
  */
 export async function reloadFromDisk(
   id: string,
@@ -325,7 +333,27 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
           });
           return;
         }
-        await reloadFromDisk(id, filePath, format);
+        // #1641: the return value is the claim's warrant. `reloadFromDisk`
+        // yields false when a concurrent reload holds the guard, and this
+        // callback used to discard that and toast anyway — telling the user a
+        // reload happened for a pass that did nothing, sometimes while the
+        // in-flight reload was still mid-transaction. Both callers of
+        // `reloadFromDisk` in `documents/reload-family.ts` already gated on this value;
+        // this was the only one that did not.
+        //
+        // What suppression costs, stated precisely rather than as "nothing",
+        // because the guard has FOUR holders and they do not all toast:
+        // a sibling watcher pass and `resolveExternalConflict` push their own
+        // reload toast, so the user still hears about it; `restoreDocumentFromBackup`
+        // pushes a restore toast that never mentions the external edit; and
+        // `reloadDocumentFromMarkdown` (which takes the guard directly, across
+        // a clear+repopulate and a disk save) pushes no reload toast at all.
+        // In that last window a genuine third-party write is dropped with no
+        // signal. The staleness itself is pre-existing — master skipped the
+        // reload too and merely lied about it — and the save guard still
+        // catches the consequence, since the reload records the PRE-write
+        // mtime as the baseline. Only the false claim is gone.
+        if (!(await reloadFromDisk(id, filePath, format))) return;
         pushNotification({
           id: generateNotificationId(),
           type: "file-reloaded",

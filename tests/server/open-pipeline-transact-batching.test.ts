@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 
-// Match the isolation pattern in file-opener-lifecycle.test.ts so this file
+// Match the isolation pattern in open-pipeline-lifecycle.test.ts so this file
 // does not collide with concurrent test files using the same app-data dir.
 vi.mock("../../src/server/platform", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();

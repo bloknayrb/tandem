@@ -2,7 +2,7 @@
 
 These tools are exposed over the MCP protocol. **Claude Code is Tandem's default and most-tested client** ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), but the tools are available to any MCP-capable client connecting to `http://127.0.0.1:3479/mcp`.
 
-Tandem exposes 32 tools via MCP HTTP (29 active, 3 deprecated stubs that return MCP error responses with code `DEPRECATED`). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 33 tools via MCP HTTP (30 active, 3 deprecated stubs that return MCP error responses with code `DEPRECATED`). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -204,10 +204,11 @@ tandem_getTextContent({ section: "Cost Summary" })
 
 ### tandem_getOutline
 
-Get document structure (headings only) without full content. Low token cost.
+Get document structure without full content. Headings only by default (low token cost); pass `includeBlocks` to also list every block with the character offsets `tandem_edit` and `tandem_editList` take.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
+| `includeBlocks` | boolean | no | Also return every block: node type, flat `[from, to)` range, nesting path and depth, position within its list, and checkbox state. Roughly one entry per block -- omit on large documents unless you need to edit inside a list or a table. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
@@ -223,7 +224,25 @@ Get document structure (headings only) without full content. Low token cost.
 }
 ```
 
-**Best practice:** Call this first on large documents to understand structure, then use `getTextContent(section)` for targeted reads.
+**With `includeBlocks: true`**, a `blocks` array is added. For `- [ ] todo one` / `- [x] done two`:
+```json
+{
+  "blocks": [
+    { "from": 0, "to": 8,  "node": "paragraph", "path": [0, 0, 0], "depth": 2,
+      "container": "listItem", "listType": "bullet", "listItemIndex": 1, "checked": false },
+    { "from": 9, "to": 17, "node": "paragraph", "path": [0, 1, 0], "depth": 2,
+      "container": "listItem", "listType": "bullet", "listItemIndex": 2, "checked": true }
+  ]
+}
+```
+
+**Why this exists:** the flat text those offsets index is structurally blind -- the list above reads as `"todo one\ndone two"`, with no markers, no nesting and no checkbox state. Without `blocks` there is no way to tell a list item from a paragraph, so the list-editing tools are undiscoverable.
+
+Two details worth knowing, because they are asymmetries in the coordinate system rather than in this tool:
+- A **top-level** heading's `from` points *past* its `"## "` prefix; a **nested** heading (`- # Section`) starts at its text, because the flat projection emits a prefix only at top level.
+- `checked` is **absent** for a plain bullet rather than `false` -- a plain bullet stores no attribute, and reporting `false` would claim an unticked checkbox that is not in the document.
+
+**Best practice:** Call this first on large documents to understand structure, then use `getTextContent(section)` for targeted reads. Call it with `includeBlocks: true` before any `tandem_editList` call, and re-read after an edit rather than reusing stale offsets.
 
 ---
 
@@ -293,8 +312,48 @@ tandem_appendContent({ content: "# Notes\n\n- First point\n- Second point\n\nA c
 - Content is **appended at the end** — it never deletes or overwrites existing content. To replace text, use `tandem_edit`; to reload a file wholesale, use `tandem_open({ force: true })`.
 - Appending shifts no existing offsets, so existing annotations and authorship ranges stay valid.
 - Appended text is attributed to Claude (authorship overlay), matching `tandem_edit`.
-- Markdown documents only in v1. Non-markdown documents are rejected with `FORMAT_ERROR` -- the check is the document's format, not its read-only flag.
-- For arbitrary mid-document insertion (not just append), use `tandem_edit` per block, or open the file after writing it.
+- Markdown documents only. Non-markdown documents are rejected with `FORMAT_ERROR` -- the check is the document's format, not its read-only flag.
+- To add an item **inside** an existing list rather than at the end of the document, use `tandem_editList`.
+- For arbitrary mid-document insertion of a **non-list** block, there is still no direct path: use `tandem_edit` per block, or open the file after writing it. `tandem_editList` closes this gap for list items only -- its `insertAfter`/`insertBefore`/`remove` machinery is general, but the tool deliberately refuses a target outside a list.
+
+---
+
+### tandem_editList
+
+Change the **shape** of a list: add an item, remove one, or tick a checkbox. Does not change the wording of an item -- `tandem_edit` does that, and since it resolves to the textblock owning an offset it reaches inside list items, blockquotes and table cells.
+
+Target an item by a flat offset anywhere inside it. Flat text is structurally blind (`- [ ] task item` reads as bare `task item`), so call `tandem_getOutline({ includeBlocks: true })` first to see which lines are items, their nesting, and their checkbox state.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `at` | number | yes | Flat offset anywhere inside the target list item. |
+| `op` | string | yes | `insertAfter` \| `insertBefore` \| `remove` \| `setChecked`. |
+| `markdown` | string | insert only | The NEW item(s), one per line (`- text`); indent two spaces to nest. A non-list block is wrapped as an item. Never re-send the target item's own text. |
+| `checked` | boolean \| null | `setChecked` only | `true` ticks, `false` unticks, `null` removes the checkbox and leaves a plain bullet. |
+| `documentId` | string | no | Target document ID (defaults to active document) |
+
+**Returns:**
+```json
+{ "edited": true, "op": "insertAfter", "insertedCount": 1, "atItemIndex": 2 }
+```
+
+**Errors:** `FORMAT_ERROR` (read-only; a plaintext format, which has no list structure; or `setChecked` on a `.docx`, since Word lists have no checkbox state), `INVALID_RANGE` (offset is not inside a list -- the message names `tandem_edit` and `tandem_appendContent` as the alternatives), `INVALID_ARGUMENT` (missing `markdown` or `checked`), `FILE_TOO_LARGE`, `EMPTY_DOCUMENT`, `NO_DOCUMENT`
+
+**Format support:** markdown **and `.docx`** -- Word documents hold real bulleted and numbered lists and Tandem writes them back on save, so the ops apply there too; only `setChecked` is markdown-only. Plaintext formats (`.txt`, `.csv`, `.html`, unknown extensions) have no list model at all.
+
+**No `move` or list-type conversion, deliberately -- and reordering by hand is lossy.** Yjs has no move primitive and `nodeName` is immutable, so relocating an item or switching a list between bulleted and numbered means delete-and-rebuild, which destroys the annotations, authorship and CRDT anchors on everything it touches -- the same loss the range-replace design was rejected for. Composing `remove` + `insertAfter` to reorder has exactly that cost: **the moved item's annotations and authorship do not survive**, and nothing warns you. Prefer leaving the item where it is, or accept the loss knowingly.
+
+**Why path-addressed rather than range-replacing:** a `replaceBlock(from, to, markdown)` shape was drafted and withdrawn. It would make the caller re-emit every block it touched, but `extractText` strips inline marks and there is no per-block markdown reader -- so every call that meant to *preserve* a sibling would have silently deleted that sibling's bold, links and code spans. Each op here touches only what changes: `setChecked` is a single attribute write, and an insert never rebuilds a neighbour.
+
+**Example:**
+```
+// See the list, then add an item after the second one:
+tandem_getOutline({ includeBlocks: true })
+tandem_editList({ at: 42, op: "insertAfter", markdown: "- A new point" })
+
+// Tick a task off:
+tandem_editList({ at: 42, op: "setChecked", checked: true })
+```
 
 ---
 
@@ -452,7 +511,7 @@ Convert a `.docx` document to an editable Markdown file. Writes the `.md` file t
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `documentId` | string | no | Document ID of the `.docx` to convert (defaults to active document) |
-| `outputPath` | string | no | Custom output path for the `.md` file (defaults to same directory as the `.docx`) |
+| `outputPath` | string | no | Custom output **directory** for the `.md` file, which must already exist (defaults to the `.docx`'s own directory). The filename is always derived from the source document — a caller cannot name the file that gets created ([#1654](https://github.com/bloknayrb/tandem/issues/1654)). |
 
 **Returns:**
 ```json
@@ -677,9 +736,11 @@ Export all annotations as a formatted summary. Useful for review reports.
 | `format` | enum | no | `markdown` (default) or `json` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 | `writeToDisk` | boolean | no | Also write the export to a sharable sidecar next to the document (`<docPath>.annotations.{json\|md}`). Overwrites any existing sidecar. |
-| `outputPath` | string | no | Custom sidecar path for `writeToDisk` — a file path, or an existing directory the default filename is appended to. Must be **absolute** (a relative path would silently resolve against the server's CWD), and UNC / extended-length / device-namespace prefixes are rejected. |
+| `outputPath` | string | no | Custom sidecar path for `writeToDisk` — a file path, or an existing directory the default filename is appended to. Must be **absolute** (a relative path would silently resolve against the server's CWD), and UNC / extended-length / device-namespace prefixes are rejected. The final filename must end in `.annotations.md` or `.annotations.json`, matching `format`; the destination **directory** is unrestricted ([#1654](https://github.com/bloknayrb/tandem/issues/1654)). |
 
 Solo mode applies here: while Solo is on, held comments and replies are withheld from the export and the count is disclosed as `heldFromExport` rather than being silently omitted.
+
+**Errors:** `INVALID_PATH` — `outputPath` is relative, carries a UNC / extended-length / device-namespace prefix, contains a colon in the filename (NTFS alternate data stream), or names a file whose suffix is not `.annotations.md` / `.annotations.json` matching `format`. `FILE_NOT_FOUND` — the destination directory does not exist.
 
 **Returns (markdown):**
 ```json
@@ -1020,7 +1081,7 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 
 The channel routes and `GET /api/events` are documented in [Channel API](#channel-api-real-time-push) below.
 
-`/api/open` and `/api/upload` converge with `tandem_open` in `file-opener.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
+`/api/open` and `/api/upload` converge with `tandem_open` in `documents/open.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
 
 ### GET /api/info
 

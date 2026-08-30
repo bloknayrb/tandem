@@ -6,9 +6,10 @@
  * y-prosemirror sync of `checked` is exercised by E2E / manual editor testing.)
  */
 
-import { Editor } from "@tiptap/core";
+import { type AnyExtension, type Content, Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import { ListItemCheckbox } from "../../src/client/editor/extensions/list-item-checkbox";
 import { SLASH_COMMANDS } from "../../src/client/editor/slash-menu";
 
@@ -19,13 +20,16 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-function makeEditor(): Editor {
+function makeEditor(opts: { extensions?: AnyExtension[]; content?: Content } = {}): Editor {
   const container = document.createElement("div");
   document.body.appendChild(container);
   editor = new Editor({
     element: container,
-    extensions: [StarterKit.configure({ history: false, listItem: false }), ListItemCheckbox],
-    content: "",
+    extensions: opts.extensions ?? [
+      StarterKit.configure({ history: false, listItem: false }),
+      ListItemCheckbox,
+    ],
+    content: opts.content ?? "",
   });
   return editor;
 }
@@ -318,5 +322,103 @@ describe("ListItemCheckbox Enter continuation (#982 A3)", () => {
       if (node.type.name === "paragraph") paragraphs.push(node.textContent);
     });
     expect(paragraphs).toEqual(["", "hello"]);
+  });
+});
+
+/**
+ * Enter inside a code block in a list item (#1664).
+ *
+ * These are keymap tests, not schema tests, and the distinction is the point.
+ * Widening `listItem` to `block+` made `canSplit` succeed with the cursor in a
+ * code block, so this extension's `Enter` override began consuming a key that
+ * used to fall through to `newlineInCode`. Nothing caught it: the document
+ * involved (`- text` plus an indented fence) was already valid before the
+ * widening, so a corpus that only asserts documents still BIND cannot see that
+ * one stopped being EDITABLE.
+ *
+ * Uses the production extension set rather than the `StarterKit + ListItemCheckbox`
+ * pair the rest of this file builds, because the fallthrough target
+ * (`newlineInCode`) comes from StarterKit's own keymap and the ordering between
+ * the two is exactly what regressed.
+ */
+describe("Enter in a code block inside a list item (#1664)", () => {
+  const ITEM_WITH_CODE = {
+    type: "doc",
+    content: [
+      {
+        type: "bulletList",
+        content: [
+          {
+            type: "listItem",
+            content: [
+              { type: "paragraph", content: [{ type: "text", text: "text" }] },
+              { type: "codeBlock", content: [{ type: "text", text: "abcdef" }] },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  /** Text of the FIRST code block — same first-match convention as `findTextPos`. */
+  function codeText(ed: Editor): string {
+    let code: string | null = null;
+    ed.state.doc.descendants((n) => {
+      if (code === null && n.type.name === "codeBlock") code = n.textContent;
+      return true;
+    });
+    if (code === null) throw new Error("no codeBlock found");
+    return code;
+  }
+
+  /** Every listItem's block child type names, in document order. */
+  function itemShapes(ed: Editor): string[][] {
+    const shapes: string[][] = [];
+    ed.state.doc.descendants((node) => {
+      if (node.type.name === "listItem") {
+        const kids: string[] = [];
+        node.forEach((child) => kids.push(child.type.name));
+        shapes.push(kids);
+      }
+      return true;
+    });
+    return shapes;
+  }
+
+  it("inserts a newline mid-block instead of tearing the code block into two items", () => {
+    const ed = makeEditor({ extensions: buildSchemaExtensions(), content: ITEM_WITH_CODE });
+    ed.commands.setTextSelection(findTextPos(ed, "abcdef") + 3); // after "abc"
+    pressEnter(ed);
+
+    // One item, still holding one code block — not two items each holding half.
+    expect(itemShapes(ed)).toEqual([["paragraph", "codeBlock"]]);
+    expect(codeText(ed)).toBe("abc\ndef");
+  });
+
+  it("inserts a newline at the end of the block instead of starting a new bullet", () => {
+    const ed = makeEditor({ extensions: buildSchemaExtensions(), content: ITEM_WITH_CODE });
+    ed.commands.setTextSelection(findTextPos(ed, "abcdef") + 6); // after "abcdef"
+    pressEnter(ed);
+
+    expect(itemShapes(ed)).toEqual([["paragraph", "codeBlock"]]);
+    expect(codeText(ed)).toBe("abcdef\n");
+  });
+
+  it("still splits the item normally when the cursor is in a paragraph", () => {
+    // The bail must be scoped to code blocks — ordinary Enter is unchanged.
+    const ed = makeEditor({ extensions: buildSchemaExtensions(), content: ITEM_WITH_CODE });
+    ed.commands.setTextSelection(findTextPos(ed, "text") + 4); // end of "text"
+    pressEnter(ed);
+    expect(itemShapes(ed).length).toBe(2);
+  });
+
+  it("keeps `paragraph` as the type a split list item is filled with", () => {
+    // `splitListItem` takes `contentMatchAt(0).defaultType`. Under
+    // `paragraph block*` that was `paragraph` structurally; under `block+` it is
+    // whichever `block`-group node the schema registers first, so it holds by
+    // extension ordering rather than by contract. Pin it: a reordering that made
+    // this `blockquote` would have Enter create bullets containing quotes.
+    const ed = makeEditor({ extensions: buildSchemaExtensions(), content: ITEM_WITH_CODE });
+    expect(ed.schema.nodes.listItem.contentMatch.defaultType?.name).toBe("paragraph");
   });
 });

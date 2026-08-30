@@ -8,13 +8,15 @@
  *      stripped directedAt, etc.) are coerced through the canonical
  *      normalizer before status branching reads them.
  *   2. Validates the mutation against the annotation's current state and
- *      returns a tagged `LifecycleResult` arm (e.g. `not-pending`) instead
- *      of throwing a stringly-typed error.
+ *      returns a TAGGED RESULT arm (e.g. `not-pending`) instead of throwing a
+ *      stringly-typed error. The union is per-family, not shared:
+ *      `LifecycleResult` for accept/dismiss, `CreateResult`, `EditResult` —
+ *      see {@link EditResult} for why they did not converge.
  *   3. Computes the next `rev` via `nextRev` and writes via `withMcp`.
  *
- * Current scope: `create` (Unit 8b) plus `accept` / `dismiss`. Edit, remove,
- * replies, note promotion and `.docx` import creation each migrate here in
- * their own separately-revertible PR (Units 8c–8h).
+ * Current scope: `create` (Unit 8b), `editPending` (Unit 8c), plus `accept` /
+ * `dismiss`. Remove, replies, note promotion and `.docx` import creation each
+ * migrate here in their own separately-revertible PR (Units 8d–8h).
  *
  * ## The layering, settled by Unit 8b
  *
@@ -58,7 +60,7 @@ import type * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { withMcp } from "../../shared/origins.js";
 import type { AnchoredRangeResult } from "../../shared/positions/index.js";
-import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
+import { type OnLossy, type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationStatus, AnnotationType } from "../../shared/types.js";
 import { generateAnnotationId, generateNotificationId } from "../../shared/utils.js";
 import { pushNotification } from "../notifications.js";
@@ -68,10 +70,42 @@ import { nextRev } from "./schema.js";
 // Result variants
 // ---------------------------------------------------------------------------
 
-/** Tagged outcome of a lifecycle mutation. */
+/**
+ * Tagged outcome of a lifecycle mutation.
+ *
+ * `invalid-note` was added by #1680 and carries no payload. Note that this is
+ * **inconsistent with its own union** — every other non-`ok` arm here carries
+ * `id` — and consistent instead with the edit path's identically-named arm. It
+ * is harmless because the sole consumer already closes over `id` from the tool
+ * arguments, but "it mirrors `EditResult`" is not a justification for a shape
+ * inside `LifecycleResult`; the honest reason is that the shared-`LifecycleError`
+ * refactor this union needs has not happened yet. **The arm was
+ * chosen over `not-found` knowing `not-found` was the alternative.** Notes are
+ * structurally unenumerable through the read surface, so answering `not-found`
+ * would be the more consistent story; it is also a silent-failure shape, and it
+ * buys nothing here, because a note-typed id CAN be one Claude legitimately
+ * read and still holds — `file-io/docx-comments.ts` migrates a legacy imported
+ * `comment` to a `note` in place, under an id that is a content hash with no
+ * timestamp. `editPending` and `addReplyToAnnotation` already disclose "this id
+ * is a note", so this discloses nothing new.
+ *
+ * **"Nothing new" is the honest phrasing, and the pre-existing oracle is
+ * stronger than it looks.** `importAnnotationId` is
+ * `sha256(commentId from to bodyText)` — a Word comment id is a small integer,
+ * and `from`/`to` are flat offsets Claude can obtain from
+ * `tandem_getTextContent`. So for an imported note the id is *offline
+ * computable* from a guess at the body, and any arm that confirms "this id
+ * exists and is a note" is a content-guessing oracle over short private
+ * bodies, not merely a type disclosure. That predates #1680 —
+ * `editPendingAnnotation` and `addReplyToAnnotation` both answer it — and
+ * answering `not-found` here while edit answers `invalid-note` would leave the
+ * oracle intact while making the family inconsistent. It is a family-wide
+ * question, tracked as such rather than solved by this arm's spelling.
+ */
 export type LifecycleResult<T> =
   | { kind: "ok"; data: T }
   | { kind: "not-found"; id: string }
+  | { kind: "invalid-note" }
   | { kind: "not-pending"; id: string; currentStatus: AnnotationStatus };
 
 /**
@@ -98,6 +132,64 @@ export type LifecycleResult<T> =
  * shape at every site.
  */
 export type CreateResult = { kind: "created"; annotation: Annotation };
+
+/**
+ * The edit family's result. Deliberately NOT a widened {@link LifecycleResult}.
+ *
+ * Two of these arms — `empty-patch` and `invalid-suggestion-target` — are
+ * unreachable from `accept`/`dismiss`, so folding them into `LifecycleResult`
+ * would make a `switch` over an accept stop telling the reader which arms can
+ * actually occur. (`invalid-note` used to be a third; #1680 gave
+ * `LifecycleResult` its own, so it no longer counts toward this argument.)
+ *
+ * **DEFERRED, not rejected — and the cost is smaller than it looks.** The
+ * honest end state is a shared `LifecycleError` base holding the two arms that
+ * really are one concept, extended per family; that way `not-pending`'s payload
+ * cannot change in one family and not the other. The only thing in the way is
+ * `LifecycleResult`'s `id` field, which these arms do not carry — and review
+ * measured that `id` is read by **no production consumer** (`annotations.ts`
+ * has the id in scope from the tool's own arguments; one test reads it). So
+ * "reconciling two payload shapes across every consumer" — which is what this
+ * docblock used to claim — was never true. It is deferred because Unit 8c's
+ * whole contract is that behaviour does not change, not because it is
+ * expensive. Do not read this paragraph as an argument against doing it.
+ *
+ * Note also that `AnnotationStatus` and `Annotation["status"]` below are the
+ * same type spelled two ways; that is drift, not divergence.
+ *
+ * Structurally identical to the `EditAnnotationResult` it replaces, so no
+ * adapter's arm-mapping moves. `document-store.ts` aliases that name.
+ */
+export type EditResult =
+  | { kind: "ok"; annotation: Annotation }
+  | { kind: "not-found" }
+  | { kind: "invalid-note" }
+  | { kind: "not-pending"; currentStatus: Annotation["status"] }
+  | { kind: "empty-patch" }
+  | { kind: "invalid-suggestion-target"; annotationType: AnnotationType };
+
+/**
+ * The mutable fields an edit may set.
+ *
+ * **What keeps a caller from stamping `rev` or `status` is the IMPLEMENTATION,
+ * not this type.** `editPendingAnnotation` reads `patch.content` and
+ * `patch.suggestedText` by name; it never spreads `patch`. Narrowness here is
+ * legibility — excess-property checking catches only fresh object literals, so
+ * a widened variable (`const p: Partial<Annotation> = …`) is assignable to this
+ * with no cast and no error. That is the same caveat {@link CreateExtras}
+ * spells out, and the reason `mintAnnotation` needs `stripOwnedFields` while
+ * this path does not is that `mintAnnotation` spreads its extras last.
+ * Refactoring the object literal to `...patch` reintroduces the whole hazard
+ * with the type unchanged.
+ *
+ * `undefined` means "leave alone", so **there is no way to CLEAR a
+ * `suggestedText` through this path** — a comment that acquired one keeps it.
+ * If clearing is ever wanted the shape is `suggestedText?: string | null`.
+ */
+export interface EditPatch {
+  content?: string;
+  suggestedText?: string;
+}
 
 /**
  * Fields a caller may stamp onto a newly created annotation.
@@ -206,10 +298,36 @@ export interface AnnotationLifecycle {
    * that have not migrated yet, and Unit 8j removes it.
    */
   create(input: CreateInput): CreateResult;
-  /** Accept a pending annotation (pending → accepted). */
-  accept(id: string): LifecycleResult<Annotation>;
-  /** Dismiss a pending annotation (pending → dismissed). */
-  dismiss(id: string): LifecycleResult<Annotation>;
+  /**
+   * Edit the mutable fields of a PENDING annotation.
+   *
+   * Named for the invariant rather than the operation, matching the private
+   * `transitionPending` and ADR-035's own text — `editAnnotation` reads as
+   * though any annotation is editable, and the pending guard says otherwise.
+   *
+   * `onLossy` is a REQUIRED parameter rather than a lifecycle-owned default.
+   * `transitionPending` passes a no-op sink whose wiring is deferred to Unit
+   * 8d; edit arrives with a real relay already attached at its caller, and
+   * taking the sink as an argument is what stops 8d's decision from silently
+   * becoming edit's. What the relay does is narrow — a deduped `console.error`
+   * via `logLegacyMigration`, nothing functional — so the cost of dropping it
+   * is forensic visibility into legacy-shape migrations, not correctness.
+   * Worth carrying anyway: a silent untested regression is the shape this
+   * programme exists to stop.
+   */
+  editPending(id: string, patch: EditPatch, onLossy: OnLossy): EditResult;
+  /**
+   * Accept a pending annotation (pending → accepted).
+   *
+   * `onLossy` is required for the same reason it is on {@link editPending}: a
+   * sink with a default is a sink a caller can neuter without saying so. Unit
+   * 8d wired the real relay here; before that this path sanitized into
+   * `() => {}` and every legacy-shape migration performed on an accept was
+   * invisible.
+   */
+  accept(id: string, onLossy: OnLossy): LifecycleResult<Annotation>;
+  /** Dismiss a pending annotation (pending → dismissed). See {@link accept}. */
+  dismiss(id: string, onLossy: OnLossy): LifecycleResult<Annotation>;
 }
 
 /**
@@ -228,6 +346,15 @@ export interface AnnotationLifecycle {
  * {@link createAnnotationLifecycle} itself, so a future edit there is one line
  * from the full lifecycle. Closing that means injecting an `AnnotationCreator`
  * from `dispatch`'s caller, which is Unit 8j's restructuring, not 8b's.
+ *
+ * **A `Pick` does not grow when its source interface does, and that is load-
+ * bearing rather than incidental.** Unit 8c added `editPending` to
+ * `AnnotationLifecycle` and the local-model loop stayed edit-incapable with no
+ * decision required — but nothing in the code distinguishes that from an
+ * oversight, so it is written down here. Every later mutation family (8d–8h)
+ * inherits the same property: adding a method grants local-model nothing. If a
+ * future unit wants it to have one, widening this `Pick` is the deliberate act
+ * that does it.
  */
 export type AnnotationCreator = Pick<AnnotationLifecycle, "create">;
 
@@ -245,8 +372,9 @@ export function createAnnotationLifecycle(ydoc: Y.Doc): AnnotationLifecycle {
       kind: "created",
       annotation: mintAnnotation(ydoc, map, "comment", input.anchored, input.content, input.extras),
     }),
-    accept: (id) => transitionPending(id, ydoc, map, "accepted"),
-    dismiss: (id) => transitionPending(id, ydoc, map, "dismissed"),
+    editPending: (id, patch, onLossy) => editPendingAnnotation(id, ydoc, map, patch, onLossy),
+    accept: (id, onLossy) => transitionPending(id, ydoc, map, "accepted", onLossy),
+    dismiss: (id, onLossy) => transitionPending(id, ydoc, map, "dismissed", onLossy),
   };
 }
 
@@ -374,23 +502,40 @@ function transitionPending(
   ydoc: Y.Doc,
   map: Y.Map<unknown>,
   nextStatus: "accepted" | "dismissed",
+  onLossy: OnLossy,
 ): LifecycleResult<Annotation> {
   const raw = map.get(id);
   if (raw === undefined) return { kind: "not-found", id };
 
   // Sanitize first so the status check + result arm both see normalized
-  // fields. `sanitizeAnnotation` accepts a `RawAnnotation` shape (which
-  // permits legacy fields); the lifecycle uses a no-op sink for migration
-  // events because docHash-keyed relay belongs upstream of the lifecycle
-  // (scoped to the doc context, not the per-mutation seam).
+  // fields. `sanitizeAnnotation` accepts a `RawAnnotation` shape, which permits
+  // legacy fields.
   //
-  // Unit 8b deliberately left this a no-op. Wiring the real
-  // `relaySanitizationEvent` here would change accept/dismiss behavior —
-  // accepting a legacy `flag` would begin emitting a migration log line and
-  // consuming a dedup slot — inside a PR whose subject is create, which would
-  // make it non-cleanly revertible against Unit 8d. The upgrade belongs to 8d,
-  // where accept/dismiss is the subject and can be tested.
-  const ann = sanitizeAnnotation(raw as RawAnnotation, () => {});
+  // **Unit 8d replaced the `() => {}` that stood here.** Until then, accepting a
+  // legacy-shaped record silently performed the migration and reported nothing:
+  // the sink was a no-op, so `flag→note`, `question→comment`, a malformed
+  // suggestion JSON and an unknown type all normalized without a log line.
+  //
+  // **This emits even when the write is then refused**, and that ordering is
+  // worth stating because it reads backwards. A stored `flag` sanitizes to a
+  // note, fires `flag-to-note` HERE, and only then hits the ADR-027 guard below
+  // and returns `invalid-note` — so the migration is reported for a transition
+  // that never happened. That is correct: the event describes what sanitize
+  // read, not what the lifecycle wrote, and the relay is an observability sink
+  // rather than an audit of mutations.
+  const ann = sanitizeAnnotation(raw as RawAnnotation, onLossy);
+
+  // ADR-027 (#1680): notes are user-private. Claude must not resolve them.
+  //
+  // **After sanitize, and before the pending check — both halves matter.**
+  // After, because a stored `flag` is a note only once sanitized, so a raw-type
+  // check lets one through; that is the same constraint `editPendingAnnotation`
+  // documents. Before, because reporting `not-pending` on a resolved note tells
+  // a caller the note exists and is merely resolved, which is a disclosure
+  // ADR-027 does not make. Only a spec seeding an ALREADY-RESOLVED note
+  // distinguishes this ordering from the other one.
+  if (ann.type === "note") return { kind: "invalid-note" };
+
   if (ann.status !== "pending") {
     return { kind: "not-pending", id, currentStatus: ann.status };
   }
@@ -406,18 +551,129 @@ function transitionPending(
   return { kind: "ok", data: updated };
 }
 
+// ---------------------------------------------------------------------------
+// Edit
+// ---------------------------------------------------------------------------
+
+/**
+ * Edit a pending annotation's mutable fields.
+ *
+ * **The guard ORDER is the contract, not an implementation detail**, and it is
+ * asserted in three suites (`edit-annotation.test.ts`, `document-store.test.ts`
+ * and `annotation-edit-lifecycle.test.ts`). not-found → sanitize → note
+ * (ADR-027) → pending → empty-patch → suggestion-target. Two of those orderings
+ * are load-bearing and look arbitrary:
+ *
+ * - The **note check precedes the pending check**, so editing a resolved note
+ *   reports `invalid-note`, not `not-pending`. Swapping them tells a caller the
+ *   note exists and is merely resolved, which is a disclosure ADR-027 does not
+ *   make. `edit-annotation.test.ts` pins exactly this.
+ * - **Sanitize runs before every guard**, so a legacy-shaped note is recognised
+ *   as a note by its sanitized type rather than its stored one — a stored
+ *   `flag` sanitizes to `note`, and a raw-type check would let Claude edit it.
+ *
+ * The empty-patch / suggestion-target order is NOT in that set, despite sitting
+ * in the same sequence: `empty-patch` needs both fields absent and
+ * `invalid-suggestion-target` needs `suggestedText` present, so the two are
+ * mutually exclusive and no input can observe which comes first. Nothing pins
+ * it, and nothing can.
+ *
+ * Moved from `YDocStore.editAnnotation` by ADR-034/035 Unit 8c with the body
+ * unchanged; the store now delegates.
+ */
+function editPendingAnnotation(
+  id: string,
+  ydoc: Y.Doc,
+  map: Y.Map<unknown>,
+  patch: EditPatch,
+  onLossy: OnLossy,
+): EditResult {
+  const raw = map.get(id) as Annotation | undefined;
+  if (!raw) return { kind: "not-found" };
+
+  // Sanitize legacy shapes before editing (matches the pre-seam handler).
+  const ann = sanitizeAnnotation(raw, onLossy);
+
+  // ADR-027: notes are user-private. Claude must not modify them via MCP.
+  if (ann.type === "note") return { kind: "invalid-note" };
+
+  if (ann.status !== "pending") return { kind: "not-pending", currentStatus: ann.status };
+
+  if (patch.content === undefined && patch.suggestedText === undefined) {
+    return { kind: "empty-patch" };
+  }
+
+  if (patch.suggestedText !== undefined && ann.type !== "comment") {
+    return { kind: "invalid-suggestion-target", annotationType: ann.type };
+  }
+
+  const updated = {
+    ...ann,
+    // Field-by-field, never `...patch` — see {@link EditPatch}. This literal is
+    // what stops a caller-supplied `rev` or `status` from riding into the store,
+    // and the type is not what holds that line.
+    ...(patch.content !== undefined ? { content: patch.content } : {}),
+    ...(patch.suggestedText !== undefined ? { suggestedText: patch.suggestedText } : {}),
+    editedAt: Date.now(),
+    // `nextRev(ann)`, never `nextRev()`. The argument-free form returns 1, which
+    // pins every later edit at the same number — see the note at the mint site.
+    // **Measured, so state it precisely:** an exact-value pin of `2` cannot tell
+    // the two apart, because a record at `rev: 1` gives 2 under BOTH. The
+    // pre-existing `toBeGreaterThan(before.rev ?? 0)` in `document-store.test.ts`
+    // does kill it. The specs here edit twice and seed a prior rev, which kills
+    // it two further ways that do not depend on the seeded rev being 1.
+    rev: nextRev(ann),
+    // The cast is what makes the spread compile: the discriminant correlation is
+    // lost across `...ann`, so `Annotation`'s "a highlight has no suggestedText"
+    // arm is not re-checked here. The suggestion-target guard above is what makes
+    // it sound — move that guard after this literal and the cast starts lying.
+  } as Annotation;
+
+  // `withMcp`, and the wrong helper fails in two different directions.
+  //
+  // Toward the CHANNEL: only browser-origin writes reach it (`CHANNEL_SKIP` in
+  // `shared/origins.ts` holds the other five), so `withBrowser` here would emit an
+  // `annotation:edited` for a server-initiated write — specifically when Claude
+  // edits a USER-authored pending comment, the one shape the observer's update
+  // branch admits. Pinned by an origin spec rather than left to review.
+  //
+  // Toward DISK, which is the half a "they all skip the channel anyway" reading
+  // misses: `withFileSync` and `withInternal` also sit in `DURABLE_SKIP`, so
+  // either one leaves the channel correct and silently stops the edit reaching
+  // the durable store. No test in this suite would notice.
+  withMcp(ydoc, () => map.set(id, updated));
+  return { kind: "ok", annotation: updated };
+}
+
+/**
+ * Pre-ADR-035 accept entry point.
+ *
+ * **No production caller reaches these two** — `YDocStore` goes through
+ * {@link createAnnotationLifecycle}, and a census of `src/` finds only these
+ * definitions. They survive because the seam census
+ * (`tests/server/annotation-create-seam-census.test.ts`) names them and roughly
+ * thirty specs drive them; retiring them is Unit 8j's, along with
+ * {@link mintAnnotation}.
+ *
+ * `onLossy` is required here too rather than defaulted, so a test driving this
+ * export cannot accidentally be measuring a different sanitize contract from
+ * the one production runs.
+ */
 export function acceptPending(
   id: string,
   ydoc: Y.Doc,
   map: Y.Map<unknown>,
+  onLossy: OnLossy,
 ): LifecycleResult<Annotation> {
-  return transitionPending(id, ydoc, map, "accepted");
+  return transitionPending(id, ydoc, map, "accepted", onLossy);
 }
 
+/** Pre-ADR-035 dismiss entry point. See {@link acceptPending}. */
 export function dismissPending(
   id: string,
   ydoc: Y.Doc,
   map: Y.Map<unknown>,
+  onLossy: OnLossy,
 ): LifecycleResult<Annotation> {
-  return transitionPending(id, ydoc, map, "dismissed");
+  return transitionPending(id, ydoc, map, "dismissed", onLossy);
 }

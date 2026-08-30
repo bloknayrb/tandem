@@ -468,10 +468,10 @@ So the command half depends on distribution — #1335's archive source carrying 
 - `withFileSync(doc, fn)` — writes echoing from the durable-annotation file-writer (the back-from-disk path: load JSON annotations, write into Y.Map).
 - `withInternal(doc, fn)` — server-internal setup writes that must not surface as user events and must not be persisted back as if they were live edits. Worked examples (every `withInternal` callsite in the codebase falls into one of these):
   - Session restore — populating Y.Doc fragment from disk-cached state; pruning chat history pre-save (`src/server/session/manager.ts`).
-  - mdast / `.docx` HTML population during file open (`applyPreparedContent` in `src/server/mcp/file-opener.ts`).
-  - Tutorial / scratchpad seeding (`src/server/mcp/tutorial-annotations.ts`; scratchpad seed in `src/server/mcp/file-opener.ts`).
+  - mdast / `.docx` HTML population during file open (`applyPreparedContent` in `src/server/documents/populate.ts`).
+  - Tutorial / scratchpad seeding (`src/server/mcp/tutorial-annotations.ts`; scratchpad seed in `src/server/documents/open.ts`).
   - **`clear-and-reload`** user-initiated via `tandem_open force: true` — `withInternal`, distinct from the file-watcher `reloadFromDisk` path (`withReload`). The user-initiated force-reload semantically overwrites local state with disk truth; channel skip is correct, durable-sync skip is correct (the file is authoritative), tombstone skip is correct (cleared annotations are not user deletions).
-  - **Cleanup-after-failure paths** — e.g. `populateDocFromContent` partial-state cleanup in `src/server/mcp/file-opener.ts` and `evictPartialDocState` eviction transacts. These are not user actions; observability surfaces should not see them.
+  - **Cleanup-after-failure paths** — e.g. `populateDocFromContent` partial-state cleanup in `src/server/documents/populate.ts` and `evictPartialDocState` eviction transacts. These are not user actions; observability surfaces should not see them.
   - **Server metadata broadcasts on CTRL_ROOM** — `broadcastOpenDocs` and `Y_MAP_STORE_READ_ONLY` writes in `src/server/mcp/document-service.ts`. These are server-internal state announcements. Today they are tagged `MCP_ORIGIN` only because every observer that would care happens to skip MCP — a behaviour-by-coincidence pattern. `withInternal` makes the intent explicit and survives future observer changes.
 - `withReload(doc, fn)` — file-watcher reload path (the `reloadFromDisk` flow): channel skips the event (not a user action) but durable-sync *must* persist (we want the re-anchored relRanges saved). Added after the CRDT-reviewer agent flagged that `reloadFromDisk` couldn't be classified under the original four-origin set without regressing #622 or producing a labelling lie. The post-reload annotation-refresh step (`refreshAllRanges` + position relocation, currently the second transact in `reloadFromDisk`) is also `withReload` — it is a continuation of the same logical operation, not a separate user-intent write.
 - `withBrowser(doc, fn)` — user edits originating in the browser. Sets origin `"browser"`. No listener filters on it today, but the explicit label preserves the universal rule and gives future listeners a value to read.
@@ -639,7 +639,7 @@ Public registry interface (sketch — not authoritative):
 
 ## ADR-034: File-Open Pipeline with Named Entry Points and Shared Core
 
-**Status:** Accepted; largely implemented (verified against `src/` 2026-08-27). Part 1 landed: `src/server/documents/open.ts` exposes named entry aliases (`openFromDisk` / `openFromUpload` / `openScratchpad`) that forward to `file-opener.ts`, plus a derived `kindOfOpenResult` helper. **Unit 6 of the 2026-08-24 maintainability programme made the seam mandatory rather than opt-in**: every non-restore disk caller and every upload and scratchpad caller now imports it, `mcp/document.ts`'s duplicate re-export of the same three entries is deleted, and `tests/server/documents-open.test.ts` fails on any module under `src/` that reaches `mcp/file-opener.ts` outside a written-down exception list. Unit 6 also characterized every entry path first (`tests/server/adr-034-open-characterization.test.ts`), which is what makes the remaining parts verifiable as behaviour-preserving. **Unit 7a then moved the pipeline itself.** `documents/open.ts` now holds path resolution, session restore, content finalization and the three disk/upload/scratchpad entries, and exposes the fourth named entry `openFromRestore` — which is what let `document-service.ts` drop all three of its dynamic `await import("./file-opener.js")` calls, so the cycle they existed to dodge is gone rather than deferred. Five sibling modules came out of the same split: `documents/populate.ts` (content in and out of a Y.Doc), `documents/annotation-wiring.ts`, `documents/conflict.ts` (the external-conflict flag, whose read and write halves had been in different files), `documents/watcher.ts` (the reload lifecycle, carrying the concurrent-reload guard as a named acquire/release contract) and `documents/autosave.ts` (arming auto-save — its own module because both the open pipeline and the reload family call it, so on either one it would be an implementation detail on a published surface). **The `file-opener.ts` ↔ `document-service.ts` cycle is gone, but the graph is not acyclic:** `open.ts → autosave.ts → mcp/document-service.ts → open.ts` replaced it, inert at runtime and recorded as an edge in the boundary inventory. Breaking it means moving `autoSaveAllToDisk` out of document-service, which is later work. What is left in `mcp/file-opener.ts` is the reload family — three entries that replace an already-open document's content — and Unit 7c decides where those land. **Deferred:** `OpenResult` remains a derived enum rather than a discriminator on the result type (Unit 7b). Pairs with ADR-033. Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
+**Status:** Accepted; largely implemented (verified against `src/` 2026-08-27). Part 1 landed: `src/server/documents/open.ts` exposes named entry aliases (`openFromDisk` / `openFromUpload` / `openScratchpad`) that forward to `file-opener.ts`, plus a derived `kindOfOpenResult` helper. **Unit 6 of the 2026-08-24 maintainability programme made the seam mandatory rather than opt-in**: every non-restore disk caller and every upload and scratchpad caller now imports it, `mcp/document.ts`'s duplicate re-export of the same three entries is deleted, and `tests/server/documents-open.test.ts` fails on any module under `src/` that reaches `mcp/file-opener.ts` outside a written-down exception list. Unit 6 also characterized every entry path first (`tests/server/adr-034-open-characterization.test.ts`), which is what makes the remaining parts verifiable as behaviour-preserving. **Unit 7a then moved the pipeline itself.** `documents/open.ts` now holds path resolution, session restore, content finalization and the three disk/upload/scratchpad entries, and exposes the fourth named entry `openFromRestore` — which is what let `document-service.ts` drop all three of its dynamic `await import("./file-opener.js")` calls, so the cycle they existed to dodge is gone rather than deferred. Five sibling modules came out of the same split: `documents/populate.ts` (content in and out of a Y.Doc), `documents/annotation-wiring.ts`, `documents/conflict.ts` (the external-conflict flag, whose read and write halves had been in different files), `documents/watcher.ts` (the reload lifecycle, carrying the concurrent-reload guard as a named acquire/release contract) and `documents/autosave.ts` (arming auto-save — its own module because both the open pipeline and the reload family call it, so on either one it would be an implementation detail on a published surface). **The `file-opener.ts` ↔ `document-service.ts` cycle is gone, but the graph is not acyclic:** `open.ts → autosave.ts → mcp/document-service.ts → open.ts` replaced it, inert at runtime and recorded as an edge in the boundary inventory. Breaking it means moving `autoSaveAllToDisk` out of document-service, which is later work. **Unit 7b then promoted the result type**, and the shipped shape differs from what this ADR specified below — see the first amendment. **Unit 7c then finished the split**: the reload family moved to `documents/reload-family.ts` and `mcp/file-opener.ts` was deleted, so this ADR's "replaces `mcp/file-opener.ts`" is now literally true — see the second amendment. **Deferred:** the failure half only (failures are still thrown, not returned). Pairs with ADR-033. Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
 
 **Context:** `src/server/mcp/file-opener.ts` is 1049 lines exposing three public entry points (`openFileByPath`, `openFileFromContent`, `openScratchpad`) and internal helpers (`applyPreparedContent`, `clearAndReload`, `wireAnnotationStore`, `ensureAutoSave`). Six callers invoke `openFileByPath`: `startup-file.ts` (cold-start file-association), `index.ts` (welcome/changelog auto-open), `mcp/routes/open.ts` (HTTP REST API), `mcp/document.ts` (`tandem_open` MCP tool), `mcp/convert.ts` (after `.docx` HTML conversion), and `mcp/document-service.ts` (session restore — using a dynamic `await import(...)` to dodge a circular dependency through provider/registry state). Each caller wires the same downstream steps (track the doc, broadcast, set active, attach auto-save) in slightly different orders. `OpenFileResult` conflates outcomes via booleans (`forceReloaded`, `alreadyOpen`). The "open before HTTP bind" startup invariant (CLAUDE.md) is enforced by call ordering in `src/server/index.ts` only.
 
@@ -681,9 +681,135 @@ Public registry interface (sketch — not authoritative):
 - `mcp/document.ts`'s `tandem_open` tool becomes a thin wrapper around `openFromDisk`. The MCP tool is the *adapter*, not the implementation — matching the seam pattern from ADR-016.
 - Pairs with #1 (annotation lifecycle, ADR-035 forthcoming): the post-load annotation re-anchor pass (`refreshAllRanges`) runs inside step 3 of the pipeline, so the annotation lifecycle module doesn't have to know about file-open ordering.
 
+### Amendment (Unit 7b, 2026-08-28): the success contract only, and what the union does not buy
+
+The result type above was specified as `OpenResult = { kind: 'opened' | 'already-open' | 'reloaded-from-disk' | 'failed', doc?, reason? }`. What shipped is `OpenSuccess` in `src/server/documents/open.ts`, and four things about it are deliberate departures worth recording, because each was a decision rather than a drift.
+
+**1. No `failed` arm; failures still throw.** The externally visible failure mapping is real and asymmetric — MCP maps `INVALID_PATH` → `FILE_NOT_FOUND` while HTTP maps it → `400`; `UNSUPPORTED_FORMAT` and `FILE_TOO_LARGE` collapse to `FORMAT_ERROR` on MCP but split 400/413 on HTTP; `mcp/convert.ts` rewraps an open failure as `OPEN_FAILED`. Converting throw-sites to a returned arm rewrites all of that in the same change that introduces the union, and the two mapping tables have their own characterization. So this unit changed the **success** contract only. The type is named `OpenSuccess`, not `OpenResult`, so that a `switch` over it does not read as total over what an open can do — TypeScript has no checked exceptions to make that structural, and the name is the one free signal.
+
+**2. The kind names are `fresh | restored | already-open | force-reloaded`**, not the three above. `restored` (disk-cached session state applied, no disk re-read) is a real fourth outcome the original list did not name, and it is user-visible: `tandem_open` returns a different sentence for it.
+
+**3. Every arm carries the identical payload, so the win is not exhaustiveness.** Structurally this is `{ kind } & OpenSuccessPayload` — no arm-specific narrowing exists, and reading `pageEstimate` will never require checking `kind` first. Inventing arm-specific payloads the domain does not have would be worse. The actual win is that `kind` is computed **once, at construction**, by the code that knows which path it took: before this, the precedence over `forceReloaded`/`alreadyOpen`/`restoredFromSession` existed in two independent copies — `kindOfOpenResult` and the message chain in `tandem_open` — that agreed by inspection alone. It is written as four explicit arms rather than an intersection, and *not* for `Extract`'s sake — `FreshOpen` is expressible as `OpenSuccessPayload & { kind: "fresh" }` directly, so citing `Extract` argues in a circle. The real difference is that a genuine union narrows to `never` once every arm is handled, which is what lets a reader prove exhaustiveness anywhere other than a switch's return type. `openFromUpload` and `openScratchpad` still return `FreshOpen`, the single kind they can produce, so callers writing an exhaustive switch are not handed three provably dead branches.
+
+**4. `readOnly` is a fifth distinction the four kinds do not name.** It splits the `fresh` message in two, and it is consulted for `fresh` alone — so a restored, already-open or force-reloaded document that is *also* read-only gets a sentence that never mentions it (#1591's shape). That was the pre-existing `else if` chain's behaviour and it is preserved exactly rather than quietly fixed; `tests/server/open-result-message.test.ts` pins all eight `(kind × readOnly)` combinations so a later wording fix has to change them deliberately.
+
+**The wire shape did not change.** `OpenFileResult` survives as the flat JSON six sites put on the MCP and HTTP wire. **Four of them ship the whole payload and all four go through `toWireResult`** — `tandem_open` directly, the three HTTP routes via the shared `sendOpenResult`. The other two (`tandem_scratchpad`, `mcp/convert.ts`) read two or three named fields off `OpenSuccess` and deliberately do **not** project: cherry-picking cannot ship `kind` and cannot drop a boolean, because it never puts the object anywhere. An earlier draft of this paragraph called `toWireResult` "the single projector all of them go through", which is the kind of sentence that later licenses routing a cherry-pick through it for consistency.
+
+This matters more than it looks: the four whole-payload sites spread the result into an untyped response body, so dropping a field there **compiles silently** — when the union first landed, exactly one call site in the whole repo produced a type error. `kindOfOpenResult` remains, now as the inverse of that projection rather than a second copy of a precedence, and the pair is pinned as a round trip. `toWireResult` encodes the booleans from a `Record<OpenResultKind, …>` table rather than three `kind === "…"` comparisons, so a fifth kind is a compile error there instead of shipping as `false/false/false` — byte-identical to `fresh`, and decoded back as `fresh`. `tests/server/open-result-consumption.test.ts` is the complement no type can carry, and its scope is the part worth stating: it checks **response bodies**, not modules. Every `res.json` / `mcpSuccess` argument in a module that opens documents must, after the projection is blanked out of it, name no open result and call no open entry point. Three earlier drafts checked modules instead and each was defeated — by the wrong polarity, by a module-wide exemption, and then by the same module-wide exemption in a shape that did not look like one.
+
+**Two success outcomes the union still does not express**, and a type whose stated job is to describe the success contract precisely should name them rather than assert them away. First, "opened, but flagged for external-conflict resolution" rides a Y.Map side channel (`flagExternalConflict`) entirely outside the result type. Second, `handleAlreadyOpen` can **upgrade** a document to read-only on the way through, so `readOnly: true` on an `already-open` result means either "was already read-only" or "this call made it so" — a distinction the code computes and then discards. It is left out because nothing consumes it and putting it on the wire is a compatibility change, not because the domain lacks it; it is also the one place where "every arm carries the identical payload" is a statement about the type rather than about the world. Both are pre-existing and neither is this unit's to fix — but do not read `OpenSuccess` as the complete picture of what an open can produce.
+
+### Amendment (Unit 7c, 2026-08-29): the reload family's home, and what the move cost
+
+Unit 7a left three entries behind in `mcp/file-opener.ts` — `reloadDocumentFromMarkdown`,
+`restoreDocumentFromBackup`, `resolveExternalConflict` — and deferred where they land. They are
+now `src/server/documents/reload-family.ts`, and the old module is deleted rather than kept as a
+re-export shim: nothing under `src/` imports it, and a shim that no code needs is a second name
+for one thing.
+
+**They are not part of `watcher.ts`.** All three sit on the far side of the watcher's
+concurrent-reload guard, and folding them in would turn `acquireReloadGuard` /
+`releaseReloadGuard` from a published contract with named external callers into an
+implementation detail nobody outside the file can see using wrongly. The watcher owns the watch
+loop and the disk-initiated `reloadFromDisk`; the family owns three *caller*-initiated content
+replacements that acquire that guard. They are also not part of `open.ts` — replacing the
+content of an already-open document is the opposite of opening one, and merging them would undo
+7a.
+
+**The move reversed the direction of the boundary, which is the point.** Six inventory rows of
+the shape `mcp/file-opener.ts → documents/{autosave,registry,populate,annotation-wiring,conflict,
+watcher}.ts` became four of the shape `mcp/{docx-apply,routes/backups,routes/document-reload,
+routes/external-conflict}.ts → documents/reload-family.ts`. What used to cross the seam was
+`mcp/` reaching into `documents/`'s internals; what crosses it now is four consumers asking a
+published entry point to do something.
+
+**Two costs, stated rather than netted out.** Eleven new outward edges appear from
+`documents/reload-family.ts`. Only **three** of them reach a destination `documents/` had not
+already reached — `file-io/doc-backup.ts`, `file-io/docx-size-gate.ts` and `platform.ts`; the
+other eight targets (`file-io/index.ts`, `file-watcher.ts`, `mcp/document-service.ts`,
+`notifications.ts`, `yjs/provider.ts` and three under `shared/`) were reached from `documents/`
+before 7c. (An earlier draft of this paragraph said eight were new. Eight is the count of the
+ones that already existed — the number was inverted, and it had propagated into a test comment
+before review caught it.) And one of them is
+`reload-family.ts → mcp/document-service.ts` (for `canSaveToDisk` / `saveDocumentToDisk`), so
+the count of `documents/ → document-service` edges went from one to two. Both leave together
+when `autoSaveAllToDisk` moves out of `document-service`; neither leaves before that, and the
+comment in `tests/docs/documents-boundary.test.ts` that said autosave was the only one has been
+corrected rather than deleted.
+
+**The review inventory migrated with the module.** `tests/server/documents-open.test.ts`'s
+`SANCTIONED` map was written to constrain who may reach `mcp/file-opener.ts`, and the obvious
+move on deleting that module was to empty it. That would have been a silent disarm: the spec
+loops `Object.entries(SANCTIONED)`, so an empty map runs zero assertions and the entitlements
+stop being checked at all. The four rows were re-keyed to `documents/reload-family.js` instead.
+
+**Review then defeated three of this unit's own guards, and the defeats are
+recorded because each was a class rather than a slip.**
+
+1. **A specifier sweep keyed on `\.js` is beaten by dropping the extension.**
+   `tsconfig.json` sets `moduleResolution: "bundler"` and `tsconfig.server.json`
+   extends it, so `from "../../documents/reload-family"` typechecks, bundles and
+   ships. An unsanctioned fifth consumer using that form passed the sweep,
+   passed `tsc --noEmit`, and produced a successful `tsup` build. The miss
+   compounded: the per-symbol entitlement spec iterates the list the sweep
+   builds, so a file that never enters it is never checked for what it takes
+   either. One dropped extension defeated both layers and the second layer's
+   silence was indistinguishable from a pass.
+2. **A guard keyed on an EDGE is defeated by anything that does not create one.**
+   A sanctioned consumer can `export { restoreDocumentFromBackup };` — a bare
+   re-export, carrying no specifier — and any module may then import it from
+   there. No new import edge means no new row in either inventory, and the
+   entitlement layer has nothing to object to because the re-exporting module is
+   listed. Both layers were satisfied by construction rather than by the code
+   being safe. Twenty-five specs stayed green with an arbitrary extra consumer
+   in place. The `export … from "…reload-family.js"` form was caught only
+   incidentally, because it happens to carry a specifier. A dedicated spec now
+   asks the different question: not who imports, but who re-exports.
+3. **A denylist of discarding shapes is bounded by whoever wrote it.** The
+   `reloadFromDisk` consumption check enumerated four ways to throw the boolean
+   away; `paths.map((p) => reloadFromDisk(p))` is a fifth — #1641's exact defect,
+   in an already-listed module, while the comment beside it claimed a previous
+   review had fixed that class. It now enumerates the CONSUMING forms instead, so
+   an unrecognised idiom fails closed and gets added deliberately.
+
+Two of the three had comments that were **ahead of their code**, which is worse
+than an unpinned guard: the export-surface spec claimed to catch a two-hop
+launder it cannot see, and the consumption spec claimed a defeat had been closed.
+A reader who believes either stops looking. Both comments now state their scope
+and name the neighbouring spec that owns the rest.
+
+**Origin tagging was the omission most worth catching.** The family carries two `withInternal`
+sites — the conflict-flag clear in `resolveExternalConflict("keep")` and the saved-baseline
+write in `restoreDocumentFromBackup` — and moving a file cannot change a helper choice, so
+nothing about the move made them wrong. But Critical Rule 2 says the helper choice *is* the
+contract, and neither site had a test asserting which helper it used; a later edit could switch
+either to `withBrowser` and emit a channel event for a server-internal write with the suite
+staying green. Both are now pinned by origin assertions with controls that fail if the write
+under test did not happen — **and the first version of one of them was itself
+defeated, which is the more useful half of this story.** It collected every
+`afterTransaction` origin the flow emitted and asserted
+`toContain(INTERNAL_ORIGIN)`; review measured the array and found
+`["reload","internal","internal","internal"]`, only one of which was the subject
+— the other two are `publishDirty`, also `withInternal` on the same doc. It
+passed with the write **deleted entirely**. Collecting origins is not attributing
+one. It now filters to the transaction that changed the key, pins the count, then
+pins the origin.
+
+The sibling in `resolveExternalConflict` was sound with that identical shape, and
+that is the trap: that flow emits exactly one transaction, so `toContain` over a
+one-element array *is* attribution. It is a property of the subject, not of the
+test — two specs that look the same, one correct by accident. Neither should be
+copied forward without counting the transactions first.
+
 ## ADR-035: Annotation Lifecycle Module
 
-**Status:** Accepted; partially implemented (verified against `src/` 2026-05-25). `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (`acceptPending` / `dismissPending`, returning a tagged `LifecycleResult`). `narrowForChannel` and the `ChannelEligible` brand landed 2026-08-26 as `src/server/annotations/projection.ts` — **see the amendment below, which widens the predicate this ADR specifies.** **Deferred:** the create / remove / edit paths, `promoteNoteToComment`, and the `.docx` `importNote` entry still live on the handlers rather than in the lifecycle module. Builds on ADR-027 (audience model), ADR-031 (origin tagging), and ADR-032 (tagged result variants). Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
+**Status:** Accepted; partially implemented (verified against `src/` 2026-08-30). `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (`acceptPending` / `dismissPending`, returning a tagged `LifecycleResult`). `narrowForChannel` and the `ChannelEligible` brand landed 2026-08-26 as `src/server/annotations/projection.ts` — **see the amendment below, which widens the predicate this ADR specifies.** `create` landed 2026-08-28 (Unit 8b) and `editPending` 2026-08-30 (Unit 8c); `YDocStore.createAnnotation` and `YDocStore.editAnnotation` are now delegating shells. **Deferred:** the remove paths, `promoteNoteToComment`, and the `.docx` `importNote` entry still live on the handlers.
+
+**Two departures from the sketch below, both in Unit 8c.**
+
+*The result type is `EditResult`, not `LifecycleResult`.* This is a departure from the method sketch's **naming**, not from its policy — the ADR already says each method's failure variant enumerates only the failures that method can produce, which is exactly the reasoning applied here. Widening `LifecycleResult` to cover edit would give `accept`/`dismiss` three arms they can never reach (`empty-patch`, `invalid-note`, `invalid-suggestion-target`). What review found, and what the code comment now records, is that the *other* half of the original justification was wrong: the shared-looking arms differ only by a `LifecycleResult.id` field that no production consumer reads. A shared `LifecycleError` base is therefore the honest end state and is deferred rather than rejected, because 8c's contract is that behaviour does not change.
+
+*The signature is `editPending(id, patch, onLossy)`, not `editPending(id, patch)`.* The sanitization sink is a required parameter rather than a lifecycle-owned default. `transitionPending` supplies a no-op whose wiring is deferred to Unit 8d; edit arrived with a real relay already attached at its caller, and taking the sink as an argument is what stops 8d's decision from silently becoming edit's. Builds on ADR-027 (audience model), ADR-031 (origin tagging), and ADR-032 (tagged result variants). Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
 
 **Context:** The annotation lifecycle is fragmented across six modules. Creating one comment touches all of them in implicit order:
 
@@ -760,7 +886,7 @@ Each method's `LifecycleResult` failure variant enumerates only the failures tha
 **Context:** `src/server/file-io/types.ts` declares a three-method `FormatAdapter` interface (`load`, `save`, `canSave`). The actual capabilities of registered adapters do not match that shape:
 
 - **markdown / txt**: both methods + `canSave: true` — fits the interface.
-- **docx**: `load` does four things (.docx→HTML conversion, comment extraction with silent `.catch(() => [])` fallback, Y.Doc population from HTML, inject comments as annotations); `save()` returns `null`; `canSave: false`. The interface models one of three real `.docx` capabilities — the other two (extract-embedded-comments, apply-tracked-changes) live in `docx-comments.ts` and `docx-apply.ts` (829 LOC of `applyTrackedChanges`) and are consumed via direct imports from `mcp/convert.ts` and `file-opener.ts`. ADR-004's "review-only by default" semantics are encoded by `canSave: false` plus a `null` return — two ways of saying the same thing.
+- **docx**: `load` does four things (.docx→HTML conversion, comment extraction with silent `.catch(() => [])` fallback, Y.Doc population from HTML, inject comments as annotations); `save()` returns `null`; `canSave: false`. The interface models one of three real `.docx` capabilities — the other two (extract-embedded-comments, apply-tracked-changes) live in `docx-comments.ts` and `docx-apply.ts` (829 LOC of `applyTrackedChanges`) and are consumed via direct imports from `mcp/convert.ts` and `documents/reload-family.ts`. ADR-004's "review-only by default" semantics are encoded by `canSave: false` plus a `null` return — two ways of saying the same thing.
 
 Consequences observed: the `.docx` comment-extraction `.catch` silently turns "comments failed to extract" into "document loaded fine, just no comments" — callers can't tell the difference and users get no signal. The `canSave` boolean and `save() === null` invariant must stay in lockstep; nothing enforces that. New capabilities (#576 docx write-back; future formats that emit metadata; future formats that support tracked changes) have no place to live in the current interface.
 
