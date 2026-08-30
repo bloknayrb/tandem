@@ -31,11 +31,16 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   };
 });
 
-// Mock the watcher so tests can assert suppressNextChange without real fs.watch.
+// Mock the watcher so tests can assert the self-write filter without real
+// fs.watch. BOTH layers are mocked, because both are asserted: the arrival
+// counter (`suppressNextChange`) and the delivery fingerprint
+// (`recordSelfWrite`). Mocking only the layer you assert is how the other one
+// ends up unpinned.
 vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   suppressNextChange: vi.fn(),
+  recordSelfWrite: vi.fn(),
 }));
 
 // Notification bus is irrelevant here; capture calls instead.
@@ -60,19 +65,24 @@ import {
   listDocBackups,
   snapshotBeforeFirstWrite,
 } from "../../src/server/file-io/doc-backup.js";
-import { suppressNextChange } from "../../src/server/file-watcher.js";
+import { recordSelfWrite, suppressNextChange } from "../../src/server/file-watcher.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerApplyTools } from "../../src/server/mcp/docx-apply.js";
 import { pushNotification } from "../../src/server/notifications.js";
 import { resolveAppDataDir } from "../../src/server/platform.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { BROWSER_ORIGIN, INTERNAL_ORIGIN, MCP_ORIGIN, withMcp } from "../../src/shared/origins.js";
+import {
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_SAVED_AT_VERSION,
+} from "../../src/shared/constants.js";
+import { INTERNAL_ORIGIN, RELOAD_ORIGIN, withMcp } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
 
 const suppressMock = vi.mocked(suppressNextChange);
+const recordSelfWriteMock = vi.mocked(recordSelfWrite);
 const pushNotificationMock = vi.mocked(pushNotification);
 
 // ---------------------------------------------------------------------------
@@ -265,6 +275,7 @@ describe("restoreDocumentFromBackup", () => {
     // pre-overwrite snapshot of v2 is exercised too.
     _resetDocBackupGateForTests();
     suppressMock.mockClear();
+    recordSelfWriteMock.mockClear();
 
     const result = await restoreDocumentFromBackup(opened.documentId, snapshot.name);
 
@@ -274,8 +285,24 @@ describe("restoreDocumentFromBackup", () => {
     expect(extractText(doc)).toContain("Hello world");
     expect(extractText(doc)).not.toContain("badly escaped");
     // The restore write was suppressed so the watcher doesn't misread it
-    // as an external edit.
-    expect(suppressMock).toHaveBeenCalledWith(filePath);
+    // as an external edit. **Both layers, because self-write filtering is two
+    // of them and only one was pinned.** Replacing the `recordSelfWrite` call
+    // in `restoreDocumentFromBackup` with `void 0;` passed 109 tests across
+    // five suites — the arrival counter below was asserted and the delivery
+    // fingerprint was not, so half of a pair CLAUDE.md calls load-bearing had
+    // no gate at all.
+    //
+    // The layers are not redundant and the second is the one that fails
+    // quietly. An NTFS atomic rename fires ~2 `change` events while
+    // `suppressNextChange` arms once, so one leaks past it every time;
+    // `recordSelfWrite` is what catches the leaked one. Lose it and the
+    // restore triggers a second, spurious reload plus a "file changed" toast
+    // for an edit the user did not make.
+    expect(suppressMock, "layer 1: the arrival counter").toHaveBeenCalledWith(filePath);
+    expect(
+      recordSelfWriteMock,
+      "layer 2: the delivery fingerprint, paired with the write's exact bytes",
+    ).toHaveBeenCalledWith(filePath, v1);
     // Annotations survived the reload.
     expect(annotations.has("ann_restore_1")).toBe(true);
     // The pre-restore on-disk bytes (v2) were preserved as a new snapshot,
@@ -315,19 +342,54 @@ describe("restoreDocumentFromBackup", () => {
     const doc = getOrCreateDocument(opened.documentId);
     _resetDocBackupGateForTests();
 
-    const origins: unknown[] = [];
-    doc.on("afterTransaction", (txn: Y.Transaction) => origins.push(txn.origin));
+    // **Filtered to the transaction that changed the key, not a bag of every
+    // origin the flow emits.** The first version of this spec collected all
+    // origins and asserted `toContain(INTERNAL_ORIGIN)`, and review measured
+    // what that array actually holds: `["reload","internal","internal",
+    // "internal"]`. Only ONE of those three is the write under test — the other
+    // two come from `publishDirty` (`documents/dirty.ts`), also `withInternal`
+    // on this doc, firing once when repopulation trips the fragment observer
+    // and once from `markClean`. Two mutants passed it: `withInternal` ->
+    // `withReload`, and the write DELETED ENTIRELY.
+    //
+    // Its sibling in `external-conflict.test.ts` is sound with that same shape,
+    // and that is the trap worth naming: `resolveExternalConflict("keep")`
+    // emits exactly one transaction, so `toContain` over a one-element array
+    // IS attribution. That is a property of the SUBJECT, not of the test. The
+    // two specs looked identical and one of them was correct by accident — so
+    // do not copy either forward without counting the transactions first.
+    const baselineWrites: unknown[] = [];
+    // `txn.changed` is keyed by a widened `AbstractType` while `getMap` returns
+    // the narrower `Y.Map`, so the lookup needs a cast. The key type is inferred
+    // from `changed` itself rather than spelled out, so this cannot drift if
+    // Yjs restates it. Only identity matters here, never the element type.
+    type ChangedKey = Y.Transaction["changed"] extends Map<infer K, unknown> ? K : never;
+    const metaMap = doc.getMap(Y_MAP_DOCUMENT_META) as unknown as ChangedKey;
+    doc.on("afterTransaction", (txn: Y.Transaction) => {
+      if (txn.changed.get(metaMap)?.has(Y_MAP_SAVED_AT_VERSION)) {
+        baselineWrites.push(txn.origin);
+      }
+    });
 
     await restoreDocumentFromBackup(opened.documentId, snapshot.name);
 
     expect(extractText(doc), "control: the restore actually ran").toContain("One");
-    expect(origins, "control: it wrote at all").not.toEqual([]);
-    expect(origins).toContain(INTERNAL_ORIGIN);
-    expect(origins, "a restore is not a browser edit").not.toContain(BROWSER_ORIGIN);
-    expect(origins, "nor an MCP write").not.toContain(MCP_ORIGIN);
-    // RELOAD_ORIGIN is expected here and deliberately not excluded: the content
-    // replacement goes through `reloadFromDisk`, which tags with `withReload`.
-    // Only the baseline metadata write is this spec's subject.
+
+    // Two writes touch this key, in this order, and the ordering is a real
+    // invariant nothing else asserts: `reloadFromDisk` sets it from the file's
+    // mtime inside its `withReload` transact, then the restore overwrites it
+    // with `Date.now()` under `withInternal`. Pinning the COUNT is the
+    // load-bearing half — without it the filter could widen later and the
+    // origin assertion below would quietly start describing a different write.
+    expect(
+      baselineWrites,
+      "control: the baseline key is written exactly twice — reload, then the restore's own re-baseline",
+    ).toHaveLength(2);
+    expect(baselineWrites[0], "reloadFromDisk's content replacement").toBe(RELOAD_ORIGIN);
+    expect(
+      baselineWrites[1],
+      "the restore's own re-baseline — `browser` would emit a channel event for a write the user did not make, and `mcp` would be a lie about who wrote it",
+    ).toBe(INTERNAL_ORIGIN);
   });
 
   it("rejects unknown documents", async () => {

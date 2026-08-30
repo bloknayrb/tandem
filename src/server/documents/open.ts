@@ -36,9 +36,12 @@
  * `tests/docs/documents-boundary.test.ts` cannot see this cycle and is not
  * meant to: its acyclicity check is deliberately scoped to cycles contained
  * *entirely within* `documents/`, and this one routes through `mcp/`. What
- * that suite does hold is the edge itself, written down in FAN_OUT as the one
- * `documents/ → document-service` import — so the cycle is visible as its
- * parts even though nothing calls it a cycle.
+ * that suite does hold is the edges themselves, written down in FAN_OUT as
+ * the two `documents/ → document-service` imports — so the cycle is visible as
+ * its parts even though nothing calls it a cycle. (This said "the one edge"
+ * until Unit 7c added the second, seven lines after the paragraph above
+ * announced it. A comment block that contradicts itself is worse than either
+ * half alone, because a reader has no way to tell which half was updated.)
  *
  * **The reload family is the sibling, not part of this module.** Three
  * entries live in `documents/reload-family.ts`: `reloadDocumentFromMarkdown`

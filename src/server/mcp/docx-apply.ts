@@ -126,7 +126,8 @@ export async function applyChangesCore(
   // POSIX it treats `\\server\share\x.docx` as a RELATIVE name and prepends
   // cwd, and it collapses `//evil/share` to `/evil/share` — either way the
   // prefix the check looks for is gone before the check runs. Same idiom and
-  // same reason as `integrations/node-binary.ts` and `documents/reload-family.ts`.
+  // same reason as `integrations/node-binary.ts` and `documents/open.ts`
+  // (`assertSafePathPrefix`, applied to both the raw and the resolved path).
   if (backupPath !== undefined) {
     const unsafe =
       rejectUnsafeWindowsPrefix(backupPath) ?? rejectUnsafeWindowsPrefix(path.resolve(backupPath));

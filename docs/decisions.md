@@ -724,8 +724,13 @@ routes/external-conflict}.ts → documents/reload-family.ts`. What used to cross
 published entry point to do something.
 
 **Two costs, stated rather than netted out.** Eleven new outward edges appear from
-`documents/reload-family.ts`, eight of which did not exist as `documents/ →` edges before,
-because the code making them used to live in `mcp/`. And one of them is
+`documents/reload-family.ts`. Only **three** of them reach a destination `documents/` had not
+already reached — `file-io/doc-backup.ts`, `file-io/docx-size-gate.ts` and `platform.ts`; the
+other eight targets (`file-io/index.ts`, `file-watcher.ts`, `mcp/document-service.ts`,
+`notifications.ts`, `yjs/provider.ts` and three under `shared/`) were reached from `documents/`
+before 7c. (An earlier draft of this paragraph said eight were new. Eight is the count of the
+ones that already existed — the number was inverted, and it had propagated into a test comment
+before review caught it.) And one of them is
 `reload-family.ts → mcp/document-service.ts` (for `canSaveToDisk` / `saveDocumentToDisk`), so
 the count of `documents/ → document-service` edges went from one to two. Both leave together
 when `autoSaveAllToDisk` moves out of `document-service`; neither leaves before that, and the
@@ -738,6 +743,41 @@ move on deleting that module was to empty it. That would have been a silent disa
 loops `Object.entries(SANCTIONED)`, so an empty map runs zero assertions and the entitlements
 stop being checked at all. The four rows were re-keyed to `documents/reload-family.js` instead.
 
+**Review then defeated three of this unit's own guards, and the defeats are
+recorded because each was a class rather than a slip.**
+
+1. **A specifier sweep keyed on `\.js` is beaten by dropping the extension.**
+   `tsconfig.json` sets `moduleResolution: "bundler"` and `tsconfig.server.json`
+   extends it, so `from "../../documents/reload-family"` typechecks, bundles and
+   ships. An unsanctioned fifth consumer using that form passed the sweep,
+   passed `tsc --noEmit`, and produced a successful `tsup` build. The miss
+   compounded: the per-symbol entitlement spec iterates the list the sweep
+   builds, so a file that never enters it is never checked for what it takes
+   either. One dropped extension defeated both layers and the second layer's
+   silence was indistinguishable from a pass.
+2. **A guard keyed on an EDGE is defeated by anything that does not create one.**
+   A sanctioned consumer can `export { restoreDocumentFromBackup };` — a bare
+   re-export, carrying no specifier — and any module may then import it from
+   there. No new import edge means no new row in either inventory, and the
+   entitlement layer has nothing to object to because the re-exporting module is
+   listed. Both layers were satisfied by construction rather than by the code
+   being safe. Twenty-five specs stayed green with an arbitrary extra consumer
+   in place. The `export … from "…reload-family.js"` form was caught only
+   incidentally, because it happens to carry a specifier. A dedicated spec now
+   asks the different question: not who imports, but who re-exports.
+3. **A denylist of discarding shapes is bounded by whoever wrote it.** The
+   `reloadFromDisk` consumption check enumerated four ways to throw the boolean
+   away; `paths.map((p) => reloadFromDisk(p))` is a fifth — #1641's exact defect,
+   in an already-listed module, while the comment beside it claimed a previous
+   review had fixed that class. It now enumerates the CONSUMING forms instead, so
+   an unrecognised idiom fails closed and gets added deliberately.
+
+Two of the three had comments that were **ahead of their code**, which is worse
+than an unpinned guard: the export-surface spec claimed to catch a two-hop
+launder it cannot see, and the consumption spec claimed a defeat had been closed.
+A reader who believes either stops looking. Both comments now state their scope
+and name the neighbouring spec that owns the rest.
+
 **Origin tagging was the omission most worth catching.** The family carries two `withInternal`
 sites — the conflict-flag clear in `resolveExternalConflict("keep")` and the saved-baseline
 write in `restoreDocumentFromBackup` — and moving a file cannot change a helper choice, so
@@ -745,7 +785,21 @@ nothing about the move made them wrong. But Critical Rule 2 says the helper choi
 contract, and neither site had a test asserting which helper it used; a later edit could switch
 either to `withBrowser` and emit a channel event for a server-internal write with the suite
 staying green. Both are now pinned by origin assertions with controls that fail if the write
-under test did not happen.
+under test did not happen — **and the first version of one of them was itself
+defeated, which is the more useful half of this story.** It collected every
+`afterTransaction` origin the flow emitted and asserted
+`toContain(INTERNAL_ORIGIN)`; review measured the array and found
+`["reload","internal","internal","internal"]`, only one of which was the subject
+— the other two are `publishDirty`, also `withInternal` on the same doc. It
+passed with the write **deleted entirely**. Collecting origins is not attributing
+one. It now filters to the transaction that changed the key, pins the count, then
+pins the origin.
+
+The sibling in `resolveExternalConflict` was sound with that identical shape, and
+that is the trap: that flow emits exactly one transaction, so `toContain` over a
+one-element array *is* attribution. It is a property of the subject, not of the
+test — two specs that look the same, one correct by accident. Neither should be
+copied forward without counting the transactions first.
 
 ## ADR-035: Annotation Lifecycle Module
 

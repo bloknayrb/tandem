@@ -482,9 +482,12 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
 
 /**
  * Load the on-disk annotation envelope for this doc and merge it with the
- * current Y.Doc state. Called by the open pipeline (`documents/open.ts`)
+ * current Y.Doc state. The only caller is `wireAnnotationStore`
+ * (`documents/annotation-wiring.ts`), which four paths reach: the open
+ * pipeline, the reload family, rename and save-as. On the open path it runs
  * AFTER session restore populates the Y.Doc but BEFORE Hocuspocus starts
- * accepting browser connections for this doc.
+ * accepting browser connections for this doc; the other three re-wire an
+ * already-connected document.
  *
  * Algorithm (see the Phase 1 plan §"Merge rules" for background):
  *

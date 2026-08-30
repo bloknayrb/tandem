@@ -117,29 +117,121 @@ describe("reloadFromDisk's skipped-reload return has to be consumed (#1641)", ()
     ).toEqual(Object.keys(CALLERS).sort());
   });
 
+  /**
+   * Every syntactic form that genuinely CONSUMES the boolean.
+   *
+   * Exported from the spec body so the vacuity control below can attack the
+   * same array the real check uses — a control built from its own private copy
+   * proves nothing about the matcher in service.
+   */
+  const CONSUMING = [
+    // `const ok = await f(…)` / `let ok = f(…)`, including destructures
+    /(?:const|let|var)\s+[\w${}[\],\s:]+=\s*(?:await\s+)?reloadFromDisk\s*\(/,
+    // `x = await f(…)` / `this.ok = f(…)` / `arr[i] = f(…)`
+    /[\w$\].)]\s*=\s*(?:await\s+)?reloadFromDisk\s*\(/,
+    // `return f(…)` / `return await f(…)`
+    /return\s+(?:await\s+)?reloadFromDisk\s*\(/,
+    // `if (await f(…))`, `if (!(await f(…)))`, `while (…)`
+    /(?:if|while)\s*\(\s*!*\(?\s*(?:await\s+)?reloadFromDisk\s*\(/,
+    // `a && f(…)`, `a ?? f(…)`, `c ? f(…) : x`
+    /(?:&&|\|\||\?\??|:)\s*!*\(?\s*(?:await\s+)?reloadFromDisk\s*\(/,
+  ];
+
+  const CALL_RE = /(?<![\w$.])reloadFromDisk\s*\(/;
+
+  /**
+   * The function's own declaration, which matches the call shape.
+   *
+   * The previous denylist never needed this: none of its four patterns
+   * described a declaration. An allowlist sees every match, so the definition
+   * has to be excluded explicitly — that is the cost of failing closed, and it
+   * is the right cost. The trailing `(?![\\w$])` is load-bearing: without it
+   * this also skips `const reloadFromDiskResult = f(reloadFromDisk(x))`, so the
+   * fix for a false positive would have opened a hole.
+   */
+  const DECLARATION = /\b(?:function|const|let|var)\s+reloadFromDisk(?![\w$])/;
+
   it("no call site discards the result", () => {
-    // #1641's own shape is `await reloadFromDisk(...);` as a bare statement,
-    // but review defeated a line-anchored version of this check with
-    // `await Promise.all([reloadFromDisk(...)])` — the same defect, in an
-    // already-listed module, invisible to both specs. So the discarding forms
-    // are enumerated rather than assumed to be one.
+    // **This enumerates the CONSUMING forms, not the discarding ones**, and the
+    // direction is the whole design. Two successive denylists were defeated.
+    // First a line-anchored check, by `await Promise.all([reloadFromDisk(...)])`.
+    // Then the four-shape list that replaced it, by
+    // `paths.map((p) => reloadFromDisk(p))` — #1641's exact defect, in an
+    // already-listed module, while the comment right here claimed that class was
+    // fixed. `setTimeout(() => reloadFromDisk(p), 0)` and
+    // `void (async () => { await reloadFromDisk(p); })()` walk the same gap.
     //
-    // Consuming forms deliberately allowed: `if (!(await f(…)))`, `const x =
-    // await f(…)`, `return f(…)`. An unused `const` is caught by
-    // `noUnusedLocals`, not here.
-    const DISCARDS = [
-      /^\s*(await\s+)?reloadFromDisk\s*\(/, // bare statement — #1641 itself
-      /^\s*void\s+reloadFromDisk\s*\(/, // explicitly thrown away
-      /\[\s*reloadFromDisk\s*\(/, // Promise.all([...]) and friends
-      /reloadFromDisk\s*\([^)]*\)\s*\.\s*(then|catch|finally)\s*\(/, // floating chain
-    ];
+    // A denylist of discard shapes is bounded by whoever wrote it. The set of
+    // ways to CONSUME a value is bounded by the language. So every call site
+    // must match one of `CONSUMING`, and anything unrecognised is an offender:
+    // a new legitimate idiom fails this spec and gets added deliberately, which
+    // is the failure direction we want. The alternative is a new idiom joining
+    // the allowed set in silence.
+    //
+    // An unused `const` is caught by `noUnusedLocals`, not here.
     const offenders: string[] = [];
     for (const file of sourceFiles()) {
       for (const line of stripNonCode(file.text).split("\n")) {
-        if (DISCARDS.some((re) => re.test(line))) offenders.push(`${file.rel}: ${line.trim()}`);
+        if (!CALL_RE.test(line)) continue;
+        if (DECLARATION.test(line)) continue;
+        if (!CONSUMING.some((re) => re.test(line))) {
+          offenders.push(`${file.rel}: ${line.trim()}`);
+        }
       }
     }
-    expect(offenders, "the return value is the claim's warrant — read it").toEqual([]);
+    expect(
+      offenders,
+      "the return value is the claim's warrant — read it. If this is a legitimate consuming form CONSUMING does not know about, add it there rather than working around it",
+    ).toEqual([]);
+  });
+
+  it("the consuming-form allowlist rejects the shapes that defeated its predecessors", () => {
+    // An allowlist broad enough to match everything passes the spec above while
+    // constraining nothing, and looks identical in the output. These are the
+    // four forms that actually got through a previous version of this check,
+    // written as the source lines they appeared as. Each must be judged an
+    // offender by the SAME array the real spec uses.
+    const KNOWN_DISCARDS = [
+      "await reloadFromDisk(id, filePath, format);",
+      "void reloadFromDisk(id, filePath, format);",
+      "await Promise.all([reloadFromDisk(id, filePath, format)]);",
+      "const tasks = paths.map((p) => reloadFromDisk(p));",
+      "setTimeout(() => reloadFromDisk(p), 0);",
+      "reloadFromDisk(id, filePath, format).catch(() => {});",
+    ];
+    for (const line of KNOWN_DISCARDS) {
+      expect(CALL_RE.test(line), `control: the call matcher sees \`${line}\``).toBe(true);
+      expect(
+        CONSUMING.some((re) => re.test(line)),
+        `\`${line}\` discards the result and must not be recognised as consuming`,
+      ).toBe(false);
+    }
+
+    // And the positive half: the forms that ARE consuming must be recognised,
+    // or the spec above would report every real call site as an offender and
+    // the next person would widen CONSUMING until the noise stopped.
+    const KNOWN_CONSUMERS = [
+      "const reloaded = await reloadFromDisk(id, filePath, format);",
+      "if (!(await reloadFromDisk(id, filePath, format))) return false;",
+      "return reloadFromDisk(id, filePath, format);",
+      "const ok = didWrite && (await reloadFromDisk(id, filePath, format));",
+    ];
+    // The declaration exclusion must skip the definition and NOTHING else.
+    expect(
+      DECLARATION.test("export async function reloadFromDisk("),
+      "control: the definition is excluded",
+    ).toBe(true);
+    expect(
+      DECLARATION.test("const reloadFromDiskResult = wrap(reloadFromDisk(id));"),
+      "a similarly-named binding must not launder a real call past the check",
+    ).toBe(false);
+
+    for (const line of KNOWN_CONSUMERS) {
+      expect(
+        CONSUMING.some((re) => re.test(line)),
+        `\`${line}\` consumes the result and must be recognised`,
+      ).toBe(true);
+    }
   });
 });
 

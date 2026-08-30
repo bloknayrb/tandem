@@ -14,12 +14,19 @@
  *     (`openFromDisk`'s outcomes are covered in the characterization suite,
  *     which drives every entry point through this same seam.)
  *   - **The redirect invariant.** No module under `src/` may reach
- *     `mcp/file-opener.ts` outside a written-down exception list — four
- *     modules today (Unit 7a removed the fifth), each with the symbols it may
- *     take. That is Unit 6's
+ *     `documents/reload-family.ts` outside a written-down exception list —
+ *     four modules today, each with the symbols it may take. That is Unit 6's
  *     actual deliverable, and nothing else observes it: a new route importing
  *     `openFromDisk` would work perfectly and quietly put the seam back to
  *     zero production consumers.
+ *
+ *     The named module has changed twice. It was `mcp/file-opener.ts` when
+ *     this was written; Unit 7a moved the open pipeline out of it, and Unit 7c
+ *     moved the remaining reload family to `documents/reload-family.ts` and
+ *     deleted it. The inventory moved with the module rather than being
+ *     emptied — an empty `SANCTIONED` runs zero assertions through the
+ *     `Object.entries` loop below, which is the shape where a guard reads
+ *     exactly like a pass.
  *
  * Broader behaviour of the open pipelines is characterized in
  * `adr-034-open-characterization.test.ts`.
@@ -199,10 +206,23 @@ describe("the redirect invariant (Unit 6)", () => {
    * emits on its own once the list is long enough. Every one of those is a real
    * regrowth of the thing Unit 6 removes, and every one passed.
    *
-   * So this keys on the structural fact instead: **which files name the legacy
-   * module specifier at all.** Syntax cannot route around that — reaching
-   * `file-opener.ts` requires saying its name. The symbol check is then a
-   * second, narrower layer over the handful of files allowed to say it.
+   * So this keys on the structural fact instead: **which files name the
+   * module specifier at all.** Most syntax cannot route around that — reaching
+   * `reload-family.ts` requires saying its name, in `import * as`, in a
+   * dynamic `import()`, in a destructure. The symbol check is then a second,
+   * narrower layer over the handful of files allowed to say it.
+   *
+   * **"Most" is doing work, and the exception is written down rather than
+   * discovered again.** A guard keyed on an EDGE is defeated by anything that
+   * does not create one. A sanctioned consumer can `export { restoreDocumentFromBackup };`
+   * — a bare re-export of a symbol it is already entitled to — and any module
+   * may then import it from THERE. No new specifier means no new row here and
+   * none in `documents-boundary.test.ts`'s fan-in tally, and the entitlement
+   * layer has nothing to object to because the re-exporting module is listed.
+   * Both layers are satisfied by construction rather than by the code being
+   * safe. (The `export … from "…reload-family.js"` form IS caught, but only
+   * incidentally: it happens to carry a specifier.) The `it` below closes it
+   * by asking a different question — not who imports, but who re-exports.
    */
   /**
    * Corpus-walk budget, well above the project's 15s default.
@@ -243,7 +263,19 @@ describe("the redirect invariant (Unit 6)", () => {
       for (const file of files) {
         if (file === seam || file === impl) continue;
         const body = stripComments(await fs.readFile(file, "utf8"));
-        if (/["'][^"']*reload-family\.js["']/.test(body)) referencing.push(rel(file));
+        // The extension is OPTIONAL, and that is the whole point. `tsconfig.json`
+        // sets `moduleResolution: "bundler"` and `tsconfig.server.json` extends it,
+        // so `from "../../documents/reload-family"` typechecks, bundles and ships.
+        // This required a literal `.js` until review demonstrated the gap: an
+        // unsanctioned fifth consumer using the extensionless form passed this
+        // spec, passed `tsc --noEmit`, and produced a successful `tsup` build.
+        //
+        // The miss COMPOUNDED, which is why the extension is the wrong thing to
+        // anchor on. The symbol-entitlement spec below iterates the list this
+        // loop builds, so a file that never enters `referencing` is never checked
+        // for which symbols it takes either — one dropped extension defeated both
+        // layers, and the second layer's silence looked identical to a pass.
+        if (/["'][^"']*reload-family(?:\.[a-z]+)?["']/.test(body)) referencing.push(rel(file));
       }
 
       expect(
@@ -283,6 +315,37 @@ describe("the redirect invariant (Unit 6)", () => {
           `${relPath} no longer uses any sanctioned symbol — delete the row rather than leaving it`,
         ).not.toEqual([]);
       }
+    },
+    CORPUS_TIMEOUT_MS,
+  );
+
+  it(
+    "no sanctioned module re-exports its entitlement, which would launder access to anyone",
+    async () => {
+      // Demonstrated, not hypothesised. Appending `export { restoreDocumentFromBackup };`
+      // to `routes/backups.ts` and importing it from an unlisted module passed
+      // every other spec in this file AND the boundary inventory: 25 green with
+      // an arbitrary fifth consumer in place.
+      //
+      // Scoped to the sanctioned four rather than all of `src/`, because they
+      // are the only modules that HAVE the symbols to re-export — anywhere else,
+      // the specifier sweep above already fires.
+      const offenders: string[] = [];
+      for (const relPath of Object.keys(SANCTIONED)) {
+        const body = stripComments(await fs.readFile(path.join(srcRoot, relPath), "utf8"));
+        for (const name of ENTRIES) {
+          // `export { x }`, `export { x as y }`, `export { a, x }` — with or
+          // without a `from` clause, since the bare form is the one that was
+          // invisible. A local `export function <name>` cannot occur here: these
+          // names are defined in reload-family.ts, not in a consumer.
+          const re = new RegExp(`export\\s*\\{[^}]*(?<![\\w$])${name}(?![\\w$])[^}]*\\}`);
+          if (re.test(body)) offenders.push(`${relPath} re-exports ${name}`);
+        }
+      }
+      expect(
+        offenders,
+        "a consumer re-exporting what it is entitled to hands that entitlement to every module in src/, and adds no import edge for any inventory to see",
+      ).toEqual([]);
     },
     CORPUS_TIMEOUT_MS,
   );

@@ -10,10 +10,7 @@
  *
  * Resolution deliberately lives elsewhere — `resolveExternalConflict` in
  * `documents/reload-family.ts`: clearing the flag runs the reload lifecycle,
- * which is a different dependency set entirely. (It was in
- * `mcp/file-opener.ts` until Unit 7c moved the whole reload family here and
- * deleted that module; the reason for the split did not change, only the
- * address.)
+ * which is a different dependency set entirely.
  */
 
 import path from "path";

@@ -1,9 +1,10 @@
 /**
  * Attaching a document's annotation envelope to its Y.Doc.
  *
- * Split out of `mcp/file-opener.ts` for ADR-034 Unit 7a. Both the open
- * pipeline and `renameDocument` wire annotations, and neither needs anything
- * else file-opener holds, so this sits below both rather than between them.
+ * Split out of `mcp/file-opener.ts` for ADR-034 Unit 7a (that module was
+ * deleted in Unit 7c). Both the open pipeline and `renameDocument` wire
+ * annotations, and neither needed anything else file-opener held, so this sits
+ * below both rather than between them.
  */
 
 import path from "path";

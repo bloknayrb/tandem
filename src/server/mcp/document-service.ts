@@ -1074,10 +1074,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
 
   // Acquire the lock INSIDE the try so the finally always releases it — taking it
   // outside and then throwing would leak it and permanently block this doc's future
-  // saves/renames with RENAME_IN_PROGRESS. This paragraph also described a dynamic
-  // import resolved in the same place, to dodge the file-opener/document-service
-  // cycle; ADR-034 Unit 7a removed that import and Unit 7c deleted file-opener, so
-  // only the lock half is left.
+  // saves/renames with RENAME_IN_PROGRESS.
   try {
     savingDocs.add(docId);
     const doc = getOrCreateDocument(docId);
