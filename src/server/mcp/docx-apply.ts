@@ -221,7 +221,7 @@ export async function applyChangesCore(
     const newText = ann.suggestedText ?? "";
 
     // The originating Word `w:id`, read off the record — never parsed out of
-    // `ann.id` (#1682). Since W8 `importAnnotationId` mints
+    // `ann.id` (#1682). Since #337 (2026-04-17) `importAnnotationId` mints
     // `import-${sha256(...).slice(0, 12)}`: a hash, so no format string can
     // recover the comment id from it, and the old `import-{commentId}-{ts}`
     // parse silently yielded `undefined` for every real import (12 hex chars,

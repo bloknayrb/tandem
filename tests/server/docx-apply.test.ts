@@ -1304,7 +1304,7 @@ describe("applyChangesCore — the backup sidecar", () => {
 // suggestion. That is exactly why the producer could be dead for five releases
 // without a red test: `src/server/mcp/docx-apply.ts` parsed the comment id out
 // of `ann.id` in a `import-{commentId}-{timestamp}` shape the ids stopped using
-// at W8, so `lastIndexOf("-")` was -1 and the field was ALWAYS undefined.
+// at #337, so `lastIndexOf("-")` was -1 and the field was ALWAYS undefined.
 //
 // So these specs build their input from the real producers — the annotation is
 // minted by `injectCommentsAsAnnotations` (which mints the id through
@@ -1419,7 +1419,7 @@ describe("applyChangesCore — the originating Word comment", () => {
       expect(importedId).toBe(importAnnotationId(COMMENT_ID, 0, 5, COMMENT_BODY));
       expect(
         importedId.slice("import-".length),
-        "a W8 id is a bare hash — the deleted parse needed a dash here",
+        "a post-#337 id is a bare hash — the deleted parse needed a dash here",
       ).not.toContain("-");
       expect(note.importSource?.commentId).toBe(COMMENT_ID);
 
@@ -1482,10 +1482,16 @@ describe("applyChangesCore — the originating Word comment", () => {
 
       // `commentsResolved: 0` alone is a weak control: `resolveWordComments`
       // also returns 0 when it DID carry an id and simply failed to match one
-      // in comments.xml — which is what the old parse produced for a
-      // `import-reply-<hash>` id (the literal "reply"). The warn is the only
-      // observable that separates "never attempted" from "attempted and
-      // missed", so spy on it rather than inferring from the count.
+      // in comments.xml. The warn at `file-io/docx-apply.ts`'s "No
+      // comment-paragraph id" is the only observable that separates "never
+      // attempted" from "attempted and missed", so spy on it rather than
+      // inferring from the count.
+      //
+      // (An earlier draft justified this with an `import-reply-<hash>` id,
+      // whose old parse yielded the literal "reply". The arithmetic is right
+      // and the case is unreachable: `importReplyId` mints those only for
+      // records in `Y_MAP_ANNOTATION_REPLIES`, and this loop walks
+      // `Y_MAP_ANNOTATIONS`. The control is right; that reason for it was not.)
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({
