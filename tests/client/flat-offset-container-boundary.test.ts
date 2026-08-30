@@ -97,22 +97,30 @@ const SHAPES: Record<string, string> = {
  * Offsets that do NOT resolve inside a textblock, with the reason, pinned as an
  * exact set.
  *
- * All three are PRE-EXISTING and unchanged by #1485 — I checked each against
- * the old code. They are listed rather than excluded from the corpus because an
+ * Both were PRE-EXISTING and unchanged by #1485 — each was checked against the
+ * old code — and one has since been retired by #1664 (below), which is the
+ * mechanism described here doing its job.
+ *
+ * They are listed rather than excluded from the corpus because an
  * exception that is silently skipped is an exception nobody re-examines: if a
  * later change fixes one, or introduces a fourth, this set fails and says so.
  *
- * - `empty list item` — a `listItem` with no children at all. There is no
- *   textblock inside it to land in, so no better answer exists. Round-trips
- *   correctly.
+ * - `empty list item` — REMOVED by #1664, which is this pin working as
+ *   designed. The entry read "a `listItem` with no children at all. There is no
+ *   textblock inside it to land in, so no better answer exists." The premise
+ *   stopped holding: a zero-child `listItem` was not merely unaddressable, it
+ *   was schema-invalid, and the client answered that by deleting it out of the
+ *   shared Y.Doc and cascading to the fragment root. `ensureBlockChild`
+ *   (`src/server/file-io/mdast-ydoc.ts`) now gives such an item one empty
+ *   paragraph at load, so offset 4 has a textblock to land in and the exception
+ *   is gone rather than widened.
  * - `horizontal rule` — an `hr` contributes zero flat characters but sits
  *   between two block separators, so one flat offset belongs to it and has no
  *   text position anywhere. Resolving it to the end of the previous block or
  *   the start of the next is a judgment call that belongs with the flat-text
- *   convention, not with this fix.
+ *   convention, not with this fix. Still live.
  */
 const KNOWN_NON_TEXTBLOCK: Record<string, number[]> = {
-  "empty list item": [4],
   "horizontal rule": [2],
 };
 

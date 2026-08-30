@@ -53,6 +53,7 @@ const boundaryWith = (name: string): RegExp => new RegExp(`withErrorBoundary\\(\
 const GATED = [
   "tandem_edit",
   "tandem_appendContent",
+  "tandem_editList",
   "tandem_scratchpad",
   "tandem_comment",
   "tandem_suggest",

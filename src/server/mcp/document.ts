@@ -15,6 +15,9 @@ import {
 import { flattenHeadingText, headingPrefix } from "../../shared/offsets.js";
 import { withMcp } from "../../shared/origins.js";
 import { isPlaintextFormat } from "../../shared/plaintext-format.js";
+import type { FlatOffset } from "../../shared/positions/types.js";
+import { isTopLevel, sameTextblock } from "../../shared/positions/types.js";
+import { elementAtPath, resolveToTextblock } from "../../shared/positions/ydoc.js";
 import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
@@ -22,21 +25,24 @@ import { isStoreReadOnly } from "../annotations/store.js";
 import { type OpenSuccess, openFromDisk, openScratchpad, toWireResult } from "../documents/open.js";
 import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
-import { appendMdast } from "../file-io/mdast-ydoc.js";
+import { appendMdast, buildListItemsFromTree } from "../file-io/mdast-ydoc.js";
 // Position system
-import { anchoredRange, resolveToElement, validateRange } from "../positions.js";
+import { anchoredRange, validateRange } from "../positions.js";
 import { saveSession } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { convertToMarkdown } from "./convert.js";
 // Document model (pure logic)
 import {
+  collectBlocks,
   extractText,
+  flatDocLength,
+  flatOffsetWithinList,
+  flatSpanOfChildren,
   getElementText,
   getElementTextLength,
   getHeadingPrefixLength,
   mergeInlineTail,
   replaceFlatRangeInElement,
-  TEXTBLOCK_NODES,
 } from "./document-model.js";
 // Document service (state management)
 import {
@@ -54,6 +60,12 @@ import {
   toDocListEntry,
 } from "./document-service.js";
 import { gatedTool, licenseGate } from "./license-gate.js";
+import {
+  attachItems,
+  findListTarget,
+  listFormatRefusal,
+  removeItemAndCollapse,
+} from "./list-edit.js";
 import {
   getTextContentOutputShape,
   listDocumentsOutputShape,
@@ -100,6 +112,7 @@ export {
   extractText,
   findXmlText,
   findXmlTextAtOffset,
+  flatDocLength,
   getElementText,
   getElementTextLength,
   getHeadingPrefixLength,
@@ -339,6 +352,34 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void 
   });
 }
 
+/**
+ * Anchor a flat range and record it as Claude-authored, in one place.
+ *
+ * Both `tandem_edit` and `tandem_editList` need this, and the entry shape — in
+ * particular `relRange` being present only when the anchor is FULL — is the kind
+ * of detail that goes quietly wrong when it is written twice.
+ *
+ * Deliberately not `stampClaudeAuthorshipWholeDoc`: that walks top level only,
+ * keys entries `claude-block-${i}` by fragment index and has no end bound, so a
+ * mid-document write would re-key every later block.
+ */
+function stampClaudeRange(doc: Y.Doc, from: FlatOffset, to: FlatOffset): void {
+  if (to <= from) return;
+  const anchored = anchoredRange(doc, from, to);
+  if (!anchored.ok) return;
+  const authorshipMap = doc.getMap(Y_MAP_AUTHORSHIP);
+  const rangeId = generateAuthorshipId("claude");
+  withMcp(doc, () => {
+    authorshipMap.set(rangeId, {
+      id: rangeId,
+      author: "claude",
+      range: anchored.range,
+      relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
+      timestamp: Date.now(),
+    } satisfies AuthorshipRange);
+  });
+}
+
 export function registerDocumentTools(server: McpServer): void {
   const openDocs = getOpenDocs();
 
@@ -468,19 +509,40 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_getOutline",
-    "Get document structure (headings, sections) without full content. Low token cost.",
+    "Get document structure without full content. Headings only by default (low token cost); " +
+      "pass includeBlocks to also list every block — paragraphs, list items, their nesting and " +
+      "checkbox state — with the character offsets tandem_edit takes.",
     {
+      includeBlocks: z
+        .boolean()
+        .optional()
+        .describe(
+          "Also return every block, not just headings: node type, flat [from,to) range, nesting " +
+            "path, position within its list, and checkbox state. Flat text alone cannot show " +
+            "this — a list item reads as bare prose — so pass this before editing inside a list " +
+            "or a table. Roughly one entry per block; omit on large documents.",
+        ),
       documentId: z
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_getOutline", async ({ documentId }) => {
+    withErrorBoundary("tandem_getOutline", async ({ includeBlocks, documentId }) => {
       const r = requireDocument(documentId);
       if (!r) return noDocumentError();
       const fragment = r.doc.getXmlFragment("default");
       const outline = getOutline(fragment);
-      return mcpSuccess({ outline, totalNodes: fragment.length });
+      // Opt-in: the outline is the documented cheap read, and `blocks` is
+      // roughly one entry per block. Lives here rather than on
+      // `tandem_getTextContent` because that tool carries an `outputSchema`
+      // (so an unlisted container node would fail validation on a real
+      // document) and its `section` branch returns early, which would make
+      // structure unobtainable for a section read.
+      return mcpSuccess({
+        outline,
+        totalNodes: fragment.length,
+        ...(includeBlocks ? { blocks: collectBlocks(r.doc) } : {}),
+      });
     }),
   );
 
@@ -582,43 +644,68 @@ export function registerDocumentTools(server: McpServer): void {
           }
 
           const fragment = r.doc.getXmlFragment("default");
-          const startPos = resolveToElement(fragment, from);
-          const endPos = resolveToElement(fragment, to);
+          // Resolve to the TEXTBLOCK that owns each offset, at any depth. The old
+          // `resolveToElement` pair stopped at the fragment's direct children, so
+          // every offset inside a list resolved to the `bulletList` CONTAINER and
+          // was rejected with "edit a specific paragraph or list item instead" —
+          // advice no tool could follow, because none could address a nested block.
+          const startPos = resolveToTextblock(fragment, from);
+          const endPos = resolveToTextblock(fragment, to);
 
           if (!startPos || !endPos) {
+            return mcpError(
+              "INVALID_RANGE",
+              `Cannot resolve offset range [${from}, ${to}] to editable text. The range may cover only a container or an image.`,
+            );
+          }
+
+          const startNode = elementAtPath(fragment, startPos.path);
+          const endNode = elementAtPath(fragment, endPos.path);
+          if (!startNode || !endNode) {
             return mcpError(
               "INVALID_RANGE",
               `Cannot resolve offset range [${from}, ${to}] in document.`,
             );
           }
 
-          // Guard: only textblock elements (paragraph, heading, codeBlock) may be
-          // edited. This must reject before the transaction to prevent partial-commit
-          // corruption — Y.js transactions don't roll back on throw.
-          const startNode = fragment.get(startPos.elementIndex);
-          if (!(startNode instanceof Y.XmlElement) || !TEXTBLOCK_NODES.has(startNode.nodeName)) {
+          // Every rejection below MUST precede the first `withMcp` — Y.js does not
+          // roll back a transaction on throw, so a late bail is a partial commit.
+          if (sameTextblock(startPos, endPos)) {
+            // Same textblock at any depth: a list item, a nested item, a table
+            // cell, a blockquote paragraph. `replaceFlatRangeInElement` already
+            // handles multi-XmlText/hardBreak interiors, so depth costs nothing.
+            withMcp(r.doc, () => {
+              replaceFlatRangeInElement(startNode, startPos.textOffset, endPos.textOffset, newText);
+            });
+          } else if (!isTopLevel(startPos) || !isTopLevel(endPos)) {
+            // Cross-block where either end is nested. The top-level algorithm below
+            // is keyed on `fragment.delete` indices and cannot express "delete the
+            // middle items of this list", so refuse rather than corrupt — and name
+            // both retry ranges so the caller's next call is mechanical.
+            //
+            // NB: the test is `isTopLevel` on BOTH ends plus `sameTextblock` above, never
+            // top-level-index equality. Two different list items share a top-level
+            // index, so an index test reads a cross-item range as same-block and
+            // edits with offsets measured against two different elements.
+            const startEnd = toFlatOffset(
+              from + (getElementTextLength(startNode) - startPos.textOffset),
+            );
+            const endStart = toFlatOffset(to - endPos.textOffset);
             return mcpError(
               "INVALID_RANGE",
-              `Target element is a container (${startNode instanceof Y.XmlElement ? startNode.nodeName : "unknown"}) — edit a specific paragraph or list item instead.`,
+              `Range [${from}, ${to}] spans two blocks and at least one is nested (inside a list, ` +
+                `blockquote or table). tandem_edit replaces text within a single block. Edit them ` +
+                `separately — the first ends at ${startEnd}, the second starts at ${endStart} — or ` +
+                `use tandem_appendContent for new block structure.`,
             );
-          }
-          if (startPos.elementIndex !== endPos.elementIndex) {
-            const endNode = fragment.get(endPos.elementIndex);
-            if (!(endNode instanceof Y.XmlElement) || !TEXTBLOCK_NODES.has(endNode.nodeName)) {
-              return mcpError(
-                "INVALID_RANGE",
-                `Target end element is a container (${endNode instanceof Y.XmlElement ? endNode.nodeName : "unknown"}) — edit a specific paragraph or list item instead.`,
-              );
-            }
-          }
-
-          if (startPos.elementIndex !== endPos.elementIndex) {
+          } else {
+            const startIndex = startPos.path[0];
+            const endIndex = endPos.path[0];
             withMcp(r.doc, () => {
-              // Cross-element edit. Each textblock may hold multiple Y.XmlText
-              // children split by sibling hardBreaks, so trims/merges go through the
-              // multi-XmlText helpers — the old first-XmlText-only path dropped the
-              // tail's breaks and later runs (and could throw mid-transaction).
-              const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
+              // Cross-element edit, both ends top-level. Each textblock may hold
+              // multiple Y.XmlText children split by sibling hardBreaks, so
+              // trims/merges go through the multi-XmlText helpers — the old
+              // first-XmlText-only path dropped the tail's breaks and later runs.
               // 1. Trim the start element's tail: delete [startOffset, end).
               replaceFlatRangeInElement(
                 startNode,
@@ -628,14 +715,13 @@ export function registerDocumentTools(server: McpServer): void {
               );
 
               // 2. Delete the whole in-between elements.
-              const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
-              for (let i = 0; i < deleteCount; i++) {
-                fragment.delete(startPos.elementIndex + 1, 1);
-              }
+              // One call, not a loop: Y.XmlFragment.delete takes a length.
+              const deleteCount = endIndex - startIndex - 1;
+              if (deleteCount > 0) fragment.delete(startIndex + 1, deleteCount);
 
               // 3. Trim the end element's head: delete [0, endOffset).
-              const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
-              replaceFlatRangeInElement(endNode, 0, endPos.textOffset, "");
+              const tailNode = fragment.get(startIndex + 1) as Y.XmlElement;
+              replaceFlatRangeInElement(tailNode, 0, endPos.textOffset, "");
 
               // 4. Insert newText at the join (end of start), then fold the end
               //    element's surviving children onto start → [start][newText][end].
@@ -646,15 +732,10 @@ export function registerDocumentTools(server: McpServer): void {
                 const joinAt = startPos.textOffset;
                 replaceFlatRangeInElement(startNode, joinAt, joinAt, newText);
               }
-              mergeInlineTail(startNode, endNode);
+              mergeInlineTail(startNode, tailNode);
 
               // 5. Remove the now-emptied end element.
-              fragment.delete(startPos.elementIndex + 1, 1);
-            });
-          } else {
-            withMcp(r.doc, () => {
-              const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
-              replaceFlatRangeInElement(node, startPos.textOffset, endPos.textOffset, newText);
+              fragment.delete(startIndex + 1, 1);
             });
           }
 
@@ -669,23 +750,7 @@ export function registerDocumentTools(server: McpServer): void {
           // remote Y update into the gap. Adding an `await` in this span would
           // create one.
           if (newText.length > 0) {
-            const newFrom = from;
-            const newTo = toFlatOffset(newFrom + newText.length);
-            const anchored = anchoredRange(r.doc, newFrom, newTo);
-            if (anchored.ok) {
-              const authorshipMap = r.doc.getMap(Y_MAP_AUTHORSHIP);
-              const rangeId = generateAuthorshipId("claude");
-              const entry: AuthorshipRange = {
-                id: rangeId,
-                author: "claude",
-                range: anchored.range,
-                relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
-                timestamp: Date.now(),
-              };
-              withMcp(r.doc, () => {
-                authorshipMap.set(rangeId, entry);
-              });
-            }
+            stampClaudeRange(r.doc, from, toFlatOffset(from + newText.length));
           }
 
           return mcpSuccess({ edited: true, from, to, newTextLength: newText.length });
@@ -697,6 +762,177 @@ export function registerDocumentTools(server: McpServer): void {
   // 1 MB inline cap — mdParser.parse is synchronous and blocks the event loop;
   // the 50 MB file cap is far too loose for an inline MCP argument.
   const MAX_APPEND_CONTENT_BYTES = 1_000_000;
+
+  server.tool(
+    "tandem_editList",
+    "Change the SHAPE of a list: add an item, remove one, or tick a checkbox. Does not change " +
+      "the wording of an item — use tandem_edit for that. Target an item by a flat offset " +
+      "anywhere inside it; call tandem_getOutline({ includeBlocks: true }) to see the list's " +
+      "items and their offsets. Markdown and .docx documents only.",
+    {
+      at: z
+        .number()
+        .describe(
+          "A flat character offset anywhere inside the target list item. Take it from a blocks[] " +
+            "entry in tandem_getOutline({ includeBlocks: true }) — do not reuse one from before " +
+            "your last edit.",
+        ),
+      op: z
+        .enum(["insertAfter", "insertBefore", "remove", "setChecked"])
+        .describe(
+          "insertAfter / insertBefore add new item(s) next to the target and need `markdown`. " +
+            "remove deletes the target item and everything nested under it. setChecked ticks or " +
+            "unticks its checkbox and needs `checked`. There is no move op: reordering by " +
+            "composing remove + insertAfter loses the item's annotations and authorship, " +
+            "because Yjs cannot move a node and the rebuild drops its anchors.",
+        ),
+      markdown: z
+        .string()
+        .optional()
+        .describe(
+          "insertAfter / insertBefore only. One item per line as markdown (`- text`); indent two " +
+            "spaces to nest under the line above. A block that is not a list item is wrapped as " +
+            "one. Only the NEW items — never re-send the text of the item you are targeting, " +
+            "which is left untouched.",
+        ),
+      checked: z
+        .union([z.boolean(), z.null()])
+        .optional()
+        .describe(
+          "setChecked only. true ticks the box, false unticks it, null removes the checkbox and " +
+            "leaves an ordinary bullet. Markdown only — Word lists have no checkbox state.",
+        ),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Target document ID (defaults to active document)"),
+    },
+    gatedTool("tandem_editList", async ({ at, op, markdown, checked, documentId }) => {
+      return withTypingPresence({ tool: "tandem_editList", documentId }, async () => {
+        const r = requireDocument(documentId);
+        if (!r) return noDocumentError();
+
+        const docState = getCurrentDoc(documentId);
+        if (docState?.readOnly) {
+          return mcpError("FORMAT_ERROR", "Document is read-only — cannot edit lists.");
+        }
+        const refusal = listFormatRefusal(docState?.format);
+        if (refusal) return mcpError("FORMAT_ERROR", refusal);
+
+        const fragment = r.doc.getXmlFragment("default");
+        if (fragment.length === 0) {
+          return mcpError(
+            "EMPTY_DOCUMENT",
+            "Document is empty — no list to edit. Seed content with tandem_appendContent.",
+          );
+        }
+
+        // Bounds-check BEFORE resolving. `resolveToElement` clamps out-of-range
+        // offsets to the first/last element, so an `at` past the end silently
+        // targets the LAST item and one below zero targets the FIRST — and
+        // `op: "remove"` would then delete an item the caller never named and
+        // report success. A stale offset is exactly the case this tool's own
+        // description warns about, so it must fail loudly rather than guess.
+        const flatLength = flatDocLength(r.doc);
+        if (!Number.isInteger(at) || at < 0 || at > flatLength) {
+          return mcpError(
+            "INVALID_RANGE",
+            `Offset ${at} is outside the document (0..${flatLength}). Re-read the list with ` +
+              "tandem_getOutline({ includeBlocks: true }) — an offset from before your last " +
+              "edit may no longer point where you expect.",
+          );
+        }
+        const pos = resolveToTextblock(fragment, toFlatOffset(at));
+        if (!pos) {
+          return mcpError("INVALID_RANGE", `Cannot resolve offset ${at} to a block.`);
+        }
+        const target = findListTarget(fragment, pos.path);
+        if ("error" in target) return mcpError("INVALID_RANGE", target.error);
+
+        // Everything that can refuse must refuse BEFORE the transaction — Y.js
+        // does not roll back on throw, so a late bail is a partial commit.
+        if (op === "setChecked") {
+          if (checked === undefined) {
+            return mcpError(
+              "INVALID_ARGUMENT",
+              "setChecked requires `checked` (true, false or null).",
+            );
+          }
+          if (docState?.format === "docx") {
+            return mcpError(
+              "FORMAT_ERROR",
+              "Word lists have no checkbox state, so setChecked does not apply to a .docx. " +
+                "The other ops work on this document.",
+            );
+          }
+          withMcp(r.doc, () => {
+            if (checked === null) target.item.removeAttribute("checked");
+            // Stored as a real boolean, matching what y-prosemirror writes when a
+            // user toggles the checkbox, so it round-trips byte-identically.
+            else target.item.setAttribute("checked", checked as any);
+          });
+          return mcpSuccess({ edited: true, op, itemIndex: target.index + 1, checked });
+        }
+
+        if (op === "remove") {
+          withMcp(r.doc, () => removeItemAndCollapse(fragment, target));
+          return mcpSuccess({ edited: true, op, removedItemIndex: target.index + 1 });
+        }
+
+        // insertAfter / insertBefore
+        if (!markdown || markdown.trim() === "") {
+          return mcpError("INVALID_ARGUMENT", `${op} requires \`markdown\` for the new item(s).`);
+        }
+        if (Buffer.byteLength(markdown, "utf-8") > MAX_APPEND_CONTENT_BYTES) {
+          return mcpError(
+            "FILE_TOO_LARGE",
+            `markdown exceeds the ${MAX_APPEND_CONTENT_BYTES}-byte limit.`,
+          );
+        }
+
+        // Parse AND build outside the transaction. Parsing alone is not enough:
+        // `blockToYxml`'s default arm calls the remark stringifier, so a throw
+        // during the build would land mid-transaction with the delete already
+        // applied and nothing replacing it.
+        const tree = mdParser.parse(markdown) as Root;
+        const { items, deferred } = buildListItemsFromTree(tree);
+        if (items.length === 0) {
+          return mcpError("INVALID_ARGUMENT", "markdown parsed to no list items.");
+        }
+
+        const insertAt = op === "insertAfter" ? target.index + 1 : target.index;
+        withMcp(r.doc, () => attachItems(target.list, insertAt, items, deferred));
+
+        // Stamp the inserted items as Claude's, using the per-range scheme
+        // tandem_edit uses. `stampClaudeAuthorshipWholeDoc` is unusable here: it
+        // walks top level only, keys entries by fragment index, and has no end
+        // bound, so a mid-document insert would re-key every later block.
+        //
+        // The range is derived from the document AFTER insertion rather than
+        // from the target block's own start. Deriving it from the target stamps
+        // the user's existing item — `insertAfter` puts the new items after it,
+        // so a span starting at the target covers text Claude did not write, and
+        // claiming authorship over the user's prose is worse than claiming none.
+        // Scoped to the target list, not the document: the span is a question
+        // about `target.list`'s children, and enumerating every block in the
+        // file to answer it costs a full traversal plus an allocation per block
+        // (1041 of them on this repo's CHANGELOG) — on the long lists this tool
+        // exists for, that dominates the mutation itself.
+        const listStart = at - pos.textOffset - flatOffsetWithinList(target.list, target.index);
+        const insertedSpan = flatSpanOfChildren(target.list, insertAt, items.length, listStart);
+        if (insertedSpan) {
+          stampClaudeRange(r.doc, toFlatOffset(insertedSpan.from), toFlatOffset(insertedSpan.to));
+        }
+
+        return mcpSuccess({
+          edited: true,
+          op,
+          insertedCount: items.length,
+          atItemIndex: insertAt + 1,
+        });
+      });
+    }),
+  );
 
   server.tool(
     "tandem_appendContent",

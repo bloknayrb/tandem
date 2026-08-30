@@ -375,24 +375,32 @@ describe("markdownToSlice", () => {
     });
   });
 
-  // F5: accepted limitation, pinned rather than fixed. A solo image hoisted
-  // inside a listItem yields `listItem(paragraph(empty), image)` because
-  // the schema's listItem requires a paragraph head and `createAndFill`
-  // inserts one. Downgrading instead would lose the image entirely, which
-  // is worse; the server's own .docx import path independently produces
-  // `listItem > image`, so the shapes converge after a save/reload anyway.
-  it("solo image in a list item keeps the image (accepted: schema inserts an empty paragraph head)", () => {
+  // F5, no longer a limitation (#1664). This used to assert
+  // `listItem(paragraph(empty), image)`: `listItem` was `paragraph block*`, so
+  // the schema demanded a paragraph head and `createAndFill` supplied an empty
+  // one. The comment here accepted that, on the grounds that the server's .docx
+  // import path independently produces a bare `listItem > image` and the two
+  // "converge after a save/reload anyway".
+  //
+  // They did not converge — they diverged into a document-blanking bug. That
+  // bare `listItem > image` was precisely the shape the client's own schema
+  // rejected, and `createNodeFromYElement` answers a rejection by deleting the
+  // node out of the shared Y.Doc, cascading to the fragment root. Widening
+  // `listItem` to `block+` fixed that, and this paste path inherits the fix: no
+  // filler paragraph is needed, so paste now yields the same bare
+  // `listItem > image` the importer produces. The convergence the old comment
+  // assumed is now real.
+  it("solo image in a list item keeps the image, with no filler paragraph", () => {
     const doc = parseToDoc("- ![cat](https://example.com/c.png)");
     const list = doc.firstChild!;
     expect(list.type.name).toBe("bulletList");
     const item = list.firstChild!;
     expect(item.type.name).toBe("listItem");
-    expect(item.childCount).toBe(2);
-    expect(item.child(0).type.name).toBe("paragraph");
-    expect(item.child(0).content.size).toBe(0);
-    expect(item.child(1).type.name).toBe("image");
-    expect(item.child(1).attrs.src).toBe("https://example.com/c.png");
-    expect(item.child(1).attrs.alt).toBe("cat");
+    // Exactly the image — the empty-paragraph head is gone.
+    expect(item.childCount).toBe(1);
+    expect(item.child(0).type.name).toBe("image");
+    expect(item.child(0).attrs.src).toBe("https://example.com/c.png");
+    expect(item.child(0).attrs.alt).toBe("cat");
   });
 });
 

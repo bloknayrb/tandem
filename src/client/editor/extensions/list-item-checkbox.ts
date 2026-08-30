@@ -37,6 +37,50 @@ const checkboxPluginKey = new PluginKey("listItemCheckbox");
 const TASK_INPUT_RULE = /^\[([ xX])\]\s$/;
 
 export const ListItemCheckbox = ListItem.extend({
+  /**
+   * Widened from Tiptap's default `paragraph block*` (#1664).
+   *
+   * `paragraph block*` requires a list item's FIRST child to be a paragraph.
+   * CommonMark has no such rule, so `- ![shot](a.png)`, `- > quoted`,
+   * `- # Section`, a fenced block as the whole item, and a text-less parent
+   * carrying only a sub-list (`- - nested`) all parse to `listItem > <block>`
+   * — a shape `loadMarkdown` builds faithfully and this schema then rejected.
+   *
+   * Rejecting it was not inert. `createNodeFromYElement` builds children, calls
+   * `schema.node(...)` (→ `NodeType.createChecked`, which throws on invalid
+   * content), and its catch assumes the throw is a concurrency artifact:
+   *
+   *     (el.doc).transact((tr) => { (el._item).delete(tr); }, ySyncPluginKey)
+   *
+   * That is a real write to the shared Y.Doc. It replicates over Hocuspocus and
+   * autosave persists it, and the eviction CASCADES — an emptied `listItem`
+   * leaves its list failing `listItem+`, which evicts the list, up to the
+   * fragment root. So merely OPENING one of those files blanked the whole
+   * document and saved the blank back. No guard could see it: the origin is
+   * `ySyncPluginKey` (so `installUntaggedWriteWarning` stays quiet), it is not
+   * `browser` (so no channel event), and the catch logs nothing.
+   *
+   * Widening rather than normalizing the content, deliberately. Injecting an
+   * empty leading paragraph server-side would fix the schema but move flat
+   * offsets (an extra FLAT_SEPARATOR per item) and rewrite the user's file on
+   * open — and it does not even hold: `- alpha\n-\n  ## A heading` re-serializes
+   * to `- alpha\n- ## A heading`, i.e. straight back to the rejected shape on
+   * the next load. Widening moves no offset and touches no file.
+   *
+   * `block+` (not `paragraph block*` relaxed to `block block*`) so an item whose
+   * only child is a list or an image is expressible, which is the case that
+   * destroyed whole documents.
+   *
+   * This closes the "first child is not a paragraph" half of #1664 and NOT the
+   * whole class: `block+` still requires one child, so a ZERO-child `listItem`
+   * (`- a\n-\n- b`) is evicted by the same mechanism — as is an empty
+   * `blockquote`, which is not a list at all. That half is fixed at the loader,
+   * in `ensureBlockChild` (`src/server/file-io/mdast-ydoc.ts`), where injecting
+   * an empty paragraph is measurably free; the two halves are covered together
+   * by `tests/client/list-ydoc-sync.test.ts`.
+   */
+  content: "block+",
+
   addAttributes() {
     return {
       // Preserve any attributes the base ListItem declares.
@@ -119,6 +163,22 @@ export const ListItemCheckbox = ListItem.extend({
       // by a test below.
       Enter: () => {
         const { $from } = this.editor.state.selection;
+        // Widening `listItem` to `block+` (#1664) made splitting a list item
+        // legal with the cursor inside a code block, and that silently changed
+        // what Enter does there. Under the old `paragraph block*`, the split's
+        // second item would have begun with a `codeBlock`, so `canSplit` failed,
+        // `splitListItem` returned false, and the keymap chain fell through to
+        // `newlineInCode` — Enter inserted a newline, as it must. Once the split
+        // became legal this override consumed the key first: Enter mid-block
+        // TORE one fenced block into two bullets, and at the end of the block it
+        // started a new bullet. `- text` plus an indented fence is an everyday
+        // shape (this repo's own docs are full of it), and with `hardBreak`
+        // absent from `codeBlock`'s `text*` content there was then no key at all
+        // that could add a line to such a block.
+        //
+        // Bail so the chain reaches `newlineInCode`. Keyed on `spec.code` rather
+        // than the `codeBlock` node name so any future code-ish node inherits it.
+        if ($from.parent.type.spec.code) return false;
         let checked: unknown;
         for (let depth = $from.depth; depth > 0; depth--) {
           const node = $from.node(depth);
