@@ -174,8 +174,14 @@ export interface DocumentStore {
    *
    * **No `author` parameter, and its absence is the point.** It took
    * `ReplyAuthor` — three members — so `store.addReply(id, text, "import")` was
-   * type-legal, and any dispatch on that value would have written it as a USER
-   * reply. Keeping the parameter would also have re-keyed the privacy guard on a
+   * type-legal. Master wrote that value straight through as `author: "import"`;
+   * what it bought was skipping the `author === "claude"` guard entirely, so
+   * Claude could reply into a note thread by picking a third byline the client
+   * renders as an import. (An earlier draft of this sentence said it "would have
+   * been written as a USER reply" — a more specific claim, and the wrong one:
+   * `author` was never remapped, and `heldInSolo` is gated on `"user"`, so an
+   * `"import"` reply would not have been stamped either.) Keeping the parameter
+   * would also have re-keyed the privacy guard on a
    * caller-supplied value one level above the seam, which is the defect Unit 8f
    * exists to remove. This store is the MCP surface; the browser's entry is
    * `addUserReply`.

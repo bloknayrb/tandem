@@ -268,8 +268,42 @@ describe("dispatch — replies", () => {
     );
     expect(out.effect.kind).toBe("reply");
     expect((out.result as { ok?: boolean }).ok).toBeUndefined();
-    expect((out.result as { error?: string }).error).toBeDefined();
-    if (out.effect.kind === "reply") expect(out.effect.ok).toBe(false);
+    // The CODE, not merely that some error exists. `toBeDefined()` passes for a
+    // branch that calls `describeReplyWriteRefusal` and then discards it in
+    // favour of a constant — and the seam census only requires the call to
+    // APPEAR in the file, so nothing else was covering the wiring.
+    expect((out.result as { error?: string }).error).toBe("NOT_FOUND");
+    if (out.effect.kind === "reply") {
+      expect(out.effect.ok).toBe(false);
+      expect(out.effect.errorCode).toBe("NOT_FOUND");
+    }
+  });
+
+  it("carries the ADR-027 guard for the local model, not just for Claude", () => {
+    // ADR-035 Unit 8f routed this branch through `AnnotationLifecycle.reply`,
+    // and the docblock claims the guard "covers the local model exactly as it
+    // covers Claude". Before this spec that claim had no driver — the loop's
+    // pre-8f call passed a literal `"claude"` to the free helper, so the
+    // behaviour is unchanged, but an unasserted claim is the kind that gets read
+    // as verified. `BYO_MODELS_ENABLED` is false, so this is the only thing
+    // standing between the prose and a regression.
+    doc = makeMarkdownDoc(FIXTURE);
+    const map = getAnnotationsMap(doc);
+    const created = dispatch(
+      "comment_on_quote",
+      { quoted_text: "the first phase", comment: "needs detail" },
+      { ydoc: doc },
+    );
+    const annotationId = (created.result as { annotation_id: string }).annotation_id;
+    map.set(annotationId, { ...(map.get(annotationId) as Annotation), type: "note" });
+
+    const out = dispatch(
+      "reply_to_annotation",
+      { annotation_id: annotationId, text: "into a private thread" },
+      { ydoc: doc },
+    );
+    expect((out.result as { error?: string }).error).toBe("INVALID_ARGUMENT");
+    expect(doc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
   });
 });
 

@@ -57,8 +57,19 @@ describe("ADR-035 Unit 8f: who may write a reply", () => {
     // while being a regression of #1000.
     const route = stripComments(SRC_FILES.get("src/server/mcp/routes/annotation-reply.ts") ?? "");
     expect(route).toContain("addUserReply(");
+
+    // **Keyed on the reachable spelling, not the private one.** This asserted
+    // `not.toMatch(/\breplyForClaude\b/)` until review measured it: that symbol
+    // is module-private, so no compiling change to the route can ever contain
+    // it, and the assertion had no reachable failing input — a zero check
+    // satisfied by zero. The regression the paragraph above names was then
+    // demonstrated GREEN by adding a real `createAnnotationLifecycle(ydoc)
+    // .reply(...)` call to the route. These two are what that costs.
     expect(route, "the browser must not acquire Claude's ADR-027 guard").not.toMatch(
-      /\breplyForClaude\b/,
+      /\bcreateAnnotationLifecycle\b/,
+    );
+    expect(route, "…and must not reach it through a lifecycle held elsewhere").not.toMatch(
+      /\.reply\s*\(/,
     );
 
     // And the MCP tool must not reach past its own store onto the browser entry.
@@ -82,6 +93,27 @@ describe("ADR-035 Unit 8f: who may write a reply", () => {
       lifecycle.match(/\bwriteReply\b/g) ?? [],
       "declaration + addUserReply + replyForClaude — a fourth is a new unguarded producer",
     ).toHaveLength(3);
+
+    // **And the same pin on `addUserReply` itself, which is the defeat the
+    // paragraph above did not cover.** Measured by two reviewers independently:
+    // `export const postReplyAsUser = addUserReply;` in this file, imported by
+    // an MCP-side module, left all four specs GREEN. The census never sees it —
+    // the alias is *defined* in a sanctioned file and the consumer never spells
+    // the pinned name — and `writeReply`'s count is untouched, because the alias
+    // goes through `addUserReply`. Exactly ONE occurrence here once comments are
+    // stripped: the declaration. Its body calls `writeReply`, not itself, so a
+    // second mention is an alias, a re-export, or a new internal caller — each
+    // of which hands the unguarded capability somewhere this suite cannot see.
+    expect(
+      lifecycle.match(/\baddUserReply\b/g) ?? [],
+      "the declaration and nothing else — a second mention hands the capability on",
+    ).toHaveLength(1);
+    expect(lifecycle, "no alias binding of the unguarded entry").not.toMatch(
+      /export\s+(?:const|let|var|function)\s+\w+\s*=?\s*addUserReply\b/,
+    );
+    expect(lifecycle, "no aliased re-export of the unguarded entry").not.toMatch(
+      /export\s*\{[^}]*\baddUserReply\b[^}]*\bas\b/,
+    );
 
     // `writeReply` stays module-private. Exporting it makes the count above
     // meaningless: a caller in any other file would then reach the mechanism

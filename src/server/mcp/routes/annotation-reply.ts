@@ -1,10 +1,36 @@
 import type { Request, Response } from "express";
 import { generateNotificationId } from "../../../shared/utils.js";
-import { addUserReply, describeReplyWriteRefusal } from "../../annotations/lifecycle.js";
+import {
+  addUserReply,
+  describeReplyWriteRefusal,
+  type ReplyRefusalCode,
+} from "../../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../../annotations/migration-log.js";
 import { pushNotification } from "../../notifications.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
 import { getCurrentDoc } from "../document.js";
+
+/**
+ * Wire code → HTTP status. **A total record, not a ternary chain.**
+ *
+ * The chain this replaces carried a comment arguing it could not go stale,
+ * because a new result ARM has to pass `describeReplyWriteRefusal`'s `never`
+ * anchor first. True, and it answered the wrong question: the chain's `else`
+ * defaulted on the CODE, and `ReplyRefusalCode` is one line of source that a new
+ * arm needing a different status is exactly what prompts someone to widen.
+ * Measured during review — adding a fourth code and returning it compiled clean
+ * and silently shipped HTTP 400, with `mcpError` accepting it on the other
+ * consumer too. That is the catch-all this unit deleted, displaced one type
+ * upward.
+ *
+ * `Record<ReplyRefusalCode, number>` has no default, so a fourth code fails to
+ * compile here — the same failure the describer gives a fourth arm.
+ */
+const REFUSAL_STATUS: Record<ReplyRefusalCode, number> = {
+  NOT_FOUND: 404,
+  ANNOTATION_RESOLVED: 409,
+  INVALID_ARGUMENT: 400,
+};
 
 export function handleAnnotationReply(req: Request, res: Response): void {
   const { annotationId, text, documentId } = (req.body ?? {}) as Record<string, unknown>;
@@ -39,11 +65,7 @@ export function handleAnnotationReply(req: Request, res: Response): void {
     return;
   }
   const { code, message } = describeReplyWriteRefusal(result);
-  // Status from the CODE, not the arm. The code set is closed and does not
-  // grow when the result union does, so this mapping cannot go stale behind
-  // a new arm — the arm is forced through `describeReplyWriteRefusal`'s anchor
-  // first.
-  const status = code === "ANNOTATION_RESOLVED" ? 409 : code === "NOT_FOUND" ? 404 : 400;
+  const status = REFUSAL_STATUS[code];
   console.warn(`[Tandem] API error (${status}): annotation reply failed: ${message}`);
   pushNotification({
     id: generateNotificationId(),

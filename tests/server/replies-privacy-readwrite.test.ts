@@ -115,6 +115,26 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
   });
 
+  it("(b3b) refuses a stored legacy `flag`, which is a note only AFTER sanitize", () => {
+    // The ordering claim in `replyForClaude`'s docblock, which nothing pinned.
+    // Every other reply fixture seeds a record whose raw type already equals its
+    // sanitized type, so `sanitizeAnnotation(raw, onLossy)` could be replaced
+    // with a raw cast and 84 specs stayed green — measured, not supposed. Under
+    // that mutation a stored `flag` (which normalizes to a private note) falls
+    // through and Claude writes into it. `adr027-note-write-guards.test.ts`
+    // carries `f1`/`f2` for the remove and resolve families for this reason.
+    const ydoc = setupDoc("rw-flag", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "legacy");
+    // Written past `createAnnotation`: `flag` is not in `AnnotationType` any
+    // more, which is the whole point — it only arrives from storage.
+    map.set(annId, { ...(map.get(annId) as Annotation), type: "flag" });
+
+    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", noRelay);
+    expect(result).toStrictEqual({ kind: "invalid-note" });
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
+  });
+
   it("(b4) control: the SAME parent at audience outbound accepts Claude's reply", () => {
     // Without this row, (b3) passes on a fixture that is unreplyable for some
     // other reason entirely — a wrong status, a malformed range, a guard that

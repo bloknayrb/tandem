@@ -164,8 +164,11 @@ export type RemoveRecordResult = { kind: "ok"; id: string } | { kind: "not-found
  * rejected*. That deferral covered this one, and named its own trigger: a fourth
  * family is where it should stop being deferred.
  *
- * **Unit 8f added the fourth and fifth ({@link ReplyResult},
- * {@link ClaudeReplyResult}), so the trigger has fired.** It is tracked in
+ * **Unit 8f added the fourth, so the trigger has fired.** ({@link ReplyResult}
+ * and {@link ClaudeReplyResult} are one family under this file's own counting,
+ * the same way `RemoveRecordResult` and `RemoveResult` are — a positive base
+ * and the union that widens it. An earlier draft called them the fourth AND
+ * fifth, which counts a pair two ways in one sentence.) It is tracked in
  * #1687 with a date in the title and a criterion answerable from this file —
  * `not-pending` is currently spelled independently in three families and
  * `not-found` in four — rather than deferred a fifth time in a comment nothing
@@ -182,9 +185,14 @@ export type RemoveResult = RemoveRecordResult | { kind: "invalid-note" };
  * silently into the narrow one; widening upward means a new arm cannot reach the
  * user path unless someone edits THIS type on purpose. That is the shape
  * {@link RemoveRecordResult} settled, and 8e's lesson was that hardening only
- * the direction with no reachable producer hardens the wrong direction — so the
- * `never` anchors at BOTH consumers are what make the claim true rather than
- * incidentally true.
+ * the direction with no reachable producer hardens the wrong direction.
+ *
+ * What makes the claim true rather than incidentally true is the single
+ * `never` anchor in {@link describeReplyWriteRefusal} — **one**, deliberately.
+ * (An earlier draft of this sentence said "the anchors at BOTH consumers",
+ * carried over from the remove family, which really does have two. For
+ * replies that asserts the opposite of what this unit shipped, and the
+ * describer's own docblock says so 40 lines down.)
  */
 export type ReplyResult =
   | { kind: "ok"; replyId: string }
@@ -316,8 +324,10 @@ export type CreateResult = { kind: "created"; annotation: Annotation };
  * whole contract is that behaviour does not change, not because it is
  * expensive. Do not read this paragraph as an argument against doing it.
  *
- * Unit 8f made this the FIFTH family and moved the deferral into #1687, which
- * is where the decision now has to be made rather than restated.
+ * Unit 8f added a fourth family and moved this deferral into #1687, which is
+ * where the decision now has to be made rather than restated. (`this` in an
+ * earlier draft read as `EditResult`, which predates 8f and is not fifth under
+ * any counting.)
  *
  * Note also that `AnnotationStatus` and `Annotation["status"]` below are the
  * same type spelled two ways; that is drift, not divergence.
@@ -565,8 +575,8 @@ export interface AnnotationLifecycle {
  * directly, outside this `Pick` entirely — so moving that call onto the
  * interface would otherwise have left an implementer choosing between widening
  * this type and retyping `creator` to the full `AnnotationLifecycle`. The second
- * is a one-character diff that also hands over `remove`, the ADR-027 chokepoint
- * that sweeps a note's private reply thread. Widening deliberately, and pinning
+ * is a single type-name substitution that also hands over `remove`, the ADR-027
+ * chokepoint that sweeps a note's private reply thread. Widening deliberately, and pinning
  * it, is what stops the path of least resistance from being that one.
  */
 export type AnnotationReplier = Pick<AnnotationLifecycle, "create" | "reply">;
@@ -1019,7 +1029,10 @@ export function removeAnnotationRecord(
  * become the guard. That split is the whole unit: before it, one function
  * decided both rules from a caller-supplied `author`, and the MCP surface
  * (`YDocStore.addReply`) took `ReplyAuthor` — three members — so `"import"` was
- * type-legal and would have been written as a user reply.
+ * type-legal there. Master wrote that value STRAIGHT
+ * THROUGH as `author: "import"`; what it bought was skipping the
+ * `author === "claude"` guard entirely, so Claude could reply into a note
+ * thread by picking a third byline the client renders as an import.
  *
  * **One builder, not one per entry.** `private` is keyed on the parent's type
  * and `heldInSolo` on `author` AND type AND mode; duplicating the record would
@@ -1082,10 +1095,17 @@ function writeReply(
     //
     // **The conjunction order is load-bearing, not stylistic.** `readModeState()`
     // reaches CTRL_ROOM via `getOrCreateDocument`, so hoisting it above the
-    // `author === "user"` test — the obvious readability edit — makes Claude's
-    // MCP path perform a cross-document read (and possibly a create) inside
-    // another document's write. Short-circuit order is what keeps it off that
+    // `author === "user"` test — the obvious readability edit — makes every
+    // Claude and local-model reply do a lookup-or-create on a second document it
+    // has no business touching. Short-circuit order is what keeps it off that
     // path; deleting the stamp is not the only way to break this.
+    //
+    // (An earlier draft said this happened "inside another document's write". It
+    // does not: `wrap(ydoc, …)` opens the transaction below, after this literal
+    // is built, and no caller wraps `writeReply` in one. The reason to keep the
+    // order survives without the transaction-nesting story — and a reader who
+    // checked that detail, found it false, and reordered on the strength of it
+    // would be making the exact edit this paragraph exists to stop.)
     ...(author === "user" && ann.type === "comment" && readModeState() !== "tandem"
       ? { heldInSolo: true }
       : {}),
@@ -1106,11 +1126,27 @@ function writeReply(
  *
  * **No ADR-027 guard, deliberately** — replying to one's own private note is
  * exactly what ADR-027 permits, and the guard lives on
- * {@link AnnotationLifecycle.reply}. Reaching Claude's forbidden case therefore
- * requires a module to change which symbol it imports, which reads as what it is
- * in a diff. `tests/server/annotation-reply-seam.test.ts` pins the importer set
+ * {@link AnnotationLifecycle.reply}. Reaching it from any OTHER module therefore
+ * requires changing which symbol that module imports, which reads as what it is
+ * in a diff.
+ *
+ * **That is a statement about `src/`, not about reachability.** This entry is
+ * also one HTTP POST away: `/api/annotation-reply` is loopback-only but carries
+ * no origin gate — it is one of the six routes CLAUDE.md's security inventory
+ * names as relying solely on the path-wide invariant — so anything running on
+ * the machine can write an `author: "user"` reply into a note thread. That is
+ * unchanged from before ADR-035 and is not what the importer pin is for; the pin
+ * stops a second *code* path from quietly acquiring the capability.
+ *
+ * `tests/server/annotation-reply-seam.test.ts` pins the importer set
  * in both directions: no MCP-side module may import this, and this is the only
- * unguarded producer of a newly authored reply.
+ * unguarded producer of a newly authored reply **that any request can reach**.
+ * The absolute phrasing would be false: `file-io/docx-comments.ts` builds
+ * imported reply records and writes them with a bare `repliesMap.set` during
+ * `.docx` ingest, bypassing this module entirely. That path is driven by a file
+ * the user chose to open, never by an MCP call, which is why it is out of this
+ * seam rather than a hole in it — but a reader trusting "the only producer"
+ * would not go looking for it.
  *
  * `actor` is not a parameter: this entry is the browser's by definition, and
  * `browser` is the one origin outside `CHANNEL_SKIP`. A parameter here would be
@@ -1155,14 +1191,22 @@ function replyForClaude(
   const raw = ydoc.getMap(Y_MAP_ANNOTATIONS).get(annotationId) as RawAnnotation | undefined;
   if (raw) {
     const ann = sanitizeAnnotation(raw, onLossy);
-    // **Scoped to the parents this rule is actually about.** The obvious
-    // spelling, `ann.type !== "comment"`, also catches a HIGHLIGHT — so Claude
-    // replying to a highlight came back `invalid-note`, an arm naming a rule
-    // that had nothing to do with the refusal, and it masked `not-repliable`,
-    // which carries the real parent type. Both map to INVALID_ARGUMENT, so the
-    // wire contract is identical either way; what differs is whether the
-    // diagnosis is true. A highlight now falls through to `writeReply`, whose
-    // own refusal is the one that applies to every author.
+    // **Scoped to the parents this rule is actually about, and the hazard is
+    // one THIS unit introduced.** On master the two checks lived in one
+    // function in the other order: `ann.type === "highlight"` returned first,
+    // so `author === "claude" && ann.type !== "comment"` was simply
+    // unreachable for a highlight. Moving the ADR-027 rule up here, ahead of
+    // `writeReply`, is what would have made `type !== "comment"` swallow a
+    // highlight and answer `invalid-note` — an arm naming a rule that had
+    // nothing to do with the refusal, masking `not-repliable`, which carries
+    // the real parent type.
+    //
+    // So this is not an inherited defect being fixed; it is a defect this
+    // restructure could have created, caught because a store parity spec
+    // asserts the ARM. Both spellings map to INVALID_ARGUMENT, so the wire
+    // contract is identical and nothing keyed on the code could have seen it.
+    // A highlight now falls through to `writeReply`, whose own refusal is the
+    // one that applies to every author — the same answer master gave.
     if (ann.type === "note" || (ann.type === "comment" && ann.audience !== "outbound")) {
       return { kind: "invalid-note" };
     }

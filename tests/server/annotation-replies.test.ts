@@ -196,6 +196,34 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
     expect(stored.heldInSolo).toBeUndefined();
   });
 
+  it("does NOT stamp heldInSolo on CLAUDE's reply in Solo (the author conjunct)", () => {
+    // The other three rows all drive `addUserReply`, so `author === "user"` is
+    // unkilled by them: drop that conjunct and every one stays green. What it
+    // costs is specific — Claude's own reply gets marked Solo-held, and
+    // `hideFromAI` then withholds Claude's message from Claude on the next pull.
+    const ydoc = setupDoc("held-reply-claude", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent comment");
+    setMode("solo");
+
+    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude reply", noRelay);
+    assertReplyOk(result);
+
+    const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as AnnotationReply & {
+      heldInSolo?: boolean;
+    };
+    expect(stored.heldInSolo).toBeUndefined();
+    // The control that makes the row mean something: the SAME mode and the SAME
+    // parent type do stamp a user's reply, so this is the author conjunct and
+    // not Solo mode failing to register.
+    const userReply = addUserReply(ydoc, annId, "user reply", noRelay);
+    assertReplyOk(userReply);
+    expect(
+      (ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(userReply.replyId) as { heldInSolo?: boolean })
+        .heldInSolo,
+    ).toBe(true);
+  });
+
   // Completes the #1213 fail-closed invariant on the STAMPING side: a server
   // restart can drop the CTRL_ROOM mode key BEFORE the reconnecting client
   // rebroadcasts real mode state, so a reply created in that exact window reads
