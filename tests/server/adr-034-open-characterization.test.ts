@@ -19,7 +19,7 @@
  *     store: with no envelope on disk `loadAndMerge` has nothing to re-anchor,
  *     so wiring early produces identical output. It needs a REAL envelope with
  *     real offsets, and it must assert the offsets survive — not that wiring
- *     happened. `file-opener-lifecycle.test.ts` only asserts
+ *     happened. `open-pipeline-lifecycle.test.ts` only asserts
  *     `setFileSyncContext` was called with the doc id.
  *   - **The saved-at baseline VALUE.** Disk open uses the file's mtime; upload
  *     and scratchpad use `Date.now()`. No test asserts the value, only that

@@ -233,7 +233,10 @@ export function errorCodeToLabel(code: string): string {
 }
 
 /**
- * Map error codes from file-opener to HTTP responses.
+ * Map thrown API error codes to HTTP responses. Not scoped to any one
+ * producer: the open pipeline, the reload family and the annotation layer all
+ * feed it, which is why the table below carries `RELOAD_IN_PROGRESS`,
+ * `EXTERNAL_CONFLICT` and `ANNOTATION_RESOLVED` alongside the open codes.
  *
  * #1294: a raw `fs` error message embeds the absolute path Node was operating
  * on, so echoing `e.message` put the app-data layout in the body of any failed

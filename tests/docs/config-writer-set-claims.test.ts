@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "fs";
 import { extname, join, relative, resolve } from "path";
 import { describe, expect, it } from "vitest";
+import { hasExtension } from "../helpers/source-extensions.js";
 
 /**
  * Pins the scope of the config-mutation race accepted in
@@ -41,10 +42,20 @@ import { describe, expect, it } from "vitest";
  *      in the repo (a list that churns with unrelated work and would be
  *      rubber-stamped), this pins who can reach the *resource* instead.
  *    - `DURABLE_WRITER_FILES` — every file in `src/` that durably writes at
- *      all. Only the FILE SET is pinned, never the per-file counts: counts
- *      outside the scan roots would churn on unrelated work and get
- *      rubber-stamped, while a brand-new durable-writer file is both rare and
- *      exactly the shape of a config writer smuggled outside `SCAN_ROOTS`.
+ *      all, **and how many times**. This said the opposite until 2026-08-28:
+ *      only the file set was pinned, on the reasoning that counts outside the
+ *      scan roots would churn on unrelated work and get rubber-stamped.
+ *
+ *      That reasoning is not wrong, and the cost is accepted rather than
+ *      denied — an unrelated PR adding a durable write to one of these files
+ *      now has to update a number. What changed is the discovery of what
+ *      presence-only cannot see: review of ADR-034 Unit 7c pointed out that a
+ *      write ADDED to a file already on the list is invisible, because the file
+ *      was always there. A refactor that moves a module is precisely where such
+ *      a write can ride along, and "this move is a rename, not a change of set"
+ *      was a claim no test in this repo could check. The churn is the price of
+ *      that check, and the failure message names the two distinct causes so the
+ *      update is a decision rather than a rubber stamp.
  *    - `TOKEN_FILE_REFERENCES` — the load-bearing invariant behind the
  *      acceptance: the server's accepted-token source is written independently
  *      of every config writer, which is what keeps a lost update from
@@ -193,36 +204,48 @@ const CONFIG_API_REFERENCES = [
 ] as const;
 
 /**
- * Every file under `src/` that performs a durable write, by any idiom. Pinned
- * as a SET, not by count: a new entry here is a new durable writer somewhere in
- * the tree, which is how a config writer would arrive outside `SCAN_ROOTS`.
- * Most entries have nothing to do with this acceptance and never will — that is
- * fine, the question this asks is only "is this new, and does it write a config
- * file?".
+ * Every file under `src/` that performs a durable write, by any idiom, keyed
+ * `file` -> call count.
+ *
+ * **Pinned by COUNT, not merely as a set.** It was a bare array, and review of
+ * ADR-034 Unit 7c found what that could not see: a durable write ADDED to a
+ * file already on the list is invisible, because presence never changed. The
+ * per-file counts in `WRITER_SITES` above are the enforcement mechanism inside
+ * `SCAN_ROOTS`, and everything outside them had presence only — so "this move
+ * is a rename, not a change of set" was a sentence no test could check. It can
+ * now: move a file, keep its count, and this stays green; smuggle a write in
+ * with the move and it does not.
+ *
+ * Most entries have nothing to do with the #1599 acceptance and never will.
+ * The questions this asks are "is this writer new?" and "did an existing one
+ * grow?" — a new FILE means a config writer could have arrived outside
+ * `SCAN_ROOTS`; a bumped COUNT means an existing file gained a write. Either
+ * one needs a deliberate answer, and if it writes a Claude config file, a
+ * deliberate widening in `docs/security.md`'s accepted entry.
  */
-const DURABLE_WRITER_FILES = [
-  "src/cli/rotate-token.ts",
-  "src/cli/uninstall-scrub.ts",
-  "src/client/tabs/TabItem.svelte",
-  "src/server/annotations/store.ts",
-  "src/server/auth/token-store.ts",
-  "src/server/file-io/doc-backup.ts",
-  "src/server/file-io/index.ts",
-  "src/server/integrations/apply.ts",
-  "src/server/integrations/install-claude-cli.ts",
-  "src/server/integrations/storage.ts",
-  "src/server/launcher/supervisor.ts",
-  "src/server/license/license-state.ts",
-  "src/server/mcp/annotations.ts",
-  "src/server/mcp/convert.ts",
-  "src/server/mcp/document-service.ts",
-  "src/server/mcp/document.ts",
-  "src/server/mcp/docx-apply.ts",
-  "src/server/mcp/file-opener.ts",
-  "src/server/models/store.ts",
-  "src/server/session/manager.ts",
-  "src/server/version-check.ts",
-] as const;
+const DURABLE_WRITER_FILES: Record<string, number> = {
+  "src/cli/rotate-token.ts": 4,
+  "src/cli/uninstall-scrub.ts": 2,
+  "src/client/tabs/TabItem.svelte": 1,
+  "src/server/annotations/store.ts": 5,
+  "src/server/auth/token-store.ts": 3,
+  "src/server/file-io/doc-backup.ts": 2,
+  "src/server/file-io/index.ts": 3,
+  "src/server/integrations/apply.ts": 10,
+  "src/server/integrations/install-claude-cli.ts": 2,
+  "src/server/integrations/storage.ts": 8,
+  "src/server/launcher/supervisor.ts": 1,
+  "src/server/license/license-state.ts": 2,
+  "src/server/mcp/annotations.ts": 1,
+  "src/server/mcp/convert.ts": 1,
+  "src/server/mcp/document-service.ts": 4,
+  "src/server/mcp/document.ts": 1,
+  "src/server/mcp/docx-apply.ts": 4,
+  "src/server/documents/reload-family.ts": 2,
+  "src/server/models/store.ts": 1,
+  "src/server/session/manager.ts": 2,
+  "src/server/version-check.ts": 1,
+};
 
 /**
  * Every file under `src/` whose EXECUTABLE code reaches the auth-token file
@@ -259,9 +282,18 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 function sourceFiles(root: string): string[] {
-  return walk(join(ROOT, root))
-    .filter((f) => SCANNED_EXTENSIONS.some((e) => f.endsWith(e)) && !f.includes(".test."))
-    .sort();
+  return (
+    walk(join(ROOT, root))
+      // `hasExtension` lowercases before comparing. `endsWith` did not, so
+      // `Bypass.TS` was excluded from ALL FOUR derivation surfaces below while
+      // the control beneath them — which lowercases via `extname` — counted it
+      // as a known `.ts` and reported clean. A control that passes against the
+      // defect it exists to catch is worse than no control, because it stops
+      // the next reader looking. (`endsWith` was also the wrong shape twice
+      // over: `x.mts` ends with `ts`.)
+      .filter((f) => hasExtension(f, SCANNED_EXTENSIONS) && !f.includes(".test."))
+      .sort()
+  );
 }
 
 function codeMatches(repoPath: string, pattern: RegExp): boolean {
@@ -339,6 +371,82 @@ describe("config-writer set (#1599 accepted risk)", () => {
     expect(present.has(".ts"), "src/ holds no .ts at all — the walk is broken").toBe(true);
   });
 
+  it("no scanned file imports a durable-write or config API under an alias", () => {
+    // All three idiom regexes above match a BARE identifier, so
+    //
+    //     import { writeFileSync as ws } from "node:fs";
+    //     ws(configPath, data);
+    //
+    // reaches disk without firing any of them, and the file drops out of
+    // `WRITER_SITES`, `DURABLE_WRITER_FILES` and the token-file pin at once.
+    // It is cheaper than the evasions the docblock does name (native fds,
+    // child processes), and a lint auto-fix resolving a name collision could
+    // introduce it entirely by accident — which is the case that worries me,
+    // because nobody would be looking.
+    //
+    // Refusing the alias beats teaching three regexes to chase it: chasing
+    // would also have to keep the per-file COUNTS right under the alias, and a
+    // count that silently drifts is what the census exists to prevent. This
+    // way a legitimate alias fails here and earns an exemption in the open.
+    const NAMES = [
+      "atomicWrite",
+      "rename",
+      "renameSync",
+      "writeFile",
+      "writeFileSync",
+      "appendFile",
+      "appendFileSync",
+      "copyFile",
+      "copyFileSync",
+      "cp",
+      "cpSync",
+      "createWriteStream",
+      "open",
+      "openSync",
+      "applyConfig",
+      "applyConfigWithToken",
+      "removeConfigEntries",
+      "readConfigForMutation",
+      "claudeCodeConfigPath",
+      "claudeDesktopConfigPath",
+      "writeTokenToFile",
+      "readTokenFile",
+    ];
+    const aliased: string[] = [];
+    // `sourceFiles("src")` rather than the `all` binding: that one lives in the
+    // repo-wide describe below, and this check belongs beside the writer set it
+    // protects. Same derivation, same case-folding fix, wider than SCAN_ROOTS.
+    for (const file of sourceFiles("src")) {
+      const body = stripComments(readFileSync(join(ROOT, file), "utf-8"));
+      for (const name of NAMES) {
+        const re = new RegExp(`(?<![\\w$])${name}\\s+as\\s+([\\w$]+)`);
+        const m = re.exec(body);
+        if (m) aliased.push(`${file}: ${name} as ${m[1]}`);
+      }
+    }
+    expect(
+      aliased,
+      `a durable-write or config API is imported under an alias: ${aliased}. Every ` +
+        `idiom regex in this file matches the ORIGINAL name, so the aliased call is ` +
+        `invisible to all four derivation surfaces. Use the real name, or add the ` +
+        `alias to the idiom regexes AND re-derive the counts.`,
+    ).toEqual([]);
+  });
+
+  it("the alias check would actually see one", () => {
+    // The positive control. `aliased` being empty is also what a broken loop
+    // looks like, and an empty-result assertion cannot tell those apart —
+    // which is the exact shape that has produced a false clean bill of health
+    // twice in this file's history.
+    const re = new RegExp(`(?<![\\w$])writeFileSync\\s+as\\s+([\\w$]+)`);
+    expect(re.test('import { writeFileSync as ws } from "node:fs";')).toBe(true);
+    expect(re.test('import { writeFileSync } from "node:fs";')).toBe(false);
+    expect(
+      re.test('import { safeWriteFileSync as ws } from "./x.js";'),
+      "a longer name that merely ENDS with the API name is a different function",
+    ).toBe(false);
+  });
+
   it("keeps the scan roots pinned — narrowing them would hide writers", () => {
     expect([...SCAN_ROOTS]).toEqual(["src/server/integrations", "src/cli"]);
   });
@@ -368,15 +476,21 @@ describe("resource surfaces (repo-wide, because the writer scan is directory-sco
     ).toEqual([...CONFIG_API_REFERENCES].sort());
   });
 
-  it("pins every file in src/ that durably writes, so a writer cannot hide outside the scan roots", () => {
-    const derived = all.filter((f) => durableWriteSites(f) > 0).sort();
+  it("pins every file in src/ that durably writes, and how many times, so a writer cannot hide outside the scan roots", () => {
+    const derived: Record<string, number> = {};
+    for (const f of all.sort()) {
+      const n = durableWriteSites(f);
+      if (n > 0) derived[f] = n;
+    }
     expect(
       derived,
-      `the set of durable-writer files changed. If a NEW one writes a Claude config ` +
-        `file, it is outside SCAN_ROOTS where the writer set above cannot see it \u2014 ` +
-        `widen the accepted scope in docs/security.md deliberately. If it writes ` +
-        `something else, just add it here.`,
-    ).toEqual([...DURABLE_WRITER_FILES].sort());
+      `the durable-writer census changed. A NEW FILE means a writer appeared outside ` +
+        `SCAN_ROOTS, where the writer set above cannot see it. A CHANGED COUNT means an ` +
+        `existing file gained or lost a durable write \u2014 which is what a move can ` +
+        `smuggle, since the file's presence never changes. Either way: if it writes a ` +
+        `Claude config file, widen the accepted scope in docs/security.md deliberately. ` +
+        `If it writes something else, update the number here.`,
+    ).toEqual(DURABLE_WRITER_FILES);
   });
 
   it("pins exactly which modules reach the auth-token file", () => {
@@ -385,7 +499,36 @@ describe("resource surfaces (repo-wide, because the writer scan is directory-sco
     expect(derived).toContain("src/server/auth/token-store.ts");
   });
 
-  it("no config writer touches the auth-token file", () => {
+  it("the extension filter is case-insensitive, so a rename cannot hide a writer", () => {
+    // The negative control the fix above needs. The `scans every file type`
+    // spec below CANNOT serve as one: it lowercases independently, so it
+    // passed against the defect and would pass against a half-fix too.
+    expect(hasExtension("src/x/Bypass.TS", SCANNED_EXTENSIONS)).toBe(true);
+    expect(hasExtension("src/x/w.MJS", SCANNED_EXTENSIONS)).toBe(true);
+    expect(hasExtension("src/x/notes.md", SCANNED_EXTENSIONS)).toBe(false);
+    expect(
+      hasExtension("src/x/foo.not-ts", SCANNED_EXTENSIONS),
+      "a suffix match is not an extension match",
+    ).toBe(false);
+  });
+
+  it("no unsynchronised config WRITER touches the auth-token file", () => {
+    // Scope, stated because the previous failure message overstated it and a
+    // message that claims more than the filter checks misdirects the reader who
+    // is trusting it at 2am.
+    //
+    // "Config writer" here means a file that durably WRITES a Claude config —
+    // `WRITER_SITES` marked covered, or anything under the integrations
+    // directory. It deliberately does NOT mean `CONFIG_API_REFERENCES`, which is
+    // the wider "reaches the config-mutation API" surface and includes readers.
+    //
+    // Review of Unit 7c proposed folding that surface in. Measured before
+    // accepting: doing so fails immediately on `src/cli/rotate-token.ts` and
+    // `src/server/index.ts`, which sit in BOTH lists by design — rotating a
+    // token legitimately reads a config path and writes the token file, and
+    // that is the feature, not the race. #1599's acceptance is bounded by the
+    // config-write race specifically, so widening the filter here would turn a
+    // correct guard red and teach the next person to weaken it.
     const offenders = all
       .filter((f) => codeMatches(f, TOKEN_FILE_API))
       .filter(
@@ -394,9 +537,12 @@ describe("resource surfaces (repo-wide, because the writer scan is directory-sco
       );
     expect(
       offenders,
-      `a config writer now reaches the auth-token file: ${offenders}. This VOIDS the ` +
-        `acceptance recorded in docs/security.md — a lost update could then resurrect ` +
-        `a live credential, not merely strand a dead one. Reopen #1599.`,
+      `a durable CONFIG WRITER now also reaches the auth-token file: ${offenders}. This ` +
+        `VOIDS the acceptance recorded in docs/security.md — a lost update could then ` +
+        `resurrect a live credential, not merely strand a dead one. Reopen #1599. (This ` +
+        `check covers durable writers only; a file that merely REFERENCES the config API ` +
+        `is pinned by the CONFIG_API_REFERENCES spec above, and two entries legitimately ` +
+        `appear in both.)`,
     ).toEqual([]);
   });
 

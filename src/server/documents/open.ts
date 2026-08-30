@@ -28,26 +28,31 @@
  * has initialized — but inert is not absent, and the next person to add a
  * top-level `const` here is the one who finds out. Its load-bearing edge is
  * `autosave.ts`'s import of `autoSaveAllToDisk`; moving that function out of
- * document-service is what would actually break it, and that is Unit 7c/8's
- * to do, not this unit's.
+ * document-service is what would actually break it, and that is Unit 8's to
+ * do. Unit 7c did NOT break it — it added a second edge of the same shape
+ * (`reload-family.ts → document-service.ts`), so there are now two, and they
+ * leave together or not at all.
  *
  * `tests/docs/documents-boundary.test.ts` cannot see this cycle and is not
  * meant to: its acyclicity check is deliberately scoped to cycles contained
  * *entirely within* `documents/`, and this one routes through `mcp/`. What
- * that suite does hold is the edge itself, written down in FAN_OUT as the one
- * `documents/ → document-service` import — so the cycle is visible as its
- * parts even though nothing calls it a cycle.
+ * that suite does hold is the edges themselves, written down in FAN_OUT as
+ * the two `documents/ → document-service` imports — so the cycle is visible as
+ * its parts even though nothing calls it a cycle. (This said "the one edge"
+ * until Unit 7c added the second, seven lines after the paragraph above
+ * announced it. A comment block that contradicts itself is worse than either
+ * half alone, because a reader has no way to tell which half was updated.)
  *
- * **What is still in `mcp/file-opener.ts`, and why.** Three entries remain,
- * and they are the reload family, not the open family:
- * `reloadDocumentFromMarkdown` (`routes/document-reload.ts`),
- * `restoreDocumentFromBackup` (`routes/backups.ts`, `mcp/docx-apply.ts`) and
- * `resolveExternalConflict` (`routes/external-conflict.ts`). Each replaces the
- * content of an ALREADY-open document; none of them opens one. Unit 7c decides
- * where they land. Until then `tests/server/documents-open.test.ts` names the
- * four call sites that may reach them (`restoreDocumentFromBackup` has two),
- * so a fifth reaching back into file-opener is a test failure rather than a
- * quiet regrowth.
+ * **The reload family is the sibling, not part of this module.** Three
+ * entries live in `documents/reload-family.ts`: `reloadDocumentFromMarkdown`
+ * (`routes/document-reload.ts`), `restoreDocumentFromBackup`
+ * (`routes/backups.ts`, `mcp/docx-apply.ts`) and `resolveExternalConflict`
+ * (`routes/external-conflict.ts`). Each replaces the content of an
+ * ALREADY-open document; none of them opens one, which is why they are not
+ * here. Unit 7c moved them out of `mcp/file-opener.ts` and deleted that
+ * module. `tests/server/documents-open.test.ts` still names the four call
+ * sites that may reach them (`restoreDocumentFromBackup` has two), so a fifth
+ * consumer is a test failure rather than a quiet regrowth.
  *
  * Two corrections to what this header used to claim, both load-bearing enough
  * that a reader acting on them would be wrong:

@@ -694,7 +694,7 @@ export function createStore(docHash: string, meta: { filePath: string }): DocSto
 
 /**
  * Flush any pending write for this doc and clear its TRANSIENT bookkeeping.
- * Wired into the file-opener's close path so long-running servers opening
+ * Wired into the document close path (`mcp/document-service.ts`) so long-running servers opening
  * many docs don't accumulate stale entries in the module-level maps.
  *
  * Asymmetric cleanup (intentional):

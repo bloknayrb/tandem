@@ -13,10 +13,27 @@
  *     `routes/external-conflict.ts`.
  *
  * They are grouped by what they do, not by where they were written: each one
- * decides what the on-disk truth is and makes the Y.Doc match it. Unit 7c
- * decides where they finally live; until then this module exists to hold them
- * and nothing else, which is why it no longer imports the open pipeline it used
- * to contain.
+ * decides what the on-disk truth is and makes the Y.Doc match it.
+ *
+ * **Unit 7c settled where they live, and this is it.** They were the last
+ * three entries in `mcp/file-opener.ts`; that module is now deleted, with no
+ * re-export shim, because nothing under `src/` needs one and a shim no code
+ * imports is a second name for one thing.
+ *
+ * Two placements were rejected, and the reasons are the contract:
+ *
+ *   - **Not `watcher.ts`.** All three sit on the far side of the watcher's
+ *     concurrent-reload guard. Folding them in would turn `acquireReloadGuard`
+ *     / `releaseReloadGuard` from a published contract with named external
+ *     callers into an implementation detail nobody outside that file can see
+ *     used wrongly. The watcher owns the watch loop and the disk-initiated
+ *     `reloadFromDisk`; these three are CALLER-initiated and acquire its guard.
+ *   - **Not `open.ts`.** Replacing the content of an already-open document is
+ *     the opposite of opening one; merging them would undo Unit 7a.
+ *
+ * `tests/server/documents-open.test.ts` names the four modules that may import
+ * this one and the symbols each may take, so a fifth consumer is a test failure
+ * rather than a quiet regrowth.
  */
 
 import fs from "fs/promises";
@@ -28,25 +45,25 @@ import {
 } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
-import { wireAnnotationStore } from "../documents/annotation-wiring.js";
-import { ensureAutoSave } from "../documents/autosave.js";
-import { readPendingConflict } from "../documents/conflict.js";
-import { clearAndReload } from "../documents/populate.js";
-import { broadcastOpenDocs, getOpenDocs } from "../documents/registry.js";
+import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
+import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
+import { atomicWrite, atomicWriteBuffer } from "../file-io/index.js";
+import { recordSelfWrite, suppressNextChange } from "../file-watcher.js";
+import { canSaveToDisk, saveDocumentToDisk } from "../mcp/document-service.js";
+import { pushNotification } from "../notifications.js";
+import { resolveAppDataDir } from "../platform.js";
+import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
+import { wireAnnotationStore } from "./annotation-wiring.js";
+import { ensureAutoSave } from "./autosave.js";
+import { readPendingConflict } from "./conflict.js";
+import { clearAndReload } from "./populate.js";
+import { broadcastOpenDocs, getOpenDocs } from "./registry.js";
 import {
   acquireReloadGuard,
   isReloadInProgress,
   releaseReloadGuard,
   reloadFromDisk,
-} from "../documents/watcher.js";
-import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
-import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
-import { atomicWrite, atomicWriteBuffer } from "../file-io/index.js";
-import { recordSelfWrite, suppressNextChange } from "../file-watcher.js";
-import { pushNotification } from "../notifications.js";
-import { resolveAppDataDir } from "../platform.js";
-import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
-import { canSaveToDisk, saveDocumentToDisk } from "./document-service.js";
+} from "./watcher.js";
 
 /**
  * Replace an open document's content from a user-supplied markdown string

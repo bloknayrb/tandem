@@ -46,7 +46,7 @@ vi.mock("../../src/server/auth/middleware.js", async (importOriginal) => {
 vi.mock("../../src/server/mcp/document-service.js", () => ({ getCurrentDoc }));
 vi.mock("../../src/server/file-io/doc-backup.js", () => ({ listDocBackups }));
 vi.mock("../../src/server/platform.js", () => ({ resolveAppDataDir }));
-vi.mock("../../src/server/mcp/file-opener.js", () => ({
+vi.mock("../../src/server/documents/reload-family.js", () => ({
   restoreDocumentFromBackup,
   reloadDocumentFromMarkdown,
   resolveExternalConflict,

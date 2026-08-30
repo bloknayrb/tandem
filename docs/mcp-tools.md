@@ -1022,7 +1022,7 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 
 The channel routes and `GET /api/events` are documented in [Channel API](#channel-api-real-time-push) below.
 
-`/api/open` and `/api/upload` converge with `tandem_open` in `file-opener.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
+`/api/open` and `/api/upload` converge with `tandem_open` in `documents/open.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
 
 ### GET /api/info
 

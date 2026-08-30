@@ -108,7 +108,7 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
         audience: "outbound" as const,
         range: result.range,
         // Only attach a CRDT-anchored relRange when fully resolved. Matches
-        // the reloadFromDisk pattern (file-opener.ts) — a partial anchor
+        // the reloadFromDisk pattern (documents/watcher.ts) — a partial anchor
         // leaks a half-resolved RelativePosition that downstream code would
         // re-anchor anyway via the lazy-attach path in refreshRange.
         ...(result.fullyAnchored ? { relRange: result.relRange } : {}),
