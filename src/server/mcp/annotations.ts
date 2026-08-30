@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { withBrowser, withMcp } from "../../shared/origins.js";
+import { withBrowser } from "../../shared/origins.js";
 import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
@@ -59,42 +59,6 @@ function makeOnLossy(hash: string | undefined): (event: SanitizationEvent) => vo
 /** Get the annotation replies Y.Map for a document. */
 function getRepliesMap(ydoc: Y.Doc): Y.Map<unknown> {
   return ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
-}
-
-/** Remove the annotation and its orphaned replies. Tombstones are recorded
- *  automatically by the sync observer on the Y.Map delete event (see #695). */
-export function removeAnnotationById(
-  ydoc: Y.Doc,
-  annotationsMap: Y.Map<unknown>,
-  filePath: string,
-  annotationId: string,
-): { ok: true; id: string } | { ok: false; code: string; error: string } {
-  void filePath;
-  const existing = annotationsMap.get(annotationId) as Annotation | undefined;
-  if (!existing) {
-    return { ok: false, code: "NOT_FOUND", error: `Annotation ${annotationId} not found` };
-  }
-
-  // **No note guard here, deliberately — see `YDocStore.removeAnnotation`.**
-  // This helper is shared: `mcp/routes/remove-annotation.ts` calls it for the
-  // BROWSER, and that is how a user archives their own note
-  // (`AnnotationCardActions.svelte`'s `archive-btn`). ADR-027 governs what
-  // Claude may do, not what the user may do to their own note, so a guard at
-  // this altitude breaks the primary interaction on every note card — silently,
-  // because the client only logs the failure.
-
-  withMcp(ydoc, () => {
-    annotationsMap.delete(annotationId);
-    const repliesMap = getRepliesMap(ydoc);
-    const toDelete: string[] = [];
-    repliesMap.forEach((value, key) => {
-      const reply = value as { annotationId?: string };
-      if (reply && reply.annotationId === annotationId) toDelete.push(key);
-    });
-    for (const key of toDelete) repliesMap.delete(key);
-  });
-
-  return { ok: true, id: annotationId };
 }
 
 /**
@@ -680,12 +644,33 @@ export function registerAnnotationTools(server: McpServer): void {
     gatedTool("tandem_removeAnnotation", async ({ id, documentId }) => {
       const store = getDocumentStore(documentId);
       if (!store) return noDocumentError();
+      // ADR-035 Unit 8e: the store delegates to `AnnotationLifecycle.remove`,
+      // and this handler is the thin adapter translating arms to envelopes.
+      // Arm-by-arm rather than a flattened `NOT_FOUND` — collapsing them made
+      // the error code and the error text disagree, and the `INVALID_ARGUMENT`
+      // envelope is what `tandem_editAnnotation` and `tandem_resolveAnnotation`
+      // already return for a note.
       const result = store.removeAnnotation(id);
-      // `result.code`, not a hardcoded `NOT_FOUND` — the store's ADR-027 guard
-      // answers `INVALID_ARGUMENT`, and collapsing every arm to NOT_FOUND made
-      // the error text and the error code disagree.
-      if (!result.ok) return mcpError(result.code, result.error);
-      return mcpSuccess({ removed: true, id });
+      switch (result.kind) {
+        case "ok":
+          return mcpSuccess({ removed: true, id });
+        case "not-found":
+          return mcpError("NOT_FOUND", `Annotation ${id} not found`);
+        case "invalid-note":
+          return mcpError(
+            "INVALID_ARGUMENT",
+            `Annotation ${id} is a private note and cannot be removed by Claude`,
+          );
+        default: {
+          // A new `RemoveResult` arm errors HERE, naming it. Without this the
+          // switch falls off the end and the only complaint is `gatedTool`
+          // rejecting the inferred `Promise<… | undefined>` — a message that
+          // never mentions the arm or this switch, and whose obvious fix is a
+          // generic `default` that swallows it.
+          const unhandled: never = result;
+          return mcpError("INTERNAL", `unhandled remove outcome: ${JSON.stringify(unhandled)}`);
+        }
+      }
     }),
   );
 

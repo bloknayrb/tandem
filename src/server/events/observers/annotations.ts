@@ -60,6 +60,29 @@ export function makeAnnotationsObserver(deps: {
     map: annotationsMap,
     pushEvent,
     derive: ({ key, action, value: raw, oldValue: oldRaw }): TandemEvent | undefined => {
+      // **Before the narrow, because a delete has nothing to narrow.**
+      // `makePerKeyChangeObserver` passes `value: undefined` for a delete, which
+      // `narrowForChannel` refuses with `reason: "missing"` — noteworthy by
+      // `isNoteworthyRefusal`, which excludes only `"note"` — so without this
+      // line every removal prints `refused to project … no such annotation`. It
+      // does not today only because `withMcp` is in `CHANNEL_SKIP` and the
+      // observer returns before reaching here; Unit 8e moved the browser's
+      // Archive onto `withBrowser`, which is deliberately NOT in that set, and
+      // that would have made the most ordinary user action in the product emit
+      // a corruption-shaped log line.
+      //
+      // Nothing is lost by returning early: there is no `annotation:removed`
+      // member of the event union at all (`shared/events/types.ts`), so a delete
+      // has never been projectable and every branch below re-tests `add` or
+      // `update` anyway.
+      //
+      // **An allowlist, not `action === "delete"`**, matching
+      // `observers/replies.ts`'s `action !== "add"`. A denylist covers the one
+      // kind that exists today and lets a future one fall straight through to
+      // `narrowForChannel(undefined)` — reproducing the exact refusal line this
+      // check exists to prevent, in a change that never mentions it.
+      if (action !== "add" && action !== "update") return undefined;
+
       // ADR-035: the single narrow. Sanitizes, then requires
       // `audience === "outbound" && type !== "note"`. Everything below builds
       // its payload from `ann`, and the builders take `ChannelEligible` — so a

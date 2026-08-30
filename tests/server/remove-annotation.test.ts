@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
+import { removeAnnotationRecord } from "../../src/server/annotations/lifecycle.js";
 import {
   createStore,
   resetForTesting as resetStoreForTesting,
@@ -9,11 +10,7 @@ import {
   registerAnnotationObserver,
   resetForTesting,
 } from "../../src/server/annotations/sync.js";
-import {
-  addReplyToAnnotation,
-  createAnnotation,
-  removeAnnotationById,
-} from "../../src/server/mcp/annotations.js";
+import { addReplyToAnnotation, createAnnotation } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { useTmpAnnotationsEnvWithFlag } from "../helpers/annotation-store-env.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
@@ -47,7 +44,7 @@ afterEach(() => {
   while (observerCleanups.length) observerCleanups.pop()?.();
 });
 
-describe("removeAnnotationById", () => {
+describe("removeAnnotationRecord", () => {
   it("deletes annotation from map and records tombstone", () => {
     const ydoc = setupDoc("rm-fn-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -55,9 +52,16 @@ describe("removeAnnotationById", () => {
     bindObserver(ydoc, filePath);
     const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "test note");
 
-    const result = removeAnnotationById(ydoc, map, filePath, id);
+    // No wrapper argument: the BROWSER default. That is the case worth pinning
+    // for the tombstone, because Unit 8e moved the browser's Archive off `mcp`
+    // and the ledger's indifference to origin is what makes that safe —
+    // `sync.ts` records from the Y.Map delete event, before its `DURABLE_SKIP`
+    // check. #700 moved it there in the first place because browser-origin
+    // deletes and stale-tab CRDT merges bypassed the old explicit call, which
+    // is also what retired this function's `filePath` parameter.
+    const result = removeAnnotationRecord(ydoc, id);
 
-    expect(result.ok).toBe(true);
+    expect(result).toStrictEqual({ kind: "ok", id });
     expect(map.has(id)).toBe(false);
 
     const tombstones = getTombstones(docHash(filePath));
@@ -76,21 +80,17 @@ describe("removeAnnotationById", () => {
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);
 
-    removeAnnotationById(ydoc, map, "/tmp/rm-fn-2.md", id);
+    removeAnnotationRecord(ydoc, id);
 
     expect(repliesMap.size).toBe(0);
   });
 
   it("returns NOT_FOUND for non-existent annotation", () => {
     const ydoc = setupDoc("rm-fn-3", "Hello world");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
-    const result = removeAnnotationById(ydoc, map, "/tmp/rm-fn-3.md", "fake_id");
+    const result = removeAnnotationRecord(ydoc, "fake_id");
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe("NOT_FOUND");
-    }
+    expect(result).toStrictEqual({ kind: "not-found", id: "fake_id" });
   });
 
   it("does not delete replies belonging to other annotations", () => {
@@ -105,7 +105,7 @@ describe("removeAnnotationById", () => {
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);
 
-    removeAnnotationById(ydoc, map, "/tmp/rm-fn-4.md", id1);
+    removeAnnotationRecord(ydoc, id1);
 
     expect(repliesMap.size).toBe(1);
     let remainingAnnotationId: string | undefined;

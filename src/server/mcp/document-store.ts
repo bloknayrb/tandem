@@ -13,7 +13,7 @@
  * `YDocStore` is the one implementation. It is intentionally a thin wrapper:
  * it delegates to the same standalone helpers the handlers used before
  * (`createAnnotation`, `collectAnnotations`, `addReplyToAnnotation`,
- * `removeAnnotationById`, `refreshAllRanges`) and, for the families that have
+ * `refreshAllRanges`) and, for the families that have
  * migrated, to {@link DocumentStore.lifecycle}. That delegation is the parity
  * contract: the underlying Y.Map structures and origin tagging (`withMcp`,
  * ADR-031) are byte-identical to the pre-refactor behavior. The helpers stay
@@ -56,6 +56,7 @@ import {
   type EditResult,
   type LifecycleResult,
   type MintExtras,
+  type RemoveResult,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { refreshAllRanges, refreshRange } from "../positions.js";
@@ -65,7 +66,6 @@ import {
   collectAnnotations,
   collectRepliesForAnnotation,
   createAnnotation,
-  removeAnnotationById,
 } from "./annotations.js";
 import { extractText } from "./document-model.js";
 import { getCurrentDoc } from "./document-service.js";
@@ -142,10 +142,8 @@ export interface DocumentStore {
   /** Dismiss a pending annotation (pending → dismissed). */
   dismissAnnotation(id: string): LifecycleResult<Annotation>;
 
-  /** Remove an annotation and its orphaned replies. */
-  removeAnnotation(
-    id: string,
-  ): { ok: true; id: string } | { ok: false; code: string; error: string };
+  /** Remove an annotation and its orphaned replies, on CLAUDE's behalf. */
+  removeAnnotation(id: string): RemoveResult;
 
   // --- Annotations: read ---
 
@@ -289,30 +287,22 @@ export class YDocStore implements DocumentStore {
   /**
    * Remove an annotation on CLAUDE's behalf.
    *
-   * **The ADR-027 note guard lives here rather than in `removeAnnotationById`,
-   * and the altitude is the whole point.** That helper is shared with
-   * `mcp/routes/remove-annotation.ts`, the browser's own Archive action — a
-   * guard down there refuses the user access to their own note. This method's
-   * only production caller is the `tandem_removeAnnotation` handler, so it is
-   * the MCP-only chokepoint.
+   * **The ADR-027 note guard moved down to `AnnotationLifecycle.remove` in Unit
+   * 8e, and the altitude did not change with it.** That member is Claude's
+   * remove; the shared mechanism it calls, `removeAnnotationRecord`, is what the
+   * browser's Archive action reaches, and a guard down THERE refuses the user
+   * access to their own note (#1680). This method's only production caller is
+   * the `tandem_removeAnnotation` handler, so the store remains an MCP-only
+   * seam — it just no longer holds the branch itself.
    *
    * Remove is the destructive path: it deletes the annotation AND sweeps every
-   * reply keyed to it, which for a note is a private thread. `getAnnotation`
-   * sanitizes through the store's real relay, so a stored legacy `flag` — a
-   * note only once normalized — is caught, and the relay is deduped rather than
-   * the unconditional `console.error` an undefined docHash produces.
+   * reply keyed to it, which for a note is a private thread. The sink is passed
+   * rather than defaulted, so the guard's sanitize reports a legacy shape
+   * through the store's deduped relay rather than the unconditional
+   * `console.error` an undefined docHash produces.
    */
-  removeAnnotation(
-    id: string,
-  ): { ok: true; id: string } | { ok: false; code: string; error: string } {
-    if (this.getAnnotation(id)?.type === "note") {
-      return {
-        ok: false,
-        code: "INVALID_ARGUMENT",
-        error: `Annotation ${id} is a private note and cannot be removed by Claude`,
-      };
-    }
-    return removeAnnotationById(this.ydoc, this.map, this.filePath, id);
+  removeAnnotation(id: string): RemoveResult {
+    return this.lifecycle.remove(id, (e) => this.onLossy(e));
   }
 
   getAnnotation(id: string): Annotation | undefined {

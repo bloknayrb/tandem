@@ -57,8 +57,8 @@
  */
 
 import type * as Y from "yjs";
-import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { withMcp } from "../../shared/origins.js";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import { withBrowser, withMcp } from "../../shared/origins.js";
 import type { AnchoredRangeResult } from "../../shared/positions/index.js";
 import { type OnLossy, type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationStatus, AnnotationType } from "../../shared/types.js";
@@ -107,6 +107,53 @@ export type LifecycleResult<T> =
   | { kind: "not-found"; id: string }
   | { kind: "invalid-note" }
   | { kind: "not-pending"; id: string; currentStatus: AnnotationStatus };
+
+/**
+ * What the shared MECHANISM can answer, and the base {@link RemoveResult} widens.
+ *
+ * **Declared as the positive base rather than as
+ * `Exclude<RemoveResult, {kind: "invalid-note"}>`, and the direction is the
+ * whole point.** Subtraction is evaluated against whatever `RemoveResult`
+ * happens to be, so a fourth arm added later flows silently into the
+ * mechanism's type, the route's `kind !== "ok"` widens with it, and a generic
+ * 404 absorbs it. That is the objection two reviewers raised against the
+ * ternary this replaced, relocated into a type operator. Widening upward means
+ * a new arm cannot reach the mechanism unless someone edits THIS type on
+ * purpose.
+ *
+ * **That argument is one-directional, and a third reviewer found the other
+ * direction by compiling it.** An arm added to `RemoveResult` cannot reach the
+ * mechanism — verified, one error, at the MCP handler. But an arm added *here*
+ * is one the mechanism can actually produce (a future `read-only`, `locked`,
+ * `already-removed`), and it flowed into `routes/remove-annotation.ts`'s single
+ * non-`ok` branch to become a hardcoded 404 with the wrong code and the wrong
+ * message, with no compile error anywhere. I had aimed my own killing argument
+ * only at the alternative. The `never` anchors at both call sites are what make
+ * the claim true rather than incidentally true.
+ */
+export type RemoveRecordResult = { kind: "ok"; id: string } | { kind: "not-found"; id: string };
+
+/**
+ * The remove family's result: the mechanism's outcomes plus the one arm only
+ * the ADR-027 guard produces.
+ *
+ * **Not a `LifecycleResult<Annotation>`, for the reason {@link EditResult}
+ * already establishes in this file**: `not-pending` cannot occur on a remove —
+ * every status is removable, and that is the point of Archive — so widening
+ * would hand every caller a `switch` arm that is dead by construction. All
+ * three arms here are reachable.
+ *
+ * No `data` payload either. Accept and dismiss return the transitioned record
+ * because the caller reports its new status; there is no post-state to report
+ * for a record that no longer exists, and returning the pre-delete copy would
+ * invite a caller to treat it as live.
+ *
+ * **The third bespoke result family in this file**, and {@link EditResult}
+ * labels the convergence onto a shared `LifecycleError` base as *deferred, not
+ * rejected*. That deferral covers this one; a fourth family is where it should
+ * stop being deferred.
+ */
+export type RemoveResult = RemoveRecordResult | { kind: "invalid-note" };
 
 /**
  * Tagged outcome of {@link AnnotationLifecycle.create}.
@@ -328,6 +375,27 @@ export interface AnnotationLifecycle {
   accept(id: string, onLossy: OnLossy): LifecycleResult<Annotation>;
   /** Dismiss a pending annotation (pending → dismissed). See {@link accept}. */
   dismiss(id: string, onLossy: OnLossy): LifecycleResult<Annotation>;
+
+  /**
+   * Remove an annotation on **Claude's** behalf, and every reply keyed to it.
+   *
+   * **This member is the ADR-027 chokepoint; {@link removeAnnotationRecord} is
+   * not.** The mechanism below is shared with the browser's Archive action, and
+   * a note guard down there refuses the user access to their own note — #1680
+   * is that bug, and `tests/server/adr027-note-write-guards.test.ts` pins both
+   * halves. Adding the guard here rather than threading an `actor` argument
+   * into the mechanism is deliberate: an argument moves the privacy *condition*
+   * out of the file holding the guard, where a default value or a
+   * request-derived value defeats it with no structural edit. Reaching the
+   * unguarded path instead requires a route to change which symbol it imports,
+   * which reads as what it is in a diff.
+   *
+   * `onLossy` is required for the same reason it is on accept and dismiss, and
+   * it is not decorative here: the guard reads the SANITIZED type, so a stored
+   * legacy `flag` — a note only once normalized — is refused, and the migration
+   * that discovery performs is what the sink reports.
+   */
+  remove(id: string, onLossy: OnLossy): RemoveResult;
 }
 
 /**
@@ -375,6 +443,7 @@ export function createAnnotationLifecycle(ydoc: Y.Doc): AnnotationLifecycle {
     editPending: (id, patch, onLossy) => editPendingAnnotation(id, ydoc, map, patch, onLossy),
     accept: (id, onLossy) => transitionPending(id, ydoc, map, "accepted", onLossy),
     dismiss: (id, onLossy) => transitionPending(id, ydoc, map, "dismissed", onLossy),
+    remove: (id, onLossy) => removeForClaude(id, ydoc, map, onLossy),
   };
 }
 
@@ -676,4 +745,126 @@ export function dismissPending(
   onLossy: OnLossy,
 ): LifecycleResult<Annotation> {
   return transitionPending(id, ydoc, map, "dismissed", onLossy);
+}
+
+/**
+ * Delete an annotation and sweep every reply keyed to it, in ONE transaction.
+ *
+ * **No ADR-027 note guard, deliberately** — see {@link AnnotationLifecycle.remove},
+ * which is where it lives. This function is what the browser's Archive button
+ * reaches (`mcp/routes/remove-annotation.ts`), and the user removing their own
+ * private note is exactly what ADR-027 permits.
+ *
+ * `actor` picks the ADR-031 wrapper, and it is a **closed union rather than the
+ * bare `(doc, fn) => void` parameter `addReplyToAnnotation` takes**. That shape
+ * accepts any callable — `(_d, fn) => fn()` performs a completely untagged
+ * write, violating Critical Rule 2 while staying invisible to
+ * `npm run audit:origins`, whose walk sees a local `wrap(...)` rather than a
+ * helper name. Naming the actor keeps a literal `withMcp` / `withBrowser` in
+ * this file, where the audit can see both.
+ *
+ * It defaults to `"browser"` so an omission mislabels nothing — the direction
+ * that matters, since the mislabel this unit fixes was a user action tagged as
+ * Claude's.
+ *
+ * **An `actor` argument here, having rejected one on
+ * {@link AnnotationLifecycle.remove}**: the two dimensions fail differently. A
+ * wrong origin is a hygiene defect with no behavioural consequence today (both
+ * origins persist, and the observer skips deletes either way). A wrong guard
+ * decision is a privacy bypass. Only the second is worth making structurally
+ * unreachable rather than merely explicit.
+ *
+ * `map` is derived rather than taken. Passing a doc and its annotations map as
+ * two parameters is a correspondence nobody can enforce — a caller can hand
+ * over a map belonging to a different document — and this function already
+ * derives the replies map from the doc two lines down.
+ *
+ * One transaction, not two: the replies are only meaningful with their parent,
+ * and a split would let a peer observe the record gone with its thread still
+ * present. **That is a claim about interleaving, not about atomicity, and the
+ * difference is worth stating** — `Y.transact` has no rollback, so a throw
+ * inside the callback KEEPS whatever was already applied, reaching exactly the
+ * split state described above. Only `Y.Map.delete` and `forEach` run in here,
+ * so the window is theoretical; what is on offer is that no *observer* sees the
+ * split, not that a throw cannot produce it. The sweep also collects keys before deleting: Yjs does not specify what
+ * mutating a Y.Map inside its own `forEach` does, and an unspecified
+ * traversal is not something to build a delete on.
+ *
+ * It does NOT call `recordTombstone`. `annotations/sync.ts` records one from the
+ * Y.Map delete event, before its `DURABLE_SKIP` check and unconditionally across
+ * origins — #700 moved it there in 2026-05-16 precisely because browser-origin
+ * deletes and stale-tab CRDT merges bypassed the explicit call. That is also
+ * what retired this function's old `filePath` parameter, which existed only to
+ * compute the tombstone's `docHash` and had been `void`ed ever since.
+ */
+export function removeAnnotationRecord(
+  ydoc: Y.Doc,
+  annotationId: string,
+  actor: "browser" | "mcp" = "browser",
+): RemoveRecordResult {
+  const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  if (!map.has(annotationId)) return { kind: "not-found", id: annotationId };
+
+  const wrap = actor === "mcp" ? withMcp : withBrowser;
+  wrap(ydoc, () => {
+    map.delete(annotationId);
+    const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    const orphaned: string[] = [];
+    // A reply whose `annotationId` is unreadable is skipped here — and nothing
+    // else ever collects it. Replies come from one wide-open `set` in
+    // `mcp/annotations.ts`, no reaper walks this map for parentless entries,
+    // `snapshot()`'s `normalizeReply` folds it into an aggregate count naming no
+    // id, and the client groups by `annotationId` so it renders under nothing.
+    // It then syncs to every peer indefinitely. Counting is the cheapest thing
+    // that makes it findable at all.
+    let unreadable = 0;
+    repliesMap.forEach((value, key) => {
+      const reply = value as { annotationId?: unknown } | null;
+      if (typeof reply !== "object" || reply === null || typeof reply.annotationId !== "string") {
+        unreadable++;
+        return;
+      }
+      if (reply.annotationId === annotationId) orphaned.push(key);
+    });
+    if (unreadable > 0) {
+      console.warn(
+        `[Tandem] reply sweep for ${annotationId}: ${unreadable} unreadable annotationId(s), left in place`,
+      );
+    }
+    for (const key of orphaned) repliesMap.delete(key);
+  });
+
+  return { kind: "ok", id: annotationId };
+}
+
+/**
+ * {@link AnnotationLifecycle.remove}'s body: the guard, then the mechanism under
+ * `withMcp`.
+ *
+ * It answers `not-found` itself rather than deferring to
+ * {@link removeAnnotationRecord}'s check, because it has to read the record
+ * anyway to sanitize it, and answering here keeps the guard's own precondition
+ * — "there is a record, and it is not a note" — legible in one place.
+ *
+ * **Similar, not duplicated**, and the difference is worth not collapsing: the
+ * mechanism tests `map.has(id)` while this tests `!raw` after a `get`. A stored
+ * falsy value diverges — this path answers `not-found`, the mechanism proceeds
+ * to delete. Unreachable through any writer today; the point is that they are
+ * two checks, not one written twice.
+ */
+function removeForClaude(
+  id: string,
+  ydoc: Y.Doc,
+  map: Y.Map<unknown>,
+  onLossy: OnLossy,
+): RemoveResult {
+  const raw = map.get(id) as RawAnnotation | undefined;
+  if (!raw) return { kind: "not-found", id };
+
+  // Sanitized type, not `raw.type`. A stored legacy `flag` normalizes to a note,
+  // and a raw check lets exactly that record through — the same ordering the
+  // resolve and edit guards use.
+  if (sanitizeAnnotation(raw, onLossy).type === "note") return { kind: "invalid-note" };
+
+  return removeAnnotationRecord(ydoc, id, "mcp");
 }

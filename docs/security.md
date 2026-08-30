@@ -158,7 +158,7 @@ has them is not thereby safe to expose. `docs/decisions.md` ADR-046 states the s
 ## Privacy
 
 - **Notes are user-private (ADR-027).** Annotations with `type: "note"` are stripped from every MCP tool response and never appear in channel events. The AI cannot read them. **Read-side confidentiality is not the whole of the rule, and until #1680 it was the only half implemented** — the AI could still *write* to a note it never read. See the fix below.
-- **The AI cannot resolve or remove a note BY ID (#1680), which is narrower than "cannot destroy notes" — see the bound below.** `tandem_resolveAnnotation` and `tandem_removeAnnotation` refuse a note with `INVALID_ARGUMENT`, matching `tandem_editAnnotation`. The remove guard lives on `YDocStore.removeAnnotation`, **not** on the shared `removeAnnotationById` helper, because the browser's own Archive action calls that helper — ADR-027 governs what Claude may do, not what the user may do to their own note. **One honest gap: the `INVALID_ARGUMENT` code reaching the MCP wire is not pinned by a test.** The tool handler used to flatten every failure to `NOT_FOUND` and now forwards `result.code`, but there is no MCP-handler harness in `tests/`, so that half rests on reading the handler rather than running it — a revert would leave the code and the message disagreeing with nothing red. **The guard sits after `sanitizeAnnotation`, not before it**, in all three: a stored legacy `flag` is a note only once normalized, so a raw-type check lets one through. On resolve it also sits *before* the pending check, so a resolved note answers `invalid-note` rather than `not-pending` — the latter would confirm the note exists and is merely resolved. Pinned by `tests/server/adr027-note-write-guards.test.ts`.
+- **The AI cannot resolve or remove a note BY ID (#1680), which is narrower than "cannot destroy notes" — see the bound below.** `tandem_resolveAnnotation` and `tandem_removeAnnotation` refuse a note with `INVALID_ARGUMENT`, matching `tandem_editAnnotation`. The remove guard lives on `AnnotationLifecycle.remove` (reached through `YDocStore.removeAnnotation`), **not** on the shared `removeAnnotationRecord` mechanism, because the browser's own Archive action calls that mechanism directly — ADR-027 governs what Claude may do, not what the user may do to their own note. **One honest gap: the `INVALID_ARGUMENT` code reaching the MCP wire is not pinned by a test.** The tool handler used to flatten every failure to `NOT_FOUND` and now maps the lifecycle's arms to envelopes one by one, but there is no MCP-handler harness in `tests/`, so that half rests on reading the handler rather than running it — a revert would leave the code and the message disagreeing with nothing red. **The guard sits after `sanitizeAnnotation`, not before it**, in all three: a stored legacy `flag` is a note only once normalized, so a raw-type check lets one through. On resolve it also sits *before* the pending check, so a resolved note answers `invalid-note` rather than `not-pending` — the latter would confirm the note exists and is merely resolved. Pinned by `tests/server/adr027-note-write-guards.test.ts`.
 - **What the AI sees:** the document content you open, selections you hold (subject to dwell-time gating), annotations you create or that the AI itself creates, and chat messages sent through the Tandem sidebar.
 - **What the AI doesn't see:** files you haven't opened, notes (per above), the auth token, and any environment variables that aren't surfaced through MCP tools.
 - **Read routes scrub absolute paths for non-loopback callers.** `GET /api/sessions` and `GET /api/backups` strip paths to their basename, so a LAN caller holding a token learns filenames but not the directory layout of the machine (#1121). `GET /api/document/raw` is loopback-only outright. All path-taking routes reject UNC, enforce an extension allowlist and a 50 MB limit, and write atomically.
@@ -297,7 +297,7 @@ exist.
 
 `tandem_editAnnotation` gained a note guard in Unit 8c. Its two siblings did
 not. `transitionPending` (resolve) flipped a note's status and bumped its `rev`
-under `withMcp`; `removeAnnotationById` deleted the note **and swept every reply
+under `withMcp`; the remove path deleted the note **and swept every reply
 keyed to it** — a private thread — with neither a note guard nor a status guard.
 
 **Why "the AI can't enumerate notes" was not the mitigation it looked like.**
@@ -339,12 +339,23 @@ coordinate-repair exception, but it means "the AI never writes to a note" was
 never literally true either.
 
 **And the guard's placement was wrong in the first draft, in the direction that
-matters.** It went into `removeAnnotationById`, which `mcp/routes/remove-annotation.ts`
-also calls — so the user's own Archive button on their own note started
-returning 400, silently (the client only logs), while a toast told them their
-note "cannot be removed by Claude". Two reviewers found it independently. A
-privacy guard placed at the wrong altitude does not fail closed; it fails at the
-user.
+matters.** It went into the shared remove mechanism, which
+`mcp/routes/remove-annotation.ts` also calls — so the user's own Archive button
+on their own note started returning 400, silently (the client only logs), while
+a toast told them their note "cannot be removed by Claude". Two reviewers found
+it independently. A privacy guard placed at the wrong altitude does not fail
+closed; it fails at the user.
+
+**ADR-035 Unit 8e moved the mechanism without moving the guard**, and the
+placement now has two controls rather than a comment. The mechanism is
+`removeAnnotationRecord` in `annotations/lifecycle.ts`; the guard is on
+`AnnotationLifecycle.remove`, which is the only thing `YDocStore.removeAnnotation`
+calls. Reaching the unguarded path from a new MCP-side caller therefore needs a
+new import rather than an edit, and `annotation-remove-seam.test.ts` pins the
+importer set to exactly two modules. It also drives
+`handleRemoveAnnotation` itself — the previous suite pinned only that the
+*mechanism* does not refuse a note, which stays green if the route is rewired to
+the guarded member, i.e. through this exact regression in a new location.
 
 **The transferable lesson: a read filter and a write guard are different
 controls, and "they can't see it" does not imply "they can't touch it."** ADR-027
