@@ -221,6 +221,14 @@ Closed since v0.22.1 — kept here because the mechanism is load-bearing for the
 Still open from the v0.21.0 security gate, whose RC re-run failed on 2026-08-05 with two HIGH:
 
 - **[#1609](https://github.com/bloknayrb/tandem/issues/1609) -- three unscreened path reads reached by `runDoctor`, belonging to no remediation unit.** `TANDEM_CLAUDE_CMD` -> `statSync` (win32) and the `homedir()`-derived `~/.local/bin` probe, both in `src/shared/integrations/detect-claude-cli.ts`, plus the `PATH`-walk `statSync` in `src/shared/integrations/path-lookup.ts`. Same class as #1417's eighth site and reachable the same way, through `/api/diagnostics` and `tandem_diagnostics`. Enumerated in the #1417 narrative below; listed here because that narrative is not where a maintainer looks for what is open.
+- **[#1666](https://github.com/bloknayrb/tandem/issues/1666) — `tandem_open`'s resolver applies no root containment, and the decision is open.** `resolveAndValidatePath` (`src/server/documents/open.ts:615-673`) screens the UNC / extended-length / device-namespace prefix on the raw, resolved and `realpath`'d forms, enforces `SUPPORTED_EXTENSIONS` and a 50 MB cap — and contains the result to no directory. The file holds **zero** `allowedRoots` calls and **zero** `assertPathSafe` calls; that is the verified property, re-derived at `dd87fc1` after #1661 relocated the function (it was cited in #1654's earlier analysis as `file-opener.ts:685-743`, which does not resolve — that file is 450 lines and does not define it).
+
+  **The capability, stated at its real size.** An MCP client can `tandem_open` any existing allowlisted file at any absolute path on the machine, `tandem_edit` it and `tandem_save` it: arbitrary *content* into any existing `.md` / `.txt` / `.html` / `.docx`. It cannot **create** a file — the resolver ends in `fs.stat`, which throws ENOENT — so the bound is "replace the contents of an existing allowlisted file", not "write anywhere". **What makes it loud is the first step, not every step:** `tandem_open` opens a visible tab, and `tandem_edit` / `tandem_save` then require an already-open document (`requireDocument`) and act inside it, live-syncing to the editor. So there is exactly one observable moment and it is at the start — which is worth stating precisely, because "every step is visible" would wrongly imply a user who missed the open still gets a second chance to notice.
+
+  **Why it is filed rather than left as a property.** It is not a fresh vector and nothing about it changed. It is here because **#1654's acceptance leans on it**: the residual there is called *marginal* precisely because a caller who reaches those tools can already do the larger thing through open+edit+save. An acceptance whose bound rests on an untracked code condition can silently invert — if this resolver gains containment for an unrelated reason, #1654's residual stops being marginal and becomes net-new, and nothing would notice. #1654's revisit criterion names exactly this condition; this entry is its tracked home.
+
+  **The decision is Bryan's and it is open.** Either (i) **accept**, recording that the extension allowlist plus "cannot create" is the intended bound for a local-first editor whose job is opening the user's files — a file-open tool that refuses files outside a root is a different product; or (ii) **contain**, which needs a root set that means something. `assertPathSafe`'s default `[homedir(), tmpdir()]` contains essentially every document a user would open, so it is not the answer, and a real containment would need an opened-workspace notion Tandem does not have. Not the same class as #1609, which is unscreened path *reads*. Until it is decided it stays in this list, because an unexamined property is not an accepted finding.
+
 - **#1292 — the last HIGH.** It gates on the BYO-models flag flip rather than on the release, so no changelog entry closes it. Verify the issue state, not the changelog — and read the state below before repeating either of the two wrong summaries this finding has already produced.
 
   **"The v0.21.0 fix closed it" is wrong**, and the issue was very nearly closed on it. #1317's two caps (`MAX_STREAMED_CHARS` 64 KiB on the sink, `MAX_STREAMED_RESPONSE_BYTES` 4 MiB on the wire) *bounded* the amplification; they did not remove it. `updateClaudeChatMessage` still re-`set` the whole message value on every flush, so the cost stayed `O(n²)` — measured 2026-08-07 against a live ctrl `Y.Doc`: a 64 KiB reply cost **27 MB** of broadcast, and because the sink's cap resets on `onTurnEnd({ hadToolCalls: true })` while `maxTurns` defaults to 12, a model looping on tool calls reached **~86 MB** at 12 turns (worst case ~325 MB against the 5-minute deadline) — silently, with no truncation marker and no abort.
@@ -289,7 +297,7 @@ avoid. It is equally not `Closed since`, whose entries all narrate a real code
 change. Every entry here carries who accepted it, when, its tracked issue, the
 bound in full, and the conditions that void the acceptance.
 
-- **[#1654](https://github.com/bloknayrb/tandem/issues/1654) — caller-named write destinations are not root-confined. ACCEPTED 2026-08-28 (narrowed, not contained); revisit by 2027-02-28. CodeQL alert 16 stays OPEN.** Four sites take a caller-supplied write path: `tandem_convertToMarkdown`'s `outputPath` (`src/server/mcp/convert.ts`), `tandem_exportAnnotations`'s `outputPath` (`src/server/mcp/annotations.ts`), the `.docx` `backupPath` (`docx-apply.ts:119`, `path.resolve`d) and Save-As's `targetPath`. None is root-confined and none became so.
+- **[#1654](https://github.com/bloknayrb/tandem/issues/1654) — caller-named write destinations are not root-confined. ACCEPTED 2026-08-28 (narrowed, not contained); revisit by 2027-02-28, tracked as [#1671](https://github.com/bloknayrb/tandem/issues/1671) because #1654 itself is closed and a date in a closed issue surfaces in no `gh issue list`. CodeQL alert 16 stays OPEN.** Four sites take a caller-supplied write path: `tandem_convertToMarkdown`'s `outputPath` (`src/server/mcp/convert.ts`), `tandem_exportAnnotations`'s `outputPath` (`src/server/mcp/annotations.ts`), the `.docx` `backupPath` (`docx-apply.ts:119`, `path.resolve`d) and Save-As's `targetPath`. None is root-confined and none became so.
 
   **The target is one class, not four.** An earlier draft claimed anything able to create `*.md` at an arbitrary path reaches `~/.claude/CLAUDE.md`, a project `CLAUDE.md`, `.claude/agents/*.md` and `~/.claude/skills/*/SKILL.md`. Three of those do not hold: `SKILL.md` needs a new subdirectory and `atomicWrite` (`file-io/index.ts:349-353`) does no `mkdir`; `.claude/agents/*.md` puts only the frontmatter `description` in the system prompt and needs valid YAML; `~/.claude/CLAUDE.md` normally already exists, so `findAvailablePath` (`convert.ts:21-53`) refuses it. **What survives is a project `CLAUDE.md` written into a repo that lacks one** — full body, auto-loaded, no user action beyond starting a session there. Creation, not overwrite, is the capability it needs.
 
@@ -340,12 +348,20 @@ bound in full, and the conditions that void the acceptance.
 location.** Move the code and the scanner retires the alert and opens a new one
 at the new line, carrying none of the dismissal or its reasoning. This is not
 hypothetical: Unit 7a ([#1645](https://github.com/bloknayrb/tandem/pull/1645),
-unmerged at the time of writing — `openFileByPath` and `resolveAndValidatePath`
-are still in `src/server/mcp/file-opener.ts` on master) moves the open pipeline
-into `src/server/documents/`, and that opened eight fresh `js/path-injection`
-alerts on its PR branch against sinks whose master-side twins had just been
-dismissed. Each matched its twin at the same **column**, which is what made the
-mapping checkable rather than assumed; it is recorded in that PR's comments.
+**merged 2026-08-28**) moved the open pipeline into `src/server/documents/`,
+and that opened eight fresh `js/path-injection` alerts on its PR branch against
+sinks whose master-side twins had just been dismissed. Each matched its twin at
+the same **column**, which is what made the mapping checkable rather than
+assumed; it is recorded in that PR's comments.
+
+**The prose describing that move went stale the same way the dismissals do,
+which is the argument for this section rather than a footnote to it.** This
+paragraph called #1645 unmerged and placed `openFileByPath` on master for a
+month after both stopped being true, and the entry below cited that same
+retired name as the caller of `resolveAndValidatePath` — a symbol that has
+since existed nowhere in `src/`. A reader checking the dismissal against the
+source would have found no such function and had no way to tell whether the
+screen had moved or been deleted.
 
 So the reasoning lives here, keyed by **sink and argument** rather than by
 number. Re-dismissing after a move should be a lookup against this list plus a
@@ -353,13 +369,14 @@ check that the named screen still runs first — not a fresh investigation, and
 not a reflex "it was dismissed before".
 
 - **Paths reaching a file open through `resolveAndValidatePath`.** It is called
-  unconditionally at the head of `openFileByPath` and screens UNC/extended-length
+  from exactly one place — unconditionally at the head of `openFromDisk`
+  (`src/server/documents/open.ts:314-323`) — and screens UNC/extended-length
   prefixes on the raw, resolved *and* `realpath`'d forms, enforces the extension
   allowlist and the size cap. **Bound: screened, but NOT confined to any
   directory** — opening any allowlisted-extension file by absolute path is the
   product's intended behaviour, so a containment-shaped alert here is a policy
-  question — see "Caller-named write destinations are not root-confined" under
-  Open findings — not a false positive.
+  question — tracked as #1666 under Open findings, and undecided — not a
+  false positive.
 - **Paths from the server-owned `OpenDoc` registry, and rename targets.** Request
   input contributes only a document-id map key, `path.basename`'d before lookup;
   a rename target is pinned to the existing file's own directory and extension.
