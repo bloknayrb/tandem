@@ -121,55 +121,52 @@ export async function convertToMarkdown(
     if (resolvedReason) {
       throw Object.assign(new Error(resolvedReason), { code: "INVALID_PATH" });
     }
-    // If they gave a directory, append the filename. Use realpath to follow
-    // symlinked export dirs and re-check the resolved location's prefix.
+    // `outputPath` names a DIRECTORY, never a file. The leaf is always derived
+    // from the source document (`<docBasename>.md`), so a caller cannot name the
+    // file that gets created.
+    //
+    // This is the #1654 narrowing. The surviving target of that finding is a
+    // project `CLAUDE.md` written into a repo that lacks one, and creation --
+    // not overwrite -- is the capability it needs: `findAvailablePath` below
+    // refuses to clobber, but the file being absent is precisely the case.
+    // Screening the extension does not help, because `.md` is the extension a
+    // legitimate conversion emits. Removing the caller-named leaf is what
+    // closes it, and it costs nothing real: the default and directory forms
+    // both already derived the name, and no first-party caller passes
+    // `outputPath` at all.
+    //
+    // The directory must EXIST. There is deliberately no "create the parent"
+    // branch and no caller-named-leaf branch: with the leaf derived, the
+    // ENOENT-on-leaf case this block used to canonicalize cannot arise.
+    // A symlinked output directory still resolves through `realpath`, which is
+    // what keeps the #1650 canonicalization guarantee alive here.
+    let realDir: string;
     try {
-      const real = await fs.realpath(resolvedOutput);
-      const realReason = rejectUnsafeWindowsPrefix(real);
-      if (realReason) {
-        throw Object.assign(new Error(realReason), { code: "INVALID_PATH" });
-      }
-      const stat = await fs.stat(real);
-      if (stat.isDirectory()) {
-        const baseName = path.basename(docState.filePath, path.extname(docState.filePath));
-        resolvedOutput = path.join(real, `${baseName}.md`);
-      } else {
-        resolvedOutput = real;
-      }
+      realDir = await fs.realpath(resolvedOutput);
     } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") throw err; // Only swallow "doesn't exist"
-      // ENOENT here means the LEAF does not exist yet — which is the normal
-      // case for an export, and was therefore the one case this whole block
-      // never ran on. Swallowing it left `resolvedOutput` uncanonicalized and
-      // skipped the post-realpath prefix re-check above, so a symlinked or
-      // junctioned parent was never followed on exactly the create-new path
-      // the check exists to guard. Canonicalize the parent instead.
-      //
-      // The parent, not the deepest existing ancestor: `atomicWrite` does no
-      // mkdir, so an export into a missing directory already fails, and
-      // walking further up has no caller.
-      const parent = path.dirname(resolvedOutput);
-      try {
-        const realParent = await fs.realpath(parent);
-        const parentReason = rejectUnsafeWindowsPrefix(realParent);
-        if (parentReason) {
-          throw Object.assign(new Error(parentReason), { code: "INVALID_PATH" });
-        }
-        // Safe to rejoin: `resolvedOutput` is already `path.resolve`d, so its
-        // basename is normalised and separator-free and cannot reintroduce the
-        // prefix just screened off `realParent`.
-        resolvedOutput = path.join(realParent, path.basename(resolvedOutput));
-      } catch (parentErr: unknown) {
-        if ((parentErr as NodeJS.ErrnoException).code !== "ENOENT") throw parentErr;
-        // The parent is missing too. This already failed downstream in
-        // `atomicWrite`, but as a raw ENOENT surfacing as a 500 / INTERNAL —
-        // a caller-fixable path mistake reported as a server fault.
-        throw Object.assign(new Error(`Output directory does not exist: ${parent}`), {
-          code: "FILE_NOT_FOUND",
-        });
-      }
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      // A caller-fixable path mistake, not a server fault. FILE_NOT_FOUND
+      // rather than INVALID_PATH so an AI caller creates the directory instead
+      // of reformatting a path that was never malformed.
+      throw Object.assign(new Error(`Output directory does not exist: ${resolvedOutput}`), {
+        code: "FILE_NOT_FOUND",
+      });
     }
+    const realReason = rejectUnsafeWindowsPrefix(realDir);
+    if (realReason) {
+      throw Object.assign(new Error(realReason), { code: "INVALID_PATH" });
+    }
+    const stat = await fs.stat(realDir);
+    if (!stat.isDirectory()) {
+      throw Object.assign(
+        new Error(
+          "outputPath must be an existing directory. The .md filename is derived from the source document and cannot be chosen by the caller.",
+        ),
+        { code: "INVALID_PATH" },
+      );
+    }
+    const baseName = path.basename(docState.filePath, path.extname(docState.filePath));
+    resolvedOutput = path.join(realDir, `${baseName}.md`);
   } else {
     const baseName = path.basename(docState.filePath, path.extname(docState.filePath));
     resolvedOutput = path.join(sourceDir, `${baseName}.md`);

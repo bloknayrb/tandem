@@ -1083,7 +1083,9 @@ export function registerDocumentTools(server: McpServer): void {
       outputPath: z
         .string()
         .optional()
-        .describe("Custom output path for the .md file (defaults to same directory as the .docx)"),
+        .describe(
+          "Custom output DIRECTORY for the .md file (must already exist; defaults to the .docx's own directory). The filename is always derived from the source document and cannot be chosen.",
+        ),
     },
     withErrorBoundary("tandem_convertToMarkdown", async ({ documentId, outputPath }) => {
       // path.basename eliminates directory components so CodeQL does not trace
