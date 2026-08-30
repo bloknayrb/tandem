@@ -316,10 +316,18 @@ export interface AnnotationLifecycle {
    * programme exists to stop.
    */
   editPending(id: string, patch: EditPatch, onLossy: OnLossy): EditResult;
-  /** Accept a pending annotation (pending → accepted). */
-  accept(id: string): LifecycleResult<Annotation>;
-  /** Dismiss a pending annotation (pending → dismissed). */
-  dismiss(id: string): LifecycleResult<Annotation>;
+  /**
+   * Accept a pending annotation (pending → accepted).
+   *
+   * `onLossy` is required for the same reason it is on {@link editPending}: a
+   * sink with a default is a sink a caller can neuter without saying so. Unit
+   * 8d wired the real relay here; before that this path sanitized into
+   * `() => {}` and every legacy-shape migration performed on an accept was
+   * invisible.
+   */
+  accept(id: string, onLossy: OnLossy): LifecycleResult<Annotation>;
+  /** Dismiss a pending annotation (pending → dismissed). See {@link accept}. */
+  dismiss(id: string, onLossy: OnLossy): LifecycleResult<Annotation>;
 }
 
 /**
@@ -365,8 +373,8 @@ export function createAnnotationLifecycle(ydoc: Y.Doc): AnnotationLifecycle {
       annotation: mintAnnotation(ydoc, map, "comment", input.anchored, input.content, input.extras),
     }),
     editPending: (id, patch, onLossy) => editPendingAnnotation(id, ydoc, map, patch, onLossy),
-    accept: (id) => transitionPending(id, ydoc, map, "accepted"),
-    dismiss: (id) => transitionPending(id, ydoc, map, "dismissed"),
+    accept: (id, onLossy) => transitionPending(id, ydoc, map, "accepted", onLossy),
+    dismiss: (id, onLossy) => transitionPending(id, ydoc, map, "dismissed", onLossy),
   };
 }
 
@@ -494,23 +502,28 @@ function transitionPending(
   ydoc: Y.Doc,
   map: Y.Map<unknown>,
   nextStatus: "accepted" | "dismissed",
+  onLossy: OnLossy,
 ): LifecycleResult<Annotation> {
   const raw = map.get(id);
   if (raw === undefined) return { kind: "not-found", id };
 
   // Sanitize first so the status check + result arm both see normalized
-  // fields. `sanitizeAnnotation` accepts a `RawAnnotation` shape (which
-  // permits legacy fields); the lifecycle uses a no-op sink for migration
-  // events because docHash-keyed relay belongs upstream of the lifecycle
-  // (scoped to the doc context, not the per-mutation seam).
+  // fields. `sanitizeAnnotation` accepts a `RawAnnotation` shape, which permits
+  // legacy fields.
   //
-  // Unit 8b deliberately left this a no-op. Wiring the real
-  // `relaySanitizationEvent` here would change accept/dismiss behavior —
-  // accepting a legacy `flag` would begin emitting a migration log line and
-  // consuming a dedup slot — inside a PR whose subject is create, which would
-  // make it non-cleanly revertible against Unit 8d. The upgrade belongs to 8d,
-  // where accept/dismiss is the subject and can be tested.
-  const ann = sanitizeAnnotation(raw as RawAnnotation, () => {});
+  // **Unit 8d replaced the `() => {}` that stood here.** Until then, accepting a
+  // legacy-shaped record silently performed the migration and reported nothing:
+  // the sink was a no-op, so `flag→note`, `question→comment`, a malformed
+  // suggestion JSON and an unknown type all normalized without a log line.
+  //
+  // **This emits even when the write is then refused**, and that ordering is
+  // worth stating because it reads backwards. A stored `flag` sanitizes to a
+  // note, fires `flag-to-note` HERE, and only then hits the ADR-027 guard below
+  // and returns `invalid-note` — so the migration is reported for a transition
+  // that never happened. That is correct: the event describes what sanitize
+  // read, not what the lifecycle wrote, and the relay is an observability sink
+  // rather than an audit of mutations.
+  const ann = sanitizeAnnotation(raw as RawAnnotation, onLossy);
 
   // ADR-027 (#1680): notes are user-private. Claude must not resolve them.
   //
@@ -632,18 +645,35 @@ function editPendingAnnotation(
   return { kind: "ok", annotation: updated };
 }
 
+/**
+ * Pre-ADR-035 accept entry point.
+ *
+ * **No production caller reaches these two** — `YDocStore` goes through
+ * {@link createAnnotationLifecycle}, and a census of `src/` finds only these
+ * definitions. They survive because the seam census
+ * (`tests/server/annotation-create-seam-census.test.ts`) names them and roughly
+ * thirty specs drive them; retiring them is Unit 8j's, along with
+ * {@link mintAnnotation}.
+ *
+ * `onLossy` is required here too rather than defaulted, so a test driving this
+ * export cannot accidentally be measuring a different sanitize contract from
+ * the one production runs.
+ */
 export function acceptPending(
   id: string,
   ydoc: Y.Doc,
   map: Y.Map<unknown>,
+  onLossy: OnLossy,
 ): LifecycleResult<Annotation> {
-  return transitionPending(id, ydoc, map, "accepted");
+  return transitionPending(id, ydoc, map, "accepted", onLossy);
 }
 
+/** Pre-ADR-035 dismiss entry point. See {@link acceptPending}. */
 export function dismissPending(
   id: string,
   ydoc: Y.Doc,
   map: Y.Map<unknown>,
+  onLossy: OnLossy,
 ): LifecycleResult<Annotation> {
-  return transitionPending(id, ydoc, map, "dismissed");
+  return transitionPending(id, ydoc, map, "dismissed", onLossy);
 }
