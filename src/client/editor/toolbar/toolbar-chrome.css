@@ -1,0 +1,47 @@
+/* Shared toolbar chrome for the formatting bar and the selection popup.
+ *
+ * Scope discipline — this file carries RESTING METRICS ONLY:
+ *
+ *   - no :hover and no state rules;
+ *   - no transition and no animation;
+ *   - every conflict with a consumer resolves on specificity, never on order.
+ *
+ * The argument for each — a global state rule outranking the scoped component
+ * rule it would override, the reduced-motion guard's same-file/after-the-rule
+ * requirement, and the E2E suite's structural blindness to bundle order — is
+ * written out once in tests/design-system-impl/toolbar-chrome-cascade.test.ts,
+ * which is also what enforces it.
+ *
+ * Consumers import this directly (the morphTiming.css idiom); Vite dedupes.
+ * Metrics follow the production pill recipe in
+ * docs/design-system-impl/preview/1.11-selection-toolbar-options.html.
+ */
+
+.tandem-toolbar-ctl {
+  height: 26px;
+  min-width: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--tandem-fg-muted);
+  border-radius: var(--tandem-r-pill);
+  font-family: inherit;
+  font-size: var(--tandem-text-sm);
+  font-weight: 500;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+/* 18px at `margin: 0 3px` is the pill recipe's separator. The popup already
+   used these values; the bar was at 16px/0 2px and converges here. */
+.tandem-toolbar-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--tandem-border);
+  margin: 0 3px;
+  flex-shrink: 0;
+}

@@ -27,7 +27,9 @@ Use these instead of raw px literals in client surfaces:
 - **Spacing:** `--tandem-space-1..7`
 - **Radius:** `--tandem-r-1..5`, `--tandem-r-pill`, `--tandem-r-circle`
 - **Type:** `--tandem-text-2xs..3xl`
-- **Elevation:** `--tandem-shadow-1..4`
+- **Elevation:** `--tandem-shadow-1..4`, plus `--tandem-shadow-inset` (the toggle
+  PRESSED state — see *Light vs dark derivation*; it is the only shadow token with
+  a per-theme override)
 - **Stacking:** `--tandem-z-base..tooltip`
 
 ## Highlights
@@ -38,6 +40,7 @@ CSS-facing highlight fills use `--tandem-highlight-yellow|green|blue|pink`. Keep
 
 - **Light mode:** `--tandem-success-bg`, `--tandem-warning-bg`, and `--tandem-error-bg` are derived via `color-mix(in srgb, var(--tandem-{color}) 10%, var(--tandem-surface))`. `--tandem-accent-bg` (`#eef2ff`) and `--tandem-info-bg` (`#eff6ff`) use hand-picked hex. `--tandem-suggestion-bg` uses `color-mix` like the other status families.
 - **Dark mode:** all `*-bg` tokens use hand-coded saturated hex (e.g. `#052e16`, `#451a03`, `#450a0a`). `color-mix` produces washed-out surfaces against the dark neutral; hand-picked values read as intentionally colored.
+- **`--tandem-shadow-inset`** is the one shadow token that varies by theme, and the reason is not the one people guess. **Measure it on gamma-encoded sRGB, not linear light** — CSS composites `box-shadow` alpha in the encoded space, and compositing in linear space under-reports the band by ~16%. Measured ΔL\* over each theme's `--tandem-surface-sunk`: light `0.16` → **13.69**, warm → **13.07**, dark `0.45` → **3.85**. Warm **inherits the light value deliberately** — a fixed alpha is near-constant in contrast across light bases, so warm lands within 0.6 ΔL\* of light despite a much darker sunk surface. That near-constancy holds only while luminance sits well above the `0.05` in the contrast formula, which is why **dark** is the case that breaks: a black inset saturates on a near-black base (still only 5.68 at `0.75` alpha), so its override is a floor, not a fix. The band is the sole separator between pressed and hover on `.toolbar-btn` and `.fr-scope-pill`, so its strength is load-bearing.
 
 ## Color utilities
 

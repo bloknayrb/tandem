@@ -40,6 +40,8 @@ import {
 } from "./selection-toolbar";
 // A26 morph (#798): shared timing tokens + reduced-motion token-zeroing.
 import "../../panels/morphTiming.css";
+// Shared toolbar resting metrics (.tandem-toolbar-ctl / .tandem-toolbar-sep).
+import "./toolbar-chrome.css";
 
 interface Props {
   editor: TiptapEditor | null;
@@ -129,6 +131,37 @@ let annotateMode = $state(false);
 let annotationIntent = $state<AnnotationComposerIntent>(null);
 let forcedComposer = $state(false);
 
+/**
+ * "Is the user still working inside this popup?" — the question the guards
+ * below are actually asking. They used to ask the narrower
+ * `document.activeElement === textareaEl`, which answers "is the caret in the
+ * composer" and reports a user who has merely moved to a sibling control as
+ * having left.
+ *
+ * That gap is reachable and it silently ate typed drafts. **Tab is the case no
+ * `preventDefault` can close** — the footer controls bind `handleComposerKeyDown`
+ * precisely BECAUSE a keyboard user can Tab onto them (see the comment on the
+ * audience segments), and there is no mousedown to prevent. The pointer routes
+ * are just as open: `.composer-card`'s own padding, the `.composer-actions`
+ * strip, the commit button, and any click outside the popup that is not in the
+ * editor (`onOutsideEvent` is wired to `["scroll"]` only, so nothing dismisses).
+ * A disabled commit button is a fifth: browsers suppress mousedown on a disabled
+ * form control AND do not bubble it, so no ancestor handler can ever see it —
+ * measured in Chromium, not assumed. "Stop the blur" is therefore not achievable
+ * as an invariant; asking the right question is.
+ *
+ * Once focus is off the textarea by any of those routes, a scroll reached
+ * `dismissPopup()`, which sets `annotationText = ""`. Type a note, press Tab,
+ * scroll to re-read the passage — draft gone, no undo. That is pinned by
+ * "a typed draft survives Tab-ing out of the textarea and scrolling".
+ *
+ * `toolbarEl` is null while the popup is unmounted, which is the correct answer
+ * (nobody is working in a popup that is not there).
+ */
+function popupHasFocus(): boolean {
+  return !!toolbarEl?.contains(document.activeElement);
+}
+
 // A28 dwell + entrance (#798).
 // `dwellSatisfied` gates `showPopup`: the popup appears only after the selection
 // has been held steady for DWELL_MS (a NEW client-side intent gate — NOT
@@ -199,6 +232,27 @@ function clearDwell() {
   latchedAnchorX = null;
   latchedAnchorY = null;
   pointerUpSinceDwellArm = false;
+  // Drop the measured width with the rest of the per-appearance state, so each
+  // entrance re-seeds from the state it actually mounts in (the `toolbarWidth
+  // === 0` branch in updateToolbarMetrics) instead of inheriting the last
+  // appearance's measurement.
+  //
+  // The component is never unmounted — only the `{#if}` block is — so this value
+  // used to outlive every teardown, which is what made a cross-appearance
+  // mismatch possible at all: the morph stopped being width-neutral when
+  // `.morph-block:not(.is-active)` dropped to `width: 0`, so a width measured in
+  // ANNOTATE state (~278px) describes nothing about a FORMAT-state popup
+  // (~452px) that later reuses it, and `entering` would then hold it for the
+  // whole ENTER_POPUP_MS.
+  //
+  // HONEST STATUS: this is defensive. The mechanism is a code trace, and an E2E
+  // attempt to drive a stale-narrow value all the way to a visible overhang did
+  // not reproduce it — after a blur and a resize the annotate width was still
+  // not what the clamp used. Do not delete it on the strength of that: the
+  // re-seed is the better invariant on its own terms, because a width that
+  // describes the popup in front of you needs no argument about which states
+  // can be confused.
+  toolbarWidth = 0;
 }
 
 // Arm the A28 appearance dwell. DWELL_MS later (with no re-arm in between) the
@@ -303,7 +357,7 @@ function updateSelectionAffordance(ed: TiptapEditor) {
     // an in-place drag-EXTEND never collapses — so it's preserved. Guard on
     // textarea focus so we never pull the user out of a composer they're typing
     // in (draft text is intentionally left intact for click-away recovery).
-    if (document.activeElement !== textareaEl) annotateMode = false;
+    if (!popupHasFocus()) annotateMode = false;
     return;
   }
 
@@ -338,9 +392,38 @@ function updateSelectionAffordance(ed: TiptapEditor) {
       anchorY: latchedAnchorY ?? caretAnchorY,
       // A26 morph (#798): decide placement with a CONSTANT height-reserve, not
       // the live (animating) `toolbarHeight`. Keeps above/below stable across
-      // the morph and lets the height-independent edge-anchor grow the popup
-      // without any reposition — so the ResizeObserver recompute below is a
-      // no-op during the morph and no freeze flag is needed.
+      // the morph and lets the height-independent edge-anchor grow the popup.
+      //
+      // HEIGHT is height-independent; WIDTH is not, and the morph is no longer
+      // width-neutral — since `.morph-block:not(.is-active)` stopped the
+      // collapsed block contributing width, the format and annotate states
+      // measure ~452px and ~278px. `maxLeft` below is derived from
+      // `toolbarWidth`, so that difference does reach positioning.
+      //
+      // Two things keep a width from reaching a popup it does not describe, and
+      // BOTH are needed — the first alone was frame-ordering luck:
+      //
+      //   1. `updateToolbarMetrics` does not measure while focus is inside the
+      //      popup, so the composer's narrower width is normally never written.
+      //      This used to key on the TEXTAREA holding focus, which a Tab onto
+      //      an audience segment or the commit button defeated outright (no
+      //      mousedown exists to preventDefault); it now keys on the popup as a
+      //      whole. See popupHasFocus().
+      //   2. `clearDwell()` drops `toolbarWidth` on both teardown paths
+      //      (`dismissPopup`, and the `!next` branch of
+      //      updateSelectionAffordance), so the next entrance re-seeds from the
+      //      state it mounts in. NOT an absolute invariant: `suppressSelectionToolbar`
+      //      (App.svelte — slash menu, find bar, command palette) unmounts the
+      //      popup without going near clearDwell, so Ctrl+F over an open popup
+      //      does carry the width across. Harmless, because `annotateMode` is
+      //      carried too and it remounts in the same state it was measured in.
+      //
+      // (1) alone leaves a hole in principle: focus can land entirely OUTSIDE
+      // the popup — a click on the side panel, say, since `onOutsideEvent`
+      // watches scroll only and nothing dismisses — after which a resize could
+      // measure the annotate width for real. (2) is what makes the width a
+      // per-appearance value rather than a carried one, so the question does not
+      // arise. Do not remove either without re-deriving the other.
       toolbarHeight: SELECTION_POPUP_HEIGHT_RESERVE,
       toolbarWidth,
       viewportHeight,
@@ -494,8 +577,9 @@ $effect(() => {
     ["scroll"],
     () => {
       if (!scrollDismissArmed) return;
-      // Don't dismiss while the user is composing in the textarea
-      if (document.activeElement === textareaEl) return;
+      // Don't dismiss while the user is working in the popup. This is the guard
+      // the draft-loss bug ran through — see popupHasFocus().
+      if (popupHasFocus()) return;
       dismissPopup();
     },
   );
@@ -518,27 +602,50 @@ $effect(() => {
   const frozen = entering;
 
   const updateToolbarMetrics = () => {
-    // Skip position jitter while textarea is focused
-    if (document.activeElement === textareaEl) return;
-    // While the popup's width is unrolling (entrance), the ResizeObserver fires
-    // every frame; writing the mid-animation width into `toolbarWidth` would
-    // jitter the left-anchor clamp (maxLeft depends on width) as the popup grows.
-    // Hold the pre-entrance width until the entrance settles — the left edge stays
-    // pinned at the cursor X meanwhile, so there's nothing to correct mid-unroll.
+    // While the popup's width is unrolling, the ResizeObserver fires every
+    // frame. Grow `toolbarWidth` MONOTONICALLY toward the widest thing seen so
+    // far rather than seeding once, because the obvious one-shot seed does not
+    // work: `scrollWidth` is NOT the un-clipped natural width here. The
+    // transition animates `width` on the popup itself, so `scrollWidth` tracks
+    // the animated value — measured 0 on the first ResizeObserver callback and
+    // 41 on the second, against a settled 260. A single seed therefore latches
+    // a near-zero width and, because it only fires while `toolbarWidth === 0`,
+    // never corrects.
+    //
+    // Monotonic growth is also why this no longer needs the old freeze. The
+    // freeze existed to stop the left-clamp jittering as the popup grew, and
+    // `clearDwell()` zeroing `toolbarWidth` per appearance left it nothing to
+    // hold anyway. Under `Math.max` the clamp can only move the popup LEFT, and
+    // only when it would otherwise overhang — an anchor with room to spare has
+    // `maxLeft > anchorX` at every width, so its `left` never moves at all and
+    // `updateSelectionAffordance`'s own dedup drops the write.
     if (entering) {
-      // Exception: the FIRST popup of the session has `toolbarWidth === 0`, so the
-      // right-edge clamp (`maxLeft` depends on width) is a no-op and a popup whose
-      // cursor anchor is near the right edge unrolls off-screen, only snapping on
-      // once the entrance settles (ENTER_POPUP_MS later). Seed the clamp once with the natural
-      // content width — `scrollWidth` reports the un-clipped width even mid-entrance
-      // (the transition animates a growing `width` under `overflow:clip`). Later
-      // appearances retain the last measured width, so this runs at most once.
-      if (toolbarWidth === 0) {
+      if (el.scrollWidth > toolbarWidth) {
         toolbarWidth = el.scrollWidth;
         updateSelectionAffordance(ed);
       }
       return;
     }
+    // Skip position jitter while the user is working in the popup — and note
+    // this is now load-bearing for WIDTH, not just jitter. The morph stopped
+    // being width-neutral when `.morph-block:not(.is-active)` dropped to
+    // `width: 0`, so measuring in annotate state records a value ~174px narrower
+    // than the format state it may be reused by. Focus is what keeps that
+    // measurement from happening; popupHasFocus() is what makes "focus" mean the
+    // whole popup rather than the textarea alone, which is what a Tab away from
+    // the composer used to defeat.
+    //
+    // This gate is safe to apply on an UNMEASURED popup only because two other
+    // things guarantee every appearance is measured before focus can reach it:
+    // the monotonic branch above (motion on), and the synchronous measure at the
+    // bottom of this effect, which runs in Svelte's flush and therefore beats
+    // `openRequestedComposer`'s rAF focus (reduced motion, where `entering` is
+    // never set and the branch above cannot cover). Both arms are pinned in
+    // toolbar-a8-fidelity.spec.ts. Weaken either and this gate starts blocking a
+    // first measurement, which leaves `maxLeft` clamping against 0 — wider than
+    // the viewport, so nothing clamps and the composer hangs off the right edge
+    // for as long as it is open.
+    if (popupHasFocus()) return;
     const rect = el.getBoundingClientRect();
     // Only width feeds positioning now (left-edge clamp). Height is decoupled
     // from placement (A26 morph uses SELECTION_POPUP_HEIGHT_RESERVE), so the
@@ -559,8 +666,20 @@ $effect(() => {
   if (showPopup && !capturedRange) captureSelectionRange();
   if (!showPopup) {
     capturedRange = null;
-    // Only clear draft text if user isn't actively typing (prevents resize-glitch data loss)
-    if (document.activeElement !== textareaEl) annotationText = "";
+    // Only clear draft text if the user isn't actively working in the popup
+    // (prevents resize-glitch data loss). The fifth and last site to ask the
+    // question this way; it is deliberately NOT left on the narrow
+    // `activeElement === textareaEl` form even though the two answer identically
+    // TODAY. That equivalence rests on the popup being unmounted by the time
+    // `showPopup` is false, which holds only while the `{#if}` has no LEAVING
+    // transition — there is already an entrance one, and adding its counterpart
+    // is a plausible next step in this same fidelity work. It would keep the
+    // popup mounted through the false-`showPopup` window and silently revert
+    // this one site to the narrow question while the other four stayed correct.
+    // The dependency argument for keeping it narrow does not hold either: the
+    // line this replaced already read `textareaEl`, so this is one `$state` dep
+    // swapped for another on the same mount lifecycle, not one added.
+    if (!popupHasFocus()) annotationText = "";
   }
 });
 
@@ -620,7 +739,7 @@ $effect(() => {
   if (!editor || !showPopup) return;
   const ed = editor;
   const onSelChange = () => {
-    if (document.activeElement === textareaEl) return;
+    if (popupHasFocus()) return;
     captureSelectionRange();
   };
   ed.on("selectionUpdate", onSelChange);
@@ -902,7 +1021,7 @@ function handleComposerKeyDown(e: KeyboardEvent) {
         <div class="pill-row tandem-floating-pill" data-testid="popup-format-row">
           <FormattingToolbar {editor} variant="popup" {onNotify} />
           {#if onUpdateDecorations}
-            <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
+            <div class="tandem-toolbar-sep"></div>
             <!-- preventDefault on mousedown keeps the editor selection alive while
                  interacting with the (onclick-based) Decorations control, so a
                  toggle can't dismiss the popup before a follow-up Annotate.
@@ -926,15 +1045,13 @@ function handleComposerKeyDown(e: KeyboardEvent) {
           {/if}
           {#if onToggleFormattingBar}
             <!-- A8 swap: persistent hide/show-bar toggle at the far right of the
-                 format row. Chevron-up = hide (bar shown), chevron-down = show
-                 (bar hidden) — mirrors the bar's own hide button, opposite
-                 direction. Always present (unlike the old show-only affordance),
+                 format row. Always present (unlike the old show-only affordance),
                  so the bar is both hideable and reachable from the popup. testid
                  kept for the E2E contract though it now toggles both ways.
                  onmousedown preventDefault keeps the editor selection alive so
                  toggling doesn't dismiss the popup mid-interaction; onclick
                  (filtered to keyboard activation) covers Enter/Space. -->
-            <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
+            <div class="tandem-toolbar-sep"></div>
             <button
               type="button"
               data-testid="popup-show-formatbar-btn"
@@ -945,17 +1062,36 @@ function handleComposerKeyDown(e: KeyboardEvent) {
                 onToggleFormattingBar?.();
               }}
               onclick={onKeyActivate(() => onToggleFormattingBar?.())}
-              style="height: 26px; min-width: 26px; padding: 0 6px; border: 1px solid transparent; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-pill); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;"
+              class="popup-swap-btn tandem-toolbar-ctl"
             >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d={formattingBarVisible ? "m18 15-6-6-6 6" : "m6 9 6 6 6-6"} />
-              </svg>
+              <!-- A8: hide is a chevron collapsing onto a baseline; show is the
+                   bar itself. Two distinct glyphs rather than an up/down pair,
+                   so the control reads as "put formatting on a bar" instead of
+                   a generic direction. Inside an aria-hidden svg, so the
+                   accessible name is untouched. The hide glyph is shared with
+                   FormattingBar.svelte's own .fmtbar-hide button — same
+                   affordance from a different place, keep them identical. -->
+              {#if formattingBarVisible}
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M18 15l-6-6-6 6" />
+                  <path d="M4 20h16" opacity="0.4" />
+                </svg>
+              {:else}
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3" y="6" width="18" height="5" rx="2.5" />
+                  <path d="M7 8.5h6" opacity="0.5" />
+                </svg>
+              {/if}
             </button>
           {/if}
         </div>
         <!-- Capsule 2: highlight swatches + Annotate. -->
-        <div class="pill-row tandem-floating-pill" data-testid="popup-annotate-row">
-          <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
+        <div class="pill-row is-annotate-row tandem-floating-pill" data-testid="popup-annotate-row">
+          <!-- role="group" is load-bearing: an aria-label on a roleless div is
+               ignored by AT, so the swatch strip had no accessible name at all.
+               Must NOT be role="button" — toolbar-redesign asserts exactly four
+               buttons matching /Highlight /. -->
+          <div class="popup-swatch-tray" role="group" aria-label="Highlight colors">
             <!-- A8: the strip leads with a "none" swatch so clearing a highlight
                  is one click (any color), not a same-color re-click. preventDefault
                  keeps the selection alive; clearHighlight resolves PM→flat inside
@@ -974,7 +1110,7 @@ function handleComposerKeyDown(e: KeyboardEvent) {
                 handleClearHighlight();
                 editor?.chain().focus().run();
               })}
-              style="width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface); cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center;"
+              class="popup-swatch popup-swatch-none"
             >
               <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
                 <line x1="3.5" y1="12.5" x2="12.5" y2="3.5" stroke="var(--tandem-fg-muted)" stroke-width="1.5" stroke-linecap="round" />
@@ -995,11 +1131,11 @@ function handleComposerKeyDown(e: KeyboardEvent) {
                   handleHighlight(color);
                   editor?.chain().focus().run();
                 })}
-                style={`width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLOR_VARS[color]}; cursor: pointer; padding: 0;`}
+                class="popup-swatch"
+                style:background={HIGHLIGHT_COLOR_VARS[color]}
               ></button>
             {/each}
           </div>
-          <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
           <button
             type="button"
             data-testid="popup-annotate-btn"
@@ -1009,10 +1145,10 @@ function handleComposerKeyDown(e: KeyboardEvent) {
               openAnnotateMode();
             }}
             onclick={onKeyActivate(() => openAnnotateMode())}
-            style="height: 24px; padding: 0 12px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-pill); font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;"
+            class="popup-annotate-btn tandem-toolbar-ctl"
           >
             <!-- A8: leading pencil icon on the Annotate affordance. -->
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M12 20h9" />
               <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
             </svg>
@@ -1076,16 +1212,20 @@ function handleComposerKeyDown(e: KeyboardEvent) {
                  highlight swatch, Annotate) carries the same line for the same
                  reason. The old footer buttons got away without it only because
                  they submitted and unmounted the popup in one gesture; a TOGGLE
-                 leaves focus parked on the button indefinitely, and five things
-                 in this file key on `document.activeElement === textareaEl`:
-                 the scroll-dismiss guard (which calls dismissPopup, and that
-                 sets `annotationText = ""` — so type, pick an audience, scroll
-                 to re-read the passage, and the draft was silently gone), the
-                 resize-glitch draft clear, the "never pull the user out of a
-                 composer they're typing in" guard, the position-jitter skip and
-                 the selection re-capture skip. Keeping focus in the textarea
-                 restores all five at once, and keeps the caret — which is this
-                 composer's only focus indicator — visible while you toggle. -->
+                 leaves focus parked on the button indefinitely.
+
+                 The line is KEPT, but it is no longer what makes the popup's
+                 focus-dependent guards correct, and it never could have been:
+                 a keyboard user Tabs onto these segments — that is why they bind
+                 handleComposerKeyDown — and there is no mousedown to prevent.
+                 All five guards (the scroll-dismiss that eats the draft, the
+                 "never pull the user out of a composer they're typing in"
+                 reset, the position/width measurement skip, the selection
+                 re-capture skip and the resize-glitch draft clear) now ask
+                 popupHasFocus() instead, which is true for every control in
+                 here. What this line still buys is the CARET — this
+                 composer's only focus indicator — staying visible while you
+                 toggle, plus the editor selection surviving the click. -->
             <button
               type="button"
               class="audience-seg"
@@ -1210,7 +1350,7 @@ function handleComposerKeyDown(e: KeyboardEvent) {
 
   /* A8 two-pill: format-state column of two capsules. The gap lives HERE (inside
      morph-format), never on .selection-popup — a shell-level flex gap would
-     render a phantom 5px against the 0fr-collapsed annotate block. Capsules are
+     render a phantom 6px against the 0fr-collapsed annotate block. Capsules are
      width:max-content so the narrower annotate row doesn't stretch to the format
      row's width (column children stretch by default). Each capsule pulls its
      chrome from the global .tandem-floating-pill class; here we add only layout.
@@ -1221,7 +1361,7 @@ function handleComposerKeyDown(e: KeyboardEvent) {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 5px;
+    gap: 6px;
   }
   .popup-format-col .pill-row {
     display: flex;
@@ -1229,6 +1369,127 @@ function handleComposerKeyDown(e: KeyboardEvent) {
     gap: 1px;
     padding: 4px 6px;
     width: max-content;
+  }
+  /* Capsule 2 carries its own budget (design `.row.annot`): a wider gap doing
+     the separating that capsule 1 needs a rule for, hence no divider here. */
+  .popup-format-col .pill-row.is-annotate-row {
+    gap: 8px;
+    padding: 5px 8px;
+  }
+
+  /* The bar-swap control is quieter than a formatting button — it changes where
+     formatting lives, it is not itself formatting. Resting metrics come from
+     .tandem-toolbar-ctl; only the colour shift and the transition live here so
+     the reduced-motion guards stay co-located (see toolbar-chrome.css). */
+  .popup-swap-btn {
+    color: var(--tandem-fg-faint);
+    flex-shrink: 0;
+    transition: background 120ms, color 120ms;
+  }
+  :global(body.tandem-reduce-motion) .popup-swap-btn {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .popup-swap-btn {
+      transition: none;
+    }
+  }
+  .popup-swap-btn:hover {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .popup-swap-btn:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+
+  /* Swatch tray. The sunk fill groups the five chips into one object so the
+     Annotate button reads as the row's other half rather than a sixth swatch. */
+  .popup-swatch-tray {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 7px;
+    border-radius: var(--tandem-r-pill);
+    background: var(--tandem-surface-sunk);
+  }
+  /* The four COLOUR chips set `background` inline (it is dynamic), and a
+     non-important inline style outranks any author rule here regardless of
+     specificity — so never move their background into a rule, and never add one
+     to :hover. The failure is worse than a no-op: `.popup-swatch-none` below
+     owns its background in CSS and has no inline one to lose to, so a
+     `.popup-swatch:hover { background }` would take effect on the none-chip and
+     be swallowed by the other four, leaving the strip visibly inconsistent
+     under the pointer. */
+  .popup-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: var(--tandem-r-2);
+    border: 1px solid var(--tandem-border);
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 120ms, box-shadow 120ms;
+  }
+  :global(body.tandem-reduce-motion) .popup-swatch {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .popup-swatch {
+      transition: none;
+    }
+  }
+  /* transform stays on the chip and never on the tray or the capsule: a
+     transform on either would create a stacking context and trap capsule-1's
+     dropdowns behind capsule 2 (see the .popup-format-col note above). */
+  .popup-swatch:hover {
+    transform: scale(1.12);
+    box-shadow: var(--tandem-shadow-1);
+  }
+  .popup-swatch:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+  .popup-swatch-none {
+    background: var(--tandem-surface);
+    border-color: var(--tandem-border-strong);
+  }
+
+  /* Colour-neutral by #1444's rule: authorship/destination colour belongs only
+     on controls that set or change `audience`. Annotate sets none — it opens a
+     composer that defaults to outbound (openAnnotateMode clears the intent and
+     defaultAnnotationIntent resolves null → "comment"), so the private/you blue
+     it used to wear asserted the opposite of what the button does. */
+  /* Resting metrics come from .tandem-toolbar-ctl (toolbar-chrome.css); only
+     the deltas live here. Scoped selectors are (0,2,0) against the shared
+     (0,1,0), so every override below wins on specificity, not order. */
+  .popup-annotate-btn {
+    padding: 0 15px;
+    border-color: var(--tandem-border-strong);
+    color: var(--tandem-fg);
+    font-weight: 600;
+    gap: 6px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 120ms, color 120ms;
+  }
+  :global(body.tandem-reduce-motion) .popup-annotate-btn {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .popup-annotate-btn {
+      transition: none;
+    }
+  }
+  .popup-annotate-btn:hover {
+    background: var(--tandem-surface-sunk);
+  }
+  .popup-annotate-btn:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
   }
 
   /* P2. Each block animates its grid row 0fr→1fr — to the NATURAL content
@@ -1247,6 +1508,42 @@ function handleComposerKeyDown(e: KeyboardEvent) {
   }
   .morph-block.is-active {
     grid-template-rows: 1fr;
+  }
+  /* A collapsed block must stop contributing WIDTH, not just height.
+     `grid-template-rows: 0fr` zeroes the row, so the block is invisible — but it
+     keeps its full inline size, and `.selection-popup` is a column flex box, so
+     the popup sized itself to whichever block was WIDER regardless of which one
+     was showing. In practice that meant the annotate composer was stretched to
+     the format row: measured at 452.6px against a footer needing 278px, with
+     `.composer-card`'s `max-width: 420px` (documented as vestigial) silently
+     becoming the thing that set the card's width. The design gives the composer
+     its own 300px modal, independent of the format row
+     (1.11-selection-converged.html:82).
+
+     Symmetric on purpose — whichever block is collapsed yields the width, so
+     each state sizes to its own content.
+
+     KNOWN COST, accepted: `width` is not in the transition list above and
+     cannot be, because both endpoints are `auto` (the `:not()` rule stops
+     matching outright rather than animating to a length, and `auto` does not
+     interpolate). So on format -> annotate the outgoing capsules clip to zero
+     width in ONE frame and the remaining P2 wipes an already-empty box, while
+     P1 is still tweening the shell chrome. Before this rule the outgoing
+     content stayed visible and wiped vertically. The trade is deliberate: the
+     stretched composer was a defect in a RESTING state every annotate shows,
+     and the wipe is 480ms of polish. Revisit with a real cross-fade if it
+     grates; do not "fix" it by restoring the width contribution.
+
+     Two load-bearing facts, both invisible from here. This only works because
+     `.morph-block-inner` sets `overflow: clip` — that is what zeroes its
+     `min-width: auto` automatic minimum size. Relax that clip to `visible` and
+     the grid track refuses to shrink below the content's min-content width and
+     this rule silently stops doing anything. And
+     `.morph-format.is-active > .morph-block-inner { overflow: visible }` below
+     is safe only because it is gated on `is-active`. */
+  .morph-block:not(.is-active) {
+    width: 0;
+    min-width: 0;
   }
   .morph-block-inner {
     min-height: 0;
@@ -1309,26 +1606,31 @@ function handleComposerKeyDown(e: KeyboardEvent) {
     gap: var(--tandem-space-2);
     padding: var(--tandem-space-3) var(--tandem-space-3) var(--tandem-space-2);
     min-width: 260px;
-    /* 420px, inherited from #1444 and now VESTIGIAL — it is kept as a ceiling,
-       not as a fitting constraint, and nothing here is sized to it.
+    /* 420px, inherited from #1444. It is a ceiling, not a fitting constraint.
+       NOTE — it stopped being vestigial for a while and nobody noticed: because
+       a `0fr`-collapsed `.morph-block` still contributed its full width, the
+       card was stretched to the format row, and once the A8 icon redraw pushed
+       that row past 420px this cap became the thing actually setting the card's
+       width (measured 420/420). `.morph-block:not(.is-active)` now zeroes the
+       collapsed block's width, so the card is content-sized again (278.6px
+       measured) and this is a true ceiling once more.
 
        #1444 raised this from 360 because the footer was two labelled pills in a
        `justify-content: flex-end` row that clipped on its LEFT when they
        overflowed (a silent truncation, since `.morph-block` is `overflow:
        clip`). The audience toggle deleted that geometry. Measured in the
        running app: the footer needs 254px of content — toggle 149 + gap 8 +
-       commit 97 — plus 24px of card padding, against a card that renders at
-       414px because the shell pins it to the format row's natural width. Some
-       142px of slack, and the card is not content-sized in the first place.
+       commit 97 — plus 24px of card padding, and the card now renders at that
+       width rather than at the format row's.
 
        #1123's longer agent names do not bring the old risk back. The segments
        are `minmax(0, 1fr)`, so they stay equal (72px each here) and a longer
        family name widens the toggle by a few px per segment rather than pushing
        a sibling off the start edge. "GPT-5 Codex" lands around 278px total.
 
-       Left in place rather than deleted because it still bounds the card if the
-       shell ever stops governing, and `computeSelectionToolbarPosition` derives
-       maxLeft from the MEASURED toolbarWidth either way, so a wider card is
+       Left in place as a genuine ceiling rather than deleted: nothing sizes to
+       it today, and `computeSelectionToolbarPosition` derives maxLeft from the
+       MEASURED toolbarWidth either way, so a card that did reach 420px would be
        clamped into the viewport rather than overflowing it. */
     max-width: 420px;
   }

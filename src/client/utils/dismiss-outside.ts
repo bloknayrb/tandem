@@ -6,8 +6,10 @@
  * (mousedown-based dismiss). See #589.
  *
  * Call sites still decide what "dismiss" means and apply any caller-specific
- * extra guards (e.g. Toolbar skips dismiss while the user is composing in a
- * textarea). This module only owns the contains-check and listener lifecycle.
+ * extra guards (e.g. Toolbar skips dismiss while focus is anywhere inside the
+ * popup — see its `popupHasFocus()`, which is deliberately wider than "the
+ * composer textarea has the caret"). This module only owns the contains-check
+ * and listener lifecycle.
  */
 
 export type OutsideEventType = "mousedown" | "scroll";
