@@ -59,6 +59,10 @@ import type { Request, Response } from "express";
 import { resetForTesting as resetDirtyState } from "../../src/server/documents/dirty.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import {
+  reloadDocumentFromMarkdown,
+  resolveExternalConflict,
+} from "../../src/server/documents/reload-family.js";
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { suppressNextChange, watchFile } from "../../src/server/file-watcher.js";
 import { registerDocumentTools } from "../../src/server/mcp/document.js";
@@ -72,10 +76,6 @@ import {
   saveCurrentSession,
   saveDocumentToDisk,
 } from "../../src/server/mcp/document-service.js";
-import {
-  reloadDocumentFromMarkdown,
-  resolveExternalConflict,
-} from "../../src/server/mcp/file-opener.js";
 import { handleResolveExternalConflict } from "../../src/server/mcp/routes/external-conflict.js";
 import { handleSave } from "../../src/server/mcp/routes/save.js";
 import {
@@ -90,7 +90,12 @@ import {
   Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../src/shared/constants.js";
-import { withBrowser } from "../../src/shared/origins.js";
+import {
+  BROWSER_ORIGIN,
+  INTERNAL_ORIGIN,
+  MCP_ORIGIN,
+  withBrowser,
+} from "../../src/shared/origins.js";
 import type { ExternalConflictState } from "../../src/shared/types.js";
 
 /** Build a minimal one-paragraph .docx buffer with the given text. */
@@ -290,6 +295,33 @@ describe("resolveExternalConflict", () => {
     const stat = await fs.stat(filePath);
     const savedAt = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_SAVED_AT_VERSION) as number;
     expect(savedAt).toBe(stat.mtimeMs); // explicit save unblocked
+  });
+
+  it('"keep" tags its metadata write `internal`, so it emits no channel event', async () => {
+    // Critical Rule 2: the helper choice IS the contract, and nothing else in
+    // this repo checks this one. `withInternal` marks a server-owned setup
+    // write — `browser` is the only origin that generates a channel event, and
+    // `file-sync`/`internal` are the two the durable annotation ledger skips.
+    // Resolving a conflict banner is neither a user edit nor a file sync.
+    //
+    // Written ahead of ADR-034 Unit 7c, which moves this function to a new
+    // module. A copy-paste across a module boundary is exactly where a helper
+    // gets picked wrong, and swapping `withInternal` for `withMcp` here would
+    // pass typecheck, pass every other spec in this file, and be invisible to
+    // all four written-down inventories — none of them looks at how a write is
+    // tagged. The only other detector is a warn-only PostToolUse hook, which
+    // is not a gate.
+    const { id, doc } = await flaggedSetup();
+    const origins: unknown[] = [];
+    doc.on("afterTransaction", (txn: Y.Transaction) => origins.push(txn.origin));
+
+    await resolveExternalConflict(id, "keep");
+
+    expect(conflictOf(doc), "control: the write under test actually happened").toBeUndefined();
+    expect(origins, "control: it wrote at all").not.toEqual([]);
+    expect(origins).toContain(INTERNAL_ORIGIN);
+    expect(origins, "a conflict resolution is not a browser edit").not.toContain(BROWSER_ORIGIN);
+    expect(origins, "nor an MCP write").not.toContain(MCP_ORIGIN);
   });
 
   it('"keep" re-baselines via Date.now() when the file is unreadable, so saves stay unblocked', async () => {

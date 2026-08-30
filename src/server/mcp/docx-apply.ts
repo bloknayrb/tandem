@@ -15,6 +15,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
+import { restoreDocumentFromBackup } from "../documents/reload-family.js";
 import { listDocBackups, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import {
   type AcceptedSuggestion,
@@ -27,7 +28,6 @@ import { narrowConflict } from "../session/manager.js";
 import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
-import { restoreDocumentFromBackup } from "./file-opener.js";
 import { gatedTool } from "./license-gate.js";
 import { mcpError, mcpSuccess, noDocumentError } from "./response.js";
 
@@ -126,7 +126,8 @@ export async function applyChangesCore(
   // POSIX it treats `\\server\share\x.docx` as a RELATIVE name and prepends
   // cwd, and it collapses `//evil/share` to `/evil/share` — either way the
   // prefix the check looks for is gone before the check runs. Same idiom and
-  // same reason as `integrations/node-binary.ts` and `mcp/file-opener.ts`.
+  // same reason as `integrations/node-binary.ts` and `documents/open.ts`
+  // (`assertSafePathPrefix`, applied to both the raw and the resolved path).
   if (backupPath !== undefined) {
     const unsafe =
       rejectUnsafeWindowsPrefix(backupPath) ?? rejectUnsafeWindowsPrefix(path.resolve(backupPath));

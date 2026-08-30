@@ -7,7 +7,7 @@
  * the document. Two do it by writing text back:
  *
  *  - **undo** restores it verbatim, deleting everything past the cap;
- *  - **the reload relocation pass** (`file-opener.ts`) searches for it with
+ *  - **the reload relocation pass** (`documents/watcher.ts`) searches for it with
  *    `indexOf` and re-anchors the annotation to `match + snapshot.length`,
  *    silently shrinking a 900-character annotation to 200 — after which accept
  *    replaces the wrong span and the `.docx` apply guard, which compares the

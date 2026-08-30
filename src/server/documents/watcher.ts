@@ -10,9 +10,16 @@
  * per-document concurrent-reload guard, and it has two callers outside this
  * module (`restoreDocumentFromBackup` and `resolveExternalConflict`, both of
  * which turn a skip into a coded failure rather than reporting a success the
- * Y.Doc does not reflect). Leaving it behind would make this module import
- * back into `mcp/`; duplicating the Set would leave both halves green while
- * silently no longer suppressing anything.
+ * Y.Doc does not reflect). Duplicating the Set would leave both halves green
+ * while silently no longer suppressing anything.
+ *
+ * Those two callers were in `mcp/` when this was written, so the original
+ * reason given here was that leaving the guard behind would make this module
+ * import back into `mcp/`. Unit 7c moved them to `documents/reload-family.ts`,
+ * which retires that argument but NOT the decision: the guard is a published
+ * acquire/release contract with named callers outside this file, and that is
+ * what makes it an interface rather than an internal detail. Do not read the
+ * retired argument as licence to un-export it.
  */
 
 import fs from "fs/promises";
@@ -331,7 +338,7 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
         // callback used to discard that and toast anyway — telling the user a
         // reload happened for a pass that did nothing, sometimes while the
         // in-flight reload was still mid-transaction. Both callers of
-        // `reloadFromDisk` in `mcp/file-opener.ts` already gated on this value;
+        // `reloadFromDisk` in `documents/reload-family.ts` already gated on this value;
         // this was the only one that did not.
         //
         // What suppression costs, stated precisely rather than as "nothing",

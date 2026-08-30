@@ -41,9 +41,10 @@ function safeCleanup(
 }
 
 /**
- * Register the durable-annotation sync context for a document. Called by the
- * file-opener after `loadAndMerge` returns its observer cleanup. The cleanup
- * passed here is what gets invoked on `clearFileSyncContext` or the next
+ * Register the durable-annotation sync context for a document. The only
+ * caller is `wireAnnotationStore` (`documents/annotation-wiring.ts`), which is
+ * where `loadAndMerge`'s returned cleanup is consumed. The cleanup passed here
+ * is what gets invoked on `clearFileSyncContext` or the next
  * `reattachObservers` call.
  *
  * Callers don't need to think about the swap-vs-close distinction: the queue

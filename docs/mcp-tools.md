@@ -452,7 +452,7 @@ Convert a `.docx` document to an editable Markdown file. Writes the `.md` file t
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `documentId` | string | no | Document ID of the `.docx` to convert (defaults to active document) |
-| `outputPath` | string | no | Custom output path for the `.md` file (defaults to same directory as the `.docx`) |
+| `outputPath` | string | no | Custom output **directory** for the `.md` file, which must already exist (defaults to the `.docx`'s own directory). The filename is always derived from the source document — a caller cannot name the file that gets created ([#1654](https://github.com/bloknayrb/tandem/issues/1654)). |
 
 **Returns:**
 ```json
@@ -677,9 +677,11 @@ Export all annotations as a formatted summary. Useful for review reports.
 | `format` | enum | no | `markdown` (default) or `json` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 | `writeToDisk` | boolean | no | Also write the export to a sharable sidecar next to the document (`<docPath>.annotations.{json\|md}`). Overwrites any existing sidecar. |
-| `outputPath` | string | no | Custom sidecar path for `writeToDisk` — a file path, or an existing directory the default filename is appended to. Must be **absolute** (a relative path would silently resolve against the server's CWD), and UNC / extended-length / device-namespace prefixes are rejected. |
+| `outputPath` | string | no | Custom sidecar path for `writeToDisk` — a file path, or an existing directory the default filename is appended to. Must be **absolute** (a relative path would silently resolve against the server's CWD), and UNC / extended-length / device-namespace prefixes are rejected. The final filename must end in `.annotations.md` or `.annotations.json`, matching `format`; the destination **directory** is unrestricted ([#1654](https://github.com/bloknayrb/tandem/issues/1654)). |
 
 Solo mode applies here: while Solo is on, held comments and replies are withheld from the export and the count is disclosed as `heldFromExport` rather than being silently omitted.
+
+**Errors:** `INVALID_PATH` — `outputPath` is relative, carries a UNC / extended-length / device-namespace prefix, contains a colon in the filename (NTFS alternate data stream), or names a file whose suffix is not `.annotations.md` / `.annotations.json` matching `format`. `FILE_NOT_FOUND` — the destination directory does not exist.
 
 **Returns (markdown):**
 ```json
@@ -1020,7 +1022,7 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 
 The channel routes and `GET /api/events` are documented in [Channel API](#channel-api-real-time-push) below.
 
-`/api/open` and `/api/upload` converge with `tandem_open` in `file-opener.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
+`/api/open` and `/api/upload` converge with `tandem_open` in `documents/open.ts`, so the resulting Y.Doc and Hocuspocus sync behave identically regardless of how the file was opened.
 
 ### GET /api/info
 

@@ -9,12 +9,14 @@
  * **Why an edge inventory rather than "assert no cycles".** Both were tried on
  * paper first and the cycle framing loses three ways:
  *
- *   1. It is red today and stays red. `documents/open.ts` already sits in a
- *      large strongly-connected component — `open.ts -> mcp/file-opener.ts
- *      -> mcp/annotations.ts -> mcp/document.ts -> open.ts`, all static value
- *      imports, closed by Unit 6's own redirect of `mcp/document.ts` at the
- *      seam. Four more paths close through `mcp/api-routes.ts`. None of that is
- *      in ADR-034's scope, so a gate keyed on it could only ever be skipped.
+ *   1. It is red today and stays red. `documents/open.ts` sits in a large
+ *      strongly-connected component that closes through `mcp/api-routes.ts`,
+ *      all static value imports. (The illustration used to be
+ *      `open.ts -> mcp/file-opener.ts -> mcp/annotations.ts -> mcp/document.ts
+ *      -> open.ts`; Unit 7c deleted the second node, so that particular path
+ *      is gone while the argument is not: the SCC survives it.)
+ *      None of that is in ADR-034's scope, so a gate keyed on it could only
+ *      ever be skipped.
  *   2. A gate keyed on a *directory* is satisfied by emptying the directory.
  *      Move the pipeline to `src/server/mcp/open-pipeline.ts`, leave
  *      `documents/open.ts` as a facade, and "no cycle through documents/" is
@@ -25,10 +27,20 @@
  *      which is precisely the idiom this unit teaches.
  *
  * An exact-set inventory has none of those properties. It is green the moment
- * it is written, it fails on *deletion* as well as addition, and every mutant
- * that matters shows up as a row: a re-export left in `file-opener.ts` adds a
- * fan-in row; a two-hop launder through a new compat module adds a fan-in row
- * from a new module; emptying `documents/` removes rows.
+ * it is written, it fails on *deletion* as well as addition, and most mutants
+ * that matter show up as a row: an `export … from "…reload-family.js"` left
+ * behind adds a fan-in row; a launder through a new compat module adds a
+ * fan-in row from that new module; emptying `documents/` removes rows.
+ *
+ * **"Most" is exact, and the exception was demonstrated rather than reasoned
+ * about.** A guard keyed on an EDGE is defeated by anything that does not
+ * create one. A sanctioned consumer can `export { restoreDocumentFromBackup };`
+ * — a BARE re-export, no specifier — and any module may then import it from
+ * there. No new specifier, so no new row here, and 25 specs stayed green with
+ * an arbitrary extra consumer in place. The `export … from` form is caught
+ * only incidentally, because it happens to carry a specifier. The re-export
+ * question is asked directly in `tests/server/documents-open.test.ts` instead,
+ * where the sanctioned list lives.
  *
  * The one cycle property this unit actually controls is kept, narrowly: no
  * cycle may be contained *entirely within* `documents/`. That is green today
@@ -40,8 +52,9 @@
  */
 
 import { readdirSync, readFileSync, statSync } from "fs";
-import { join, posix, relative } from "path";
+import { extname, join, posix, relative } from "path";
 import { describe, expect, it } from "vitest";
+import { hasExtension, isSourceFile, SOURCE_EXTENSIONS } from "../helpers/source-extensions.js";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const SRC = join(REPO_ROOT, "src");
@@ -159,7 +172,11 @@ function sourceFiles(): string[] {
     for (const name of readdirSync(dir)) {
       const full = join(dir, name);
       if (statSync(full).isDirectory()) walk(full);
-      else if (/\.(ts|tsx|mts|cts|svelte)$/.test(name) && !/\.d\.[mc]?ts$/.test(name)) {
+      // Shared with `documents-open.test.ts` rather than spelled twice: the
+      // two guards defer coverage to each other, and a deferral to a guard
+      // that walks a NARROWER set is a hole in both at once. See
+      // `helpers/source-extensions.ts`.
+      else if (isSourceFile(name)) {
         out.push(relative(SRC, full).split("\\").join("/"));
       }
     }
@@ -273,20 +290,42 @@ const FAN_IN = [
   // The deduped version of this list could not see the second statement.
   "server/mcp/document-service.ts -> server/documents/registry.ts (value) x2",
   "server/mcp/document.ts -> server/documents/open.ts (value) x1",
-  "server/mcp/file-opener.ts -> server/documents/autosave.ts (value) x1",
-  "server/mcp/file-opener.ts -> server/documents/registry.ts (value) x1",
-  // The reload family reaching for the shared content machinery. This edge is
-  // the point of the split: leaving `prepareContent`/`clearDocMaps` behind in
-  // file-opener.ts would have made `documents/` import back into `mcp/`.
-  "server/mcp/file-opener.ts -> server/documents/populate.ts (value) x1",
-  "server/mcp/file-opener.ts -> server/documents/annotation-wiring.ts (value) x1",
-  "server/mcp/file-opener.ts -> server/documents/conflict.ts (value) x1",
+  // The reload family's four consumers, reaching it by its name on the seam.
+  //
+  // These four rows REPLACED six of the opposite shape
+  // (`mcp/file-opener.ts -> documents/{autosave,registry,populate,
+  // annotation-wiring,conflict,watcher}.ts`), whose written rationale was that
+  // leaving the shared content machinery behind in `mcp/` would have made
+  // `documents/` import back into `mcp/`. Unit 7c settled that differently and
+  // better: the reload family moved INTO `documents/`, so those six are now
+  // intra-directory calls that no inventory needs to sanction, and what crosses
+  // the boundary is four consumers asking for a published entry point. The
+  // direction reversed, and reversing it is the improvement.
+  //
+  // **It is a trade, not an equivalence, and the losing half is written down
+  // here so nobody has to rediscover it.** Those six edges were inventoried
+  // and are now pinned by nothing but the intra-`documents/` acyclicity check.
+  // Concretely: any module inside `documents/` may now import and call any
+  // reload-family symbol with zero constraint — adding
+  // `import { resolveExternalConflict } from "./reload-family"` to `open.ts`
+  // is green across every spec in this file and in `documents-open.test.ts`.
+  // The entitlement inventory therefore covers strictly LESS area after 7c
+  // than before. That was accepted because the six rows were sanctioning
+  // `mcp/` reaching into `documents/`'s internals — a thing that should not
+  // happen at all rather than a thing worth enumerating — while the four rows
+  // that replaced them sanction the calls that genuinely cross a seam.
+  //
+  // Which symbols each may take is a separate, narrower question, kept in
+  // `tests/server/documents-open.test.ts`'s SANCTIONED map.
+  "server/mcp/docx-apply.ts -> server/documents/reload-family.ts (value) x1",
+  "server/mcp/routes/backups.ts -> server/documents/reload-family.ts (value) x1",
+  "server/mcp/routes/document-reload.ts -> server/documents/reload-family.ts (value) x1",
+  "server/mcp/routes/external-conflict.ts -> server/documents/reload-family.ts (value) x1",
   // document-service reaching in is the point of the conflict split: it read
   // `Y_MAP_EXTERNAL_CONFLICT` through a helper it owned, so the watcher had to
   // import document-service to ask a question about a map it writes itself.
   "server/mcp/document-service.ts -> server/documents/annotation-wiring.ts (value) x1",
   "server/mcp/document-service.ts -> server/documents/conflict.ts (value) x1",
-  "server/mcp/file-opener.ts -> server/documents/watcher.ts (value) x1",
   "server/mcp/document-service.ts -> server/documents/watcher.ts (value) x1",
   // The restore path, by its name on the seam. This edge replaced a dynamic
   // import whose only purpose was breaking the cycle; a static edge here is
@@ -318,9 +357,10 @@ const FAN_IN = [
 ];
 
 /**
- * The fan-out is the half that carries ADR-034's residue. `open.ts`'s two rows
- * naming `mcp/file-opener.ts` are the pipeline that has not moved yet; Unit 7a
- * replaces them, Unit 7c deletes the target.
+ * The fan-out is the half that carried ADR-034's residue, and the residue is
+ * now gone: `open.ts` had two rows naming `mcp/file-opener.ts` — the pipeline
+ * that had not moved yet — and Unit 7a replaced them, then Unit 7c deleted
+ * the target module outright. Zero rows name it today.
  */
 const FAN_OUT = [
   "server/documents/dirty.ts -> server/yjs/provider.ts (value) x1",
@@ -347,12 +387,33 @@ const FAN_OUT = [
   "server/documents/conflict.ts -> shared/origins.ts (value) x1",
   "server/documents/conflict.ts -> shared/types.ts (type) x1",
   "server/documents/conflict.ts -> shared/utils.ts (value) x1",
-  // Autosave is the ONLY thing in documents/ still reaching
-  // document-service, and it is why `ensureAutoSave` got its own module
-  // instead of riding the open seam: leaving it in open.ts would have put
-  // this edge back on the pipeline that just shed it.
+  // TWO things in documents/ still reach document-service, and they leave
+  // together or not at all. Autosave is why `ensureAutoSave` got its own
+  // module instead of riding the open seam: leaving it in open.ts would have
+  // put this edge back on the pipeline that just shed it. The reload family
+  // brought the second one in with it (Unit 7c) for `canSaveToDisk` /
+  // `saveDocumentToDisk` — a known, deliberate cost of that move, not a
+  // regression. Both disappear when `autoSaveAllToDisk` moves out of
+  // document-service; neither disappears before that.
+  //
+  // This comment read "Autosave is the ONLY thing" until 7c made it false.
   "server/documents/autosave.ts -> server/mcp/document-service.ts (value) x1",
   "server/documents/autosave.ts -> server/session/manager.ts (value) x1",
+  // The reload family, moved here by Unit 7c. Eight of these eleven are new
+  // edges OUT of documents/ that did not exist before, because the code that
+  // makes them used to live in mcp/ — they are the accounting cost of turning
+  // six inbound rows into four, and every one is one-directional.
+  "server/documents/reload-family.ts -> server/file-io/doc-backup.ts (value) x1",
+  "server/documents/reload-family.ts -> server/file-io/docx-size-gate.ts (value) x1",
+  "server/documents/reload-family.ts -> server/file-io/index.ts (value) x1",
+  "server/documents/reload-family.ts -> server/file-watcher.ts (value) x1",
+  "server/documents/reload-family.ts -> server/mcp/document-service.ts (value) x1",
+  "server/documents/reload-family.ts -> server/notifications.ts (value) x1",
+  "server/documents/reload-family.ts -> server/platform.ts (value) x1",
+  "server/documents/reload-family.ts -> server/yjs/provider.ts (value) x1",
+  "server/documents/reload-family.ts -> shared/constants.ts (value) x1",
+  "server/documents/reload-family.ts -> shared/origins.ts (value) x1",
+  "server/documents/reload-family.ts -> shared/utils.ts (value) x1",
   "server/documents/autosave.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/open.ts -> server/file-io/index.ts (value) x1",
   // Two edges from the seam back into mcp/, both ADR-034 residue: format
@@ -372,9 +433,17 @@ const FAN_OUT = [
   "server/documents/watcher.ts -> server/events/queue.ts (value) x1",
   "server/documents/watcher.ts -> server/file-io/index.ts (value) x1",
   "server/documents/watcher.ts -> server/file-watcher.ts (value) x1",
-  // The one edge out of documents/ that points back at mcp/, and the reason
-  // this list is phrased as residue rather than as a contract: annotation
-  // sanitization has not been split out of the MCP layer yet.
+  // One of FIVE edges out of documents/ that point back at mcp/, and the
+  // reason this list is phrased as residue rather than as a contract:
+  // annotation sanitization has not been split out of the MCP layer yet.
+  //
+  // This said "the one edge" when it was written and was already wrong then —
+  // `open.ts -> mcp/document-model.ts`, `open.ts -> mcp/tutorial-annotations.ts`
+  // and `autosave.ts -> mcp/document-service.ts` all existed, making four.
+  // Unit 7c added a fifth (`reload-family.ts -> mcp/document-service.ts`) and
+  // corrected the count. Each has its own reason and they do not leave
+  // together. Count them from the rows below rather than trusting this number:
+  // review handed me "four" for the post-7c graph and the rows said five.
   "server/documents/watcher.ts -> server/mcp/annotations.ts (value) x1",
   "server/documents/watcher.ts -> server/notifications.ts (value) x1",
   "server/documents/watcher.ts -> server/positions.ts (value) x1",
@@ -433,6 +502,48 @@ describe("stripComments", () => {
 describe("the documents/ boundary is an inventory", () => {
   const { edges, unresolved } = buildGraph();
   const files = sourceFiles();
+
+  it("scans every source file type present under src/", () => {
+    // The census guard has had this control for a while; this one did not,
+    // which is the more dangerous of the two arrangements only because the
+    // census guard's version *passed against its own defect* (it lowercased
+    // in the control while matching case-sensitively in the walk). A missing
+    // control at least does not vouch for anything.
+    //
+    // `.css` is listed as non-code rather than swept: it cannot hold an
+    // import edge, which is the only thing this file inventories.
+    const NON_CODE = [".css"];
+    // A RAW walk, deliberately not `sourceFiles()` — that one is already
+    // filtered by the very predicate under test, so deriving the control
+    // from it would make it agree with the filter by construction.
+    const present = new Set<string>();
+    const walkAll = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name);
+        if (statSync(full).isDirectory()) walkAll(full);
+        else present.add(extname(name).toLowerCase());
+      }
+    };
+    walkAll(SRC);
+    const unswept = [...present].filter(
+      (e) => !hasExtension(`x${e}`, SOURCE_EXTENSIONS) && !NON_CODE.includes(e),
+    );
+    expect(
+      unswept,
+      `file types under src/ that this inventory never opens: ${unswept}. Add ` +
+        `them to SOURCE_EXTENSIONS, or to NON_CODE if they cannot hold an import.`,
+    ).toEqual([]);
+    expect(present.has(".ts"), "control: src/ holds .ts at all").toBe(true);
+  });
+
+  it("the extension filter is case-insensitive, so a rename cannot hide a module", () => {
+    // The negative control for the fix above. A half-fix — lowercasing in one
+    // place and not the other — passes the sweep-size control and fails here.
+    expect(isSourceFile("Bypass.TS"), "an uppercased .ts must still be swept").toBe(true);
+    expect(isSourceFile("Widget.SVELTE")).toBe(true);
+    expect(isSourceFile("types.D.TS"), "a declaration file is still excluded").toBe(false);
+    expect(isSourceFile("notes.md"), "control: the filter still rejects").toBe(false);
+  });
 
   it("the sweep and the resolver both actually did something", () => {
     // Every assertion in this file is of the "found nothing unexpected" family,
@@ -581,16 +692,25 @@ describe("runtime export surfaces", () => {
   /**
    * The source sweeps above are keyed on module specifiers. This one is not,
    * and that is the point: it asks the loaded module what it actually exports.
-   * Every way of laundering the seam past the specifier check — a split
-   * `import` plus a bare `export {}`, a wrapper function, a dynamic re-export,
-   * `export *`, an aliased path, or a two-hop launder through a new compat
-   * module — puts the laundered name back on this list.
+   * Every way of widening THIS MODULE'S surface — a split `import` plus a bare
+   * `export {}`, a wrapper function, a dynamic re-export, `export *`, an
+   * aliased path — puts the new name back on this list.
+   *
+   * **Scope, stated because an earlier version of this comment overstated
+   * it.** It said a two-hop launder through a new compat module was also
+   * caught here. It is not: this spec reads the export surface of
+   * `reload-family.ts` and nothing else, so a compat module that re-exports
+   * from somewhere else is invisible to it. That case is the fan-in
+   * inventory's, and the BARE re-export sub-case is neither's — it is pinned
+   * in `tests/server/documents-open.test.ts`. A comment that claims a
+   * neighbouring spec's coverage is worse than an unpinned guard, because it
+   * makes the next reader stop looking.
    */
-  it("mcp/file-opener.ts exports exactly what is written down", async () => {
-    const mod = await import("../../src/server/mcp/file-opener.js");
+  it("documents/reload-family.ts exports exactly what is written down", async () => {
+    const mod = await import("../../src/server/documents/reload-family.js");
     expect(
       Object.keys(mod).sort(),
-      "ADR-034 shrinks this surface: Unit 7a moves the open entries out, 7c deletes the module. A name reappearing here is the seam being undone, whatever syntax put it there",
+      "ADR-034 shrank this surface to three: Unit 7a moved the open entries out of what was then mcp/file-opener.ts, and 7c moved the remaining reload family here and deleted that module. A name reappearing here is the seam being undone, whatever syntax put it there",
     ).toEqual(
       ["reloadDocumentFromMarkdown", "resolveExternalConflict", "restoreDocumentFromBackup"].sort(),
     );

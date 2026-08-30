@@ -2,11 +2,11 @@ import type { Request, Response } from "express";
 
 import { API_EXTERNAL_CONFLICT_RESOLVE } from "../../../shared/api-paths.js";
 import { getActiveDocId, hasDoc } from "../../documents/registry.js";
+import { resolveExternalConflict } from "../../documents/reload-family.js";
 import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
-import { resolveExternalConflict } from "../file-opener.js";
 import { sendApiError } from "./_shared.js";
 
 /**
