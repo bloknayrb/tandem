@@ -12,6 +12,25 @@ import { E2E_MCP_PORT, E2E_VITE_PORT, E2E_WS_PORT } from "./test-ports";
 const PROBE_TIMEOUT_MS = 5_000;
 
 /**
+ * The served-module probe needs its own, larger budget. Playwright's health
+ * check only proves Vite is answering; this probe asks it to TRANSFORM a module
+ * for the first time, which pays the plugin-container warm-up the health check
+ * never touches. (Not the dependency pre-bundle: the module under probe imports
+ * only `shared/constants`, so nothing in its graph reads `node_modules/.vite`.)
+ *
+ * Timed at 4627ms on one healthy run on a loaded dev machine — inside the
+ * 5000ms shared bound, but with no margin. Three consecutive runs refused when
+ * load pushed it over; those failing durations were not captured, so 4627 is
+ * the near-miss that explains the refusals rather than one of them.
+ *
+ * Because a timeout here is a REFUSAL rather than a warning, a bound that tight
+ * converts machine load into a failed suite. `probeForeignServer` — the only
+ * other consumer, and a cheap port-squatter check — keeps the 5s bound; only
+ * the transform gets the slack.
+ */
+const TRANSFORM_PROBE_TIMEOUT_MS = 30_000;
+
+/**
  * Is `candidate` `root` itself, or inside it?
  *
  * `pathImpl` is a test-only seam, and it exists because the two platform
@@ -234,7 +253,7 @@ export function assertServedClientTargetsHarness(
 /** Fetch the served form of the backend-ports module. Fail-closed: Playwright already health-checked this Vite, so any failure here is a refusal, not a clear. */
 export async function fetchServedBackendPortsModule(
   vitePort: number = E2E_VITE_PORT,
-  timeoutMs: number = PROBE_TIMEOUT_MS,
+  timeoutMs: number = TRANSFORM_PROBE_TIMEOUT_MS,
 ): Promise<string> {
   const url = `http://127.0.0.1:${vitePort}${BACKEND_PORTS_MODULE_PATH}`;
   let res: Response;

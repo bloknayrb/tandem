@@ -1,8 +1,11 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   bundledCssFiles,
   cssRulesBySelector,
+  markupOutsideStyleBlocks,
   neutralizeSvelteGlobal,
   styleBlocks,
 } from "./css-source";
@@ -203,6 +206,84 @@ describe("cssRulesBySelector: atRules and start (#1425's reduce-motion guard che
     const [a, b] = rules(".a{color:red} .b{color:blue}");
     expect(a.start).toBeGreaterThanOrEqual(0);
     expect(b.start).toBeGreaterThan(a.start);
+  });
+});
+
+/**
+ * The markup half. Same rationale as the fixtures above: the property that
+ * matters is invisible to every caller, because they all feed it well-formed
+ * `.svelte` files where a single-pass strip and a fixpoint strip return the
+ * same string.
+ *
+ * And the failure is the quiet direction again. A scan that silently retains a
+ * `<style>` block does not throw — it sweeps in class names that were only ever
+ * mentioned in CSS, which is a false POSITIVE in suites whose assertions are
+ * mostly `toEqual([])`. Nothing downstream would say so.
+ *
+ * Fixtures go to disk because this helper takes a path, not a string.
+ */
+describe("markupOutsideStyleBlocks", () => {
+  let dir: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "tandem-css-source-"));
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function fixture(name: string, content: string): string {
+    const path = join(dir, name);
+    writeFileSync(path, content, "utf-8");
+    return path;
+  }
+
+  it("removes a style block and keeps the markup around it", () => {
+    const file = fixture(
+      "plain.svelte",
+      '<button class="ctl">Go</button>\n<style>\n  .ctl { color: red; }\n</style>\n',
+    );
+    const markup = markupOutsideStyleBlocks(file);
+    expect(markup).toContain('class="ctl"');
+    expect(markup).not.toContain("color: red");
+  });
+
+  // Svelte's own `<style lang="postcss">` form. The opening tag is matched as
+  // `<style[^>]*>`, so an attribute must not let the block survive.
+  it("removes a style block carrying attributes", () => {
+    const file = fixture(
+      "attrs.svelte",
+      '<div class="a"></div><style lang="postcss">.a{color:red}</style>',
+    );
+    expect(markupOutsideStyleBlocks(file)).not.toContain("color:red");
+  });
+
+  // The property CodeQL's js/incomplete-multi-character-sanitization names:
+  // removing the inner block splices `<sty` onto `le>`, reintroducing exactly
+  // the sequence that was removed. One pass leaves a live `<style>` in what it
+  // calls "the markup".
+  it("strips to a fixpoint, so a spliced-together block cannot survive", () => {
+    const file = fixture("nested.svelte", "<sty<style>x</style>le>.a{color:red}</style>");
+    expect(markupOutsideStyleBlocks(file)).not.toContain("<style");
+  });
+
+  it("returns nothing for a .css file, which is style all the way down", () => {
+    expect(markupOutsideStyleBlocks(fixture("sheet.css", ".a{color:red}"))).toBe("");
+  });
+
+  // The two are used by sibling scans in the same suites — one asserting a
+  // property of the CSS, one of the markup — so a disagreement about where the
+  // boundary lies would let a declaration fall into neither half and be
+  // asserted by nothing.
+  it("is the complement of styleBlocks over the same file", () => {
+    const file = fixture(
+      "complement.svelte",
+      '<span class="mark">hi</span>\n<style>\n  .mark { --x: 1; }\n</style>\n',
+    );
+    expect(styleBlocks(file)).toContain("--x: 1");
+    expect(markupOutsideStyleBlocks(file)).not.toContain("--x: 1");
+    expect(markupOutsideStyleBlocks(file)).toContain('class="mark"');
   });
 });
 

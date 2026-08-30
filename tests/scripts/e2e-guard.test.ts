@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -295,5 +296,37 @@ describe("fetchServedBackendPortsModule — fail closed", () => {
     const port = (server.address() as AddressInfo).port;
     await new Promise((r) => server.close(r));
     await expect(fetchServedBackendPortsModule(port, 500)).rejects.toThrow(/cannot be verified/);
+  });
+
+  it("keeps a budget larger than the cheap probes', because a timeout is a refusal", () => {
+    // This probe asks Vite to TRANSFORM a module for the first time, paying a
+    // plugin-container warm-up the health check never touches. It shared the
+    // 5s port-squatter budget and measured 4627ms on one healthy run, then
+    // refused three consecutive runs when load pushed it over — and a refusal
+    // here fails the whole suite while the thing it guards is fine.
+    //
+    // Pinned from source text because neither constant is exported, and
+    // exporting a timeout purely to test it would be the tail wagging the dog.
+    // What must not silently revert is the DEFAULT on this signature.
+    const src = readFileSync(path.resolve(__dirname, "../../scripts/e2e-guard.ts"), "utf-8");
+    const budgets = Object.fromEntries(
+      [...src.matchAll(/const (\w*PROBE_TIMEOUT_MS) = ([\d_]+);/g)].map(([, k, v]) => [
+        k,
+        Number(v.replace(/_/g, "")),
+      ]),
+    );
+    expect(budgets.PROBE_TIMEOUT_MS, "PROBE_TIMEOUT_MS vanished").toBeGreaterThan(0);
+    expect(
+      budgets.TRANSFORM_PROBE_TIMEOUT_MS,
+      "the served-module probe lost its own budget and is back on the shared one",
+    ).toBeGreaterThan(budgets.PROBE_TIMEOUT_MS);
+
+    expect(
+      src,
+      "fetchServedBackendPortsModule's default timeout must be TRANSFORM_PROBE_TIMEOUT_MS — " +
+        "on PROBE_TIMEOUT_MS it refuses healthy runs under load",
+    ).toMatch(
+      /fetchServedBackendPortsModule\([^)]*timeoutMs: number = TRANSFORM_PROBE_TIMEOUT_MS/s,
+    );
   });
 });
