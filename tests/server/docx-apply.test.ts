@@ -14,6 +14,10 @@ import {
   buildOffsetMap,
   resolveWordComments,
 } from "../../src/server/file-io/docx-apply.js";
+import {
+  importAnnotationId,
+  injectCommentsAsAnnotations,
+} from "../../src/server/file-io/docx-comments.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { applyChangesCore } from "../../src/server/mcp/docx-apply.js";
@@ -25,6 +29,8 @@ import {
   Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../src/shared/constants.js";
+import type { Annotation } from "../../src/shared/types.js";
+import { toFlatOffset } from "../../src/shared/types.js";
 import { timeoutMs } from "../helpers/timing.js";
 
 /**
@@ -1284,6 +1290,208 @@ describe("applyChangesCore — the backup sidecar", () => {
             "check-then-act again and a symlink planted after the lstat is followed",
         ).toBe(fs.constants.COPYFILE_EXCL);
       }
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// applyChangesCore — deriving the originating Word comment id (#1682)
+//
+// The `resolveWordComments` block far above is thorough about the CONSUMER, and
+// every one of its specs hand-writes `importCommentId: "42"` onto the
+// suggestion. That is exactly why the producer could be dead for five releases
+// without a red test: `src/server/mcp/docx-apply.ts` parsed the comment id out
+// of `ann.id` in a `import-{commentId}-{timestamp}` shape the ids stopped using
+// at W8, so `lastIndexOf("-")` was -1 and the field was ALWAYS undefined.
+//
+// So these specs build their input from the real producers — the annotation is
+// minted by `injectCommentsAsAnnotations` (which mints the id through
+// `importAnnotationId` and writes `importSource`) — and assert the field the
+// code under test DERIVES, never one they set.
+// ---------------------------------------------------------------------------
+
+describe("applyChangesCore — the originating Word comment", () => {
+  const COMMENT_ID = "42";
+  const COMMENT_BODY = "Reword this greeting.";
+  const ANCHOR_PARA_ID = "AAAA1111";
+  const LAST_PARA_ID = "BBBB2222";
+
+  let counter = 0;
+  let DOC_ID: string;
+  let docPath: string;
+
+  /**
+   * A .docx carrying one Word comment whose body is two paragraphs, so the
+   * resolution assertion can name the LAST paraId and be wrong if the pass
+   * resolved something else.
+   */
+  async function createTestDocxWithComment(): Promise<Buffer> {
+    const zip = new JSZip();
+    zip.file("word/document.xml", wrapBody("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"));
+    zip.file(
+      "word/comments.xml",
+      `<?xml version="1.0"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">` +
+        `<w:comment w:id="${COMMENT_ID}" w:author="Reviewer" w:date="2026-01-01T00:00:00Z">` +
+        `<w:p w14:paraId="${ANCHOR_PARA_ID}"><w:r><w:t>${COMMENT_BODY}</w:t></w:r></w:p>` +
+        `<w:p w14:paraId="${LAST_PARA_ID}"><w:r><w:t>thanks</w:t></w:r></w:p>` +
+        `</w:comment></w:comments>`,
+    );
+    zip.file(
+      "[Content_Types].xml",
+      `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>`,
+    );
+    zip.file(
+      "_rels/.rels",
+      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
+    );
+    zip.file(
+      "word/_rels/document.xml.rels",
+      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
+    );
+    return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
+  }
+
+  beforeEach(async () => {
+    for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+    setActiveDocId(null);
+
+    counter += 1;
+    DOC_ID = `import-resolve-doc-${counter}`;
+    docPath = path.join(
+      await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-apply-import-")),
+      "doc.docx",
+    );
+    await fsp.writeFile(docPath, await createTestDocxWithComment());
+
+    getOrCreateDocument(DOC_ID)
+      .getXmlFragment("default")
+      .insert(0, [makeYParagraph("Hello world")]);
+
+    addDoc(DOC_ID, {
+      id: DOC_ID,
+      filePath: docPath,
+      format: "docx",
+      readOnly: false,
+      source: "file",
+    });
+    setActiveDocId(DOC_ID);
+  });
+
+  /** The `word/commentsExtended.xml` of whatever is on disk now, or undefined. */
+  async function savedCommentsExtended(): Promise<string | undefined> {
+    const zip = await JSZip.loadAsync(await fsp.readFile(docPath));
+    return zip.file("word/commentsExtended.xml")?.async("text");
+  }
+
+  it(
+    "marks the imported Word comment done after its promoted suggestion is applied",
+    async () => {
+      const doc = getOrCreateDocument(DOC_ID);
+
+      // PRODUCER, not a hand-built id: this is the same call `openFromDisk`
+      // makes, so the record's key and its `importSource` are whatever the real
+      // import writes.
+      const injected = injectCommentsAsAnnotations(
+        doc,
+        [
+          {
+            commentId: COMMENT_ID,
+            authorName: "Reviewer",
+            bodyText: COMMENT_BODY,
+            from: toFlatOffset(0),
+            to: toFlatOffset(5),
+          },
+        ],
+        "doc.docx",
+      );
+      expect(injected).toBe(1);
+
+      const map = doc.getMap(Y_MAP_ANNOTATIONS);
+      const entries = [...(map as Iterable<[string, Annotation]>)];
+      expect(entries.length).toBe(1);
+      const [importedId, note] = entries[0];
+
+      // The discriminating precondition. Without these two the spec would still
+      // pass against a build whose ids had gone back to a parseable shape, and
+      // it would no longer be testing the thing that broke.
+      expect(importedId).toBe(importAnnotationId(COMMENT_ID, 0, 5, COMMENT_BODY));
+      expect(
+        importedId.slice("import-".length),
+        "a W8 id is a bare hash — the deleted parse needed a dash here",
+      ).not.toContain("-");
+      expect(note.importSource?.commentId).toBe(COMMENT_ID);
+
+      // The user promotes the note (mirrors `promotedAnnotation`, which carries
+      // `importSource` through its `...rest`), Claude attaches a suggestion, the
+      // user accepts. `importSource` is untouched by all three.
+      map.set(importedId, {
+        ...note,
+        type: "comment" as const,
+        author: "user" as const,
+        audience: "outbound" as const,
+        promotedFrom: "note" as const,
+        status: "accepted" as const,
+        suggestedText: "Howdy",
+        textSnapshot: "Hello",
+      });
+
+      await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({
+        applied: 1,
+        commentsResolved: 1,
+      });
+
+      const extXml = await savedCommentsExtended();
+      expect(extXml).toBeDefined();
+      // The comment's OWN last body paragraph, not its document anchor.
+      expect(extXml).toContain(`w15:paraId="${LAST_PARA_ID}"`);
+      expect(extXml).not.toContain(ANCHOR_PARA_ID);
+      expect(extXml).toContain('w15:done="1"');
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
+
+  it(
+    "resolves nothing for an accepted suggestion that carries no importSource",
+    async () => {
+      // Negative control. An ordinary Claude comment on the same document, with
+      // the same .docx underneath it — so a build that manufactured a comment id
+      // from somewhere other than the record would light this up.
+      getOrCreateDocument(DOC_ID)
+        .getMap(Y_MAP_ANNOTATIONS)
+        .set("a1", {
+          id: "a1",
+          type: "comment",
+          author: "claude",
+          status: "accepted",
+          range: { from: 0, to: 5 },
+          content: "swap it",
+          suggestedText: "Howdy",
+          textSnapshot: "Hello",
+          timestamp: Date.now(),
+        });
+
+      // `commentsResolved: 0` alone is a weak control: `resolveWordComments`
+      // also returns 0 when it DID carry an id and simply failed to match one
+      // in comments.xml — which is what the old parse produced for a
+      // `import-reply-<hash>` id (the literal "reply"). The warn is the only
+      // observable that separates "never attempted" from "attempted and
+      // missed", so spy on it rather than inferring from the count.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({
+          applied: 1,
+          commentsResolved: 0,
+        });
+        expect(
+          warn.mock.calls.filter((c) => String(c[0]).includes("No comment-paragraph id")),
+        ).toEqual([]);
+      } finally {
+        warn.mockRestore();
+      }
+
+      // Nothing was marked done, and the part was not created just to say so.
+      expect(await savedCommentsExtended()).toBeUndefined();
     },
     REAL_APPLY_TIMEOUT_MS,
   );
