@@ -19,7 +19,7 @@ import {
 import type { Annotation } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { unanchored } from "../helpers/positions.js";
-import { rangeOf } from "../helpers/ydoc-factory.js";
+import { noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
 const DOC_HASH = "sha256:annotation-tools";
 
@@ -199,7 +199,7 @@ describe("tandem_resolveAnnotation tool logic", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "review me");
 
-    const result = op(id, ydoc, map, () => {});
+    const result = op(id, ydoc, map, noRelay);
 
     expect(result.kind).toBe("ok");
     expect((map.get(id) as Annotation).status).toBe(want);

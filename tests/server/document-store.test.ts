@@ -24,16 +24,9 @@ import { getDocumentStore, YDocStore } from "../../src/server/mcp/document-store
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
-import type { OnLossy } from "../../src/shared/sanitize.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
-import { rangeOf } from "../helpers/ydoc-factory.js";
-
-/** No sink: these specs are about the guards and the write, not the relay.
- *  Named rather than inlined so "does not care" is distinguishable from
- *  "forgot" at a glance. The relay's own coverage lives in the specs that pass
- *  a real one. */
-const noRelay: OnLossy = () => {};
+import { noRelay, normalizeForParity, rangeOf } from "../helpers/ydoc-factory.js";
 
 beforeEach(() => {
   clearOpenDocs();
@@ -60,8 +53,7 @@ describe("YDocStore.createAnnotation parity", () => {
     const recStore = map.get(idStore) as Annotation;
     const recHelper = map.get(idHelper) as Annotation;
 
-    const norm = (a: Annotation) => ({ ...a, id: "X", timestamp: 0 });
-    expect(norm(recStore)).toEqual(norm(recHelper));
+    expect(normalizeForParity(recStore)).toEqual(normalizeForParity(recHelper));
     expect(recStore.author).toBe("claude");
     expect(recStore.type).toBe("comment");
     expect(recStore.suggestedText).toBe("Hi");
@@ -202,6 +194,10 @@ describe("YDocStore lifecycle parity", () => {
     const idStore = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
     const idHelper = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
 
+    // Without this, `normalizeForParity` blanking `id` and `timestamp` would be
+    // the whole of the comparison if `rangeOf` ever stopped anchoring.
+    expect((map.get(idStore) as Annotation).relRange, "the fixtures are anchored").toBeDefined();
+
     const resStore = viaStore(store, idStore);
     const resHelper = viaHelper(idHelper, ydoc, map);
 
@@ -213,9 +209,8 @@ describe("YDocStore lifecycle parity", () => {
 
     // The records, modulo the two fields that legitimately differ between any
     // two annotations minted a moment apart.
-    const norm = (a: Annotation) => ({ ...a, id: "", timestamp: 0 });
-    expect(norm(map.get(idStore) as Annotation)).toStrictEqual(
-      norm(map.get(idHelper) as Annotation),
+    expect(normalizeForParity(map.get(idStore) as Annotation)).toStrictEqual(
+      normalizeForParity(map.get(idHelper) as Annotation),
     );
     expect((map.get(idStore) as Annotation).status).toBe(want);
   });

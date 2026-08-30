@@ -27,15 +27,8 @@ import { processInboxAnnotations } from "../../src/server/mcp/awareness.js";
 import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { TUTORIAL_ANNOTATIONS } from "../../src/server/mcp/tutorial-annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES } from "../../src/shared/constants.js";
-import type { OnLossy } from "../../src/shared/sanitize.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { getAnnotationsMap, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
-
-/** No sink: these specs are about the guards and the write, not the relay.
- *  Named rather than inlined so "does not care" is distinguishable from
- *  "forgot" at a glance. The relay's own coverage lives in the specs that pass
- *  a real one. */
-const noRelay: OnLossy = () => {};
+import { getAnnotationsMap, makeDoc, noRelay, seedRawAnnotation } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 let map: Y.Map<unknown>;
@@ -49,21 +42,9 @@ beforeEach(() => {
   store = new YDocStore(doc, "C:/tmp/guards.md", "doc-guards");
 });
 
-/** Seed a record RAW so a spec can choose a stored shape the mint path would
- *  never produce — a `flag` in particular, which is a note only post-sanitize. */
+/** Shorthand for the shared raw-record seeder, bound to this file's doc. */
 function seed(id: string, extra: Record<string, unknown>): void {
-  map.set(id, {
-    id,
-    type: "comment",
-    author: "user",
-    audience: "private",
-    status: "pending",
-    range: rangeOf(0, 5, doc).range,
-    content: "private thought",
-    timestamp: Date.now(),
-    rev: 1,
-    ...extra,
-  });
+  seedRawAnnotation(map, doc, id, extra);
 }
 
 describe("resolve refuses notes (ADR-027)", () => {

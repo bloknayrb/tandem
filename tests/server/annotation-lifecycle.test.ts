@@ -14,15 +14,8 @@ import * as Y from "yjs";
 import { acceptPending, dismissPending } from "../../src/server/annotations/lifecycle.js";
 import { createAnnotation } from "../../src/server/mcp/annotations.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
-import type { OnLossy } from "../../src/shared/sanitize.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { getAnnotationsMap, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
-
-/** No sink: these specs are about the guards and the write, not the relay.
- *  Named rather than inlined so "does not care" is distinguishable from
- *  "forgot" at a glance. The relay's own coverage lives in the specs that pass
- *  a real one. */
-const noRelay: OnLossy = () => {};
+import { getAnnotationsMap, makeDoc, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 
@@ -72,7 +65,13 @@ describe("acceptPending", () => {
       suggestedText: "replacement",
       textSnapshot: "Hello",
     });
-    const before = map.get(id) as Annotation;
+    // **A SPREAD, not the reference.** `map.get` hands back the stored object, so
+    // a bare `const before = map.get(id)` is a live alias — and a mutant that
+    // writes the record in place (`Object.assign(raw, updated); map.set(id, raw)`)
+    // then makes the assertion below compare an object to a spread of itself and
+    // pass. Measured, not reasoned: that mutant left this spec green and reds
+    // only the two rev specs.
+    const before = { ...(map.get(id) as Annotation) };
     expect(before.relRange, "fixture precondition: the record is anchored").toBeDefined();
 
     acceptPending(id, doc, map, noRelay);
@@ -80,8 +79,13 @@ describe("acceptPending", () => {
     const after = map.get(id) as Annotation;
     // Status and rev are the two fields the transition OWNS; everything else
     // must survive byte-for-byte, so assert the whole record rather than a
-    // field list that a future field would silently escape.
-    expect(after).toStrictEqual({ ...before, status: "accepted", rev: after.rev });
+    // field list that a future field would silently escape. `rev` is asserted
+    // by its own specs above and below — reading it off `after` here would be
+    // circular, so it is excluded from the comparison rather than smuggled in.
+    const { rev: _afterRev, ...afterRest } = after;
+    const { rev: _beforeRev, ...beforeRest } = before;
+    expect(afterRest).toStrictEqual({ ...beforeRest, status: "accepted" });
+    expect(after.rev, "and the transition did bump it").toBeGreaterThan(before.rev ?? 0);
   });
 
   it("returns kind: 'not-found' when the annotation doesn't exist", () => {
@@ -183,13 +187,21 @@ describe("transactions are tagged with MCP_ORIGIN (channel-event skip)", () => {
 
     op(id, doc, map);
 
-    // `toStrictEqual`, not `toContain`. The describe title claims a
-    // CHANNEL-EVENT SKIP, and existence cannot establish that: a correct
-    // `withMcp` write plus a spurious `withBrowser` echo contains "mcp" and
-    // emits the channel event anyway. Sound as a bare equality here only
-    // because the listener is attached after `createAnnotation` and nothing
-    // else transacts in this spec — do NOT add a `tr.changed` key filter, which
-    // is empty on `beforeTransaction` and would silently assert over `[]`.
-    expect(origins).toStrictEqual([MCP_ORIGIN]);
+    // The title claims a CHANNEL-EVENT SKIP, and `toContain("mcp")` cannot
+    // establish it: a correct `withMcp` write plus a spurious `withBrowser`
+    // echo contains "mcp" and emits the channel event anyway. So assert the
+    // absence of any other origin, plus that something happened at all.
+    //
+    // Phrased that way rather than as `toStrictEqual([MCP_ORIGIN])` on purpose:
+    // an exact-array pin also reds a refactor that splits the write into two
+    // `withMcp` transactions, which emits no channel event and does not violate
+    // this title. The invariant is "nothing but mcp", not "exactly one write".
+    //
+    // Sound with no `tr.changed` key filter only because the listener is
+    // attached after `createAnnotation` and nothing else transacts here — do
+    // NOT add one, since `changed` is empty on `beforeTransaction` and the
+    // filter would silently assert over `[]`.
+    expect(origins.filter((o) => o !== MCP_ORIGIN)).toStrictEqual([]);
+    expect(origins.length, "and the write happened").toBeGreaterThan(0);
   });
 });
