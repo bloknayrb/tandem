@@ -8,6 +8,7 @@ import HighlightColorPicker from "../editor/toolbar/HighlightColorPicker.svelte"
 import { toggleHighlight } from "../editor/toolbar/highlight-toggle";
 import { pmPosToFlatOffset } from "../positions";
 import { createCoalescingTick } from "../utils/coalescing-tick";
+import "../editor/toolbar/toolbar-chrome.css";
 import DecorationsMenu from "./DecorationsMenu.svelte";
 
 interface Props {
@@ -196,11 +197,11 @@ function handleHighlight(color: HighlightColor) {
       style="display: flex; align-items: center; gap: 1px; overflow-x: clip; overflow-y: visible; min-width: 0;"
     >
       <FormattingToolbar {editor} {onNotify} />
-      <div class="fmtbar-divider"></div>
+      <div class="tandem-toolbar-sep"></div>
       <HighlightColorPicker disabled={!canHighlight} onHighlight={handleHighlight} />
     </div>
     {#if onUpdateDecorations}
-      <div class="fmtbar-divider"></div>
+      <div class="tandem-toolbar-sep"></div>
       <DecorationsMenu
         {showAuthorship}
         {showComments}
@@ -212,10 +213,10 @@ function handleHighlight(color: HighlightColor) {
       />
     {/if}
     {#if onToggleSourceView}
-      <div class="fmtbar-divider"></div>
+      <div class="tandem-toolbar-sep"></div>
       <button
         type="button"
-        class="fmtbar-source"
+        class="fmtbar-source tandem-toolbar-ctl"
         class:on={sourceViewActive}
         data-testid="formatbar-source-toggle"
         aria-label={sourceViewActive ? "Return to formatted editor" : "View Markdown source"}
@@ -230,17 +231,21 @@ function handleHighlight(color: HighlightColor) {
       <!-- Outside the clipped track so it never truncates. Hiding the
            bar leaves formatting reachable via the always-full selection popup;
            restore via the command palette or Appearance settings. -->
-      <div class="fmtbar-divider"></div>
+      <div class="tandem-toolbar-sep"></div>
       <button
         type="button"
-        class="fmtbar-hide"
+        class="fmtbar-hide tandem-toolbar-ctl"
         data-testid="formatbar-hide-btn"
         title="Hide formatting bar"
         aria-label="Hide formatting bar"
         onclick={onHide}
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="m18 15-6-6-6 6" />
+        <!-- Same glyph as the popup's swap control (Toolbar.svelte,
+             .popup-swap-btn) — the two affordances do the same thing from
+             different places and must stay identical. -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 15l-6-6-6 6" />
+          <path d="M4 20h16" opacity="0.4" />
         </svg>
       </button>
     {/if}
@@ -281,25 +286,8 @@ function handleHighlight(color: HighlightColor) {
   .tandem-fmtbar-wrap:has(:global([aria-expanded="true"])) {
     z-index: var(--tandem-z-toast);
   }
-  .fmtbar-divider {
-    width: 1px;
-    height: 16px;
-    background: var(--tandem-border);
-    margin: 0 2px;
-    flex-shrink: 0;
-  }
+  /* Resting metrics come from .tandem-toolbar-ctl (toolbar-chrome.css). */
   .fmtbar-hide {
-    height: 26px;
-    min-width: 26px;
-    padding: 0 6px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--tandem-fg-muted);
-    border-radius: var(--tandem-r-pill);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
     flex-shrink: 0;
     transition: background 120ms, color 120ms;
   }
@@ -313,23 +301,19 @@ function handleHighlight(color: HighlightColor) {
       transition: none;
     }
   }
+  /* Resting metrics come from .tandem-toolbar-ctl; the mono treatment is this
+     control's own. One deleted declaration is worth knowing about: this rule
+     used to carry `min-width: 32px` and now inherits the shared 26px. Inert
+     today — `</>` at 11px/600 mono measures ~36px of glyph plus padding, so
+     neither floor engages — but this is the one control in the bar whose label
+     is three narrow characters, so a future type change could reach the floor
+     and find it lower than it was. */
   .fmtbar-source {
-    height: 26px;
-    min-width: 32px;
-    padding: 0 7px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--tandem-fg-muted);
-    border-radius: var(--tandem-r-pill);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
     flex-shrink: 0;
     font-family: var(--tandem-font-mono);
     font-size: 11px;
     font-weight: 600;
-    transition: background 120ms, border-color 120ms, color 120ms;
+    transition: background 120ms, border-color 120ms, color 120ms, box-shadow 120ms;
   }
   /* Source toggle: the `.on` border/background still land, they just land
      immediately under reduced motion. */
@@ -346,9 +330,17 @@ function handleHighlight(color: HighlightColor) {
     color: var(--tandem-fg);
   }
   .fmtbar-source.on {
-    background: var(--tandem-accent-bg);
-    border-color: var(--tandem-accent-border);
-    color: var(--tandem-accent-fg-strong, var(--tandem-accent));
+    background: var(--tandem-surface-sunk);
+    border-color: var(--tandem-border);
+    color: var(--tandem-fg);
+    box-shadow: var(--tandem-shadow-inset);
+  }
+  /* See ToolbarButton's matching block: forced colors drops the inset and
+     overrides the fill, so the press needs a border it cannot suppress. */
+  @media (forced-colors: active) {
+    .fmtbar-source.on {
+      border-color: Highlight;
+    }
   }
   .fmtbar-source:focus-visible {
     outline: 2px solid var(--tandem-accent);
