@@ -220,16 +220,18 @@ export async function applyChangesCore(
 
     const newText = ann.suggestedText ?? "";
 
-    // Extract importCommentId from annotation ID if it starts with "import-"
-    // Format: import-{commentId}-{timestamp} where commentId may contain hyphens
-    let importCommentId: string | undefined;
-    if (ann.id.startsWith("import-")) {
-      const withoutPrefix = ann.id.slice("import-".length);
-      const lastDash = withoutPrefix.lastIndexOf("-");
-      if (lastDash > 0) {
-        importCommentId = withoutPrefix.slice(0, lastDash);
-      }
-    }
+    // The originating Word `w:id`, read off the record — never parsed out of
+    // `ann.id` (#1682). Since #337 (2026-04-17) `importAnnotationId` mints
+    // `import-${sha256(...).slice(0, 12)}`: a hash, so no format string can
+    // recover the comment id from it, and the old `import-{commentId}-{ts}`
+    // parse silently yielded `undefined` for every real import (12 hex chars,
+    // no dash ⇒ `lastIndexOf("-") === -1`). That made the entire
+    // `resolveWordComments` pass unreachable. `importSource.commentId` is
+    // written at import (`docx-comments.ts`) and survives both
+    // `sanitizeAnnotation`'s allowlist and the client's `promotedAnnotation`
+    // spread, which is what makes the promote → suggest → accept → apply path
+    // carry it this far.
+    const importCommentId = ann.importSource?.commentId;
 
     suggestions.push({
       id: ann.id,
