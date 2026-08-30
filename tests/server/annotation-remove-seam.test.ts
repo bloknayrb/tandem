@@ -345,6 +345,32 @@ describe("the reply sweep", () => {
 
     expect(records).toHaveLength(1);
   });
+
+  it("leaves a reply whose parent id is unreadable, and says so", () => {
+    const ydoc = setupDoc("rm-sweep-bad", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "x");
+    addReplyToAnnotation(ydoc, map, id, "good", "user");
+    // Written past the helper on purpose: `addReplyToAnnotation` cannot produce
+    // this, but `mcp/annotations.ts` sets caller-shaped data into the same map.
+    withBrowser(ydoc, () => {
+      ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set("bad", { text: "no parent" });
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    removeAnnotationRecord(ydoc, id);
+    // Captured BEFORE restoring: `mockRestore` clears `mock.calls`, so asserting
+    // after it reads an empty array and passes for a `toHaveLength(0)`.
+    const warned = warn.mock.calls.map((c) => c.join(" ")).join(" | ");
+    warn.mockRestore();
+
+    // The behavioural half: it survives, and nothing else in the codebase ever
+    // collects it. The reported half is what makes that findable rather than a
+    // record that syncs to every peer in silence forever.
+    const replies = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    expect([...replies.keys()], "the good one went, the unreadable one stayed").toEqual(["bad"]);
+    expect(warned).toContain("unreadable annotationId");
+  });
 });
 
 describe("who may reach the unguarded mechanism", () => {
