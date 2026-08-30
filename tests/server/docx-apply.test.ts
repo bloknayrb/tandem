@@ -59,9 +59,34 @@ function wrapBody(bodyContent: string): string {
     </w:document>`;
 }
 
-async function createTestDocx(documentXml: string): Promise<Buffer> {
+const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml";
+
+/** Build a minimal word/comments.xml. Each comment lists its paragraph paraIds in order. */
+function commentsXml(comments: Array<{ id: string; paraIds: string[] }>): string {
+  const body = comments
+    .map(
+      (c) =>
+        `<w:comment w:id="${c.id}" w:author="A" w:date="2026-01-01T00:00:00Z">` +
+        c.paraIds.map((p) => `<w:p w14:paraId="${p}"><w:r><w:t>body</w:t></w:r></w:p>`).join("") +
+        `</w:comment>`,
+    )
+    .join("");
+  return `<?xml version="1.0"?><w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">${body}</w:comments>`;
+}
+
+/**
+ * A minimal but structurally valid .docx. `extraParts` adds package parts on
+ * top of the four every caller needs — `word/comments.xml`, say — so a fixture
+ * that only differs by one part does not restamp the other three.
+ */
+async function createTestDocx(
+  documentXml: string,
+  extraParts: Record<string, string> = {},
+): Promise<Buffer> {
   const zip = new JSZip();
   zip.file("word/document.xml", documentXml);
+  for (const [name, content] of Object.entries(extraParts)) zip.file(name, content);
   zip.file(
     "[Content_Types].xml",
     `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>`,
@@ -643,22 +668,6 @@ describe("applyTrackedChanges", () => {
 // ---------------------------------------------------------------------------
 
 describe("resolveWordComments", () => {
-  const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-  const W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml";
-
-  /** Build a minimal word/comments.xml. Each comment lists its paragraph paraIds in order. */
-  function commentsXml(comments: Array<{ id: string; paraIds: string[] }>): string {
-    const body = comments
-      .map(
-        (c) =>
-          `<w:comment w:id="${c.id}" w:author="A" w:date="2026-01-01T00:00:00Z">` +
-          c.paraIds.map((p) => `<w:p w14:paraId="${p}"><w:r><w:t>body</w:t></w:r></w:p>`).join("") +
-          `</w:comment>`,
-      )
-      .join("");
-    return `<?xml version="1.0"?><w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">${body}</w:comments>`;
-  }
-
   function countCommentEx(xml: string): number {
     return (xml.match(/<w15:commentEx\b/g) || []).length;
   }
@@ -697,8 +706,6 @@ describe("resolveWordComments", () => {
     // A comment whose body is: <w:p TOPLEVEL1/> <w:tbl><w:tr><w:tc><w:p NESTED/></w:tc></w:tr></w:tbl> <w:p TOPLEVEL2/>
     // CT_CommentEx @paraId must be TOPLEVEL2, not NESTED (the deepest/last in doc order).
     const zip = new JSZip();
-    const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-    const W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml";
     const xml =
       `<?xml version="1.0"?><w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">` +
       `<w:comment w:id="55" w:author="A" w:date="2026-01-01T00:00:00Z">` +
@@ -1327,30 +1334,12 @@ describe("applyChangesCore — the originating Word comment", () => {
    * resolution assertion can name the LAST paraId and be wrong if the pass
    * resolved something else.
    */
-  async function createTestDocxWithComment(): Promise<Buffer> {
-    const zip = new JSZip();
-    zip.file("word/document.xml", wrapBody("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"));
-    zip.file(
-      "word/comments.xml",
-      `<?xml version="1.0"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">` +
-        `<w:comment w:id="${COMMENT_ID}" w:author="Reviewer" w:date="2026-01-01T00:00:00Z">` +
-        `<w:p w14:paraId="${ANCHOR_PARA_ID}"><w:r><w:t>${COMMENT_BODY}</w:t></w:r></w:p>` +
-        `<w:p w14:paraId="${LAST_PARA_ID}"><w:r><w:t>thanks</w:t></w:r></w:p>` +
-        `</w:comment></w:comments>`,
-    );
-    zip.file(
-      "[Content_Types].xml",
-      `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>`,
-    );
-    zip.file(
-      "_rels/.rels",
-      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
-    );
-    zip.file(
-      "word/_rels/document.xml.rels",
-      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
-    );
-    return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
+  function createTestDocxWithComment(): Promise<Buffer> {
+    return createTestDocx(wrapBody("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>"), {
+      "word/comments.xml": commentsXml([
+        { id: COMMENT_ID, paraIds: [ANCHOR_PARA_ID, LAST_PARA_ID] },
+      ]),
+    });
   }
 
   beforeEach(async () => {
