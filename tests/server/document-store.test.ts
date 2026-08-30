@@ -239,7 +239,7 @@ describe("YDocStore.removeAnnotation parity", () => {
     const ydoc = setupDoc("rm-2", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "rm-2");
     const viaStore = store.removeAnnotation("nope");
-    const viaMechanism = removeAnnotationRecord(ydoc, ydoc.getMap(Y_MAP_ANNOTATIONS), "nope");
+    const viaMechanism = removeAnnotationRecord(ydoc, "nope");
     // Both halves pinned, not just their equality: two functions that both
     // returned `{kind:"ok"}` would also be equal to each other.
     expect(viaStore).toStrictEqual({ kind: "not-found", id: "nope" });

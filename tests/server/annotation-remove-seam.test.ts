@@ -29,6 +29,7 @@ import { makeAnnotationsObserver } from "../../src/server/events/observers/annot
 import { addReplyToAnnotation, createAnnotation } from "../../src/server/mcp/annotations.js";
 import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { handleRemoveAnnotation } from "../../src/server/mcp/routes/remove-annotation.js";
+import { getBuffer, resetForTesting } from "../../src/server/notifications.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { TandemEvent } from "../../src/shared/events/types.js";
 import { BROWSER_ORIGIN, MCP_ORIGIN, withBrowser } from "../../src/shared/origins.js";
@@ -88,6 +89,64 @@ describe("the browser's Archive route — ADR-027 (#1680), pinned at the ROUTE",
 
     expect(res._status).toBe(404);
     expect(map.size, "the real annotation survives").toBe(1);
+  });
+});
+
+/**
+ * The client half of an Archive failure is one-way: `removeAnnotation` in
+ * `panels/annotation-actions.ts` returns `Promise<void>`, `SidePanel.svelte`
+ * calls it un-awaited, and `!resp.ok` produces only a `console.error`. So the
+ * toast pushed here is the ONLY thing that tells the user their click did
+ * nothing — which makes every failure exit's notification load-bearing, and
+ * makes an unasserted one a thing a refactor can drop in silence.
+ *
+ * Review found two of three exits had neither a toast nor a log, `No document
+ * open` among them — reachable through an ordinary tab swap between render and
+ * click. The success row is what stops this from being satisfied by a handler
+ * that notifies unconditionally.
+ */
+describe("every failure exit of the Archive route reports to the user", () => {
+  beforeEach(() => resetForTesting());
+
+  it("pushes exactly one error notification per failure, and none on success", () => {
+    const ydoc = setupDoc("rm-notify", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "real");
+
+    const cases: Array<[string, unknown, number, string]> = [
+      ["missing id", { documentId: "rm-notify" }, 400, "remove-error:no-id"],
+      [
+        "no document open",
+        { annotationId: id, documentId: "no-such-doc" },
+        404,
+        "remove-error:no-document",
+      ],
+      [
+        "unknown annotation",
+        { annotationId: "nope", documentId: "rm-notify" },
+        404,
+        `remove-error:nope`,
+      ],
+    ];
+
+    for (const [label, body, status, dedupKey] of cases) {
+      resetForTesting();
+      const res = mockRes();
+      handleRemoveAnnotation(reqWith(body), res);
+
+      expect(res._status, label).toBe(status);
+      const pushed = getBuffer().filter((n) => n.severity === "error");
+      expect(
+        pushed.map((n) => n.dedupKey),
+        label,
+      ).toEqual([dedupKey]);
+    }
+
+    resetForTesting();
+    const res = mockRes();
+    handleRemoveAnnotation(reqWith({ annotationId: id, documentId: "rm-notify" }), res);
+    expect(res._status).toBe(200);
+    expect(getBuffer(), "success is silent — otherwise the rows above prove nothing").toEqual([]);
   });
 });
 
@@ -174,7 +233,7 @@ describe("ADR-031 origin — the contract the helper choice IS", () => {
     const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "x");
     const origins = originsChangingKey(ydoc, id);
 
-    removeAnnotationRecord(ydoc, map, id);
+    removeAnnotationRecord(ydoc, id);
 
     expect(origins).toStrictEqual([BROWSER_ORIGIN]);
   });
@@ -228,7 +287,7 @@ describe("the channel observer and a delete", () => {
       events.length = 0;
       warn.mockClear();
 
-      removeAnnotationRecord(ydoc, map, id);
+      removeAnnotationRecord(ydoc, id);
     } finally {
       stop();
     }
@@ -281,7 +340,7 @@ describe("the reply sweep", () => {
     // yields one atomic transaction, which is the property this name claims.
     const { records, detach } = listenForTransactions(ydoc);
 
-    removeAnnotationRecord(ydoc, map, id);
+    removeAnnotationRecord(ydoc, id);
     detach();
 
     expect(records).toHaveLength(1);

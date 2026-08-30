@@ -59,7 +59,7 @@ describe("removeAnnotationRecord", () => {
     // check. #700 moved it there in the first place because browser-origin
     // deletes and stale-tab CRDT merges bypassed the old explicit call, which
     // is also what retired this function's `filePath` parameter.
-    const result = removeAnnotationRecord(ydoc, map, id);
+    const result = removeAnnotationRecord(ydoc, id);
 
     expect(result).toStrictEqual({ kind: "ok", id });
     expect(map.has(id)).toBe(false);
@@ -80,16 +80,15 @@ describe("removeAnnotationRecord", () => {
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);
 
-    removeAnnotationRecord(ydoc, map, id);
+    removeAnnotationRecord(ydoc, id);
 
     expect(repliesMap.size).toBe(0);
   });
 
   it("returns NOT_FOUND for non-existent annotation", () => {
     const ydoc = setupDoc("rm-fn-3", "Hello world");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
-    const result = removeAnnotationRecord(ydoc, map, "fake_id");
+    const result = removeAnnotationRecord(ydoc, "fake_id");
 
     expect(result).toStrictEqual({ kind: "not-found", id: "fake_id" });
   });
@@ -106,7 +105,7 @@ describe("removeAnnotationRecord", () => {
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);
 
-    removeAnnotationRecord(ydoc, map, id1);
+    removeAnnotationRecord(ydoc, id1);
 
     expect(repliesMap.size).toBe(1);
     let remainingAnnotationId: string | undefined;

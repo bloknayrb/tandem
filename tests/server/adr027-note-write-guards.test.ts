@@ -169,7 +169,7 @@ describe("the BROWSER may still archive its own note", () => {
     // guard, which is exactly why the regression was invisible to it.
     seed("b1", { type: "note" });
 
-    const result = removeAnnotationRecord(doc, map, "b1");
+    const result = removeAnnotationRecord(doc, "b1");
 
     expect(result.kind, "the user's own Archive still works").toBe("ok");
     expect(map.has("b1")).toBe(false);

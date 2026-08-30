@@ -39,11 +39,31 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Every file under `src/`, repo-relative POSIX path → contents. Read once. */
+/**
+ * Every file under `src/`, repo-relative POSIX path → contents. Read once.
+ *
+ * **Undecodable content throws rather than entering the map**, because it is the
+ * one failure mode a static guard cannot survive: `readFileSync(p, "utf8")` does
+ * NOT throw on invalid UTF-8, it substitutes U+FFFD. A mis-encoded file would
+ * arrive as a mangled string, every `filesMentioning` would match nothing in it,
+ * and each guard built on this helper would report "no new callers" — a false
+ * green precisely in the suites whose job is to catch one. The loud failures
+ * need no help: a `readdirSync`/`readFileSync` error carries its path and aborts
+ * module evaluation, which vitest reports against this file.
+ */
 export const SRC_FILES: ReadonlyMap<string, string> = new Map(
   walk(SRC)
     .map((f) => path.relative(ROOT, f).split(path.sep).join("/"))
-    .map((rel) => [rel, readFileSync(path.join(ROOT, rel), "utf8")] as const),
+    .map((rel) => {
+      const contents = readFileSync(path.join(ROOT, rel), "utf8");
+      if (contents.includes("\uFFFD")) {
+        throw new Error(
+          `${rel} did not decode as UTF-8 (U+FFFD present). Every src/ guard reads this map, ` +
+            "and a mangled file silently matches nothing — so this fails loudly instead.",
+        );
+      }
+      return [rel, contents] as const;
+    }),
 );
 
 /**

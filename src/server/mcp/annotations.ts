@@ -661,6 +661,15 @@ export function registerAnnotationTools(server: McpServer): void {
             "INVALID_ARGUMENT",
             `Annotation ${id} is a private note and cannot be removed by Claude`,
           );
+        default: {
+          // A new `RemoveResult` arm errors HERE, naming it. Without this the
+          // switch falls off the end and the only complaint is `gatedTool`
+          // rejecting the inferred `Promise<… | undefined>` — a message that
+          // never mentions the arm or this switch, and whose obvious fix is a
+          // generic `default` that swallows it.
+          const unhandled: never = result;
+          return mcpError("INTERNAL", `unhandled remove outcome: ${JSON.stringify(unhandled)}`);
+        }
       }
     }),
   );
