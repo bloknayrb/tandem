@@ -1,8 +1,15 @@
-import type { AlignType, PhrasingContent, Root, RootContent, Table } from "mdast";
+import type { AlignType, ListItem, PhrasingContent, Root, RootContent, Table } from "mdast";
 import * as Y from "yjs";
 import { sanitizeImageSrc } from "../../shared/image-src-safety.js";
 import { normalizeHardBreaks } from "./hardbreak-normalize.js";
 import { serializeMdastBlock, serializeMdastInline } from "./markdown.js";
+
+/** A pass-2 text population op: attach the Y.XmlText first, then run these. */
+export type DeferredText = {
+  xmlText: Y.XmlText;
+  nodes?: PhrasingContent[];
+  plainText?: string;
+};
 
 export const MARKDOWN_HTML_ATTR = "markdownHtml";
 /**
@@ -75,7 +82,7 @@ function insertBlocks(doc: Y.Doc, tree: Root, index: number): void {
   const fragment = doc.getXmlFragment("default");
 
   // Pass 1 collects deferred text operations while building the element tree.
-  const deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }> = [];
+  const deferred: DeferredText[] = [];
   const allElements: Y.XmlElement[] = [];
   for (const node of tree.children) {
     allElements.push(...blockToYxml(node, deferred));
@@ -87,6 +94,82 @@ function insertBlocks(doc: Y.Doc, tree: Root, index: number): void {
   }
 
   // Pass 2: populate text now that elements are attached to the Y.Doc
+  populateDeferredText(deferred);
+
+  // Convert hardBreak embeds into sibling elements y-prosemirror can render (else
+  // they surface as literal <hardbreak></hardbreak>). Covers both mdastToYDoc and
+  // appendMdast; scoped to the just-inserted blocks so append stays offset-safe.
+  normalizeHardBreaks(allElements);
+}
+
+/**
+ * Build one detached `listItem` from an mdast list item.
+ *
+ * Extracted from the `list` case so `tandem_editList` can build items WITHOUT
+ * building a list around them. That is not a stylistic preference: a detached
+ * `Y.XmlElement`'s `.get(i)` returns `undefined` (prelim content is unreadable),
+ * so items cannot be lifted back out of a built-but-unattached list, and moving
+ * an already-attached element into a new parent throws. Building the items
+ * directly is the only shape that works.
+ */
+function buildListItem(item: ListItem, deferred: DeferredText[]): Y.XmlElement {
+  const listItem = new Y.XmlElement("listItem");
+  if (item.spread) listItem.setAttribute("spread", true as any);
+  // GFM task list: a list item with non-null `checked` carries the tri-state as
+  // an attribute on the ordinary listItem (#982). `null` (plain bullet) stores
+  // no attribute so the editor's PM-default `null` reconciles without a phantom
+  // transaction. Stored as a real boolean — the same representation
+  // y-prosemirror writes when a user toggles the checkbox — so it round-trips
+  // byte-identically (yjs ContentAny).
+  if (item.checked != null) {
+    listItem.setAttribute("checked", item.checked as any);
+  }
+  let itemIndex = 0;
+  for (const child of item.children) {
+    for (const c of blockToYxml(child, deferred)) {
+      listItem.insert(itemIndex, [c]);
+      itemIndex++;
+    }
+  }
+  ensureBlockChild(listItem, itemIndex);
+  return listItem;
+}
+
+/**
+ * Build detached `listItem`s from a parsed markdown tree, for insertion into an
+ * EXISTING list.
+ *
+ * Total by construction: a parsed `list` contributes its items; any other block
+ * (a paragraph, a heading, a fenced block) is wrapped as one item. `listItem` is
+ * `block+` since #1664, so a non-paragraph first child is legal and needs no
+ * filler — before that fix, wrapping a heading here would have produced a node
+ * the client schema rejected, and a rejection is answered by deleting the node
+ * out of the shared Y.Doc.
+ *
+ * Returns the items and the deferred text ops. The caller MUST attach the items
+ * first and only then run `populateDeferredText` — a detached `Y.XmlText`
+ * reverses segment order on attach (ADR-001).
+ */
+export function buildListItemsFromTree(tree: Root): {
+  items: Y.XmlElement[];
+  deferred: DeferredText[];
+} {
+  const deferred: DeferredText[] = [];
+  const items: Y.XmlElement[] = [];
+  for (const node of tree.children) {
+    if (node.type === "list") {
+      for (const item of node.children) items.push(buildListItem(item, deferred));
+    } else {
+      items.push(
+        buildListItem({ type: "listItem", spread: false, children: [node] } as ListItem, deferred),
+      );
+    }
+  }
+  return { items, deferred };
+}
+
+/** Run the pass-2 text population for elements that are now attached. */
+export function populateDeferredText(deferred: DeferredText[]): void {
   for (const { xmlText, nodes, plainText } of deferred) {
     if (nodes) {
       processInline(xmlText, nodes, {});
@@ -94,11 +177,6 @@ function insertBlocks(doc: Y.Doc, tree: Root, index: number): void {
       xmlText.insert(0, plainText);
     }
   }
-
-  // Convert hardBreak embeds into sibling elements y-prosemirror can render (else
-  // they surface as literal <hardbreak></hardbreak>). Covers both mdastToYDoc and
-  // appendMdast; scoped to the just-inserted blocks so append stays offset-safe.
-  normalizeHardBreaks(allElements);
 }
 
 /** Convert a block-level MDAST node to one or more Y.XmlElements */
@@ -158,6 +236,7 @@ function blockToYxml(
           insertIndex++;
         }
       }
+      ensureBlockChild(el, insertIndex);
       return [el];
     }
 
@@ -177,26 +256,7 @@ function blockToYxml(
       if (node.spread) el.setAttribute("spread", true as any);
       let listIndex = 0;
       for (const item of node.children) {
-        const listItem = new Y.XmlElement("listItem");
-        if (item.spread) listItem.setAttribute("spread", true as any);
-        // GFM task list: a list item with non-null `checked` carries the
-        // tri-state as an attribute on the ordinary listItem (#982). `null`
-        // (plain bullet) stores no attribute so the editor's PM-default `null`
-        // reconciles without a phantom transaction. Stored as a real boolean —
-        // the same representation y-prosemirror writes when a user toggles the
-        // checkbox — so it round-trips byte-identically (yjs ContentAny).
-        if (item.checked != null) {
-          listItem.setAttribute("checked", item.checked as any);
-        }
-        let itemIndex = 0;
-        for (const child of item.children) {
-          const childEls = blockToYxml(child, deferred);
-          for (const c of childEls) {
-            listItem.insert(itemIndex, [c]);
-            itemIndex++;
-          }
-        }
-        el.insert(listIndex, [listItem]);
+        el.insert(listIndex, [buildListItem(item, deferred)]);
         listIndex++;
       }
       return [el];
@@ -286,6 +346,53 @@ function blockToYxml(
       return serialized.length > 0 ? [rawBlockParagraph(serialized, deferred)] : [];
     }
   }
+}
+
+/**
+ * Guarantee a block container has at least one child (#1664).
+ *
+ * `listItem` and `blockquote` are `block+` / `block+` in the editor schema, so a
+ * ZERO-child one is invalid — and invalid is not inert. `createNodeFromYElement`
+ * reads a schema rejection as a concurrency artifact and deletes the node out of
+ * the shared Y.Doc, cascading to the fragment root; autosave then persists the
+ * result. Widening `listItem` to `block+` fixed the "first child is not a
+ * paragraph" half of that bug and does nothing for this half, because `block+`
+ * still requires ONE.
+ *
+ * Legal CommonMark reaches here: `- a\n-\n- b` (an empty item between two
+ * others) and a bare `>` both parse to an empty container, and a document whose
+ * only block is one of those was blanked entirely.
+ *
+ * Normalizing here is free in a way the general case is not, which is why this
+ * is a loader fix and the sibling half was a schema fix. An empty paragraph
+ * contributes no characters and no FLAT_SEPARATOR (`collectElementFlat` only
+ * emits one BETWEEN siblings), so no flat offset moves and no annotation
+ * re-anchors; and `remark-stringify` renders an item holding one empty paragraph
+ * as the same bare `-` it read, so nothing rewrites the user's file. Both are
+ * asserted rather than assumed, in `tests/client/list-ydoc-sync.test.ts`.
+ *
+ * Takes the child count rather than reading `el.length`, and that is not a
+ * micro-optimization. `el` is still DETACHED here, and yjs's
+ * `YXmlFragment.get length()` opens with `this.doc ?? warnPrematureAccess()` —
+ * so an `el.length` guard emits a `console.warn` for every list item and
+ * blockquote in the document, measured at 795 on `CHANGELOG.md` alone. Beyond
+ * the cost, CLAUDE.md documents "Invalid access" as a harmless y-prosemirror
+ * artifact and `index.ts` suppresses it by pattern; manufacturing thousands
+ * deterministically would destroy what signal that channel has left. Both
+ * callers already track the count for their insert index, so it is free.
+ *
+ * No `deferred` entry, unlike every other builder here. The two-pass rule exists
+ * because a DETACHED `Y.XmlText` reverses segment order on attach — and there
+ * are no segments to reverse. `new Y.XmlText("")` bakes the (empty) content in
+ * at construction, the same reasoning `imageToYxml` gives for taking no
+ * `deferred`; routing it through pass 2 would only reach `insert(0, "")`, which
+ * yjs returns from immediately.
+ */
+function ensureBlockChild(el: Y.XmlElement, childCount: number): void {
+  if (childCount > 0) return;
+  const para = new Y.XmlElement("paragraph");
+  para.insert(0, [new Y.XmlText("")]);
+  el.insert(0, [para]);
 }
 
 /**

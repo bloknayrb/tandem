@@ -42,7 +42,7 @@ These WILL break things if violated:
 
 | Working on… | Read first |
 |---|---|
-| MCP tools, `/api` routes, channel API | [docs/mcp-tools.md](docs/mcp-tools.md) — All 32 MCP tools (29 active, 3 deprecated stubs) |
+| MCP tools, `/api` routes, channel API | [docs/mcp-tools.md](docs/mcp-tools.md) — All 33 MCP tools (30 active, 3 deprecated stubs) |
 | Data flows, coordinate systems, file map, Tauri layer | [docs/architecture.md](docs/architecture.md) |
 | Colors, spacing, radii, elevation | [docs/semantic-tokens.md](docs/semantic-tokens.md) |
 | `data-testid` / E2E selectors | [docs/design-system-impl/testid-manifest.md](docs/design-system-impl/testid-manifest.md) |
@@ -251,7 +251,7 @@ settled is in [docs/release-smoke-checklist.md](docs/release-smoke-checklist.md#
 unverified against a real upgrade rather than merely untested this cycle; tracked with a
 date in #1596.
 
-Core is complete — 29 active MCP tools, multi-doc tabs, CRDT-anchored annotations, chat, four
+Core is complete — 30 active MCP tools, multi-doc tabs, CRDT-anchored annotations, chat, four
 push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor stdin),
 `.md`/`.docx`/`.txt`/`.html`, npm global install, Tauri desktop app.
 

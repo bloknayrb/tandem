@@ -437,10 +437,20 @@ const NUMBERED_REF = "tandem-numbered";
 interface BlockCtx {
   numberingDepth: number;
   blockquoteDepth: number;
+  /**
+   * Whether this block is a direct child of the fragment root.
+   *
+   * Only top-level headings carry a `"## "` prefix in the flat projection —
+   * `extractTextWithBreaks` applies `headingPrefix(level)` in its own top-level
+   * loop, while a nested heading is traversed by `collectElementFlat`, which
+   * adds nothing. The emit cursor has to make the same distinction or it walks
+   * more characters than the document holds. See the `heading` branch.
+   */
+  topLevel: boolean;
 }
 
 function emptyCtx(): BlockCtx {
-  return { numberingDepth: 0, blockquoteDepth: 0 };
+  return { numberingDepth: 0, blockquoteDepth: 0, topLevel: true };
 }
 
 function blockToDocx(el: Y.XmlElement, ctx: BlockCtx, emit: EmitCtx): Array<Paragraph | Table> {
@@ -449,13 +459,20 @@ function blockToDocx(el: Y.XmlElement, ctx: BlockCtx, emit: EmitCtx): Array<Para
     case "heading": {
       const level = Number(el.getAttribute("level") ?? 1);
       const heading = HEADING_BY_LEVEL[level] ?? HeadingLevel.HEADING_1;
-      // Flat offsets include the markdown-style heading prefix ("## ").
-      // Markers can't render inside the virtual prefix; any event there
-      // flushes at the heading text start (the import walker also counts the
-      // prefix before the first run, so a clamp is the closest valid anchor).
-      // getHeadingPrefixLength is the SAME function the coordinate system
-      // uses (extractText/resolveToElement) — keep the cursor consistent.
-      emit.pos += getHeadingPrefixLength(el);
+      // Flat offsets include the markdown-style heading prefix ("## ") — but
+      // ONLY for a top-level heading. Markers can't render inside the virtual
+      // prefix; any event there flushes at the heading text start (the import
+      // walker also counts the prefix before the first run, so a clamp is the
+      // closest valid anchor). getHeadingPrefixLength is the SAME function the
+      // coordinate system uses (extractText/resolveToElement) — keep the cursor
+      // consistent.
+      //
+      // The `ctx.topLevel` gate is not cosmetic: charging the prefix for a
+      // NESTED heading walks 2-4 characters the flat text does not contain, and
+      // every exported comment anchor after it is displaced by that much.
+      // Reachable before #1664 as `> # Quoted`; reachable by the everyday
+      // `- # Section` spelling since `listItem` was widened to `block+`.
+      if (ctx.topLevel) emit.pos += getHeadingPrefixLength(el);
       return [new Paragraph({ heading, children: inlineChildren(el, emit) })];
     }
     case "paragraph": {
@@ -468,7 +485,7 @@ function blockToDocx(el: Y.XmlElement, ctx: BlockCtx, emit: EmitCtx): Array<Para
     }
     case "blockquote": {
       const out: Array<Paragraph | Table> = [];
-      const childCtx = { ...ctx, blockquoteDepth: ctx.blockquoteDepth + 1 };
+      const childCtx = { ...ctx, blockquoteDepth: ctx.blockquoteDepth + 1, topLevel: false };
       let hasPrior = false;
       for (let i = 0; i < el.length; i++) {
         const c = el.get(i);
@@ -528,10 +545,14 @@ function blockToDocx(el: Y.XmlElement, ctx: BlockCtx, emit: EmitCtx): Array<Para
             );
           } else if (child.nodeName === "bulletList" || child.nodeName === "orderedList") {
             out.push(
-              ...blockToDocx(child, { ...ctx, numberingDepth: ctx.numberingDepth + 1 }, emit),
+              ...blockToDocx(
+                child,
+                { ...ctx, numberingDepth: ctx.numberingDepth + 1, topLevel: false },
+                emit,
+              ),
             );
           } else {
-            out.push(...blockToDocx(child, ctx, emit));
+            out.push(...blockToDocx(child, { ...ctx, topLevel: false }, emit));
           }
         }
       }
