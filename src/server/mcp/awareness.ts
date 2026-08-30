@@ -602,7 +602,7 @@ function processUnsurfacedInboxAnnotations(
         ...(wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
       });
       surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
-    } else if (ann.author === "claude" && ann.status !== "pending") {
+    } else if (ann.author === "claude" && ann.type !== "note" && ann.status !== "pending") {
       userResponses.push({ ...ann, textSnippet: snippet });
       surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
     }

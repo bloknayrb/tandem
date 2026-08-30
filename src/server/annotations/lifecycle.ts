@@ -70,10 +70,42 @@ import { nextRev } from "./schema.js";
 // Result variants
 // ---------------------------------------------------------------------------
 
-/** Tagged outcome of a lifecycle mutation. */
+/**
+ * Tagged outcome of a lifecycle mutation.
+ *
+ * `invalid-note` was added by #1680 and carries no payload. Note that this is
+ * **inconsistent with its own union** — every other non-`ok` arm here carries
+ * `id` — and consistent instead with the edit path's identically-named arm. It
+ * is harmless because the sole consumer already closes over `id` from the tool
+ * arguments, but "it mirrors `EditResult`" is not a justification for a shape
+ * inside `LifecycleResult`; the honest reason is that the shared-`LifecycleError`
+ * refactor this union needs has not happened yet. **The arm was
+ * chosen over `not-found` knowing `not-found` was the alternative.** Notes are
+ * structurally unenumerable through the read surface, so answering `not-found`
+ * would be the more consistent story; it is also a silent-failure shape, and it
+ * buys nothing here, because a note-typed id CAN be one Claude legitimately
+ * read and still holds — `file-io/docx-comments.ts` migrates a legacy imported
+ * `comment` to a `note` in place, under an id that is a content hash with no
+ * timestamp. `editPending` and `addReplyToAnnotation` already disclose "this id
+ * is a note", so this discloses nothing new.
+ *
+ * **"Nothing new" is the honest phrasing, and the pre-existing oracle is
+ * stronger than it looks.** `importAnnotationId` is
+ * `sha256(commentId from to bodyText)` — a Word comment id is a small integer,
+ * and `from`/`to` are flat offsets Claude can obtain from
+ * `tandem_getTextContent`. So for an imported note the id is *offline
+ * computable* from a guess at the body, and any arm that confirms "this id
+ * exists and is a note" is a content-guessing oracle over short private
+ * bodies, not merely a type disclosure. That predates #1680 —
+ * `editPendingAnnotation` and `addReplyToAnnotation` both answer it — and
+ * answering `not-found` here while edit answers `invalid-note` would leave the
+ * oracle intact while making the family inconsistent. It is a family-wide
+ * question, tracked as such rather than solved by this arm's spelling.
+ */
 export type LifecycleResult<T> =
   | { kind: "ok"; data: T }
   | { kind: "not-found"; id: string }
+  | { kind: "invalid-note" }
   | { kind: "not-pending"; id: string; currentStatus: AnnotationStatus };
 
 /**
@@ -104,10 +136,11 @@ export type CreateResult = { kind: "created"; annotation: Annotation };
 /**
  * The edit family's result. Deliberately NOT a widened {@link LifecycleResult}.
  *
- * Three of these arms — `empty-patch`, `invalid-suggestion-target`,
- * `invalid-note` — are unreachable from `accept`/`dismiss`, so folding them
- * into `LifecycleResult` would make a `switch` over an accept stop telling the
- * reader which arms can actually occur.
+ * Two of these arms — `empty-patch` and `invalid-suggestion-target` — are
+ * unreachable from `accept`/`dismiss`, so folding them into `LifecycleResult`
+ * would make a `switch` over an accept stop telling the reader which arms can
+ * actually occur. (`invalid-note` used to be a third; #1680 gave
+ * `LifecycleResult` its own, so it no longer counts toward this argument.)
  *
  * **DEFERRED, not rejected — and the cost is smaller than it looks.** The
  * honest end state is a shared `LifecycleError` base holding the two arms that
@@ -478,6 +511,18 @@ function transitionPending(
   // make it non-cleanly revertible against Unit 8d. The upgrade belongs to 8d,
   // where accept/dismiss is the subject and can be tested.
   const ann = sanitizeAnnotation(raw as RawAnnotation, () => {});
+
+  // ADR-027 (#1680): notes are user-private. Claude must not resolve them.
+  //
+  // **After sanitize, and before the pending check — both halves matter.**
+  // After, because a stored `flag` is a note only once sanitized, so a raw-type
+  // check lets one through; that is the same constraint `editPendingAnnotation`
+  // documents. Before, because reporting `not-pending` on a resolved note tells
+  // a caller the note exists and is merely resolved, which is a disclosure
+  // ADR-027 does not make. Only a spec seeding an ALREADY-RESOLVED note
+  // distinguishes this ordering from the other one.
+  if (ann.type === "note") return { kind: "invalid-note" };
+
   if (ann.status !== "pending") {
     return { kind: "not-pending", id, currentStatus: ann.status };
   }

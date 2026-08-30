@@ -75,6 +75,14 @@ export function removeAnnotationById(
     return { ok: false, code: "NOT_FOUND", error: `Annotation ${annotationId} not found` };
   }
 
+  // **No note guard here, deliberately — see `YDocStore.removeAnnotation`.**
+  // This helper is shared: `mcp/routes/remove-annotation.ts` calls it for the
+  // BROWSER, and that is how a user archives their own note
+  // (`AnnotationCardActions.svelte`'s `archive-btn`). ADR-027 governs what
+  // Claude may do, not what the user may do to their own note, so a guard at
+  // this altitude breaks the primary interaction on every note card — silently,
+  // because the client only logs the failure.
+
   withMcp(ydoc, () => {
     annotationsMap.delete(annotationId);
     const repliesMap = getRepliesMap(ydoc);
@@ -643,6 +651,13 @@ export function registerAnnotationTools(server: McpServer): void {
           return mcpSuccess({ id, status: result.data.status });
         case "not-found":
           return mcpError("NOT_FOUND", `Annotation ${id} not found`);
+        case "invalid-note":
+          // Same envelope `tandem_editAnnotation` returns for a note, so the two
+          // write paths now answer identically rather than disagreeing.
+          return mcpError(
+            "INVALID_ARGUMENT",
+            `Annotation ${id} is a private note and cannot be resolved by Claude`,
+          );
         case "not-pending":
           return mcpError(
             "ANNOTATION_NOT_PENDING",
@@ -666,7 +681,10 @@ export function registerAnnotationTools(server: McpServer): void {
       const store = getDocumentStore(documentId);
       if (!store) return noDocumentError();
       const result = store.removeAnnotation(id);
-      if (!result.ok) return mcpError("NOT_FOUND", result.error);
+      // `result.code`, not a hardcoded `NOT_FOUND` — the store's ADR-027 guard
+      // answers `INVALID_ARGUMENT`, and collapsing every arm to NOT_FOUND made
+      // the error text and the error code disagree.
+      if (!result.ok) return mcpError(result.code, result.error);
       return mcpSuccess({ removed: true, id });
     }),
   );

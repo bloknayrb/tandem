@@ -157,7 +157,8 @@ has them is not thereby safe to expose. `docs/decisions.md` ADR-046 states the s
 
 ## Privacy
 
-- **Notes are user-private (ADR-027).** Annotations with `type: "note"` are stripped from every MCP tool response and never appear in channel events. The AI cannot read them.
+- **Notes are user-private (ADR-027).** Annotations with `type: "note"` are stripped from every MCP tool response and never appear in channel events. The AI cannot read them. **Read-side confidentiality is not the whole of the rule, and until #1680 it was the only half implemented** — the AI could still *write* to a note it never read. See the fix below.
+- **The AI cannot resolve or remove a note BY ID (#1680), which is narrower than "cannot destroy notes" — see the bound below.** `tandem_resolveAnnotation` and `tandem_removeAnnotation` refuse a note with `INVALID_ARGUMENT`, matching `tandem_editAnnotation`. The remove guard lives on `YDocStore.removeAnnotation`, **not** on the shared `removeAnnotationById` helper, because the browser's own Archive action calls that helper — ADR-027 governs what Claude may do, not what the user may do to their own note. **One honest gap: the `INVALID_ARGUMENT` code reaching the MCP wire is not pinned by a test.** The tool handler used to flatten every failure to `NOT_FOUND` and now forwards `result.code`, but there is no MCP-handler harness in `tests/`, so that half rests on reading the handler rather than running it — a revert would leave the code and the message disagreeing with nothing red. **The guard sits after `sanitizeAnnotation`, not before it**, in all three: a stored legacy `flag` is a note only once normalized, so a raw-type check lets one through. On resolve it also sits *before* the pending check, so a resolved note answers `invalid-note` rather than `not-pending` — the latter would confirm the note exists and is merely resolved. Pinned by `tests/server/adr027-note-write-guards.test.ts`.
 - **What the AI sees:** the document content you open, selections you hold (subject to dwell-time gating), annotations you create or that the AI itself creates, and chat messages sent through the Tandem sidebar.
 - **What the AI doesn't see:** files you haven't opened, notes (per above), the auth token, and any environment variables that aren't surfaced through MCP tools.
 - **Read routes scrub absolute paths for non-loopback callers.** `GET /api/sessions` and `GET /api/backups` strip paths to their basename, so a LAN caller holding a token learns filenames but not the directory layout of the machine (#1121). `GET /api/document/raw` is loopback-only outright. All path-taking routes reject UNC, enforce an extension allowlist and a 50 MB limit, and write atomically.
@@ -286,6 +287,78 @@ Four things about the original sweep and this follow-up are worth carrying forwa
 - **The uninstall path documented the mitigation it then defeated.** `src-tauri/windows/installer-hook.nsi` explains that the scrub runs inside the signed `tandem.exe` rather than a separate binary precisely to prevent binary planting — and that signed binary then spawned bare `reg`, and reached bare `netsh` through `firewall::remove_cowork_rules()`. **There are two firewall scrubs**, and the second one is in a different binary: the npm CLI's `src/cli/uninstall-scrub.ts` deletes the same rules and had its own bare `netsh`. Anchoring one and not the other would have closed nothing.
 
 The Node half is narrowed rather than closed. Every Node site is now anchored through `systemBin` — `acl-win.ts`'s Windows PowerShell fallback, the CLI scrub's `netsh`, `process-identity.ts`'s `tasklist` (whose Rust twin was already anchored, an asymmetry rather than a policy), and `install-claude-cli.ts`, which hand-rolled a byte-identical copy of the same join and so would have drifted out of the rule the moment the rule changed. But `systemBin` itself reads `process.env.SystemRoot`, because Node cannot reach `GetSystemDirectoryW` without a native module. What bounds that residual is that the Node server never runs elevated, so a launcher able to poison its environment already holds everything the process holds — and the Node exposure is narrower in kind: libuv does not search the cwd, so it is PATH poisoning only, with no application-directory vector. `pwsh.exe` stays a bare name deliberately — PowerShell 7 has no fixed install path, so PATH is its genuine discovery mechanism rather than a lookup that could have been anchored.
+
+### Closed: #1680 — the AI could write to notes it could not read
+
+**Found 2026-08-30 while planning ADR-035 Unit 8d; fixed the same day.** Kept
+here rather than only in the tracker because the *reason it survived* is
+reusable, and because two of its three reach paths are conditions that still
+exist.
+
+`tandem_editAnnotation` gained a note guard in Unit 8c. Its two siblings did
+not. `transitionPending` (resolve) flipped a note's status and bumped its `rev`
+under `withMcp`; `removeAnnotationById` deleted the note **and swept every reply
+keyed to it** — a private thread — with neither a note guard nor a status guard.
+
+**Why "the AI can't enumerate notes" was not the mitigation it looked like.**
+The read surface is genuinely closed: `tandem_getAnnotations` filters on the
+sanitized type and reports only a count, export does the same, and
+`checkInbox`'s `userActions` bucket requires `type === "comment"`. Three things
+get past that anyway, and only the first was obvious:
+
+1. **`tutorial-note-1` is a compile-time constant, not a nonce**
+   (`shared/constants.ts` + `mcp/tutorial-annotations.ts`), seeded on the
+   welcome document that auto-opens on first run. No disclosure step is needed
+   at all. *This id is still guessable* — the fix guards the operations, not the
+   name.
+2. **A legacy imported record can BECOME a note under an id the AI already
+   holds.** `file-io/docx-comments.ts` migrates a pre-W8 `author: "import"`,
+   `type: "comment"` record to `type: "note"` **in place**, and
+   `importAnnotationId` is a content hash with **no timestamp**, so the id is
+   stable across re-imports. The AI reads it as a comment, the user reopens the
+   `.docx`, and it is now a note under the same id. Re-injection is reachable
+   from `tandem_open({force: true})` and `tandem_restoreBackup`. *This condition
+   still exists*; the guard is what makes it harmless.
+3. **`awareness.ts`'s `userResponses` bucket had no type gate**, only
+   `author === "claude" && status !== "pending"`. This one did not leak — the
+   output schema's `type` is `z.enum(["highlight", "comment"])` and the MCP SDK
+   hard-validates `structuredContent` before transmit — but that made it an
+   *availability* bug instead: one legacy record failed the entire
+   `tandem_checkInbox` call rather than filtering one row. Now gated.
+
+**What this does NOT close, and the CHANGELOG's first draft got this wrong by
+framing the identifier as the barrier.** `tandem_open({force: true})` clears the
+whole annotations map and the durable store in one transaction — every note and
+every private reply, with **no identifier needed at all**. `tandem_restoreBackup`
+and `tandem_applyChanges` reach the same wipe through the reload family. #1680
+closed the *targeted* case; the sledgehammer is untouched and is arguably
+intended (the tool's own conflict message advertises "(and annotations)"), but
+nobody should read this section as "the AI cannot destroy notes". Separately,
+`refreshRange` writes to note records on every Claude *read* — the sanctioned
+coordinate-repair exception, but it means "the AI never writes to a note" was
+never literally true either.
+
+**And the guard's placement was wrong in the first draft, in the direction that
+matters.** It went into `removeAnnotationById`, which `mcp/routes/remove-annotation.ts`
+also calls — so the user's own Archive button on their own note started
+returning 400, silently (the client only logs), while a toast told them their
+note "cannot be removed by Claude". Two reviewers found it independently. A
+privacy guard placed at the wrong altitude does not fail closed; it fails at the
+user.
+
+**The transferable lesson: a read filter and a write guard are different
+controls, and "they can't see it" does not imply "they can't touch it."** ADR-027
+is phrased as a confidentiality rule, which is why three write paths were
+allowed to disagree about it for as long as they did. The fix makes all three
+answer identically; a fourth write path added later still has nothing
+structurally forcing it to.
+
+**One regression shipped with the fix, deliberately.** If a legacy imported
+comment exists on disk and the AI holds its id, a `.docx` reopen migrates it to
+a note and the AI's next resolve on that id starts erroring where it silently
+succeeded. That is the correct break — ADR-027's revised import model makes
+imported content user-gated for promotion, so resolving one via MCP was never
+intended — but it is a behaviour change, not a no-op.
 
 ### Accepted (bounded) — decided, not fixed
 
