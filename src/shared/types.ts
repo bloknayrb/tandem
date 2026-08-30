@@ -140,7 +140,8 @@ export interface AnnotationReply {
   rev?: number;
   /**
    * WS-A2: when true, this reply was authored while in Solo mode and is pending
-   * release to Claude. Server-stamped in `addReplyToAnnotation` (replies are
+   * release to Claude. Server-stamped by the reply seam in
+   * `server/annotations/lifecycle.ts` (replies are
    * created via an HTTP POST, not a client Y.Map write). Like the annotation
    * marker, it drives the held-count badge + the fail-closed-restart tiebreaker,
    * NOT live hiding (that is server-authoritative, mode-based).

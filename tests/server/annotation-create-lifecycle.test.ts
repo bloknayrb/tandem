@@ -21,8 +21,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
-  type AnnotationCreator,
   type AnnotationLifecycle,
+  type AnnotationReplier,
   type CreateExtras,
   createAnnotationLifecycle,
   mintAnnotation,
@@ -295,7 +295,7 @@ describe("AnnotationLifecycle.create — ADR-027 / ADR-035 privacy", () => {
     lifecycle.create({ anchored, content: "x", extras: { color: "yellow" } });
   });
 
-  it("type-level: AnnotationCreator really is create-only", () => {
+  it("type-level: AnnotationReplier is create+reply and nothing more", () => {
     // The narrowing handed to the local-model loop (#1123) is a deliberate
     // capability boundary: that subsystem has no accept/dismiss tool, and a
     // wider lifecycle would grant it resolution for the first time. Until this
@@ -310,25 +310,32 @@ describe("AnnotationLifecycle.create — ADR-027 / ADR-035 privacy", () => {
     // `Pick` to `"create" | "editPending"` left both directives live, left
     // `create` reachable, and the spec stayed green. A guard keyed on a list of
     // names is defeated by whatever the list does not name. This form is keyed
-    // on the SHAPE instead, so every future unit 8d–8h fails closed by default.
+    // on the SHAPE instead, so every future unit fails closed by default.
     //
-    // Measured: widening the `Pick` to `"create" | "editPending"` leaves this
-    // file GREEN under vitest and fails `typecheck:tests` with TS2322 at the
-    // line below. That is a real gate (CI runs it), but do not expect a red
-    // test run — the enforcement is the compiler, and the runtime `expect` is
-    // only here so the assertion is visible to a reader scanning the suite.
-    type ExtraKeys = Exclude<keyof AnnotationCreator, "create">;
+    // **Unit 8f is the first time it actually fired, and it fired correctly.**
+    // Adding `reply` to the `Pick` turned the line below red under
+    // `typecheck:tests` with TS2322 — no runtime failure, because the
+    // enforcement is the compiler and the `expect` exists only so a reader
+    // scanning the suite can see the assertion. The list here was then widened
+    // as a deliberate act, which is exactly the transaction the guard is meant
+    // to force. See `AnnotationReplier`'s docblock for why `reply` belongs and
+    // why granting it costs nothing the loop did not already have.
+    type ExtraKeys = Exclude<keyof AnnotationReplier, "create" | "reply">;
     const noExtraKeys: ExtraKeys extends never ? true : never = true;
-    expect(noExtraKeys, "AnnotationCreator grew a key beyond `create`").toBe(true);
+    expect(noExtraKeys, "AnnotationReplier grew a key beyond create/reply").toBe(true);
 
-    const creator: AnnotationCreator = createAnnotationLifecycle(doc);
+    const creator: AnnotationReplier = createAnnotationLifecycle(doc);
 
     // @ts-expect-error — the loop has no accept tool; the seam must not give it one
     creator.accept("id");
 
-    // Guard the guard: `create` IS reachable, so the error above is the
-    // narrowing biting and not a broken binding that rejects everything.
-    creator.create({ anchored: unanchored(0, 5), content: "x" });
+    // Guard the guard: both granted methods ARE reachable, so the error above
+    // is the narrowing biting and not a broken binding that rejects everything.
+    // `reply` is named here as well as in the `Exclude` — the `Exclude` alone
+    // would stay green if `reply` were dropped from the `Pick` AND from the
+    // interface, which is a capability regression that must not read as a pass.
+    const created = creator.create({ anchored: unanchored(0, 5), content: "x" });
+    creator.reply(created.annotation.id, "ack", () => {});
 
     // Runtime caveat, stated because the docblock reads stronger than the code:
     // TypeScript is structural, so this annotation narrows the BINDING, not the

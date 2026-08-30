@@ -322,7 +322,7 @@ describe("channel projection — replies", () => {
     // Master read the parent raw and required `type === "comment"`, so a
     // parent stored as `suggestion` or `question` silently dropped its
     // replies. Sanitize maps both to `comment` (`sanitize.ts:164-181`), so the
-    // narrow admits them. This is a fix, not a regression: `addReplyToAnnotation`
+    // narrow admits them. This is a fix, not a regression: the reply seam
     // sanitizes the parent before stamping `private`, so the MCP layer already
     // accepted these replies as non-private — master then swallowed the event
     // the user's reply should have produced. The two halves now agree.

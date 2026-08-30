@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { docHash } from "../../src/server/annotations/doc-hash.js";
-import { removeAnnotationRecord } from "../../src/server/annotations/lifecycle.js";
+import {
+  addUserReply,
+  createAnnotationLifecycle,
+  removeAnnotationRecord,
+} from "../../src/server/annotations/lifecycle.js";
 import {
   createStore,
   resetForTesting as resetStoreForTesting,
@@ -10,7 +14,7 @@ import {
   registerAnnotationObserver,
   resetForTesting,
 } from "../../src/server/annotations/sync.js";
-import { addReplyToAnnotation, createAnnotation } from "../../src/server/mcp/annotations.js";
+import { createAnnotation } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { useTmpAnnotationsEnvWithFlag } from "../helpers/annotation-store-env.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
@@ -74,8 +78,8 @@ describe("removeAnnotationRecord", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "noted");
 
-    addReplyToAnnotation(ydoc, map, id, "reply 1", "user");
-    addReplyToAnnotation(ydoc, map, id, "reply 2", "claude");
+    addUserReply(ydoc, id, "reply 1", () => {});
+    createAnnotationLifecycle(ydoc).reply(id, "reply 2", () => {});
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);
@@ -99,8 +103,8 @@ describe("removeAnnotationRecord", () => {
     const id1 = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "first");
     const id2 = createAnnotation(map, ydoc, "comment", unanchored(6, 11), "second");
 
-    addReplyToAnnotation(ydoc, map, id1, "reply to first", "user");
-    addReplyToAnnotation(ydoc, map, id2, "reply to second", "user");
+    addUserReply(ydoc, id1, "reply to first", () => {});
+    addUserReply(ydoc, id2, "reply to second", () => {});
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);

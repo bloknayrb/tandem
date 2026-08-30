@@ -3,19 +3,12 @@ import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
-import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { withBrowser } from "../../shared/origins.js";
+import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import { SNAPSHOT_CAP } from "../../shared/snapshot.js";
-import type {
-  AgentIdentity,
-  Annotation,
-  AnnotationReply,
-  AnnotationType,
-  ReplyAuthor,
-} from "../../shared/types.js";
+import type { Annotation, AnnotationReply, AnnotationType } from "../../shared/types.js";
 import {
   AnnotationActionSchema,
   AnnotationStatusSchema,
@@ -24,12 +17,11 @@ import {
   HighlightColorSchema,
   toFlatOffset,
 } from "../../shared/types.js";
-import { generateNotificationId, generateReplyId } from "../../shared/utils.js";
+import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import type { MintExtras } from "../annotations/lifecycle.js";
-import { mintAnnotation } from "../annotations/lifecycle.js";
+import { describeReplyRefusal, mintAnnotation } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
-import { nextRev, REPLY_TEXT_MAX } from "../annotations/schema.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { atomicWrite } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
@@ -57,9 +49,6 @@ function makeOnLossy(hash: string | undefined): (event: SanitizationEvent) => vo
 }
 
 /** Get the annotation replies Y.Map for a document. */
-function getRepliesMap(ydoc: Y.Doc): Y.Map<unknown> {
-  return ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
-}
 
 /**
  * Replies safe to surface to Claude for `annotation`. The SINGLE place that
@@ -102,130 +91,6 @@ export function collectRepliesForAnnotation(
   // Sort chronologically
   replies.sort((a, b) => a.timestamp - b.timestamp);
   return replies;
-}
-
-/**
- * Add a reply to an annotation. Writes to the separate annotationReplies Y.Map.
- * Returns the reply ID on success, or an error string on failure.
- */
-export function addReplyToAnnotation(
-  ydoc: Y.Doc,
-  annotationsMap: Y.Map<unknown>,
-  annotationId: string,
-  text: string,
-  author: ReplyAuthor,
-  /**
-   * ADR-031 transact wrapper: `withMcp` for Claude-initiated replies via the
-   * MCP tool; `withBrowser` for user replies via the HTTP route. Defaults to
-   * `withBrowser` so the lone HTTP caller doesn't need to pass it explicitly.
-   */
-  wrap: (doc: Y.Doc, fn: () => void) => void = withBrowser,
-  /**
-   * #1123 M3: the authoring agent's identity, stamped on the reply so the
-   * client byline names the specific local model. Passed ONLY by the
-   * local-model collaborator loop; the MCP `tandem_annotationReply` caller and
-   * the HTTP user-reply route leave it undefined, so their replies are
-   * byte-identical to pre-M3.
-   */
-  agentIdentity?: AgentIdentity,
-): { ok: true; replyId: string } | { ok: false; error: string; code?: string } {
-  // #1295 L3: reject over-long replies HERE, at the model layer, rather than at
-  // one caller. There are three production callers (the MCP tandem_annotationReply
-  // tool via document-store, the /api/annotation-reply route, and the local-model
-  // reply tool) and none bounded the text, while the DURABLE schema caps it at
-  // REPLY_TEXT_MAX and normalizeReply safeParses per record. So an over-long
-  // reply was accepted into the live Y.Doc, rendered in the UI, and then
-  // silently dropped on the next load with only a stderr line as evidence.
-  // Turning that into a structured error is the whole fix.
-  //
-  // Reusing REPLY_TEXT_MAX is a deliberate choice, not an oversight: its own
-  // docstring calls it a generous LOAD-time ceiling, sized so it can never drop
-  // a legitimate existing reply, which is a different job from a write-time
-  // limit. One constant is still right — a lower write bound would let the two
-  // drift, and the failure mode being fixed is precisely that a value accepted
-  // at write is rejected at load. They must be the same number.
-  if (text.length > REPLY_TEXT_MAX) {
-    return {
-      ok: false,
-      error: `Reply text exceeds the ${REPLY_TEXT_MAX}-character limit`,
-      code: "INVALID_ARGUMENT",
-    };
-  }
-
-  const raw = annotationsMap.get(annotationId) as Annotation | undefined;
-  if (!raw) return { ok: false, error: `Annotation ${annotationId} not found`, code: "NOT_FOUND" };
-
-  const ann = sanitizeAnnotation(raw, makeOnLossy(undefined));
-  // Highlights are user-only UI markup with no body to thread — reject for any
-  // author. Notes and comments accept replies (#1000): note replies are
-  // user-private, stamped `private` below and stripped from every Claude-facing
-  // read by `channelVisibleReplies`; the channel observer independently gates
-  // via `narrowForChannel` (ADR-035) on the parent AND reads `private` on the
-  // reply itself, so note replies never emit an SSE event.
-  if (ann.type === "highlight") {
-    return {
-      ok: false,
-      error: `Cannot reply to a highlight annotation; only notes and comments support replies`,
-      code: "INVALID_ARGUMENT",
-    };
-  }
-  // ADR-027: Claude never interacts with notes. The note-reply relaxation
-  // (#1000) is for the USER path only (`tandem_annotationReply` always passes
-  // `author: "claude"`); Claude may reply only to comments. Without this the
-  // MCP tool would let Claude write into a private note thread.
-  if (author === "claude" && ann.type !== "comment") {
-    return {
-      ok: false,
-      error: `Claude can only reply to comments, not ${ann.type} annotations`,
-      code: "INVALID_ARGUMENT",
-    };
-  }
-  if (ann.status !== "pending") {
-    return {
-      ok: false,
-      error: `Cannot reply to a ${ann.status} annotation`,
-      code: "ANNOTATION_RESOLVED",
-    };
-  }
-
-  const replyId = generateReplyId();
-  const reply: AnnotationReply = {
-    id: replyId,
-    annotationId,
-    author,
-    text,
-    timestamp: Date.now(),
-    rev: nextRev(),
-    // A reply inherits its parent's privacy at creation. Note replies are
-    // user-private forever (even if the note is later promoted to a comment);
-    // comment replies omit the flag and surface to Claude normally (#1000).
-    ...(ann.type === "comment" ? {} : { private: true }),
-    // WS-A2: server-stamp the Solo-hold marker on a user reply created while not
-    // in Tandem. Replies are created server-side (this function is the sole
-    // write path), so unlike browser annotation writes the stamp lives here.
-    // Live hiding is still mode-based (Phase 2 pushEvent + the
-    // checkInbox/getAnnotations reply gates); this persisted marker drives the
-    // held-badge AND the fail-closed-restart hold that `mode.ts#hideFromAI`
-    // applies in "indeterminate" mode (record.heldInSolo === true). Tested
-    // against `!== "tandem"`, not `=== "solo"` — completing the #1213
-    // fail-closed invariant: a reply created mid-restart, while the CTRL_ROOM
-    // mode key is absent (indeterminate), must still be stamped, or
-    // `hideFromAI` has nothing to withhold on the next pull even though the
-    // server has no idea whether the user was actually in Solo. Gated on
-    // `ann.type === "comment"` to match the comment-only annotation path
-    // (heldInSoloOnCreate): a private note-reply is never sent to Claude, so it
-    // is not "held from the AI" and carries no marker.
-    ...(author === "user" && ann.type === "comment" && readModeState() !== "tandem"
-      ? { heldInSolo: true }
-      : {}),
-    // #1123 M3: agent byline (local-model collaborator only). Absent ⇒ omitted.
-    ...(agentIdentity ? { agentIdentity } : {}),
-  };
-
-  const repliesMap = getRepliesMap(ydoc);
-  wrap(ydoc, () => repliesMap.set(replyId, reply));
-
-  return { ok: true, replyId };
 }
 
 /** Human-readable message for a range validation failure. */
@@ -1023,8 +888,8 @@ export function registerAnnotationTools(server: McpServer): void {
       if (!store) return noDocumentError();
 
       // #651 presence: surface the typing indicator on the specific card being
-      // replied to. ADR-027: `addReplyToAnnotation` already rejects non-comment
-      // parents (notes return INVALID_ARGUMENT), but we belt-and-suspenders the
+      // replied to. ADR-027: the seam already rejects a note parent for Claude
+      // (`lifecycle.reply` returns `invalid-note`), but we belt-and-suspenders the
       // broadcast via `sanitizeAnnotationIdForPresence` — if the lookup says
       // note (or absent), the annotationId is dropped and the indicator falls
       // back to the generic status-bar one.
@@ -1040,19 +905,15 @@ export function registerAnnotationTools(server: McpServer): void {
           ...(safeId ? { annotationId: safeId } : {}),
         },
         async () => {
-          const result = store.addReply(annotationId, text, "claude");
-          if (!result.ok) {
-            const code =
-              result.code === "NOT_FOUND"
-                ? "NOT_FOUND"
-                : result.code === "ANNOTATION_RESOLVED"
-                  ? "ANNOTATION_RESOLVED"
-                  : result.code === "INVALID_ARGUMENT"
-                    ? "INVALID_ARGUMENT"
-                    : "INVALID_RANGE";
-            return mcpError(code, result.error);
+          const result = store.addReply(annotationId, text);
+          if (result.kind === "ok") {
+            return mcpSuccess({ replyId: result.replyId, annotationId });
           }
-          return mcpSuccess({ replyId: result.replyId, annotationId });
+          // The wire codes are unchanged from the ternary chain this replaces;
+          // what moved is that a new arm now fails to compile inside
+          // `describeReplyRefusal` instead of falling into a catch-all.
+          const { code, message } = describeReplyRefusal(result);
+          return mcpError(code, message);
         },
       );
     }),
