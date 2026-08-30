@@ -19,6 +19,7 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/co
 import { useTmpAnnotationsEnvWithFlag } from "../helpers/annotation-store-env.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { unanchored } from "../helpers/positions.js";
+import { noRelay } from "../helpers/ydoc-factory.js";
 
 useTmpAnnotationsEnvWithFlag("tandem-remove-annotation-test-");
 
@@ -78,8 +79,8 @@ describe("removeAnnotationRecord", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "noted");
 
-    addUserReply(ydoc, id, "reply 1", () => {});
-    createAnnotationLifecycle(ydoc).reply(id, "reply 2", () => {});
+    addUserReply(ydoc, id, "reply 1", noRelay);
+    createAnnotationLifecycle(ydoc).reply(id, "reply 2", noRelay);
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);
@@ -103,8 +104,8 @@ describe("removeAnnotationRecord", () => {
     const id1 = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "first");
     const id2 = createAnnotation(map, ydoc, "comment", unanchored(6, 11), "second");
 
-    addUserReply(ydoc, id1, "reply to first", () => {});
-    addUserReply(ydoc, id2, "reply to second", () => {});
+    addUserReply(ydoc, id1, "reply to first", noRelay);
+    addUserReply(ydoc, id2, "reply to second", noRelay);
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);

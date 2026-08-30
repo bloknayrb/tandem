@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { addUserReply } from "../../src/server/annotations/lifecycle.js";
 import { REPLY_TEXT_MAX } from "../../src/server/annotations/schema.js";
 import { Y_MAP_ANNOTATION_REPLIES } from "../../src/shared/constants.js";
-import { getAnnotationsMap, makeMarkdownDoc } from "../helpers/ydoc-factory.js";
+import { getAnnotationsMap, makeMarkdownDoc, noRelay } from "../helpers/ydoc-factory.js";
 
 /** Replies live in their OWN Y.Map, not nested on the annotation record. */
 function replyCount(ydoc: ReturnType<typeof makeMarkdownDoc>): number {
@@ -34,7 +34,7 @@ describe("the reply seam — write-time length bound", () => {
     const ydoc = makeMarkdownDoc("# H\n\nbody\n");
     seedComment(ydoc);
 
-    const result = addUserReply(ydoc, "a1", "x".repeat(REPLY_TEXT_MAX + 1), () => {});
+    const result = addUserReply(ydoc, "a1", "x".repeat(REPLY_TEXT_MAX + 1), noRelay);
 
     // `too-long` specifically, carrying the bound it enforced. The old
     // `INVALID_ARGUMENT` was shared with the highlight-parent and note refusals,
@@ -53,7 +53,7 @@ describe("the reply seam — write-time length bound", () => {
     const ydoc = makeMarkdownDoc("# H\n\nbody\n");
     seedComment(ydoc);
 
-    const result = addUserReply(ydoc, "a1", "x".repeat(REPLY_TEXT_MAX), () => {});
+    const result = addUserReply(ydoc, "a1", "x".repeat(REPLY_TEXT_MAX), noRelay);
 
     expect(result.kind).toBe("ok");
     expect(replyCount(ydoc)).toBe(1);

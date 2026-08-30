@@ -19,7 +19,7 @@ import {
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { assertReplyOk } from "../helpers/reply-results.js";
-import { rangeOf } from "../helpers/ydoc-factory.js";
+import { noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
 function setMode(mode: string | undefined) {
   const ctrl = getOrCreateDocument(CTRL_ROOM);
@@ -41,7 +41,7 @@ describe("the reply seam — addUserReply and lifecycle.reply", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test comment");
 
-    const result = addUserReply(ydoc, annId, "I agree", () => {});
+    const result = addUserReply(ydoc, annId, "I agree", noRelay);
     assertReplyOk(result);
     expect(result.replyId).toMatch(/^rpl_/);
 
@@ -56,7 +56,7 @@ describe("the reply seam — addUserReply and lifecycle.reply", () => {
   it("rejects reply to a non-existent annotation (NOT_FOUND)", () => {
     const ydoc = setupDoc("reply-2", "Hello world");
 
-    const result = addUserReply(ydoc, "fake_id", "reply text", () => {});
+    const result = addUserReply(ydoc, "fake_id", "reply text", noRelay);
     // The ARM, and it carries the id back — `NOT_FOUND` alone did not say WHICH
     // annotation was missing, so a refusal naming the wrong one still passed.
     expect(result).toStrictEqual({ kind: "not-found", id: "fake_id" });
@@ -71,7 +71,7 @@ describe("the reply seam — addUserReply and lifecycle.reply", () => {
     const ann = map.get(annId) as Annotation;
     map.set(annId, { ...ann, status: "accepted" });
 
-    const result = addUserReply(ydoc, annId, "too late", () => {});
+    const result = addUserReply(ydoc, annId, "too late", noRelay);
     expect(result).toStrictEqual({ kind: "not-pending", currentStatus: "accepted" });
   });
 
@@ -83,7 +83,7 @@ describe("the reply seam — addUserReply and lifecycle.reply", () => {
     const ann = map.get(annId) as Annotation;
     map.set(annId, { ...ann, status: "dismissed" });
 
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "too late", () => {});
+    const result = createAnnotationLifecycle(ydoc).reply(annId, "too late", noRelay);
     // `dismissed`, not just "some non-pending status" — the accepted case above
     // asserts `accepted`, so together they pin that the arm reports the real
     // status rather than a constant.
@@ -117,7 +117,7 @@ describe("event emission on reply", () => {
     // `browser` is the only origin outside `CHANNEL_SKIP`, so naming it is the
     // difference between pinning the contract and pinning that something
     // happened.
-    addUserReply(ydoc, annId, "user says hi", () => {});
+    addUserReply(ydoc, annId, "user says hi", noRelay);
     expect(events).toHaveLength(1);
     expect(events[0].origin).toBe(BROWSER_ORIGIN);
     expect(shouldSkipChannel(BROWSER_ORIGIN), "browser must stay projectable").toBe(false);
@@ -140,7 +140,7 @@ describe("event emission on reply", () => {
     });
 
     // Claude reply — MCP_ORIGIN, observer filters these out
-    createAnnotationLifecycle(ydoc).reply(annId, "claude says hi", () => {});
+    createAnnotationLifecycle(ydoc).reply(annId, "claude says hi", noRelay);
     // The transaction IS tagged with MCP_ORIGIN, so the real event queue would skip it
     expect(mcpEvents).toHaveLength(1);
     expect(mcpEvents[0].origin).toBe(MCP_ORIGIN);
@@ -154,7 +154,7 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent comment");
     setMode("solo");
 
-    const result = addUserReply(ydoc, annId, "held reply", () => {});
+    const result = addUserReply(ydoc, annId, "held reply", noRelay);
     assertReplyOk(result);
 
     const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as AnnotationReply & {
@@ -169,7 +169,7 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
     const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "parent note");
     setMode("solo");
 
-    const result = addUserReply(ydoc, annId, "note reply", () => {});
+    const result = addUserReply(ydoc, annId, "note reply", noRelay);
     assertReplyOk(result);
 
     const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as AnnotationReply & {
@@ -187,7 +187,7 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent comment");
     setMode("tandem");
 
-    const result = addUserReply(ydoc, annId, "live reply", () => {});
+    const result = addUserReply(ydoc, annId, "live reply", noRelay);
     assertReplyOk(result);
 
     const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as AnnotationReply & {
@@ -210,7 +210,7 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent comment");
     setMode(undefined); // absent CTRL_ROOM mode key === indeterminate
 
-    const result = addUserReply(ydoc, annId, "mid-restart reply", () => {});
+    const result = addUserReply(ydoc, annId, "mid-restart reply", noRelay);
     assertReplyOk(result);
 
     const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as AnnotationReply & {
@@ -227,9 +227,9 @@ describe("collectRepliesForAnnotation", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
 
-    addUserReply(ydoc, annId, "first", () => {});
-    createAnnotationLifecycle(ydoc).reply(annId, "second", () => {});
-    addUserReply(ydoc, annId, "third", () => {});
+    addUserReply(ydoc, annId, "first", noRelay);
+    createAnnotationLifecycle(ydoc).reply(annId, "second", noRelay);
+    addUserReply(ydoc, annId, "third", noRelay);
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     const replies = collectRepliesForAnnotation(repliesMap, annId);
@@ -257,8 +257,8 @@ describe("tandem_removeAnnotation cleans up replies", () => {
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
 
     // Add replies to the annotation
-    addUserReply(ydoc, annId, "reply 1", () => {});
-    createAnnotationLifecycle(ydoc).reply(annId, "reply 2", () => {});
+    addUserReply(ydoc, annId, "reply 1", noRelay);
+    createAnnotationLifecycle(ydoc).reply(annId, "reply 2", noRelay);
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);
@@ -284,8 +284,8 @@ describe("tandem_removeAnnotation cleans up replies", () => {
     const annId1 = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "comment 1");
     const annId2 = createAnnotation(map, ydoc, "comment", rangeOf(6, 11, ydoc), "comment 2");
 
-    addUserReply(ydoc, annId1, "reply to 1", () => {});
-    addUserReply(ydoc, annId2, "reply to 2", () => {});
+    addUserReply(ydoc, annId1, "reply to 1", noRelay);
+    addUserReply(ydoc, annId2, "reply to 2", noRelay);
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);

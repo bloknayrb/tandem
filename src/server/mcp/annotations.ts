@@ -48,8 +48,6 @@ function makeOnLossy(hash: string | undefined): (event: SanitizationEvent) => vo
   return (event) => relaySanitizationEvent(hash, event);
 }
 
-/** Get the annotation replies Y.Map for a document. */
-
 /**
  * Replies safe to surface to Claude for `annotation`. The SINGLE place that
  * enforces both ADR-027 reply-privacy gates, so no Claude-facing caller can

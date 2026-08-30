@@ -260,8 +260,8 @@ function annotateFromQuote(
     ...(agentIdentity ? { agentIdentity } : {}),
   };
   // ADR-035 (Unit 8b): the create goes through the lifecycle seam. The loop
-  // gets `AnnotationCreator`, not the full lifecycle — it has no accept or
-  // dismiss tool and this unit must not hand it one.
+  // gets `AnnotationReplier`, not the full lifecycle — it has no accept or
+  // dismiss tool and no unit may hand it one by widening a binding.
   const { annotation } = creator.create({
     anchored: r.anchored,
     content: body,

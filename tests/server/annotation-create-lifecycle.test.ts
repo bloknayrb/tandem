@@ -39,7 +39,7 @@ import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { INTERNAL_ORIGIN, MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { unanchored } from "../helpers/positions.js";
-import { getAnnotationsMap, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
+import { getAnnotationsMap, makeDoc, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 let map: Y.Map<unknown>;
@@ -335,7 +335,7 @@ describe("AnnotationLifecycle.create — ADR-027 / ADR-035 privacy", () => {
     // would stay green if `reply` were dropped from the `Pick` AND from the
     // interface, which is a capability regression that must not read as a pass.
     const created = creator.create({ anchored: unanchored(0, 5), content: "x" });
-    creator.reply(created.annotation.id, "ack", () => {});
+    creator.reply(created.annotation.id, "ack", noRelay);
 
     // Runtime caveat, stated because the docblock reads stronger than the code:
     // TypeScript is structural, so this annotation narrows the BINDING, not the

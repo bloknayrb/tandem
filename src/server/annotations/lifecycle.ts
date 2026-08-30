@@ -548,8 +548,9 @@ export interface AnnotationLifecycle {
  * not recoverable from `creator` without a cast. It is *not* a capability
  * boundary for the module — `local-model/tools.ts` imports
  * {@link createAnnotationLifecycle} itself, so a future edit there is one line
- * from the full lifecycle. Closing that means injecting an `AnnotationCreator`
- * from `dispatch`'s caller, which is Unit 8j's restructuring, not 8b's.
+ * from the full lifecycle. Closing that means injecting an
+ * {@link AnnotationReplier} from `dispatch`'s caller, which is Unit 8j's
+ * restructuring, not 8b's.
  *
  * **A `Pick` does not grow when its source interface does, and that is load-
  * bearing rather than incidental.** Unit 8c added `editPending` to
@@ -569,14 +570,6 @@ export interface AnnotationLifecycle {
  * it, is what stops the path of least resistance from being that one.
  */
 export type AnnotationReplier = Pick<AnnotationLifecycle, "create" | "reply">;
-
-/**
- * @deprecated Unit 8f renamed this to {@link AnnotationReplier} when the reply
- * family joined the seam. Kept as an alias only so a stale import fails loudly
- * at the name rather than silently binding a narrower capability; Unit 8j drops
- * it along with the rest of the compatibility surface.
- */
-export type AnnotationCreator = AnnotationReplier;
 
 /**
  * Build a lifecycle bound to one document.

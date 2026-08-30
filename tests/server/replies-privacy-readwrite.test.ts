@@ -31,7 +31,7 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/co
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
-import { rangeOf } from "../helpers/ydoc-factory.js";
+import { noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
 beforeEach(() => {
   clearOpenDocs();
@@ -43,7 +43,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "comment-content");
 
-    const result = addUserReply(ydoc, annId, "ack", () => {});
+    const result = addUserReply(ydoc, annId, "ack", noRelay);
     expect(result.kind).toBe("ok");
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
@@ -58,7 +58,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
 
-    const result = addUserReply(ydoc, annId, "my private thought", () => {});
+    const result = addUserReply(ydoc, annId, "my private thought", noRelay);
     expect(result.kind).toBe("ok");
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
@@ -82,7 +82,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     // one branching on an author string — `lifecycle.reply` carries the ADR-027
     // guard, `addUserReply` does not and must not, since replying to one's own
     // note is exactly what ADR-027 permits (case (b) above).
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", () => {});
+    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", noRelay);
     // `invalid-note`, an arm ONLY the ADR-027 guard produces. Under the old
     // `INVALID_ARGUMENT` this spec also passed when the reply was refused for
     // being over-length or for having a highlight parent — neither of which is
@@ -110,7 +110,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     // legacy envelope or CRDT merge, not by an API call.
     map.set(annId, { ...(map.get(annId) as Annotation), audience: "private" });
 
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", () => {});
+    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", noRelay);
     expect(result).toStrictEqual({ kind: "invalid-note" });
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
   });
@@ -125,7 +125,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "shared");
     map.set(annId, { ...(map.get(annId) as Annotation), audience: "outbound" });
 
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", () => {});
+    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", noRelay);
     expect(result.kind).toBe("ok");
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(1);
   });
@@ -140,7 +140,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "held back");
     map.set(annId, { ...(map.get(annId) as Annotation), audience: "private" });
 
-    expect(addUserReply(ydoc, annId, "my own thread", () => {}).kind).toBe("ok");
+    expect(addUserReply(ydoc, annId, "my own thread", noRelay).kind).toBe("ok");
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(1);
   });
 
@@ -155,7 +155,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "highlight", rangeOf(0, 5, ydoc), "");
 
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", () => {});
+    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", noRelay);
     expect(result).toStrictEqual({ kind: "not-repliable", annotationType: "highlight" });
   });
 
@@ -164,7 +164,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "highlight", rangeOf(0, 5, ydoc), "");
 
-    const result = addUserReply(ydoc, annId, "should fail", () => {});
+    const result = addUserReply(ydoc, annId, "should fail", noRelay);
     expect(result).toStrictEqual({ kind: "not-repliable", annotationType: "highlight" });
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
@@ -179,7 +179,7 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     // Delete the parent first.
     ydoc.transact(() => map.delete(annId), MCP_ORIGIN);
 
-    const result = addUserReply(ydoc, annId, "too late", () => {});
+    const result = addUserReply(ydoc, annId, "too late", noRelay);
     expect(result).toStrictEqual({ kind: "not-found", id: annId });
   });
 });
@@ -222,7 +222,7 @@ describe("ADR-027 + #1000 reply privacy (Claude read path: channelVisibleReplies
     const ydoc = setupDoc("read-note", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
-    addUserReply(ydoc, annId, "thought", () => {});
+    addUserReply(ydoc, annId, "thought", noRelay);
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
     const ann = map.get(annId) as Annotation;
@@ -239,7 +239,7 @@ describe("ADR-027 + #1000 reply privacy (Claude read path: channelVisibleReplies
 
     // A user reply authored while it was a note (→ private), plus an imported
     // Word reply (→ private).
-    addUserReply(ydoc, annId, "my private deliberation", () => {});
+    addUserReply(ydoc, annId, "my private deliberation", noRelay);
     const importReply: AnnotationReply = {
       id: "rpl_import",
       annotationId: annId,
@@ -258,7 +258,7 @@ describe("ADR-027 + #1000 reply privacy (Claude read path: channelVisibleReplies
     ydoc.transact(() => map.set(annId, { ...note, type: "comment" } as Annotation), MCP_ORIGIN);
 
     // A NEW reply added after promotion (parent is now a comment) is NOT private.
-    addUserReply(ydoc, annId, "now visible to Claude", () => {});
+    addUserReply(ydoc, annId, "now visible to Claude", noRelay);
 
     const promoted = map.get(annId) as Annotation;
     expect(promoted.type).toBe("comment");
