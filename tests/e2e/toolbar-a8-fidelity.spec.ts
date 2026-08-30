@@ -6,6 +6,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  openAnnotatePopup,
   selectTextStable,
 } from "./helpers";
 
@@ -431,4 +432,359 @@ test("the annotate composer is sized to its own content, not the format row", as
     client: el.clientWidth,
   }));
   expect(fit.scroll, "the composer footer is being clipped").toBeLessThanOrEqual(fit.client);
+});
+
+/**
+ * The composer's focus-dependent guards must key on the POPUP, not the textarea.
+ *
+ * Four guards in Toolbar.svelte skip work while the user is composing. They
+ * used to ask `document.activeElement === textareaEl`, which reports a user who
+ * has merely moved to a sibling control as having left. Tab is the case no
+ * `preventDefault` can close — the audience segments bind handleComposerKeyDown
+ * precisely because a keyboard user Tabs onto them, and there is no mousedown to
+ * prevent — so this was reachable with every existing guard in place.
+ *
+ * The consequence was silent and unrecoverable: once focus was off the textarea,
+ * a scroll reached the scroll-dismiss guard, which calls dismissPopup(), which
+ * sets `annotationText = ""`. Type a note, press Tab, scroll to re-read the
+ * passage you are annotating, and the draft is gone with no undo.
+ *
+ * The existing coverage in toolbar-redesign.spec.ts pins only the
+ * mousedown-on-segment variant, which the preventDefault already handled.
+ */
+test("a typed draft survives Tab-ing out of the textarea and scrolling", async ({ page }) => {
+  const editor = await openDoc(page);
+  await selectFirstParagraph(editor);
+
+  await openAnnotatePopup(page);
+  const popup = page.locator(".selection-popup");
+  await expect(popup).toHaveClass(/is-annotate/);
+
+  const input = page.locator("[data-testid='popup-annotation-input']");
+  await input.fill("a draft worth keeping");
+
+  // Tab lands on a footer control — a documented interaction, not an edge case.
+  await input.press("Tab");
+  await expect(input, "Tab did not move focus off the composer textarea").not.toBeFocused();
+
+  // The gesture that used to eat the draft. Dispatched on the editor so it
+  // reaches the capture-phase scroll listener onOutsideEvent installs at
+  // `document` — capture is what lets a listener there see an inner-scroll
+  // event that never bubbles.
+  await editor.evaluate((el) => {
+    el.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+
+  await expect(popup, "the popup was dismissed by a scroll while still in use").toHaveClass(
+    /is-annotate/,
+  );
+  await expect(input, "the draft was silently cleared").toHaveValue("a draft worth keeping");
+});
+
+/**
+ * Drag-select the first paragraph, releasing the pointer at `releaseX`.
+ *
+ * The popup's horizontal origin is the raw `pointerup` clientX (Toolbar.svelte's
+ * `onPointerUp` sets `pointerAnchorX = e.clientX`), NOT where the text ends — so
+ * releasing past the end of the line is what makes the anchor, and therefore the
+ * `maxLeft` clamp, controllable from a test instead of a function of whatever
+ * width the fixture's prose happens to render at.
+ */
+async function dragSelectParagraph(
+  page: import("@playwright/test").Page,
+  editor: import("@playwright/test").Locator,
+  releaseX: number,
+) {
+  // The FIRST line box, not the element box. At a narrow viewport the paragraph
+  // wraps, and the element box's vertical centre then lands in the gap between
+  // the two lines — the drag selects nothing and every assertion downstream goes
+  // vacuous. Measured: at 620px this paragraph is 51px tall over two lines.
+  const box = await editor
+    .locator("p")
+    .first()
+    .evaluate((el) => {
+      // A Range over the contents, NOT el.getClientRects() — a block element
+      // reports one border-box rect however many lines it wraps to, so the
+      // "first line" read off the element IS the whole paragraph, and at a
+      // narrow viewport its vertical centre lands in the gap between two lines
+      // where the drag selects nothing.
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const line = range.getClientRects()[0];
+      return { x: line.x, y: line.y, height: line.height };
+    });
+  const y = box.y + box.height / 2;
+  await page.mouse.move(box.x + 2, y);
+  await page.mouse.down();
+  await page.mouse.move(releaseX, y, { steps: 8 });
+  await page.mouse.up();
+}
+
+/**
+ * Poll until the popup's geometry stops changing.
+ *
+ * Waiting for a value to *change* is not enough anywhere in this test, and that
+ * is a trap worth naming: after the resize the popup's `left` moves the moment
+ * `viewportWidth` updates, which happens BEFORE the measurement that is the
+ * whole point. Polling for change passes on that first move and lets the
+ * teardown beat the write, so the test goes green on a broken build.
+ */
+async function settleRect(popup: import("@playwright/test").Locator) {
+  let previous = "";
+  await expect
+    .poll(
+      async () => {
+        const current = await popup.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return `${Math.round(r.left)}x${Math.round(r.width)}`;
+        });
+        const stable = current === previous;
+        previous = current;
+        return stable;
+      },
+      { message: "the popup never stopped moving or resizing" },
+    )
+    .toBe(true);
+}
+
+/**
+ * Horizontal containment of the selection popup — asserted nowhere else.
+ *
+ * `toolbar-redesign.spec.ts`'s "stays within a short viewport" checks `box.y`
+ * and `box.y + box.height` only, so the right-edge clamp in
+ * computeSelectionToolbarPosition had no gate at all.
+ *
+ * The clamp is `maxLeft = viewportWidth - EDGE_GAP - toolbarWidth`, and
+ * `toolbarWidth` stopped describing one thing when `.morph-block:not(.is-active)`
+ * dropped to `width: 0`: the format state measures ~452px and the annotate state
+ * ~278px. Measure in annotate state, carry that value into a format-state
+ * appearance, and `maxLeft` is under-constrained by ~174px.
+ *
+ * THREE THINGS ARE LOAD-BEARING and the obvious shortcuts defeat all of them:
+ *
+ *  - **Blur without collapsing.** Clicking the editor to leave the composer
+ *    collapses the selection, which tears the popup down before any measurement
+ *    happens. `blur()` on the focused element leaves the editor selection alone.
+ *  - **A controlled anchor.** With the anchor wherever the fixture's prose ends
+ *    (~306px here) the clamp never binds at all, and the test passes on a broken
+ *    build. Releasing the drag at 700px puts it inside the window where a stale
+ *    width changes the answer.
+ *  - **Sampling every frame.** The overhang lasts only ENTER_POPUP_MS; the
+ *    settle then re-measures and the popup snaps back. A single sample taken
+ *    "once the popup is visible" races that correction.
+ *
+ * Deliberately NOT under reduced motion: `beginEntrance` returns before setting
+ * `entering` there, so the freeze this exercises does not exist.
+ */
+test("the selection popup stays inside the viewport near the right edge", async ({ page }) => {
+  await page.setViewportSize({ width: 940, height: 800 });
+  const editor = await openDoc(page);
+  const popup = page.locator(".selection-popup");
+
+  await dragSelectParagraph(page, editor, 700);
+  await expect(popup).toBeVisible();
+  await openAnnotatePopup(page);
+  await expect(popup).toHaveClass(/is-annotate/);
+
+  // Wait for the composer to actually hold focus first: openAnnotateMode focuses
+  // the textarea from a rAF, so blurring before that lands is a no-op the rAF
+  // then undoes — and the test passes on a broken build because the metrics skip
+  // was doing its job for the wrong reason.
+  await expect(page.locator("[data-testid='popup-annotation-input']")).toBeFocused();
+  // …and for the morph to finish, or the width this records is a mid-animation
+  // frame rather than the annotate state's real width.
+  await settleRect(popup);
+
+  // Leave the textarea WITHOUT collapsing the editor selection, then resize so
+  // the metrics effect re-runs and records the annotate-state width for real.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.setViewportSize({ width: 900, height: 800 });
+  // The resize handler is rAF-throttled and the measurement runs behind it, so
+  // wait for the whole chain to come to rest — see settleRect on why "changed"
+  // is the wrong condition here.
+  await settleRect(popup);
+
+  // Collapse the selection to tear the popup down. This is clearDwell()'s other
+  // caller (updateSelectionAffordance's `!next` branch), and it is the teardown a
+  // user actually performs between two selections.
+  await editor.click();
+  await expect(popup).toHaveCount(0);
+
+  // Sample every frame across the whole entrance and keep the worst overhang.
+  const sampler = page.evaluate(async () => {
+    const started = performance.now();
+    let worst = Number.NEGATIVE_INFINITY;
+    while (performance.now() - started < 1500) {
+      const el = document.querySelector(".selection-popup");
+      if (el) worst = Math.max(worst, el.getBoundingClientRect().right - window.innerWidth);
+      await new Promise(requestAnimationFrame);
+    }
+    return worst;
+  });
+  await dragSelectParagraph(page, editor, 700);
+  const overflow = await sampler;
+
+  expect(
+    overflow,
+    "the sampler never saw the popup — the selection did not reopen it",
+  ).toBeGreaterThan(Number.NEGATIVE_INFINITY);
+  expect(
+    Math.round(overflow),
+    "the popup overhangs the right viewport edge during its entrance — maxLeft " +
+      "was derived from a toolbarWidth measured in a narrower state",
+  ).toBeLessThanOrEqual(0);
+});
+
+/**
+ * Ctrl+Alt+M is the one appearance that never gets a second chance to measure.
+ *
+ * `openRequestedComposer` opens straight into the composer and rAF-focuses the
+ * textarea. rAF callbacks run before ResizeObserver delivery in the same frame
+ * (measured in Chromium, not assumed), so by the time updateToolbarMetrics runs
+ * the textarea already holds focus. A focus gate that suppressed MEASUREMENT
+ * rather than RE-measurement therefore left `toolbarWidth` at 0 for the life of
+ * that composer, and `maxLeft` in computeSelectionToolbarPosition clamps against
+ * `viewportWidth - EDGE_GAP - 0` — wider than the viewport, so nothing clamps.
+ * Measured before the fix: the composer sat 202px off the right edge and STAYED
+ * there, through the settle and for as long as it was open.
+ *
+ * TWO ASSERTIONS, because they are not the same claim:
+ *
+ *  - **Settled containment is the contract.** This is the one that was broken.
+ *  - **The transient is bounded, not zero.** The width is animated and read back
+ *    through a ResizeObserver, which delivers one frame late, so the clamp is
+ *    always computed from the previous frame's width. Early in the unroll the
+ *    width grows ~80px/frame, which is worth ~34px of overhang for ~2 frames.
+ *    That is inherent to measuring an animation from its own output and is not
+ *    worth chasing; the bound is here so a regression to the 202px class fails
+ *    loudly rather than hiding under a loosened assertion.
+ *
+ * TWO THINGS ARE LOAD-BEARING in the setup, and skipping either yields a
+ * decorative test that passes on a broken build — the first draft did exactly
+ * that:
+ *
+ *  - **A pointer-set anchor.** `beginEntrance` latches `pointerAnchorX` (the
+ *    pointerup clientX) when a pointerup armed the dwell, and `caretAnchorX`
+ *    otherwise. The keyboard path is NOT controllable from a test: a Shift+End
+ *    over this fixture measured an anchor of x=40, which leaves the popup
+ *    entirely on-screen whether or not the clamp runs. Releasing a drag at 560
+ *    in a 620px viewport is what puts the anchor inside the window where the
+ *    measurement changes the answer.
+ *  - **Beating the dwell.** The composer must be the FIRST appearance, or a
+ *    dwell popup measures `toolbarWidth` first and this becomes a test of the
+ *    path it is not about. Ctrl+Alt+M lands milliseconds after the pointerup,
+ *    well inside DWELL_MS, and the `toHaveCount(0)` makes the alternative a
+ *    loud failure rather than a quiet weaker pass.
+ */
+test("Ctrl+Alt+M's composer is clamped inside the viewport on its first appearance", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 620, height: 800 });
+  const editor = await openDoc(page);
+  const popup = page.locator(".selection-popup");
+
+  await dragSelectParagraph(page, editor, 560);
+  await expect(
+    popup,
+    "the dwell popup opened first and pre-measured toolbarWidth — this test no " +
+      "longer exercises the first-appearance path",
+  ).toHaveCount(0);
+
+  // Sample every frame across the entrance AND past its settle, so the two
+  // assertions below are answering different questions off one run.
+  const sampler = page.evaluate(async () => {
+    const started = performance.now();
+    let worst = Number.NEGATIVE_INFINITY;
+    let settled = Number.NEGATIVE_INFINITY;
+    while (performance.now() - started < 1500) {
+      const el = document.querySelector(".selection-popup");
+      if (el) {
+        const over = el.getBoundingClientRect().right - window.innerWidth;
+        worst = Math.max(worst, over);
+        settled = over;
+      }
+      await new Promise(requestAnimationFrame);
+    }
+    return { worst, settled };
+  });
+  await page.keyboard.press("Control+Alt+m");
+  const { worst, settled } = await sampler;
+
+  expect(
+    worst,
+    "the sampler never saw the popup — Ctrl+Alt+M did not open the composer",
+  ).toBeGreaterThan(Number.NEGATIVE_INFINITY);
+  expect(
+    Math.round(settled),
+    "the Ctrl+Alt+M composer is still hanging off the right edge after its " +
+      "entrance settles — its appearance was never measured, so maxLeft " +
+      "clamped against a toolbarWidth of 0",
+  ).toBeLessThanOrEqual(0);
+  expect(
+    Math.round(worst),
+    "the overhang during the unroll is larger than the ResizeObserver's " +
+      "one-frame lag can account for — the clamp is running on a width that " +
+      "describes something other than this popup",
+  ).toBeLessThanOrEqual(60);
+});
+
+/**
+ * The same first-appearance measurement, with the entrance animation removed.
+ *
+ * This is the arm that pins the `toolbarWidth !== 0` half of the focus gate.
+ * With motion on, the entrance branch grows the width monotonically and the
+ * popup is already correctly sized by the time the gate is reached, so the gate
+ * has nothing left to do — a build that blocks measurement outright still
+ * passes the animated test above. Reduced motion is where it bites:
+ * `beginEntrance` returns before setting `entering` (there is no width unroll to
+ * protect), so the entrance branch never runs at all and the ONLY chance to
+ * measure this composer is the one the focus gate would swallow.
+ *
+ * Driven through the in-app `reduceMotion` setting rather than Playwright's
+ * `reducedMotion` context option, because `motionOff()` reads both and the
+ * setting is the half the product owns.
+ *
+ * There is no transient to tolerate here — the popup is full width on its first
+ * frame — so this arm asserts the strict bound the animated one cannot.
+ */
+test("Ctrl+Alt+M's composer is clamped under reduced motion, where nothing animates", async ({
+  page,
+}) => {
+  await page.addInitScript(
+    ([key]) => {
+      const raw = window.localStorage.getItem(key);
+      const parsed = raw ? JSON.parse(raw) : {};
+      window.localStorage.setItem(key, JSON.stringify({ ...parsed, reduceMotion: true }));
+    },
+    [TANDEM_SETTINGS_KEY] as const,
+  );
+  await page.setViewportSize({ width: 620, height: 800 });
+  const editor = await openDoc(page);
+  const popup = page.locator(".selection-popup");
+
+  await dragSelectParagraph(page, editor, 560);
+  await expect(popup, "the dwell popup opened first and pre-measured toolbarWidth").toHaveCount(0);
+
+  const sampler = page.evaluate(async () => {
+    const started = performance.now();
+    let worst = Number.NEGATIVE_INFINITY;
+    while (performance.now() - started < 1200) {
+      const el = document.querySelector(".selection-popup");
+      if (el) worst = Math.max(worst, el.getBoundingClientRect().right - window.innerWidth);
+      await new Promise(requestAnimationFrame);
+    }
+    return worst;
+  });
+  await page.keyboard.press("Control+Alt+m");
+  const overflow = await sampler;
+
+  expect(
+    overflow,
+    "the sampler never saw the popup — Ctrl+Alt+M did not open the composer",
+  ).toBeGreaterThan(Number.NEGATIVE_INFINITY);
+  expect(
+    Math.round(overflow),
+    "the composer hangs off the right edge under reduced motion — the focus " +
+      "gate blocked the only measurement this appearance gets",
+  ).toBeLessThanOrEqual(0);
 });

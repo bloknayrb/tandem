@@ -252,9 +252,29 @@
            an accent fill on every such toggle: the accent means "applied to the
            selection" elsewhere in the same bars, so spending it on view toggles
            made unrelated controls look like the same kind of thing.
-           Overridden for dark below — a black inset on a dark sunk surface is
-           nearly invisible at the light theme's opacity. */
-        --tandem-shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+
+           This band is the ONLY thing separating pressed from hover on
+           `.toolbar-btn` and `.fr-scope-pill`, which declare the identical
+           fill — so its strength is load-bearing, not decoration.
+
+           MEASURE IT IN THE RIGHT SPACE. CSS composites `box-shadow` alpha on
+           GAMMA-ENCODED sRGB, not on linear light. Compositing in linear space
+           under-reports this band by ~16% and is how a review and the fix that
+           followed it both concluded the press was a "1.1:1 nothing" (PR #1667).
+           Correct figures, black-over-`--tandem-surface-sunk`, as deltaL*:
+
+             light 0.16 -> 13.69   (was 0.12 -> 10.22)
+             warm  0.16 -> 13.07   inherits this line, deliberately: see below
+             dark  0.45 ->  3.85   overridden below, and see the ceiling note
+
+           WARM INHERITS ON PURPOSE — do not "fix" it. Warm's sunk surface is
+           much darker (oklch 0.920 vs light's 0.960), which looks like it
+           should need more alpha, but a fixed alpha is near-constant in
+           contrast across LIGHT bases: warm lands within 0.6 deltaL* of light
+           at the same value. The near-constancy holds only while luminance is
+           well above the 0.05 in the contrast formula, which is exactly why
+           dark is the case that breaks and needs its own line. */
+        --tandem-shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.16);
         --tandem-shadow-2: 0 8px 24px rgba(0, 0, 0, 0.12);
         --tandem-shadow-3: 0 20px 60px rgba(0, 0, 0, 0.2);
         --tandem-shadow-4: 0 16px 48px rgba(0, 0, 0, 0.18);
@@ -675,6 +695,19 @@
         --tandem-page-bg: #2a2a2a;
         --tandem-page-paper: #1a1a1a;
         --tandem-page-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+        /* A black inset SATURATES on a near-black base, so this is the weakest
+           press of the three themes and raising the alpha cannot rescue it:
+           measured deltaL* on dark's `--tandem-surface-sunk` is 3.85 at 0.45,
+           4.48 at 0.55 and still only 5.68 at 0.75 — against light's 13.69.
+           Do not chase it with opacity. What DOES reach parity is an inset
+           WHITE highlight (0.08 alpha measures deltaL* 9.17) on the BOTTOM
+           inner edge — a recess lit from above has its top wall in shadow and
+           its bottom wall lit, which is exactly why light's dark-at-top inset
+           reads as pressed; on a near-black base only the lit half has room to
+           move. Nothing structural is in the way: this token is a full shadow
+           value per theme, not a per-theme alpha, so dark could declare that
+           today. It is a design decision, not a tuning one, so it is Bryan's
+           call and is tracked in #1683 rather than made here. */
         --tandem-shadow-inset: inset 0 1px 3px rgba(0, 0, 0, 0.45);
         --tandem-rail-shadow-left: 4px 0 14px -4px rgba(0, 0, 0, 0.58),
           1px 0 1px rgba(0, 0, 0, 0.28);

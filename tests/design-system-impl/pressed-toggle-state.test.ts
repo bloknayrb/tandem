@@ -268,18 +268,178 @@ describe("activated toggles read as pressed, not as accent-coloured", () => {
     ).toEqual([]);
   });
 
-  it("the inset token is defined for light and given a DIFFERENT dark value", () => {
-    // A single :root definition would render the dark press nearly invisible —
-    // a 0.12-alpha black inset on the dark sunk surface is below the JND. So
-    // asserting the dark block merely *mentions* the token is not the check:
-    // re-declaring the identical value would pass while changing nothing.
-    const html = styleBlocks("index.html");
-    const valueIn = (css: string) => css.match(/--tandem-shadow-inset:\s*([^;]+);/)?.[1]?.trim();
+  /**
+   * The band's STRENGTH, not merely its presence.
+   *
+   * `.toolbar-btn` and `.fr-scope-pill` declare the identical fill for hover and
+   * for pressed, so this inset is the only thing separating the two states.
+   * Asserting the token exists says nothing about whether it can be seen — and
+   * the value was under-measured once already: compositing the alpha in LINEAR
+   * light rather than gamma-encoded sRGB under-reports the band by ~16%, which
+   * is how a review concluded the press was a "1.1:1 nothing" (PR #1667). The
+   * floor below is the corrected light-theme value; lowering it is a design
+   * decision that has to come here first.
+   */
+  const LIGHT_INSET_DELTA_L_FLOOR = 12;
 
+  /** `--tandem-shadow-inset`'s declared value inside a slice of index.html. */
+  const INSET_RE = /--tandem-shadow-inset:\s*([^;]+);/;
+  const insetIn = (css: string) => css.match(INSET_RE)?.[1]?.trim();
+
+  /**
+   * The light and dark declarations, with the slice boundary asserted.
+   *
+   * Hoisted because four specs need it and three of them used to re-derive the
+   * same slice-and-regex — the shape `tests/helpers/css-source.ts` warns about
+   * in its own header ("one copy is a bug to fix; N copies is a bug plus N-1
+   * silent false negatives"). One of those copies did not guard `indexOf`
+   * returning -1, so a moved marker would have handed it `slice(0, -1)`, i.e.
+   * nearly the whole file, and passed.
+   */
+  function insetValues() {
+    const html = styleBlocks("index.html");
     const darkAt = html.indexOf('[data-theme="dark"]');
     expect(darkAt, "index.html has no [data-theme='dark'] block").toBeGreaterThan(-1);
-    const light = valueIn(html.slice(0, darkAt));
-    const dark = valueIn(html.slice(darkAt));
+    return {
+      html,
+      darkAt,
+      light: insetIn(html.slice(0, darkAt)),
+      dark: insetIn(html.slice(darkAt)),
+    };
+  }
+
+  /** The trailing alpha of an `rgba(r, g, b, a)` inside a shadow value. */
+  const alphaOf = (value: string | undefined) =>
+    value ? Number(value.match(/rgba\([^)]*,\s*([0-9.]+)\s*\)/)?.[1]) : Number.NaN;
+
+  /** The `rgba(r, g, b, a)` inside a shadow value, as 0-255 channels + alpha. */
+  function rgbaOf(value: string | undefined): [number, number, number, number] {
+    const m = value?.match(/rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)/);
+    expect(m, `could not parse an rgba() out of ${value}`).toBeTruthy();
+    return [Number(m![1]), Number(m![2]), Number(m![3]), Number(m![4])];
+  }
+
+  /**
+   * |ΔL*| of `overlay` composited over an oklch base — the perceptual step the
+   * band actually makes.
+   *
+   * Pinning the ALPHA alone pins a proxy, and mutation-testing walked straight
+   * through it: swapping `rgba(0,0,0,0.16)` for `rgba(255,255,255,0.16)` keeps
+   * the alpha and destroys the band, and an alpha-only check stayed green. So
+   * this composites the real colour and measures the result, which also catches
+   * `--tandem-surface-sunk` being retuned underneath it.
+   *
+   * COMPOSITE ON GAMMA-ENCODED sRGB. CSS composites `box-shadow` alpha in the
+   * encoded space; doing it in linear light under-reports by ~16% and is how a
+   * review and the first fix for it both called this band a "1.1:1 nothing".
+   */
+  function insetDeltaL(sunk: [number, number, number], overlay: string | undefined): number {
+    const [L, C, Hdeg] = sunk;
+    const h = (Hdeg * Math.PI) / 180;
+    const a = C * Math.cos(h);
+    const b = C * Math.sin(h);
+    const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+    const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+    const s_ = L - 0.0894841775 * a - 1.291485548 * b;
+    const [l, m, sm] = [l_ ** 3, m_ ** 3, s_ ** 3];
+    const lin = [
+      4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * sm,
+      -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * sm,
+      -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * sm,
+    ].map((c) => Math.max(0, Math.min(1, c)));
+
+    const enc = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055);
+    const dec = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    const [orr, og, ob, alpha] = rgbaOf(overlay);
+    const over = [orr, og, ob].map((c) => c / 255);
+    const out = lin.map((c, i) => dec(enc(c) * (1 - alpha) + over[i] * alpha));
+
+    const lumOf = (v: number[]) => 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+    const lstar = (Y: number) => (Y > 216 / 24389 ? 116 * Math.cbrt(Y) - 16 : (Y * 24389) / 27);
+    return Math.abs(lstar(lumOf(lin)) - lstar(lumOf(out)));
+  }
+
+  /** `--tandem-surface-sunk` for a theme, as oklch components. */
+  function sunkOf(css: string): [number, number, number] {
+    const m = css.match(/--tandem-surface-sunk:\s*oklch\(([\d.]+)\s+([\d.]+)\s+([\d.]+)\)/);
+    expect(m, "could not parse --tandem-surface-sunk").toBeTruthy();
+    return [Number(m![1]), Number(m![2]), Number(m![3])];
+  }
+
+  it("the light inset still makes a visible band over the surface it sits on", () => {
+    const { html, darkAt, light } = insetValues();
+    const delta = insetDeltaL(sunkOf(html.slice(0, darkAt)), light);
+    expect(
+      delta,
+      `the light pressed band dropped to deltaL* ${delta.toFixed(2)}, under the ` +
+        `${LIGHT_INSET_DELTA_L_FLOOR} floor. It is the ONLY separator between hover ` +
+        "and pressed on .toolbar-btn and .fr-scope-pill, which declare the same " +
+        "fill — so weakening it removes the state cue rather than softening it. " +
+        "Changing the alpha, the overlay colour or --tandem-surface-sunk can all " +
+        "land here",
+    ).toBeGreaterThanOrEqual(LIGHT_INSET_DELTA_L_FLOOR);
+  });
+
+  it("warm inherits the light inset rather than overriding it", () => {
+    // Deliberate, and it looks wrong at a glance: warm's --tandem-surface-sunk
+    // is much darker than light's, which reads as needing more alpha. It does
+    // not — a fixed alpha is near-constant in contrast across light bases, so
+    // warm measures within 0.6 deltaL* of light at the same value. Pinned
+    // because "add the missing warm override" is the obvious wrong fix, and it
+    // was proposed once.
+    const { html } = insetValues();
+    const warmAt = html.indexOf('[data-theme="warm"]');
+    expect(warmAt, "index.html has no [data-theme='warm'] block").toBeGreaterThan(-1);
+    const end = html.indexOf('[data-high-contrast="true"]', warmAt);
+    expect(end, "the warm block's end marker moved — this slice is now wrong").toBeGreaterThan(
+      warmAt,
+    );
+    expect(
+      html.slice(warmAt, end),
+      "the warm theme now overrides --tandem-shadow-inset. Warm inherits the " +
+        "light value on purpose; if this is intentional, re-measure both and " +
+        "update docs/semantic-tokens.md and index.html's comment together",
+    ).not.toContain("--tandem-shadow-inset:");
+  });
+
+  it("docs/semantic-tokens.md carries the inset's actual values, not just its name", () => {
+    // A mention-only assertion is what this suite already rejects two specs
+    // below ("asserting the dark block merely *mentions* the token is not the
+    // check"). Pin the doc to the VALUES instead: retune either alpha without
+    // touching the doc and this goes red, which is the drift that actually
+    // happens. CLAUDE.md points every future author at that file as the full
+    // enumeration, and nothing else in tests/ reads it.
+    const { light, dark } = insetValues();
+    const [lightAlpha, darkAlpha] = [alphaOf(light), alphaOf(dark)];
+    const doc = readFileSync("docs/semantic-tokens.md", "utf-8");
+
+    expect(
+      doc,
+      "docs/semantic-tokens.md never names --tandem-shadow-inset. Its Elevation " +
+        "line is the enumeration CLAUDE.md treats as complete",
+    ).toContain("--tandem-shadow-inset");
+    for (const [theme, alpha] of [
+      ["light", lightAlpha],
+      ["dark", darkAlpha],
+    ] as const) {
+      expect(Number.isNaN(alpha), `could not parse the ${theme} inset alpha`).toBe(false);
+      expect(
+        doc,
+        `docs/semantic-tokens.md does not record the ${theme} inset alpha ` +
+          `(${alpha}). The doc and index.html have drifted apart`,
+      ).toContain(String(alpha));
+    }
+  });
+
+  it("the inset token is defined for light and given a DIFFERENT dark value", () => {
+    // A single :root definition would render the dark press nearly invisible: a
+    // black overlay saturates on a near-black base, so the light value measures
+    // deltaL* 3.85 there against 13.69 on the light surface. Asserting the dark
+    // block merely *mentions* the token is therefore not the check — re-declaring
+    // the identical value would pass while changing nothing. Dark deliberately
+    // has no deltaL* floor of its own; it cannot meet light's, and #1683 holds
+    // that decision.
+    const { light, dark } = insetValues();
 
     expect(light, "--tandem-shadow-inset is not defined for the light theme").toBeTruthy();
     expect(

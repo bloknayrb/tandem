@@ -131,6 +131,37 @@ let annotateMode = $state(false);
 let annotationIntent = $state<AnnotationComposerIntent>(null);
 let forcedComposer = $state(false);
 
+/**
+ * "Is the user still working inside this popup?" — the question the guards
+ * below are actually asking. They used to ask the narrower
+ * `document.activeElement === textareaEl`, which answers "is the caret in the
+ * composer" and reports a user who has merely moved to a sibling control as
+ * having left.
+ *
+ * That gap is reachable and it silently ate typed drafts. **Tab is the case no
+ * `preventDefault` can close** — the footer controls bind `handleComposerKeyDown`
+ * precisely BECAUSE a keyboard user can Tab onto them (see the comment on the
+ * audience segments), and there is no mousedown to prevent. The pointer routes
+ * are just as open: `.composer-card`'s own padding, the `.composer-actions`
+ * strip, the commit button, and any click outside the popup that is not in the
+ * editor (`onOutsideEvent` is wired to `["scroll"]` only, so nothing dismisses).
+ * A disabled commit button is a fifth: browsers suppress mousedown on a disabled
+ * form control AND do not bubble it, so no ancestor handler can ever see it —
+ * measured in Chromium, not assumed. "Stop the blur" is therefore not achievable
+ * as an invariant; asking the right question is.
+ *
+ * Once focus is off the textarea by any of those routes, a scroll reached
+ * `dismissPopup()`, which sets `annotationText = ""`. Type a note, press Tab,
+ * scroll to re-read the passage — draft gone, no undo. That is pinned by
+ * "a typed draft survives Tab-ing out of the textarea and scrolling".
+ *
+ * `toolbarEl` is null while the popup is unmounted, which is the correct answer
+ * (nobody is working in a popup that is not there).
+ */
+function popupHasFocus(): boolean {
+  return !!toolbarEl?.contains(document.activeElement);
+}
+
 // A28 dwell + entrance (#798).
 // `dwellSatisfied` gates `showPopup`: the popup appears only after the selection
 // has been held steady for DWELL_MS (a NEW client-side intent gate — NOT
@@ -201,6 +232,27 @@ function clearDwell() {
   latchedAnchorX = null;
   latchedAnchorY = null;
   pointerUpSinceDwellArm = false;
+  // Drop the measured width with the rest of the per-appearance state, so each
+  // entrance re-seeds from the state it actually mounts in (the `toolbarWidth
+  // === 0` branch in updateToolbarMetrics) instead of inheriting the last
+  // appearance's measurement.
+  //
+  // The component is never unmounted — only the `{#if}` block is — so this value
+  // used to outlive every teardown, which is what made a cross-appearance
+  // mismatch possible at all: the morph stopped being width-neutral when
+  // `.morph-block:not(.is-active)` dropped to `width: 0`, so a width measured in
+  // ANNOTATE state (~278px) describes nothing about a FORMAT-state popup
+  // (~452px) that later reuses it, and `entering` would then hold it for the
+  // whole ENTER_POPUP_MS.
+  //
+  // HONEST STATUS: this is defensive. The mechanism is a code trace, and an E2E
+  // attempt to drive a stale-narrow value all the way to a visible overhang did
+  // not reproduce it — after a blur and a resize the annotate width was still
+  // not what the clamp used. Do not delete it on the strength of that: the
+  // re-seed is the better invariant on its own terms, because a width that
+  // describes the popup in front of you needs no argument about which states
+  // can be confused.
+  toolbarWidth = 0;
 }
 
 // Arm the A28 appearance dwell. DWELL_MS later (with no re-arm in between) the
@@ -305,7 +357,7 @@ function updateSelectionAffordance(ed: TiptapEditor) {
     // an in-place drag-EXTEND never collapses — so it's preserved. Guard on
     // textarea focus so we never pull the user out of a composer they're typing
     // in (draft text is intentionally left intact for click-away recovery).
-    if (document.activeElement !== textareaEl) annotateMode = false;
+    if (!popupHasFocus()) annotateMode = false;
     return;
   }
 
@@ -348,17 +400,30 @@ function updateSelectionAffordance(ed: TiptapEditor) {
       // measure ~452px and ~278px. `maxLeft` below is derived from
       // `toolbarWidth`, so that difference does reach positioning.
       //
-      // What keeps it stable is `updateToolbarMetrics`' early return while the
-      // textarea holds focus, and `openAnnotateMode` rAF-focuses the textarea:
-      // rAF callbacks run before ResizeObserver delivery in the same frame, so
-      // the narrower width is never written and `toolbarWidth` stays frozen at
-      // the format width for the whole composer session. That over-constrains
-      // `maxLeft` by ~174px on a reposition while the composer is open (window
-      // resize is the only reachable trigger — the audience segments all
-      // preventDefault on mousedown, so they cannot blur the textarea). It
-      // errs toward keeping the popup inside the viewport, which is the safe
-      // direction, but it is frame-ordering luck rather than design. Do not
-      // "simplify" the focus early-return without re-deriving this.
+      // Two things keep a width from reaching a popup it does not describe, and
+      // BOTH are needed — the first alone was frame-ordering luck:
+      //
+      //   1. `updateToolbarMetrics` does not measure while focus is inside the
+      //      popup, so the composer's narrower width is normally never written.
+      //      This used to key on the TEXTAREA holding focus, which a Tab onto
+      //      an audience segment or the commit button defeated outright (no
+      //      mousedown exists to preventDefault); it now keys on the popup as a
+      //      whole. See popupHasFocus().
+      //   2. `clearDwell()` drops `toolbarWidth` on both teardown paths
+      //      (`dismissPopup`, and the `!next` branch of
+      //      updateSelectionAffordance), so the next entrance re-seeds from the
+      //      state it mounts in. NOT an absolute invariant: `suppressSelectionToolbar`
+      //      (App.svelte — slash menu, find bar, command palette) unmounts the
+      //      popup without going near clearDwell, so Ctrl+F over an open popup
+      //      does carry the width across. Harmless, because `annotateMode` is
+      //      carried too and it remounts in the same state it was measured in.
+      //
+      // (1) alone leaves a hole in principle: focus can land entirely OUTSIDE
+      // the popup — a click on the side panel, say, since `onOutsideEvent`
+      // watches scroll only and nothing dismisses — after which a resize could
+      // measure the annotate width for real. (2) is what makes the width a
+      // per-appearance value rather than a carried one, so the question does not
+      // arise. Do not remove either without re-deriving the other.
       toolbarHeight: SELECTION_POPUP_HEIGHT_RESERVE,
       toolbarWidth,
       viewportHeight,
@@ -512,8 +577,9 @@ $effect(() => {
     ["scroll"],
     () => {
       if (!scrollDismissArmed) return;
-      // Don't dismiss while the user is composing in the textarea
-      if (document.activeElement === textareaEl) return;
+      // Don't dismiss while the user is working in the popup. This is the guard
+      // the draft-loss bug ran through — see popupHasFocus().
+      if (popupHasFocus()) return;
       dismissPopup();
     },
   );
@@ -536,27 +602,50 @@ $effect(() => {
   const frozen = entering;
 
   const updateToolbarMetrics = () => {
-    // Skip position jitter while textarea is focused
-    if (document.activeElement === textareaEl) return;
-    // While the popup's width is unrolling (entrance), the ResizeObserver fires
-    // every frame; writing the mid-animation width into `toolbarWidth` would
-    // jitter the left-anchor clamp (maxLeft depends on width) as the popup grows.
-    // Hold the pre-entrance width until the entrance settles — the left edge stays
-    // pinned at the cursor X meanwhile, so there's nothing to correct mid-unroll.
+    // While the popup's width is unrolling, the ResizeObserver fires every
+    // frame. Grow `toolbarWidth` MONOTONICALLY toward the widest thing seen so
+    // far rather than seeding once, because the obvious one-shot seed does not
+    // work: `scrollWidth` is NOT the un-clipped natural width here. The
+    // transition animates `width` on the popup itself, so `scrollWidth` tracks
+    // the animated value — measured 0 on the first ResizeObserver callback and
+    // 41 on the second, against a settled 260. A single seed therefore latches
+    // a near-zero width and, because it only fires while `toolbarWidth === 0`,
+    // never corrects.
+    //
+    // Monotonic growth is also why this no longer needs the old freeze. The
+    // freeze existed to stop the left-clamp jittering as the popup grew, and
+    // `clearDwell()` zeroing `toolbarWidth` per appearance left it nothing to
+    // hold anyway. Under `Math.max` the clamp can only move the popup LEFT, and
+    // only when it would otherwise overhang — an anchor with room to spare has
+    // `maxLeft > anchorX` at every width, so its `left` never moves at all and
+    // `updateSelectionAffordance`'s own dedup drops the write.
     if (entering) {
-      // Exception: the FIRST popup of the session has `toolbarWidth === 0`, so the
-      // right-edge clamp (`maxLeft` depends on width) is a no-op and a popup whose
-      // cursor anchor is near the right edge unrolls off-screen, only snapping on
-      // once the entrance settles (ENTER_POPUP_MS later). Seed the clamp once with the natural
-      // content width — `scrollWidth` reports the un-clipped width even mid-entrance
-      // (the transition animates a growing `width` under `overflow:clip`). Later
-      // appearances retain the last measured width, so this runs at most once.
-      if (toolbarWidth === 0) {
+      if (el.scrollWidth > toolbarWidth) {
         toolbarWidth = el.scrollWidth;
         updateSelectionAffordance(ed);
       }
       return;
     }
+    // Skip position jitter while the user is working in the popup — and note
+    // this is now load-bearing for WIDTH, not just jitter. The morph stopped
+    // being width-neutral when `.morph-block:not(.is-active)` dropped to
+    // `width: 0`, so measuring in annotate state records a value ~174px narrower
+    // than the format state it may be reused by. Focus is what keeps that
+    // measurement from happening; popupHasFocus() is what makes "focus" mean the
+    // whole popup rather than the textarea alone, which is what a Tab away from
+    // the composer used to defeat.
+    //
+    // This gate is safe to apply on an UNMEASURED popup only because two other
+    // things guarantee every appearance is measured before focus can reach it:
+    // the monotonic branch above (motion on), and the synchronous measure at the
+    // bottom of this effect, which runs in Svelte's flush and therefore beats
+    // `openRequestedComposer`'s rAF focus (reduced motion, where `entering` is
+    // never set and the branch above cannot cover). Both arms are pinned in
+    // toolbar-a8-fidelity.spec.ts. Weaken either and this gate starts blocking a
+    // first measurement, which leaves `maxLeft` clamping against 0 — wider than
+    // the viewport, so nothing clamps and the composer hangs off the right edge
+    // for as long as it is open.
+    if (popupHasFocus()) return;
     const rect = el.getBoundingClientRect();
     // Only width feeds positioning now (left-edge clamp). Height is decoupled
     // from placement (A26 morph uses SELECTION_POPUP_HEIGHT_RESERVE), so the
@@ -577,8 +666,20 @@ $effect(() => {
   if (showPopup && !capturedRange) captureSelectionRange();
   if (!showPopup) {
     capturedRange = null;
-    // Only clear draft text if user isn't actively typing (prevents resize-glitch data loss)
-    if (document.activeElement !== textareaEl) annotationText = "";
+    // Only clear draft text if the user isn't actively working in the popup
+    // (prevents resize-glitch data loss). The fifth and last site to ask the
+    // question this way; it is deliberately NOT left on the narrow
+    // `activeElement === textareaEl` form even though the two answer identically
+    // TODAY. That equivalence rests on the popup being unmounted by the time
+    // `showPopup` is false, which holds only while the `{#if}` has no LEAVING
+    // transition — there is already an entrance one, and adding its counterpart
+    // is a plausible next step in this same fidelity work. It would keep the
+    // popup mounted through the false-`showPopup` window and silently revert
+    // this one site to the narrow question while the other four stayed correct.
+    // The dependency argument for keeping it narrow does not hold either: the
+    // line this replaced already read `textareaEl`, so this is one `$state` dep
+    // swapped for another on the same mount lifecycle, not one added.
+    if (!popupHasFocus()) annotationText = "";
   }
 });
 
@@ -638,7 +739,7 @@ $effect(() => {
   if (!editor || !showPopup) return;
   const ed = editor;
   const onSelChange = () => {
-    if (document.activeElement === textareaEl) return;
+    if (popupHasFocus()) return;
     captureSelectionRange();
   };
   ed.on("selectionUpdate", onSelChange);
@@ -1111,16 +1212,20 @@ function handleComposerKeyDown(e: KeyboardEvent) {
                  highlight swatch, Annotate) carries the same line for the same
                  reason. The old footer buttons got away without it only because
                  they submitted and unmounted the popup in one gesture; a TOGGLE
-                 leaves focus parked on the button indefinitely, and five things
-                 in this file key on `document.activeElement === textareaEl`:
-                 the scroll-dismiss guard (which calls dismissPopup, and that
-                 sets `annotationText = ""` — so type, pick an audience, scroll
-                 to re-read the passage, and the draft was silently gone), the
-                 resize-glitch draft clear, the "never pull the user out of a
-                 composer they're typing in" guard, the position-jitter skip and
-                 the selection re-capture skip. Keeping focus in the textarea
-                 restores all five at once, and keeps the caret — which is this
-                 composer's only focus indicator — visible while you toggle. -->
+                 leaves focus parked on the button indefinitely.
+
+                 The line is KEPT, but it is no longer what makes the popup's
+                 focus-dependent guards correct, and it never could have been:
+                 a keyboard user Tabs onto these segments — that is why they bind
+                 handleComposerKeyDown — and there is no mousedown to prevent.
+                 All five guards (the scroll-dismiss that eats the draft, the
+                 "never pull the user out of a composer they're typing in"
+                 reset, the position/width measurement skip, the selection
+                 re-capture skip and the resize-glitch draft clear) now ask
+                 popupHasFocus() instead, which is true for every control in
+                 here. What this line still buys is the CARET — this
+                 composer's only focus indicator — staying visible while you
+                 toggle, plus the editor selection surviving the click. -->
             <button
               type="button"
               class="audience-seg"
