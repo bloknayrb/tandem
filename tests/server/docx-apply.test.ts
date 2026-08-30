@@ -6,6 +6,7 @@ import render from "dom-serializer";
 import JSZip from "jszip";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { sendNoteToClaude } from "../../src/client/panels/annotation-actions.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { listDocBackups } from "../../src/server/file-io/doc-backup.js";
 import {
@@ -1422,15 +1423,23 @@ describe("applyChangesCore — the originating Word comment", () => {
       ).not.toContain("-");
       expect(note.importSource?.commentId).toBe(COMMENT_ID);
 
-      // The user promotes the note (mirrors `promotedAnnotation`, which carries
-      // `importSource` through its `...rest`), Claude attaches a suggestion, the
-      // user accepts. `importSource` is untouched by all three.
+      // **The REAL promotion, not a hand-built copy of it.** `sendNoteToClaude`
+      // is what the Send-to-Claude button calls, and it is the step that has to
+      // carry `importSource` through. A spec that mirrors `promotedAnnotation`'s
+      // field list instead would keep carrying the field itself, so it would
+      // stay green on the day promotion stopped carrying it — the correspondence
+      // bug this whole issue is an instance of.
+      sendNoteToClaude(doc, importedId);
+      const promoted = map.get(importedId) as Annotation;
+      expect(promoted.type, "the promotion actually ran").toBe("comment");
+      expect(promoted.importSource?.commentId, "and it carried the Word comment id through").toBe(
+        COMMENT_ID,
+      );
+
+      // Claude attaches a suggestion and the user accepts. Neither touches
+      // `importSource`.
       map.set(importedId, {
-        ...note,
-        type: "comment" as const,
-        author: "user" as const,
-        audience: "outbound" as const,
-        promotedFrom: "note" as const,
+        ...promoted,
         status: "accepted" as const,
         suggestedText: "Howdy",
         textSnapshot: "Hello",
