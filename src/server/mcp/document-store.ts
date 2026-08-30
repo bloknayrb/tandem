@@ -278,9 +278,32 @@ export class YDocStore implements DocumentStore {
     return this.lifecycle.dismiss(id);
   }
 
+  /**
+   * Remove an annotation on CLAUDE's behalf.
+   *
+   * **The ADR-027 note guard lives here rather than in `removeAnnotationById`,
+   * and the altitude is the whole point.** That helper is shared with
+   * `mcp/routes/remove-annotation.ts`, the browser's own Archive action — a
+   * guard down there refuses the user access to their own note. This method's
+   * only production caller is the `tandem_removeAnnotation` handler, so it is
+   * the MCP-only chokepoint.
+   *
+   * Remove is the destructive path: it deletes the annotation AND sweeps every
+   * reply keyed to it, which for a note is a private thread. `getAnnotation`
+   * sanitizes through the store's real relay, so a stored legacy `flag` — a
+   * note only once normalized — is caught, and the relay is deduped rather than
+   * the unconditional `console.error` an undefined docHash produces.
+   */
   removeAnnotation(
     id: string,
   ): { ok: true; id: string } | { ok: false; code: string; error: string } {
+    if (this.getAnnotation(id)?.type === "note") {
+      return {
+        ok: false,
+        code: "INVALID_ARGUMENT",
+        error: `Annotation ${id} is a private note and cannot be removed by Claude`,
+      };
+    }
     return removeAnnotationById(this.ydoc, this.map, this.filePath, id);
   }
 
