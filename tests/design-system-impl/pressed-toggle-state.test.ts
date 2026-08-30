@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { bundledCssFiles, cssRulesBySelector, styleBlocks } from "../helpers/css-source";
+import {
+  bundledCssFiles,
+  cssRulesBySelector,
+  markupOutsideStyleBlocks,
+  styleBlocks,
+} from "../helpers/css-source";
 
 /**
  * A toggle button's "on" state is a PRESS, not a colour category.
@@ -228,7 +233,7 @@ describe("activated toggles read as pressed, not as accent-coloured", () => {
       const name = norm(file);
       if (!INLINE_ACCENT_DIRS.some((d) => name.includes(d))) continue;
       scanned++;
-      const markup = readFileSync(file, "utf-8").replace(/<style[\s\S]*?<\/style>/g, "");
+      const markup = markupOutsideStyleBlocks(file);
       if (/background\s*:[^;]*--tandem-accent/.test(markup)) found.add(name);
     }
 

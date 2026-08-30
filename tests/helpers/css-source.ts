@@ -62,6 +62,17 @@ export function stripCssComments(css: string): string {
 }
 
 /**
+ * One `<style>` block, opening tag through closing tag, with the block's
+ * contents captured. Shared by `styleBlocks` and `markupOutsideStyleBlocks` so
+ * the two cannot drift into non-complements.
+ *
+ * Safe to share despite the `g` flag: `matchAll` iterates a clone, and
+ * `String.replace` resets `lastIndex` around the call, so neither consumer
+ * leaves state behind for the other.
+ */
+const STYLE_BLOCK = /<style[^>]*>([\s\S]*?)<\/style>/g;
+
+/**
  * A file's authored CSS, comments removed.
  *
  * `.css` files are returned whole. For `.svelte` / `.html` only `<style>` blocks
@@ -72,9 +83,39 @@ export function stripCssComments(css: string): string {
 export function styleBlocks(file: string): string {
   const src = readFileSync(file, "utf-8");
   if (file.endsWith(".css")) return stripCssComments(src);
-  return stripCssComments(
-    [...src.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n"),
-  );
+  return stripCssComments([...src.matchAll(STYLE_BLOCK)].map((m) => m[1]).join("\n"));
+}
+
+/**
+ * A file's MARKUP — everything outside its `<style>` blocks. The exact
+ * complement of `styleBlocks`, which is why the two share one pattern: a scan
+ * that reads markup and a scan that reads CSS must not be able to disagree
+ * about where the boundary lies, and they could while each rolled its own
+ * regex (two files did, byte-identically — the same duplication this module's
+ * header describes).
+ *
+ * `.css` returns empty rather than the file: a stylesheet is style all the way
+ * down, so its markup genuinely is nothing. A caller that means "read this
+ * file" wants `styleBlocks`.
+ *
+ * The strip repeats to a FIXPOINT, for the reason CodeQL's
+ * `js/incomplete-multi-character-sanitization` flags the single pass: removing
+ * a multi-character sequence can splice a fresh one out of what remains
+ * (`<sty<style>x</style>le>` leaves `<style>`), so one pass is not "the markup"
+ * — it is the markup minus one round. Nothing here is a security boundary; the
+ * inputs are the repo's own `src/client/**` files and the output is grepped,
+ * never rendered. The loop is here because a scan that reports it removed the
+ * style blocks should have removed them.
+ */
+export function markupOutsideStyleBlocks(file: string): string {
+  if (file.endsWith(".css")) return "";
+  let markup = readFileSync(file, "utf-8");
+  let previous: string;
+  do {
+    previous = markup;
+    markup = markup.replace(STYLE_BLOCK, "");
+  } while (markup !== previous);
+  return markup;
 }
 
 /**

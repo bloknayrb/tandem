@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { bundledCssFiles, cssRulesBySelector, styleBlocks } from "../helpers/css-source";
+import {
+  bundledCssFiles,
+  cssRulesBySelector,
+  markupOutsideStyleBlocks,
+  styleBlocks,
+} from "../helpers/css-source";
 
 /**
  * Guards the cascade contract of `src/client/editor/toolbar/toolbar-chrome.css`.
@@ -60,11 +65,6 @@ interface Control {
   classes: string[];
 }
 
-/** Markup with `<style>` blocks removed. */
-function markupOf(file: string): string {
-  return readFileSync(file, "utf-8").replace(/<style[\s\S]*?<\/style>/g, "");
-}
-
 /**
  * The value of every `class` attribute in `markup`, in any of the forms Svelte
  * accepts: `class="…"`, `class='…'`, and `class={…}` (expression, including a
@@ -116,7 +116,7 @@ function deriveControls(): Control[] {
   const out: Control[] = [];
   for (const file of bundledCssFiles("src/client")) {
     if (!file.endsWith(".svelte")) continue;
-    for (const attr of classAttrValues(markupOf(file))) {
+    for (const attr of classAttrValues(markupOutsideStyleBlocks(file))) {
       if (!new RegExp(`\\b${CTL}\\b`).test(attr)) continue;
       const classes = attr.split(/\s+/).filter((c) => c && !c.startsWith("tandem-"));
       out.push({ file, classes });
@@ -211,7 +211,7 @@ describe("toolbar-chrome.css cascade contract", () => {
     for (const file of bundledCssFiles("src/client")) {
       if (!file.endsWith(".svelte")) continue;
       expect(
-        markupOf(file),
+        markupOutsideStyleBlocks(file),
         `${file}: \`class:${CTL}\` is not seen by this file's scan. Put the class ` +
           "in a plain `class` attribute, or teach classAttrValues the directive form",
       ).not.toContain(`class:${CTL}`);
@@ -319,7 +319,7 @@ describe("ToolbarButton style-prop escape hatch", () => {
     const tags: Array<{ file: string; style: string }> = [];
     for (const file of bundledCssFiles("src/client")) {
       if (!file.endsWith(".svelte")) continue;
-      for (const tag of toolbarButtonTags(markupOf(file))) {
+      for (const tag of toolbarButtonTags(markupOutsideStyleBlocks(file))) {
         const m = tag.match(/\bstyle\s*=\s*"([^"]*)"/);
         if (m) tags.push({ file, style: m[1] });
       }
