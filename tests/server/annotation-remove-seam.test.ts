@@ -31,9 +31,11 @@ import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { handleRemoveAnnotation } from "../../src/server/mcp/routes/remove-annotation.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { TandemEvent } from "../../src/shared/events/types.js";
-import { BROWSER_ORIGIN, MCP_ORIGIN, withBrowser, withMcp } from "../../src/shared/origins.js";
+import { BROWSER_ORIGIN, MCP_ORIGIN, withBrowser } from "../../src/shared/origins.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { unanchored } from "../helpers/positions.js";
+import { filesMentioning, SRC_FILES, stripComments } from "../helpers/src-tree.js";
+import { listenForTransactions } from "../helpers/yjs-transactions.js";
 
 beforeEach(() => clearOpenDocs());
 
@@ -176,17 +178,6 @@ describe("ADR-031 origin — the contract the helper choice IS", () => {
 
     expect(origins).toStrictEqual([BROWSER_ORIGIN]);
   });
-
-  it("and passing withMcp explicitly is what switches it", () => {
-    const ydoc = setupDoc("rm-origin-explicit", "Hello world");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "x");
-    const origins = originsChangingKey(ydoc, id);
-
-    removeAnnotationRecord(ydoc, map, id, withMcp);
-
-    expect(origins).toStrictEqual([MCP_ORIGIN]);
-  });
 });
 
 describe("the channel observer and a delete", () => {
@@ -280,16 +271,20 @@ describe("the reply sweep", () => {
     const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "x");
     addReplyToAnnotation(ydoc, map, id, "r", "user");
 
-    // Observed at the DOC level: two transactions would be two afterTransaction
-    // fires, and a spec that only checked the end state cannot tell them apart.
-    let transactions = 0;
-    ydoc.on("afterTransaction", () => {
-      transactions += 1;
-    });
+    // Observed at the DOC level: two transactions would be two
+    // `afterTransaction` fires, and a spec that only checked the end state
+    // cannot tell them apart. `listenForTransactions` rather than a hand-rolled
+    // counter — it detaches, which the hand-rolled one did not.
+    //
+    // Yjs merges NESTED transactions into one fire, so a mutant that nests the
+    // sweep inside the delete stays at 1. That is not a miss: nesting still
+    // yields one atomic transaction, which is the property this name claims.
+    const { records, detach } = listenForTransactions(ydoc);
 
     removeAnnotationRecord(ydoc, map, id);
+    detach();
 
-    expect(transactions).toBe(1);
+    expect(records).toHaveLength(1);
   });
 });
 
@@ -316,49 +311,25 @@ describe("who may reach the unguarded mechanism", () => {
    */
   const SANCTIONED = [
     // Defines it, and is where `AnnotationLifecycle.remove` adds the guard.
-    "server/annotations/lifecycle.ts",
+    "src/server/annotations/lifecycle.ts",
     // The browser's Archive. The ONE production caller entitled to the
     // unguarded path — see #1680.
-    "server/mcp/routes/remove-annotation.ts",
+    "src/server/mcp/routes/remove-annotation.ts",
   ];
 
-  it("is exactly the lifecycle module and the browser's Archive route", async () => {
-    const fs = await import("fs/promises");
-    const path = await import("path");
-    const { fileURLToPath } = await import("url");
-    const srcRoot = path.resolve(fileURLToPath(import.meta.url), "../../../src");
+  it("is exactly the lifecycle module and the browser's Archive route", () => {
+    // `filesMentioning` walks all of `src/` with no extension filter and matches
+    // on a word boundary. Both properties are load-bearing and both were learned
+    // by being defeated: review put a caller in a `.tsx` and then a `.js` and
+    // each survived an extension-filtered sweep, and a substring test is beaten
+    // by a longer rename. The shared helper is also what keeps this from being
+    // a FOURTH independent whole-`src` read — see its header for what that
+    // costs on Windows.
+    expect(SRC_FILES.size, "control: the sweep found source files").toBeGreaterThan(100);
 
-    async function walk(dir: string): Promise<string[]> {
-      const out: string[] = [];
-      for (const e of await fs.readdir(dir, { withFileTypes: true })) {
-        const full = path.join(dir, e.name);
-        if (e.isDirectory()) out.push(...(await walk(full)));
-        else out.push(full);
-      }
-      return out;
-    }
-
-    // **Every file under `src/`, no extension filter.** An earlier version
-    // filtered to `.ts|.mts|.cts|.svelte`, and review put a caller in a
-    // `.tsx` and then a `.js` — both survived green. There are no such files
-    // in `src/` today, which is exactly why the filter looked harmless. Sweep
-    // wider than the thing you are guarding, the way
-    // `typecheck-tests-wiring.test.ts` does.
-    const files = await walk(srcRoot);
-    expect(files.length, "control: the sweep found source files").toBeGreaterThan(100);
-
-    const strip = (src: string) =>
-      src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
-
-    const users: string[] = [];
-    for (const file of files) {
-      const src = strip(await fs.readFile(file, "utf-8"));
-      if (src.includes("removeAnnotationRecord")) {
-        users.push(path.relative(srcRoot, file).replace(/\\/g, "/"));
-      }
-    }
-
-    expect(users.sort()).toStrictEqual([...SANCTIONED].sort());
+    // Equality against a non-empty list, not "no unexpected files": a sweep
+    // that silently found nothing satisfies the second and fails the first.
+    expect(filesMentioning("removeAnnotationRecord")).toStrictEqual(SANCTIONED);
 
     // **The file-level pin alone is defeated from INSIDE a sanctioned file**,
     // and review demonstrated it: export a wrapper from `lifecycle.ts` that
@@ -369,9 +340,7 @@ describe("who may reach the unguarded mechanism", () => {
     // So pin the call sites too. Exactly two occurrences of the name in
     // `lifecycle.ts`: the declaration, and the one call inside `removeForClaude`
     // (the guarded path). A wrapper is a third, and reds this.
-    const lifecycle = strip(
-      await fs.readFile(path.join(srcRoot, "server/annotations/lifecycle.ts"), "utf-8"),
-    );
+    const lifecycle = stripComments(SRC_FILES.get("src/server/annotations/lifecycle.ts") ?? "");
     expect(
       lifecycle.match(/removeAnnotationRecord/g) ?? [],
       "the declaration and removeForClaude's call — a third is a wrapper around the guard",

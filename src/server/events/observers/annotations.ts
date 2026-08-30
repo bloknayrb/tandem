@@ -73,9 +73,15 @@ export function makeAnnotationsObserver(deps: {
       //
       // Nothing is lost by returning early: there is no `annotation:removed`
       // member of the event union at all (`shared/events/types.ts`), so a delete
-      // has never been projectable and no branch below reads `action ===
-      // "delete"`.
-      if (action === "delete") return undefined;
+      // has never been projectable and every branch below re-tests `add` or
+      // `update` anyway.
+      //
+      // **An allowlist, not `action === "delete"`**, matching
+      // `observers/replies.ts`'s `action !== "add"`. A denylist covers the one
+      // kind that exists today and lets a future one fall straight through to
+      // `narrowForChannel(undefined)` — reproducing the exact refusal line this
+      // check exists to prevent, in a change that never mentions it.
+      if (action !== "add" && action !== "update") return undefined;
 
       // ADR-035: the single narrow. Sanitizes, then requires
       // `audience === "outbound" && type !== "note"`. Everything below builds

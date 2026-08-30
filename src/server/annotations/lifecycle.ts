@@ -109,7 +109,22 @@ export type LifecycleResult<T> =
   | { kind: "not-pending"; id: string; currentStatus: AnnotationStatus };
 
 /**
- * The remove family's result.
+ * What the shared MECHANISM can answer, and the base the family widens.
+ *
+ * **Declared as the positive base rather than as
+ * `Exclude<RemoveResult, {kind: "invalid-note"}>`, and the direction is the
+ * whole point.** Subtraction is evaluated against whatever `RemoveResult`
+ * happens to be, so a fourth arm added later flows silently into the
+ * mechanism's type, the route's `kind !== "ok"` widens with it, and a generic
+ * 404 absorbs it. That is the objection two reviewers raised against the
+ * ternary this replaced, relocated into a type operator. Widening upward means
+ * a new arm cannot reach the mechanism unless someone edits THIS type on
+ * purpose.
+ */
+
+/**
+ * The remove family's result: the mechanism's outcomes plus the one arm only
+ * the ADR-027 guard produces.
  *
  * **Not a `LifecycleResult<Annotation>`, for the reason {@link EditResult}
  * already establishes in this file**: `not-pending` cannot occur on a remove —
@@ -122,10 +137,9 @@ export type LifecycleResult<T> =
  * for a record that no longer exists, and returning the pre-delete copy would
  * invite a caller to treat it as live.
  */
-export type RemoveResult =
-  | { kind: "ok"; id: string }
-  | { kind: "not-found"; id: string }
-  | { kind: "invalid-note" };
+export type RemoveRecordResult = { kind: "ok"; id: string } | { kind: "not-found"; id: string };
+
+export type RemoveResult = RemoveRecordResult | { kind: "invalid-note" };
 
 /**
  * Tagged outcome of {@link AnnotationLifecycle.create}.
@@ -735,8 +749,9 @@ export function dismissPending(
  *
  * One transaction, not two: the replies are only meaningful with their parent,
  * and a split would let a peer observe the record gone with its thread still
- * present. The sweep also collects keys before deleting, because mutating a
- * Y.Map inside its own `forEach` is undefined.
+ * present. The sweep also collects keys before deleting: Yjs does not specify what
+ * mutating a Y.Map inside its own `forEach` does, and an unspecified
+ * traversal is not something to build a delete on.
  *
  * It does NOT call `recordTombstone`. `annotations/sync.ts` records one from the
  * Y.Map delete event, before its `DURABLE_SKIP` check and unconditionally across
@@ -750,7 +765,7 @@ export function removeAnnotationRecord(
   map: Y.Map<unknown>,
   annotationId: string,
   wrap: (doc: Y.Doc, fn: () => void) => void = withBrowser,
-): RemoveResult {
+): RemoveRecordResult {
   if (!map.has(annotationId)) return { kind: "not-found", id: annotationId };
 
   wrap(ydoc, () => {
@@ -771,10 +786,16 @@ export function removeAnnotationRecord(
  * {@link AnnotationLifecycle.remove}'s body: the guard, then the mechanism under
  * `withMcp`.
  *
- * The `not-found` check is duplicated with {@link removeAnnotationRecord}'s
- * rather than deferred to it, because this one has to read the record anyway to
- * sanitize it, and answering `not-found` here keeps the guard's own precondition
+ * It answers `not-found` itself rather than deferring to
+ * {@link removeAnnotationRecord}'s check, because it has to read the record
+ * anyway to sanitize it, and answering here keeps the guard's own precondition
  * — "there is a record, and it is not a note" — legible in one place.
+ *
+ * **Similar, not duplicated**, and the difference is worth not collapsing: the
+ * mechanism tests `map.has(id)` while this tests `!raw` after a `get`. A stored
+ * falsy value diverges — this path answers `not-found`, the mechanism proceeds
+ * to delete. Unreachable through any writer today; the point is that they are
+ * two checks, not one written twice.
  */
 function removeForClaude(
   id: string,

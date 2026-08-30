@@ -31,7 +31,7 @@ export function handleRemoveAnnotation(req: Request, res: Response): void {
   const result = removeAnnotationRecord(ydoc, annotationsMap, annotationId);
   if (result.kind !== "ok") {
     // One arm, and the TYPE is what says so: the mechanism returns
-    // `RemoveMechanismResult`, which subtracts `invalid-note` — the arm only
+    // `RemoveRecordResult`, which does not carry `invalid-note` — the arm only
     // the guarded member produces. So `result` narrows to `not-found` here and
     // there is no branch to get wrong. An earlier draft wrote a ternary and a
     // comment claiming a new arm would be a compile error; a ternary's `else`

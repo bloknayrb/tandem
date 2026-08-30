@@ -22,50 +22,22 @@
  * (`createAnnotationLifecycleForTests`) does not slip past a substring check.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const SRC = path.join(ROOT, "src");
-
-/** Where the identifiers are defined — excluded, or every census is self-satisfying. */
-const DEFINITION = "src/server/annotations/lifecycle.ts";
-
-function walk(dir: string, out: string[] = []): string[] {
-  // `withFileTypes` so the directory test costs no extra syscall per entry.
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) walk(full, out);
-    else out.push(full);
-  }
-  return out;
-}
+import { filesMentioning, SRC_FILES, stripComments } from "../helpers/src-tree.js";
 
 /**
- * Every file under `src/` read exactly once, as repo-relative POSIX path →
- * contents.
- *
- * One pass, not one per identifier: this suite shares a worker pool with two
- * other whole-`src` walks (`documents-open.test.ts`,
- * `client-log-callsites.test.ts`), and a re-read per lookup was measurably
- * enough extra Windows filesystem contention to push those two over their
- * timeouts in the full run.
+ * Where the identifiers are defined — excluded, or every census is
+ * self-satisfying.
  */
-const SRC_FILES: ReadonlyMap<string, string> = new Map(
-  walk(SRC)
-    .map((f) => path.relative(ROOT, f).split(path.sep).join("/"))
-    .map((rel) => [rel, readFileSync(path.join(ROOT, rel), "utf8")] as const),
-);
+const DEFINITION = "src/server/annotations/lifecycle.ts";
 
 function importersOf(identifier: string): string[] {
-  return filesMatching(new RegExp(`\\b${identifier}\\b`));
+  return filesMentioning(identifier, [DEFINITION]);
 }
 
 function filesMatching(pattern: RegExp): string[] {
   return [...SRC_FILES]
-    .filter(([rel, contents]) => rel !== DEFINITION && pattern.test(contents))
+    .filter(([rel, contents]) => rel !== DEFINITION && pattern.test(stripComments(contents)))
     .map(([rel]) => rel)
     .sort();
 }
