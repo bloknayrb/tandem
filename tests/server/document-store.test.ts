@@ -7,18 +7,21 @@
  * annotation suites are the behavioral parity floor; this file is the contract
  * test for the new interface itself — it pins the store's outputs against the
  * standalone helpers (`createAnnotation`, `collectAnnotations`,
- * `addReplyToAnnotation`, `removeAnnotationById`) and the lifecycle module the
+ * `addReplyToAnnotation`, `removeAnnotationRecord`) and the lifecycle module the
  * handlers used before, and asserts the Y.Map state matches byte-for-byte.
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { acceptPending, dismissPending } from "../../src/server/annotations/lifecycle.js";
+import {
+  acceptPending,
+  dismissPending,
+  removeAnnotationRecord,
+} from "../../src/server/annotations/lifecycle.js";
 import {
   collectAnnotations,
   collectRepliesForAnnotation,
   createAnnotation,
-  removeAnnotationById,
 } from "../../src/server/mcp/annotations.js";
 import { getDocumentStore, YDocStore } from "../../src/server/mcp/document-store.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
@@ -217,7 +220,7 @@ describe("YDocStore lifecycle parity", () => {
 });
 
 describe("YDocStore.removeAnnotation parity", () => {
-  it("removes the annotation and its replies, matching removeAnnotationById", () => {
+  it("removes the annotation and its replies, matching removeAnnotationRecord", () => {
     const ydoc = setupDoc("rm-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, "rm-1");
@@ -227,17 +230,20 @@ describe("YDocStore.removeAnnotation parity", () => {
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(1);
 
     const result = store.removeAnnotation(id);
-    expect(result).toEqual({ ok: true, id });
+    expect(result).toStrictEqual({ kind: "ok", id });
     expect(map.has(id)).toBe(false);
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
   });
 
-  it("returns NOT_FOUND for an absent ID (same arm as the helper)", () => {
+  it("returns the not-found arm for an absent ID (same arm as the mechanism)", () => {
     const ydoc = setupDoc("rm-2", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "rm-2");
     const viaStore = store.removeAnnotation("nope");
-    const viaHelper = removeAnnotationById(ydoc, ydoc.getMap(Y_MAP_ANNOTATIONS), FILE_PATH, "nope");
-    expect(viaStore).toEqual(viaHelper);
+    const viaMechanism = removeAnnotationRecord(ydoc, ydoc.getMap(Y_MAP_ANNOTATIONS), "nope");
+    // Both halves pinned, not just their equality: two functions that both
+    // returned `{kind:"ok"}` would also be equal to each other.
+    expect(viaStore).toStrictEqual({ kind: "not-found", id: "nope" });
+    expect(viaMechanism).toStrictEqual(viaStore);
   });
 });
 

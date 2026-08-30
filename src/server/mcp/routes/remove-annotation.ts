@@ -1,9 +1,9 @@
 import type { Request, Response } from "express";
 import { Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
 import { generateNotificationId } from "../../../shared/utils.js";
+import { removeAnnotationRecord } from "../../annotations/lifecycle.js";
 import { pushNotification } from "../../notifications.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
-import { removeAnnotationById } from "../annotations.js";
 import { getCurrentDoc } from "../document.js";
 
 export function handleRemoveAnnotation(req: Request, res: Response): void {
@@ -21,19 +21,33 @@ export function handleRemoveAnnotation(req: Request, res: Response): void {
   const ydoc = getOrCreateDocument(doc.docName);
   const annotationsMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
-  const result = removeAnnotationById(ydoc, annotationsMap, doc.filePath, annotationId);
-  if (!result.ok) {
-    const status = result.code === "NOT_FOUND" ? 404 : 400;
-    console.warn(`[Tandem] API error (${status}): remove annotation failed: ${result.error}`);
+  // **`removeAnnotationRecord`, NOT `AnnotationLifecycle.remove`** — the
+  // difference is the ADR-027 note guard, and this route must not have it.
+  // Archive is how the user deletes their own private note; routing this call
+  // through the guarded member is #1680 verbatim, and it is pinned by a spec
+  // that drives THIS handler rather than the mechanism (a spec on the mechanism
+  // stays green through exactly that rewiring). The wrapper is left to the
+  // default `withBrowser`, matching `annotation-reply.ts`.
+  const result = removeAnnotationRecord(ydoc, annotationsMap, annotationId);
+  if (result.kind !== "ok") {
+    // `invalid-note` is unreachable here — the guard is on the member this
+    // route deliberately does not call — so every non-ok arm is a 404. Written
+    // as a message per arm anyway, so adding an arm is a compile error rather
+    // than a silently mislabelled 404.
+    const message =
+      result.kind === "not-found"
+        ? `Annotation ${annotationId} not found`
+        : `Annotation ${annotationId} cannot be removed`;
+    console.warn(`[Tandem] API error (404): remove annotation failed: ${message}`);
     pushNotification({
       id: generateNotificationId(),
       type: "annotation-error",
       severity: "error",
-      message: `Remove failed: ${result.error}`,
+      message: `Remove failed: ${message}`,
       dedupKey: `remove-error:${annotationId}`,
       timestamp: Date.now(),
     });
-    res.status(status).json({ error: result.code, message: result.error });
+    res.status(404).json({ error: "NOT_FOUND", message });
     return;
   }
   res.json({ data: { removed: true, annotationId } });

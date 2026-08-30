@@ -21,8 +21,11 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { acceptPending, dismissPending } from "../../src/server/annotations/lifecycle.js";
-import { removeAnnotationById } from "../../src/server/mcp/annotations.js";
+import {
+  acceptPending,
+  dismissPending,
+  removeAnnotationRecord,
+} from "../../src/server/annotations/lifecycle.js";
 import { processInboxAnnotations } from "../../src/server/mcp/awareness.js";
 import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { TUTORIAL_ANNOTATIONS } from "../../src/server/mcp/tutorial-annotations.js";
@@ -32,7 +35,7 @@ import { getAnnotationsMap, makeDoc, noRelay, seedRawAnnotation } from "../helpe
 
 let doc: Y.Doc;
 let map: Y.Map<unknown>;
-/** The MCP-only seam. The browser reaches `removeAnnotationById` directly, so
+/** The MCP-only seam. The browser reaches `removeAnnotationRecord` directly, so
  *  the guard is here and every remove spec must drive THIS, not the helper. */
 let store: YDocStore;
 
@@ -120,9 +123,11 @@ describe("remove refuses notes (ADR-027)", () => {
 
     const result = store.removeAnnotation("n3");
 
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.code).toBe("INVALID_ARGUMENT");
+    // The ARM, not a boolean. `invalid-note` is what the handler translates
+    // into the INVALID_ARGUMENT envelope; asserting only "not ok" would pass
+    // for `not-found`, which tells a caller the opposite thing about whether
+    // the note exists.
+    expect(result).toStrictEqual({ kind: "invalid-note" });
     expect(map.has("n3"), "the note survives").toBe(true);
     expect(replies.has("r1"), "and so does its private thread").toBe(true);
   });
@@ -130,7 +135,7 @@ describe("remove refuses notes (ADR-027)", () => {
   it("refuses a stored `flag` here too, for the same post-sanitize reason", () => {
     seed("f2", { type: "flag" });
 
-    expect(store.removeAnnotation("f2").ok).toBe(false);
+    expect(store.removeAnnotation("f2")).toStrictEqual({ kind: "invalid-note" });
     expect(map.has("f2")).toBe(true);
   });
 
@@ -144,14 +149,14 @@ describe("remove refuses notes (ADR-027)", () => {
 
     const result = store.removeAnnotation("c3");
 
-    expect(result.ok).toBe(true);
+    expect(result).toStrictEqual({ kind: "ok", id: "c3" });
     expect(map.has("c3")).toBe(false);
     expect(replies.has("r2"), "the reply sweep still runs for a comment").toBe(false);
   });
 });
 
 describe("the BROWSER may still archive its own note", () => {
-  it("removeAnnotationById itself does not refuse a note", () => {
+  it("removeAnnotationRecord itself does not refuse a note", () => {
     // **The guard must NOT be here.** `mcp/routes/remove-annotation.ts` calls
     // this helper for `POST /api/remove-annotation`, which is what the Archive
     // button on every note card posts to. The first draft of this fix put the
@@ -164,9 +169,9 @@ describe("the BROWSER may still archive its own note", () => {
     // guard, which is exactly why the regression was invisible to it.
     seed("b1", { type: "note" });
 
-    const result = removeAnnotationById(doc, map, "C:/tmp/doc.md", "b1");
+    const result = removeAnnotationRecord(doc, map, "b1");
 
-    expect(result.ok, "the user's own Archive still works").toBe(true);
+    expect(result.kind, "the user's own Archive still works").toBe("ok");
     expect(map.has("b1")).toBe(false);
   });
 });
@@ -230,7 +235,7 @@ describe("the tutorial note, which is the reachable instance", () => {
 
     expect(acceptPending(noteId, doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
     expect(dismissPending(noteId, doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
-    expect(store.removeAnnotation(noteId).ok).toBe(false);
+    expect(store.removeAnnotation(noteId)).toStrictEqual({ kind: "invalid-note" });
     expect(map.has(noteId), "and it is still there").toBe(true);
   });
 });
