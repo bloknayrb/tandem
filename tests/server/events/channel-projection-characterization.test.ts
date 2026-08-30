@@ -53,6 +53,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { sendNoteToClaude } from "../../../src/client/panels/annotation-actions.js";
 import { makeAnnotationsObserver } from "../../../src/server/events/observers/annotations.js";
 import { makeRepliesObserver } from "../../../src/server/events/observers/replies.js";
 import type { TandemEvent } from "../../../src/server/events/types.js";
@@ -89,6 +90,7 @@ function harness() {
     makeRepliesObserver({ docName: "doc", doc, pushEvent: push }),
   ];
   return {
+    doc,
     annotations: doc.getMap(Y_MAP_ANNOTATIONS),
     replies: doc.getMap(Y_MAP_ANNOTATION_REPLIES),
     events,
@@ -409,6 +411,56 @@ describe("channel projection — replies", () => {
     });
     expect(h.types()).toEqual(["annotation:created"]);
     expect(JSON.stringify(h.events)).not.toContain(REPLY_SECRET);
+    h.dispose();
+  });
+
+  it("keeps a note's reply private across a REAL promotion, and admits the next one", () => {
+    // **The regression ADR-035 Unit 8a asked for, which did not exist.** The
+    // spec above says "a later promotion must not back-publish it" while its
+    // fixture seeds a comment parent and never promotes — the symptom asserted
+    // without its discriminating precondition, so deleting promotion
+    // permanence leaves it green. This drives the sequence.
+    //
+    // The promotion is `sendNoteToClaude`, the real user action, rather than a
+    // hand-written `{type:"comment", audience:"outbound"}` literal: an input I
+    // build myself can only confirm my own model of what promotion writes.
+    // Measured honestly, that choice buys correctness by construction, not
+    // detection — substituting the literal leaves this spec green.
+    //
+    // Note what is NOT asserted: "no textSnapshot on the wire". Promotion
+    // legitimately emits `annotation:created`, and `createdPayload` puts the
+    // parent's own snapshot on as `textSnippet`. The claim is about the REPLY.
+    const h = harness();
+    add(h, "a1", { author: "user", type: "note" });
+    h.replies.set("r1", {
+      id: "r1",
+      annotationId: "a1",
+      author: "user",
+      text: REPLY_SECRET,
+      timestamp: 1,
+      // What production stamps for a note parent, permanently (#1000).
+      private: true,
+    });
+    expect(h.types(), "a note and its private reply emit nothing").toEqual([]);
+
+    sendNoteToClaude(h.doc, "a1");
+
+    expect(h.types()).toEqual(["annotation:created"]);
+    expect(JSON.stringify(h.events)).not.toContain(REPLY_SECRET);
+
+    // The control, and it is what stops this passing for "replies never emit".
+    // The parent IS eligible now — so a reply written after the promotion must
+    // go through. What withholds the first one is its own `private` stamp, not
+    // the parent's current state.
+    h.replies.set("r2", {
+      id: "r2",
+      annotationId: "a1",
+      author: "user",
+      text: "written after the promotion",
+      timestamp: 2,
+    });
+    expect(h.types()).toEqual(["annotation:created", "annotation:reply"]);
+    expect(JSON.stringify(h.events), "and still not the old one").not.toContain(REPLY_SECRET);
     h.dispose();
   });
 
