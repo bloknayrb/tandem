@@ -105,6 +105,21 @@ function entryOpenings(): string[] {
   return openings;
 }
 
+/**
+ * The register's `### Accepted (bounded)` subsection.
+ *
+ * It is NESTED inside `## Open findings`, which is why the entry-existence spec
+ * above cannot stand in for this one: an entry filed under Accepted satisfies
+ * "has its own entry in the register" while saying the opposite of open.
+ */
+function acceptedSubsection(): string {
+  const section = registerSection();
+  const start = section.indexOf("### Accepted (bounded)");
+  if (start === -1) return "";
+  const next = section.indexOf("\n### ", start + 1);
+  return section.slice(start, next === -1 ? undefined : next);
+}
+
 /** The single CLAUDE.md bullet that carries the count and the enumeration. */
 function claimBullet(): string {
   const start = CLAUDE_MD.indexOf("security findings are open");
@@ -190,5 +205,39 @@ describe("open security-findings claims (CLAUDE.md vs docs/security.md)", () => 
     // how #1420 survived nine days after its issue was closed.
     const openSection = SECURITY_MD.slice(SECURITY_MD.indexOf("## Open findings"));
     expect(openSection).toMatch(/reconciled against the tracker \d{4}-\d{2}-\d{2}/);
+  });
+
+  it("nothing CLAUDE.md calls open is filed under Accepted in the register", () => {
+    // The hole the sibling specs leave, demonstrated rather than imagined.
+    // "Every open finding has its own entry in the register" is satisfied by an
+    // entry in the `### Accepted (bounded)` SUBSECTION, because that subsection
+    // is nested inside `## Open findings` and `registerSection()` swallows it.
+    // And the open-vs-not-open overlap spec reads only CLAUDE.md's own bullet,
+    // so it cannot see the register disagreeing with it.
+    //
+    // Measured against the real case that produced this: resolving the #1654
+    // merge by taking either side's sentence unchanged leaves the bullet
+    // calling #1654 open while the register files it as Accepted, and all four
+    // sibling specs stayed green. This is the one that fails.
+    const accepted = acceptedSubsection();
+    expect(accepted, "the register no longer has an `### Accepted (bounded)` subsection").not.toBe(
+      "",
+    );
+
+    const acceptedOpenings = accepted
+      .split("\n")
+      .filter((line) => line.startsWith("- "))
+      .map((line) => line.slice(0, 240));
+    // Positive control: an empty opening list would satisfy the filter below
+    // by finding no counterexample, exactly as the parser control above guards.
+    expect(acceptedOpenings.length, "derived no accepted entries").toBeGreaterThan(0);
+
+    const contradicted = issueRefsAtTopLevel(segments().open).filter((n) =>
+      acceptedOpenings.some((o) => o.includes(`issues/${n}`) || new RegExp(`#${n}(?!\\d)`).test(o)),
+    );
+    expect(
+      contradicted,
+      "CLAUDE.md calls these findings open, but docs/security.md files them under Accepted",
+    ).toEqual([]);
   });
 });

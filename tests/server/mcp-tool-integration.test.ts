@@ -570,11 +570,15 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
     expect(raw).not.toContain("A private reminder");
   });
 
+  // #1654: this is the caller-named POSITIVE CONTROL for the suffix pin -- the
+  // fixture name is `.annotations.json` deliberately, not incidentally. Without
+  // it, a pin that refuses every caller-named path satisfies all the negatives
+  // in `export-path-canonicalization.test.ts`. Do not "tidy" the suffix away.
   it("honors a custom outputPath", async () => {
     const docPath = uniqueDocPath();
     const customPath = join(
       tmpdir(),
-      `tandem-custom-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+      `tandem-custom-${Date.now()}-${Math.random().toString(36).slice(2)}.annotations.json`,
     );
     sidecarTempFiles.push(customPath);
 

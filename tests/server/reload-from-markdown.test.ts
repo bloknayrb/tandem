@@ -33,13 +33,38 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
   watchFile: watcherMocks.watchFile,
 }));
 
+// The tail of `reloadDocumentFromMarkdown` calls `broadcastOpenDocs()` and
+// `ensureAutoSave()` and nothing asserted either: replacing both with
+// `void 0;` left 27 specs green across this file, `documents-open` and
+// `documents-boundary`. They are intra-`documents/` edges, so the import
+// inventories cannot see them either — the only thing that could notice was
+// a test, and there wasn't one.
+//
+// `importOriginal` is spread so the real implementation still runs for every
+// other spec here; this is an observation point, not a stub.
+//
+// `ensureAutoSave` is deliberately NOT spied the same way. `autosave.ts` sits
+// inside the documented cycle `open.ts → autosave.ts →
+// mcp/document-service.ts → open.ts` (header of `documents/open.ts`), and
+// mocking a module in that cycle yields TWO instances. Measured, not
+// assumed: with the spy in place the test's own binding reported as a mock
+// while the binding `reload-family.ts` had already captured reported as the
+// real function, so the spy recorded nothing and the spec failed against
+// working code. That half is asserted through the observable effect instead.
+vi.mock("../../src/server/documents/registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/documents/registry.js")>();
+  return { ...actual, broadcastOpenDocs: vi.fn(actual.broadcastOpenDocs) };
+});
+
 vi.mock("../../src/server/notifications.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/notifications.js")>();
   return { ...actual, pushNotification: vi.fn() };
 });
 
 import { openFromDisk, openScratchpad } from "../../src/server/documents/open.js";
+import { broadcastOpenDocs } from "../../src/server/documents/registry.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { reloadDocumentFromMarkdown } from "../../src/server/documents/reload-family.js";
 import {
   acquireReloadGuard,
   isReloadInProgress,
@@ -47,8 +72,8 @@ import {
 } from "../../src/server/documents/watcher.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import { reloadDocumentFromMarkdown } from "../../src/server/mcp/file-opener.js";
 import { anchoredRange } from "../../src/server/positions.js";
+import { isAutoSaveRunning, stopAutoSave } from "../../src/server/session/manager.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
@@ -111,6 +136,36 @@ function seedAnnotation(doc: Y.Doc, snapshot: string): string {
 }
 
 describe("reloadDocumentFromMarkdown — round-trip + disk persistence", () => {
+  it("re-broadcasts the tab list and re-arms autosave on the way out", async () => {
+    // The last two statements in the function, and nothing asserted either:
+    // replacing both with `void 0;` left 27 specs green across this file,
+    // `documents-open` and `documents-boundary`. They are intra-`documents/`
+    // calls, so no import inventory can see them — a test was the only thing
+    // that could, and there wasn't one.
+    //
+    // What each loss costs, since "it isn't called" is not by itself a defect:
+    // without `broadcastOpenDocs` the client's tab list keeps the pre-reload
+    // title and dirty state; without `ensureAutoSave` a document edited through
+    // the raw-markdown view silently stops autosaving until something else
+    // re-arms the timer.
+    const broadcastMock = vi.mocked(broadcastOpenDocs);
+    const { id } = await openMdFile("# Title\n\nOriginal paragraph.\n");
+    broadcastMock.mockClear();
+
+    // The open above armed the timer, so asserting it is running after the
+    // reload would pass with `ensureAutoSave()` deleted. Disarm it first, so
+    // re-arming is the only thing that can turn it back on — and pin the
+    // disarm, because a control that silently stops controlling is the whole
+    // failure mode this spec exists to close.
+    stopAutoSave();
+    expect(isAutoSaveRunning(), "control: the timer is genuinely disarmed").toBe(false);
+
+    await reloadDocumentFromMarkdown(id, "# Changed\n\nBrand new body.\n");
+
+    expect(broadcastMock, "the tab list would keep the pre-reload state").toHaveBeenCalled();
+    expect(isAutoSaveRunning(), "a raw-markdown edit would stop autosaving").toBe(true);
+  });
+
   it("replaces the Y.Doc body from the supplied markdown", async () => {
     const { id, doc } = await openMdFile("# Title\n\nOriginal paragraph.\n");
     expect(extractText(doc)).toContain("Original paragraph");

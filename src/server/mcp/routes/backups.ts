@@ -15,6 +15,7 @@ import path from "node:path";
 import type { Request, Response } from "express";
 import { API_BACKUPS_RESTORE } from "../../../shared/api-paths.js";
 import { hasDoc } from "../../documents/registry.js";
+import { restoreDocumentFromBackup } from "../../documents/reload-family.js";
 import { listDocBackups } from "../../file-io/doc-backup.js";
 import {
   assertLoopbackForMutation,
@@ -22,7 +23,6 @@ import {
 } from "../../integrations/api-routes.js";
 import { resolveAppDataDir } from "../../platform.js";
 import { getCurrentDoc } from "../document-service.js";
-import { restoreDocumentFromBackup } from "../file-opener.js";
 import { isValidDocumentId, scrubPathForCaller, sendApiError } from "./_shared.js";
 
 export async function handleListBackups(req: Request, res: Response): Promise<void> {

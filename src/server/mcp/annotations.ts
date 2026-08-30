@@ -760,7 +760,7 @@ export function registerAnnotationTools(server: McpServer): void {
           message: "outputPath must not use UNC or extended-length / device-namespace prefixes.",
         })
         .describe(
-          "Custom absolute sidecar path (used with writeToDisk). A file path, or an existing directory to which the default filename is appended.",
+          "Custom absolute sidecar path (used with writeToDisk). A file path whose name must end in `.annotations.md` or `.annotations.json` (matching `format`), or an existing directory to which the default filename is appended. The directory is unrestricted; only the filename is.",
         ),
     },
     withErrorBoundary(
@@ -904,6 +904,60 @@ export function registerAnnotationTools(server: McpServer): void {
                 );
               }
             }
+          }
+          // #1654 suffix pin. The sidecar this tool produces is named
+          // `<doc>.annotations.{md,json}`, so requiring that suffix is an
+          // allowlist BY CONSTRUCTION rather than a denylist of dangerous
+          // names: `CLAUDE.md`, `AGENTS.md`, `.cursorrules`,
+          // `.github/copilot-instructions.md` and `settings.json` are all
+          // refused without being enumerated, while an arbitrary destination
+          // DIRECTORY stays legal -- which is the documented point of
+          // `outputPath` and what a directory confinement would have deleted.
+          // (A denylist was rejected because the attack composes what survives
+          // it; a bare extension pin was rejected because `.md` is the
+          // extension the vector requires.)
+          //
+          // THREE THINGS THIS CHECK DEPENDS ON. Change any of them and it stops
+          // being sound:
+          //
+          // 1. It runs on the POST-realpath `sidecarPath`, not on the caller's
+          //    string. `:866` above assigns `sidecarPath = real` when realpath
+          //    hits an existing leaf, so a conforming name that is a SYMLINK to
+          //    `CLAUDE.md` would otherwise launder itself past a check placed
+          //    even one line earlier.
+          // 2. `atomicWrite` is temp-file + `rename` (`file-io/index.ts`).
+          //    `rename` REPLACES a symlink at the destination rather than
+          //    writing through it, which is the only reason a check on the
+          //    NAME implies anything about the INODE written. A "simplification"
+          //    to a direct `fs.writeFile` makes this pin decorative.
+          // 3. It is `endsWith`, never an anchored full-basename pattern. The
+          //    default is `${filePath}.annotations.${ext}`, so an ordinary
+          //    document like `My Report (final).md` yields
+          //    `My Report (final).md.annotations.json`.
+          //
+          // The default and directory-append forms both satisfy it by
+          // construction; only a caller-named file path can fail. The check is
+          // deliberately NOT in the Zod schema: `outputPath` may legitimately be
+          // an existing DIRECTORY (appended to at `:860-862`), and a
+          // schema-level pin would also annex the UNC specs that currently
+          // prove the schema refines fire.
+          const sidecarName = path.basename(sidecarPath);
+          const requiredSuffix = `.annotations.${isJson ? "json" : "md"}`;
+          if (!sidecarName.toLowerCase().endsWith(requiredSuffix)) {
+            return mcpError(
+              "INVALID_PATH",
+              `outputPath must name a file ending in ${requiredSuffix} (rename the file; the directory is unrestricted).`,
+            );
+          }
+          // An NTFS alternate data stream (`CLAUDE.md:x.annotations.md`)
+          // satisfies the suffix while naming a stream on a different file.
+          // `validate_open_candidate` screens ADS on the file-open path; this
+          // keeps the write path from being the one surface that does not.
+          if (sidecarName.includes(":")) {
+            return mcpError(
+              "INVALID_PATH",
+              "outputPath must not contain a colon in the filename (NTFS alternate data stream).",
+            );
           }
           const contents = isJson
             ? JSON.stringify(

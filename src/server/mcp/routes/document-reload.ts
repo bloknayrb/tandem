@@ -2,11 +2,11 @@ import type { Request, Response } from "express";
 
 import { API_DOCUMENT_RELOAD } from "../../../shared/api-paths.js";
 import { hasDoc } from "../../documents/registry.js";
+import { reloadDocumentFromMarkdown } from "../../documents/reload-family.js";
 import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
-import { reloadDocumentFromMarkdown } from "../file-opener.js";
 import { isValidDocumentId, sendApiError } from "./_shared.js";
 
 /**
