@@ -803,7 +803,7 @@ copied forward without counting the transactions first.
 
 ## ADR-035: Annotation Lifecycle Module
 
-**Status:** Accepted; partially implemented (verified against `src/` 2026-08-30). `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (`acceptPending` / `dismissPending`, returning a tagged `LifecycleResult`). `narrowForChannel` and the `ChannelEligible` brand landed 2026-08-26 as `src/server/annotations/projection.ts` — **see the amendment below, which widens the predicate this ADR specifies.** `create` landed 2026-08-28 (Unit 8b) and `editPending` 2026-08-30 (Unit 8c); `YDocStore.createAnnotation` and `YDocStore.editAnnotation` are now delegating shells. `remove` landed 2026-08-30 (Unit 8e) as `AnnotationLifecycle.remove` over the shared `removeAnnotationRecord`, and `reply` the same day (Unit 8f) as `AnnotationLifecycle.reply` over a module-private `writeReply`, with `addUserReply` as the deliberately unguarded browser entry. **`promoteNoteToComment` is DECLINED rather than deferred — see the amendment below.** **Deferred:** the `.docx` `importNote` entry still lives on the handler.
+**Status:** Accepted; implemented, with two entries declined rather than built (verified against `src/` 2026-08-30). "Partially implemented" was right while a deferred set existed; it is now empty. `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (`acceptPending` / `dismissPending`, returning a tagged `LifecycleResult`). `narrowForChannel` and the `ChannelEligible` brand landed 2026-08-26 as `src/server/annotations/projection.ts` — **see the amendment below, which widens the predicate this ADR specifies.** `create` landed 2026-08-28 (Unit 8b) and `editPending` 2026-08-30 (Unit 8c); `YDocStore.createAnnotation` and `YDocStore.editAnnotation` are now delegating shells. `remove` landed 2026-08-30 (Unit 8e) as `AnnotationLifecycle.remove` over the shared `removeAnnotationRecord`, and `reply` the same day (Unit 8f) as `AnnotationLifecycle.reply` over a module-private `writeReply`, with `addUserReply` as the deliberately unguarded browser entry. **`promoteNoteToComment` is DECLINED rather than deferred — see the amendment below.** **`importNote` is DECLINED too (Unit 8h, 2026-08-30) — see the second amendment.** **Nothing is deferred: the set is now empty**, and every entry this ADR sketched has either landed or been declined with a reason on the record.
 
 **Two departures from the sketch below, both in Unit 8c.**
 
@@ -928,6 +928,65 @@ green" can go stale without misleading anyone reading the decision.
 
 This does not close #1619. The pull surfaces still gate on `type` and never on
 `audience`, which is true of any comment, promoted or not.
+
+### Amendment (2026-08-30, Unit 8h): `importNote` declined — the `.docx` path stays outside the seam
+
+`importNote(range, content, importSource)` was the last entry in this ADR's
+deferred set. It is declined, and the deferred set is now empty.
+
+**The blocker is the origin, and it is measured rather than argued.** Every
+`AnnotationLifecycle` write opens its own transaction under `withMcp` or
+`withBrowser`; the module imports neither `withInternal`, which is the origin
+`.docx` ingest requires. `injectCommentsAsAnnotations` writes every comment in a
+single `withInternal` batch, and both ways of reconciling that change observable
+behaviour:
+
+- **Inside the batch**, Yjs swallows the nested transaction — an inner
+  `doc.transact(fn, "INNER")` within an outer one fires a single transaction
+  carrying only the OUTER origin. The lifecycle's own tag would be silently
+  discarded, which is worse than Critical Rule 2's "wrong helper is a silent
+  bug": the helper is not wrong, it is ignored.
+- **Outside the batch**, the origin becomes `mcp`, and `DURABLE_SKIP` holds
+  `file-sync` and `internal` but *not* `mcp`. Imported notes would begin queuing
+  a debounced durable snapshot per comment, where today they reach the durable
+  envelope only when a later user action touches them.
+
+Note what is NOT the reason. Transaction count is nearly unobservable here — the
+channel skips both origins and the tombstone observer records for both. And a
+mid-loop throw is no more atomic today than it would be after: `Y.transact` has
+no rollback, so a throw keeps everything already applied either way. An earlier
+draft of this decision leaned on that atomicity claim; it was measured false.
+
+**A partial migration was evaluated, not skipped.** The create half and the reply
+half are structurally separable, so create-only migration was considered on its
+own merits and rejected on the same origin argument — the batch is precisely what
+it would have to break. The reply half has a second, independent blocker: Unit 8f
+narrowed `writeReply`'s author from a three-member `ReplyAuthor` to
+`"user" | "claude"` *because* the third member let `"import"` ride past the
+`author === "claude"` ADR-027 guard, so an import-authored reply is not
+representable through the seam by construction.
+
+**Idempotency was not the reason either**, though an earlier draft said so. The
+id is a content hash, but re-import does not structurally depend on that: the
+`byCommentId` drift index is a second lookup keyed on the stable Word id and
+indifferent to the annotation key's shape. The narrower true statement is that
+this ADR's sketched signature takes no id and its sibling `create*` methods mint
+unconditionally, so implemented in that shape it drops the `map.has(offsetId)`
+fast path — a redesign, not a migration.
+
+**What shipped instead.** The exemption is no longer prose. Unit 8h funnels every
+import write through two module-private writers that stamp `author: "import"`
+rather than trusting it, and `tests/server/docx-import-write-seam.test.ts` pins
+the set — the same shape as `writeReply` and `annotation-reply-seam.test.ts`. The
+half of the unit's instruction about `tandem_checkInbox` was already satisfied by
+Unit 8g's `annotation-promote-pull-surface.test.ts`, which drives the real
+importer through the registered MCP handlers; carry that file's own caveat, that
+its before-assertion is a baseline rather than a control, because both records
+are `author: "import"` at that point.
+
+The unit also closed two id collisions found while reasoning about the hash
+delimiter — see the CHANGELOG entry and #1691. Those are a
+correctness defect in the import path, not a consequence of this decision.
 
 ## ADR-036: Format Adapter as Capability Set
 
