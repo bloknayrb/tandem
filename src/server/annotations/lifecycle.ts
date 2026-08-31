@@ -20,6 +20,14 @@
  *
  * ## The layering, settled by Unit 8b
  *
+ * **Where Unit 8j actually got to (updated as it lands, so this never promises
+ * a future).** 8j-1 deleted the `DocumentStore` *interface* — zero importers —
+ * leaving `YDocStore` as the only type, and moved the wide-typed create wrapper
+ * out of `src/`. The `ydoc` / `transactMcp` escape hatches named below are
+ * closed by 8j-2 and are **still present until it lands**. The file itself is
+ * collapsed, not deleted: after the hatches close it still owns document
+ * resolution, and tracker row 85 is titled "Collapse the shallow DocumentStore".
+ *
  * **`AnnotationLifecycle` is the seam callers hold. `DocumentStore` is a
  * compatibility shell that Unit 8j deletes.** Three facts decide it:
  *
@@ -638,9 +646,18 @@ function stripOwnedFields(extras: MintExtras | undefined): MintExtras {
  *
  * **The wide `type` parameter is compatibility, not design.** The public seam
  * is {@link AnnotationLifecycle.create}, which always mints a comment. This
- * entry point stays only for `mcp/annotations.ts::createAnnotation` — the
- * pre-ADR-035 export that the not-yet-migrated families and the existing test
- * floor still call with `note` and `highlight`. Unit 8j deletes both.
+ * entry point survives for the test floor, which needs `note` and `highlight`
+ * fixtures the seam deliberately cannot express.
+ *
+ * **Unit 8j moved its only caller out of `src/`.** That caller was
+ * `mcp/annotations.ts::createAnnotation`, a production export with no
+ * production callers, whose sole defence against acquiring one was a census
+ * assertion. It now lives at `tests/helpers/annotation-minter.ts`, so the width
+ * is confined structurally: a `src/` file cannot import from `tests/`. This
+ * function stays here because it performs the real origin-tagged Y.Map write
+ * and fires the notification — production code with a test-only caller, the
+ * arrangement {@link acceptPending} already has. Both are pinned by
+ * `tests/server/annotation-create-seam-census.test.ts`.
  *
  * It takes `map` explicitly rather than deriving it from `ydoc` so that the
  * legacy signature's map argument is actually used: a delegator that silently
@@ -878,8 +895,15 @@ function editPendingAnnotation(
  * {@link createAnnotationLifecycle}, and a census of `src/` finds only these
  * definitions. They survive because the seam census
  * (`tests/server/annotation-create-seam-census.test.ts`) names them and roughly
- * thirty specs drive them; retiring them is Unit 8j's, along with
- * {@link mintAnnotation}.
+ * thirty specs drive them.
+ *
+ * **Unit 8j considered relocating them to `tests/helpers/` — as it did for
+ * `mcp/annotations.ts::createAnnotation` — and declined.** That wrapper was a
+ * self-contained delegation, so moving it cost one import line per file. These
+ * two delegate to `transitionPending`, which is module-private: relocating them
+ * would mean *exporting the guarded transition mechanism itself*, trading two
+ * narrow test-only exports for one wide one. The census pinning their `src/`
+ * importer set to `[]` is the cheaper containment.
  *
  * `onLossy` is required here too rather than defaulted, so a test driving this
  * export cannot accidentally be measuring a different sanitize contract from

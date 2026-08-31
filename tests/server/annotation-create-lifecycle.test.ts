@@ -32,12 +32,12 @@ import {
   type ProjectionRefusal,
 } from "../../src/server/annotations/projection.js";
 import { dispatch } from "../../src/server/local-model/tools.js";
-import { createAnnotation } from "../../src/server/mcp/annotations.js";
 import { injectTutorialAnnotations } from "../../src/server/mcp/tutorial-annotations.js";
 import * as notifications from "../../src/server/notifications.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { INTERNAL_ORIGIN, MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { createAnnotation } from "../helpers/annotation-minter.js";
 import { unanchored } from "../helpers/positions.js";
 import { getAnnotationsMap, makeDoc, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 

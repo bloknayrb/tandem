@@ -11,7 +11,7 @@ import {
   unsubscribe,
   wasEmittedViaChannel,
 } from "../../src/server/events/queue.js";
-import { collectAnnotations, createAnnotation } from "../../src/server/mcp/annotations.js";
+import { collectAnnotations } from "../../src/server/mcp/annotations.js";
 import {
   collectInboxUserReplies,
   isUserActive,
@@ -37,6 +37,7 @@ import { withBrowser } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply, ChatMessage } from "../../src/shared/types.js";
 import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
+import { createAnnotation } from "../helpers/annotation-minter.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { range, unanchored } from "../helpers/positions.js";
 

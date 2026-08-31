@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { addUserReply, createAnnotationLifecycle } from "../../src/server/annotations/lifecycle.js";
-import { collectRepliesForAnnotation, createAnnotation } from "../../src/server/mcp/annotations.js";
+import { collectRepliesForAnnotation } from "../../src/server/mcp/annotations.js";
 import { hideFromAI } from "../../src/server/mode.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
@@ -17,6 +17,7 @@ import {
   withInternal,
 } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
+import { createAnnotation } from "../helpers/annotation-minter.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { assertReplyOk } from "../helpers/reply-results.js";
 import { noRelay, rangeOf } from "../helpers/ydoc-factory.js";

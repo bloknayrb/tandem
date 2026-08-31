@@ -1,12 +1,9 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import {
-  captureSnapshot,
-  collectAnnotations,
-  createAnnotation,
-} from "../../src/server/mcp/annotations.js";
+import { captureSnapshot, collectAnnotations } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { isSnapshotTruncated, SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
+import { createAnnotation } from "../helpers/annotation-minter.js";
 import { unanchored as makeResult } from "../helpers/positions.js";
 
 const DOC_HASH = "sha256:annotation-text-snapshot";

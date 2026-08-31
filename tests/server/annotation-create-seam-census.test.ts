@@ -63,11 +63,21 @@ describe("annotation create seam — who may mint", () => {
     ]);
   });
 
-  it("mintAnnotation — the wide-typed compatibility entry — has exactly one caller", () => {
-    // It accepts `note` and `highlight`, which the seam refuses. Exactly one
-    // caller keeps that width confined to the pre-ADR-035 export Unit 8j
-    // deletes; a second would be the width leaking into new code.
-    expect(importersOf("mintAnnotation")).toStrictEqual(["src/server/mcp/annotations.ts"]);
+  it("mintAnnotation — the wide-typed compatibility entry — has NO production caller", () => {
+    // It accepts `note` and `highlight`, which the seam refuses. Until Unit 8j
+    // exactly one caller held that width: `mcp/annotations.ts::createAnnotation`,
+    // a production export with zero production callers of its own. That wrapper
+    // now lives in `tests/helpers/annotation-minter.ts`, so the width is
+    // confined structurally — a `src/` file cannot import from `tests/` — and
+    // this set is empty.
+    //
+    // **An empty expectation is a zero check, so it carries its own anchor.**
+    // The `[]` below is only meaningful because the sweep can demonstrably see
+    // this identifier: unexcluded, it finds the definition. Without that line,
+    // a typo in the name would satisfy the assertion just as well as the
+    // confinement does.
+    expect(filesMentioning("mintAnnotation", [])).toContain(DEFINITION);
+    expect(importersOf("mintAnnotation")).toStrictEqual([]);
   });
 
   it("nothing invokes create through an already-built lifecycle it did not import", () => {
@@ -83,25 +93,28 @@ describe("annotation create seam — who may mint", () => {
     ]);
   });
 
-  it("the deprecated wide create path stays confined to its two server files", () => {
-    // `DocumentStore.createAnnotation` still accepts `note` and `highlight`,
-    // which the seam refuses, and it is reachable as `store.createAnnotation(…)`
-    // from any handler — importing nothing that the two assertions above read.
-    // So this keys on the *call shape*, not on a bare identifier: the bare name
-    // also appears in four files' prose, and a census that counts sentences is
-    // one an unrelated comment edit turns red. `\b` does not match inside
-    // `createAnnotationLifecycle` (the next character is a word character).
+  it("no server file calls the wide create path at all (Unit 8j)", () => {
+    // Until Unit 8j this list held three files: `Toolbar.svelte` plus the two
+    // server ones — `mcp/annotations.ts`, which declared the wide wrapper, and
+    // `document-store.ts`, which exposed it as `store.createAnnotation(…)`,
+    // reachable from any handler while importing nothing the assertions above
+    // read. Both are deleted, so the server half of this list is now empty.
     //
-    // `Toolbar.svelte` is listed and is NOT the same function: the client
-    // declares its own local `createAnnotation` and writes under `withBrowser`
-    // against the browser's Y.Doc, never reaching server lifecycle code. It
-    // stays in the expectation rather than being filtered out because the sweep
-    // is deliberately wider than the thing it guards — a filter would also hide
-    // a future `src/client` file that reached the server export for real.
+    // **This narrowing is deliberate and is the unit's point**, not a list edit
+    // that follows the code around: the surviving entry is a DIFFERENT function.
+    // `Toolbar.svelte` declares its own local `createAnnotation` and writes
+    // under `withBrowser` against the browser's Y.Doc, never reaching server
+    // lifecycle code. It stays in the expectation rather than being filtered out
+    // because the sweep is deliberately wider than the thing it guards — a
+    // filter would also hide a future `src/client` file that reached a server
+    // export for real. It is also what keeps this from being a zero check: the
+    // pattern demonstrably matches something.
+    //
+    // Keyed on the *call shape*, not a bare identifier — the bare name appears
+    // in prose, and a census that counts sentences is one an unrelated comment
+    // edit turns red. `\b` does not match inside `createAnnotationLifecycle`.
     expect(filesMatching(/\bcreateAnnotation\(/)).toStrictEqual([
       "src/client/editor/toolbar/Toolbar.svelte",
-      "src/server/mcp/annotations.ts",
-      "src/server/mcp/document-store.ts",
     ]);
   });
 

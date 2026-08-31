@@ -19,11 +19,11 @@
 import type { Request, Response } from "express";
 import { beforeEach, describe, expect, it } from "vitest";
 import { addUserReply, createAnnotationLifecycle } from "../../src/server/annotations/lifecycle.js";
-import { createAnnotation } from "../../src/server/mcp/annotations.js";
 import { handleAnnotationReply } from "../../src/server/mcp/routes/annotation-reply.js";
 import { getBuffer, resetForTesting } from "../../src/server/notifications.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { createAnnotation } from "../helpers/annotation-minter.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 

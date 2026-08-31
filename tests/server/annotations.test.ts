@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
   collectAnnotations,
-  createAnnotation,
   refreshRange,
   sanitizeAnnotation,
 } from "../../src/server/mcp/annotations.js";
 import { extractText, getOrCreateXmlText } from "../../src/server/mcp/document.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { generateAnnotationId } from "../../src/shared/utils.js";
+import { createAnnotation } from "../helpers/annotation-minter.js";
 import { unanchored } from "../helpers/positions.js";
 import { getAnnotationsMap, getFragment, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
 

@@ -2,11 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { acceptPending, dismissPending } from "../../src/server/annotations/lifecycle.js";
 import { exportAnnotations } from "../../src/server/file-io/docx.js";
-import {
-  collectAnnotations,
-  createAnnotation,
-  refreshRange,
-} from "../../src/server/mcp/annotations.js";
+import { collectAnnotations, refreshRange } from "../../src/server/mcp/annotations.js";
 import { extractText, verifyAndResolveRange } from "../../src/server/mcp/document.js";
 import { hideFromAI, readModeState } from "../../src/server/mode.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
@@ -17,6 +13,7 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { createAnnotation } from "../helpers/annotation-minter.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { unanchored } from "../helpers/positions.js";
 import { noRelay, rangeOf } from "../helpers/ydoc-factory.js";
