@@ -25,13 +25,12 @@ import { addUserReply, createAnnotationLifecycle } from "../../src/server/annota
 import {
   channelVisibleReplies,
   collectRepliesForAnnotation,
-  createAnnotation,
 } from "../../src/server/mcp/annotations.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
-import { noRelay, rangeOf } from "../helpers/ydoc-factory.js";
+import { createAnnotation, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
 beforeEach(() => {
   clearOpenDocs();

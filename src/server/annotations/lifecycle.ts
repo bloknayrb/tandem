@@ -20,26 +20,51 @@
  *
  * ## The layering, settled by Unit 8b
  *
- * **`AnnotationLifecycle` is the seam callers hold. `DocumentStore` is a
- * compatibility shell that Unit 8j deletes.** Three facts decide it:
+ * **Where Unit 8j actually got to (updated as it lands, so this never promises
+ * a future).** 8j-1 deleted the `DocumentStore` *interface* — zero importers —
+ * leaving `YDocStore` as the only type, and moved the wide-typed create wrapper
+ * out of `src/`. The `ydoc` / `transactMcp` escape hatches named below are
+ * closed by 8j-2 and are **still present until it lands**. The file itself is
+ * collapsed, not deleted: after the hatches close it still owns document
+ * resolution, and tracker row **8j** is titled "Collapse the shallow
+ * DocumentStore" — collapse is what the row asks for.
+ *
+ * **`AnnotationLifecycle` is the seam callers hold. The store is a
+ * compatibility shell.** (Unit 8b wrote "that Unit 8j deletes"; 8j collapses it
+ * instead — see above.) Three facts decided it:
  *
  * - Unit 8's own instruction ends "collapse or delete `DocumentStore`". A seam
  *   scheduled for deletion cannot be the seam callers program against.
- * - `DocumentStore` advertises `readonly ydoc` as an "escape hatch" and
+ * - `YDocStore` advertises `readonly ydoc` as an "escape hatch" and
  *   `transactMcp`. Removing exactly those two is Unit 8's own instruction in
  *   `docs/plans/2026-08-24-ai-assisted-maintainability-remediation.md` — ADR-035
  *   itself predates the store and never names it. **The lifecycle must never
  *   acquire either** — that is an invariant for Units 8c–8j, not a stylistic
  *   note.
- * - `local-model/tools.ts` structurally cannot reach `DocumentStore`: its
+ * - `local-model/tools.ts` structurally cannot reach the store at all: its
  *   `DispatchCtx` carries a `Y.Doc`, a license flag and an agent identity, and
  *   no store. A seam that one of the two production writers cannot hold is not
  *   the seam.
  *
- * Document *resolution* stays in `mcp/document-store.ts` for now (the
- * `getCurrentDoc` / `getOrCreateDocument` lookup lives there, and importing it
- * from this module would make `annotations/ → mcp/` a cycle). Unit 8j moves
- * the lookup. Resolution is not the seam; the interface is.
+ * Document *resolution* stays where it is. **Unit 8b said "Unit 8j moves the
+ * lookup"; it does not** — a third module to hold it buys nothing. Resolution
+ * is not the seam, and the seam is this module — an earlier version of this
+ * sentence ended "the interface is", which stopped being true when 8j-1 deleted
+ * the interface.
+ *
+ * **Two versions of this paragraph have been wrong, in opposite directions, so
+ * the measurement is recorded rather than the argument.** It read "a cycle is
+ * the whole reason the lookup cannot come here", naming
+ * `mcp/document-store.ts` as where `getCurrentDoc` / `getOrCreateDocument`
+ * live. Both halves were false. They are defined in `documents/registry.ts` and
+ * `yjs/provider.ts`; `mcp/document-service.ts` is a re-export facade, and what
+ * `document-store.ts` holds is the *composition* of the two inside
+ * `getDocumentStore`. Walking the transitive import closure of those two
+ * definition modules reaches 25 files and **none** under `annotations/` or
+ * `mcp/` — so this module could import them today with no cycle at all. The
+ * `annotations/ → mcp/` edge exists only if the import is routed through the
+ * facade. The reason to leave resolution alone is that moving it buys nothing,
+ * which is a weaker claim than the one that was here, and the true one.
  *
  * ## Lifetime rule
  *
@@ -403,8 +428,10 @@ export interface EditPatch {
  * path, and authorship is not part of the projection predicate. `status` stays
  * writable for the same reason.
  *
- * Verified against every `createAnnotation` call site in `src/` and `tests/`:
- * none passes any excluded key.
+ * Verified against every `createAnnotation` call site in `tests/`: none passes
+ * any excluded key. (The `src/` half of that sweep was retired as vacuous by
+ * Unit 8j-1 — the only `createAnnotation` left in `src/` is `Toolbar.svelte`'s
+ * unrelated local function.)
  */
 export type CreateExtras = Omit<
   Partial<Extract<Annotation, { type: "comment" }>>,
@@ -420,7 +447,10 @@ export type CreateExtras = Omit<
  * `shared/types.ts` exist to forbid. The seam therefore derives its
  * {@link CreateExtras} from the comment arm alone, and this wider alias carries
  * the flattening for the legacy path that genuinely mints a `highlight` (with a
- * `color`) and a `note`. Unit 8j deletes it along with its one caller.
+ * `color`) and a `note`. **Unit 8j-1 did not delete it** — an earlier version of
+ * this line promised it would. Its caller moved to `tests/helpers/ydoc-factory.ts`
+ * rather than disappearing, so this alias is still exported, still imported by
+ * two test modules, and pinned in the census's export list.
  */
 export type MintExtras = Omit<Partial<Annotation>, LifecycleOwnedField>;
 
@@ -469,8 +499,10 @@ export interface AnnotationLifecycle {
    * There is no `type` parameter. Claude authors comments only: a note is
    * user-private (ADR-027) and a highlight is user-only, so a Claude-mutation
    * seam that accepted either would be the wrong type. The pre-ADR-035
-   * wide-typed entry point survives as {@link mintAnnotation} for the paths
-   * that have not migrated yet, and Unit 8j removes it.
+   * wide-typed entry point survives as {@link mintAnnotation}, and as of Unit
+   * 8j-1 it survives for the *test* floor rather than for unmigrated production
+   * paths — that set is empty in `src/`. It is also still on the hot production
+   * path, because this member calls it.
    */
   create(input: CreateInput): CreateResult;
   /**
@@ -638,18 +670,51 @@ function stripOwnedFields(extras: MintExtras | undefined): MintExtras {
  *
  * **The wide `type` parameter is compatibility, not design.** The public seam
  * is {@link AnnotationLifecycle.create}, which always mints a comment. This
- * entry point stays only for `mcp/annotations.ts::createAnnotation` — the
- * pre-ADR-035 export that the not-yet-migrated families and the existing test
- * floor still call with `note` and `highlight`. Unit 8j deletes both.
+ * entry point survives for the test floor, which needs `note` and `highlight`
+ * fixtures the seam deliberately cannot express.
+ *
+ * **Unit 8j moved its only CROSS-FILE caller out of `src/`** — and the
+ * distinction matters, because an earlier draft of this paragraph said "its
+ * only caller" and was wrong. This function is on the hot production path:
+ * {@link createAnnotationLifecycle} calls it directly, a few lines above, to
+ * mint the comment the seam produces. What left `src/` was
+ * `mcp/annotations.ts::createAnnotation`, a production export with no
+ * production callers of its own, whose sole defence against acquiring one was a
+ * census assertion; it now lives in `tests/helpers/ydoc-factory.ts`.
+ *
+ * So the census assertion for this symbol reads "no OTHER file in `src/`
+ * mentions it" — `importersOf` excludes this file. That is cross-file
+ * confinement of the wide `type` parameter, which is the property worth having,
+ * and it is **not** the same shape as {@link acceptPending}, which genuinely has
+ * no caller at all: the lifecycle reaches `transitionPending` directly rather
+ * than through those wrappers. Both are pinned by
+ * `tests/server/annotation-create-seam-census.test.ts`, under titles that now
+ * say which of the two claims each one makes.
  *
  * It takes `map` explicitly rather than deriving it from `ydoc` so that the
  * legacy signature's map argument is actually used: a delegator that silently
  * discarded it would let the two drift apart with nothing able to observe it.
  *
  * `pushNotification` fires **outside** the transaction, matching the
- * pre-ADR-035 ordering. It lives here rather than at the callers because both
- * production callers raise the same toast and duplicating the label /
- * `dedupKey` derivation across two files is how the two would diverge.
+ * pre-ADR-035 ordering. It lived here originally because the two production
+ * callers raised the same toast and duplicating the label / `dedupKey`
+ * derivation across two files was how they would diverge. **Unit 8j-1 moved the
+ * second caller into `tests/`**, so that argument no longer applies as written.
+ *
+ * Two reasons survive, and neither is the one an earlier draft gave — "moving
+ * it up would fire it outside the only function that knows the record was
+ * actually written" is simply false: the `map.set` below is unconditional with
+ * no failure arm, `create` receives the built annotation, and a throw
+ * propagates identically through both frames.
+ *
+ * 1. **The second caller still exists**, one directory over. Moving the toast
+ *    up to `createAnnotationLifecycle` would silently stop the `note` and
+ *    `highlight` fixture path from firing it — a parity-floor shift that no
+ *    suite asserts, because nothing in `tests/` observes this notification.
+ *    That is the reason the prose has to be right rather than merely plausible.
+ * 2. **The label derivation is type-dependent** (`type[0].toUpperCase() + …`)
+ *    while `create` hard-codes `"comment"`, so half of it would go dead on the
+ *    move.
  */
 export function mintAnnotation(
   ydoc: Y.Doc,
@@ -878,8 +943,15 @@ function editPendingAnnotation(
  * {@link createAnnotationLifecycle}, and a census of `src/` finds only these
  * definitions. They survive because the seam census
  * (`tests/server/annotation-create-seam-census.test.ts`) names them and roughly
- * thirty specs drive them; retiring them is Unit 8j's, along with
- * {@link mintAnnotation}.
+ * thirty specs drive them.
+ *
+ * **Unit 8j considered relocating them to `tests/helpers/` — as it did for
+ * `mcp/annotations.ts::createAnnotation` — and declined.** That wrapper was a
+ * self-contained delegation, so moving it cost one import line per file. These
+ * two delegate to `transitionPending`, which is module-private: relocating them
+ * would mean *exporting the guarded transition mechanism itself*, trading two
+ * narrow test-only exports for one wide one. The census pinning their `src/`
+ * importer set to `[]` is the cheaper containment.
  *
  * `onLossy` is required here too rather than defaulted, so a test driving this
  * export cannot accidentally be measuring a different sanitize contract from

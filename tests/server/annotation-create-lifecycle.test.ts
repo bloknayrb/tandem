@@ -32,14 +32,19 @@ import {
   type ProjectionRefusal,
 } from "../../src/server/annotations/projection.js";
 import { dispatch } from "../../src/server/local-model/tools.js";
-import { createAnnotation } from "../../src/server/mcp/annotations.js";
 import { injectTutorialAnnotations } from "../../src/server/mcp/tutorial-annotations.js";
 import * as notifications from "../../src/server/notifications.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { INTERNAL_ORIGIN, MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { unanchored } from "../helpers/positions.js";
-import { getAnnotationsMap, makeDoc, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
+import {
+  createAnnotation,
+  getAnnotationsMap,
+  makeDoc,
+  noRelay,
+  rangeOf,
+} from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 let map: Y.Map<unknown>;
@@ -450,19 +455,24 @@ describe("create-family write paths that stay OUTSIDE the lifecycle", () => {
   });
 });
 
-describe("compatibility surface", () => {
-  it("createAnnotation still returns the id string the MCP envelope reports", () => {
-    // `tandem_comment` puts this straight into `mcpSuccess({ annotationId })`.
-    const id = createAnnotation(map, doc, "comment", unanchored(0, 5), "x");
-    expect(typeof id).toBe("string");
-    expect(map.has(id)).toBe(true);
-  });
+describe("the wide test minter — fixture sanity, not a production surface", () => {
+  // **Read the describe name as the claim.** ADR-035 Unit 8j-1 moved
+  // `createAnnotation` out of `src/` into `tests/helpers/ydoc-factory.ts`, so
+  // the subject here is a TEST HELPER. It was two specs, and the first said
+  // "`tandem_comment` puts this straight into `mcpSuccess({ annotationId })`" —
+  // false since Unit 8b (`tandem_comment` goes through `lifecycle.create`), and
+  // stale on master before this unit moved the subject out from under it. It
+  // also asserted nothing the spec below does not. Deleted for the same reason
+  // this unit deleted two specs in `document-store.test.ts`: their subject no
+  // longer exists.
 
   it("createAnnotation uses the map it is handed, not one it derives", () => {
-    // The wide entry point keeps BOTH its `map` and `ydoc` parameters. A
-    // delegator that dropped `map` and re-derived it from `ydoc` would agree
-    // with every existing call site (all pass the doc's own annotations map)
-    // and diverge silently the first time one did not.
+    // Kept, because it pins a real property of the verbatim copy rather than
+    // restating the helper's docblock: the wide entry point keeps BOTH its
+    // `map` and `ydoc` parameters. A delegator that dropped `map` and
+    // re-derived it from `ydoc` would agree with all 158 existing call sites
+    // (every one passes the doc's own annotations map) and diverge silently the
+    // first time one did not.
     const other = new Y.Doc().getMap<unknown>("scratch");
     const id = createAnnotation(other, doc, "comment", unanchored(0, 5), "x");
     expect(other.has(id)).toBe(true);

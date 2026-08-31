@@ -1,14 +1,30 @@
 /**
  * Parity contract for `YDocStore` (issue #315).
  *
- * The DocumentStore seam was extracted as a PURE INTERNAL REFACTOR: every
- * method must produce the same Y.Map structures and outputs the pre-refactor
- * MCP handlers produced when they touched `Y.Map` directly. The existing MCP /
- * annotation suites are the behavioral parity floor; this file is the contract
- * test for the new interface itself — it pins the store's outputs against the
- * standalone helpers (`createAnnotation`, `collectAnnotations`,
- * `addUserReply`, `removeAnnotationRecord`) and the lifecycle module the
- * handlers used before, and asserts the Y.Map state matches byte-for-byte.
+ * The store seam was extracted as a PURE INTERNAL REFACTOR: every method must
+ * produce the same Y.Map structures and outputs the pre-refactor MCP handlers
+ * produced when they touched `Y.Map` directly. The existing MCP / annotation
+ * suites are the behavioral parity floor; this file is the contract test for
+ * the seam itself — it pins the store's outputs against the standalone helpers
+ * (`collectAnnotations`, `addUserReply`, `removeAnnotationRecord`) and the
+ * lifecycle module the handlers used before, and asserts the Y.Map state
+ * matches byte-for-byte.
+ *
+ * **`YDocStore` is the only type now** — the `DocumentStore` interface went in
+ * ADR-035 Unit 8j; why is on the class, not restated here. **Three specs went
+ * with it** (an earlier version of this sentence said two, then listed a pair
+ * plus one): the `createAnnotation` parity PAIR, whose subject was a store
+ * method with no production callers, and a `getAnnotation` spec named "returns
+ * the sanitized record". That third one also asserted the not-found branch —
+ * which would be a real loss, except **the method itself is deleted**, with zero
+ * callers in `src/` or `tests/`, so there is nothing left to cover. (Read it as
+ * "the method is gone", not "the spec was thin"; the thin-spec framing sends the
+ * reader to check the wrong thing — though it was thin, asserting only
+ * `.content` on a record it had just minted through the canonical path.)
+ * Neither loss is coverage —
+ * `annotation-create-lifecycle.test.ts` pins creation's record shape field-for-
+ * field and asserts `toStrictEqual([MCP_ORIGIN])`, i.e. exactly one tagged
+ * transaction, where the deleted spec captured only the last origin it saw.
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
@@ -16,64 +32,56 @@ import * as Y from "yjs";
 import {
   acceptPending,
   dismissPending,
+  type MintExtras,
   removeAnnotationRecord,
 } from "../../src/server/annotations/lifecycle.js";
 import {
   collectAnnotations,
   collectRepliesForAnnotation,
-  createAnnotation,
 } from "../../src/server/mcp/annotations.js";
 import { getDocumentStore, YDocStore } from "../../src/server/mcp/document-store.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
+import type { AnchoredRangeResult } from "../../src/shared/positions/index.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
-import type { Annotation } from "../../src/shared/types.js";
+import type { Annotation, AnnotationType } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
-import { noRelay, normalizeForParity, rangeOf } from "../helpers/ydoc-factory.js";
+import {
+  createAnnotation,
+  getAnnotationsMap,
+  noRelay,
+  normalizeForParity,
+  rangeOf,
+} from "../helpers/ydoc-factory.js";
 
 beforeEach(() => {
   clearOpenDocs();
 });
 
+/**
+ * Stand-in for the deleted `YDocStore.createAnnotation` (ADR-035 Unit 8j).
+ *
+ * The store method's whole body was `createAnnotation(this.map, this.ydoc, …)`,
+ * and `this.map` is the annotations Y.Map — so this writes the same record
+ * through the same function into the same map. The specs below are
+ * setup-equivalent, not weakened: they needed an annotation to exist, not that
+ * method in particular. The two specs that DID pin the method itself are
+ * deleted rather than ported, because their subject no longer exists.
+ *
+ * Local rather than shared: `document-store.test.ts` is the only file that ever
+ * called `store.createAnnotation(…)`, so no other suite wants this shape.
+ */
+function mint(
+  ydoc: Y.Doc,
+  type: AnnotationType,
+  anchored: AnchoredRangeResult,
+  content: string,
+  extras?: MintExtras,
+): string {
+  return createAnnotation(getAnnotationsMap(ydoc), ydoc, type, anchored, content, extras);
+}
+
 const FILE_PATH = "/tmp/doc.md";
-
-describe("YDocStore.createAnnotation parity", () => {
-  it("writes the same Y.Map record the standalone helper writes", () => {
-    // Drive both the store method and the standalone helper against the SAME
-    // Y.Doc so relRange (which embeds the doc's client ID) is comparable; only
-    // the random id + timestamp legitimately differ between the two records.
-    const ydoc = setupDoc("create-1", "Hello world");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const store = new YDocStore(ydoc, FILE_PATH, "create-1");
-
-    const idStore = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "needs work", {
-      suggestedText: "Hi",
-    });
-    const idHelper = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "needs work", {
-      suggestedText: "Hi",
-    });
-
-    const recStore = map.get(idStore) as Annotation;
-    const recHelper = map.get(idHelper) as Annotation;
-
-    expect(normalizeForParity(recStore)).toEqual(normalizeForParity(recHelper));
-    expect(recStore.author).toBe("claude");
-    expect(recStore.type).toBe("comment");
-    expect(recStore.suggestedText).toBe("Hi");
-    expect(recStore.relRange).toBeDefined();
-  });
-
-  it("tags the write with MCP_ORIGIN (ADR-031)", () => {
-    const ydoc = setupDoc("create-origin", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH, "create-origin");
-    let origin: unknown;
-    ydoc.on("afterTransaction", (tr) => {
-      origin = tr.origin;
-    });
-    store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
-    expect(origin).toBe(MCP_ORIGIN);
-  });
-});
 
 describe("YDocStore.listAnnotations parity", () => {
   it("matches collectAnnotations output", () => {
@@ -88,22 +96,14 @@ describe("YDocStore.listAnnotations parity", () => {
     expect(store.listAnnotations()).toEqual(collectAnnotations(map, store.docHash));
     expect(store.listAnnotations()).toHaveLength(3);
   });
-
-  it("getAnnotation returns the sanitized record, undefined when absent", () => {
-    const ydoc = setupDoc("get-1", "Hello world");
-    const store = new YDocStore(ydoc, FILE_PATH, "get-1");
-    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "hi");
-    expect(store.getAnnotation(id)?.content).toBe("hi");
-    expect(store.getAnnotation("missing")).toBeUndefined();
-  });
 });
 
 describe("YDocStore.editAnnotation parity (handler guard order)", () => {
   it("updates content + suggestedText and bumps rev/editedAt", () => {
     const ydoc = setupDoc("edit-ok", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "edit-ok");
-    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "old");
-    const before = store.getAnnotation(id)!;
+    const id = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "old");
+    const before = ydoc.getMap(Y_MAP_ANNOTATIONS).get(id) as Annotation;
 
     const result = store.editAnnotation(id, { content: "new", suggestedText: "Hi" });
     expect(result.kind).toBe("ok");
@@ -126,7 +126,7 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
   it("rejects editing a note (ADR-027) before any other guard", () => {
     const ydoc = setupDoc("edit-note", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "edit-note");
-    const id = store.createAnnotation("note", rangeOf(0, 5, ydoc), "private");
+    const id = mint(ydoc, "note", rangeOf(0, 5, ydoc), "private");
     // Even with an empty patch, the note guard wins (it precedes empty-patch).
     expect(store.editAnnotation(id, {})).toEqual({ kind: "invalid-note" });
   });
@@ -135,7 +135,7 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
     const ydoc = setupDoc("edit-np", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, "edit-np");
-    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
+    const id = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x");
     acceptPending(id, ydoc, map, noRelay);
     expect(store.editAnnotation(id, { content: "y" })).toEqual({
       kind: "not-pending",
@@ -146,14 +146,14 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
   it("returns empty-patch when no fields are supplied (pending comment)", () => {
     const ydoc = setupDoc("edit-empty", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "edit-empty");
-    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
+    const id = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x");
     expect(store.editAnnotation(id, {})).toEqual({ kind: "empty-patch" });
   });
 
   it("rejects suggestedText on a non-comment after the empty-patch guard", () => {
     const ydoc = setupDoc("edit-sugg", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "edit-sugg");
-    const id = store.createAnnotation("highlight", rangeOf(0, 5, ydoc), "", {
+    const id = mint(ydoc, "highlight", rangeOf(0, 5, ydoc), "", {
       color: "yellow",
     });
     expect(store.editAnnotation(id, { suggestedText: "Hi" })).toEqual({
@@ -173,9 +173,10 @@ describe("YDocStore lifecycle parity", () => {
   // Fixing that by comparing records across two docs does not work and would
   // make things worse: `relRange` embeds the doc's client id, so a cross-doc
   // comparison must normalise it away — and normalising `relRange` away is
-  // exactly what the field-survival mutant needs to survive. The create-parity
-  // spec above already solved this by driving both paths against ONE doc, and
-  // says so; these two now do the same.
+  // exactly what the field-survival mutant needs to survive. The fix is to
+  // drive both paths against ONE doc, which is what these two now do — and the
+  // reason the `relRange`-is-defined assertion below is load-bearing rather
+  // than decorative.
   it.each([
     [
       "accept",
@@ -194,7 +195,7 @@ describe("YDocStore lifecycle parity", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, `parity-${want}`);
 
-    const idStore = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
+    const idStore = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x");
     const idHelper = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
 
     // Without this, `normalizeForParity` blanking `id` and `timestamp` would be
@@ -225,7 +226,7 @@ describe("YDocStore.removeAnnotation parity", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, "rm-1");
 
-    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
+    const id = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x");
     store.addReply(id, "a reply");
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(1);
 
@@ -251,7 +252,7 @@ describe("YDocStore replies parity", () => {
   it("addReply writes Claude's reply through the seam", () => {
     const ydoc = setupDoc("rep-1", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "rep-1");
-    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
+    const id = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x");
 
     const r = store.addReply(id, "agreed");
     expect(r.kind).toBe("ok");
@@ -267,7 +268,7 @@ describe("YDocStore replies parity", () => {
   it("tags Claude's reply MCP_ORIGIN, so it is not echoed back at Claude", () => {
     const ydoc = setupDoc("rep-origin", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "rep-origin");
-    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
+    const id = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x");
 
     // Unpinned until Unit 8f. The parity spec above asserts author, text and
     // list equality and never looks at origin, so flipping this call site to
@@ -286,7 +287,7 @@ describe("YDocStore replies parity", () => {
   it("addReply rejects a non-comment parent (ADR-027), matching the helper", () => {
     const ydoc = setupDoc("rep-2", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "rep-2");
-    const id = store.createAnnotation("highlight", rangeOf(0, 5, ydoc), "", {
+    const id = mint(ydoc, "highlight", rangeOf(0, 5, ydoc), "", {
       color: "yellow",
     });
     const r = store.addReply(id, "nope");
@@ -304,7 +305,7 @@ describe("YDocStore.listAnnotationsRefreshed", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, "refresh-1");
     // Anchor a comment on "world" (offsets 6..11).
-    const id = store.createAnnotation("comment", rangeOf(6, 11, ydoc), "on world");
+    const id = mint(ydoc, "comment", rangeOf(6, 11, ydoc), "on world");
 
     // Insert text before the anchor so the flat offset must shift.
     const frag = ydoc.getXmlFragment("default");

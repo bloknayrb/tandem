@@ -4,11 +4,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
+import type { RangeValidation } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import { SNAPSHOT_CAP } from "../../shared/snapshot.js";
-import type { Annotation, AnnotationReply, AnnotationType } from "../../shared/types.js";
+import type { Annotation, AnnotationReply } from "../../shared/types.js";
 import {
   AnnotationActionSchema,
   AnnotationStatusSchema,
@@ -19,8 +19,7 @@ import {
 } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
-import type { MintExtras } from "../annotations/lifecycle.js";
-import { describeReplyWriteRefusal, mintAnnotation } from "../annotations/lifecycle.js";
+import { describeReplyWriteRefusal } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { atomicWrite } from "../file-io/index.js";
@@ -195,29 +194,6 @@ export function captureSnapshot(
     .filter((b) => b.at >= from && b.at < from + kept.length)
     .map((b) => ({ at: b.at - from, kind: b.kind }));
   return { text: kept, truncated: capped, breaks };
-}
-
-/**
- * Create an annotation from an anchored range result and store it in the Y.Map.
- * The ydoc parameter is required for origin-tagged transactions (prevents
- * channel echo).
- *
- * **Compatibility surface (ADR-035, Unit 8b).** The seam is now
- * `AnnotationLifecycle.create`, which mints a comment and nothing else. This
- * wide-typed entry point survives for the families that have not migrated yet
- * (Units 8c–8h) and for the existing test floor, which constructs `note` and
- * `highlight` fixtures through it. Unit 8j deletes it. New production callers
- * go through the lifecycle.
- */
-export function createAnnotation(
-  map: Y.Map<unknown>,
-  ydoc: Y.Doc,
-  type: AnnotationType,
-  anchored: AnchoredRangeResult,
-  content: string,
-  extras?: MintExtras,
-): string {
-  return mintAnnotation(ydoc, map, type, anchored, content, extras).id;
 }
 
 export { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";

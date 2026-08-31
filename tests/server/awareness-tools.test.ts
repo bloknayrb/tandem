@@ -11,7 +11,7 @@ import {
   unsubscribe,
   wasEmittedViaChannel,
 } from "../../src/server/events/queue.js";
-import { collectAnnotations, createAnnotation } from "../../src/server/mcp/annotations.js";
+import { collectAnnotations } from "../../src/server/mcp/annotations.js";
 import {
   collectInboxUserReplies,
   isUserActive,
@@ -39,6 +39,7 @@ import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { range, unanchored } from "../helpers/positions.js";
+import { createAnnotation } from "../helpers/ydoc-factory.js";
 
 const DOC_HASH = "sha256:awareness-tools";
 // Ledger keys are document-scoped (see `surfacedIds`); tests share one id

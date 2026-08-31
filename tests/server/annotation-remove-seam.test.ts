@@ -26,7 +26,6 @@ import type { Request, Response } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addUserReply, removeAnnotationRecord } from "../../src/server/annotations/lifecycle.js";
 import { makeAnnotationsObserver } from "../../src/server/events/observers/annotations.js";
-import { createAnnotation } from "../../src/server/mcp/annotations.js";
 import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { handleRemoveAnnotation } from "../../src/server/mcp/routes/remove-annotation.js";
 import { getBuffer, resetForTesting } from "../../src/server/notifications.js";
@@ -36,7 +35,7 @@ import { BROWSER_ORIGIN, MCP_ORIGIN, withBrowser } from "../../src/shared/origin
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { unanchored } from "../helpers/positions.js";
 import { filesMentioning, SRC_FILES, stripComments } from "../helpers/src-tree.js";
-import { noRelay } from "../helpers/ydoc-factory.js";
+import { createAnnotation, noRelay } from "../helpers/ydoc-factory.js";
 import { listenForTransactions } from "../helpers/yjs-transactions.js";
 
 beforeEach(() => clearOpenDocs());

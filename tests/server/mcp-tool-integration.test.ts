@@ -19,7 +19,7 @@ import {
   recordWakeForward,
   resetDeliveryStateForTests,
 } from "../../src/server/events/delivery-state.js";
-import { createAnnotation, registerAnnotationTools } from "../../src/server/mcp/annotations.js";
+import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { extractMarkdown, extractText } from "../../src/server/mcp/document-model.js";
@@ -41,7 +41,7 @@ import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { range } from "../helpers/positions.js";
-import { rangeOf } from "../helpers/ydoc-factory.js";
+import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
 const sidecarTempFiles: string[] = [];

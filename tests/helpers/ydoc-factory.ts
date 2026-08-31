@@ -1,11 +1,12 @@
 import * as Y from "yjs";
+import { type MintExtras, mintAnnotation } from "../../src/server/annotations/lifecycle.js";
 import { loadMarkdown } from "../../src/server/file-io/markdown.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { type AnchoredRangeResult, toFlatOffset } from "../../src/shared/positions/types.js";
 import type { OnLossy } from "../../src/shared/sanitize.js";
-import type { Annotation } from "../../src/shared/types.js";
+import type { Annotation, AnnotationType } from "../../src/shared/types.js";
 
 /** Create a Y.Doc populated with text content */
 export function makeDoc(text: string): Y.Doc {
@@ -130,6 +131,53 @@ export function seedRawAnnotation(
     rev: 1,
     ...extra,
   });
+}
+
+/**
+ * Mint an annotation of ANY type through the real production path, and return
+ * its id.
+ *
+ * The third member of this file's write family, and the only one that goes
+ * through production code: `makeAnnotation` builds a well-formed record without
+ * writing it, `seedRawAnnotation` writes a deliberately malformed one straight
+ * into the map, and this one calls `mintAnnotation` — so the record, its `rev`,
+ * and its `withMcp` origin tag are whatever production produces.
+ *
+ * **Why it lives in `tests/` (ADR-035 Unit 8j-1).** Until this unit it was
+ * `mcp/annotations.ts::createAnnotation`, a *production* export accepting `note`
+ * and `highlight` — which `AnnotationLifecycle.create`, the seam every
+ * production caller now holds, deliberately refuses. It had no production
+ * caller; the only thing standing between it and acquiring one was a census
+ * assertion. Here, a `src/` importer is a visible boundary violation that would
+ * bundle test code into `dist/`, and `annotation-create-seam-census.test.ts`
+ * fails on one — including the shapes no tsconfig `rootDir` covers: the bare
+ * `baseUrl` specifier and the dynamic `import()`, both of which defeated that
+ * guard's first pattern.
+ *
+ * The body is copied verbatim from that export rather than rewritten, including
+ * its `(map, ydoc, …)` argument order — which is inverted relative to
+ * `mintAnnotation`'s `(ydoc, map, …)`. Correcting the order would mean touching
+ * all 158 call sites (measured with comments stripped, definition excluded —
+ * this said 159, which counted the definition line as a call), which is the cost
+ * this relocation exists to avoid: the
+ * fixtures stay byte-identical, so the parity floor cannot shift under the move.
+ *
+ * `mintAnnotation` itself cannot follow it here for the plainest possible
+ * reason: production calls it. `createAnnotationLifecycle` mints through it, so
+ * it is on the hot path, not a compatibility leftover. (It also performs the
+ * real origin-tagged write and fires the review notification — true, but
+ * secondary, and an earlier draft of this docblock led with it and thereby
+ * implied the function had no production caller.)
+ */
+export function createAnnotation(
+  map: Y.Map<unknown>,
+  ydoc: Y.Doc,
+  type: AnnotationType,
+  anchored: AnchoredRangeResult,
+  content: string,
+  extras?: MintExtras,
+): string {
+  return mintAnnotation(ydoc, map, type, anchored, content, extras).id;
 }
 
 /**

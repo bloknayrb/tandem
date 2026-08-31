@@ -12,10 +12,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { acceptPending, dismissPending } from "../../src/server/annotations/lifecycle.js";
-import { createAnnotation } from "../../src/server/mcp/annotations.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { getAnnotationsMap, makeDoc, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
+import {
+  createAnnotation,
+  getAnnotationsMap,
+  makeDoc,
+  noRelay,
+  rangeOf,
+} from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 

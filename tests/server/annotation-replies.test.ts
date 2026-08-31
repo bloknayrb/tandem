@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { addUserReply, createAnnotationLifecycle } from "../../src/server/annotations/lifecycle.js";
-import { collectRepliesForAnnotation, createAnnotation } from "../../src/server/mcp/annotations.js";
+import { collectRepliesForAnnotation } from "../../src/server/mcp/annotations.js";
 import { hideFromAI } from "../../src/server/mode.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
@@ -19,7 +19,7 @@ import {
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { assertReplyOk } from "../helpers/reply-results.js";
-import { noRelay, rangeOf } from "../helpers/ydoc-factory.js";
+import { createAnnotation, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
 function setMode(mode: string | undefined) {
   const ctrl = getOrCreateDocument(CTRL_ROOM);
