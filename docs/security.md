@@ -361,8 +361,42 @@ the guarded member, i.e. through this exact regression in a new location.
 controls, and "they can't see it" does not imply "they can't touch it."** ADR-027
 is phrased as a confidentiality rule, which is why three write paths were
 allowed to disagree about it for as long as they did. The fix makes all three
-answer identically; a fourth write path added later still has nothing
-structurally forcing it to.
+answer identically.
+
+**Unit 8f was that fourth write path, and it is what the previous sentence
+predicted.** Replies split the same way — `AnnotationLifecycle.reply` guarded,
+`addUserReply` deliberately not, since replying inside one's own note thread is
+what #1000 permits — so the structural control it inherited was the pattern, not
+a mechanism. `annotation-reply-seam.test.ts` is what turns the pattern into a
+gate: it pins the importer set AND the count of unguarded producers inside the
+sanctioned module, because the file-level pin alone is defeated from inside a
+sanctioned file by a wrapper, which review demonstrated against 8e's first draft.
+
+Two things 8f found. The first is a hazard the unit **created and then caught**,
+which is worth recording precisely because the first draft of this paragraph got
+it backwards. On master the highlight check and the ADR-027 check lived in one
+function, highlight first, so `author === "claude" && type !== "comment"` was
+unreachable for a highlight. Moving the ADR-027 rule ahead of the shared writer
+is what would have made the obvious spelling swallow a highlight and answer
+`invalid-note`, masking the arm that names the real parent type. Both spellings
+map to the same wire code, so **only an arm-level assertion could see it** — and
+one did, in a store parity spec. The inherited guard was not wrong; the
+restructure could have made it so.
+
+Second, the guard did have a **write-side twin of #1619**: a stored
+`{type: "comment", audience: "private"}` record let Claude write into a withheld
+thread, and because the parent typed as `comment` the reply was stamped
+NON-private and became permanently shared. A read leak discloses; a write makes
+the disclosure durable.
+
+**Reachability, stated because this register is read as a list of live
+exposures**: no first-party writer produces that record today. It arrives by
+legacy envelope or stale-tab CRDT merge, and `sanitizeAnnotation` does not heal
+it (its audience guard covers note/highlight/flag and deliberately not comment).
+So this is defence-in-depth, not a shipped exploit. #1619 itself — the read half,
+on `tandem_checkInbox` and three sibling reads — remains open, which means the
+two halves now disagree in the other direction: a record Claude can still SEE is
+one it can no longer reply to.
 
 **One regression shipped with the fix, deliberately.** If a legacy imported
 comment exists on disk and the AI holds its id, a `.docx` reopen migrates it to

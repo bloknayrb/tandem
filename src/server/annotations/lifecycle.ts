@@ -61,10 +61,21 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/consta
 import { withBrowser, withMcp } from "../../shared/origins.js";
 import type { AnchoredRangeResult } from "../../shared/positions/index.js";
 import { type OnLossy, type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
-import type { Annotation, AnnotationStatus, AnnotationType } from "../../shared/types.js";
-import { generateAnnotationId, generateNotificationId } from "../../shared/utils.js";
+import type {
+  AgentIdentity,
+  Annotation,
+  AnnotationReply,
+  AnnotationStatus,
+  AnnotationType,
+} from "../../shared/types.js";
+import {
+  generateAnnotationId,
+  generateNotificationId,
+  generateReplyId,
+} from "../../shared/utils.js";
+import { readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
-import { nextRev } from "./schema.js";
+import { nextRev, REPLY_TEXT_MAX } from "./schema.js";
 
 // ---------------------------------------------------------------------------
 // Result variants
@@ -86,8 +97,8 @@ import { nextRev } from "./schema.js";
  * buys nothing here, because a note-typed id CAN be one Claude legitimately
  * read and still holds — `file-io/docx-comments.ts` migrates a legacy imported
  * `comment` to a `note` in place, under an id that is a content hash with no
- * timestamp. `editPending` and `addReplyToAnnotation` already disclose "this id
- * is a note", so this discloses nothing new.
+ * timestamp. `editPending` and {@link AnnotationLifecycle.reply} already
+ * disclose "this id is a note", so this discloses nothing new.
  *
  * **"Nothing new" is the honest phrasing, and the pre-existing oracle is
  * stronger than it looks.** `importAnnotationId` is
@@ -97,7 +108,7 @@ import { nextRev } from "./schema.js";
  * computable* from a guess at the body, and any arm that confirms "this id
  * exists and is a note" is a content-guessing oracle over short private
  * bodies, not merely a type disclosure. That predates #1680 —
- * `editPendingAnnotation` and `addReplyToAnnotation` both answer it — and
+ * `editPendingAnnotation` and Claude's reply entry both answer it — and
  * answering `not-found` here while edit answers `invalid-note` would leave the
  * oracle intact while making the family inconsistent. It is a family-wide
  * question, tracked as such rather than solved by this arm's spelling.
@@ -150,10 +161,122 @@ export type RemoveRecordResult = { kind: "ok"; id: string } | { kind: "not-found
  *
  * **The third bespoke result family in this file**, and {@link EditResult}
  * labels the convergence onto a shared `LifecycleError` base as *deferred, not
- * rejected*. That deferral covers this one; a fourth family is where it should
- * stop being deferred.
+ * rejected*. That deferral covered this one, and named its own trigger: a fourth
+ * family is where it should stop being deferred.
+ *
+ * **Unit 8f added the fourth, so the trigger has fired.** ({@link ReplyResult}
+ * and {@link ClaudeReplyResult} are one family under this file's own counting,
+ * the same way `RemoveRecordResult` and `RemoveResult` are — a positive base
+ * and the union that widens it. An earlier draft called them the fourth AND
+ * fifth, which counts a pair two ways in one sentence.) It is tracked in
+ * #1687 with a date in the title and a criterion answerable from this file —
+ * `not-pending` is currently spelled independently in three families and
+ * `not-found` in four — rather than deferred a fifth time in a comment nothing
+ * reads on a schedule.
  */
 export type RemoveResult = RemoveRecordResult | { kind: "invalid-note" };
+
+/**
+ * What a reply write can answer for the USER path — and the base
+ * {@link ClaudeReplyResult} widens.
+ *
+ * **The positive base, not `Exclude<ClaudeReplyResult, …>`.** Subtraction is
+ * evaluated against whatever the wider union currently is, so a later arm flows
+ * silently into the narrow one; widening upward means a new arm cannot reach the
+ * user path unless someone edits THIS type on purpose. That is the shape
+ * {@link RemoveRecordResult} settled, and 8e's lesson was that hardening only
+ * the direction with no reachable producer hardens the wrong direction.
+ *
+ * What makes the claim true rather than incidentally true is the single
+ * `never` anchor in {@link describeReplyWriteRefusal} — **one**, deliberately.
+ * (An earlier draft of this sentence said "the anchors at BOTH consumers",
+ * carried over from the remove family, which really does have two. For
+ * replies that asserts the opposite of what this unit shipped, and the
+ * describer's own docblock says so 40 lines down.)
+ */
+export type ReplyResult =
+  | { kind: "ok"; replyId: string }
+  | { kind: "not-found"; id: string }
+  | { kind: "too-long"; max: number }
+  | { kind: "not-repliable"; annotationType: AnnotationType }
+  | { kind: "not-pending"; currentStatus: AnnotationStatus };
+
+/**
+ * The reply family's result: the shared outcomes plus the one arm only the
+ * ADR-027 guard on {@link AnnotationLifecycle.reply} produces.
+ *
+ * `invalid-note` rather than a name like `claude-cannot-reply-to-note`: three
+ * unions in this file already spell this condition that way, and an arm should
+ * name what is wrong, not who asked. It covers **"not a Claude-facing
+ * comment"** — a note, or a `comment` record whose stored `audience` is
+ * `private`. The second case is the write-side twin of #1619 and is why the
+ * arm is not simply `is-note`.
+ */
+export type ClaudeReplyResult = ReplyResult | { kind: "invalid-note" };
+
+/** The wire codes a reply refusal can carry. Closed, and unchanged by Unit 8f. */
+export type ReplyRefusalCode = "NOT_FOUND" | "INVALID_ARGUMENT" | "ANNOTATION_RESOLVED";
+
+/**
+ * The single description of a refusal to WRITE a reply — code and message —
+ * shared by all three consumers (the MCP tool, the HTTP route, the
+ * local-model loop).
+ *
+ * **`Write` is in the name because `annotations/projection.ts` already
+ * exports a `describeReplyRefusal`**, about a refusal to PROJECT a reply onto
+ * the channel. Nothing errors when two exports in one subsystem share a name
+ * and are never imported together — which is precisely the failure mode: the
+ * two read as one concept, and a reader following the wrong one finds a
+ * plausible function that answers a different question.
+ *
+ * **This is where the `never` anchor lives, and one place is deliberate.** Parts
+ * of an earlier draft gave each consumer its own exhaustive switch: three
+ * anchors and three copies of every message, which drift. A new
+ * {@link ClaudeReplyResult} arm now fails to compile HERE, naming itself, and no
+ * consumer can answer it by accident — the HTTP route switches on the returned
+ * *code*, a closed set that does not grow when the result union does.
+ *
+ * The alternative that was rejected: the MCP tool's original ternary chain ended
+ * in a catch-all `: "INVALID_RANGE"`, an arm that could not occur, which would
+ * have absorbed any later arm and shipped the wrong wire code in silence. That
+ * is the failure the remove family hit one PR earlier.
+ *
+ * The three codes are exactly what the ternary produced for the three reachable
+ * cases, so 8f changes how the answer is derived and not what it is.
+ */
+export function describeReplyWriteRefusal(result: Exclude<ClaudeReplyResult, { kind: "ok" }>): {
+  code: ReplyRefusalCode;
+  message: string;
+} {
+  switch (result.kind) {
+    case "not-found":
+      return { code: "NOT_FOUND", message: `Annotation ${result.id} not found` };
+    case "not-pending":
+      return {
+        code: "ANNOTATION_RESOLVED",
+        message: `Cannot reply to a ${result.currentStatus} annotation`,
+      };
+    case "too-long":
+      return {
+        code: "INVALID_ARGUMENT",
+        message: `Reply text exceeds the ${result.max}-character limit`,
+      };
+    case "not-repliable":
+      return {
+        code: "INVALID_ARGUMENT",
+        message: `Cannot reply to a ${result.annotationType} annotation; only notes and comments support replies`,
+      };
+    case "invalid-note":
+      return {
+        code: "INVALID_ARGUMENT",
+        message: "Claude can only reply to comments that are shared with it",
+      };
+    default: {
+      const unhandled: never = result;
+      throw new Error(`unhandled reply refusal: ${(unhandled as { kind: string }).kind}`);
+    }
+  }
+}
 
 /**
  * Tagged outcome of {@link AnnotationLifecycle.create}.
@@ -200,6 +323,11 @@ export type CreateResult = { kind: "created"; annotation: Annotation };
  * docblock used to claim — was never true. It is deferred because Unit 8c's
  * whole contract is that behaviour does not change, not because it is
  * expensive. Do not read this paragraph as an argument against doing it.
+ *
+ * Unit 8f added a fourth family and moved this deferral into #1687, which is
+ * where the decision now has to be made rather than restated. (`this` in an
+ * earlier draft read as `EditResult`, which predates 8f and is not fifth under
+ * any counting.)
  *
  * Note also that `AnnotationStatus` and `Annotation["status"]` below are the
  * same type spelled two ways; that is drift, not divergence.
@@ -396,6 +524,24 @@ export interface AnnotationLifecycle {
    * that discovery performs is what the sink reports.
    */
   remove(id: string, onLossy: OnLossy): RemoveResult;
+
+  /**
+   * Add Claude's reply to a comment thread.
+   *
+   * **The ADR-027 chokepoint for replies**, holding both halves of "is this a
+   * Claude-facing comment". The unguarded mechanism the browser route reaches is
+   * {@link addUserReply}; reaching it from an MCP-side module is a change of
+   * import, pinned by `tests/server/annotation-reply-seam.test.ts`.
+   *
+   * `onLossy` is required, as everywhere else on this interface, and it is not
+   * decorative: the guard reads the SANITIZED type.
+   */
+  reply(
+    annotationId: string,
+    text: string,
+    onLossy: OnLossy,
+    agentIdentity?: AgentIdentity,
+  ): ClaudeReplyResult;
 }
 
 /**
@@ -412,19 +558,28 @@ export interface AnnotationLifecycle {
  * not recoverable from `creator` without a cast. It is *not* a capability
  * boundary for the module — `local-model/tools.ts` imports
  * {@link createAnnotationLifecycle} itself, so a future edit there is one line
- * from the full lifecycle. Closing that means injecting an `AnnotationCreator`
- * from `dispatch`'s caller, which is Unit 8j's restructuring, not 8b's.
+ * from the full lifecycle. Closing that means injecting an
+ * {@link AnnotationReplier} from `dispatch`'s caller, which is Unit 8j's
+ * restructuring, not 8b's.
  *
  * **A `Pick` does not grow when its source interface does, and that is load-
  * bearing rather than incidental.** Unit 8c added `editPending` to
  * `AnnotationLifecycle` and the local-model loop stayed edit-incapable with no
  * decision required — but nothing in the code distinguishes that from an
- * oversight, so it is written down here. Every later mutation family (8d–8h)
- * inherits the same property: adding a method grants local-model nothing. If a
- * future unit wants it to have one, widening this `Pick` is the deliberate act
- * that does it.
+ * oversight, so it is written down here. 8d and 8e added `accept`/`dismiss` and
+ * `remove` and granted local-model nothing, exactly as intended.
+ *
+ * **Unit 8f is the first unit to exercise the other half of that sentence**, and
+ * it is why this type is now {@link AnnotationReplier}. The local-model loop had
+ * a reply capability all along — it called the free `addReplyToAnnotation`
+ * directly, outside this `Pick` entirely — so moving that call onto the
+ * interface would otherwise have left an implementer choosing between widening
+ * this type and retyping `creator` to the full `AnnotationLifecycle`. The second
+ * is a single type-name substitution that also hands over `remove`, the ADR-027
+ * chokepoint that sweeps a note's private reply thread. Widening deliberately, and pinning
+ * it, is what stops the path of least resistance from being that one.
  */
-export type AnnotationCreator = Pick<AnnotationLifecycle, "create">;
+export type AnnotationReplier = Pick<AnnotationLifecycle, "create" | "reply">;
 
 /**
  * Build a lifecycle bound to one document.
@@ -444,6 +599,8 @@ export function createAnnotationLifecycle(ydoc: Y.Doc): AnnotationLifecycle {
     accept: (id, onLossy) => transitionPending(id, ydoc, map, "accepted", onLossy),
     dismiss: (id, onLossy) => transitionPending(id, ydoc, map, "dismissed", onLossy),
     remove: (id, onLossy) => removeForClaude(id, ydoc, map, onLossy),
+    reply: (annotationId, text, onLossy, agentIdentity) =>
+      replyForClaude(ydoc, annotationId, text, onLossy, agentIdentity),
   };
 }
 
@@ -755,13 +912,18 @@ export function dismissPending(
  * reaches (`mcp/routes/remove-annotation.ts`), and the user removing their own
  * private note is exactly what ADR-027 permits.
  *
- * `actor` picks the ADR-031 wrapper, and it is a **closed union rather than the
- * bare `(doc, fn) => void` parameter `addReplyToAnnotation` takes**. That shape
- * accepts any callable — `(_d, fn) => fn()` performs a completely untagged
- * write, violating Critical Rule 2 while staying invisible to
+ * `actor` picks the ADR-031 wrapper, and it is a **closed union rather than a
+ * bare `(doc, fn) => void` wrapper parameter**. That shape accepts any
+ * callable — `(_d, fn) => fn()` performs a completely untagged write,
+ * violating Critical Rule 2 while staying invisible to
  * `npm run audit:origins`, whose walk sees a local `wrap(...)` rather than a
  * helper name. Naming the actor keeps a literal `withMcp` / `withBrowser` in
  * this file, where the audit can see both.
+ *
+ * The counterexample this paragraph was written against was the pre-8f
+ * `addReplyToAnnotation`, which took exactly that callable. Unit 8f converted
+ * it (`writeReply` now takes the same closed `actor` union), so the shape is
+ * no longer a contrast with a live caller — it is the family's rule.
  *
  * It defaults to `"browser"` so an omission mislabels nothing — the direction
  * that matters, since the mislabel this unit fixes was a user action tagged as
@@ -852,6 +1014,209 @@ export function removeAnnotationRecord(
  * to delete. Unreachable through any writer today; the point is that they are
  * two checks, not one written twice.
  */
+
+// ---------------------------------------------------------------------------
+// Replies (ADR-035 Unit 8f)
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate and write one reply. **The single record builder, and it makes no
+ * author-keyed decision.**
+ *
+ * `author` is here for the byline and the two stamps, never for a branch. The
+ * ADR-027 rule lives in {@link AnnotationLifecycle.reply} alone, so the browser
+ * entry cannot reach it and a future edit to *this* function cannot quietly
+ * become the guard. That split is the whole unit: before it, one function
+ * decided both rules from a caller-supplied `author`, and the MCP surface
+ * (`YDocStore.addReply`) took `ReplyAuthor` — three members — so `"import"` was
+ * type-legal there. Master wrote that value STRAIGHT
+ * THROUGH as `author: "import"`; what it bought was skipping the
+ * `author === "claude"` guard entirely, so Claude could reply into a note
+ * thread by picking a third byline the client renders as an import.
+ *
+ * **One builder, not one per entry.** `private` is keyed on the parent's type
+ * and `heldInSolo` on `author` AND type AND mode; duplicating the record would
+ * make both stamps locally dead on Claude's path, where they would then be
+ * pruned as unreachable — correct today, a privacy bug the moment the guard
+ * relaxes. It also makes a single mutation row score a false kill, which is 8e's
+ * two-implementations lesson applied to stamps rather than guards.
+ */
+function writeReply(
+  ydoc: Y.Doc,
+  annotationId: string,
+  text: string,
+  author: "user" | "claude",
+  onLossy: OnLossy,
+  actor: "browser" | "mcp",
+  agentIdentity?: AgentIdentity,
+): ReplyResult {
+  // #1295 L3: bound the text at the model layer rather than at one caller. All
+  // three production callers left it unbounded while the DURABLE schema caps it
+  // at REPLY_TEXT_MAX and `normalizeReply` safeParses per record — so an
+  // over-long reply was accepted into the live Y.Doc, rendered, and silently
+  // dropped on the next load with only a stderr line as evidence.
+  //
+  // Reusing REPLY_TEXT_MAX is deliberate: its own docstring calls it a generous
+  // LOAD-time ceiling, a different job from a write-time limit. One constant is
+  // still right — the failure being fixed is precisely a value accepted at write
+  // and rejected at load, so they must be the same number.
+  if (text.length > REPLY_TEXT_MAX) return { kind: "too-long", max: REPLY_TEXT_MAX };
+
+  const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  const raw = map.get(annotationId) as RawAnnotation | undefined;
+  if (!raw) return { kind: "not-found", id: annotationId };
+
+  const ann = sanitizeAnnotation(raw, onLossy);
+  // Highlights are user-only UI markup with no body to thread — refused for any
+  // author. Notes and comments both accept replies (#1000); a note's reply is
+  // user-private, stamped below and stripped from every Claude-facing read by
+  // `channelVisibleReplies`, with the channel observer independently gating on
+  // the parent AND on `private` (ADR-035).
+  if (ann.type === "highlight") return { kind: "not-repliable", annotationType: ann.type };
+  if (ann.status !== "pending") return { kind: "not-pending", currentStatus: ann.status };
+
+  const replyId = generateReplyId();
+  const reply: AnnotationReply = {
+    id: replyId,
+    annotationId,
+    author,
+    text,
+    timestamp: Date.now(),
+    rev: nextRev(),
+    // A reply inherits its parent's privacy at creation and keeps it forever —
+    // a note's reply stays private through a later promotion to comment (#1000).
+    ...(ann.type === "comment" ? {} : { private: true }),
+    // WS-A2: the Solo-hold marker. Replies are written server-side, so unlike
+    // browser annotation writes the stamp lives here. Tested `!== "tandem"`
+    // rather than `=== "solo"`, completing #1213's fail-closed invariant: a
+    // reply created mid-restart, while the CTRL_ROOM mode key is absent
+    // (indeterminate), must still be stamped or `hideFromAI` has nothing to
+    // withhold on the next pull.
+    //
+    // **The conjunction order is load-bearing, not stylistic.** `readModeState()`
+    // reaches CTRL_ROOM via `getOrCreateDocument`, so hoisting it above the
+    // `author === "user"` test — the obvious readability edit — makes every
+    // Claude and local-model reply do a lookup-or-create on a second document it
+    // has no business touching. Short-circuit order is what keeps it off that
+    // path; deleting the stamp is not the only way to break this.
+    //
+    // (An earlier draft said this happened "inside another document's write". It
+    // does not: `wrap(ydoc, …)` opens the transaction below, after this literal
+    // is built, and no caller wraps `writeReply` in one. The reason to keep the
+    // order survives without the transaction-nesting story — and a reader who
+    // checked that detail, found it false, and reordered on the strength of it
+    // would be making the exact edit this paragraph exists to stop.)
+    ...(author === "user" && ann.type === "comment" && readModeState() !== "tandem"
+      ? { heldInSolo: true }
+      : {}),
+    // #1123 M3: agent byline, local-model collaborator only. Absent ⇒ omitted.
+    ...(agentIdentity ? { agentIdentity } : {}),
+  };
+
+  const wrap = actor === "mcp" ? withMcp : withBrowser;
+  wrap(ydoc, () => {
+    ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set(replyId, reply);
+  });
+
+  return { kind: "ok", replyId };
+}
+
+/**
+ * The user's reply, from the browser (`mcp/routes/annotation-reply.ts`).
+ *
+ * **No ADR-027 guard, deliberately** — replying to one's own private note is
+ * exactly what ADR-027 permits, and the guard lives on
+ * {@link AnnotationLifecycle.reply}. Reaching it from any OTHER module therefore
+ * requires changing which symbol that module imports, which reads as what it is
+ * in a diff.
+ *
+ * **That is a statement about `src/`, not about reachability.** This entry is
+ * also one HTTP POST away: `/api/annotation-reply` is loopback-only but carries
+ * no origin gate — it is one of the six routes CLAUDE.md's security inventory
+ * names as relying solely on the path-wide invariant — so anything running on
+ * the machine can write an `author: "user"` reply into a note thread. That is
+ * unchanged from before ADR-035 and is not what the importer pin is for; the pin
+ * stops a second *code* path from quietly acquiring the capability.
+ *
+ * `tests/server/annotation-reply-seam.test.ts` pins the importer set
+ * in both directions: no MCP-side module may import this, and this is the only
+ * unguarded producer of a newly authored reply **that any request can reach**.
+ * The absolute phrasing would be false: `file-io/docx-comments.ts` builds
+ * imported reply records and writes them with a bare `repliesMap.set` during
+ * `.docx` ingest, bypassing this module entirely. That path is driven by a file
+ * the user chose to open, never by an MCP call, which is why it is out of this
+ * seam rather than a hole in it — but a reader trusting "the only producer"
+ * would not go looking for it.
+ *
+ * `actor` is not a parameter: this entry is the browser's by definition, and
+ * `browser` is the one origin outside `CHANNEL_SKIP`. A parameter here would be
+ * a way to silence a user's reply.
+ */
+export function addUserReply(
+  ydoc: Y.Doc,
+  annotationId: string,
+  text: string,
+  onLossy: OnLossy,
+): ReplyResult {
+  return writeReply(ydoc, annotationId, text, "user", onLossy, "browser");
+}
+
+/**
+ * Claude's reply, and **the only place the ADR-027 rule for replies lives**.
+ *
+ * Two conditions, and the second is new. The note rule is the one #1000 relaxed
+ * for the user only. `audience !== "outbound"` is the **write-side
+ * twin of #1619**: `channelVisibleReplies` gates reads on `type` and `private`
+ * and never reads `audience`, while the projection module checks both — so on a
+ * `{type: "comment", audience: "private"}` record (reachable by legacy envelope
+ * or stale-tab CRDT merge, and not healed by `sanitizeAnnotation`, which demotes
+ * but never promotes) Claude could write into the thread, and because the type
+ * is `comment` the reply was stamped with NO `private` flag. 8f owns and is
+ * rewriting this guard, so leaving that half open was not a defensible
+ * inheritance. The read half remains #1619's.
+ *
+ * It reads the record itself rather than deferring to {@link writeReply}'s
+ * lookup, because the guard must run against the SANITIZED type — a legacy
+ * `flag` is a note only once normalized — and answering here keeps the
+ * precondition legible in one place. The duplicate read is the same trade
+ * `removeForClaude` makes.
+ */
+function replyForClaude(
+  ydoc: Y.Doc,
+  annotationId: string,
+  text: string,
+  onLossy: OnLossy,
+  agentIdentity?: AgentIdentity,
+): ClaudeReplyResult {
+  const raw = ydoc.getMap(Y_MAP_ANNOTATIONS).get(annotationId) as RawAnnotation | undefined;
+  if (raw) {
+    const ann = sanitizeAnnotation(raw, onLossy);
+    // **Scoped to the parents this rule is actually about, and the hazard is
+    // one THIS unit introduced.** On master the two checks lived in one
+    // function in the other order: `ann.type === "highlight"` returned first,
+    // so `author === "claude" && ann.type !== "comment"` was simply
+    // unreachable for a highlight. Moving the ADR-027 rule up here, ahead of
+    // `writeReply`, is what would have made `type !== "comment"` swallow a
+    // highlight and answer `invalid-note` — an arm naming a rule that had
+    // nothing to do with the refusal, masking `not-repliable`, which carries
+    // the real parent type.
+    //
+    // So this is not an inherited defect being fixed; it is a defect this
+    // restructure could have created, caught because a store parity spec
+    // asserts the ARM. Both spellings map to INVALID_ARGUMENT, so the wire
+    // contract is identical and nothing keyed on the code could have seen it.
+    // A highlight now falls through to `writeReply`, whose own refusal is the
+    // one that applies to every author — the same answer master gave.
+    if (ann.type === "note" || (ann.type === "comment" && ann.audience !== "outbound")) {
+      return { kind: "invalid-note" };
+    }
+  }
+  // A missing record falls through to `writeReply`, which answers `not-found` —
+  // the guard has nothing to protect when there is no parent, and duplicating
+  // the arm here would let the two spellings drift.
+  return writeReply(ydoc, annotationId, text, "claude", onLossy, "mcp", agentIdentity);
+}
+
 function removeForClaude(
   id: string,
   ydoc: Y.Doc,

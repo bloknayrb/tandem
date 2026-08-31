@@ -24,9 +24,9 @@
 
 import type { Request, Response } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { removeAnnotationRecord } from "../../src/server/annotations/lifecycle.js";
+import { addUserReply, removeAnnotationRecord } from "../../src/server/annotations/lifecycle.js";
 import { makeAnnotationsObserver } from "../../src/server/events/observers/annotations.js";
-import { addReplyToAnnotation, createAnnotation } from "../../src/server/mcp/annotations.js";
+import { createAnnotation } from "../../src/server/mcp/annotations.js";
 import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { handleRemoveAnnotation } from "../../src/server/mcp/routes/remove-annotation.js";
 import { getBuffer, resetForTesting } from "../../src/server/notifications.js";
@@ -36,6 +36,7 @@ import { BROWSER_ORIGIN, MCP_ORIGIN, withBrowser } from "../../src/shared/origin
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { unanchored } from "../helpers/positions.js";
 import { filesMentioning, SRC_FILES, stripComments } from "../helpers/src-tree.js";
+import { noRelay } from "../helpers/ydoc-factory.js";
 import { listenForTransactions } from "../helpers/yjs-transactions.js";
 
 beforeEach(() => clearOpenDocs());
@@ -63,7 +64,7 @@ describe("the browser's Archive route — ADR-027 (#1680), pinned at the ROUTE",
     const ydoc = setupDoc("rm-route-note", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "note", unanchored(0, 5), "private thought");
-    addReplyToAnnotation(ydoc, map, id, "to myself", "user");
+    addUserReply(ydoc, id, "to myself", noRelay);
     expect((map.get(id) as { type: string }).type, "fixture precondition").toBe("note");
 
     const res = mockRes();
@@ -155,7 +156,7 @@ describe("Claude's remove — the guard is at the lifecycle, not the mechanism",
     const ydoc = setupDoc("rm-claude-note", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "note", unanchored(0, 5), "private thought");
-    addReplyToAnnotation(ydoc, map, id, "to myself", "user");
+    addUserReply(ydoc, id, "to myself", noRelay);
     const store = new YDocStore(ydoc, "/tmp/rm-claude-note.md", "rm-claude-note");
 
     const result = store.removeAnnotation(id);
@@ -312,8 +313,8 @@ describe("the reply sweep", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const doomed = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "first");
     const spared = createAnnotation(map, ydoc, "comment", unanchored(6, 11), "second");
-    addReplyToAnnotation(ydoc, map, doomed, "goes", "user");
-    addReplyToAnnotation(ydoc, map, spared, "stays", "user");
+    addUserReply(ydoc, doomed, "goes", noRelay);
+    addUserReply(ydoc, spared, "stays", noRelay);
 
     handleRemoveAnnotation(reqWith({ annotationId: doomed, documentId: "rm-sweep" }), mockRes());
 
@@ -328,7 +329,7 @@ describe("the reply sweep", () => {
     const ydoc = setupDoc("rm-sweep-txn", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "x");
-    addReplyToAnnotation(ydoc, map, id, "r", "user");
+    addUserReply(ydoc, id, "r", noRelay);
 
     // Observed at the DOC level: two transactions would be two
     // `afterTransaction` fires, and a spec that only checked the end state
@@ -350,8 +351,8 @@ describe("the reply sweep", () => {
     const ydoc = setupDoc("rm-sweep-bad", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "x");
-    addReplyToAnnotation(ydoc, map, id, "good", "user");
-    // Written past the helper on purpose: `addReplyToAnnotation` cannot produce
+    addUserReply(ydoc, id, "good", noRelay);
+    // Written past the seam on purpose: neither reply entry can produce
     // this, but `mcp/annotations.ts` sets caller-shaped data into the same map.
     withBrowser(ydoc, () => {
       ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set("bad", { text: "no parent" });

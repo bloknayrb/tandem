@@ -7,7 +7,7 @@
  *
  *   unescape -> countOccurrences -> (clamp occ->1 iff occ>1 and count===1) ->
  *   findOccurrence -> anchoredRange({rejectHeadingOverlap}) ->
- *   AnnotationCreator.create / addReplyToAnnotation   (wrapped in withMcp)
+ *   AnnotationReplier.create / .reply                 (wrapped in withMcp)
  *
  * Anchor/validation failures are returned to the model as structured tool errors
  * so it can retry with a tighter quote (the bounded repair is loop-level, via
@@ -27,15 +27,15 @@
  */
 import type * as Y from "yjs";
 
-import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { withMcp } from "../../shared/origins.js";
 import type { AgentIdentity } from "../../shared/types.js";
 import {
-  type AnnotationCreator,
+  type AnnotationReplier,
   type CreateExtras,
   createAnnotationLifecycle,
+  describeReplyWriteRefusal,
 } from "../annotations/lifecycle.js";
-import { addReplyToAnnotation, captureSnapshot } from "../mcp/annotations.js";
+import { relaySanitizationEvent } from "../annotations/migration-log.js";
+import { captureSnapshot } from "../mcp/annotations.js";
 import { getOutline, getSection } from "../mcp/document.js";
 import { extractText } from "../mcp/document-model.js";
 import { licenseGate } from "../mcp/license-gate.js";
@@ -224,7 +224,7 @@ function resolveAnchor(ydoc: Y.Doc, rawQuote: string, rawOcc: number) {
 function annotateFromQuote(
   kind: "comment" | "replacement",
   ydoc: Y.Doc,
-  creator: AnnotationCreator,
+  creator: AnnotationReplier,
   args: Record<string, unknown>,
   body: string,
   extra?: CreateExtras,
@@ -260,8 +260,8 @@ function annotateFromQuote(
     ...(agentIdentity ? { agentIdentity } : {}),
   };
   // ADR-035 (Unit 8b): the create goes through the lifecycle seam. The loop
-  // gets `AnnotationCreator`, not the full lifecycle — it has no accept or
-  // dismiss tool and this unit must not hand it one.
+  // gets `AnnotationReplier`, not the full lifecycle — it has no accept or
+  // dismiss tool and no unit may hand it one by widening a binding.
   const { annotation } = creator.create({
     anchored: r.anchored,
     content: body,
@@ -286,13 +286,12 @@ export function dispatch(
   ctx: DispatchCtx,
 ): ToolOutcome {
   const { ydoc } = ctx;
-  const annotations = ydoc.getMap(Y_MAP_ANNOTATIONS);
   // Built per dispatch, never cached on `ctx`. Two reasons, both silent if
   // broken: a lifecycle outliving a Hocuspocus `onLoadDocument` doc swap writes
   // into a destroyed doc, and a lifecycle injected alongside a different `ydoc`
   // would resolve flat offsets against one document and write them into
   // another (Critical Rule 4) with nothing to typecheck the mismatch.
-  const creator: AnnotationCreator = createAnnotationLifecycle(ydoc);
+  const creator: AnnotationReplier = createAnnotationLifecycle(ydoc);
 
   if (args == null) {
     return {
@@ -350,26 +349,32 @@ export function dispatch(
       );
     case "reply_to_annotation": {
       const annotationId = asString(args.annotation_id);
-      const reply = addReplyToAnnotation(
-        ydoc,
-        annotations,
+      // ADR-035 Unit 8f: through the seam, so the ADR-027 guard covers the
+      // local model exactly as it covers Claude. This previously called the
+      // free `addReplyToAnnotation` with a literal "claude" — which is why
+      // widening `AnnotationReplier` grants nothing that was not already
+      // reachable here; see its docblock.
+      const reply = creator.reply(
         annotationId,
         asString(args.text),
-        "claude",
-        withMcp,
+        (event) => relaySanitizationEvent(undefined, event),
         ctx.agentIdentity,
       );
+      // Branch once. The earlier shape computed the refusal in one ternary and
+      // read it in another, so every access needed a `?? "REPLY_FAILED"` for a
+      // case that cannot occur — TypeScript will not carry the narrowing across
+      // two expressions, and an unreachable fallback string is indistinguishable
+      // from a reachable one to anyone reading it later.
+      if (reply.kind === "ok") {
+        return {
+          result: { ok: true, reply_id: reply.replyId },
+          effect: { kind: "reply", ok: true, annotationId, replyId: reply.replyId },
+        };
+      }
+      const refusal = describeReplyWriteRefusal(reply);
       return {
-        result: reply.ok
-          ? { ok: true, reply_id: reply.replyId }
-          : { error: reply.code ?? "REPLY_FAILED", message: reply.error },
-        effect: {
-          kind: "reply",
-          ok: reply.ok,
-          annotationId,
-          replyId: reply.ok ? reply.replyId : undefined,
-          errorCode: reply.ok ? undefined : reply.code,
-        },
+        result: { error: refusal.code, message: refusal.message },
+        effect: { kind: "reply", ok: false, annotationId, errorCode: refusal.code },
       };
     }
     default:

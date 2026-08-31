@@ -132,3 +132,4 @@ coverage/
 # would silently start writing screenshots to `src-tauri/.ui-inspector/`. An
 # anchored rule would leave those untracked-but-committable.
 .ui-inspector/
+.mut.json

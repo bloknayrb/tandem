@@ -7,7 +7,7 @@
  * annotation suites are the behavioral parity floor; this file is the contract
  * test for the new interface itself — it pins the store's outputs against the
  * standalone helpers (`createAnnotation`, `collectAnnotations`,
- * `addReplyToAnnotation`, `removeAnnotationRecord`) and the lifecycle module the
+ * `addUserReply`, `removeAnnotationRecord`) and the lifecycle module the
  * handlers used before, and asserts the Y.Map state matches byte-for-byte.
  */
 
@@ -226,7 +226,7 @@ describe("YDocStore.removeAnnotation parity", () => {
     const store = new YDocStore(ydoc, FILE_PATH, "rm-1");
 
     const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
-    store.addReply(id, "a reply", "claude");
+    store.addReply(id, "a reply");
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(1);
 
     const result = store.removeAnnotation(id);
@@ -248,13 +248,13 @@ describe("YDocStore.removeAnnotation parity", () => {
 });
 
 describe("YDocStore replies parity", () => {
-  it("addReply writes the same record as addReplyToAnnotation (claude author)", () => {
+  it("addReply writes Claude's reply through the seam", () => {
     const ydoc = setupDoc("rep-1", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "rep-1");
     const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
 
-    const r = store.addReply(id, "agreed", "claude");
-    expect(r.ok).toBe(true);
+    const r = store.addReply(id, "agreed");
+    expect(r.kind).toBe("ok");
 
     const replies = store.listReplies(id);
     expect(replies).toHaveLength(1);
@@ -264,16 +264,37 @@ describe("YDocStore replies parity", () => {
     expect(replies).toEqual(collectRepliesForAnnotation(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES), id));
   });
 
+  it("tags Claude's reply MCP_ORIGIN, so it is not echoed back at Claude", () => {
+    const ydoc = setupDoc("rep-origin", "Hello world");
+    const store = new YDocStore(ydoc, FILE_PATH, "rep-origin");
+    const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
+
+    // Unpinned until Unit 8f. The parity spec above asserts author, text and
+    // list equality and never looks at origin, so flipping this call site to
+    // `withBrowser` survived the entire suite — and `browser` is the one origin
+    // NOT in `CHANNEL_SKIP`, which makes that mutation "Claude's own reply
+    // becomes a channel event delivered back to Claude".
+    let origin: unknown;
+    ydoc.on("afterTransaction", (tr) => {
+      origin = tr.origin;
+    });
+    const r = store.addReply(id, "agreed");
+    expect(r.kind).toBe("ok");
+    expect(origin).toBe(MCP_ORIGIN);
+  });
+
   it("addReply rejects a non-comment parent (ADR-027), matching the helper", () => {
     const ydoc = setupDoc("rep-2", "Hello world");
     const store = new YDocStore(ydoc, FILE_PATH, "rep-2");
     const id = store.createAnnotation("highlight", rangeOf(0, 5, ydoc), "", {
       color: "yellow",
     });
-    const r = store.addReply(id, "nope", "claude");
-    expect(r.ok).toBe(false);
-    if (r.ok) throw new Error("unreachable");
-    expect(r.code).toBe("INVALID_ARGUMENT");
+    const r = store.addReply(id, "nope");
+    // The ARM, not a wire code: the store now returns the lifecycle's own
+    // union, and `not-repliable` is what a highlight parent produces. The
+    // INVALID_ARGUMENT it maps to is asserted where that mapping lives, in
+    // `describeReplyRefusal`.
+    expect(r).toStrictEqual({ kind: "not-repliable", annotationType: "highlight" });
   });
 });
 

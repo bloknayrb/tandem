@@ -461,8 +461,9 @@ test("PR2: Claude cannot make a note bubble expose replies (ADR-027)", async ({ 
     });
 
   // Attempt to post a reply against the note's id via the Claude/MCP surface.
-  // The server rejects it (`addReplyToAnnotation` — Claude may reply only to
-  // comments, ADR-027), so no reply row is written. The load-bearing assertion:
+  // The server rejects it (`lifecycle.reply` returns `invalid-note` — Claude may
+  // reply only to comments, ADR-027), so no reply row is written. The
+  // load-bearing assertion:
   // the bubble's reply-count attribute MUST remain "0". Use expect.poll — a
   // thrown rAF / coordsAtPos NaN must surface as test failure, not a silent
   // pass via setTimeout.

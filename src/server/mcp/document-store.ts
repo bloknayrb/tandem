@@ -12,8 +12,8 @@
  *
  * `YDocStore` is the one implementation. It is intentionally a thin wrapper:
  * it delegates to the same standalone helpers the handlers used before
- * (`createAnnotation`, `collectAnnotations`, `addReplyToAnnotation`,
- * `refreshAllRanges`) and, for the families that have
+ * (`createAnnotation`, `collectAnnotations`, `refreshAllRanges`)
+ * and, for the families that have
  * migrated, to {@link DocumentStore.lifecycle}. That delegation is the parity
  * contract: the underlying Y.Map structures and origin tagging (`withMcp`,
  * ADR-031) are byte-identical to the pre-refactor behavior. The helpers stay
@@ -42,15 +42,11 @@ import { withMcp } from "../../shared/origins.js";
 import type { AnchoredRangeResult } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
-import type {
-  Annotation,
-  AnnotationReply,
-  AnnotationType,
-  ReplyAuthor,
-} from "../../shared/types.js";
+import type { Annotation, AnnotationReply, AnnotationType } from "../../shared/types.js";
 import { docHash } from "../annotations/doc-hash.js";
 import {
   type AnnotationLifecycle,
+  type ClaudeReplyResult,
   createAnnotationLifecycle,
   type EditPatch,
   type EditResult,
@@ -62,7 +58,6 @@ import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { refreshAllRanges, refreshRange } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
-  addReplyToAnnotation,
   collectAnnotations,
   collectRepliesForAnnotation,
   createAnnotation,
@@ -175,14 +170,23 @@ export interface DocumentStore {
   // --- Replies ---
 
   /**
-   * Add a reply to a comment thread. Returns the reply ID or a tagged failure
-   * mirroring `addReplyToAnnotation`.
+   * Add CLAUDE's reply to a comment thread, carrying the ADR-027 guard.
+   *
+   * **No `author` parameter, and its absence is the point.** It took
+   * `ReplyAuthor` — three members — so `store.addReply(id, text, "import")` was
+   * type-legal. Master wrote that value straight through as `author: "import"`;
+   * what it bought was skipping the `author === "claude"` guard entirely, so
+   * Claude could reply into a note thread by picking a third byline the client
+   * renders as an import. (An earlier draft of this sentence said it "would have
+   * been written as a USER reply" — a more specific claim, and the wrong one:
+   * `author` was never remapped, and `heldInSolo` is gated on `"user"`, so an
+   * `"import"` reply would not have been stamped either.) Keeping the parameter
+   * would also have re-keyed the privacy guard on a
+   * caller-supplied value one level above the seam, which is the defect Unit 8f
+   * exists to remove. This store is the MCP surface; the browser's entry is
+   * `addUserReply`.
    */
-  addReply(
-    annotationId: string,
-    text: string,
-    author: ReplyAuthor,
-  ): { ok: true; replyId: string } | { ok: false; error: string; code?: string };
+  addReply(annotationId: string, text: string): ClaudeReplyResult;
 
   /** Collect all replies for an annotation, sorted chronologically. */
   listReplies(annotationId: string): AnnotationReply[];
@@ -327,12 +331,8 @@ export class YDocStore implements DocumentStore {
     withMcp(this.ydoc, fn);
   }
 
-  addReply(
-    annotationId: string,
-    text: string,
-    author: ReplyAuthor,
-  ): { ok: true; replyId: string } | { ok: false; error: string; code?: string } {
-    return addReplyToAnnotation(this.ydoc, this.map, annotationId, text, author, withMcp);
+  addReply(annotationId: string, text: string): ClaudeReplyResult {
+    return this.lifecycle.reply(annotationId, text, (e) => this.onLossy(e));
   }
 
   /**

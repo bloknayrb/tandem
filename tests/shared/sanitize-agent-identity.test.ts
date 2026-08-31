@@ -5,7 +5,7 @@ import type { Annotation } from "../../src/shared/types";
 
 // #1123 M3: the `agentIdentity` byline field must survive `sanitizeAnnotation`.
 // sanitize is a strict ALLOWLIST — every Claude-facing annotation read routes
-// through it (client yjsSync, server collectAnnotations, addReplyToAnnotation's
+// through it (client yjsSync, server collectAnnotations, the reply seam's
 // parent read). If the allowlist ever drops the field, the provider byline
 // silently no-ops on the client even though the loop stamped it. This is the
 // one load-bearing gap two plan reviewers independently flagged.
