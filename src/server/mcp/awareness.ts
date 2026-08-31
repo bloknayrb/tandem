@@ -1,21 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
-import {
-  CTRL_ROOM,
-  Y_MAP_ACTIVITY,
-  Y_MAP_CHAT,
-  Y_MAP_CHAT_STREAM,
-  Y_MAP_SELECTION,
-  Y_MAP_USER_AWARENESS,
-} from "../../shared/constants.js";
+import { CTRL_ROOM, Y_MAP_CHAT, Y_MAP_CHAT_STREAM } from "../../shared/constants.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
 import type {
   AgentIdentity,
   Annotation,
   AnnotationReply,
   ChatMessage,
-  FlatOffset,
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
@@ -25,7 +17,7 @@ import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/q
 import { hideFromAI, type ModeState, readModeState, reportedMode } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
-import { extractText, getCurrentDoc } from "./document.js";
+import { getCurrentDoc } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
 import { checkInboxOutputShape } from "./output-schemas.js";
 import {
@@ -254,18 +246,10 @@ export function registerAwarenessTools(server: McpServer): void {
         .describe("Target document ID (defaults to active document)"),
     },
     withErrorBoundary("tandem_getActivity", async ({ documentId }) => {
-      const current = getCurrentDoc(documentId);
-      if (!current) return noDocumentError();
+      const store = getDocumentStore(documentId);
+      if (!store) return noDocumentError();
 
-      const doc = getOrCreateDocument(current.docName);
-      const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
-      const activity = userAwareness.get(Y_MAP_ACTIVITY) as
-        | {
-            isTyping: boolean;
-            cursor: number;
-            lastEdit: number;
-          }
-        | undefined;
+      const { activity } = store.getUserAwareness();
 
       if (!activity) {
         return mcpSuccess({
@@ -318,9 +302,8 @@ export function registerAwarenessTools(server: McpServer): void {
         // still unseen; closing the round there would report a delivery that
         // did not happen. Past this line the full pass runs.
         resolveDeliveryRound();
-        const doc = store.ydoc;
         const allAnnotations = store.listAnnotations();
-        const fullText = extractText(doc);
+        const fullText = store.getText();
 
         // WS-A2: single live read of the three-state mode, used both to gate
         // the Solo privacy hold (`hideFromAI` in the surfacer) and to report
@@ -328,35 +311,29 @@ export function registerAwarenessTools(server: McpServer): void {
         // value can never disagree within a single poll.
         const modeState = readModeState();
 
-        // Refresh only unsurfaced annotations; batch Y.Map writes.
-        // refreshAnnotation returns the refreshed annotation (the underlying
-        // refreshRange yields a tagged RefreshResult per ADR-032); the inbox
-        // surfacer doesn't currently distinguish refresh outcomes. A future
-        // enhancement could route `degraded` / `failed` annotations into a
-        // separate notification.
-        const unsurfaced: Annotation[] = [];
-        store.transactMcp(() => {
-          for (const raw of allAnnotations) {
-            const lastSurfacedEditedAt = surfacedIds.get(ledgerKey(store.documentId, raw.id));
-            // Not yet surfaced
-            if (lastSurfacedEditedAt === undefined) {
-              unsurfaced.push(store.refreshAnnotation(raw));
-              continue;
-            }
-            // Already surfaced — check if it's been edited since
-            if ((raw.editedAt ?? 0) > lastSurfacedEditedAt) {
-              unsurfaced.push(store.refreshAnnotation(raw));
-            }
-          }
-        });
-
-        const { userActions, userResponses } = processUnsurfacedInboxAnnotations(
-          unsurfaced,
+        // Refresh only unsurfaced annotations, in the one batch
+        // `YDocStore.refreshAnnotations` owns the transaction for (its docblock
+        // carries why the callee owns it). The inbox surfacer doesn't currently
+        // distinguish refresh outcomes; a future enhancement could route
+        // `degraded` / `failed` annotations into a separate notification.
+        //
+        // **This calls the exported function rather than the private one, and
+        // that is the point of Unit 8j-2's A2.** The selection loop used to be
+        // duplicated here, inline inside a `store.transactMcp`, while every
+        // ledger/Solo/dedup spec drove the exported copy. One loop now.
+        //
+        // `modeState` and `wasEmittedViaChannel` are passed EXPLICITLY. Both
+        // default, and the `modeState` default is the fail-closed-sounding
+        // `"indeterminate"`, which is not fail-closed for an unmarked record:
+        // `hideFromAI` then holds only records already stamped `heldInSolo`.
+        const { userActions, userResponses } = processInboxAnnotations(
+          allAnnotations,
           fullText,
           surfacedIds,
+          (anns) => store.refreshAnnotations(anns),
+          store.documentId,
           modeState,
           wasEmittedViaChannel,
-          store.documentId,
         );
 
         // WS-A2 userReplies bucket — new user replies on comment threads, held in
@@ -393,18 +370,10 @@ export function registerAwarenessTools(server: McpServer): void {
           }
         });
 
-        // Current user activity
-        const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
-        const selection = userAwareness.get(Y_MAP_SELECTION) as
-          | { from: FlatOffset; to: FlatOffset; timestamp: number }
-          | undefined;
-        const activity = userAwareness.get(Y_MAP_ACTIVITY) as
-          | {
-              isTyping: boolean;
-              cursor: number;
-              lastEdit: number;
-            }
-          | undefined;
+        // Current user activity. `getUserAwareness()` is typed rather than a
+        // `getMap` returning the raw Y.Map — a map accessor would be the `ydoc`
+        // hatch under a new name.
+        const { selection, activity } = store.getUserAwareness();
 
         // Reported mode is the two-state view of the same live read used for
         // the hold gate: indeterminate (mode key absent, e.g. restart) collapses
@@ -514,37 +483,90 @@ export function isUserActive(
 }
 
 /**
- * Process annotations into inbox buckets. Exported for testing.
+ * Process annotations into inbox buckets.
  * Mutates surfacedIds to track which annotations have been surfaced.
+ *
+ * **This is the `tandem_checkInbox` handler's own path, not a mirror of it
+ * (ADR-035 Unit 8j-2).** Until this unit it was labelled "exported for testing"
+ * and had **zero production callers**: the handler called the private
+ * {@link processUnsurfacedInboxAnnotations} directly and re-implemented the
+ * selection-and-refresh loop below inline, inside its own `store.transactMcp`.
+ * 21 call sites across 16 specs drove this copy — a count of CALLS is not a
+ * count of specs, and an earlier draft of this line conflated them. A mutation to the handler's *selection* half would
+ * still have reddened `annotation-promote-pull-surface.test.ts`, which drives
+ * the real tool — but the refresh half was observed by nothing at all.
+ *
+ * **`refreshAll` is a BATCH, and that is the load-bearing part.** A
+ * per-annotation `refreshFn` cannot preserve the single origin-tagged
+ * transaction the handler used to open around the whole loop: the natural
+ * wiring, `(a) => store.refreshAnnotation(a)`, opens one transaction per record,
+ * and the shape one step further — an unwrapped call — is an untagged `map.set`
+ * that `audit:origins` cannot see, because it cannot follow a write reached
+ * through a helper. Making the callee own the boundary is what removes that as a
+ * caller's choice. `YDocStore.refreshAnnotations` is the production
+ * implementation; `refreshAnnotation` (singular) no longer exists.
+ *
+ * **`modeState` and `wasChannelEmitted` are REQUIRED, and were briefly not.**
+ * The first draft of this unit gave both defaults and warned about them in
+ * prose. Review defeated the warning twice over. `modeState` defaulted to
+ * `"indeterminate"`, under which `hideFromAI` holds only records already
+ * stamped `heldInSolo` — so a call that stopped at `documentId` (required, and
+ * positionally AHEAD of both) surfaced unmarked user records in a live Solo
+ * session, with exactly one killer spec. `wasChannelEmitted` defaulted to
+ * `() => false` and had NO killer: deleting it from the call site left every
+ * spec in the repo green while production silently stopped stamping
+ * `alreadyPushed` for every channel-connected session. `collectInboxUserReplies`
+ * below already takes `modeState` required, with the same privacy gate; this is
+ * now consistent with it. A required parameter is the only version of that
+ * warning a compiler enforces.
+ *
+ * **`refreshAll` cannot change the selection, and that is enforced here rather
+ * than asked for.** The signature `(anns: Annotation[]) => Annotation[]` says
+ * nothing about the relationship between input and output, and the wrong
+ * implementations are the plausible ones: `(anns) => store.refreshAnnotations(anns)`
+ * is correct, while `(anns) => store.listAnnotationsRefreshed()` — one method
+ * along on the same object, same return type, typechecks — hands back the WHOLE
+ * collection. The consuming loop does not re-apply the ledger gate (it re-reads
+ * `surfaced` only to compute `edited`), so that would re-surface and re-stamp
+ * every already-delivered comment on every poll, with no error. Master could not
+ * express this: its refresher was per-record and fused into the loop, so set
+ * membership was not a callback's to change. The re-key below restores that
+ * property.
  */
 export function processInboxAnnotations(
   allAnnotations: Annotation[],
   fullText: string,
   surfaced: Map<string, number>,
-  refreshFn: (ann: Annotation) => Annotation,
+  refreshAll: (anns: Annotation[]) => Annotation[],
   /**
    * Scopes the ledger key. Required — a bare-id key silently drops the same
    * imported Word comment in a second document. See `surfacedIds`.
    */
   documentId: string,
-  // Privacy gate: default to the fail-CLOSED value, not "tandem". The real
-  // caller always passes live mode; a caller that forgets should hold held
-  // items, never surface them.
-  modeState: ModeState = "indeterminate",
-  wasChannelEmitted: (payloadId: string) => boolean = () => false,
+  /** Privacy gate. Required — see the docblock; `"indeterminate"` is NOT fail-closed. */
+  modeState: ModeState,
+  wasChannelEmitted: (payloadId: string) => boolean,
 ): {
   userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
 } {
-  const unsurfaced: Annotation[] = [];
-  for (const raw of allAnnotations) {
+  // Select first, refresh once. The two halves are separable because the
+  // selection reads only the pre-refresh records and a stable ledger — a refresh
+  // of one annotation cannot change another's selection outcome — so batching
+  // costs no fidelity against the per-item loop this replaces.
+  const candidates = allAnnotations.filter((raw) => {
     const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, raw.id));
-    if (lastSurfacedEditedAt === undefined) {
-      unsurfaced.push(refreshFn(raw));
-    } else if ((raw.editedAt ?? 0) > lastSurfacedEditedAt) {
-      unsurfaced.push(refreshFn(raw));
-    }
-  }
+    return lastSurfacedEditedAt === undefined || (raw.editedAt ?? 0) > lastSurfacedEditedAt;
+  });
+
+  // **`candidates` is the answer; `refreshAll` only gets to improve the ranges
+  // in it.** Re-keying by id means a refresher that returns extra records cannot
+  // add them to the inbox, and one that drops a record degrades to that record's
+  // pre-refresh (correct, possibly stale) range rather than losing the surface
+  // and the ledger entry for it. Without this the callback decides what Claude
+  // sees, which is not what its name or its docblock claims.
+  const refreshedById = new Map(refreshAll(candidates).map((a) => [a.id, a]));
+  const unsurfaced = candidates.map((c) => refreshedById.get(c.id) ?? c);
 
   return processUnsurfacedInboxAnnotations(
     unsurfaced,

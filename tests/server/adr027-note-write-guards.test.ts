@@ -196,9 +196,10 @@ describe("checkInbox does not choke on a legacy note", () => {
       inbox,
       "Hello world",
       new Map(),
-      (a) => a,
+      (anns) => anns,
       "doc-guards",
       "tandem",
+      () => false,
     );
 
     expect(

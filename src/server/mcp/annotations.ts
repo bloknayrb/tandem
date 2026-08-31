@@ -21,12 +21,10 @@ import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { describeReplyWriteRefusal } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
-import { exportAnnotations } from "../file-io/docx.js";
 import { atomicWrite } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
-import { anchoredRange } from "../positions.js";
-import { extractText, getCurrentDoc } from "./document.js";
+import { getCurrentDoc } from "./document.js";
 import type { FlatBreak } from "./document-model.js";
 import { extractTextWithBreaks } from "./document-model.js";
 import { getDocumentStore } from "./document-store.js";
@@ -299,14 +297,12 @@ export function registerAnnotationTools(server: McpServer): void {
           if (!store) return noDocumentError();
           const from = toFlatOffset(rawFrom);
           const to = toFlatOffset(rawTo);
-          const result = anchoredRange(store.ydoc, from, to, textSnapshot, {
-            rejectHeadingOverlap: true,
-          });
+          const result = store.anchorRange(from, to, textSnapshot);
           if (!result.ok) {
             notifyRangeFailure(result, "tandem_comment", documentId);
             return rangeFailureToError(result);
           }
-          const snap = captureSnapshot(store.ydoc, result.range.from, result.range.to);
+          const snap = store.captureSnapshot(result.range.from, result.range.to);
           // ADR-035: creates go through the lifecycle seam, not the store.
           // `create` has no `type` parameter — it mints a comment, which is
           // the only thing Claude may author.
@@ -628,13 +624,13 @@ export function registerAnnotationTools(server: McpServer): void {
         // Disclosed below. Filtering silently would trade a privacy bug for an
         // honesty bug — see `heldFromExport` in the return payloads.
         const heldFromExport = notesFiltered.length - exportable.length;
-        const { ydoc, filePath } = store;
+        const { filePath } = store;
 
         // Build the enriched JSON list up-front. It is derived from the already
         // note-filtered `exportable` and is the ONLY annotation collection
         // serialized to disk, so user-private notes (ADR-027) can never leak
         // into the sidecar.
-        const fullText = extractText(ydoc);
+        const fullText = store.getText();
         const enriched = exportable.map((ann) => ({
           ...ann,
           // ADR-027 + #1000: comment-only + `private`-stripped (see
@@ -657,7 +653,7 @@ export function registerAnnotationTools(server: McpServer): void {
         const isJson = format === "json";
         // The markdown summary is computed once and reused for both the
         // response and (when requested) the sidecar — no double work.
-        const markdown = isJson ? undefined : exportAnnotations(ydoc, exportable);
+        const markdown = isJson ? undefined : store.exportAnnotationsMarkdown(exportable);
 
         // Sidecar write (#314): persist a sharable export next to the document.
         let writtenPath: string | undefined;

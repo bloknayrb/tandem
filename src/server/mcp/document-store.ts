@@ -15,27 +15,47 @@
  * `YDocStore` is the one implementation, and as of Unit 8j the only type: it
  * delegates the annotation mutations to {@link YDocStore.lifecycle} and
  * everything else to the same standalone helpers the handlers used before
- * (`collectAnnotations`, `refreshAllRanges`). **Not a clean read/write split**
- * — `listAnnotationsRefreshed` and `refreshAnnotation` persist range updates
- * back into the Y.Map, and `transactMcp` is an unmediated write hatch, so
- * calling the second group "reads" would be wrong. That delegation is the
- * parity
- * contract: the underlying Y.Map structures and origin tagging (`withMcp`,
- * ADR-031) are byte-identical to the pre-refactor behavior. The helpers stay
- * exported because the HTTP routes and the existing test suite (the parity
- * floor) still call them directly.
+ * (`collectAnnotations`, `refreshAllRanges`, and since Unit 8j-2 also
+ * `anchoredRange`, `captureSnapshot` and `exportAnnotations` — the list is
+ * illustrative, and it has grown once already). **Not a clean read/write
+ * split**
+ * — `listAnnotationsRefreshed` and `refreshAnnotations` persist range updates
+ * back into the Y.Map, so calling the second group "reads" would be wrong. That
+ * delegation is the parity contract: the underlying Y.Map structures and origin
+ * tagging (`withMcp`, ADR-031) are byte-identical to the pre-refactor behavior.
+ * The helpers stay exported because the HTTP routes and the existing test suite
+ * (the parity floor) still call them directly.
+ *
+ * **The escape hatches are gone (ADR-035 Unit 8j-2).** `readonly ydoc` and
+ * `transactMcp(fn)` are what the Unit 8 epic in
+ * `docs/plans/2026-08-24-ai-assisted-maintainability-remediation.md` named for
+ * removal (ADR-035 predates this store and never mentions it). Every method
+ * below is named for what a handler does, and **none returns a `Y.Doc` or a
+ * `Y.Map`** — one that did would be the hatch under a different name. The doc
+ * and the annotations map are `#private` rather than `private`, which is the
+ * only structural half of this closure; the `#ydoc` field's own note carries
+ * why that difference is load-bearing. The rest is a pinned member list.
+ *
+ * **What this does NOT close, stated because the opposite reads as true.** Two
+ * routes to a raw `Y.Doc` are still open inside `src/server/mcp/`, not one.
+ * `requireDocument` (`documents/registry.ts`, re-exported by
+ * `document-service.ts`) returns `{ doc: Y.Doc }` to seven call sites in
+ * `document.ts` and one in `docx-apply.ts` — plus four in
+ * `local-model/collaborator.ts`, which ships dark. And `getOrCreateDocument`
+ * (`yjs/provider.ts`) is imported by twelve files under `src/server/mcp/`,
+ * INCLUDING `awareness.ts`, the handler this unit rewired: the two-line
+ * `getOrCreateDocument(getCurrentDoc(id).docName)` sits in the same file that no
+ * longer says `store.ydoc`. Every write reached through either is correctly
+ * `withMcp`-tagged today — a sweep finds no raw `.transact(` in `src/` outside
+ * `shared/origins.ts`, where the six helpers are implemented — but they are
+ * tagged by discipline, exactly as this store's hatch was. Removing one door is
+ * not sealing the room, and Unit 8j-2 deliberately claims only the former.
+ * Tracked as #1700.
  *
  * **Direction of travel (ADR-035).** This store is a compatibility shell, not
  * the destination. Unit 8b settled that `AnnotationLifecycle` is the seam
- * callers program against. Two consequences for anyone editing here: new
- * mutation work goes on the lifecycle, not on a new method here; and `ydoc` /
- * `transactMcp` are the escape hatches the Unit 8 epic in
- * `docs/plans/2026-08-24-ai-assisted-maintainability-remediation.md` exists to
- * remove (ADR-035 predates this store and never names it), so nothing new
- * should reach for them. **They are still here and still reachable**; tracker
- * row 8j names the PR that closes them, and the split is recorded there rather
- * than in this comment, because a sub-PR number living only in source is a date
- * nothing puts in front of a human.
+ * callers program against, so new mutation work goes on the lifecycle rather
+ * than on a new method here.
  *
  * Scope note: this wraps the *in-memory* Y.Doc/Y.Map layer the MCP handlers
  * touch — NOT the durable annotation file-store (`src/server/annotations/`).
@@ -43,10 +63,16 @@
  */
 
 import type * as Y from "yjs";
-import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { withMcp } from "../../shared/origins.js";
+import {
+  Y_MAP_ACTIVITY,
+  Y_MAP_ANNOTATION_REPLIES,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_SELECTION,
+  Y_MAP_USER_AWARENESS,
+} from "../../shared/constants.js";
+import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
-import type { Annotation, AnnotationReply } from "../../shared/types.js";
+import type { Annotation, AnnotationReply, FlatOffset } from "../../shared/types.js";
 import { docHash } from "../annotations/doc-hash.js";
 import {
   type AnnotationLifecycle,
@@ -58,10 +84,11 @@ import {
   type RemoveResult,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
-import { refreshAllRanges, refreshRange } from "../positions.js";
+import { exportAnnotations } from "../file-io/docx.js";
+import { anchoredRange, refreshAllRanges } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
-import { collectAnnotations, collectRepliesForAnnotation } from "./annotations.js";
-import { extractText } from "./document-model.js";
+import { captureSnapshot, collectAnnotations, collectRepliesForAnnotation } from "./annotations.js";
+import { extractText, type FlatBreak } from "./document-model.js";
 import { getCurrentDoc } from "./document-service.js";
 
 /**
@@ -78,14 +105,29 @@ import { getCurrentDoc } from "./document-service.js";
  * interface nothing imports is documentation wearing a type's clothes.
  */
 export class YDocStore {
-  readonly ydoc: Y.Doc;
+  /**
+   * The backing Y.Doc — `#private`, not `private`, and not exposed.
+   *
+   * **`private` is compile-time only.** It erases, so `(store as any).ydoc`
+   * reaches it with no type error, and Y.js's `AbstractType` additionally
+   * exposes a public `doc` field — meaning a `private map` hands out the same
+   * raw doc through `(store as any).map.doc`, with no new member, no new import
+   * and nothing for a static member-list pin to see. Review constructed that
+   * defeat against Unit 8j-2's first draft. `#` fields carry a runtime brand
+   * check, so this is the one part of the hatch removal that is structural
+   * rather than a convention plus a test.
+   */
+  readonly #ydoc: Y.Doc;
   /**
    * Absolute (or `upload://`) path of the backing document.
    *
-   * Read by the `tandem_exportAnnotations` handler through a DESTRUCTURE —
-   * `const { ydoc, filePath } = store` — which is why two independent census
-   * passes over this field reported zero readers and Unit 8j briefly deleted
-   * it. A member-name grep does not see a destructured bind.
+   * Read by the `tandem_exportAnnotations` handler through a DESTRUCTURE, which
+   * is why two independent census passes over this field reported zero readers
+   * and Unit 8j briefly deleted it: a member-name grep does not see a
+   * destructured bind. The live form is `const { filePath } = store`. It read
+   * `const { ydoc, filePath } = store` when those censuses ran, and quoting
+   * THAT here — the shape this same commit deleted, since `ydoc` can no longer
+   * be destructured — is what an earlier draft of this paragraph did.
    *
    * (Cited by handler rather than by line: the first draft of this comment said
    * `mcp/annotations.ts:632` and was off by one on the branch that wrote it,
@@ -103,16 +145,16 @@ export class YDocStore {
    * use this, not `docHash` and not `filePath`.
    */
   readonly documentId: string;
-  /** Annotations Y.Map — kept private; the seam is the method surface. */
-  private readonly map: Y.Map<unknown>;
+  /** Annotations Y.Map — `#private` for the reason on {@link YDocStore.#ydoc}. */
+  readonly #map: Y.Map<unknown>;
   readonly lifecycle: AnnotationLifecycle;
 
   constructor(ydoc: Y.Doc, filePath: string, documentId: string) {
-    this.ydoc = ydoc;
+    this.#ydoc = ydoc;
     this.filePath = filePath;
     this.documentId = documentId;
     this.docHash = docHash(filePath);
-    this.map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    this.#map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     this.lifecycle = createAnnotationLifecycle(ydoc);
   }
 
@@ -121,7 +163,7 @@ export class YDocStore {
   }
 
   getText(): string {
-    return extractText(this.ydoc);
+    return extractText(this.#ydoc);
   }
 
   /**
@@ -175,7 +217,7 @@ export class YDocStore {
   }
 
   listAnnotations(): Annotation[] {
-    return collectAnnotations(this.map, this.docHash);
+    return collectAnnotations(this.#map, this.docHash);
   }
 
   /**
@@ -184,27 +226,117 @@ export class YDocStore {
    * annotations.
    */
   listAnnotationsRefreshed(): Annotation[] {
-    return refreshAllRanges(this.listAnnotations(), this.ydoc, this.map).map((r) => r.annotation);
+    return refreshAllRanges(this.listAnnotations(), this.#ydoc, this.#map).map((r) => r.annotation);
   }
 
   /**
-   * Refresh a single annotation's CRDT-anchored range, persisting any update
-   * back to the Y.Map, and return the refreshed annotation. Used by the inbox
-   * surfacer, which refreshes a surfaced-gated subset rather than the whole
-   * collection.
+   * Refresh a caller-chosen SUBSET of annotations' CRDT-anchored ranges,
+   * persisting any updates back to the Y.Map, in **one** origin-tagged
+   * transaction. Used by the inbox surfacer, which refreshes a surfaced-gated
+   * subset rather than the whole collection.
    *
-   * **The caller owns the enclosing origin-tagged transaction** (see
-   * {@link transactMcp}). Unwrapped, this writes untagged — `audit:origins`
-   * cannot see a bare `map.set` reached through a helper, so nothing but this
-   * sentence stands between a new caller and an untagged write.
+   * **The callee owns the transaction, and that inversion is the point (Unit
+   * 8j-2).** This replaces a `refreshAnnotation(ann)` singular whose docblock
+   * read "the caller owns the enclosing origin-tagged transaction" — true, and
+   * the wrong contract. Its two callers sat inside one `store.transactMcp(…)`
+   * block in the inbox handler; with `transactMcp` gone, the singular would have
+   * survived as a public method whose every unwrapped call is a bare `map.set`
+   * with a `null` origin. `audit:origins` cannot follow a write reached through
+   * a helper, so nothing would have reported it. A batch that opens its own
+   * `withMcp` takes the boundary out of the caller's hands — as long as it is
+   * the OUTERMOST transaction.
+   *
+   * **It is not sealed against nesting, and Yjs is why.** `transact` constructs
+   * a `Transaction` only when `doc._transaction === null`; otherwise the
+   * `origin` argument is silently discarded and the body runs under the outer
+   * tag. So this method called from inside a `withInternal`/`withFileSync` block
+   * tags its `map.set` writes with that origin instead — both are in
+   * `DURABLE_SKIP`, so the re-anchored `relRange`s would never reach the JSON
+   * envelope, and nothing would warn: `audit:origins` sees a correct `withMcp`
+   * at the helper, and `installUntaggedWriteWarning` sees a tagged transaction.
+   * No caller nests today (the sole one is outside any transaction), and the
+   * deleted `transactMcp` had the identical property — this is a bound on the
+   * claim, not a regression.
+   *
+   * Same one-line shape as {@link listAnnotationsRefreshed} — `refreshAllRanges`
+   * already owns the `withMcp` and already backs the full-collection sibling, so
+   * this is not new transaction logic.
    */
-  refreshAnnotation(ann: Annotation): Annotation {
-    return refreshRange(ann, this.ydoc, this.map).annotation;
+  refreshAnnotations(anns: Annotation[]): Annotation[] {
+    return refreshAllRanges(anns, this.#ydoc, this.#map).map((r) => r.annotation);
   }
 
-  /** Run `fn` inside an MCP-origin Y.Doc transaction (ADR-031 `withMcp`). */
-  transactMcp(fn: () => void): void {
-    withMcp(this.ydoc, fn);
+  /**
+   * Anchor a validated flat-offset range against this document.
+   *
+   * **`rejectHeadingOverlap` is unconditional and is NOT a parameter.** Critical
+   * Rule 6 — a range overlapping a heading prefix returns INVALID_RANGE — is not
+   * a caller's choice, and a boolean here is precisely the flag a later edit
+   * drops without any type error. The one call site this replaces already passed
+   * `true`. The only other `anchoredRange` caller that passes it is
+   * `local-model/tools.ts:204`; `mcp/document.ts:620` passes it to
+   * `validateRange` directly, which is a sibling function, not this one. Both
+   * resolve their own `Y.Doc` and are unaffected — and `local-model/tools.ts`
+   * still carries the bare boolean at its own call site, with the same exposure
+   * this method removes here.
+   */
+  anchorRange(
+    from: FlatOffset,
+    to: FlatOffset,
+    textSnapshot?: string,
+  ): AnchoredRangeResult | (RangeValidation & { ok: false }) {
+    return anchoredRange(this.#ydoc, from, to, textSnapshot, { rejectHeadingOverlap: true });
+  }
+
+  /**
+   * Capture the text snapshot for a range, with its break offsets.
+   *
+   * Written out rather than `ReturnType<typeof captureSnapshot>`. This class
+   * claims that no member returns a `Y.Doc` or a `Y.Map`, and the member pin
+   * that keeps it honest reads NAMES, not types — so a `ReturnType` is the one
+   * shape through which the free function could grow a Y-typed field and drag
+   * this public surface after it with no diff in this file and a green suite.
+   */
+  captureSnapshot(
+    from: number,
+    to: number,
+  ): { text: string; truncated: boolean; breaks: FlatBreak[] } {
+    return captureSnapshot(this.#ydoc, from, to);
+  }
+
+  /**
+   * Render the annotation summary markdown `tandem_exportAnnotations` writes.
+   *
+   * **NOT Solo-safe on its own.** `exportAnnotations` re-filters `type !== "note"`
+   * internally (ADR-027 defence in depth, `file-io/docx.ts`), but it carries no
+   * `hideFromAI` gate — so a caller that hands it `listAnnotationsRefreshed()`
+   * would strip notes and still leak Solo-held comments. Anything bound for
+   * Claude must apply the mode gate before calling, exactly as
+   * {@link listReplies} requires for replies.
+   */
+  exportAnnotationsMarkdown(anns: Annotation[]): string {
+    return exportAnnotations(this.#ydoc, anns);
+  }
+
+  /**
+   * The user's current selection and typing activity, typed.
+   *
+   * Deliberately not a `getMap` returning the raw `Y.Map` — that would be the
+   * `ydoc` hatch under a new name, which is the whole thing Unit 8j-2 removes.
+   */
+  getUserAwareness(): {
+    selection?: { from: FlatOffset; to: FlatOffset; timestamp: number };
+    activity?: { isTyping: boolean; cursor: number; lastEdit: number };
+  } {
+    const userAwareness = this.#ydoc.getMap(Y_MAP_USER_AWARENESS);
+    return {
+      selection: userAwareness.get(Y_MAP_SELECTION) as
+        | { from: FlatOffset; to: FlatOffset; timestamp: number }
+        | undefined,
+      activity: userAwareness.get(Y_MAP_ACTIVITY) as
+        | { isTyping: boolean; cursor: number; lastEdit: number }
+        | undefined,
+    };
   }
 
   /**
@@ -240,7 +372,7 @@ export class YDocStore {
    * `channelVisibleReplies` instead (ADR-027, #1000).
    */
   listReplies(annotationId: string): AnnotationReply[] {
-    const repliesMap = this.ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    const repliesMap = this.#ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     return collectRepliesForAnnotation(repliesMap, annotationId);
   }
 }
