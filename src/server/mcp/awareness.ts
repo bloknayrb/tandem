@@ -491,7 +491,8 @@ export function isUserActive(
  * and had **zero production callers**: the handler called the private
  * {@link processUnsurfacedInboxAnnotations} directly and re-implemented the
  * selection-and-refresh loop below inline, inside its own `store.transactMcp`.
- * 21 specs drove this copy. A mutation to the handler's *selection* half would
+ * 21 call sites across 16 specs drove this copy — a count of CALLS is not a
+ * count of specs, and an earlier draft of this line conflated them. A mutation to the handler's *selection* half would
  * still have reddened `annotation-promote-pull-surface.test.ts`, which drives
  * the real tool — but the refresh half was observed by nothing at all.
  *
@@ -505,14 +506,32 @@ export function isUserActive(
  * caller's choice. `YDocStore.refreshAnnotations` is the production
  * implementation; `refreshAnnotation` (singular) no longer exists.
  *
- * **Callers must pass `modeState` and `wasChannelEmitted` explicitly.** Both
- * default, and the `modeState` default is `"indeterminate"`, under which
- * `hideFromAI` holds only records already stamped `heldInSolo` — so a call that
- * stops at `refreshAll` surfaces unmarked user records in a live Solo session.
- * That is not invisible (the "holds it in live Solo, and does so by AUTHOR" spec
- * in `annotation-promote-pull-surface.test.ts` uses a deliberately unmarked
- * record and reds), but it has exactly one killer, which is why the defaults are
- * called out here rather than left to be discovered.
+ * **`modeState` and `wasChannelEmitted` are REQUIRED, and were briefly not.**
+ * The first draft of this unit gave both defaults and warned about them in
+ * prose. Review defeated the warning twice over. `modeState` defaulted to
+ * `"indeterminate"`, under which `hideFromAI` holds only records already
+ * stamped `heldInSolo` — so a call that stopped at `documentId` (required, and
+ * positionally AHEAD of both) surfaced unmarked user records in a live Solo
+ * session, with exactly one killer spec. `wasChannelEmitted` defaulted to
+ * `() => false` and had NO killer: deleting it from the call site left every
+ * spec in the repo green while production silently stopped stamping
+ * `alreadyPushed` for every channel-connected session. `collectInboxUserReplies`
+ * below already takes `modeState` required, with the same privacy gate; this is
+ * now consistent with it. A required parameter is the only version of that
+ * warning a compiler enforces.
+ *
+ * **`refreshAll` cannot change the selection, and that is enforced here rather
+ * than asked for.** The signature `(anns: Annotation[]) => Annotation[]` says
+ * nothing about the relationship between input and output, and the wrong
+ * implementations are the plausible ones: `(anns) => store.refreshAnnotations(anns)`
+ * is correct, while `(anns) => store.listAnnotationsRefreshed()` — one method
+ * along on the same object, same return type, typechecks — hands back the WHOLE
+ * collection. The consuming loop does not re-apply the ledger gate (it re-reads
+ * `surfaced` only to compute `edited`), so that would re-surface and re-stamp
+ * every already-delivered comment on every poll, with no error. Master could not
+ * express this: its refresher was per-record and fused into the loop, so set
+ * membership was not a callback's to change. The re-key below restores that
+ * property.
  */
 export function processInboxAnnotations(
   allAnnotations: Annotation[],
@@ -524,11 +543,9 @@ export function processInboxAnnotations(
    * imported Word comment in a second document. See `surfacedIds`.
    */
   documentId: string,
-  // Privacy gate: default to the fail-CLOSED value, not "tandem". The real
-  // caller always passes live mode; a caller that forgets should hold held
-  // items, never surface them.
-  modeState: ModeState = "indeterminate",
-  wasChannelEmitted: (payloadId: string) => boolean = () => false,
+  /** Privacy gate. Required — see the docblock; `"indeterminate"` is NOT fail-closed. */
+  modeState: ModeState,
+  wasChannelEmitted: (payloadId: string) => boolean,
 ): {
   userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
@@ -537,12 +554,19 @@ export function processInboxAnnotations(
   // selection reads only the pre-refresh records and a stable ledger — a refresh
   // of one annotation cannot change another's selection outcome — so batching
   // costs no fidelity against the per-item loop this replaces.
-  const unsurfaced = refreshAll(
-    allAnnotations.filter((raw) => {
-      const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, raw.id));
-      return lastSurfacedEditedAt === undefined || (raw.editedAt ?? 0) > lastSurfacedEditedAt;
-    }),
-  );
+  const candidates = allAnnotations.filter((raw) => {
+    const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, raw.id));
+    return lastSurfacedEditedAt === undefined || (raw.editedAt ?? 0) > lastSurfacedEditedAt;
+  });
+
+  // **`candidates` is the answer; `refreshAll` only gets to improve the ranges
+  // in it.** Re-keying by id means a refresher that returns extra records cannot
+  // add them to the inbox, and one that drops a record degrades to that record's
+  // pre-refresh (correct, possibly stale) range rather than losing the surface
+  // and the ledger entry for it. Without this the callback decides what Claude
+  // sees, which is not what its name or its docblock claims.
+  const refreshedById = new Map(refreshAll(candidates).map((a) => [a.id, a]));
+  const unsurfaced = candidates.map((c) => refreshedById.get(c.id) ?? c);
 
   return processUnsurfacedInboxAnnotations(
     unsurfaced,

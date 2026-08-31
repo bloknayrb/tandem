@@ -388,8 +388,10 @@ describe("getDocumentStore factory", () => {
 
     // **Identity, asserted through behaviour (ADR-035 Unit 8j-2).** This was
     // `expect(store!.ydoc).toBe(ydoc)` — a direct read of the escape hatch that
-    // unit removed, and the sixth of its six uses, hidden from every census
-    // regex by the non-null assertion. `toBe` on the field is not portable, and
+    // unit removed, hidden from every census regex by the non-null assertion. It
+    // was the SEVENTH use and the only one outside `src/`; the census's "six"
+    // counts production uses, and folding this line into that number (as one
+    // draft of the tracker row did) makes a test file a production use. `toBe` on the field is not portable, and
     // replacing it with a getter would just re-open the hatch for the test's
     // convenience. Mutating the doc and watching the store observe it is the
     // same claim — the store holds THIS doc, not a snapshot or a second one —

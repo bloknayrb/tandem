@@ -199,6 +199,7 @@ describe("checkInbox does not choke on a legacy note", () => {
       (anns) => anns,
       "doc-guards",
       "tandem",
+      () => false,
     );
 
     expect(

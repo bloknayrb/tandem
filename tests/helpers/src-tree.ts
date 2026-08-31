@@ -1,14 +1,18 @@
 /**
  * One read of the `src/` tree, shared by the static-scan guards.
  *
- * **Why a helper rather than a fourth copy.** Four suites now walk all of
- * `src/` — `annotation-create-seam-census.test.ts`,
- * `annotation-remove-seam.test.ts`, `documents-open.test.ts` and
- * `client-log-callsites.test.ts` — and the census's own header records what
+ * **Why a helper rather than another copy.** Every suite that imports
+ * `SRC_FILES` walks all of `src/`, and the census's own header records what
  * that costs: they share a worker pool, and a re-read per lookup was
  * *measurably* enough extra Windows filesystem contention to push two of them
  * over their timeouts in the full run. Each new copy of the walk is another
  * pass over ~530 files and ~6.5 MB.
+ *
+ * The consumer list deliberately is not enumerated here. It was, and it drifted
+ * within two units: it named four suites, two of which (`documents-open`,
+ * `client-log-callsites`) do their own `readdirSync` and never imported this at
+ * all, while three that DO import it were missing. `grep -rl src-tree.js tests/`
+ * is the answer, and unlike a comment it cannot be wrong.
  *
  * Module-level, so the read happens once per worker rather than once per suite
  * that imports it.

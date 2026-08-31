@@ -15,7 +15,10 @@
  * `YDocStore` is the one implementation, and as of Unit 8j the only type: it
  * delegates the annotation mutations to {@link YDocStore.lifecycle} and
  * everything else to the same standalone helpers the handlers used before
- * (`collectAnnotations`, `refreshAllRanges`). **Not a clean read/write split**
+ * (`collectAnnotations`, `refreshAllRanges`, and since Unit 8j-2 also
+ * `anchoredRange`, `captureSnapshot` and `exportAnnotations` — the list is
+ * illustrative, and it has grown once already). **Not a clean read/write
+ * split**
  * — `listAnnotationsRefreshed` and `refreshAnnotations` persist range updates
  * back into the Y.Map, so calling the second group "reads" would be wrong. That
  * delegation is the parity contract: the underlying Y.Map structures and origin
@@ -33,15 +36,21 @@
  * only structural half of this closure; the `#ydoc` field's own note carries
  * why that difference is load-bearing. The rest is a pinned member list.
  *
- * **What this does NOT close, stated because the opposite reads as true.** The
- * raw `Y.Doc` is still reachable inside `src/server/mcp/` through
+ * **What this does NOT close, stated because the opposite reads as true.** Two
+ * routes to a raw `Y.Doc` are still open inside `src/server/mcp/`, not one.
  * `requireDocument` (`documents/registry.ts`, re-exported by
- * `document-service.ts`), which returns `{ doc: Y.Doc }` to seven call sites in
- * `document.ts` and one in `docx-apply.ts`. Those writes are all correctly
- * `withMcp`-tagged today — a sweep finds zero raw `.transact(` in `src/` — but
- * they are tagged by discipline, exactly as this store's hatch was. Removing one
- * door is not sealing the room, and Unit 8j-2 deliberately claims only the
- * former.
+ * `document-service.ts`) returns `{ doc: Y.Doc }` to seven call sites in
+ * `document.ts` and one in `docx-apply.ts` — plus four in
+ * `local-model/collaborator.ts`, which ships dark. And `getOrCreateDocument`
+ * (`yjs/provider.ts`) is imported by twelve files under `src/server/mcp/`,
+ * INCLUDING `awareness.ts`, the handler this unit rewired: the two-line
+ * `getOrCreateDocument(getCurrentDoc(id).docName)` sits in the same file that no
+ * longer says `store.ydoc`. Every write reached through either is correctly
+ * `withMcp`-tagged today — a sweep finds no raw `.transact(` in `src/` outside
+ * `shared/origins.ts`, where the six helpers are implemented — but they are
+ * tagged by discipline, exactly as this store's hatch was. Removing one door is
+ * not sealing the room, and Unit 8j-2 deliberately claims only the former.
+ * Tracked as #1700.
  *
  * **Direction of travel (ADR-035).** This store is a compatibility shell, not
  * the destination. Unit 8b settled that `AnnotationLifecycle` is the seam
@@ -79,7 +88,7 @@ import { exportAnnotations } from "../file-io/docx.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { captureSnapshot, collectAnnotations, collectRepliesForAnnotation } from "./annotations.js";
-import { extractText } from "./document-model.js";
+import { extractText, type FlatBreak } from "./document-model.js";
 import { getCurrentDoc } from "./document-service.js";
 
 /**
@@ -112,10 +121,13 @@ export class YDocStore {
   /**
    * Absolute (or `upload://`) path of the backing document.
    *
-   * Read by the `tandem_exportAnnotations` handler through a DESTRUCTURE —
-   * `const { ydoc, filePath } = store` — which is why two independent census
-   * passes over this field reported zero readers and Unit 8j briefly deleted
-   * it. A member-name grep does not see a destructured bind.
+   * Read by the `tandem_exportAnnotations` handler through a DESTRUCTURE, which
+   * is why two independent census passes over this field reported zero readers
+   * and Unit 8j briefly deleted it: a member-name grep does not see a
+   * destructured bind. The live form is `const { filePath } = store`. It read
+   * `const { ydoc, filePath } = store` when those censuses ran, and quoting
+   * THAT here — the shape this same commit deleted, since `ydoc` can no longer
+   * be destructured — is what an earlier draft of this paragraph did.
    *
    * (Cited by handler rather than by line: the first draft of this comment said
    * `mcp/annotations.ts:632` and was off by one on the branch that wrote it,
@@ -231,7 +243,20 @@ export class YDocStore {
    * survived as a public method whose every unwrapped call is a bare `map.set`
    * with a `null` origin. `audit:origins` cannot follow a write reached through
    * a helper, so nothing would have reported it. A batch that opens its own
-   * `withMcp` removes the boundary from the caller's hands entirely.
+   * `withMcp` takes the boundary out of the caller's hands — as long as it is
+   * the OUTERMOST transaction.
+   *
+   * **It is not sealed against nesting, and Yjs is why.** `transact` constructs
+   * a `Transaction` only when `doc._transaction === null`; otherwise the
+   * `origin` argument is silently discarded and the body runs under the outer
+   * tag. So this method called from inside a `withInternal`/`withFileSync` block
+   * tags its `map.set` writes with that origin instead — both are in
+   * `DURABLE_SKIP`, so the re-anchored `relRange`s would never reach the JSON
+   * envelope, and nothing would warn: `audit:origins` sees a correct `withMcp`
+   * at the helper, and `installUntaggedWriteWarning` sees a tagged transaction.
+   * No caller nests today (the sole one is outside any transaction), and the
+   * deleted `transactMcp` had the identical property — this is a bound on the
+   * claim, not a regression.
    *
    * Same one-line shape as {@link listAnnotationsRefreshed} — `refreshAllRanges`
    * already owns the `withMcp` and already backs the full-collection sibling, so
@@ -248,9 +273,12 @@ export class YDocStore {
    * Rule 6 — a range overlapping a heading prefix returns INVALID_RANGE — is not
    * a caller's choice, and a boolean here is precisely the flag a later edit
    * drops without any type error. The one call site this replaces already passed
-   * `true`; the other two production callers of `anchoredRange` that pass it
-   * (`mcp/document.ts`, `local-model/tools.ts`) resolve their own `Y.Doc` and
-   * are unaffected.
+   * `true`. The only other `anchoredRange` caller that passes it is
+   * `local-model/tools.ts:204`; `mcp/document.ts:620` passes it to
+   * `validateRange` directly, which is a sibling function, not this one. Both
+   * resolve their own `Y.Doc` and are unaffected — and `local-model/tools.ts`
+   * still carries the bare boolean at its own call site, with the same exposure
+   * this method removes here.
    */
   anchorRange(
     from: FlatOffset,
@@ -260,8 +288,19 @@ export class YDocStore {
     return anchoredRange(this.#ydoc, from, to, textSnapshot, { rejectHeadingOverlap: true });
   }
 
-  /** Capture the text snapshot for a range, with its break offsets. */
-  captureSnapshot(from: number, to: number): ReturnType<typeof captureSnapshot> {
+  /**
+   * Capture the text snapshot for a range, with its break offsets.
+   *
+   * Written out rather than `ReturnType<typeof captureSnapshot>`. This class
+   * claims that no member returns a `Y.Doc` or a `Y.Map`, and the member pin
+   * that keeps it honest reads NAMES, not types — so a `ReturnType` is the one
+   * shape through which the free function could grow a Y-typed field and drag
+   * this public surface after it with no diff in this file and a green suite.
+   */
+  captureSnapshot(
+    from: number,
+    to: number,
+  ): { text: string; truncated: boolean; breaks: FlatBreak[] } {
     return captureSnapshot(this.#ydoc, from, to);
   }
 

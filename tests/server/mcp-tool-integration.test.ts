@@ -13,6 +13,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import * as Y from "yjs";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   getDeliveryState,
@@ -36,6 +37,7 @@ import {
   Y_MAP_ANNOTATIONS,
   Y_MAP_AUTHORSHIP,
   Y_MAP_MODE,
+  Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
@@ -179,6 +181,43 @@ describe("MCP tool integration — annotation tools", () => {
     const parsed = parseResult(result);
     expect(parsed.error).toBe(false);
     expect(parsed.data.annotationId).toMatch(/^ann_/);
+  });
+
+  it("tandem_comment still honours textSnapshot after the store took over anchoring", async () => {
+    // **The sibling argument to the one the heading spec below protects.**
+    // `YDocStore.anchorRange(from, to, textSnapshot)` forwards three values to
+    // `anchoredRange`; review pointed out that dropping the third —
+    // `anchoredRange(this.#ydoc, from, to, undefined, {...})` — leaves every
+    // suite green. `annotation-tools.test.ts`'s staleness spec calls
+    // `verifyAndResolveRange` directly and never reaches this tool, and the
+    // other `textSnapshot` assertion here is on `captureSnapshot`'s OUTPUT
+    // record rather than on the drift-check input.
+    //
+    // Offsets name "Hello"; the snapshot names "world", which exists later in
+    // the document. With the snapshot forwarded that is a RANGE_MOVED; without
+    // it the call simply succeeds on the wrong span.
+    setupDoc("mcp-ann-snapshot", "Hello world");
+
+    const moved = parseResult(
+      await client.callTool({
+        name: "tandem_comment",
+        arguments: { from: 0, to: 5, text: "on the wrong span", textSnapshot: "world" },
+      }),
+    );
+    expect(moved.error).toBe(true);
+    expect(moved.code).toBe("RANGE_MOVED");
+
+    // The control: same tool, same document, a snapshot that MATCHES its
+    // offsets must succeed — otherwise the assertion above is satisfied by a
+    // tool that rejects every snapshot it is given.
+    const ok = parseResult(
+      await client.callTool({
+        name: "tandem_comment",
+        arguments: { from: 0, to: 5, text: "on Hello", textSnapshot: "Hello" },
+      }),
+    );
+    expect(ok.error).toBe(false);
+    expect(ok.data.annotationId).toMatch(/^ann_/);
   });
 
   it("tandem_comment refuses a range overlapping a heading prefix (Critical Rule 6)", async () => {
@@ -877,12 +916,98 @@ describe("MCP tool integration — awareness tools", () => {
 
     // The control: a document with an empty awareness map takes the other
     // branch. Without it, a handler that returned a constant `active: true`
-    // would satisfy every assertion above.
+    // would satisfy every assertion above. `setupDoc` also makes THIS the
+    // active document, so the seeded one is now reachable only by id.
     setupDoc("mcp-aw-activity-empty", "Hello world");
     const empty = parseResult(await client.callTool({ name: "tandem_getActivity", arguments: {} }));
     expect(empty.error).toBe(false);
     expect(empty.data.active).toBe(false);
     expect(empty.data.cursor).toBe(null);
+
+    // **And the `documentId` argument must still route.** The handler was
+    // repointed from a hand-rolled `getCurrentDoc(documentId)` +
+    // `getOrCreateDocument(...)` pair onto `getDocumentStore(documentId)`;
+    // dropping the argument (`getDocumentStore()`) collapses every call to the
+    // active document, which the two assertions above cannot tell apart.
+    const byId = parseResult(
+      await client.callTool({
+        name: "tandem_getActivity",
+        arguments: { documentId: "mcp-aw-activity" },
+      }),
+    );
+    expect(byId.error).toBe(false);
+    expect(byId.data.active).toBe(true);
+    expect(byId.data.cursor).toBe(7);
+  });
+
+  it("tandem_checkInbox refreshes every unsurfaced annotation in ONE mcp-tagged transaction", async () => {
+    // **This is the only spec that observes Unit 8j-2's A2 at the handler.**
+    // The batch spec in `awareness-tools.test.ts` drives the exported function
+    // with a fake refresher; the transaction spec in `document-store.test.ts`
+    // drives the store method. Neither can see the wiring between them — so
+    // restoring the master-shaped inline loop in the handler and refreshing per
+    // item left all of them green, with N transactions instead of one and the
+    // duplication A2 removed back in place.
+    const ydoc = setupDoc("mcp-inbox-txn", "Hello world content here");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const first = createAnnotation(map, ydoc, "comment", rangeOf(6, 11, ydoc), "on world", {
+      author: "user",
+    });
+    const second = createAnnotation(map, ydoc, "comment", rangeOf(12, 19, ydoc), "on content", {
+      author: "user",
+    });
+
+    // Shift both anchors so the refresh must actually WRITE. Without this the
+    // refresh is a no-op, the observer never fires, and an empty origin list
+    // would satisfy a "not more than one transaction" reading for the wrong
+    // reason.
+    const frag = ydoc.getXmlFragment("default");
+    const para = frag.get(0) as Y.XmlElement;
+    const xtext = para.get(0) as Y.XmlText;
+    withInternal(ydoc, () => xtext.insert(0, "XXX "));
+
+    const origins: unknown[] = [];
+    const observer = (events: Array<Y.YEvent<any>>, txn: Y.Transaction) => {
+      const touched = events.some((e) =>
+        [...e.changes.keys.keys()].some((k) => k === first || k === second),
+      );
+      if (touched) origins.push(txn.origin);
+    };
+    map.observeDeep(observer);
+    try {
+      const parsed = parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+      );
+      expect(parsed.error).toBe(false);
+      expect(parsed.data.userActions.map((a: { id: string }) => a.id)).toStrictEqual([
+        first,
+        second,
+      ]);
+    } finally {
+      map.unobserveDeep(observer);
+    }
+
+    expect(origins, "one batch, tagged mcp — not one transaction per annotation").toStrictEqual([
+      MCP_ORIGIN,
+    ]);
+  });
+
+  it("tandem_checkInbox reports the user's live selection", async () => {
+    // `getUserAwareness()`'s `selection` half is written by this unit and was
+    // read by nothing in the suite: swapping its key for `Y_MAP_ACTIVITY`, or
+    // returning `undefined` outright, stayed green everywhere while
+    // `tandem_checkInbox` silently stopped telling Claude what the user has
+    // highlighted.
+    const ydoc = setupDoc("mcp-inbox-selection", "Hello world");
+    withInternal(ydoc, () =>
+      ydoc
+        .getMap(Y_MAP_USER_AWARENESS)
+        .set(Y_MAP_SELECTION, { from: 6, to: 11, timestamp: Date.now() }),
+    );
+
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.activity.selectedText).toBe("world");
   });
 
   it("tandem_reply sends a chat message", async () => {

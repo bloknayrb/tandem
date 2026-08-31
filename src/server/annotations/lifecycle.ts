@@ -24,8 +24,11 @@
  * a future).** 8j-1 deleted the `DocumentStore` *interface* — zero importers —
  * leaving `YDocStore` as the only type, and moved the wide-typed create wrapper
  * out of `src/`. 8j-2 **closed the `ydoc` / `transactMcp` escape hatches named
- * below** — they no longer exist; every member of `YDocStore` is now named for
- * what a handler does, and the doc and annotations map are `#private` because
+ * below** — they no longer exist; every METHOD on `YDocStore` is now named for
+ * what a handler does ("every member" overstated it: `filePath`, `docHash`,
+ * `documentId` and `lifecycle` are data properties, and the pinned list in
+ * `tests/server/document-store-surface.test.ts` is the accurate statement of
+ * the same thing), and the doc and annotations map are `#private` because
  * `private` erases and Y.js's `AbstractType` exposes a public `doc`. The file
  * itself is collapsed, not deleted: it still owns document resolution, and
  * tracker row **8j** is titled "Collapse the shallow DocumentStore" — collapse
@@ -63,7 +66,9 @@
  * the whole reason the lookup cannot come here", naming
  * `mcp/document-store.ts` as where `getCurrentDoc` / `getOrCreateDocument`
  * live. Both halves were false. They are defined in `documents/registry.ts` and
- * `yjs/provider.ts`; `mcp/document-service.ts` is a re-export facade, and what
+ * `yjs/provider.ts`; `mcp/document-service.ts` re-exports those two symbols
+ * (it is 1600-odd lines of autosave, rename and session logic besides — a
+ * facade for what this paragraph needs, not a facade), and what
  * `document-store.ts` holds is the *composition* of the two inside
  * `getDocumentStore`. Walking the transitive import closure of those two
  * definition modules reaches 25 files and **none** under `annotations/` or
@@ -321,8 +326,12 @@ export function describeReplyWriteRefusal(result: Exclude<ClaudeReplyResult, { k
  *   `server/positions.ts`). `AnchoredRangeResult` has only `ok: true` arms, so
  *   an unvalidated range cannot be typed into {@link CreateInput}. Heading
  *   overlap is a weaker claim, stated deliberately weakly: rejection is opt-in
- *   via `anchoredRange`'s `rejectHeadingOverlap`, both production callers pass
- *   it, and the type cannot tell you whether they did.
+ *   via `anchoredRange`'s `rejectHeadingOverlap`. Both callers that turn a
+ *   caller-supplied span into a NEW annotation pass it — `YDocStore.anchorRange`
+ *   (where it is now hardcoded rather than a parameter) and
+ *   `local-model/tools.ts:204` — while every other `anchoredRange` caller is
+ *   re-anchoring a range that was already chosen and correctly passes nothing.
+ *   The type cannot tell you which of those a caller is.
  * - A Claude-authored note (ADR-027) is unconstructible *at runtime*: `create`
  *   has no `type` parameter, and {@link stripOwnedFields} deletes `type` and
  *   `audience` from whatever a caller passes. The matching `Omit` in
@@ -682,8 +691,9 @@ function stripOwnedFields(extras: MintExtras | undefined): MintExtras {
  * **Unit 8j moved its only CROSS-FILE caller out of `src/`** — and the
  * distinction matters, because an earlier draft of this paragraph said "its
  * only caller" and was wrong. This function is on the hot production path:
- * {@link createAnnotationLifecycle} calls it directly, a few lines above, to
- * mint the comment the seam produces. What left `src/` was
+ * {@link createAnnotationLifecycle} calls it directly — same file, ~90 lines
+ * up, not "just above" as an earlier draft had it — to mint the comment the
+ * seam produces. What left `src/` was
  * `mcp/annotations.ts::createAnnotation`, a production export with no
  * production callers of its own, whose sole defence against acquiring one was a
  * census assertion; it now lives in `tests/helpers/ydoc-factory.ts`.
