@@ -136,7 +136,16 @@ describe("AR5 import → promote → Claude-visible (integration)", () => {
     expect(created).toHaveLength(ids.length);
     expect(created.every((e) => e.payload.annotationType === "comment")).toBe(true);
 
-    // Stored shape: channel surface (author/type) AND MCP-read surface (audience/type≠note).
+    // Stored shape only — this block reads the Y.Map directly and calls no MCP
+    // handler. It said "AND MCP-read surface (audience/type≠note)" until Unit
+    // 8g, which is wrong twice over: nothing here invokes a read surface, and
+    // `audience` is not a field either one consults. `tandem_getAnnotations`
+    // gates on `type !== "note"` plus `hideFromAI`, and `checkInbox`'s
+    // user-actions bucket on `author === "user" && type === "comment"` — see
+    // `annotations/projection.ts:20-27`, which names all four read sites and
+    // tracks the audience gap as #1619. The pull surface is driven for real in
+    // `annotation-promote-pull-surface.test.ts`; `audience` stays asserted here
+    // because it IS what the channel narrow reads.
     const after = Array.from(getAnnotationsMap(doc).values()) as Annotation[];
     for (const ann of after) {
       expect(ann.type).toBe("comment");

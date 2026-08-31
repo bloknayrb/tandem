@@ -803,7 +803,7 @@ copied forward without counting the transactions first.
 
 ## ADR-035: Annotation Lifecycle Module
 
-**Status:** Accepted; partially implemented (verified against `src/` 2026-08-30). `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (`acceptPending` / `dismissPending`, returning a tagged `LifecycleResult`). `narrowForChannel` and the `ChannelEligible` brand landed 2026-08-26 as `src/server/annotations/projection.ts` — **see the amendment below, which widens the predicate this ADR specifies.** `create` landed 2026-08-28 (Unit 8b) and `editPending` 2026-08-30 (Unit 8c); `YDocStore.createAnnotation` and `YDocStore.editAnnotation` are now delegating shells. **Deferred:** the remove paths, `promoteNoteToComment`, and the `.docx` `importNote` entry still live on the handlers.
+**Status:** Accepted; partially implemented (verified against `src/` 2026-08-30). `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (`acceptPending` / `dismissPending`, returning a tagged `LifecycleResult`). `narrowForChannel` and the `ChannelEligible` brand landed 2026-08-26 as `src/server/annotations/projection.ts` — **see the amendment below, which widens the predicate this ADR specifies.** `create` landed 2026-08-28 (Unit 8b) and `editPending` 2026-08-30 (Unit 8c); `YDocStore.createAnnotation` and `YDocStore.editAnnotation` are now delegating shells. `remove` landed 2026-08-30 (Unit 8e) as `AnnotationLifecycle.remove` over the shared `removeAnnotationRecord`, and `reply` the same day (Unit 8f) as `AnnotationLifecycle.reply` over a module-private `writeReply`, with `addUserReply` as the deliberately unguarded browser entry. **`promoteNoteToComment` is DECLINED rather than deferred — see the amendment below.** **Deferred:** the `.docx` `importNote` entry still lives on the handler.
 
 **Two departures from the sketch below, both in Unit 8c.**
 
@@ -838,11 +838,11 @@ Changing the annotation shape — adding a field, renaming a state, tightening a
 - `acceptPending(id) → LifecycleResult` — fixes the re-accept bug; rejects non-pending.
 - `dismissPending(id) → LifecycleResult` — same.
 - `replyToPending(id, content, author) → LifecycleResult`
-- `promoteNoteToComment(id) → LifecycleResult` — the single promotion path for both user-authored notes and `author: "import"` notes. The note → comment audience change is what surfaces an annotation to Claude; identical handling for both author types means imports require the same explicit user action as personal notes.
+- `promoteNoteToComment(id) → LifecycleResult` — **NOT IMPLEMENTED, and declined rather than deferred; see the amendment below.** The single promotion path for both user-authored notes and `author: "import"` notes. The note → comment audience change is what surfaces an annotation to Claude; identical handling for both author types means imports require the same explicit user action as personal notes.
 
 Each method's `LifecycleResult` failure variant enumerates only the failures that method can produce — types carry the preconditions. A single `apply(action)` would force every caller to handle every failure variant and would not have surfaced the re-accept bug.
 
-**Imported `.docx` comments (Q3).** Separate `importNote(range, content, importSource)` entry. Creation context differs — imports run under `withInternal` (ADR-031) during `.docx` load, not under `withMcp`; preserve `importSource` metadata; set `author: "import"`, `type: "note"`. The audience is `private` (not `outbound`) — Claude does not see imported comments via `tandem_checkInbox` or the channel until the user explicitly promotes via `promoteNoteToComment`. Surfacing parity is *not* automatic: imports are gated by user intent the same way personal notes are. This reverses the earlier ADR-027 stance that imports surface like Claude-readable comments by default. The reasoning: a `.docx` reviewer comment may originate from a colleague, not from the active Tandem user; auto-surfacing it to Claude assumes consent the user did not give. **`narrowForChannel`'s predicate is `audience === "outbound" && type === "comment"` (both, not either)** — the audience derivation in `sanitizeAnnotation` is the load-bearing privacy gate, not the type alone.
+**Imported `.docx` comments (Q3).** Separate `importNote(range, content, importSource)` entry. Creation context differs — imports run under `withInternal` (ADR-031) during `.docx` load, not under `withMcp`; preserve `importSource` metadata; set `author: "import"`, `type: "note"`. The audience is `private` (not `outbound`) — Claude does not see imported comments via `tandem_checkInbox` or the channel until the user explicitly promotes (via the browser action — **`promoteNoteToComment` itself is declined; see the amendment below**). Surfacing parity is *not* automatic: imports are gated by user intent the same way personal notes are. This reverses the earlier ADR-027 stance that imports surface like Claude-readable comments by default. The reasoning: a `.docx` reviewer comment may originate from a colleague, not from the active Tandem user; auto-surfacing it to Claude assumes consent the user did not give. **`narrowForChannel`'s predicate is `audience === "outbound" && type === "comment"` (both, not either)** — the audience derivation in `sanitizeAnnotation` is the load-bearing privacy gate, not the type alone.
 
 **Amendment (2026-08-26, implementation): the predicate is `audience === "outbound" && type !== "note"`, and unrecognized types are refused.** Three corrections to the paragraph above, made when `narrowForChannel` was actually built. Recorded here rather than left as a silent divergence between the ADR and `src/server/annotations/projection.ts`.
 
@@ -878,6 +878,56 @@ Each method's `LifecycleResult` failure variant enumerates only the failures tha
 - Tests: `note→comment` projection path covered explicitly. Re-accept rejected explicitly. Stale-tab merge tombstoning verified.
 - Pairs with #5 (observer factory): the channel projection function is the consumer of `ChannelEligible`; the factory's typed seam makes the privacy invariant un-bypassable.
 - Pairs with #4 (origin tagging): `withMcp` is invoked exclusively inside the lifecycle for user-intent writes; `withInternal` exclusively for `importComment` during `.docx` load. MCP tool handlers do not call `transact` directly.
+
+**Amendment (2026-08-30, Unit 8g): `promoteNoteToComment` is declined, not deferred.**
+
+The method sketch above lists it, and the status line called it deferred for
+three months. Unit 8g went to implement it and found there is nothing to
+implement *against*.
+
+Note→comment promotion executes entirely in the browser —
+`promotedAnnotation()` in `src/client/panels/annotation-actions.ts`, shared by
+`sendNoteToClaude` and `promoteNotesToComments`, both writing
+`withBrowser(ydoc, () => map.set(...))`. No server, MCP, local-model or Tauri
+path performs a promotion: `tandem_editAnnotation` explicitly refuses a note and
+says so in a comment, and `acceptPending` / `editPendingAnnotation` both return
+`invalid-note`. The write reaches the server as an ordinary Hocuspocus sync
+update, which Hocuspocus re-tags with its own `Connection` origin — so the
+server never sees a promotion as a *call* that a seam could stand in front of.
+**There are no callers to migrate.**
+
+Making the method real would mean routing the browser through a new mutating
+`/api` route: a network round-trip added to an instant local action, a route
+that joins the license gated set under Critical Rule 9, and one that must
+deliberately have **no** MCP twin, since ADR-027 makes promotion the one
+mutation Claude must never perform. That is a behaviour change bought to satisfy
+a symmetry.
+
+And the symmetry is not real. Every user-authored client action writes straight
+to the CRDT under `withBrowser` — `editAnnotation` in the same file does exactly
+this. `AnnotationLifecycle` is the seam for server- and MCP-originated
+mutations; promotion having no seam is the shape of *every* user action, not a
+gap peculiar to promotion. The duplication risk a seam would close is also
+already absent: `promotedAnnotation` is one shared pure function with its own
+unit tests.
+
+What Unit 8g shipped instead is the coverage the deferral had been standing in
+for. Promotion was pinned five ways and **every one of them read a push-path
+event or the raw stored record**, while CLAUDE.md makes the pull surface
+authoritative over all four push paths. `tests/server/annotation-promote-pull-surface.test.ts`
+drives a real `.docx` import → real promote → the **registered**
+`tandem_getAnnotations` and `tandem_checkInbox` handlers. The architectural point
+is what the exercise established, not its arithmetic: **a promotion defect that
+lives on the read filters is invisible to every push-path test, including the one
+written for it.** Back-publishing a note-era private reply when its parent is
+promoted survives `channel-projection-characterization.test.ts:417-465` — the
+spec that exists for precisely that scenario — because it watches the channel
+while the leak is on the pull path. The per-mutation table lives in PR #1690 and
+in the new file's own docblock, which is where a count of "how many specs stayed
+green" can go stale without misleading anyone reading the decision.
+
+This does not close #1619. The pull surfaces still gate on `type` and never on
+`audience`, which is true of any comment, promoted or not.
 
 ## ADR-036: Format Adapter as Capability Set
 
