@@ -222,6 +222,25 @@ export async function recoverRenamedEnvelope(
     // reconnecting tab can't resurrect a deletion that happened before the
     // rename. `recordTombstone` dedupes by id (keeps the higher rev); it stores
     // at `prevRev + 1`, so we pass `rev - 1` to preserve the recorded rev.
+    //
+    // The REV round-trips exactly — the schema pins it non-negative, so the floor
+    // case `0 - 1 = -1` restamps to 0, and a corrupt value never reaches here
+    // because `parseAnnotationDoc` rejected the envelope above. The RECORD does
+    // not: `recordTombstone` builds a fresh `{ id, rev, deletedAt: Date.now() }`,
+    // dropping the stored `deletedAt` and any passthrough fields (unlike
+    // `migrateTombstoneLedger`, which spreads). That reaches disk on the next
+    // durable write — the re-keyed envelope is flushed above, before this — and
+    // it survives once there, because the load-time seed only overwrites on a
+    // strictly higher rev and the file copy ties. So a rename resets a
+    // tombstone's retention clock by up to a full SESSION_MAX_AGE.
+    //
+    // Fail-safe on the axis that matters here — a tombstone living longer
+    // resists resurrection, and every merge rule reads `rev` alone. The cost is
+    // on the other axis: #318's compaction sweep ages on `deletedAt`, so a
+    // document renamed more often than SESSION_MAX_AGE keeps tombstones that
+    // should have been swept. Deliberate to leave alone at this size (three
+    // fields each); noted so it is not mistaken for exactness, and so the
+    // trade is visible rather than implied by the word "fail-safe".
     for (const stone of rekeyed.tombstones) {
       recordTombstone(currentHash, stone.id, stone.rev - 1);
     }
