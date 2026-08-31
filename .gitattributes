@@ -20,9 +20,14 @@ LICENSE text eol=lf
 # A GUARD, not a description of today. `docx-comments.ts` no longer holds raw NUL
 # bytes — its importAnnotationId delimiter is written as the `\0` escape — so
 # `git diff` renders it textually with or without this line. It stays because the
-# raw form is a one-character edit away, and reintroducing it is silent: `text=auto`
-# above marks a NUL-bearing file binary on content sniffing, and the file then
-# shows only "Bin N -> M bytes" and goes INVISIBLE in every pull request. That
+# raw form is a one-character edit away, and reintroducing it is silent IN THE
+# DIFF: git classifies a NUL-bearing file as binary by sniffing its content — not
+# because of `text=auto` above, which governs EOL normalization — and the `diff`
+# attribute here is exactly what overrides that. Without it the file shows only
+# "Bin N -> M bytes" and goes INVISIBLE in every pull request. (It is no longer
+# silent in CI: `tests/scripts/src-control-characters.test.ts` fails on any raw
+# C0 byte under `src/`. This line is what keeps the diff readable when one
+# slips in, which is a different job.) That
 # opacity is not hypothetical — while the escapes were still raw bytes it hid the
 # delimiter from `grep` and from a review agent, which then reported a confident,
 # entirely fabricated hash collision built on the wrong separator.

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { IMPORT_AUTHOR_MAX, IMPORT_REPLY_BODY_CAP } from "../../src/server/annotations/schema.js";
 import { isCanonicalWordId } from "../../src/server/file-io/docx-comment-id.js";
@@ -571,6 +571,99 @@ describe("injectCommentsAsAnnotations", () => {
     expect(after.importSource).toEqual({ author: "Carol", file: "new.docx", commentId: "legacy" });
   });
 
+  it("strips color and suggestedText when migrating a legacy record to a note", () => {
+    // The note variant of `Annotation` admits neither, so a stored record
+    // carrying one is not a valid note. Nothing exercised this before: the
+    // migration spec above stomps a record that has no `color` to begin with,
+    // so deleting either destructure left the whole suite green.
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const comments: DocxComment[] = [
+      { commentId: "77", authorName: "Erin", bodyText: "Body", from: off(0), to: off(5) },
+    ];
+    injectCommentsAsAnnotations(doc, comments, "old.docx");
+    const id = Array.from(map.keys())[0];
+    const record = map.get(id) as Record<string, unknown>;
+
+    map.set(id, {
+      ...record,
+      type: "comment",
+      audience: undefined,
+      color: "yellow",
+      suggestedText: "replace me",
+    } as never);
+
+    injectCommentsAsAnnotations(doc, comments, "new.docx");
+    const after = map.get(id) as Record<string, unknown>;
+    expect(after.type).toBe("note");
+    expect(after.color).toBeUndefined();
+    expect(after.suggestedText).toBeUndefined();
+  });
+
+  it("stays silent on an ordinary re-import, including shapes the discriminator could trip on", () => {
+    // The half most likely to break. The annotation collision log compares
+    // stored provenance against this run's, so three legitimate shapes have to
+    // stay quiet: a plain re-import, a record predating #1068 that carries no
+    // `commentId` at all, and one whose `w:id` was stored TRUNCATED at
+    // IMPORT_COMMENT_ID_MAX while the incoming id is full length.
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const longId = "9".repeat(64);
+    const comments: DocxComment[] = [
+      { commentId: "31", authorName: "Fay", bodyText: "One", from: off(0), to: off(5) },
+      { commentId: longId, authorName: "Gil", bodyText: "Two", from: off(6), to: off(10) },
+    ];
+    injectCommentsAsAnnotations(doc, comments, "f.docx");
+
+    // Drop the commentId off one record, standing in for a pre-#1068 store.
+    const first = Array.from(map.keys())[0];
+    const rec = map.get(first) as Record<string, unknown>;
+    map.set(first, {
+      ...rec,
+      importSource: { author: "Fay", file: "f.docx" },
+    } as never);
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      injectCommentsAsAnnotations(doc, comments, "f.docx");
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reports an annotation id collision rather than dropping the second comment in silence", () => {
+    // Reachable only through a truncated-SHA-256 collision, so it is forced
+    // here by storing a record that names a different Word comment under the id
+    // this import will compute. Without the log the second comment vanishes
+    // with no write, no counter and no output.
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const comments: DocxComment[] = [
+      { commentId: "44", authorName: "Hal", bodyText: "Body", from: off(0), to: off(5) },
+    ];
+    injectCommentsAsAnnotations(doc, comments, "h.docx");
+    const id = Array.from(map.keys())[0];
+    const rec = map.get(id) as Record<string, unknown>;
+    map.set(id, {
+      ...rec,
+      importSource: { author: "Hal", file: "h.docx", commentId: "999" },
+    } as never);
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      injectCommentsAsAnnotations(doc, comments, "h.docx");
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(String(spy.mock.calls[0]?.[0])).toContain("Annotation id collision");
+    } finally {
+      spy.mockRestore();
+    }
+    // The stored record is left alone — the log reports the loss, it does not
+    // repair it by overwriting the comment already there.
+    expect((map.get(id) as Record<string, unknown>).importSource).toEqual({
+      author: "Hal",
+      file: "h.docx",
+      commentId: "999",
+    });
+  });
+
   it("backfills importSource.commentId on pre-#1068 import notes (one-shot)", () => {
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
     const comments: DocxComment[] = [
@@ -956,41 +1049,65 @@ describe("import id collision gate", () => {
     expect(importReplyId("1", "2", "x y")).not.toBe(importReplyId("1", "2 x", "y"));
   });
 
-  // The gate works by admitting only canonical (digits-only) ids into the
-  // original formula, which is what makes the shift unconstructible: digits
-  // carry neither a space nor a NUL, from/to are numeric, and bodyText is last
-  // and therefore free. Everything else takes a tagged fallback pre-image.
+  // The gate admits into the original formula only ids that cannot forge the
+  // separator, and tags everything else. Two conditions, because there are two
+  // ways to defeat a tagged domain: carrying the DELIMITER (which forges a
+  // field boundary) and carrying the TAG (which forges the other branch).
   //
   // Asserted on the PRE-IMAGE rather than on digests, because that is where the
   // invariant lives — comparing two ids can only show they happen to differ,
   // which stays true under a formula that has stopped separating the domains.
-  it("separates canonical and fallback pre-images by their first character", () => {
-    expect(annotationPreImage("7", 34, 901, "x")).toMatch(/^[0-9]/);
-    expect(annotationPreImage("c-9182", 34, 901, "x")).not.toMatch(/^[0-9]/);
-    expect(replyPreImage("1", "2", "b")).toMatch(/^[0-9]/);
-    expect(replyPreImage("1", "2 x", "b")).not.toMatch(/^[0-9]/);
+  it("puts a tag-forging id on the fallback branch, not merely a tagged pre-image", () => {
+    // Asserts the BRANCH, not the prefix. A spec that only checks a tagged
+    // input comes back tagged is satisfied by a gate that stopped tagging
+    // anything: `annotationPreImage("nc:[", …)` would still START with `nc:`
+    // with the tag clause deleted, because the id itself does. The canonical
+    // branch is the one carrying raw NULs, so their ABSENCE is what proves the
+    // fallback was taken.
+    expect(annotationPreImage("nc:[", 1, 2, "x")).not.toContain("\0");
+    expect(annotationPreImage("7", 1, 2, "x")).toContain("\0");
+    expect(replyPreImage("nc:[", "2", "b")).toMatch(/^nc:\["nc:\[/);
+    expect(replyPreImage("7", "2", "b")).toBe("7 2 b");
   });
 
-  it("carries the non-canonical tag, which the first-character check alone does not pin", () => {
-    // Written because the battery caught it: deleting NON_CANONICAL_TAG left
-    // every spec above GREEN. The check that survived it is real but the tag is
-    // not what satisfies it — `JSON.stringify` already opens with `[`, so the
-    // domains stay disjoint on JSON's shape alone and the constant reads
-    // load-bearing while pinning nothing.
-    //
-    // Both are kept, because they fail independently: JSON's bracket is a
-    // property of a library's output format, and the tag is ours. This spec is
-    // what makes deleting the tag cost a deliberate edit.
-    expect(annotationPreImage("c-9182", 34, 901, "x")).toMatch(/^nc:/);
+  it("keeps the two branches disjoint by their opening tag", () => {
+    expect(annotationPreImage("x\0y", 34, 901, "x")).toMatch(/^nc:/);
     expect(replyPreImage("1", "2 x", "b")).toMatch(/^nc:/);
     expect(annotationPreImage("7", 34, 901, "x")).not.toMatch(/^nc:/);
+    expect(replyPreImage("1", "2", "b")).not.toMatch(/^nc:/);
+  });
+
+  it("does not collide across the two branches, which the delimiter test alone allows", () => {
+    // THE regression pin. An earlier draft of this gate tested only the
+    // delimiter, which deleted the property that had been separating the
+    // branches: the old gate admitted digits only, so a canonical pre-image
+    // always opened with a digit. Allowing any space-free string in lets a
+    // `w:id` open with `nc:["` and forge a fallback pre-image outright —
+    // `JSON.stringify` does not escape a space, so the forgery lands exactly on
+    // the delimiters. Both inputs below are ordinary XML attribute values, so
+    // this is EASIER to construct than the NUL the annotation gate defends
+    // against, and it reopens the same silent reply loss.
+    expect(replyPreImage('nc:["a', 'b","c', 'd","x"]')).not.toBe(replyPreImage("a b", "c d", "x"));
+    expect(importReplyId('nc:["a', 'b","c', 'd","x"]')).not.toBe(importReplyId("a b", "c d", "x"));
+  });
+
+  it("keeps the fallback encoding injective, which a delimiter-joined one is not", () => {
+    // `fallbackPreImage` is a SECOND concatenation of the same untrusted
+    // fields. Nothing else here would notice it becoming a join: swapping its
+    // body for `NON_CANONICAL_TAG + fields.join("|")` leaves every other spec
+    // in this block green while reintroducing the exact defect the block
+    // exists to close.
+    expect(replyPreImage("a", "b|c", "d")).not.toBe(replyPreImage("a", "b", "c|d"));
+    expect(replyPreImage("a", 'b","c', "d")).not.toBe(replyPreImage("a", "b", 'c","d'));
+    expect(annotationPreImage("a\0b", 1, 2, "c")).not.toBe(annotationPreImage("a", 1, 2, "b\0c"));
   });
 
   it("keeps a fallback id in the bare import-<hash> shape", () => {
     // #337 deleted a parse of the id's shape and `docx-apply.test.ts` pins that
-    // it stays deleted, so the fallback must NOT take a distinguishing id
-    // prefix. Its domain separation lives in the pre-image instead.
-    expect(importAnnotationId("c-9182", 1, 2, "x")).toMatch(/^import-[0-9a-f]{12}$/);
+    // it stays deleted — though that spec runs on a canonical id, so THIS is
+    // the pin that actually covers the fallback family. Its domain separation
+    // lives in the pre-image instead of in a distinguishing id prefix.
+    expect(importAnnotationId("x\0y", 1, 2, "x")).toMatch(/^import-[0-9a-f]{12}$/);
     expect(importReplyId("a b", "c", "x")).toMatch(/^import-reply-[0-9a-f]{12}$/);
   });
 
@@ -1013,11 +1130,35 @@ describe("import id collision gate", () => {
     expect(importReplyId("6", "7", "héllo 🌍")).toBe("import-reply-7d870b7d3762");
   });
 
-  it("moves ids only for non-canonical inputs, which no Word export produces", () => {
-    // The narrow, deliberate cost: a record imported from a crafted file before
-    // this change re-imports once as a duplicate. OOXML types w:id as an
-    // integer, so that population is empty for any document Word wrote.
-    expect(importAnnotationId("c-9182", 34, 901, "review this")).not.toBe("import-71a4425a9a98");
+  it("leaves every delimiter-free id unmoved, including the shapes OOXML allows", () => {
+    // These four are why the gate was narrowed. The first draft tested
+    // `isCanonicalWordId`, which rejects a `w:id` above nine digits, a negative
+    // one and a leading-zero one — all legal `ST_DecimalNumber` values, none of
+    // which can construct a boundary shift. Moving their ids disabled BOTH
+    // layers protecting an already-promoted comment (the offset lookup missed,
+    // and the drift index refuses non-canonical ids), so a ghost note was
+    // injected beside the promotion and export wrote a second Word comment for
+    // one original.
+    //
+    // Pinned to the PRE-gate values, so this fails if the gate ever widens back.
+    expect(importAnnotationId("c-9182", 34, 901, "review this")).toBe("import-71a4425a9a98");
+    expect(importAnnotationId("1000000000", 5, 6, "big")).toBe("import-e7ebbee2e2b5");
+    expect(importAnnotationId("-1", 0, 1, "neg")).toBe("import-4036b43d220c");
+    expect(importAnnotationId("0123", 2, 3, "zero-led")).toBe("import-032bcf60de41");
+    expect(importReplyId("1000000000", "-2", "r")).toBe("import-reply-1523de1252da");
+  });
+
+  it("pins the fallback family's ids too, which are equally persisted", () => {
+    // Computed from the documented fallback formula rather than by calling the
+    // module. Without these the fallback ids are free to move, which is the
+    // hazard `importReplyId`'s own docblock names for the canonical separator —
+    // and a mutation that routes EVERYTHING to the fallback is caught by the
+    // canonical vectors above, while one that changes only the fallback
+    // encoding is caught by nothing else.
+    expect(importAnnotationId("x\0y", 1, 2, "b")).toBe("import-aa7e860f58c2");
+    expect(importAnnotationId("nc:[", 1, 2, "b")).toBe("import-9682fd4ec859");
+    expect(importReplyId("a b", "c", "x")).toBe("import-reply-4d2bfb33147d");
+    expect(importReplyId("nc:[", "c", "x")).toBe("import-reply-1eff9ed11cf8");
   });
 });
 

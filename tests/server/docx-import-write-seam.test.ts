@@ -22,9 +22,20 @@
  * 1. **Every write funnels through the two writers.** Rev 1 of this guard
  *    censused the literal `author: "import"` instead — and three of the four
  *    annotation write sites SPREAD an existing record rather than restating the
- *    tag, so that census counted 2 of 4 and was wrong before anyone attacked
- *    it. Funnelling the write rather than the construction is what makes the
- *    set countable at all.
+ *    tag, so against the pre-8h shape that census saw one of the four (two
+ *    overall, counting the reply write) and was wrong before anyone attacked
+ *    it. Do not re-derive that count on THIS tree: routing the writes through
+ *    the writers added the literal at the migrate and backfill branches, so a
+ *    grep here now finds three of four. Funnelling the write rather than the
+ *    construction is what makes the set countable at all.
+ *
+ *    **The scan's own scope is this one file**, keyed on the two local handles
+ *    bound from `doc.getMap(...)`. A write spelled through a third handle, or
+ *    one added in a sibling module, is outside what it can see — widening it to
+ *    receivers bound from `getMap(Y_MAP_ANNOTATION*)` repo-wide is filed rather
+ *    than done, because "assert the non-writer count is zero" cannot pass here:
+ *    the file holds eight other legitimate `.set(` calls on parse and index
+ *    locals.
  * 2. **The writers stay module-private.** An exported one is reachable from a
  *    second module, which is the same hole one level out.
  * 3. **The writers stamp the author rather than trusting it.** Review supplied

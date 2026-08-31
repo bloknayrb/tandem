@@ -28,48 +28,67 @@ import {
  * Tag opening every NON-canonical hash pre-image, and the whole
  * domain-separation argument in one constant.
  *
- * A canonical pre-image starts with `commentId`, which the gates below admit
- * only through `isCanonicalWordId` — decimal digits. So a canonical pre-image
- * ALWAYS begins with a digit and a fallback pre-image NEVER does. That single
- * character is what makes the two branches disjoint, and
- * `docx-comments.test.ts` asserts it on the builders directly rather than
- * inferring it from digests.
+ * **A fallback pre-image ALWAYS begins with this tag; a canonical one NEVER
+ * does.** That is what makes the two branches disjoint, and it is why each
+ * gate below tests `startsWith(NON_CANONICAL_TAG)` in addition to the
+ * delimiter: the tag is only a domain separator if the canonical branch cannot
+ * also produce it. `docx-comments.test.ts` asserts the invariant on the
+ * builders directly rather than inferring it from digests, and asserts the
+ * BRANCH rather than the prefix — a spec that only checks a tagged input comes
+ * back tagged is satisfied by a gate that stopped tagging anything.
+ *
+ * An earlier form of this argument ran on the first character being a digit,
+ * which held only because the gate was `isCanonicalWordId`. Narrowing that gate
+ * to the delimiter (see `annotationPreImage`) admits `nc:`-prefixed ids into
+ * the canonical branch, so the digit argument had to go with it. On the
+ * annotation side the branches would still be separable without the tag clause
+ * — a canonical annotation pre-image carries raw NULs and JSON escapes them —
+ * but the clause is kept on both so ONE sentence is true of both families.
  *
  * It is a tag on the *pre-image*, deliberately not on the id. A fallback id
- * keeps the plain `import-<hash>` shape because `docx-apply.test.ts` pins that
- * a post-#337 import id is a bare hash with no dash after the prefix — #337
- * deleted a parse of the id's shape and that spec is what stops it returning.
+ * keeps the plain `import-<hash>` shape: #337 deleted a parse of the id's
+ * shape, and `docx-apply.test.ts` is what stops that parse returning — though
+ * note that spec runs on a canonical id, so the pin that actually covers the
+ * fallback family is `docx-comments.test.ts`'s own bare-shape spec.
  */
 const NON_CANONICAL_TAG = "nc:";
+
+/**
+ * The one fallback encoding, in one place -- both id families share it, so a
+ * later change to the tag or the encoding cannot land on only one of them.
+ *
+ * `JSON.stringify` is injective over what these two callers actually pass:
+ * a fixed arity of strings plus, for annotations, two offsets from
+ * `calculateCommentRanges`'s monotonically incrementing counter. It is NOT
+ * injective over arbitrary numbers — `-0` and `0` both render `0`, and
+ * `NaN`/`Infinity` both render `null` — so the guarantee is scoped to those
+ * callers rather than claimed of the encoder. Nothing here reaches those
+ * values; the counter cannot produce one.
+ */
+function fallbackPreImage(...fields: (string | number)[]): string {
+  return `${NON_CANONICAL_TAG}${JSON.stringify(fields)}`;
+}
 
 /**
  * The exact bytes hashed for an annotation id. Exported so the
  * domain-separation invariant above is testable as a property of the
  * *pre-image*, which is where it actually lives — a test over digests can only
  * observe that two ids happen to differ.
- */
-/**
- * The one fallback encoding, in one place -- both id families share it, so a
- * later change to the tag or the encoding cannot land on only one of them.
  *
- * JSON is injective over these fields, and it renders a raw NUL as six
- * characters rather than a byte, so no field can forge either family's
- * delimiter.
+ * The canonical branch is byte-identical to what shipped, so an id only moves
+ * when `commentId` can forge the delimiter or the tag. `from`/`to` are numbers
+ * (`String()` of any JS number is NUL-free) and `bodyText` is last and
+ * therefore free, so `commentId` is the whole condition.
  */
-function fallbackPreImage(...fields: (string | number)[]): string {
-  return `${NON_CANONICAL_TAG}${JSON.stringify(fields)}`;
-}
-
 export function annotationPreImage(
   commentId: string,
   from: number,
   to: number,
   bodyText: string,
 ): string {
-  // Canonical: today's exact bytes, so every real document's ids are unmoved.
-  return isCanonicalWordId(commentId)
-    ? `${commentId}\0${from}\0${to}\0${bodyText}`
-    : fallbackPreImage(commentId, from, to, bodyText);
+  return commentId.includes("\0") || commentId.startsWith(NON_CANONICAL_TAG)
+    ? fallbackPreImage(commentId, from, to, bodyText)
+    : `${commentId}\0${from}\0${to}\0${bodyText}`;
 }
 
 /** The exact bytes hashed for a reply id. Exported for the same reason. */
@@ -78,9 +97,13 @@ export function replyPreImage(
   replyCommentId: string,
   bodyText: string,
 ): string {
-  return isCanonicalWordId(rootCommentId) && isCanonicalWordId(replyCommentId)
-    ? `${rootCommentId} ${replyCommentId} ${bodyText}`
-    : fallbackPreImage(rootCommentId, replyCommentId, bodyText);
+  // Only `rootCommentId` is tested for the tag: it is first, so no other
+  // field can put the tag at position 0.
+  return rootCommentId.includes(" ") ||
+    replyCommentId.includes(" ") ||
+    rootCommentId.startsWith(NON_CANONICAL_TAG)
+    ? fallbackPreImage(rootCommentId, replyCommentId, bodyText)
+    : `${rootCommentId} ${replyCommentId} ${bodyText}`;
 }
 
 /**
@@ -98,9 +121,19 @@ export function replyPreImage(
  * a literal NUL byte in `comments.xml` survives htmlparser2 into both the
  * attribute and the text node (a `&#0;` reference does not; that folds to
  * U+FFFD), so `("1\0" + "2", 3, 4, "x")` and `("1", 2, 3, "4\0x")` hashed the
- * same id before the gate below. `isCanonicalWordId` is what closes it:
- * digits-only admits neither a NUL nor a space, `from`/`to` are numeric, and
- * `bodyText` is last and therefore free to contain anything.
+ * same id before the gate below. What closes it is testing the one field that
+ * can forge a delimiter: `commentId` is the only non-final field that is free
+ * text, since `from`/`to` are numbers and `bodyText` is last and therefore free
+ * to contain anything. A `commentId` carrying a NUL takes the tagged fallback
+ * instead, and the two branches cannot meet.
+ *
+ * The gate was first written as `isCanonicalWordId`, which closed the collision
+ * but was far broader than it: that predicate also rejects a `w:id` above nine
+ * digits, a negative one and a leading-zero one, all of which OOXML admits and
+ * none of which can construct a shift. Moving those ids re-injected a ghost
+ * note beside an already-promoted comment, whose export then wrote a second
+ * Word comment for one original (#1448). The gate is now the discriminating
+ * condition and nothing wider.
  */
 export function importAnnotationId(
   commentId: string,
@@ -126,9 +159,10 @@ export function importAnnotationId(
  * **This one was the easier collision of the two**, because its separator is an
  * ordinary space and two of its three fields are free text: `("1", "2", "x y")`
  * and `("1", "2 x", "y")` minted the same id, needing only a `w:id` containing
- * a space rather than a NUL. Both ids are gated for that reason. The separator
- * itself is deliberately unchanged — changing it would rewrite every existing
- * reply id and duplicate every reply on the next import.
+ * a space rather than a NUL. Both ids are gated for that reason — and unlike
+ * the annotation family, BOTH are non-final here, so both are tested. The
+ * separator itself is deliberately unchanged — changing it would rewrite every
+ * existing reply id and duplicate every reply on the next import.
  */
 export function importReplyId(
   rootCommentId: string,
@@ -580,8 +614,14 @@ export function injectCommentsAsAnnotations(
           // `color` and `suggestedText` are stripped, not carried: the record
           // becomes a note, and the note variant of `Annotation` admits
           // neither. Nothing enforced that before — this write went into
-          // `Y.Map.set(id, unknown)`, so a migrated highlight kept its `color`
-          // and the stored record was simply not a valid note.
+          // `Y.Map.set(id, unknown)`, so a record reaching here with a `color`
+          // would keep it. No writer IN THIS TREE produces one (import only
+          // ever writes notes), but this branch exists to repair records
+          // written by earlier releases, which this tree cannot speak for.
+          // The invalidity is TypeScript-union-level only: the persistence
+          // schema is a `.passthrough()` object that deliberately does not
+          // cross-validate `color` against `type`, so nothing would have
+          // failed to load — it would simply have been wrong.
           //
           // Review proposed hoisting this strip into `writeImportAnnotation` so
           // a future branch inherits it. It cannot go there, and the reason is
@@ -616,6 +656,41 @@ export function injectCommentsAsAnnotations(
             importSource: { ...existing.importSource, commentId: importSource.commentId },
             rev: nextRev(existing),
           });
+        } else if (
+          existing?.importSource?.commentId != null &&
+          existing.importSource.commentId !== importSource.commentId
+        ) {
+          // Neither branch matched and the stored record names a DIFFERENT Word
+          // comment, so two distinct comments share one `offsetId`. The second
+          // is dropped here with no write and no counter, and its replies are
+          // then threaded onto the first one's record.
+          //
+          // Behind the gate this needs a truncated-SHA-256 collision (48 bits)
+          // — every comment in a document has a distinct `w:id`, so there is no
+          // structural route to it. It is logged rather than assumed away for
+          // the same reason the reply branch below is: the failure is invisible
+          // from the document.
+          //
+          // The comparison is against the SLICED local, not the raw incoming
+          // id, because that is what a previous run stored — comparing the raw
+          // one would print a false collision on every re-import of a document
+          // whose `w:id` exceeds IMPORT_COMMENT_ID_MAX. Nullish is quiet, which
+          // covers the pre-#1068 records that carry no `commentId` (and a
+          // legacy explicit `null`, which the passthrough schema admits). That
+          // shares a fragility with the reply log below: were
+          // IMPORT_COMMENT_ID_MAX ever changed, records stored under the old cap
+          // would compare unequal and log spuriously.
+          //
+          // Two sibling paths are NOT reachable from here and stay silent by
+          // construction, so this log does not cover them: on a collision whose
+          // stored record is legacy-shaped the migration branch above OVERWRITES
+          // the first comment's content and importSource with the second's, and
+          // one whose stored record predates #1068 takes the backfill branch,
+          // which writes the second comment's `w:id` onto the first's record.
+          // Both are worse than a drop, and both are equally unreachable.
+          console.error(
+            `[docx-comments] Annotation id collision on ${offsetId}: stored record names comment ${existing.importSource.commentId}, so comment ${importSource.commentId} was not imported.`,
+          );
         }
       } else {
         // Offset-id miss. Before injecting, consult the commentId index — a miss

@@ -936,7 +936,7 @@ deferred set. It is declined, and the deferred set is now empty.
 
 **The blocker is the origin, and it is measured rather than argued.** Every
 `AnnotationLifecycle` write opens its own transaction under `withMcp` or
-`withBrowser`; the module imports neither `withInternal`, which is the origin
+`withBrowser`; the module imports neither `withInternal` nor `withReload` — `withInternal` being the origin
 `.docx` ingest requires. `injectCommentsAsAnnotations` writes every comment in a
 single `withInternal` batch, and both ways of reconciling that change observable
 behaviour:

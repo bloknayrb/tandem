@@ -1149,8 +1149,10 @@ function writeReply(
  *
  * **Which modules may write one is now pinned rather than described**, by
  * `tests/server/docx-import-write-seam.test.ts` (ADR-035 Unit 8h): the import
- * path funnels through two module-private writers that stamp the author, and
- * that file owns the set. The rationale above is what a census cannot carry, so
+ * path funnels through two module-private writers that stamp the author. Read
+ * that pin at its real width — it owns the set of writers WITHIN
+ * `docx-comments.ts`, not across modules, so it proves the import path has one
+ * door rather than that no other module could open its own. The rationale above is what a census cannot carry, so
  * it stays here; the enumeration moved to where it can fail.
  *
  * `actor` is not a parameter: this entry is the browser's by definition, and
