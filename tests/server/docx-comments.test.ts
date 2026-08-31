@@ -600,12 +600,12 @@ describe("injectCommentsAsAnnotations", () => {
   });
 
   it("stays silent on an ordinary re-import, including shapes the discriminator could trip on", () => {
-    // The half most likely to break. The annotation collision log compares
-    // stored provenance against this run's, so three legitimate shapes have to
-    // stay quiet: a plain re-import, a record predating #1068 that carries no
-    // `commentId` at all, and one whose `w:id` was stored TRUNCATED at
-    // IMPORT_COMMENT_ID_MAX while the incoming id is full length.
-    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    // The half most likely to break: a false collision on a healthy re-import
+    // would be worse than the silence this log replaced.
+    //
+    // A truncated `w:id` is the shape that catches the natural mistake. The
+    // stored value was sliced at IMPORT_COMMENT_ID_MAX by a previous run, so
+    // comparing it against the RAW incoming id reports a collision every time.
     const longId = "9".repeat(64);
     const comments: DocxComment[] = [
       { commentId: "31", authorName: "Fay", bodyText: "One", from: off(0), to: off(5) },
@@ -613,20 +613,49 @@ describe("injectCommentsAsAnnotations", () => {
     ];
     injectCommentsAsAnnotations(doc, comments, "f.docx");
 
-    // Drop the commentId off one record, standing in for a pre-#1068 store.
-    const first = Array.from(map.keys())[0];
-    const rec = map.get(first) as Record<string, unknown>;
-    map.set(first, {
-      ...rec,
-      importSource: { author: "Fay", file: "f.docx" },
-    } as never);
-
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       injectCommentsAsAnnotations(doc, comments, "f.docx");
       expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it("stays silent when a stored record carries no usable provenance at all", () => {
+    // The nullish half of the discriminator, which nothing pinned: an earlier
+    // draft reached for a pre-#1068 record, but that shape is intercepted by
+    // the #1068 backfill branch and never arrives here, so deleting the guard
+    // left the whole file green.
+    //
+    // These two DO arrive. Both are already note-shaped and private, so the
+    // migration branch declines them; both have a present `importSource`, so
+    // the backfill branch declines them too — the first because `importSource`
+    // is absent entirely, the second because its `commentId` is an explicit
+    // `null`, which the passthrough persistence schema admits and `=== undefined`
+    // does not catch. Without `!= null` each logs a spurious collision on every
+    // single re-import.
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const comments: DocxComment[] = [
+      { commentId: "31", authorName: "Fay", bodyText: "One", from: off(0), to: off(5) },
+    ];
+
+    for (const provenance of [undefined, { author: "Fay", file: "f.docx", commentId: null }]) {
+      injectCommentsAsAnnotations(doc, comments, "f.docx");
+      const id = Array.from(map.keys())[0];
+      map.set(id, {
+        ...(map.get(id) as Record<string, unknown>),
+        importSource: provenance,
+      } as never);
+
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        injectCommentsAsAnnotations(doc, comments, "f.docx");
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+      map.delete(id);
     }
   });
 
@@ -1093,13 +1122,100 @@ describe("import id collision gate", () => {
 
   it("keeps the fallback encoding injective, which a delimiter-joined one is not", () => {
     // `fallbackPreImage` is a SECOND concatenation of the same untrusted
-    // fields. Nothing else here would notice it becoming a join: swapping its
-    // body for `NON_CANONICAL_TAG + fields.join("|")` leaves every other spec
-    // in this block green while reintroducing the exact defect the block
-    // exists to close.
-    expect(replyPreImage("a", "b|c", "d")).not.toBe(replyPreImage("a", "b", "c|d"));
-    expect(replyPreImage("a", 'b","c', "d")).not.toBe(replyPreImage("a", "b", 'c","d'));
-    expect(annotationPreImage("a\0b", 1, 2, "c")).not.toBe(annotationPreImage("a", 1, 2, "b\0c"));
+    // fields, and it needs a pin of its own: the golden vectors below DO kill a
+    // `join("|")` rewrite, but they are an id pin, so re-encoding deliberately
+    // and updating them would leave injectivity asserted by nothing.
+    //
+    // Every operand here must reach the FALLBACK branch, which an earlier
+    // draft of this spec got wrong — it compared canonical pre-images and
+    // passed against the very mutant it names. Each root below carries a space,
+    // which is what forces the branch.
+    const joined = (a: string, b: string, c: string) => `nc:${[a, b, c].join("|")}`;
+    expect(joined("a b|c", "d", "e")).toBe(joined("a b", "c|d", "e"));
+    expect(replyPreImage("a b|c", "d", "e")).not.toBe(replyPreImage("a b", "c|d", "e"));
+    expect(replyPreImage("a b", 'c","d', "e")).not.toBe(replyPreImage("a b", "c", 'd","e'));
+    expect(annotationPreImage("a\0b", 1, 2, "c")).not.toBe(annotationPreImage("a\0", 1, 2, "b|c"));
+  });
+
+  it("mints a distinct pre-image for every distinct input across the exploit alphabet", () => {
+    // The property the block argues for, swept rather than sampled. The
+    // alphabet is the characters the two collisions are built from, and it
+    // includes each delimiter LEADING, TRAILING and INTERIOR — every other spec
+    // here places them interior only, so a gate narrowed to `indexOf(d) > 0`
+    // (or one that trims first) passes them all while reopening the defect. The
+    // vectors below carry the pair that catches it.
+    //
+    // Small enough to be exhaustive over the alphabet rather than random, so it
+    // cannot pass by drawing an easy sample.
+    const alpha = [
+      "",
+      "a",
+      " ",
+      " a",
+      "a ",
+      "\0",
+      "\0a",
+      "a\0",
+      "nc:",
+      "nc:[",
+      '"',
+      "\\",
+      "[",
+      ",",
+      "1",
+      // Delimiters ADJACENT TO DIGITS, which is what lets a boundary shift
+      // against the two numeric fields. The pair these exist for, admitted by a
+      // gate narrowed to `indexOf(d) > 0`:
+      //
+      //     ("", 1, 2, "3\0a")  and  ("\0" + "1", 2, 3, "a")
+      //     both -> \01\02\03\0a
+      //
+      // Two things had to be right for the sweep to see it, and each was wrong
+      // once. The alphabet must be CLOSED over the pair's pieces — the body's
+      // tail `a` has to be a member too, so `"3\0x"` measured GREEN. And the
+      // NUL-before-a-digit vector must be spelled `\u0000`: `"\01"` is the legacy
+      // OCTAL escape for U+0001, not a NUL followed by `1`, so that operand was
+      // silently absent and the sweep stayed GREEN through two widenings.
+      "\u00001",
+      "1\0",
+      "3\0a",
+    ];
+
+    // The offsets vary, and that is load-bearing rather than thorough: the two
+    // sides of the pair above have different ranges, so a sweep holding from/to
+    // fixed measured GREEN against that mutant.
+    const offsets: [number, number][] = [
+      [1, 2],
+      [2, 3],
+      [3, 4],
+    ];
+    const annSeen = new Map<string, string>();
+    for (const id of alpha) {
+      for (const body of alpha) {
+        for (const [from, to] of offsets) {
+          const key = JSON.stringify([id, from, to, body]);
+          const pre = annotationPreImage(id, from, to, body);
+          expect(annSeen.get(pre) ?? key).toBe(key);
+          annSeen.set(pre, key);
+        }
+      }
+    }
+
+    const repSeen = new Map<string, string>();
+    for (const root of alpha) {
+      for (const reply of alpha) {
+        for (const body of alpha) {
+          const key = JSON.stringify([root, reply, body]);
+          const pre = replyPreImage(root, reply, body);
+          expect(repSeen.get(pre) ?? key).toBe(key);
+          repSeen.set(pre, key);
+        }
+      }
+    }
+
+    // A control: the sweep is only evidence if it actually covered the alphabet.
+    expect(annSeen.size).toBe(alpha.length * alpha.length * offsets.length);
+    expect(repSeen.size).toBe(alpha.length ** 3);
   });
 
   it("keeps a fallback id in the bare import-<hash> shape", () => {
@@ -1146,6 +1262,11 @@ describe("import id collision gate", () => {
     expect(importAnnotationId("-1", 0, 1, "neg")).toBe("import-4036b43d220c");
     expect(importAnnotationId("0123", 2, 3, "zero-led")).toBe("import-032bcf60de41");
     expect(importReplyId("1000000000", "-2", "r")).toBe("import-reply-1523de1252da");
+    // A space cannot forge the ANNOTATION delimiter, so a space-bearing `w:id`
+    // must stay canonical there even though it is a fallback on the reply side.
+    // Without this vector, adding `|| commentId.includes(" ")` to the annotation
+    // gate passes every other spec in the block.
+    expect(importAnnotationId("a b", 1, 2, "x")).toBe("import-11adb66bc459");
   });
 
   it("pins the fallback family's ids too, which are equally persisted", () => {

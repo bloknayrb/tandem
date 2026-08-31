@@ -58,8 +58,8 @@ const NON_CANONICAL_TAG = "nc:";
  * later change to the tag or the encoding cannot land on only one of them.
  *
  * `JSON.stringify` is injective over what these two callers actually pass:
- * a fixed arity of strings plus, for annotations, two offsets from
- * `calculateCommentRanges`'s monotonically incrementing counter. It is NOT
+ * a fixed arity of strings plus, for annotations, two flat text offsets from
+ * the walker's non-negative, monotonically non-decreasing accumulator. It is NOT
  * injective over arbitrary numbers — `-0` and `0` both render `0`, and
  * `NaN`/`Infinity` both render `null` — so the guarantee is scoped to those
  * callers rather than claimed of the encoder. Nothing here reaches those
@@ -681,15 +681,18 @@ export function injectCommentsAsAnnotations(
           // IMPORT_COMMENT_ID_MAX ever changed, records stored under the old cap
           // would compare unequal and log spuriously.
           //
-          // Two sibling paths are NOT reachable from here and stay silent by
-          // construction, so this log does not cover them: on a collision whose
-          // stored record is legacy-shaped the migration branch above OVERWRITES
-          // the first comment's content and importSource with the second's, and
-          // one whose stored record predates #1068 takes the backfill branch,
-          // which writes the second comment's `w:id` onto the first's record.
-          // Both are worse than a drop, and both are equally unreachable.
+          // What this log does NOT cover, so it is not read as covering it:
+          // a nullish stored `commentId` is quiet in EVERY case, whether or not
+          // the backfill branch claims it — that branch requires
+          // `author === "import"`, so a promoted pre-#1068 record (author
+          // `"user"`, provenance present, `commentId` absent) matches no branch
+          // at all and is dropped in silence. And on a collision whose stored
+          // record is legacy-shaped the migration branch above does something
+          // worse than dropping: it OVERWRITES the first comment's content and
+          // provenance with the second's. All of these need the same
+          // 48-bit collision to reach.
           console.error(
-            `[docx-comments] Annotation id collision on ${offsetId}: stored record names comment ${existing.importSource.commentId}, so comment ${importSource.commentId} was not imported.`,
+            `[docx-comments] Annotation id collision on ${offsetId}: stored record names comment ${existing.importSource.commentId.slice(0, IMPORT_COMMENT_ID_MAX)}, so comment ${importSource.commentId} was not imported.`,
           );
         }
       } else {
