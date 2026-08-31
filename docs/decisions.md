@@ -133,7 +133,7 @@
 - **(c) WebSocket channel from server to Claude Code:** No existing protocol support in the MCP SDK for server-initiated WebSocket pushes. Would need a custom transport.
 - **(d) Enhanced polling with long-poll:** Reduces latency vs. regular polling but still requires Claude to initiate requests. Channels API exists precisely to solve this.
 **Rationale:** The shim pattern keeps the channel concern isolated from the MCP tool server. Claude Code connects to both simultaneously: HTTP for tool calls, stdio for push events. The SSE event queue uses a circular buffer (200 events, 60s TTL) with `Last-Event-ID` replay for reconnection. Origin tagging is the key correctness mechanism — without it, Claude would see its own annotations echoed back as user actions.
-**Consequences:** Two build outputs (`dist/server/index.js` + `dist/channel/index.js`). `.mcp.json` has both `tandem` (HTTP) and `tandem-channel` (stdio) entries. All MCP tool files (10 callsites across 6 files) must tag Y.Map writes with `MCP_ORIGIN`. The `createAnnotation` function signature changed to require `ydoc` as the second parameter (was optional) to support origin-tagged transactions. Channel meta keys use underscores only (Channels API silently drops hyphenated keys).
+**Consequences:** Two build outputs (`dist/server/index.js` + `dist/channel/index.js`). `.mcp.json` has both `tandem` (HTTP) and `tandem-channel` (stdio) entries. All MCP tool files (10 callsites across 6 files) must tag Y.Map writes with `MCP_ORIGIN`. ~~The `createAnnotation` function signature changed to require `ydoc` as the second parameter (was optional) to support origin-tagged transactions.~~ **That function no longer exists** — ADR-035 Unit 8b moved Claude-authored minting to `mintAnnotation` in `annotations/lifecycle.ts` and Unit 8j-1 deleted the last wrapper. What the clause describes survives as Critical Rule 2: every Y.Doc write is origin-tagged through one of the six helpers in `shared/origins.ts`. The callsite count above is the 2026-05 measurement and is deliberately not maintained. Channel meta keys use underscores only (Channels API silently drops hyphenated keys).
 
 ## ADR-020: SSE for Ephemeral Toast Notifications (Issue #101)
 **Status:** Accepted
@@ -803,7 +803,7 @@ copied forward without counting the transactions first.
 
 ## ADR-035: Annotation Lifecycle Module
 
-**Status:** Accepted; implemented, with two entries declined rather than built (verified against `src/` 2026-08-30). "Partially implemented" was right while a deferred set existed; it is now empty. `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (`acceptPending` / `dismissPending`, returning a tagged `LifecycleResult`). `narrowForChannel` and the `ChannelEligible` brand landed 2026-08-26 as `src/server/annotations/projection.ts` — **see the amendment below, which widens the predicate this ADR specifies.** `create` landed 2026-08-28 (Unit 8b) and `editPending` 2026-08-30 (Unit 8c); `YDocStore.createAnnotation` and `YDocStore.editAnnotation` are now delegating shells. `remove` landed 2026-08-30 (Unit 8e) as `AnnotationLifecycle.remove` over the shared `removeAnnotationRecord`, and `reply` the same day (Unit 8f) as `AnnotationLifecycle.reply` over a module-private `writeReply`, with `addUserReply` as the deliberately unguarded browser entry. **`promoteNoteToComment` is DECLINED rather than deferred — see the amendment below.** **`importNote` is DECLINED too (Unit 8h, 2026-08-30) — see the second amendment.** **Nothing is deferred: the set is now empty**, and every entry this ADR sketched has either landed or been declined with a reason on the record.
+**Status:** Accepted; implemented, with two entries declined rather than built (verified against `src/` 2026-08-30). "Partially implemented" was right while a deferred set existed; it is now empty. `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (~~`acceptPending` / `dismissPending`~~ — they shipped as `accept` / `dismiss`; see the Unit 8j amendment — returning a tagged `LifecycleResult`). `narrowForChannel` and the `ChannelEligible` brand landed 2026-08-26 as `src/server/annotations/projection.ts` — **see the amendment below, which widens the predicate this ADR specifies.** `create` landed 2026-08-28 (Unit 8b) and `editPending` 2026-08-30 (Unit 8c); ~~`YDocStore.createAnnotation` and `YDocStore.editAnnotation` are now delegating shells.~~ **`YDocStore.createAnnotation` no longer exists** — Unit 8j-1 deleted it once its only surviving caller was a test helper. `YDocStore.editAnnotation` is still a delegating shell (`mcp/document-store.ts:176`). `remove` landed 2026-08-30 (Unit 8e) as `AnnotationLifecycle.remove` over the shared `removeAnnotationRecord`, and `reply` the same day (Unit 8f) as `AnnotationLifecycle.reply` over a module-private `writeReply`, with `addUserReply` as the deliberately unguarded browser entry. **`promoteNoteToComment` is DECLINED rather than deferred — see the amendment below.** **`importNote` is DECLINED too (Unit 8h, 2026-08-30) — see the second amendment.** **Nothing is deferred: the set is now empty**, and every entry this ADR sketched has either landed or been declined with a reason on the record.
 
 **Two departures from the sketch below, both in Unit 8c.**
 
@@ -987,6 +987,50 @@ are `author: "import"` at that point.
 The unit also closed two id collisions found while reasoning about the hash
 delimiter — see the CHANGELOG entry and #1691. Those are a
 correctness defect in the import path, not a consequence of this decision.
+
+### Amendment (2026-08-31, Unit 8j): the store's escape hatches are closed, and the sketch's method names are not the ones that shipped
+
+Three things the decision text above does not otherwise record.
+
+**The escape hatches are gone.** `YDocStore` exposed `readonly ydoc: Y.Doc` and
+`transactMcp(fn)`. The first handed any handler the raw document, which makes
+every origin tag, every range invariant and every ADR-027 gate below the seam
+optional from that point on; the second let a caller run arbitrary code inside a
+tagged transaction. Unit 8j-2 (#1701) replaced both with five named methods —
+`refreshAnnotations`, `anchorRange`, `captureSnapshot`,
+`exportAnnotationsMarkdown`, `getUserAwareness` — none of which returns a `Y.Doc`
+or a `Y.Map`, and made the backing doc and annotations map `#private` rather than
+`private`. That distinction is the only structural half of the closure: `private`
+erases at compile time, and Y.js's `AbstractType` exposes a public `doc`, so a
+`private map` hands the raw document back through `(store as any).map.doc` with
+no new member for a static pin to see. Unit 8j-1 (#1697) deleted the
+`DocumentStore` interface and `EditAnnotationResult`, each of which had zero
+importers anywhere.
+
+**What that does not close, stated because the opposite reads as true.** Two
+routes to a raw `Y.Doc` remain open inside `src/server/mcp/`. `requireDocument`
+(`documents/registry.ts`) returns `{ doc: Y.Doc }` to twelve call sites, and
+`getOrCreateDocument` (`yjs/provider.ts`) is imported by eleven files under
+`src/server/mcp/`. Every write reached through either is correctly `withMcp`-
+tagged today — but by discipline, which is precisely the property `store.ydoc`
+had before this unit removed it. Tracked as **#1700**. Removing one door is not
+sealing the room, and Unit 8j claims only the former.
+
+**The sketch's method names are not the ones that shipped.** The Decision section
+above lists `createComment` / `createHighlight` / `createNote` as three methods,
+plus `acceptPending`, `dismissPending` and `replyToPending`. What exists in
+`annotations/lifecycle.ts` is `create(input: CreateInput)` — one method taking a
+single non-discriminated shape, consolidated in Unit 8b — plus `accept`,
+`dismiss` and `reply`. The sketch is deliberately left as written: it is the
+proposal this ADR decided, and rewriting it would erase the divergence rather
+than record it. This paragraph is the record. Unit 8c's two departures are
+already documented above; these are the remainder.
+
+**Scope note.** This ADR's Status line called the decision complete on
+2026-08-30, after Unit 8h. Units 8i and 8j belong to the *maintainability plan's*
+Unit 8 umbrella — tombstone verification and shallow-wrapper cleanup — not to
+this ADR's method sketch. They are recorded here because the sketch is what
+created the expectation, not because the ADR was incomplete without them.
 
 ## ADR-036: Format Adapter as Capability Set
 

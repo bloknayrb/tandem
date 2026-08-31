@@ -710,6 +710,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       ledger,
       "tandem",
       DOC_KEY,
+      () => false,
     );
     expect(first).toHaveLength(1);
     expect(first[0].id).toBe("r1");
@@ -722,6 +723,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       ledger,
       "tandem",
       DOC_KEY,
+      () => false,
     );
     expect(second).toHaveLength(0);
   });
@@ -736,6 +738,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       ledger,
       "solo",
       DOC_KEY,
+      () => false,
     );
     expect(solo).toHaveLength(0);
     expect(ledger.has(`${DOC_KEY}:r1`)).toBe(false);
@@ -747,6 +750,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       ledger,
       "tandem",
       DOC_KEY,
+      () => false,
     );
     expect(released).toHaveLength(1);
   });
@@ -760,6 +764,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       new Set(),
       "tandem",
       DOC_KEY,
+      () => false,
     );
     expect(out).toHaveLength(0);
   });
@@ -774,6 +779,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
         new Set(),
         "tandem",
         DOC_KEY,
+        () => false,
       ),
     ).toHaveLength(0);
 
@@ -787,6 +793,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
         new Set(),
         "tandem",
         DOC_KEY,
+        () => false,
       ),
     ).toHaveLength(0);
   });
@@ -874,6 +881,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       new Set(),
       "indeterminate",
       DOC_KEY,
+      () => false,
     );
     const ids = out.map((r) => r.id);
     expect(ids).toContain("fresh");
@@ -1168,6 +1176,7 @@ describe("inbox ledgers are document-scoped", () => {
         ledger,
         "tandem",
         docKey,
+        () => false,
       );
       expect(out.map((r) => r.id)).toContain(sharedReply.id);
     }

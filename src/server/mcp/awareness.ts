@@ -322,10 +322,11 @@ export function registerAwarenessTools(server: McpServer): void {
         // duplicated here, inline inside a `store.transactMcp`, while every
         // ledger/Solo/dedup spec drove the exported copy. One loop now.
         //
-        // `modeState` and `wasEmittedViaChannel` are passed EXPLICITLY. Both
-        // default, and the `modeState` default is the fail-closed-sounding
-        // `"indeterminate"`, which is not fail-closed for an unmarked record:
-        // `hideFromAI` then holds only records already stamped `heldInSolo`.
+        // `modeState` and `wasEmittedViaChannel` are arguments, not defaults:
+        // both parameters are REQUIRED as of Unit 8j-2, and the docblock on
+        // `processInboxAnnotations` carries why. What this call site contributes
+        // is that `modeState` is the mode resolved for THIS poll, so the Solo
+        // hold reflects the user's current setting and not a fallback.
         const { userActions, userResponses } = processInboxAnnotations(
           allAnnotations,
           fullText,
@@ -466,7 +467,15 @@ export function registerAwarenessTools(server: McpServer): void {
   );
 }
 
-/** Safely slice text and truncate to 100 chars. Exported for testing. */
+/**
+ * Safely slice text and truncate to 100 chars.
+ *
+ * **Not test-only, whatever the "Exported for testing" that stood here implied.**
+ * Three production callers, all on the inbox poll path: the `tandem_checkInbox`
+ * handler's `selectedText`, and both collectors below. `isUserActive` further
+ * down is the function that label belongs to -- it has no non-test caller in
+ * `src/` -- and this is what came of copying it onto a neighbour.
+ */
 export function safeSlice(text: string, from: number, to: number): string {
   const start = Math.max(0, Math.min(from, text.length));
   const end = Math.max(start, Math.min(to, text.length));
@@ -515,10 +524,14 @@ export function isUserActive(
  * session, with exactly one killer spec. `wasChannelEmitted` defaulted to
  * `() => false` and had NO killer: deleting it from the call site left every
  * spec in the repo green while production silently stopped stamping
- * `alreadyPushed` for every channel-connected session. `collectInboxUserReplies`
- * below already takes `modeState` required, with the same privacy gate; this is
- * now consistent with it. A required parameter is the only version of that
- * warning a compiler enforces.
+ * `alreadyPushed` for every channel-connected session. A required parameter is
+ * the only version of that warning a compiler enforces.
+ *
+ * `collectInboxUserReplies` below took `modeState` required already and kept the
+ * `wasChannelEmitted` default through Unit 8j-2 — the argument above transfers
+ * to it whole, and a review of 8j-3 found it sitting one screen from a paragraph
+ * that reads as having fixed the class everywhere. Both are required on both
+ * now.
  *
  * **`refreshAll` cannot change the selection, and that is enforced here rather
  * than asked for.** The signature `(anns: Annotation[]) => Annotation[]` says
@@ -641,8 +654,14 @@ function processUnsurfacedInboxAnnotations(
  * validates structured output against the declared schema and throws
  * `McpError(InvalidParams)` on a mismatch, which fails the WHOLE checkInbox
  * response rather than dropping the field. Widening either to `boolean` would let
- * `edited: false` typecheck and then blow up at runtime — and tests would not
- * catch it, since tsconfig includes only `src/`.
+ * `edited: false` typecheck and then blow up at runtime.
+ *
+ * A note here used to add that tests could not catch it either, "since tsconfig
+ * includes only `src/`". That was true when it was written and is not now:
+ * #1616 put the test tree under `tsconfig.tests.{node,client,e2e}.json` and
+ * gated it in CI as `typecheck:tests`, so a `{ edited: false }` literal in a
+ * spec now fails the build before it can run. The narrowing still earns its
+ * place; it is the backstop behind it that changed.
  */
 export type InboxUserAction = Annotation & {
   textSnippet: string;
@@ -666,7 +685,8 @@ export interface InboxUserReply {
 /**
  * WS-A2: collect NEW user replies for the checkInbox userReplies bucket — the
  * pull-release path for a reply that was held from the push channel in Solo.
- * Exported for testing.
+ * The `tandem_checkInbox` handler calls this directly to build that bucket; it
+ * is exported because it is the handler's, not because a test needed it.
  *
  * Routes through `channelVisibleReplies` so the ADR-027 private/note-thread gate
  * is enforced exactly as the getAnnotations read and the SSE observer do — this
@@ -682,7 +702,8 @@ export function collectInboxUserReplies(
   modeState: ModeState,
   /** Scopes the ledger key — see `replySurfacedIds`. */
   documentId: string,
-  wasChannelEmitted: (payloadId: string) => boolean = () => false,
+  /** Required for the same reason as on `processInboxAnnotations` — see there. */
+  wasChannelEmitted: (payloadId: string) => boolean,
 ): InboxUserReply[] {
   const out: InboxUserReply[] = [];
   for (const ann of allAnnotations) {

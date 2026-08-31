@@ -42,7 +42,9 @@
  * `document-service.ts`) returns `{ doc: Y.Doc }` to seven call sites in
  * `document.ts` and one in `docx-apply.ts` — plus four in
  * `local-model/collaborator.ts`, which ships dark. And `getOrCreateDocument`
- * (`yjs/provider.ts`) is imported by twelve files under `src/server/mcp/`,
+ * (`yjs/provider.ts`) is imported by eleven files under `src/server/mcp/`
+ * (twelve NAME it: `presence-expiry.ts:47` only mentions it in prose, and
+ * counting that file is what an earlier `grep -l` here did),
  * INCLUDING `awareness.ts`, the handler this unit rewired: the two-line
  * `getOrCreateDocument(getCurrentDoc(id).docName)` sits in the same file that no
  * longer says `store.ydoc`. Every write reached through either is correctly

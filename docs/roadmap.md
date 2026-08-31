@@ -688,7 +688,7 @@ Per Bryan's 2026-05-14 triage marks. Rows not listed here are Core (see "v1.0 Co
 | Three-way merge / conflict UI | Complex; reload behavior acceptable for v1.0. |
 | RANGE_MOVED auto-retry | Edge case. |
 | #321 WS LAN auth | Rare use case. |
-| #315 DocumentStore interface | Architecture cleanup; refactor for refactor. |
+| #315 DocumentStore interface | ~~Architecture cleanup; refactor for refactor.~~ Resolved the other way by ADR-035 Unit 8j: the interface was deleted, not extracted, and the escape hatches it would have papered over were closed. |
 | #320 Annotation schema v2 framework | Bryan triage Defer. |
 | ~~#318 Tombstone / GC for annotation store~~ | **Completed v0.13.5** (with #313 content-hash rename recovery). |
 | #438 Per-client identity (Code + Cowork) | **Partially shipped v0.20.0**: transport multiplexing landed (ADR-045, #1233), so two sessions no longer evict each other. Still open — per-client inbox state (`surfacedIds`), client-type identity, and event routing are not done. Remains the prereq for #452. |
