@@ -1131,10 +1131,16 @@ describe("reattachObservers — file-sync context rebind", () => {
   });
 
   // Inverse contract: the close phase MUST drop the ledger. Without this
-  // guard, a refactor that flipped the conditional (or changed the default
-  // to "swap") would pass every other test in the suite — the wipe only
-  // shows up as per-process memory growth across many opens, which no unit
-  // test otherwise exercises.
+  // guard, a refactor that flipped the conditional would pass every other
+  // test in the suite — the wipe only shows up as per-process memory growth
+  // across many opens, which no unit test otherwise exercises.
+  //
+  // This spec does NOT cover a flipped DEFAULT, though an earlier version of
+  // this comment claimed it did: it passes an explicit `"close"` below, so
+  // `= "close"` in the signature could become `= "swap"` underneath it and
+  // this would still pass. That case is pinned separately, in
+  // tests/server/annotations/sync.test.ts — "cleanup with no argument
+  // defaults to the close phase".
   it("close-phase cleanup drops the tombstone ledger (#333)", async () => {
     const { recordTombstone, registerAnnotationObserver, getTombstones } = await import(
       "../../src/server/annotations/sync.js"

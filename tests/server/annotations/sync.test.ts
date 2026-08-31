@@ -1079,6 +1079,86 @@ describe("loadAndMerge — rename tombstone union (#1040)", () => {
     expect(getTombstones(HASH_A).map((t) => t.id)).not.toContain("A");
     cleanup();
   });
+
+  it("migrateTombstoneLedger folds into a populated destination without clobbering it", async () => {
+    // The fold's arrival half is covered end-to-end in rename-document.test.ts;
+    // what has never been exercised is a destination that ALREADY holds the id.
+    // Four ids, because the two mutants this guards against are visible in
+    // different rows and neither row catches both:
+    //
+    //   - replacing the body with `tombstonesByDoc.set(toHash, from)` shows up
+    //     only where the destination's rev is strictly higher;
+    //   - relaxing `stone.rev > existing.rev` to `>=` shows up only on a rev
+    //     TIE, and there only through `deletedAt`, since the rev is equal by
+    //     construction.
+    //
+    // Which is why the destination is seeded from a file envelope rather than
+    // with `recordTombstone`: that stamps `Date.now()` and takes no
+    // `deletedAt`, and two back-to-back calls land in the same millisecond, so
+    // a ledger built that way has no discriminator and stays green under `>=`.
+    // `loadAndMerge`'s seed preserves the file record verbatim, which is what
+    // makes the chosen timestamps observable.
+    //
+    // The tie is a LIVE branch, not a hypothetical: a rename folds twice into
+    // the same destination — once directly before the RMW snapshot, once via
+    // `loadAndMerge`'s `migrateTombstonesFrom` — so every already-folded record
+    // re-enters at an identical rev. But the first fold spreads the source, so
+    // on the real path the two sides are byte-identical and preserve-vs-clobber
+    // is unobservable. The differing `deletedAt` below is constructed for that
+    // reason; the rename never produces it.
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeAnnotationDoc(HASH_A, FILE_A, {
+        annotations: [],
+        tombstones: [
+          { id: "ann_from_higher", rev: 3, deletedAt: 103 },
+          { id: "ann_tie", rev: 4, deletedAt: 202 },
+          { id: "ann_to_higher", rev: 8, deletedAt: 208 },
+        ],
+      }),
+    );
+    await store0.flush();
+    resetStoreForTesting();
+    resetForTesting();
+
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+    expect(getTombstones(HASH_A)).toHaveLength(3);
+
+    // Source ledger under the pre-rename hash.
+    recordTombstone(HASH_B, "ann_only_from", 1); // → rev 2, destination has none
+    recordTombstone(HASH_B, "ann_from_higher", 8); // → rev 9 beats the file's 3
+    recordTombstone(HASH_B, "ann_tie", 3); // → rev 4, an exact tie
+    recordTombstone(HASH_B, "ann_to_higher", 0); // → rev 1, loses to the file's 8
+
+    migrateTombstoneLedger(HASH_B, HASH_A);
+
+    const byId = new Map(getTombstones(HASH_A).map((t) => [t.id, t]));
+    expect(byId.size).toBe(4);
+
+    // Arrival — the in-spec control, so the spec cannot pass by doing nothing.
+    expect(byId.get("ann_only_from")?.rev).toBe(2);
+
+    // Source wins on a higher rev, and brings its own record with it.
+    expect(byId.get("ann_from_higher")?.rev).toBe(9);
+    expect(byId.get("ann_from_higher")?.deletedAt).not.toBe(103);
+
+    // Tie → destination preserved. The rev assertion alone proves nothing here
+    // (both sides are 4); the timestamp is the whole discriminator.
+    expect(byId.get("ann_tie")?.rev).toBe(4);
+    expect(byId.get("ann_tie")?.deletedAt).toBe(202);
+
+    // Destination strictly higher → preserved.
+    expect(byId.get("ann_to_higher")?.rev).toBe(8);
+    expect(byId.get("ann_to_higher")?.deletedAt).toBe(208);
+
+    // The fold is a fold, not a move: the source ledger survives it. Its
+    // teardown is the caller's "close" phase, not this function.
+    expect(getTombstones(HASH_B)).toHaveLength(4);
+
+    cleanup();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1295,6 +1375,85 @@ describe("observer-driven tombstones (#695)", () => {
 
     cleanup();
   });
+
+  it("a delete whose old value has no rev tombstones at rev 1, warns, and loses to a live rev-1 copy", async () => {
+    // `sync.ts` falls back to `prevRev = 0` when the deleted value carries no
+    // `rev`, so the tombstone lands at 1. That fallback is CORRECT and must not
+    // be "fixed" upward: `normalizeAnnotation` maps a missing `rev` to 0, so 1
+    // is the minimum value that beats the record the observer actually saw.
+    //
+    // The cost is recorded here rather than treated as a defect. Against the
+    // delete rule (`stone.rev > ymapRec.rev`) a rev-1 tombstone cannot beat a
+    // peer that edited its own copy of the same rev-less record — `nextRev`
+    // takes it to rev 1 as well, and 1 > 1 is false. That is inherent to a
+    // single integer rev over a record that never had one, which is exactly
+    // what the warning announces.
+    //
+    // The tombstone MUST be produced by the observer here, not planted with
+    // `recordTombstone`: planting it makes this a duplicate of #14 that stays
+    // green with the whole `hasRev` fallback deleted, because then the test's
+    // own literal supplies the rev rather than the branch under test.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const ydoc = new Y.Doc();
+      const store = createStore(HASH_A, { filePath: FILE_A });
+      const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+      const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+      // `annRecord` always supplies `rev: 0`; drop the key entirely so the
+      // stored value is shaped like a pre-`rev` legacy session blob.
+      const { rev: _omit, ...legacy } = annRecord({ id: "ann_legacy" });
+      annMap.set("ann_legacy", legacy as AnnotationRecordV1);
+
+      ydoc.transact(() => annMap.delete("ann_legacy"), MCP_ORIGIN);
+
+      const stones = getTombstones(HASH_A);
+      expect(stones).toHaveLength(1);
+      expect(stones[0].rev).toBe(1);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0]?.[0])).toContain("ann_legacy");
+
+      // Now the consequence, on the SAME ledger. `"swap"` rather than
+      // `"close"`, because close drops the ledger and the merge below has to
+      // see the tombstone the observer just recorded — a fresh
+      // `recordTombstone` here would be the planting this spec exists to avoid.
+      cleanup("swap");
+      annMap.set("ann_legacy", annRecord({ id: "ann_legacy", rev: 1, content: "reborn" }));
+
+      const cleanup2 = await loadAndMerge(syncCtx(ydoc, store));
+      const survivor = annMap.get("ann_legacy") as AnnotationRecordV1 | undefined;
+      expect(survivor?.content).toBe("reborn");
+      cleanup2();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("a delete whose old value HAS a rev tombstones at rev+1 and does not warn", () => {
+    // Control for the spec above: without it, a mutant that warns
+    // unconditionally — or one that always uses the `prevRev = 0` fallback —
+    // survives, since the other spec only ever asserts the legacy shape.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const ydoc = new Y.Doc();
+      const store = createStore(HASH_A, { filePath: FILE_A });
+      const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+      const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+      annMap.set("ann_versioned", annRecord({ id: "ann_versioned", rev: 5 }));
+
+      ydoc.transact(() => annMap.delete("ann_versioned"), MCP_ORIGIN);
+
+      const stones = getTombstones(HASH_A);
+      expect(stones).toHaveLength(1);
+      expect(stones[0].rev).toBe(6);
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      cleanup();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1440,6 +1599,34 @@ describe("observer cleanup — tombstone survival (#333)", () => {
     expect(getTombstones(HASH_A)).toHaveLength(1);
 
     cleanup("close");
+    expect(getTombstones(HASH_A)).toHaveLength(0);
+  });
+
+  it("cleanup with no argument defaults to the close phase", () => {
+    // The two specs above always pass an explicit phase, so neither can see
+    // the DEFAULT in `(phase: ObserverCleanupPhase = "close")` being flipped.
+    // Nothing else in the suite can either: roughly 45 specs in this file call
+    // a bare `cleanup()` as teardown, but none asserts ledger state afterwards,
+    // and `resetForTesting()` runs on both sides of every spec — so a default
+    // of `"swap"` would leak nothing and the whole suite would stay green.
+    //
+    // The ledger assertion covers both halves of the branch: the
+    // `tombstonesByDoc.delete` and the `forgetDoc` share one conditional, so a
+    // flipped default skips them together. The narrower mutant that moves only
+    // `forgetDoc` out of the `if` dies on the migration-log dedup specs above.
+    //
+    // Scope, stated honestly: the default is dead in production today. The one
+    // consumer of this cleanup reaches it through `safeCleanup`, which forwards
+    // an explicit phase at all four of its call sites. This pins the contract
+    // for a future caller and for the optional `phase?` in the returned type.
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+
+    recordTombstone(HASH_A, "ann_deleted", 3);
+    expect(getTombstones(HASH_A)).toHaveLength(1);
+
+    cleanup();
     expect(getTombstones(HASH_A)).toHaveLength(0);
   });
 });

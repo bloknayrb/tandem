@@ -363,9 +363,17 @@ export function getTombstones(docHash: string): TombstoneRecordV1[] {
  * observer-detached gap (window (a)) records into the OLD-hash ledger via the
  * still-attached observer. Folding old → new (dedup by id, highest rev wins)
  * means that late tombstone survives into the post-rename envelope instead of
- * being dropped — closing the resurrection window. Idempotent and order-
- * independent: re-running is a no-op, and a record already present at an equal-
- * or-higher rev under `toHash` is preserved.
+ * being dropped — closing the resurrection window. Idempotent: re-running is a
+ * no-op, and a record already present at an equal-or-higher rev under `toHash`
+ * is preserved.
+ *
+ * Order-independent **on `rev`**, which is the only field any merge rule reads.
+ * Not order-independent on the rest of the record: first writer wins a rev tie,
+ * so under two folds into one destination the surviving `deletedAt` (and every
+ * passthrough field) depends on fold order — and `deletedAt` is what
+ * `cleanupStaleTombstones` ages against. Unreachable today, since a rename has
+ * exactly one source ledger; stated so a second source is recognised as a change
+ * in kind rather than in degree.
  *
  * The `fromHash` ledger is left intact; the caller's subsequent
  * `clearFileSyncContext` / observer teardown ("close" phase) deletes it.

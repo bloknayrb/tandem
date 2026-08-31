@@ -222,6 +222,17 @@ export async function recoverRenamedEnvelope(
     // reconnecting tab can't resurrect a deletion that happened before the
     // rename. `recordTombstone` dedupes by id (keeps the higher rev); it stores
     // at `prevRev + 1`, so we pass `rev - 1` to preserve the recorded rev.
+    //
+    // The REV round-trips exactly — the schema pins it non-negative, so the floor
+    // case `0 - 1 = -1` restamps to 0, and a corrupt value never reaches here
+    // because `parseAnnotationDoc` rejected the envelope above. The RECORD does
+    // not: `recordTombstone` builds a fresh `{ id, rev, deletedAt: Date.now() }`,
+    // dropping the stored `deletedAt` and any passthrough fields (unlike
+    // `migrateTombstoneLedger`, which spreads). That reaches disk, because the
+    // load-time seed only overwrites on a strictly higher rev and the file copy
+    // ties — so a rename resets a tombstone's retention clock by up to a full
+    // SESSION_MAX_AGE. Fail-safe (a tombstone living longer resists resurrection)
+    // and deliberate to leave alone; noted so it is not mistaken for exactness.
     for (const stone of rekeyed.tombstones) {
       recordTombstone(currentHash, stone.id, stone.rev - 1);
     }
