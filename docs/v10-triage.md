@@ -60,7 +60,7 @@ Full plan context lives in a maintainer-local planning doc. Once this triage is 
 | #320 | Annotation schema v1→v2 migration framework | MEDIUM | MEDIUM                              | Defer         | Defer |
 | #313 | Content-hash annotation identity            | MEDIUM | LOW                                 | Defer         | Core  |
 | #318 | Tombstone/GC for annotation store           | MEDIUM | LOW                                 | Defer         | Defer |
-| #315 | Extract DocumentStore interface             | SMALL  | LOW                                 | Defer         | Defer |
+| #315 | Extract DocumentStore interface             | SMALL  | LOW                                 | Defer         | **Done — extracted, then DELETED.** ADR-035 Unit 8j found the interface shallow and zero-importer; 8j-1 removed it and 8j-2 closed the store's escape hatches instead. |
 | #321 | Hocuspocus WebSocket LAN auth               | MEDIUM | LOW                                 | Defer         | Defer |
 | #282 | Extract SSE consumer                        | SMALL  | LOW                                 | Defer         | Defer |
 | #633 | Extract matchShortcut helper                | SMALL  | LOW                                 | Defer         | Defer |

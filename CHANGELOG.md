@@ -65,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The annotation-store check is bounded, and screens where it is about to read before it reads.** The scan had no limit of any kind on how many files it opened or how large they could be, and it ran on the same thread that answers requests — so a large enough store could stall the whole server, editor connections included, while it worked through the directory. It is now asynchronous and capped by file count, per-file size, and total bytes read, and it says so in the report when a limit stopped it short rather than publishing a count it never checked. Separately, it now refuses network and extended-length Windows paths before making any filesystem call, which is the rule every other path-reading check in doctor already followed. **Stated honestly:** the location it reads is fixed when Tandem starts and no request can influence it, so this closes no reachable hole today — it removes the one check that would not have been safe if that ever changed.
 
+### Internal
+
+- **Annotation mutations now cross one guarded seam, and the store no longer hands out the raw document (ADR-035 Unit 8).** Twelve PRs, no user-visible behaviour change intended: creation, editing, accept, dismiss, remove and reply moved behind `AnnotationLifecycle`, and the per-document store's `Y.Doc` and annotations `Y.Map` became genuinely private rather than private-by-convention. Two of the sketched operations were declined rather than built, each with the reason on the record. Two routes to a raw document remain open elsewhere in the server and are tracked in #1700 rather than left in prose. The user-visible faults found along the way are listed under Fixed and Security above.
+
 ## [0.24.1] - 2026-08-23
 
 A patch release for three faults found in the days after v0.24.0.

@@ -225,7 +225,7 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
     lines.push(`## ${groupLabels[key]}`, "");
 
     for (const ann of anns) {
-      const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
+      const snippet = clampRange(fullText, ann.range.from, ann.range.to);
       const truncated = snippet.length > 80 ? snippet.slice(0, 77) + "..." : snippet;
 
       lines.push(`- **"${truncated}"** (${exportAuthorLabel(ann)})`);
@@ -261,7 +261,7 @@ function extractFullText(fragment: Y.XmlFragment): string {
 }
 
 /** Safe string slice that handles out-of-bounds gracefully */
-function safeSlice(text: string, from: number, to: number): string {
+function clampRange(text: string, from: number, to: number): string {
   const start = Math.max(0, Math.min(from, text.length));
   const end = Math.max(start, Math.min(to, text.length));
   return text.slice(start, end);

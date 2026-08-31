@@ -196,6 +196,41 @@ tandem_open("report.docx")
     → Browser renders imported comments in SidePanel with "Imported" filter
 ```
 
+### Annotation Writes: Three Surfaces, One Guarded Seam
+
+Annotations are not written through a single path, and the difference is a
+privacy boundary rather than an accident of layering. ADR-027's guard exists to
+restrict **Claude**, not the person who owns the document, so the owner's own
+actions deliberately do not cross it.
+
+```
+1. Claude / MCP -- guarded
+   tandem_comment, tandem_editAnnotation, accept, dismiss, remove, reply
+       -> YDocStore (mcp/document-store.ts), doc + annotations map #private
+       -> AnnotationLifecycle (annotations/lifecycle.ts)
+       -> ADR-027 refusals, sanitization, tombstones
+       -> withMcp(...) tagged write
+   local-model/tools.ts calls createAnnotationLifecycle directly -- bypasses the
+   store, NOT the lifecycle. Ships dark (BYO_MODELS_ENABLED === false).
+
+2. Browser -- deliberately outside the lifecycle
+   POST /api/annotation-reply  -> addUserReply -> writeReply
+   POST /api/remove-annotation -> removeAnnotationRecord
+       Same underlying mechanisms the lifecycle uses, reached directly, because
+       a user replying in their own note thread must not hit Claude's guard.
+
+3. .docx import -- a third surface entirely
+   file-io/docx-comments.ts -> withInternal(...) -> map.set, author: "import"
+       Touches neither the lifecycle nor its mechanisms. ADR-035 Unit 8h
+       DECLINED bringing it inside; see that amendment for why.
+```
+
+**Do not "fix" surface 2 by routing it through `AnnotationLifecycle`.** That
+reintroduces a note guard on a user's action in their own thread, which is the
+bug the split exists to prevent. The reasoning, and the tests that pin it, live
+in `annotations/lifecycle.ts`'s docblocks and ADR-035 — this section is the map,
+not the argument, and is the one copy of it no test reads.
+
 ### E2E Test Architecture
 
 ```
@@ -890,7 +925,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `index.ts` -- Entry point, starts MCP HTTP on :3479 and Hocuspocus WebSocket on :3478 (stdio fallback via `TANDEM_TRANSPORT=stdio`)
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
 - `notifications.ts` -- Toast notification system: ring buffer of `NotificationPayload` objects, `pushNotification()` + `subscribe()`/`unsubscribe()` for SSE consumers
-- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`, `broadcastStoreReadOnly()`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`, `snapshotToolCount()` for diagnostic tool census, `findRepoFile()` for locating bundled docs), `transport-registry.ts` (live MCP sessions keyed by `Mcp-Session-Id` — one `McpServer` per session, LRU cap + idle reaper; ADR-045), `../sessions/context.ts` (`AsyncLocalStorage` carrying the calling Claude session id into tool handlers), `api-routes.ts` (REST API: `GET /api/info`, `/api/open`, `/api/upload`, `/api/close`, `POST /api/scratchpad`, `GET /api/notify-stream`), `routes/info.ts` (`makeInfoHandler()` factory for `GET /api/info` — loopback-gated fields, token mtime, `changelogPath`, `workflowsPath`), `routes/diagnostics.ts` (`makeDiagnosticsHandler()` factory for `GET /api/diagnostics` — embedded `runDoctor()` report for the About tab's Copy Diagnostics button; loopback-only, cwd-dependent checks filtered, single-flight), `routes/scratchpad.ts` (handler for `POST /api/scratchpad`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
+- `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `document-store.ts` (`YDocStore` -- the per-document handle MCP annotation handlers work through; its Y.Doc and annotations Y.Map are `#private`, so every operation is a named method), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`, `broadcastStoreReadOnly()`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`, `snapshotToolCount()` for diagnostic tool census, `findRepoFile()` for locating bundled docs), `transport-registry.ts` (live MCP sessions keyed by `Mcp-Session-Id` — one `McpServer` per session, LRU cap + idle reaper; ADR-045), `../sessions/context.ts` (`AsyncLocalStorage` carrying the calling Claude session id into tool handlers), `api-routes.ts` (REST API: `GET /api/info`, `/api/open`, `/api/upload`, `/api/close`, `POST /api/scratchpad`, `GET /api/notify-stream`), `routes/info.ts` (`makeInfoHandler()` factory for `GET /api/info` — loopback-gated fields, token mtime, `changelogPath`, `workflowsPath`), `routes/diagnostics.ts` (`makeDiagnosticsHandler()` factory for `GET /api/diagnostics` — embedded `runDoctor()` report for the About tab's Copy Diagnostics button; loopback-only, cwd-dependent checks filtered, single-flight), `routes/scratchpad.ts` (handler for `POST /api/scratchpad`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer + subscriber-gated payload tracking), `sse.ts` (SSE endpoint handler), `push-liveness.ts` (consumer heartbeat counters — diagnostics only, never Claude's presence), `observers/` (per-map event derivation), `file-sync-registry.ts` (durable-annotation file-watcher binding), `wake-socket.ts` (the self-armed `ws://…/api/wake` transport — ADR-049), `delivery-state.ts` (per-item surfaced/pushed bookkeeping)
 - `yjs/` -- Y.Doc management, the authoritative document state. `lifecycle.ts` is the named `HocuspocusLifecycle` seam (ADR-033) — a leaf module, so `provider.ts` can depend on it with no cycle — assembled and installed by `bootstrap/hocuspocus-lifecycle.ts` before every bind.
 - `mode.ts` -- Solo/Tandem authority (CTRL_ROOM `Y_MAP_MODE`), read by `shouldForwardExternally`
@@ -919,7 +954,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `launcher/` -- The auto-launcher that starts and supervises a Claude Code session (#477 PR 4, #1266, #1268). `supervisor.ts` subscribes to the event queue in-process and writes wake turns directly to the child's stdin, because a channel notification never becomes a turn under the launcher's `-p --input-format stream-json` flags; it registers as an **`"external"`** subscriber so the Solo gate applies. Also holds the crash-loop breaker, the trip-time CLI probe that distinguishes "missing" from "unstartable", and `api-routes.ts` for the `/api/launcher/*` surface.
 - `license/` -- The licensing gate, which **ships dark** (ADR-040, #1116). `license-state.ts` re-reads `trial.json` + `license.json` on every call (no cache), `gate-flag.ts` reads the build define, and the two enforcement surfaces live in `yjs/provider.ts` (read-only document rooms) and `mcp/license-gate.ts` (`gatedTool` + the Express twin).
 - `local-model/` -- The local-model collaborator loop (ADR-039, #1123), also **dark**. `ollama-client.ts` (loopback-only, validate-at-use), `tools.ts`, `loop.ts`, `prompts.ts`, `config.ts`, and `collaborator.ts` — the only server importer of the engine, whose `subscribe()` call is gated behind `BYO_MODELS_ENABLED`.
-- `annotations/` -- The durable annotation store: atomic per-document JSON, the `store.lock` cross-process guard, tombstone ledgers, and GC.
+- `annotations/` -- `lifecycle.ts` (`AnnotationLifecycle` -- the guarded write seam for annotation mutations, ADR-035; `mintAnnotation` stamps `author`/`audience` on Claude-created records), `projection.ts` (the `ChannelEligible` narrow), and the durable annotation store: atomic per-document JSON, the `store.lock` cross-process guard, tombstone ledgers, and GC.
 - `auth/` -- `middleware.ts` (loopback bypass by socket address only, never the `Host` header; rate-limited, hash-then-`timingSafeEqual` token compare) and token file handling.
 - `documents/` / `sessions/` -- Document registry and session persistence entry points.
 

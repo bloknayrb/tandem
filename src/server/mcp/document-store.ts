@@ -37,15 +37,15 @@
  * why that difference is load-bearing. The rest is a pinned member list.
  *
  * **What this does NOT close, stated because the opposite reads as true.** Two
- * routes to a raw `Y.Doc` are still open inside `src/server/mcp/`, not one.
- * `requireDocument` (`documents/registry.ts`, re-exported by
- * `document-service.ts`) returns `{ doc: Y.Doc }` to seven call sites in
- * `document.ts` and one in `docx-apply.ts` — plus four in
- * `local-model/collaborator.ts`, which ships dark. And `getOrCreateDocument`
- * (`yjs/provider.ts`) is imported by twelve files under `src/server/mcp/`,
- * INCLUDING `awareness.ts`, the handler this unit rewired: the two-line
- * `getOrCreateDocument(getCurrentDoc(id).docName)` sits in the same file that no
- * longer says `store.ydoc`. Every write reached through either is correctly
+ * routes to a raw `Y.Doc` are still open, not one. `requireDocument`
+ * (`documents/registry.ts`, re-exported by `document-service.ts`) returns
+ * `{ doc: Y.Doc }` to seven call sites in `document.ts` and one in
+ * `docx-apply.ts` — plus four in `local-model/collaborator.ts`, which ships
+ * dark, so this route is NOT confined to `src/server/mcp/`. And
+ * `getOrCreateDocument` (`yjs/provider.ts`) is imported by eleven files under
+ * `src/server/mcp/` — twelve NAME it, because `presence-expiry.ts:47` mentions
+ * it in prose, and counting that file is what an earlier `grep -l` here did.
+ * Every write reached through either is correctly
  * `withMcp`-tagged today — a sweep finds no raw `.transact(` in `src/` outside
  * `shared/origins.ts`, where the six helpers are implemented — but they are
  * tagged by discipline, exactly as this store's hatch was. Removing one door is

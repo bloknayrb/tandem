@@ -87,8 +87,11 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
         // sees the cross-author authorship indicator.
         author: def.type === "note" ? ("user" as const) : ("claude" as const),
         type: def.type,
-        // Stated, not derived — matching what `createAnnotation` stamps on
-        // every Claude-authored annotation (`mcp/annotations.ts`).
+        // Stated, not derived — matching what `mintAnnotation` stamps on every
+        // Claude-authored annotation (`annotations/lifecycle.ts:751`). That was
+        // `createAnnotation` in `mcp/annotations.ts` when this comment was
+        // written; ADR-035 Unit 8b moved the minting and 8j-1 removed the last
+        // wrapper.
         //
         // Omitting it used to be harmless, because nothing on the channel read
         // `audience`. Under ADR-035's narrow it is not: `sanitize.ts:79-87`

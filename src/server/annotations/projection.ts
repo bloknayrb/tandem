@@ -43,7 +43,8 @@
  * highlights when it was a fact about ONE record's missing field.
  *
  * `mcp/tutorial-annotations.ts` now states `audience: "outbound"` on its
- * Claude-authored seeds, as `createAnnotation` always did — so that highlight
+ * Claude-authored seeds, as `mintAnnotation` always has (the name was
+ * `createAnnotation` until ADR-035 Unit 8b) — so that highlight
  * projects again and the two predicates are genuinely distinguishable. The
  * choice rests on where each rule belongs: type carries ADR-027, audience
  * carries privacy. Both branches are pinned in

@@ -364,7 +364,7 @@ All items scoped OUT of this plan have been filed as issues on bloknayrb/tandem:
 
 - [#313](https://github.com/bloknayrb/tandem/issues/313) — Content-hash annotation identity for rename tracking (medium priority)
 - [#314](https://github.com/bloknayrb/tandem/issues/314) — Export annotations as sharable file next to document (medium)
-- [#315](https://github.com/bloknayrb/tandem/issues/315) — Extract DocumentStore interface for tool logic (low)
+- ~~[#315](https://github.com/bloknayrb/tandem/issues/315) — Extract DocumentStore interface for tool logic (low)~~ — closed by ADR-035 Unit 8j (2026-08-31), which deleted the interface rather than extracting it.
 - [#316](https://github.com/bloknayrb/tandem/issues/316) — macOS and Linux Cowork auto-setup support (medium)
 - [#317](https://github.com/bloknayrb/tandem/issues/317) — OS-specific firewall rule scoping for Cowork mode (medium)
 - [#318](https://github.com/bloknayrb/tandem/issues/318) — Tombstone and abandoned-file garbage collection (low)
