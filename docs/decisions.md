@@ -842,7 +842,7 @@ Changing the annotation shape — adding a field, renaming a state, tightening a
 
 Each method's `LifecycleResult` failure variant enumerates only the failures that method can produce — types carry the preconditions. A single `apply(action)` would force every caller to handle every failure variant and would not have surfaced the re-accept bug.
 
-**Imported `.docx` comments (Q3).** Separate `importNote(range, content, importSource)` entry. Creation context differs — imports run under `withInternal` (ADR-031) during `.docx` load, not under `withMcp`; preserve `importSource` metadata; set `author: "import"`, `type: "note"`. The audience is `private` (not `outbound`) — Claude does not see imported comments via `tandem_checkInbox` or the channel until the user explicitly promotes via `promoteNoteToComment`. Surfacing parity is *not* automatic: imports are gated by user intent the same way personal notes are. This reverses the earlier ADR-027 stance that imports surface like Claude-readable comments by default. The reasoning: a `.docx` reviewer comment may originate from a colleague, not from the active Tandem user; auto-surfacing it to Claude assumes consent the user did not give. **`narrowForChannel`'s predicate is `audience === "outbound" && type === "comment"` (both, not either)** — the audience derivation in `sanitizeAnnotation` is the load-bearing privacy gate, not the type alone.
+**Imported `.docx` comments (Q3).** Separate `importNote(range, content, importSource)` entry. Creation context differs — imports run under `withInternal` (ADR-031) during `.docx` load, not under `withMcp`; preserve `importSource` metadata; set `author: "import"`, `type: "note"`. The audience is `private` (not `outbound`) — Claude does not see imported comments via `tandem_checkInbox` or the channel until the user explicitly promotes (via the browser action — **`promoteNoteToComment` itself is declined; see the amendment below**). Surfacing parity is *not* automatic: imports are gated by user intent the same way personal notes are. This reverses the earlier ADR-027 stance that imports surface like Claude-readable comments by default. The reasoning: a `.docx` reviewer comment may originate from a colleague, not from the active Tandem user; auto-surfacing it to Claude assumes consent the user did not give. **`narrowForChannel`'s predicate is `audience === "outbound" && type === "comment"` (both, not either)** — the audience derivation in `sanitizeAnnotation` is the load-bearing privacy gate, not the type alone.
 
 **Amendment (2026-08-26, implementation): the predicate is `audience === "outbound" && type !== "note"`, and unrecognized types are refused.** Three corrections to the paragraph above, made when `narrowForChannel` was actually built. Recorded here rather than left as a silent divergence between the ADR and `src/server/annotations/projection.ts`.
 
@@ -922,13 +922,12 @@ lives on the read filters is invisible to every push-path test, including the on
 written for it.** Back-publishing a note-era private reply when its parent is
 promoted survives `channel-projection-characterization.test.ts:417-465` — the
 spec that exists for precisely that scenario — because it watches the channel
-while the leak is on the pull path. The per-mutation table lives in PR #TBD and
+while the leak is on the pull path. The per-mutation table lives in PR #1690 and
 in the new file's own docblock, which is where a count of "how many specs stayed
 green" can go stale without misleading anyone reading the decision.
 
 This does not close #1619. The pull surfaces still gate on `type` and never on
 `audience`, which is true of any comment, promoted or not.
-
 
 ## ADR-036: Format Adapter as Capability Set
 

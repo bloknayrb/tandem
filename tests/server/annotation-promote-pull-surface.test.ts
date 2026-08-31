@@ -6,26 +6,26 @@
  * `annotation-promote-event.test.ts` (the channel gate predicate),
  * `annotation-promote-e2e.test.ts` (stored shape after a real `.docx` import),
  * `annotation-actions.test.ts` (the client transform),
- * `channel-projection-characterization.test.ts:417-465` (a private reply across
- * a real promotion — on the channel), and `event-queue.test.ts` (the
+ * `channel-projection-characterization.test.ts` ("keeps a note's reply
+ * private across a REAL promotion" — on the channel), and `event-queue.test.ts` (the
  * cross-document id collision and the push-side Solo hold).
  *
  * CLAUDE.md makes the **pull** surface authoritative over all four push paths,
  * and nothing drove a promotion into it. The gap is not hypothetical:
- * `annotation-promote-e2e.test.ts:139` says its stored-shape assertion stands in
+ * `annotation-promote-e2e.test.ts`'s stored-shape block said it stood in
  * for "the MCP-read surface (audience/type≠note)", but `tandem_getAnnotations`
  * filters on `type !== "note"` and `hideFromAI` and never reads `audience` at
  * all, and `checkInbox`'s user-actions bucket requires `author === "user" &&
  * type === "comment"` and likewise never reads it. That comment asserts a field
  * its named surface does not consult — a proxy for running the filter, standing
  * where running it should be. (That the pull surfaces ignore `audience` is not a
- * discovery here: `annotations/projection.ts:20-27` says so in the source and
+ * discovery here: `annotations/projection.ts` says so in its own header and
  * tracks it as #1619. What is new is only that a test claimed to cover it.)
  *
  * So this file runs the **registered handlers** — a real `McpServer` over
  * `InMemoryTransport`, driven by `client.callTool`, exactly as
  * `mcp-tool-integration.test.ts` does. The trap it is avoiding sits one file
- * over: `annotation-tools.test.ts:119`'s "tandem_getAnnotations tool logic"
+ * over: `annotation-tools.test.ts`'s "tandem_getAnnotations tool logic"
  * describe block reimplements the filters in the test itself
  * (`.filter((a) => a.author === "claude")`) and never calls the handler, so the
  * note exclusion and the Solo hold inside the real handler are unexercised by
@@ -34,6 +34,13 @@
  * Every fixture is produced by the **real** client promoter. A record built by
  * hand can only confirm my own model of what promotion writes, which is the
  * failure this file exists to correct rather than repeat.
+ *
+ * **Citations here name symbols and test titles, never line numbers — on
+ * purpose.** An earlier draft used exact `file.ts:NN-NN` ranges. Review checked
+ * all six and found them correct, then named the real cost: nothing pins them,
+ * so one line inserted anywhere above a cited range desyncs it with nothing
+ * failing and nothing warning. A symbol name survives that and `grep` finds it.
+ * If a reference here has gone stale, search for the name.
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -43,7 +50,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type * as Y from "yjs";
 
 import { promoteNotesToComments } from "../../src/client/panels/annotation-actions.js";
-import { addUserReply } from "../../src/server/annotations/lifecycle.js";
+import { addUserReply, createAnnotationLifecycle } from "../../src/server/annotations/lifecycle.js";
 import { addDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   type DocxComment,
@@ -53,7 +60,7 @@ import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
@@ -93,7 +100,16 @@ function parseResult(result: CallToolResponse) {
  * document registry, so a bare `new Y.Doc()` — which is what the existing
  * promote suites use — is invisible to the handler.
  */
+const seededDocIds: string[] = [];
+
 function setupImportedDoc(id: string): { ydoc: Y.Doc; noteIds: string[] } {
+  // `getOrCreateDocument` is a process-wide cache that `clearOpenDocs` does not
+  // touch, so the doc must be dropped in teardown as the sibling suites do.
+  // Without it a `vitest --retry` re-enters this function against an
+  // already-populated Y.Doc and re-injects the same `commentId`s. That fails
+  // loud on the fixture guard below rather than going false-green, but a
+  // confusing retry failure is still worth not having.
+  seededDocIds.push(id);
   const ydoc = getOrCreateDocument(id);
   htmlToYDoc(ydoc, HTML);
   addDoc(id, { id, filePath: `/tmp/${id}.docx`, format: "docx", readOnly: false, source: "file" });
@@ -139,6 +155,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await client.close();
   setCtrlMode(null);
+  while (seededDocIds.length > 0) removeDocument(seededDocIds.pop() as string);
 });
 
 describe("Unit 8g G1 — a promoted note reaches Claude on the PULL surface", () => {
@@ -183,7 +200,8 @@ describe("Unit 8g G1 — a promoted note reaches Claude on the PULL surface", ()
     const ids = inboxActionIds(await checkInbox());
     expect(ids).toStrictEqual([noteIds[1]]);
     // **No `notesExcluded` assertion here, deliberately.** That counter exists
-    // only on `tandem_getAnnotations` (`mcp/annotations.ts:423,449`);
+    // only on `tandem_getAnnotations` (the `notesExcluded` count in
+    // `mcp/annotations.ts`);
     // `awareness.ts` has none, so the checkInbox half asserts the sibling's
     // ABSENCE. Review caught the first draft asserting a field the surface does
     // not return, which would have read as a passing cross-surface claim.
@@ -193,10 +211,12 @@ describe("Unit 8g G1 — a promoted note reaches Claude on the PULL surface", ()
 
 describe("Unit 8g G2 — a note promoted in Solo stays held until mode reads tandem", () => {
   /**
-   * The client stamps `heldInSolo` (`annotation-actions.ts:83-85`) and the
-   * server's `hideFromAI` (`mode.ts:84-91`) reads it — but only in the
+   * The client stamps `heldInSolo` (`heldInSoloOnCreate` in
+   * `annotation-actions.ts`) and the server's `hideFromAI` (`mode.ts`) reads
+   * it — but only in the
    * INDETERMINATE state, i.e. after a restart has lost the mode key. Two files,
-   * one invariant, and `event-queue.test.ts:1424-1499` pins the push half only
+   * one invariant, and `event-queue.test.ts`'s "WS-A2 Solo privacy hold
+   * (pushEvent)" describe pins the push half only
    * (and does so on a hand-built comment, never on a promoted record).
    */
   it("withholds it on both pull surfaces after a restart, then releases it", async () => {
@@ -226,25 +246,82 @@ describe("Unit 8g G2 — a note promoted in Solo stays held until mode reads tan
     expect(inboxActionIds(await checkInbox())).toStrictEqual([noteIds[0]]);
   });
 
-  it("holds it in Solo itself, by author rather than by marker", async () => {
-    // The other `hideFromAI` branch, and it is a different rule: in `solo` the
-    // gate is `author === "user"` and the marker is not consulted at all. A
-    // promoted import is author `user`, so promotion is what brings it under
-    // that branch — before the promotion the same record is withheld for being
-    // a note instead, which is why the assertion below is about the count
-    // staying put rather than about it changing.
+  it("holds it in live Solo, and does so by AUTHOR — the marker is not consulted", async () => {
+    // The other `hideFromAI` branch, and a different rule: in `solo` the gate is
+    // `author === "user"` and the marker is deliberately ignored. `hideFromAI`'s
+    // own docblock says why — "server-authoritative, independent of the client
+    // `heldInSolo` marker, so a promotion or a creation-race can't leak".
+    //
+    // **The obvious fixture cannot see that, and the first draft of this spec
+    // used it.** Promoting while in Solo stamps `heldInSolo: true`, so the
+    // record satisfies BOTH predicates at once and the spec passes with the
+    // author gate swapped for a marker check — the claim in its own name
+    // unasserted. Review measured it.
+    //
+    // So the fixture is the race the source comment names: promote with the
+    // CLIENT believing Tandem (no marker stamped), then have the SERVER read
+    // Solo. Author `user`, no marker — the only thing that can withhold it is
+    // the author gate.
     const { ydoc, noteIds } = setupImportedDoc("pull-g2-solo");
-    setCtrlMode("solo");
-    expect(promoteNotesToComments(ydoc, [noteIds[0]], "solo")).toBe(1);
+    setCtrlMode("tandem");
+    expect(promoteNotesToComments(ydoc, [noteIds[0]], "tandem")).toBe(1);
+    const stored = getAnnotationsMap(ydoc).get(noteIds[0]) as Annotation & {
+      heldInSolo?: boolean;
+    };
+    expect(stored.author, "fixture: promotion flipped the author").toBe("user");
+    expect(stored.heldInSolo, "fixture: and stamped NO marker — that is the point").toBeUndefined();
 
+    setCtrlMode("solo");
     expect((await getAnnotations()).data.annotations).toHaveLength(0);
     expect(inboxActionIds(await checkInbox())).toStrictEqual([]);
+
+    // The control, so the withholding above is the Solo gate and not the record
+    // being unreachable: the same unmarked record surfaces in Tandem.
+    setCtrlMode("tandem");
+    expect((await getAnnotations()).data.annotations.map((a: Annotation) => a.id)).toStrictEqual([
+      noteIds[0],
+    ]);
+  });
+});
+
+describe("Unit 8g G4 — promotion is what lets CLAUDE reply", () => {
+  it("turns replyForClaude's refusal into an accept, via the audience stamp", async () => {
+    // The user's whole reason for promoting is so Claude can respond. Claude's
+    // reply guard (`lifecycle.ts` `replyForClaude`, Unit 8f) admits a parent only
+    // at `type === "comment" && audience === "outbound"`, and the `outbound` half
+    // is stamped by `promotedAnnotation`. Every existing test of that guard's
+    // accepting branch hand-builds the parent — `replies-privacy-readwrite.test.ts`
+    // sets `audience: "outbound"` itself — so nothing joined the promoter to the
+    // consumer.
+    //
+    // **This row pins a CONSEQUENCE, not a gap, and the difference is measured.**
+    // Review proposed it as a hole where dropping the audience stamp "would ship
+    // with every test green". It would not: that mutation reds six specs across
+    // `annotation-actions.test.ts`, `annotation-promote-e2e.test.ts` and
+    // `annotation-promote-event.test.ts`. What those six say is that a FIELD
+    // changed. What this says is what the field is FOR — the same promotion
+    // flips Claude from `invalid-note` to a write it can perform. Kept because
+    // that is the sentence a future reader needs, not because it is load-bearing
+    // coverage; the honest claim is in the PR body.
+    const { ydoc, noteIds } = setupImportedDoc("pull-g4");
+    const parent = noteIds[0];
+
+    // Before: refused, and refused for the ADR-027 reason rather than any other.
+    expect(createAnnotationLifecycle(ydoc).reply(parent, "too early", noRelay)).toStrictEqual({
+      kind: "invalid-note",
+    });
+
+    expect(promoteNotesToComments(ydoc, [parent], "tandem")).toBe(1);
+
+    const after = createAnnotationLifecycle(ydoc).reply(parent, "on it", noRelay);
+    expect(after.kind).toBe("ok");
   });
 });
 
 describe("Unit 8g G3 — a private reply on a promoted parent stays private on PULL", () => {
   it("excludes the note-era reply while admitting one written after promotion", async () => {
-    // `channel-projection-characterization.test.ts:417-465` pins exactly this on
+    // `channel-projection-characterization.test.ts`'s "keeps a note's reply
+    // private across a REAL promotion" pins exactly this on
     // the CHANNEL. Review found that leaving it there would reproduce this
     // unit's own complaint: the push path covered, the authoritative one not.
     const { ydoc, noteIds } = setupImportedDoc("pull-g3");
