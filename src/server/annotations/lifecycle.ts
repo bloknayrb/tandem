@@ -46,13 +46,25 @@
  *   no store. A seam that one of the two production writers cannot hold is not
  *   the seam.
  *
- * Document *resolution* stays in `mcp/document-store.ts` (the `getCurrentDoc`
- * / `getOrCreateDocument` lookup lives there, and importing it from this module
- * would make `annotations/ → mcp/` a cycle). **Unit 8b said "Unit 8j moves the
- * lookup"; it does not** — a third module to hold it buys nothing, and the
- * cycle is the whole reason it cannot come here. Resolution is not the seam,
- * and the seam is this module — an earlier version of this sentence ended "the
- * interface is", which stopped being true when 8j-1 deleted it.
+ * Document *resolution* stays where it is. **Unit 8b said "Unit 8j moves the
+ * lookup"; it does not** — a third module to hold it buys nothing. Resolution
+ * is not the seam, and the seam is this module — an earlier version of this
+ * sentence ended "the interface is", which stopped being true when 8j-1 deleted
+ * the interface.
+ *
+ * **Two versions of this paragraph have been wrong, in opposite directions, so
+ * the measurement is recorded rather than the argument.** It read "a cycle is
+ * the whole reason the lookup cannot come here", naming
+ * `mcp/document-store.ts` as where `getCurrentDoc` / `getOrCreateDocument`
+ * live. Both halves were false. They are defined in `documents/registry.ts` and
+ * `yjs/provider.ts`; `mcp/document-service.ts` is a re-export facade, and what
+ * `document-store.ts` holds is the *composition* of the two inside
+ * `getDocumentStore`. Walking the transitive import closure of those two
+ * definition modules reaches 25 files and **none** under `annotations/` or
+ * `mcp/` — so this module could import them today with no cycle at all. The
+ * `annotations/ → mcp/` edge exists only if the import is routed through the
+ * facade. The reason to leave resolution alone is that moving it buys nothing,
+ * which is a weaker claim than the one that was here, and the true one.
  *
  * ## Lifetime rule
  *
@@ -416,8 +428,10 @@ export interface EditPatch {
  * path, and authorship is not part of the projection predicate. `status` stays
  * writable for the same reason.
  *
- * Verified against every `createAnnotation` call site in `src/` and `tests/`:
- * none passes any excluded key.
+ * Verified against every `createAnnotation` call site in `tests/`: none passes
+ * any excluded key. (The `src/` half of that sweep was retired as vacuous by
+ * Unit 8j-1 — the only `createAnnotation` left in `src/` is `Toolbar.svelte`'s
+ * unrelated local function.)
  */
 export type CreateExtras = Omit<
   Partial<Extract<Annotation, { type: "comment" }>>,
@@ -433,7 +447,10 @@ export type CreateExtras = Omit<
  * `shared/types.ts` exist to forbid. The seam therefore derives its
  * {@link CreateExtras} from the comment arm alone, and this wider alias carries
  * the flattening for the legacy path that genuinely mints a `highlight` (with a
- * `color`) and a `note`. Unit 8j deletes it along with its one caller.
+ * `color`) and a `note`. **Unit 8j-1 did not delete it** — an earlier version of
+ * this line promised it would. Its caller moved to `tests/helpers/ydoc-factory.ts`
+ * rather than disappearing, so this alias is still exported, still imported by
+ * two test modules, and pinned in the census's export list.
  */
 export type MintExtras = Omit<Partial<Annotation>, LifecycleOwnedField>;
 
@@ -482,8 +499,10 @@ export interface AnnotationLifecycle {
    * There is no `type` parameter. Claude authors comments only: a note is
    * user-private (ADR-027) and a highlight is user-only, so a Claude-mutation
    * seam that accepted either would be the wrong type. The pre-ADR-035
-   * wide-typed entry point survives as {@link mintAnnotation} for the paths
-   * that have not migrated yet, and Unit 8j removes it.
+   * wide-typed entry point survives as {@link mintAnnotation}, and as of Unit
+   * 8j-1 it survives for the *test* floor rather than for unmigrated production
+   * paths — that set is empty in `src/`. It is also still on the hot production
+   * path, because this member calls it.
    */
   create(input: CreateInput): CreateResult;
   /**
@@ -679,11 +698,23 @@ function stripOwnedFields(extras: MintExtras | undefined): MintExtras {
  * `pushNotification` fires **outside** the transaction, matching the
  * pre-ADR-035 ordering. It lived here originally because the two production
  * callers raised the same toast and duplicating the label / `dedupKey`
- * derivation across two files was how they would diverge. **Unit 8j deleted the
- * second caller**, so that argument no longer applies and the reason to keep it
- * here is now the ordinary one: the toast belongs to minting, and moving it up
- * to `createAnnotationLifecycle` would fire it outside the only function that
- * knows the record was actually written.
+ * derivation across two files was how they would diverge. **Unit 8j-1 moved the
+ * second caller into `tests/`**, so that argument no longer applies as written.
+ *
+ * Two reasons survive, and neither is the one an earlier draft gave — "moving
+ * it up would fire it outside the only function that knows the record was
+ * actually written" is simply false: the `map.set` below is unconditional with
+ * no failure arm, `create` receives the built annotation, and a throw
+ * propagates identically through both frames.
+ *
+ * 1. **The second caller still exists**, one directory over. Moving the toast
+ *    up to `createAnnotationLifecycle` would silently stop the `note` and
+ *    `highlight` fixture path from firing it — a parity-floor shift that no
+ *    suite asserts, because nothing in `tests/` observes this notification.
+ *    That is the reason the prose has to be right rather than merely plausible.
+ * 2. **The label derivation is type-dependent** (`type[0].toUpperCase() + …`)
+ *    while `create` hard-codes `"comment"`, so half of it would go dead on the
+ *    move.
  */
 export function mintAnnotation(
   ydoc: Y.Doc,

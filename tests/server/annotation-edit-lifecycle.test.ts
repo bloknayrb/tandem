@@ -290,7 +290,7 @@ describe("editPending — origin tagging", () => {
   });
 });
 
-describe("the DocumentStore shell", () => {
+describe("the YDocStore shell", () => {
   it("hands its OWN relay down, rather than substituting a sink", () => {
     // Measured, not assumed: replacing the shell's `(e) => this.onLossy(e)`
     // with `() => {}` was GREEN against every pre-existing suite AND against
@@ -325,7 +325,7 @@ describe("the DocumentStore shell", () => {
 });
 
 describe("editPending — the seam itself", () => {
-  it("is reachable without going through DocumentStore", () => {
+  it("is reachable without going through YDocStore", () => {
     // `edit-annotation.test.ts` and `document-store.test.ts` both drive
     // `YDocStore.editAnnotation`, which is now a delegating shell. If this file
     // did not import `editPending` directly, every assertion about the edit

@@ -18,8 +18,11 @@
  * `src/` — every extension, `.svelte` included — rather than the directories
  * the two importers happen to live in today, because a guard scoped to where
  * the answer already is cannot report a new answer somewhere else. It also
- * matches the identifiers on word boundaries, so a longer rename
- * (`createAnnotationLifecycleForTests`) does not slip past a substring check.
+ * matches the identifiers on **word boundaries**, which is what keeps a longer
+ * name that merely CONTAINS one — `createAnnotationLifecycleForTests` contains
+ * `createAnnotationLifecycle` — from being counted as a use of it. (An earlier
+ * version of this sentence had that backwards, claiming the boundaries were
+ * what caught such a rename.)
  */
 
 import { describe, expect, it } from "vitest";
@@ -76,24 +79,43 @@ describe("annotation create seam — who may mint", () => {
     // So the unqualified claim is made true here rather than softened in the
     // prose. This is the general rule, not a rule about one symbol: the point of
     // moving an export into `tests/` is that the boundary holds for everything.
-    const reachesTests = /from\s+["'][^"']*\/tests\//;
+    // **Three shapes, because review defeated the first two-shape version.** It
+    // was `/from\s+["'][^"']*\/tests\//`, and the comment above it claimed to
+    // cover "the relative climb and an alias" while the alias probe asserted
+    // `false` — prose promising coverage the assertion below it disproved.
+    // Worse, the same slash-delimited key missed the shape that is legal TODAY:
+    // `tsconfig.json` sets `baseUrl: "."`, so a bare `from "tests/helpers/x.js"`
+    // resolves from the repo root, typechecks under the client config, and
+    // contains no `/tests/` at all. And `await import("../../tests/…")` has no
+    // `from` keyword. Each arm below is a live specifier form, not decoration.
+    const reachesTests = /(?:\bfrom|\bimport\s*\(|\brequire\s*\()\s*["'](?:\.{1,2}\/)*@?tests\//;
 
-    // The assertion below is an empty set, so it carries its own proof that the
-    // pattern can fire at all. Both real shapes an offender could take — the
-    // relative climb and an alias — plus a near-miss that must NOT match, so
-    // the pattern is shown to discriminate rather than merely to match.
-    expect(reachesTests.test('import { x } from "../../tests/helpers/annotation-minter.js";')).toBe(
-      true,
-    );
-    expect(reachesTests.test('import { x } from "@tests/helpers/annotation-minter.js";')).toBe(
-      false,
-    );
-    expect(reachesTests.test('import { x } from "./latests/thing.js";')).toBe(false);
+    // The assertion is an empty set, so it carries its own proof that the
+    // pattern fires — one probe per arm, plus near-misses that must NOT match,
+    // so the pattern is shown to discriminate rather than merely to match.
+    for (const offender of [
+      'import { x } from "../../tests/helpers/ydoc-factory.js";', // relative climb
+      'import { x } from "tests/helpers/ydoc-factory.js";', // baseUrl, legal today
+      'const { x } = await import("../../tests/helpers/ydoc-factory.js");', // dynamic
+      'import { x } from "@tests/helpers/ydoc-factory.js";', // alias, if one is ever added
+    ]) {
+      expect(reachesTests.test(offender), `must match: ${offender}`).toBe(true);
+    }
+    for (const innocent of [
+      'import { x } from "./latests/thing.js";', // substring near-miss
+      'import { x } from "../contests/thing.js";',
+      "// we deliberately do not import from tests/ here",
+    ]) {
+      expect(reachesTests.test(innocent), `must NOT match: ${innocent}`).toBe(false);
+    }
 
     const offenders = [...SRC_FILES]
       .filter(([, contents]) => reachesTests.test(stripComments(contents)))
       .map(([rel]) => rel);
-    expect(offenders).toStrictEqual([]);
+    expect(
+      offenders,
+      "a src/ file reaching into tests/ bundles test code into dist/ — move the helper, do not widen this",
+    ).toStrictEqual([]);
   });
 
   it("mintAnnotation — the wide-typed compatibility entry — is not reachable cross-file", () => {
@@ -133,16 +155,26 @@ describe("annotation create seam — who may mint", () => {
     // Pinning the export SET closes it, because an alias has to be exported to
     // be reachable. This is a list someone chose, which is the whole premise of
     // the file: adding an export to the lifecycle means saying so here.
+    //
+    // **Both regexes tolerate leading whitespace, and that is not cosmetic.**
+    // They were `^export`, which review defeated by ending a block comment on
+    // the same physical line: `/* … *\/ export const mint = …`. The fix is split
+    // across two files — `stripComments` now preserves the comment's newlines
+    // (so `export` returns to the start of its own line) and the anchors below
+    // allow the indent that leaves behind. Either half alone still loses.
     const source = SRC_FILES.get(DEFINITION);
     expect(source, "the definition file must be in the sweep").toBeDefined();
     const exported = [
       ...stripComments(source ?? "").matchAll(
-        /^export\s+(?:async\s+)?(?:function|const|class|type|interface)\s+(\w+)/gm,
+        /^[ \t]*export\s+(?:async\s+)?(?:function|const|class|type|interface)\s+(\w+)/gm,
       ),
     ]
       .map((m) => m[1])
       .sort();
-    expect(exported).toStrictEqual([
+    expect(
+      exported,
+      "a new lifecycle export is a decision: add it to this list on purpose. A removal is equally a failure — the pin is two-sided.",
+    ).toStrictEqual([
       "AnnotationLifecycle",
       "AnnotationReplier",
       "ClaudeReplyResult",
@@ -170,8 +202,11 @@ describe("annotation create seam — who may mint", () => {
     // vanishes from the list silently and the pin quietly covers less. Counting
     // `^export` lines in the stripped source and requiring the two to agree is
     // what makes an unparsed form a failure rather than an omission.
-    const exportLines = (stripComments(source ?? "").match(/^export\s/gm) ?? []).length;
-    expect(exported).toHaveLength(exportLines);
+    const exportLines = (stripComments(source ?? "").match(/^[ \t]*export\s/gm) ?? []).length;
+    expect(
+      exported,
+      "an export form the name regex cannot parse would vanish from the pin silently. WIDEN THE REGEX — do not edit the list above to match.",
+    ).toHaveLength(exportLines);
   });
 
   it("nothing invokes create through an already-built lifecycle it did not import", () => {
@@ -192,7 +227,10 @@ describe("annotation create seam — who may mint", () => {
     // server ones — `mcp/annotations.ts`, which declared the wide wrapper, and
     // `document-store.ts`, which exposed it as `store.createAnnotation(…)`,
     // reachable from any handler while importing nothing the assertions above
-    // read. Both are deleted, so the server half of this list is now empty.
+    // read. The store method was deleted and the wide wrapper was MOVED into
+    // `tests/helpers/ydoc-factory.ts` — it still exists and still calls
+    // `mintAnnotation`, just from outside `src/`. Either way the server half of
+    // this list is now empty.
     //
     // **This narrowing is deliberate and is the unit's point**, not a list edit
     // that follows the code around: the surviving entry is a DIFFERENT function.
@@ -207,9 +245,10 @@ describe("annotation create seam — who may mint", () => {
     // Keyed on the *call shape*, not a bare identifier — the bare name appears
     // in prose, and a census that counts sentences is one an unrelated comment
     // edit turns red. `\b` does not match inside `createAnnotationLifecycle`.
-    expect(filesMatching(/\bcreateAnnotation\(/)).toStrictEqual([
-      "src/client/editor/toolbar/Toolbar.svelte",
-    ]);
+    expect(
+      filesMatching(/\bcreateAnnotation\(/),
+      "the Toolbar entry is this assertion's anchor, not an accident: if that file moves or renames its local helper, RE-ANCHOR — emptying the array turns this into a zero check",
+    ).toStrictEqual(["src/client/editor/toolbar/Toolbar.svelte"]);
   });
 
   it("acceptPending / dismissPending have no production caller at all", () => {

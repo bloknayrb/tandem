@@ -73,9 +73,21 @@ export const SRC_FILES: ReadonlyMap<string, string> = new Map(
  * literal, and stripping them made a whole sweep return nothing in
  * `documents-open.test.ts`. Callers that need the string-free form should strip
  * on top of this, and only for a symbol scan.
+ *
+ * **Line structure is preserved, which is load-bearing for any `^`-anchored
+ * caller.** A block comment collapses to its own newlines plus spaces rather
+ * than to a single space, because collapsing them defeated the export-set pin in
+ * `annotation-create-seam-census.test.ts`: `/* … *\/ export const mint = …`
+ * spanning two physical lines stripped onto ONE line, `export` landed mid-line,
+ * and `/^export/m` matched neither the name regex nor the line count — so both
+ * halves of a two-sided pin stayed green with the extra export present. Biome
+ * leaves that comment placement alone, so it survived the formatter gate too.
+ * Column offsets are not preserved and nothing should depend on them.
  */
 export function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
 }
 
 /**

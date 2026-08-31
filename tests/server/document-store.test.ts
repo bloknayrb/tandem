@@ -11,11 +11,17 @@
  * matches byte-for-byte.
  *
  * **`YDocStore` is the only type now** — the `DocumentStore` interface went in
- * ADR-035 Unit 8j; why is on the class, not restated here. Two specs went with
- * it: the `createAnnotation` parity pair, whose subject was a store method with
- * no production callers, and a `getAnnotation` spec named "returns the
- * sanitized record" that asserted only `.content` on a record it had just
- * minted through the canonical path. Neither loss is coverage —
+ * ADR-035 Unit 8j; why is on the class, not restated here. **Three specs went
+ * with it** (an earlier version of this sentence said two, then listed a pair
+ * plus one): the `createAnnotation` parity PAIR, whose subject was a store
+ * method with no production callers, and a `getAnnotation` spec named "returns
+ * the sanitized record". That third one also asserted the not-found branch —
+ * which would be a real loss, except **the method itself is deleted**, with zero
+ * callers in `src/` or `tests/`, so there is nothing left to cover. (Read it as
+ * "the method is gone", not "the spec was thin"; the thin-spec framing sends the
+ * reader to check the wrong thing — though it was thin, asserting only
+ * `.content` on a record it had just minted through the canonical path.)
+ * Neither loss is coverage —
  * `annotation-create-lifecycle.test.ts` pins creation's record shape field-for-
  * field and asserts `toStrictEqual([MCP_ORIGIN])`, i.e. exactly one tagged
  * transaction, where the deleted spec captured only the last origin it saw.

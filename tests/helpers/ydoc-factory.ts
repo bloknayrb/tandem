@@ -150,12 +150,16 @@ export function seedRawAnnotation(
  * caller; the only thing standing between it and acquiring one was a census
  * assertion. Here, a `src/` importer is a visible boundary violation that would
  * bundle test code into `dist/`, and `annotation-create-seam-census.test.ts`
- * fails on one.
+ * fails on one — including the shapes no tsconfig `rootDir` covers: the bare
+ * `baseUrl` specifier and the dynamic `import()`, both of which defeated that
+ * guard's first pattern.
  *
  * The body is copied verbatim from that export rather than rewritten, including
  * its `(map, ydoc, …)` argument order — which is inverted relative to
  * `mintAnnotation`'s `(ydoc, map, …)`. Correcting the order would mean touching
- * all 159 call sites, which is the cost this relocation exists to avoid: the
+ * all 158 call sites (measured with comments stripped, definition excluded —
+ * this said 159, which counted the definition line as a call), which is the cost
+ * this relocation exists to avoid: the
  * fixtures stay byte-identical, so the parity floor cannot shift under the move.
  *
  * `mintAnnotation` itself cannot follow it here for the plainest possible

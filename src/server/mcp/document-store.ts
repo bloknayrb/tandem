@@ -32,8 +32,10 @@
  * `transactMcp` are the escape hatches the Unit 8 epic in
  * `docs/plans/2026-08-24-ai-assisted-maintainability-remediation.md` exists to
  * remove (ADR-035 predates this store and never names it), so nothing new
- * should reach for them. **Unit 8j-2 closes them; until it lands they are
- * still here and still reachable.**
+ * should reach for them. **They are still here and still reachable**; tracker
+ * row 8j names the PR that closes them, and the split is recorded there rather
+ * than in this comment, because a sub-PR number living only in source is a date
+ * nothing puts in front of a human.
  *
  * Scope note: this wraps the *in-memory* Y.Doc/Y.Map layer the MCP handlers
  * touch — NOT the durable annotation file-store (`src/server/annotations/`).
@@ -176,18 +178,58 @@ export class YDocStore {
     return collectAnnotations(this.map, this.docHash);
   }
 
+  /**
+   * Collect annotations and refresh their CRDT-anchored ranges in one pass,
+   * **persisting any range updates back to the Y.Map**. Returns the refreshed
+   * annotations.
+   */
   listAnnotationsRefreshed(): Annotation[] {
     return refreshAllRanges(this.listAnnotations(), this.ydoc, this.map).map((r) => r.annotation);
   }
 
+  /**
+   * Refresh a single annotation's CRDT-anchored range, persisting any update
+   * back to the Y.Map, and return the refreshed annotation. Used by the inbox
+   * surfacer, which refreshes a surfaced-gated subset rather than the whole
+   * collection.
+   *
+   * **The caller owns the enclosing origin-tagged transaction** (see
+   * {@link transactMcp}). Unwrapped, this writes untagged — `audit:origins`
+   * cannot see a bare `map.set` reached through a helper, so nothing but this
+   * sentence stands between a new caller and an untagged write.
+   */
   refreshAnnotation(ann: Annotation): Annotation {
     return refreshRange(ann, this.ydoc, this.map).annotation;
   }
 
+  /** Run `fn` inside an MCP-origin Y.Doc transaction (ADR-031 `withMcp`). */
   transactMcp(fn: () => void): void {
     withMcp(this.ydoc, fn);
   }
 
+  /**
+   * Add CLAUDE's reply to a comment thread, carrying the ADR-027 guard.
+   *
+   * **No `author` parameter, and its absence is the point.** It took
+   * `ReplyAuthor` — three members — so `store.addReply(id, text, "import")` was
+   * type-legal. Master wrote that value straight through as `author: "import"`;
+   * what it bought was skipping the `author === "claude"` guard entirely, so
+   * Claude could reply into a note thread by picking a third byline the client
+   * renders as an import. (An earlier draft of this sentence said it "would have
+   * been written as a USER reply" — a more specific claim, and the wrong one:
+   * `author` was never remapped, and `heldInSolo` is gated on `"user"`, so an
+   * `"import"` reply would not have been stamped either.) Keeping the parameter
+   * would also have re-keyed the privacy guard on a caller-supplied value one
+   * level above the seam, which is the defect Unit 8f exists to remove. This
+   * store is the MCP surface; the browser's entry is `addUserReply`.
+   *
+   * **This paragraph lived on the `DocumentStore` interface, which Unit 8j-1
+   * deleted.** It is the only surviving record of that defect, and the guard it
+   * describes is a module away in `lifecycle.ts`, keyed on a value this
+   * signature no longer accepts — so a bare method here would read as
+   * uninteresting and nothing would warn the next editor off re-adding the
+   * parameter.
+   */
   addReply(annotationId: string, text: string): ClaudeReplyResult {
     return this.lifecycle.reply(annotationId, text, (e) => this.onLossy(e));
   }
