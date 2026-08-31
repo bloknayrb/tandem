@@ -67,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
-- **Annotation mutations now cross one guarded seam, and the store no longer hands out the raw document (ADR-035 Unit 8).** Ten PRs, no user-visible behaviour change intended: creation, editing, accept, dismiss, remove and reply moved behind `AnnotationLifecycle`, and the per-document store's `Y.Doc` and annotations `Y.Map` became genuinely private rather than private-by-convention. Two of the sketched operations were declined rather than built, each with the reason on the record. Two routes to a raw document remain open elsewhere in the server and are tracked in #1700 rather than left in prose. The user-visible faults found along the way are listed under Fixed and Security above.
+- **Annotation mutations now cross one guarded seam, and the store no longer hands out the raw document (ADR-035 Unit 8).** Twelve PRs, no user-visible behaviour change intended: creation, editing, accept, dismiss, remove and reply moved behind `AnnotationLifecycle`, and the per-document store's `Y.Doc` and annotations `Y.Map` became genuinely private rather than private-by-convention. Two of the sketched operations were declined rather than built, each with the reason on the record. Two routes to a raw document remain open elsewhere in the server and are tracked in #1700 rather than left in prose. The user-visible faults found along the way are listed under Fixed and Security above.
 
 ## [0.24.1] - 2026-08-23
 

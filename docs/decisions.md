@@ -803,7 +803,7 @@ copied forward without counting the transactions first.
 
 ## ADR-035: Annotation Lifecycle Module
 
-**Status:** Accepted; implemented, with two entries declined rather than built (verified against `src/` 2026-08-30). "Partially implemented" was right while a deferred set existed; it is now empty. `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (~~`acceptPending` / `dismissPending`~~ — they shipped as `accept` / `dismiss`; see the Unit 8j amendment — returning a tagged `LifecycleResult`). `narrowForChannel` and the `ChannelEligible` brand landed 2026-08-26 as `src/server/annotations/projection.ts` — **see the amendment below, which widens the predicate this ADR specifies.** `create` landed 2026-08-28 (Unit 8b) and `editPending` 2026-08-30 (Unit 8c); ~~`YDocStore.createAnnotation` and `YDocStore.editAnnotation` are now delegating shells.~~ **`YDocStore.createAnnotation` no longer exists** — Unit 8j-1 deleted it once its only surviving caller was a test helper. `YDocStore.editAnnotation` is still a delegating shell (`mcp/document-store.ts:176`). `remove` landed 2026-08-30 (Unit 8e) as `AnnotationLifecycle.remove` over the shared `removeAnnotationRecord`, and `reply` the same day (Unit 8f) as `AnnotationLifecycle.reply` over a module-private `writeReply`, with `addUserReply` as the deliberately unguarded browser entry. **`promoteNoteToComment` is DECLINED rather than deferred — see the amendment below.** **`importNote` is DECLINED too (Unit 8h, 2026-08-30) — see the second amendment.** **Nothing is deferred: the set is now empty**, and every entry this ADR sketched has either landed or been declined with a reason on the record.
+**Status:** Accepted; implemented, with two entries declined rather than built (verified against `src/` 2026-08-30). "Partially implemented" was right while a deferred set existed; it is now empty. `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (~~`acceptPending` / `dismissPending`~~ — they shipped as `accept` / `dismiss`; see the Unit 8j amendment — returning a tagged `LifecycleResult`). `narrowForChannel` and the `ChannelEligible` brand landed 2026-08-26 as `src/server/annotations/projection.ts` — **see the amendment below, which widens the predicate this ADR specifies.** `create` landed 2026-08-28 (Unit 8b) and `editPending` 2026-08-30 (Unit 8c); ~~`YDocStore.createAnnotation` and `YDocStore.editAnnotation` are now delegating shells.~~ **`YDocStore.createAnnotation` no longer exists** — Unit 8j-1 deleted it once its only surviving caller was a test helper. `YDocStore.editAnnotation` is still a delegating shell over `lifecycle.editPending`. `remove` landed 2026-08-30 (Unit 8e) as `AnnotationLifecycle.remove` over the shared `removeAnnotationRecord`, and `reply` the same day (Unit 8f) as `AnnotationLifecycle.reply` over a module-private `writeReply`, with `addUserReply` as the deliberately unguarded browser entry. **`promoteNoteToComment` is DECLINED rather than deferred — see the amendment below.** **`importNote` is DECLINED too (Unit 8h, 2026-08-30) — see the second amendment.** **Nothing is deferred: the set is now empty**, and every entry this ADR sketched has either landed or been declined with a reason on the record.
 
 **Two departures from the sketch below, both in Unit 8c.**
 
@@ -1008,13 +1008,14 @@ no new member for a static pin to see. Unit 8j-1 (#1697) deleted the
 importers anywhere.
 
 **What that does not close, stated because the opposite reads as true.** Two
-routes to a raw `Y.Doc` remain open inside `src/server/mcp/`. `requireDocument`
-(`documents/registry.ts`) returns `{ doc: Y.Doc }` to twelve call sites, and
-`getOrCreateDocument` (`yjs/provider.ts`) is imported by eleven files under
-`src/server/mcp/`. Every write reached through either is correctly `withMcp`-
-tagged today — but by discipline, which is precisely the property `store.ydoc`
-had before this unit removed it. Tracked as **#1700**. Removing one door is not
-sealing the room, and Unit 8j claims only the former.
+routes to a raw `Y.Doc` remain open: `requireDocument` (`documents/registry.ts`)
+and `getOrCreateDocument` (`yjs/provider.ts`). Every write reached through either
+is correctly `withMcp`-tagged today — but by discipline, which is precisely the
+property `store.ydoc` had before this unit removed it. Removing one door is not
+sealing the room, and Unit 8j claims only the former. **Tracked as #1700**, which
+holds the call-site breakdown along with `mcp/document-store.ts`'s header; this
+amendment deliberately does not carry a third copy of those counts, one of which
+had already gone stale between two carriers.
 
 **The sketch's method names are not the ones that shipped.** The Decision section
 above lists `createComment` / `createHighlight` / `createNote` as three methods,

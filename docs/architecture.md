@@ -205,7 +205,7 @@ actions deliberately do not cross it.
 
 ```
 1. Claude / MCP -- guarded
-   tandem_comment, tandem_edit-annotation, accept, dismiss, remove, reply
+   tandem_comment, tandem_editAnnotation, accept, dismiss, remove, reply
        -> YDocStore (mcp/document-store.ts), doc + annotations map #private
        -> AnnotationLifecycle (annotations/lifecycle.ts)
        -> ADR-027 refusals, sanitization, tombstones
@@ -227,7 +227,9 @@ actions deliberately do not cross it.
 
 **Do not "fix" surface 2 by routing it through `AnnotationLifecycle`.** That
 reintroduces a note guard on a user's action in their own thread, which is the
-bug the split exists to prevent.
+bug the split exists to prevent. The reasoning, and the tests that pin it, live
+in `annotations/lifecycle.ts`'s docblocks and ADR-035 — this section is the map,
+not the argument, and is the one copy of it no test reads.
 
 ### E2E Test Architecture
 

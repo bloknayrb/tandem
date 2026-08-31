@@ -470,11 +470,8 @@ export function registerAwarenessTools(server: McpServer): void {
 /**
  * Safely slice text and truncate to 100 chars.
  *
- * **Not test-only, whatever the "Exported for testing" that stood here implied.**
- * Three production callers, all on the inbox poll path: the `tandem_checkInbox`
- * handler's `selectedText`, and both collectors below. `isUserActive` further
- * down is the function that label belongs to -- it has no non-test caller in
- * `src/` -- and this is what came of copying it onto a neighbour.
+ * **Not test-only.** Three production callers, all on the inbox poll path: the
+ * `tandem_checkInbox` handler's `selectedText`, and both collectors below.
  */
 export function safeSlice(text: string, from: number, to: number): string {
   const start = Math.max(0, Math.min(from, text.length));
@@ -525,13 +522,8 @@ export function isUserActive(
  * `() => false` and had NO killer: deleting it from the call site left every
  * spec in the repo green while production silently stopped stamping
  * `alreadyPushed` for every channel-connected session. A required parameter is
- * the only version of that warning a compiler enforces.
- *
- * `collectInboxUserReplies` below took `modeState` required already and kept the
- * `wasChannelEmitted` default through Unit 8j-2 — the argument above transfers
- * to it whole, and a review of 8j-3 found it sitting one screen from a paragraph
- * that reads as having fixed the class everywhere. Both are required on both
- * now.
+ * the only version of that warning a compiler enforces. Both are required on
+ * `collectInboxUserReplies` below too, for the same reasons.
  *
  * **`refreshAll` cannot change the selection, and that is enforced here rather
  * than asked for.** The signature `(anns: Annotation[]) => Annotation[]` says
