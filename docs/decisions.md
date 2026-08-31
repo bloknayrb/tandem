@@ -916,14 +916,15 @@ for. Promotion was pinned five ways and **every one of them read a push-path
 event or the raw stored record**, while CLAUDE.md makes the pull surface
 authoritative over all four push paths. `tests/server/annotation-promote-pull-surface.test.ts`
 drives a real `.docx` import → real promote → the **registered**
-`tandem_getAnnotations` and `tandem_checkInbox` handlers. Five mutations of the
-read filters — dropping promoted records from either surface, ignoring the
-`heldInSolo` marker after a restart, dropping the Solo author hold, and
-back-publishing a note-era private reply on promotion — were each measured GREEN
-against all 120 specs in the five pre-existing suites and are killed by the new
-file. The last of those is the sharpest: the spec written for exactly that
-scenario (`channel-projection-characterization.test.ts:417-465`) survives it,
-because it watches the channel and the leak is on the pull path.
+`tandem_getAnnotations` and `tandem_checkInbox` handlers. The architectural point
+is what the exercise established, not its arithmetic: **a promotion defect that
+lives on the read filters is invisible to every push-path test, including the one
+written for it.** Back-publishing a note-era private reply when its parent is
+promoted survives `channel-projection-characterization.test.ts:417-465` — the
+spec that exists for precisely that scenario — because it watches the channel
+while the leak is on the pull path. The per-mutation table lives in PR #TBD and
+in the new file's own docblock, which is where a count of "how many specs stayed
+green" can go stale without misleading anyone reading the decision.
 
 This does not close #1619. The pull surfaces still gate on `type` and never on
 `audience`, which is true of any comment, promoted or not.

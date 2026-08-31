@@ -44,7 +44,7 @@ import type * as Y from "yjs";
 
 import { promoteNotesToComments } from "../../src/client/panels/annotation-actions.js";
 import { addUserReply } from "../../src/server/annotations/lifecycle.js";
-import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { addDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   type DocxComment,
   injectCommentsAsAnnotations,
@@ -53,10 +53,10 @@ import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
-import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
+import { clearOpenDocs } from "../helpers/doc-service.js";
 import { getAnnotationsMap, noRelay } from "../helpers/ydoc-factory.js";
 
 const HTML =
@@ -130,8 +130,7 @@ const inboxActionIds = (parsed: { data?: { userActions?: Array<{ id: string }> }
   (parsed.data?.userActions ?? []).map((a) => a.id);
 
 beforeEach(async () => {
-  for (const id of [...getOpenDocs().keys()]) removeDoc(id);
-  setActiveDocId(null);
+  clearOpenDocs();
   resetInbox();
   setCtrlMode("tandem");
   client = await setupMcpClient();
@@ -169,6 +168,12 @@ describe("Unit 8g G1 — a promoted note reaches Claude on the PULL surface", ()
   it("tandem_checkInbox surfaces the promoted note as a user action", async () => {
     const { ydoc, noteIds } = setupImportedDoc("pull-g1-inbox");
 
+    // **A baseline, NOT a control — labelled because it reads like one.** Both
+    // records are `author: "import"` at this point, so they fail the bucket's
+    // author half no matter what the note filtering does; this line would stay
+    // green with the type gate deleted. What it actually establishes is that the
+    // dedup ledger is empty going in, which is what makes the post-promotion
+    // assertion below mean "surfaced now" rather than "surfaced at some point".
     expect(inboxActionIds(await checkInbox())).toStrictEqual([]);
 
     expect(promoteNotesToComments(ydoc, [noteIds[1]], "tandem")).toBe(1);
