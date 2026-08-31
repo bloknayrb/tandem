@@ -326,7 +326,7 @@ interface CommentMeta {
 /** Parse comment id, author, body text, optional date, and last-paragraph paraId. */
 export function parseCommentMetadata(xml: string): Map<string, CommentMeta> {
   const doc = parseDocument(xml, { xmlMode: true });
-  const map = new Map<string, CommentMeta>();
+  const metaMap = new Map<string, CommentMeta>();
 
   for (const comment of findAllByName("w:comment", doc.children)) {
     const id = getAttr(comment, "w:id");
@@ -350,9 +350,9 @@ export function parseCommentMetadata(xml: string): Map<string, CommentMeta> {
         ? getAttr(paragraphs[paragraphs.length - 1], "w14:paraId")?.toLowerCase()
         : undefined;
 
-    map.set(id, { authorName: author, bodyText, date, lastParaId });
+    metaMap.set(id, { authorName: author, bodyText, date, lastParaId });
   }
-  return map;
+  return metaMap;
 }
 
 /**
@@ -363,13 +363,13 @@ export function parseCommentMetadata(xml: string): Map<string, CommentMeta> {
  */
 export function parseCommentThreading(xml: string): Map<string, string> {
   const doc = parseDocument(xml, { xmlMode: true });
-  const map = new Map<string, string>();
+  const threadMap = new Map<string, string>();
   for (const ex of findAllByName("w15:commentEx", doc.children)) {
     const paraId = getAttr(ex, "w15:paraId")?.toLowerCase();
     const parent = getAttr(ex, "w15:paraIdParent")?.toLowerCase();
-    if (paraId && parent) map.set(paraId, parent);
+    if (paraId && parent) threadMap.set(paraId, parent);
   }
-  return map;
+  return threadMap;
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +416,33 @@ export function calculateCommentRanges(
 // ---------------------------------------------------------------------------
 // Annotation injection
 // ---------------------------------------------------------------------------
+
+/**
+ * The ONLY way an imported annotation reaches the Y.Doc, and the reason is the
+ * same one behind `writeReply` in `annotations/lifecycle.ts`: a rule about who
+ * may write a record rots when it lives in prose, so it is spent as a named
+ * symbol a test can count instead.
+ *
+ * **It stamps the author rather than trusting one.** An earlier draft of this
+ * guard defended only against the writer *gaining* an author parameter, and
+ * review supplied the one-line defeat that needs no such parameter: a call site
+ * builds the record with `author: "claude"` and hands it straight through,
+ * leaving every file-set and call-count check green. Typing the parameter to a
+ * literal was the first answer and it is the weaker one — a cast satisfies a
+ * type, and three of the call sites spread an existing record whose inferred
+ * author is the broad union anyway. Overwriting the field means a caller cannot
+ * express the wrong author at all, checked or not.
+ *
+ * Pinned by `tests/server/docx-import-write-seam.test.ts`.
+ */
+function writeImportAnnotation(map: Y.Map<unknown>, id: string, record: Annotation): void {
+  map.set(id, { ...record, author: "import" } satisfies Annotation);
+}
+
+/** The reply half of the same funnel. See `writeImportAnnotation`. */
+function writeImportReply(repliesMap: Y.Map<unknown>, id: string, record: AnnotationReply): void {
+  repliesMap.set(id, { ...record, author: "import" } satisfies AnnotationReply);
+}
 
 /**
  * Inject extracted comments into a Y.Doc's annotation map.
@@ -540,8 +567,16 @@ export function injectCommentsAsAnnotations(
           existing.author === "import" &&
           (existing.type === "comment" || existing.audience !== "private")
         ) {
-          map.set(offsetId, {
-            ...existing,
+          // `color` and `suggestedText` are stripped, not carried: the record
+          // becomes a note, and the note variant of `Annotation` admits
+          // neither. Nothing enforced that before — this write went into
+          // `Y.Map.set(id, unknown)`, so a migrated highlight kept its `color`
+          // and the stored record was simply not a valid note. Routing the
+          // write through a typed writer is what surfaced it.
+          const { color: _dropColor, suggestedText: _dropSuggested, ...priorFields } = existing;
+          writeImportAnnotation(map, offsetId, {
+            ...priorFields,
+            author: "import" as const,
             type: "note" as const,
             audience: "private" as const,
             content: comment.bodyText,
@@ -559,8 +594,9 @@ export function injectCommentsAsAnnotations(
           // so the migration branch above skipped them) gain the original
           // Word id so a later promote → save reuses it. One-shot write —
           // guarded on the field being absent.
-          map.set(offsetId, {
+          writeImportAnnotation(map, offsetId, {
             ...existing,
+            author: "import" as const,
             importSource: { ...existing.importSource, commentId: importSource.commentId },
             rev: nextRev(existing),
           });
@@ -592,14 +628,21 @@ export function injectCommentsAsAnnotations(
           // actually complete; the breaks would be offsets into a string that no
           // longer exists. Same defense-in-depth rationale as the snapshot
           // itself — no import note carries either field today.
+          //
+          // `color` and `suggestedText` join that list for a different reason:
+          // this record becomes a note, and the note variant admits neither.
+          // See the migration branch above — the same unchecked shape, found
+          // the same way.
           const {
             relRange: _staleRel,
             textSnapshot: _staleSnap,
             textSnapshotTruncated: _staleTrunc,
             textSnapshotBreaks: _staleBreaks,
+            color: _staleColor,
+            suggestedText: _staleSuggested,
             ...existingRest
           } = drift.ann;
-          map.set(drift.key, {
+          writeImportAnnotation(map, drift.key, {
             ...existingRest,
             type: "note" as const,
             audience: "private" as const,
@@ -636,7 +679,7 @@ export function injectCommentsAsAnnotations(
             ...(result.fullyAnchored ? { relRange: result.relRange } : {}),
           };
 
-          map.set(offsetId, annotation);
+          writeImportAnnotation(map, offsetId, annotation);
           injected++;
         }
       }
@@ -677,7 +720,7 @@ export function injectCommentsAsAnnotations(
           private: true,
           importAuthor: reply.authorName.slice(0, IMPORT_AUTHOR_MAX),
         };
-        repliesMap.set(replyId, replyRecord);
+        writeImportReply(repliesMap, replyId, replyRecord);
         injectedReplies++;
       }
     }
