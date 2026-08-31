@@ -8,9 +8,14 @@ import {
 import { extractText, getOrCreateXmlText } from "../../src/server/mcp/document.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { generateAnnotationId } from "../../src/shared/utils.js";
-import { createAnnotation } from "../helpers/annotation-minter.js";
 import { unanchored } from "../helpers/positions.js";
-import { getAnnotationsMap, getFragment, makeDoc, rangeOf } from "../helpers/ydoc-factory.js";
+import {
+  createAnnotation,
+  getAnnotationsMap,
+  getFragment,
+  makeDoc,
+  rangeOf,
+} from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 const DOC_HASH = "sha256:annotations-test";

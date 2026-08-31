@@ -17,10 +17,9 @@ import {
   withInternal,
 } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
-import { createAnnotation } from "../helpers/annotation-minter.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { assertReplyOk } from "../helpers/reply-results.js";
-import { noRelay, rangeOf } from "../helpers/ydoc-factory.js";
+import { createAnnotation, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
 function setMode(mode: string | undefined) {
   const ctrl = getOrCreateDocument(CTRL_ROOM);

@@ -19,8 +19,7 @@ import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { createAnnotation } from "../helpers/annotation-minter.js";
-import { rangeOf } from "../helpers/ydoc-factory.js";
+import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
 

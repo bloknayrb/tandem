@@ -13,10 +13,9 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { createAnnotation } from "../helpers/annotation-minter.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { unanchored } from "../helpers/positions.js";
-import { noRelay, rangeOf } from "../helpers/ydoc-factory.js";
+import { createAnnotation, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
 const DOC_HASH = "sha256:annotation-tools";
 

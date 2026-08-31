@@ -32,11 +32,10 @@ import { getBuffer, resetForTesting } from "../../src/server/notifications.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { TandemEvent } from "../../src/shared/events/types.js";
 import { BROWSER_ORIGIN, MCP_ORIGIN, withBrowser } from "../../src/shared/origins.js";
-import { createAnnotation } from "../helpers/annotation-minter.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { unanchored } from "../helpers/positions.js";
 import { filesMentioning, SRC_FILES, stripComments } from "../helpers/src-tree.js";
-import { noRelay } from "../helpers/ydoc-factory.js";
+import { createAnnotation, noRelay } from "../helpers/ydoc-factory.js";
 import { listenForTransactions } from "../helpers/yjs-transactions.js";
 
 beforeEach(() => clearOpenDocs());

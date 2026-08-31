@@ -63,13 +63,53 @@ describe("annotation create seam — who may mint", () => {
     ]);
   });
 
-  it("mintAnnotation — the wide-typed compatibility entry — has NO production caller", () => {
+  it("no src/ file imports from tests/ — the confinement this unit relies on", () => {
+    // Unit 8j-1 moved the wide-typed create wrapper into
+    // `tests/helpers/ydoc-factory.ts` and called that containment "structural".
+    // **It is — for most of `src/`, and this assertion is what covers the rest.**
+    // `tsconfig.server.json` sets `rootDir: "src"`, and `npm run typecheck` runs
+    // it, so a `src/server` file importing from `tests/` fails with TS6059. But
+    // `tsconfig.client.json` and the base config set no `rootDir`, so the same
+    // import from `src/client` produces no type error at all — it would just
+    // bundle test code into `dist/`, silently.
+    //
+    // So the unqualified claim is made true here rather than softened in the
+    // prose. This is the general rule, not a rule about one symbol: the point of
+    // moving an export into `tests/` is that the boundary holds for everything.
+    const reachesTests = /from\s+["'][^"']*\/tests\//;
+
+    // The assertion below is an empty set, so it carries its own proof that the
+    // pattern can fire at all. Both real shapes an offender could take — the
+    // relative climb and an alias — plus a near-miss that must NOT match, so
+    // the pattern is shown to discriminate rather than merely to match.
+    expect(reachesTests.test('import { x } from "../../tests/helpers/annotation-minter.js";')).toBe(
+      true,
+    );
+    expect(reachesTests.test('import { x } from "@tests/helpers/annotation-minter.js";')).toBe(
+      false,
+    );
+    expect(reachesTests.test('import { x } from "./latests/thing.js";')).toBe(false);
+
+    const offenders = [...SRC_FILES]
+      .filter(([, contents]) => reachesTests.test(stripComments(contents)))
+      .map(([rel]) => rel);
+    expect(offenders).toStrictEqual([]);
+  });
+
+  it("mintAnnotation — the wide-typed compatibility entry — is not reachable cross-file", () => {
     // It accepts `note` and `highlight`, which the seam refuses. Until Unit 8j
-    // exactly one caller held that width: `mcp/annotations.ts::createAnnotation`,
+    // exactly one file held that width: `mcp/annotations.ts::createAnnotation`,
     // a production export with zero production callers of its own. That wrapper
-    // now lives in `tests/helpers/annotation-minter.ts`, so the width is
-    // confined structurally — a `src/` file cannot import from `tests/` — and
-    // this set is empty.
+    // now lives in `tests/helpers/ydoc-factory.ts`, so this set is empty.
+    //
+    // **Read the title as the claim it makes.** `importersOf` excludes the
+    // DEFINITION file, so an empty set means "no other `src/` file mentions
+    // it" — NOT "nothing calls it". `createAnnotationLifecycle` calls
+    // `mintAnnotation` in that very file, on the production path. An earlier
+    // version of this spec was titled "has NO production caller" and was simply
+    // false. The property being pinned is cross-file confinement of the wide
+    // `type` parameter, which is worth pinning; it is a different property from
+    // the one `acceptPending` below has.
     //
     // **An empty expectation is a zero check, so it carries its own anchor.**
     // The `[]` below is only meaningful because the sweep can demonstrably see
@@ -80,9 +120,63 @@ describe("annotation create seam — who may mint", () => {
     expect(importersOf("mintAnnotation")).toStrictEqual([]);
   });
 
+  it("the lifecycle module's export list is what it was — an alias defeats every sweep above", () => {
+    // **The defeat this exists for, constructed during review:** add
+    // `export const mint = mintAnnotation;` to the lifecycle and call
+    // `lifecycle.mint(…)` from a `src/` file. The wide-typed minter is reachable
+    // from production again, and BOTH assertions above stay green — the
+    // definition file still contains the literal "mintAnnotation" (so the
+    // anchor passes) and no other file mentions that identifier (so the
+    // importer set is still empty). Every census in this file keys on an
+    // identifier, and an alias is a second name for the same value.
+    //
+    // Pinning the export SET closes it, because an alias has to be exported to
+    // be reachable. This is a list someone chose, which is the whole premise of
+    // the file: adding an export to the lifecycle means saying so here.
+    const source = SRC_FILES.get(DEFINITION);
+    expect(source, "the definition file must be in the sweep").toBeDefined();
+    const exported = [
+      ...stripComments(source ?? "").matchAll(
+        /^export\s+(?:async\s+)?(?:function|const|class|type|interface)\s+(\w+)/gm,
+      ),
+    ]
+      .map((m) => m[1])
+      .sort();
+    expect(exported).toStrictEqual([
+      "AnnotationLifecycle",
+      "AnnotationReplier",
+      "ClaudeReplyResult",
+      "CreateExtras",
+      "CreateInput",
+      "CreateResult",
+      "EditPatch",
+      "EditResult",
+      "LifecycleResult",
+      "MintExtras",
+      "RemoveRecordResult",
+      "RemoveResult",
+      "ReplyRefusalCode",
+      "ReplyResult",
+      "acceptPending",
+      "addUserReply",
+      "createAnnotationLifecycle",
+      "describeReplyWriteRefusal",
+      "dismissPending",
+      "mintAnnotation",
+      "removeAnnotationRecord",
+    ]);
+
+    // The regex must be able to PARSE every export, or a form it cannot read
+    // vanishes from the list silently and the pin quietly covers less. Counting
+    // `^export` lines in the stripped source and requiring the two to agree is
+    // what makes an unparsed form a failure rather than an omission.
+    const exportLines = (stripComments(source ?? "").match(/^export\s/gm) ?? []).length;
+    expect(exported).toHaveLength(exportLines);
+  });
+
   it("nothing invokes create through an already-built lifecycle it did not import", () => {
     // The two assertions above key on the *constructor*, which is one whole
-    // class of new caller short: `DocumentStore` exposes `readonly lifecycle`,
+    // class of new caller short: `YDocStore` exposes `readonly lifecycle`,
     // so a handler anywhere in `src/server/mcp` can write
     // `store.lifecycle.create(...)` while importing nothing this census reads.
     // Keying on the invocation instead is what makes the census answer "who can

@@ -37,9 +37,9 @@ import { withBrowser } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply, ChatMessage } from "../../src/shared/types.js";
 import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
-import { createAnnotation } from "../helpers/annotation-minter.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { range, unanchored } from "../helpers/positions.js";
+import { createAnnotation } from "../helpers/ydoc-factory.js";
 
 const DOC_HASH = "sha256:awareness-tools";
 // Ledger keys are document-scoped (see `surfacedIds`); tests share one id

@@ -56,8 +56,7 @@ import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../src/shared/const
 import { withInternal } from "../../src/shared/origins.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 import { toFlatOffset } from "../../src/shared/types.js";
-import { createAnnotation } from "../helpers/annotation-minter.js";
-import { rangeOf } from "../helpers/ydoc-factory.js";
+import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
 

@@ -15,11 +15,10 @@ import {
   resetForTesting,
 } from "../../src/server/annotations/sync.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { createAnnotation } from "../helpers/annotation-minter.js";
 import { useTmpAnnotationsEnvWithFlag } from "../helpers/annotation-store-env.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { unanchored } from "../helpers/positions.js";
-import { noRelay } from "../helpers/ydoc-factory.js";
+import { createAnnotation, noRelay } from "../helpers/ydoc-factory.js";
 
 useTmpAnnotationsEnvWithFlag("tandem-remove-annotation-test-");
 

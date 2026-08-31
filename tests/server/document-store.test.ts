@@ -10,14 +10,15 @@
  * lifecycle module the handlers used before, and asserts the Y.Map state
  * matches byte-for-byte.
  *
- * **There is no `DocumentStore` interface any more (ADR-035 Unit 8j)** — it had
- * zero importers and `YDocStore` is the only type. Two specs went with it: the
- * `createAnnotation` parity pair, whose subject was a store method with no
- * production callers, and a `getAnnotation` spec named "returns the sanitized
- * record" that asserted only `.content` on a record it had just minted through
- * the canonical path. Neither loss is coverage: creation's origin tag and its
- * record shape are pinned on the lifecycle by
- * `annotation-create-lifecycle.test.ts`.
+ * **`YDocStore` is the only type now** — the `DocumentStore` interface went in
+ * ADR-035 Unit 8j; why is on the class, not restated here. Two specs went with
+ * it: the `createAnnotation` parity pair, whose subject was a store method with
+ * no production callers, and a `getAnnotation` spec named "returns the
+ * sanitized record" that asserted only `.content` on a record it had just
+ * minted through the canonical path. Neither loss is coverage —
+ * `annotation-create-lifecycle.test.ts` pins creation's record shape field-for-
+ * field and asserts `toStrictEqual([MCP_ORIGIN])`, i.e. exactly one tagged
+ * transaction, where the deleted spec captured only the last origin it saw.
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
@@ -38,9 +39,14 @@ import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { AnchoredRangeResult } from "../../src/shared/positions/index.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation, AnnotationType } from "../../src/shared/types.js";
-import { createAnnotation } from "../helpers/annotation-minter.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
-import { noRelay, normalizeForParity, rangeOf } from "../helpers/ydoc-factory.js";
+import {
+  createAnnotation,
+  getAnnotationsMap,
+  noRelay,
+  normalizeForParity,
+  rangeOf,
+} from "../helpers/ydoc-factory.js";
 
 beforeEach(() => {
   clearOpenDocs();
@@ -50,11 +56,14 @@ beforeEach(() => {
  * Stand-in for the deleted `YDocStore.createAnnotation` (ADR-035 Unit 8j).
  *
  * The store method's whole body was `createAnnotation(this.map, this.ydoc, …)`,
- * and `this.map` is `ydoc.getMap(Y_MAP_ANNOTATIONS)` — so this writes the same
- * record through the same function into the same map. The specs below are
+ * and `this.map` is the annotations Y.Map — so this writes the same record
+ * through the same function into the same map. The specs below are
  * setup-equivalent, not weakened: they needed an annotation to exist, not that
  * method in particular. The two specs that DID pin the method itself are
  * deleted rather than ported, because their subject no longer exists.
+ *
+ * Local rather than shared: `document-store.test.ts` is the only file that ever
+ * called `store.createAnnotation(…)`, so no other suite wants this shape.
  */
 function mint(
   ydoc: Y.Doc,
@@ -63,7 +72,7 @@ function mint(
   content: string,
   extras?: MintExtras,
 ): string {
-  return createAnnotation(ydoc.getMap(Y_MAP_ANNOTATIONS), ydoc, type, anchored, content, extras);
+  return createAnnotation(getAnnotationsMap(ydoc), ydoc, type, anchored, content, extras);
 }
 
 const FILE_PATH = "/tmp/doc.md";
@@ -162,11 +171,6 @@ describe("YDocStore lifecycle parity", () => {
   // drive both paths against ONE doc, which is what these two now do — and the
   // reason the `relRange`-is-defined assertion below is load-bearing rather
   // than decorative.
-  //
-  // (This comment used to say "the create-parity spec above already solved this
-  // and says so". That describe was deleted in Unit 8j along with its subject,
-  // `YDocStore.createAnnotation`, so the technique is restated here rather than
-  // pointed at.)
   it.each([
     [
       "accept",

@@ -26,28 +26,33 @@
  * out of `src/`. The `ydoc` / `transactMcp` escape hatches named below are
  * closed by 8j-2 and are **still present until it lands**. The file itself is
  * collapsed, not deleted: after the hatches close it still owns document
- * resolution, and tracker row 85 is titled "Collapse the shallow DocumentStore".
+ * resolution, and tracker row **8j** is titled "Collapse the shallow
+ * DocumentStore" — collapse is what the row asks for.
  *
- * **`AnnotationLifecycle` is the seam callers hold. `DocumentStore` is a
- * compatibility shell that Unit 8j deletes.** Three facts decide it:
+ * **`AnnotationLifecycle` is the seam callers hold. The store is a
+ * compatibility shell.** (Unit 8b wrote "that Unit 8j deletes"; 8j collapses it
+ * instead — see above.) Three facts decided it:
  *
  * - Unit 8's own instruction ends "collapse or delete `DocumentStore`". A seam
  *   scheduled for deletion cannot be the seam callers program against.
- * - `DocumentStore` advertises `readonly ydoc` as an "escape hatch" and
+ * - `YDocStore` advertises `readonly ydoc` as an "escape hatch" and
  *   `transactMcp`. Removing exactly those two is Unit 8's own instruction in
  *   `docs/plans/2026-08-24-ai-assisted-maintainability-remediation.md` — ADR-035
  *   itself predates the store and never names it. **The lifecycle must never
  *   acquire either** — that is an invariant for Units 8c–8j, not a stylistic
  *   note.
- * - `local-model/tools.ts` structurally cannot reach `DocumentStore`: its
+ * - `local-model/tools.ts` structurally cannot reach the store at all: its
  *   `DispatchCtx` carries a `Y.Doc`, a license flag and an agent identity, and
  *   no store. A seam that one of the two production writers cannot hold is not
  *   the seam.
  *
- * Document *resolution* stays in `mcp/document-store.ts` for now (the
- * `getCurrentDoc` / `getOrCreateDocument` lookup lives there, and importing it
- * from this module would make `annotations/ → mcp/` a cycle). Unit 8j moves
- * the lookup. Resolution is not the seam; the interface is.
+ * Document *resolution* stays in `mcp/document-store.ts` (the `getCurrentDoc`
+ * / `getOrCreateDocument` lookup lives there, and importing it from this module
+ * would make `annotations/ → mcp/` a cycle). **Unit 8b said "Unit 8j moves the
+ * lookup"; it does not** — a third module to hold it buys nothing, and the
+ * cycle is the whole reason it cannot come here. Resolution is not the seam,
+ * and the seam is this module — an earlier version of this sentence ended "the
+ * interface is", which stopped being true when 8j-1 deleted it.
  *
  * ## Lifetime rule
  *
@@ -649,24 +654,36 @@ function stripOwnedFields(extras: MintExtras | undefined): MintExtras {
  * entry point survives for the test floor, which needs `note` and `highlight`
  * fixtures the seam deliberately cannot express.
  *
- * **Unit 8j moved its only caller out of `src/`.** That caller was
+ * **Unit 8j moved its only CROSS-FILE caller out of `src/`** — and the
+ * distinction matters, because an earlier draft of this paragraph said "its
+ * only caller" and was wrong. This function is on the hot production path:
+ * {@link createAnnotationLifecycle} calls it directly, a few lines above, to
+ * mint the comment the seam produces. What left `src/` was
  * `mcp/annotations.ts::createAnnotation`, a production export with no
- * production callers, whose sole defence against acquiring one was a census
- * assertion. It now lives at `tests/helpers/annotation-minter.ts`, so the width
- * is confined structurally: a `src/` file cannot import from `tests/`. This
- * function stays here because it performs the real origin-tagged Y.Map write
- * and fires the notification — production code with a test-only caller, the
- * arrangement {@link acceptPending} already has. Both are pinned by
- * `tests/server/annotation-create-seam-census.test.ts`.
+ * production callers of its own, whose sole defence against acquiring one was a
+ * census assertion; it now lives in `tests/helpers/ydoc-factory.ts`.
+ *
+ * So the census assertion for this symbol reads "no OTHER file in `src/`
+ * mentions it" — `importersOf` excludes this file. That is cross-file
+ * confinement of the wide `type` parameter, which is the property worth having,
+ * and it is **not** the same shape as {@link acceptPending}, which genuinely has
+ * no caller at all: the lifecycle reaches `transitionPending` directly rather
+ * than through those wrappers. Both are pinned by
+ * `tests/server/annotation-create-seam-census.test.ts`, under titles that now
+ * say which of the two claims each one makes.
  *
  * It takes `map` explicitly rather than deriving it from `ydoc` so that the
  * legacy signature's map argument is actually used: a delegator that silently
  * discarded it would let the two drift apart with nothing able to observe it.
  *
  * `pushNotification` fires **outside** the transaction, matching the
- * pre-ADR-035 ordering. It lives here rather than at the callers because both
- * production callers raise the same toast and duplicating the label /
- * `dedupKey` derivation across two files is how the two would diverge.
+ * pre-ADR-035 ordering. It lived here originally because the two production
+ * callers raised the same toast and duplicating the label / `dedupKey`
+ * derivation across two files was how they would diverge. **Unit 8j deleted the
+ * second caller**, so that argument no longer applies and the reason to keep it
+ * here is now the ordinary one: the toast belongs to minting, and moving it up
+ * to `createAnnotationLifecycle` would fire it outside the only function that
+ * knows the record was actually written.
  */
 export function mintAnnotation(
   ydoc: Y.Doc,

@@ -7,13 +7,19 @@
  * itself). That coupled the tool logic to Yjs internals and made the handlers
  * awkward to test without standing up a full document service. This class names
  * the operations the handlers actually perform — read text, list/edit/resolve/
- * remove annotations, add/list replies, refresh CRDT ranges — so handlers never
- * write `Y.Map.get`/`set`.
+ * remove annotations, add/list replies, refresh CRDT ranges — so an MCP tool
+ * handler never writes `Y.Map.get`/`set`. (Routes and seeding paths still do:
+ * `routes/mode-release.ts` and `tutorial-annotations.ts` take the map
+ * directly. The claim is about the tool handlers, not all of `src/server/mcp`.)
  *
  * `YDocStore` is the one implementation, and as of Unit 8j the only type: it
- * delegates every mutation to {@link YDocStore.lifecycle} and its remaining
- * reads to the same standalone helpers the handlers used before
- * (`collectAnnotations`, `refreshAllRanges`). That delegation is the parity
+ * delegates the annotation mutations to {@link YDocStore.lifecycle} and
+ * everything else to the same standalone helpers the handlers used before
+ * (`collectAnnotations`, `refreshAllRanges`). **Not a clean read/write split**
+ * — `listAnnotationsRefreshed` and `refreshAnnotation` persist range updates
+ * back into the Y.Map, and `transactMcp` is an unmediated write hatch, so
+ * calling the second group "reads" would be wrong. That delegation is the
+ * parity
  * contract: the underlying Y.Map structures and origin tagging (`withMcp`,
  * ADR-031) are byte-identical to the pre-refactor behavior. The helpers stay
  * exported because the HTTP routes and the existing test suite (the parity
@@ -74,10 +80,14 @@ export class YDocStore {
   /**
    * Absolute (or `upload://`) path of the backing document.
    *
-   * Read by `tandem_exportAnnotations` (`mcp/annotations.ts:632`) through a
-   * DESTRUCTURE — `const { ydoc, filePath } = store` — which is why two
-   * independent census passes over this field reported zero readers and Unit 8j
-   * briefly deleted it. A member-name grep does not see a destructured bind.
+   * Read by the `tandem_exportAnnotations` handler through a DESTRUCTURE —
+   * `const { ydoc, filePath } = store` — which is why two independent census
+   * passes over this field reported zero readers and Unit 8j briefly deleted
+   * it. A member-name grep does not see a destructured bind.
+   *
+   * (Cited by handler rather than by line: the first draft of this comment said
+   * `mcp/annotations.ts:632` and was off by one on the branch that wrote it,
+   * which makes the point better than the citation did.)
    */
   readonly filePath: string;
   readonly docHash: string;

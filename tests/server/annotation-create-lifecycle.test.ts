@@ -37,9 +37,14 @@ import * as notifications from "../../src/server/notifications.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { INTERNAL_ORIGIN, MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { createAnnotation } from "../helpers/annotation-minter.js";
 import { unanchored } from "../helpers/positions.js";
-import { getAnnotationsMap, makeDoc, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
+import {
+  createAnnotation,
+  getAnnotationsMap,
+  makeDoc,
+  noRelay,
+  rangeOf,
+} from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
 let map: Y.Map<unknown>;
