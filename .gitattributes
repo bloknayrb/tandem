@@ -17,13 +17,20 @@
 *.svg   text eol=lf
 LICENSE text eol=lf
 
-# Sources containing literal NUL bytes. `text=auto` above marks them binary on
-# content sniffing, so `git diff` shows only "Bin N -> M bytes" and the file is
-# INVISIBLE in every pull request. `docx-comments.ts` uses \0 as the field
-# separator in the importAnnotationId hash (changing that separator would
-# rewrite every imported-comment id and break the #1150 drift dedup), so force a
-# textual diff instead. It is also the file that owns Word-comment anchor math —
-# the one place a one-character error shifts every imported comment.
+# A GUARD, not a description of today. `docx-comments.ts` no longer holds raw NUL
+# bytes — its importAnnotationId delimiter is written as the `\0` escape — so
+# `git diff` renders it textually with or without this line. It stays because the
+# raw form is a one-character edit away, and reintroducing it is silent: `text=auto`
+# above marks a NUL-bearing file binary on content sniffing, and the file then
+# shows only "Bin N -> M bytes" and goes INVISIBLE in every pull request. That
+# opacity is not hypothetical — while the escapes were still raw bytes it hid the
+# delimiter from `grep` and from a review agent, which then reported a confident,
+# entirely fabricated hash collision built on the wrong separator.
+#
+# The delimiter's *value* must not change either: that would rewrite every
+# imported-comment id and break the #1150 drift dedup. The escape is the same
+# value. This is also the file that owns Word-comment anchor math — the one place
+# a one-character error shifts every imported comment.
 src/server/file-io/docx-comments.ts diff
 
 # Binary assets -- never touch
