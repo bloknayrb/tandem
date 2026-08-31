@@ -9,8 +9,13 @@
  * about who may write a record is exactly the kind of claim that rots in prose,
  * which is what Units 8e and 8f replaced with censuses.
  *
- * `docx-comments.test.ts` pins what the import path DOES. This file pins who is
- * allowed to write, which no behavioural spec can see.
+ * `docx-comments.test.ts` pins what the import path DOES — including that every
+ * stored record carries `author: "import"`, asserted off a real import in four
+ * places. This file deliberately holds no behavioural spec of its own: an
+ * earlier draft rebuilt a fixture to re-reach that same conclusion, and the
+ * mutation battery showed it added no detection, since the stamp-removed
+ * mutation is killed by the source-anchored spec below. What this file pins is
+ * who is allowed to write, which no behavioural spec can see.
  *
  * Three directions, asserted separately because they fail separately:
  *
@@ -34,13 +39,6 @@
  */
 
 import { describe, expect, it } from "vitest";
-import * as Y from "yjs";
-import type { DocxComment } from "../../src/server/file-io/docx-comments.js";
-import { injectCommentsAsAnnotations } from "../../src/server/file-io/docx-comments.js";
-import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
-import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
-import { off } from "../helpers/positions.js";
 import { filesMentioning, SRC_FILES, stripComments } from "../helpers/src-tree.js";
 
 const DOCX_COMMENTS = "src/server/file-io/docx-comments.ts";
@@ -99,37 +97,6 @@ describe("ADR-035 Unit 8h: who may write an imported annotation", () => {
     // empty result cannot pass.
     expect(filesMentioning("writeImportAnnotation")).toStrictEqual([DOCX_COMMENTS]);
     expect(filesMentioning("writeImportReply")).toStrictEqual([DOCX_COMMENTS]);
-  });
-
-  it("stamps author=import on every written record rather than trusting the caller", () => {
-    // The behavioural half. A real import through the real entry point, then
-    // every stored record is checked — so this fails if a writer stops
-    // stamping, whatever the call sites happen to pass.
-    const doc = new Y.Doc();
-    htmlToYDoc(doc, "<p>Hello World, this is the body text.</p>");
-
-    const comments: DocxComment[] = [
-      {
-        commentId: "1",
-        authorName: "Alice",
-        bodyText: "root comment",
-        from: off(0),
-        to: off(5),
-        replies: [{ commentId: "2", authorName: "Bob", bodyText: "a reply" }],
-      },
-    ];
-    expect(injectCommentsAsAnnotations(doc, comments)).toBe(1);
-
-    const annotations = [...doc.getMap(Y_MAP_ANNOTATIONS).values()] as Annotation[];
-    const replies = [...doc.getMap(Y_MAP_ANNOTATION_REPLIES).values()] as AnnotationReply[];
-
-    // Discriminating precondition: assert something was written, or "every
-    // record has author import" is satisfied by having no records.
-    expect(annotations.length).toBe(1);
-    expect(replies.length).toBe(1);
-
-    expect(annotations.every((a) => a.author === "import")).toBe(true);
-    expect(replies.every((r) => r.author === "import")).toBe(true);
   });
 
   it("keeps the stamp in the writer, where a call site cannot opt out of it", () => {

@@ -48,6 +48,18 @@ const NON_CANONICAL_TAG = "nc:";
  * *pre-image*, which is where it actually lives — a test over digests can only
  * observe that two ids happen to differ.
  */
+/**
+ * The one fallback encoding, in one place -- both id families share it, so a
+ * later change to the tag or the encoding cannot land on only one of them.
+ *
+ * JSON is injective over these fields, and it renders a raw NUL as six
+ * characters rather than a byte, so no field can forge either family's
+ * delimiter.
+ */
+function fallbackPreImage(...fields: (string | number)[]): string {
+  return `${NON_CANONICAL_TAG}${JSON.stringify(fields)}`;
+}
+
 export function annotationPreImage(
   commentId: string,
   from: number,
@@ -55,10 +67,9 @@ export function annotationPreImage(
   bodyText: string,
 ): string {
   // Canonical: today's exact bytes, so every real document's ids are unmoved.
-  if (isCanonicalWordId(commentId)) return `${commentId}\0${from}\0${to}\0${bodyText}`;
-  // Fallback: JSON is injective over these fields — it renders a raw NUL as the
-  // six characters `\u0000`, never a byte, so no field can forge the delimiter.
-  return `${NON_CANONICAL_TAG}${JSON.stringify([commentId, from, to, bodyText])}`;
+  return isCanonicalWordId(commentId)
+    ? `${commentId}\0${from}\0${to}\0${bodyText}`
+    : fallbackPreImage(commentId, from, to, bodyText);
 }
 
 /** The exact bytes hashed for a reply id. Exported for the same reason. */
@@ -67,10 +78,9 @@ export function replyPreImage(
   replyCommentId: string,
   bodyText: string,
 ): string {
-  if (isCanonicalWordId(rootCommentId) && isCanonicalWordId(replyCommentId)) {
-    return `${rootCommentId} ${replyCommentId} ${bodyText}`;
-  }
-  return `${NON_CANONICAL_TAG}${JSON.stringify([rootCommentId, replyCommentId, bodyText])}`;
+  return isCanonicalWordId(rootCommentId) && isCanonicalWordId(replyCommentId)
+    ? `${rootCommentId} ${replyCommentId} ${bodyText}`
+    : fallbackPreImage(rootCommentId, replyCommentId, bodyText);
 }
 
 /**
@@ -571,8 +581,14 @@ export function injectCommentsAsAnnotations(
           // becomes a note, and the note variant of `Annotation` admits
           // neither. Nothing enforced that before — this write went into
           // `Y.Map.set(id, unknown)`, so a migrated highlight kept its `color`
-          // and the stored record was simply not a valid note. Routing the
-          // write through a typed writer is what surfaced it.
+          // and the stored record was simply not a valid note.
+          //
+          // Review proposed hoisting this strip into `writeImportAnnotation` so
+          // a future branch inherits it. It cannot go there, and the reason is
+          // the better guarantee: with the writer typed to `Annotation`, a call
+          // site that spreads a coloured record does not COMPILE. Stripping
+          // inside the writer would mean loosening that parameter, trading a
+          // build-time refusal for a silent runtime repair.
           const { color: _dropColor, suggestedText: _dropSuggested, ...priorFields } = existing;
           writeImportAnnotation(map, offsetId, {
             ...priorFields,
@@ -632,7 +648,8 @@ export function injectCommentsAsAnnotations(
           // `color` and `suggestedText` join that list for a different reason:
           // this record becomes a note, and the note variant admits neither.
           // See the migration branch above — the same unchecked shape, found
-          // the same way.
+          // the same way, and the same reason it is stripped here rather than
+          // inside the writer.
           const {
             relRange: _staleRel,
             textSnapshot: _staleSnap,
