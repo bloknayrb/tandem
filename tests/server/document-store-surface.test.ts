@@ -33,16 +33,24 @@
  * `#private`: that one is closed by the compiler, not by a test.
  */
 
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { stripComments } from "../helpers/src-tree.js";
+import { SRC_FILES, stripComments } from "../helpers/src-tree.js";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-
+/**
+ * Read a `src/` file from the SHARED cache, never from disk.
+ *
+ * `SRC_FILES` is one `readdirSync` walk per worker, and its own header records
+ * why: a re-read per lookup was measurably enough extra Windows filesystem
+ * contention to push two suites over their timeouts in the full run. The first
+ * draft of this file called `readFileSync` inside each `it` — three reads, two
+ * of them on the same path — which is the fifth copy of a walk the helper exists
+ * to prevent. It also throws on undecodable content, so a mangled file fails
+ * loudly here rather than silently matching no members.
+ */
 function read(rel: string): string {
-  return stripComments(readFileSync(path.join(ROOT, rel), "utf8"));
+  const source = SRC_FILES.get(rel);
+  if (source === undefined) throw new Error(`${rel} is not in the src/ sweep`);
+  return stripComments(source);
 }
 
 /**

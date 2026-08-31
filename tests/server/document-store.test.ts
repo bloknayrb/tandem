@@ -350,9 +350,11 @@ describe("YDocStore.refreshAnnotations — the batch that replaced transactMcp",
 
     const origins: unknown[] = [];
     const observer = (events: Array<Y.YEvent<any>>, txn: Y.Transaction) => {
-      // Only transactions that touched one of OUR two annotation keys count —
-      // the fixture above is itself an `MCP_ORIGIN` transaction, and counting it
-      // would make the length assertion pass for the wrong reason.
+      // Only transactions that touched one of OUR two annotation keys count.
+      // The observer attaches after the fixture edit, so that one is already
+      // outside the window; what this filter buys is attribution — the recorded
+      // origin belongs to the refresh write specifically, not to any other
+      // annotation-map write the call might grow later.
       const touched = events.some((e) =>
         [...e.changes.keys.keys()].some((k) => k === first || k === second),
       );

@@ -32,6 +32,7 @@ import {
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
+  Y_MAP_ACTIVITY,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AUTHORSHIP,
   Y_MAP_MODE,
@@ -841,6 +842,47 @@ describe("MCP tool integration — awareness tools", () => {
     expect(parsed.error).toBe(false);
     expect(parsed.data.summary).toBeDefined();
     expect(parsed.data.hasNew).toBe(false);
+  });
+
+  it("tandem_getActivity reports seeded typing activity, and nothing when there is none", async () => {
+    // **This handler had no behavioural spec at all before Unit 8j-2.** Only
+    // `license-gate-coverage.test.ts` named `tandem_getActivity`, and that
+    // walks registration sites — it would pass against any handler body. The
+    // unit repointed this one off a hand-rolled
+    // `getOrCreateDocument(...).getMap(Y_MAP_USER_AWARENESS)` read onto
+    // `store.getUserAwareness()`, which is a resolution path (equivalent by
+    // construction: `getDocumentStore` IS `getCurrentDoc` +
+    // `getOrCreateDocument`) that nothing would have reported breaking.
+    //
+    // Seeded on the DOCUMENT's map, not `CTRL_ROOM`'s: awareness is
+    // per-document, unlike mode.
+    const ydoc = setupDoc("mcp-aw-activity", "Hello world");
+    withInternal(ydoc, () =>
+      ydoc.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_ACTIVITY, {
+        isTyping: true,
+        cursor: 7,
+        lastEdit: Date.now(),
+      }),
+    );
+
+    const result = await client.callTool({
+      name: "tandem_getActivity",
+      arguments: {},
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.active).toBe(true);
+    expect(parsed.data.isTyping).toBe(true);
+    expect(parsed.data.cursor).toBe(7);
+
+    // The control: a document with an empty awareness map takes the other
+    // branch. Without it, a handler that returned a constant `active: true`
+    // would satisfy every assertion above.
+    setupDoc("mcp-aw-activity-empty", "Hello world");
+    const empty = parseResult(await client.callTool({ name: "tandem_getActivity", arguments: {} }));
+    expect(empty.error).toBe(false);
+    expect(empty.data.active).toBe(false);
+    expect(empty.data.cursor).toBe(null);
   });
 
   it("tandem_reply sends a chat message", async () => {

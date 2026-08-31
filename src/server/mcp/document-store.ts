@@ -29,11 +29,9 @@
  * removal (ADR-035 predates this store and never mentions it). Every method
  * below is named for what a handler does, and **none returns a `Y.Doc` or a
  * `Y.Map`** — one that did would be the hatch under a different name. The doc
- * and the annotations map are `#private`, not `private`, because `private`
- * erases at compile time and Y.js's `AbstractType` carries a public `doc`
- * field: `(store as any).map.doc` handed back the raw doc with no new member for
- * any static pin to see. That is the only structural half of this closure; the
- * rest is a pinned member list.
+ * and the annotations map are `#private` rather than `private`, which is the
+ * only structural half of this closure; the `#ydoc` field's own note carries
+ * why that difference is load-bearing. The rest is a pinned member list.
  *
  * **What this does NOT close, stated because the opposite reads as true.** The
  * raw `Y.Doc` is still reachable inside `src/server/mcp/` through
@@ -63,6 +61,7 @@ import {
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
+import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply, FlatOffset } from "../../shared/types.js";
 import { docHash } from "../annotations/doc-hash.js";
@@ -257,7 +256,7 @@ export class YDocStore {
     from: FlatOffset,
     to: FlatOffset,
     textSnapshot?: string,
-  ): ReturnType<typeof anchoredRange> {
+  ): AnchoredRangeResult | (RangeValidation & { ok: false }) {
     return anchoredRange(this.#ydoc, from, to, textSnapshot, { rejectHeadingOverlap: true });
   }
 

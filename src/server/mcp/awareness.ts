@@ -1,13 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
-import {
-  CTRL_ROOM,
-  Y_MAP_ACTIVITY,
-  Y_MAP_CHAT,
-  Y_MAP_CHAT_STREAM,
-  Y_MAP_USER_AWARENESS,
-} from "../../shared/constants.js";
+import { CTRL_ROOM, Y_MAP_CHAT, Y_MAP_CHAT_STREAM } from "../../shared/constants.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
 import type {
   AgentIdentity,
@@ -252,18 +246,10 @@ export function registerAwarenessTools(server: McpServer): void {
         .describe("Target document ID (defaults to active document)"),
     },
     withErrorBoundary("tandem_getActivity", async ({ documentId }) => {
-      const current = getCurrentDoc(documentId);
-      if (!current) return noDocumentError();
+      const store = getDocumentStore(documentId);
+      if (!store) return noDocumentError();
 
-      const doc = getOrCreateDocument(current.docName);
-      const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
-      const activity = userAwareness.get(Y_MAP_ACTIVITY) as
-        | {
-            isTyping: boolean;
-            cursor: number;
-            lastEdit: number;
-          }
-        | undefined;
+      const { activity } = store.getUserAwareness();
 
       if (!activity) {
         return mcpSuccess({
@@ -325,20 +311,16 @@ export function registerAwarenessTools(server: McpServer): void {
         // value can never disagree within a single poll.
         const modeState = readModeState();
 
-        // Refresh only unsurfaced annotations; batch Y.Map writes.
-        // `store.refreshAnnotations` returns the refreshed records (the
-        // underlying refreshRange yields a tagged RefreshResult per ADR-032) and
-        // owns the single origin-tagged transaction; the inbox surfacer doesn't
-        // currently distinguish refresh outcomes. A future enhancement could
-        // route `degraded` / `failed` annotations into a separate notification.
+        // Refresh only unsurfaced annotations, in the one batch
+        // `YDocStore.refreshAnnotations` owns the transaction for (its docblock
+        // carries why the callee owns it). The inbox surfacer doesn't currently
+        // distinguish refresh outcomes; a future enhancement could route
+        // `degraded` / `failed` annotations into a separate notification.
         //
         // **This calls the exported function rather than the private one, and
         // that is the point of Unit 8j-2's A2.** The selection loop used to be
         // duplicated here, inline inside a `store.transactMcp`, while every
-        // ledger/Solo/dedup spec drove the exported copy. One loop now, and the
-        // transaction boundary belongs to the store method rather than to this
-        // call site — which is what stops it from being dropped by a later edit
-        // that looks local and correct.
+        // ledger/Solo/dedup spec drove the exported copy. One loop now.
         //
         // `modeState` and `wasEmittedViaChannel` are passed EXPLICITLY. Both
         // default, and the `modeState` default is the fail-closed-sounding
@@ -555,16 +537,12 @@ export function processInboxAnnotations(
   // selection reads only the pre-refresh records and a stable ledger — a refresh
   // of one annotation cannot change another's selection outcome — so batching
   // costs no fidelity against the per-item loop this replaces.
-  const candidates: Annotation[] = [];
-  for (const raw of allAnnotations) {
-    const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, raw.id));
-    if (lastSurfacedEditedAt === undefined) {
-      candidates.push(raw);
-    } else if ((raw.editedAt ?? 0) > lastSurfacedEditedAt) {
-      candidates.push(raw);
-    }
-  }
-  const unsurfaced = refreshAll(candidates);
+  const unsurfaced = refreshAll(
+    allAnnotations.filter((raw) => {
+      const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, raw.id));
+      return lastSurfacedEditedAt === undefined || (raw.editedAt ?? 0) > lastSurfacedEditedAt;
+    }),
+  );
 
   return processUnsurfacedInboxAnnotations(
     unsurfaced,
