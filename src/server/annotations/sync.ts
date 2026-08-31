@@ -331,6 +331,15 @@ export function registerAnnotationObserver(
  * for the same id) is a no-op. Guards against unbounded array growth if a
  * caller double-fires (and is the contract relied on when the observer
  * fires after a caller-side `recordTombstone`).
+ *
+ * **This MINTS a record; it does not carry one.** The result is always a fresh
+ * `{ id, rev, deletedAt: Date.now() }`, so a caller reseeding from a STORED
+ * tombstone keeps the rev and loses the original `deletedAt` and any
+ * passthrough fields — and `deletedAt` is what `cleanupStaleTombstones` ages
+ * against, so the reseed resets that clock. `migrateTombstoneLedger` spreads
+ * instead, which is why the two differ. The one reseeding caller today
+ * (`rename-recovery.ts`) is fail-safe under this and says so at its call site;
+ * a new one must check its own case rather than inherit that reasoning.
  */
 export function recordTombstone(docHash: string, annotationId: string, prevRev: number): void {
   const newRev = prevRev + 1;
@@ -371,9 +380,11 @@ export function getTombstones(docHash: string): TombstoneRecordV1[] {
  * Not order-independent on the rest of the record: first writer wins a rev tie,
  * so under two folds into one destination the surviving `deletedAt` (and every
  * passthrough field) depends on fold order — and `deletedAt` is what
- * `cleanupStaleTombstones` ages against. Unreachable today, since a rename has
- * exactly one source ledger; stated so a second source is recognised as a change
- * in kind rather than in degree.
+ * `cleanupStaleTombstones` ages against. It takes TWO folds into one destination
+ * to observe, and no caller does that today — but that is a property of the call
+ * graph, not of this function, and nothing asserts it. A second fold source is
+ * therefore a change in kind here while looking like a change in degree at the
+ * call site.
  *
  * The `fromHash` ledger is left intact; the caller's subsequent
  * `clearFileSyncContext` / observer teardown ("close" phase) deletes it.

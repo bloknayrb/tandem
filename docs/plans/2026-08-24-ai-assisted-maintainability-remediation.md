@@ -1421,9 +1421,10 @@ would delete a correctness mechanism. The unit is rescoped accordingly.
 > `sync.ts:562-578`, or `migrateTombstoneLedger` (`sync.ts:372`). None of them
 > observes a Y.Map delete — they seed the ledger from on-disk state — so no
 > observer, at any snapshot width, can replace them. Instead, mark ADR-035's
-> tombstone item implemented, delete the now-wrong "widen the observer's
-> snapshot" consequence at decisions.md:680, and correct the stale premise at
-> decisions.md:643 that says `removeAnnotationById` calls `recordTombstone`.
+> tombstone item implemented, ~~delete the now-wrong "widen the observer's
+> snapshot" consequence at decisions.md:680~~, and correct the stale premise at
+> ~~decisions.md:643~~ decisions.md:826 that says `removeAnnotationById` calls
+> `recordTombstone`.
 >
 > — *Corrected on execution (Unit 8i).* **The "widen the observer's snapshot"
 > consequence is not wrong and was NOT deleted.** #700's diff changed the
@@ -1437,7 +1438,7 @@ would delete a correctness mechanism. The unit is rescoped accordingly.
 > resolution note, so only :861's present tense needed fixing.
 >
 > Then pin the four behaviors that a future refactor in this area would break,
-> none of which is currently covered:
+> ~~none of which is currently covered~~:
 >
 > — *Corrected on execution (Unit 8i).* **Three of the four were already
 > covered, in whole or in part**, so this unit shipped three pins rather than
@@ -1452,8 +1453,8 @@ would delete a correctness mechanism. The unit is rescoped accordingly.
 > 1. A `Y.Map` delete whose old value carries **no `rev`**: `sync.ts:271-281`
 >    falls back to `prevRev = 0` and warns, so the tombstone lands at `rev: 1`
 >    and loses the merge against any live copy at `rev >= 1` (the delete rule
->    is `stone.rev > ymapRec.rev`, decisions.md:489). This is a real
->    resurrection path on legacy session blobs. — *Corrected on execution:*
+>    is `stone.rev > ymapRec.rev`, decisions.md:489). ~~This is a real
+>    resurrection path on legacy session blobs.~~ — *Corrected on execution:*
 >    `prevRev = 0` is nonetheless the CORRECT fallback and must not be raised.
 >    `normalizeAnnotation` maps a missing `rev` to 0, so 1 is the minimum value
 >    that beats the record the observer actually saw. The residual loss is

@@ -90,6 +90,13 @@ afterEach(() => {
   resetForTesting();
   resetStoreForTesting();
   resetMigrationLog();
+  // Every console spy in this file restores by hand as its last statement, so
+  // an assertion that fails mid-spec leaks the mock and silences that channel
+  // for the rest of the run — the failure then reads as one red spec rather
+  // than as blindness. `vitest.config.ts` sets no `restoreMocks`, so this is
+  // the file-wide net. It restores `vi.spyOn` spies only; the module mock at
+  // the top is unaffected.
+  vi.restoreAllMocks();
 });
 
 // ---------------------------------------------------------------------------
@@ -1137,10 +1144,15 @@ describe("loadAndMerge — rename tombstone union (#1040)", () => {
     const byId = new Map(getTombstones(HASH_A).map((t) => [t.id, t]));
     expect(byId.size).toBe(4);
 
-    // Arrival — the in-spec control, so the spec cannot pass by doing nothing.
+    // Arrival — a control, not a mutant-kill: removing it leaves every mutant
+    // above still caught. It is here so the spec cannot pass by folding
+    // nothing at all, and so the destination-empty case stays readable.
     expect(byId.get("ann_only_from")?.rev).toBe(2);
 
-    // Source wins on a higher rev, and brings its own record with it.
+    // Source wins on a higher rev, and brings its own record with it. The
+    // timestamp half carries a third mutant of its own, beyond the two named
+    // above: a partial overwrite that copies `rev` onto the destination while
+    // keeping its old record dies here and nowhere else.
     expect(byId.get("ann_from_higher")?.rev).toBe(9);
     expect(byId.get("ann_from_higher")?.deletedAt).not.toBe(103);
 
@@ -1394,39 +1406,42 @@ describe("observer-driven tombstones (#695)", () => {
     // green with the whole `hasRev` fallback deleted, because then the test's
     // own literal supplies the rev rather than the branch under test.
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const ydoc = new Y.Doc();
-      const store = createStore(HASH_A, { filePath: FILE_A });
-      const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
 
-      const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
-      // `annRecord` always supplies `rev: 0`; drop the key entirely so the
-      // stored value is shaped like a pre-`rev` legacy session blob.
-      const { rev: _omit, ...legacy } = annRecord({ id: "ann_legacy" });
-      annMap.set("ann_legacy", legacy as AnnotationRecordV1);
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // `annRecord` always supplies `rev: 0`; drop the key entirely so the
+    // stored value is shaped like a pre-`rev` legacy session blob.
+    const legacy = { ...annRecord({ id: "ann_legacy" }) } as Partial<AnnotationRecordV1>;
+    delete legacy.rev;
+    annMap.set("ann_legacy", legacy);
 
-      ydoc.transact(() => annMap.delete("ann_legacy"), MCP_ORIGIN);
+    ydoc.transact(() => annMap.delete("ann_legacy"), MCP_ORIGIN);
 
-      const stones = getTombstones(HASH_A);
-      expect(stones).toHaveLength(1);
-      expect(stones[0].rev).toBe(1);
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(String(warnSpy.mock.calls[0]?.[0])).toContain("ann_legacy");
+    const stones = getTombstones(HASH_A);
+    expect(stones).toHaveLength(1);
+    expect(stones[0].rev).toBe(1);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(String(warnSpy.mock.calls[0]?.[0])).toContain("ann_legacy");
 
-      // Now the consequence, on the SAME ledger. `"swap"` rather than
-      // `"close"`, because close drops the ledger and the merge below has to
-      // see the tombstone the observer just recorded — a fresh
-      // `recordTombstone` here would be the planting this spec exists to avoid.
-      cleanup("swap");
-      annMap.set("ann_legacy", annRecord({ id: "ann_legacy", rev: 1, content: "reborn" }));
+    // Now the consequence, on the SAME ledger. `"swap"` rather than
+    // `"close"`, because close drops the ledger and the merge below has to
+    // see the tombstone the observer just recorded.
+    //
+    // This half COULD be its own spec — `recordTombstone(HASH_A, id, 0)`
+    // produces an identical ledger, so an earlier version of this comment
+    // was wrong to call the spec unsplittable. What the chain buys is the
+    // link between the two: split, one spec pins the value the fallback
+    // picks and the other pins the merge rule at a tie, and nothing asserts
+    // that the value the fallback picks IS the one that ties.
+    cleanup("swap");
+    annMap.set("ann_legacy", annRecord({ id: "ann_legacy", rev: 1, content: "reborn" }));
 
-      const cleanup2 = await loadAndMerge(syncCtx(ydoc, store));
-      const survivor = annMap.get("ann_legacy") as AnnotationRecordV1 | undefined;
-      expect(survivor?.content).toBe("reborn");
-      cleanup2();
-    } finally {
-      warnSpy.mockRestore();
-    }
+    const cleanup2 = await loadAndMerge(syncCtx(ydoc, store));
+    const survivor = annMap.get("ann_legacy") as AnnotationRecordV1 | undefined;
+    expect(survivor?.content).toBe("reborn");
+    cleanup2();
   });
 
   it("a delete whose old value HAS a rev tombstones at rev+1 and does not warn", () => {
@@ -1434,25 +1449,21 @@ describe("observer-driven tombstones (#695)", () => {
     // unconditionally — or one that always uses the `prevRev = 0` fallback —
     // survives, since the other spec only ever asserts the legacy shape.
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const ydoc = new Y.Doc();
-      const store = createStore(HASH_A, { filePath: FILE_A });
-      const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
 
-      const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
-      annMap.set("ann_versioned", annRecord({ id: "ann_versioned", rev: 5 }));
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    annMap.set("ann_versioned", annRecord({ id: "ann_versioned", rev: 5 }));
 
-      ydoc.transact(() => annMap.delete("ann_versioned"), MCP_ORIGIN);
+    ydoc.transact(() => annMap.delete("ann_versioned"), MCP_ORIGIN);
 
-      const stones = getTombstones(HASH_A);
-      expect(stones).toHaveLength(1);
-      expect(stones[0].rev).toBe(6);
-      expect(warnSpy).not.toHaveBeenCalled();
+    const stones = getTombstones(HASH_A);
+    expect(stones).toHaveLength(1);
+    expect(stones[0].rev).toBe(6);
+    expect(warnSpy).not.toHaveBeenCalled();
 
-      cleanup();
-    } finally {
-      warnSpy.mockRestore();
-    }
+    cleanup();
   });
 });
 
@@ -1619,6 +1630,11 @@ describe("observer cleanup — tombstone survival (#333)", () => {
     // consumer of this cleanup reaches it through `safeCleanup`, which forwards
     // an explicit phase at all four of its call sites. This pins the contract
     // for a future caller and for the optional `phase?` in the returned type.
+    //
+    // A required parameter would be the stronger form — it refuses that future
+    // caller rather than describing what happens to it — and this spec would
+    // then be deleted rather than kept alongside it. The trade is ~100
+    // mechanical test edits against a three-spec PR; it is #1695, not a defect.
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
     const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
