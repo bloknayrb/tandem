@@ -380,10 +380,14 @@ export function getTombstones(docHash: string): TombstoneRecordV1[] {
  * Not order-independent on the rest of the record: first writer wins a rev tie,
  * so under two folds into one destination the surviving `deletedAt` (and every
  * passthrough field) depends on fold order — and `deletedAt` is what
- * `cleanupStaleTombstones` ages against. It takes TWO folds into one destination
- * to observe, and no caller does that today — but that is a property of the call
- * graph, not of this function, and nothing asserts it. A second fold source is
- * therefore a change in kind here while looking like a change in degree at the
+ * `cleanupStaleTombstones` ages against. It takes two folds from DIFFERENT
+ * sources to observe, and no caller does that today. A rename does fold twice
+ * into one destination (`document-service.ts` before the RMW snapshot, then
+ * `loadAndMerge`'s `migrateTombstonesFrom`), but both folds share one source and
+ * the first spreads it, so the records re-entering on the second are
+ * byte-identical and the order dependence is unobservable. That is a property of
+ * the call graph, not of this function, and nothing asserts it: a second fold
+ * SOURCE is a change in kind here while looking like a change in degree at the
  * call site.
  *
  * The `fromHash` ledger is left intact; the caller's subsequent

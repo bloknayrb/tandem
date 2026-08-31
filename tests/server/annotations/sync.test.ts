@@ -90,12 +90,14 @@ afterEach(() => {
   resetForTesting();
   resetStoreForTesting();
   resetMigrationLog();
-  // Every console spy in this file restores by hand as its last statement, so
-  // an assertion that fails mid-spec leaks the mock and silences that channel
-  // for the rest of the run — the failure then reads as one red spec rather
-  // than as blindness. `vitest.config.ts` sets no `restoreMocks`, so this is
-  // the file-wide net. It restores `vi.spyOn` spies only; the module mock at
-  // the top is unaffected.
+  // Console spies here restore by hand as their last statement, which does
+  // nothing for a spec that fails mid-body: the mock leaks and silences that
+  // channel for the rest of the run, so the failure reads as one red spec
+  // rather than as blindness. This is the net for that, and the two warn specs
+  // below rely on it rather than restoring by hand — so the by-hand calls above
+  // are now belt-and-braces, not the mechanism. `vitest.config.ts` sets no
+  // `restoreMocks`. Restores `vi.spyOn` spies only; the module mock at the top
+  // of the file is unaffected, and its call history is NOT cleared.
   vi.restoreAllMocks();
 });
 
@@ -1145,14 +1147,17 @@ describe("loadAndMerge — rename tombstone union (#1040)", () => {
     expect(byId.size).toBe(4);
 
     // Arrival — a control, not a mutant-kill: removing it leaves every mutant
-    // above still caught. It is here so the spec cannot pass by folding
-    // nothing at all, and so the destination-empty case stays readable.
+    // above still caught, and the size check already stops the spec passing on
+    // a fold that did nothing. It earns its place by keeping the
+    // destination-empty case readable beside the three that are not.
     expect(byId.get("ann_only_from")?.rev).toBe(2);
 
     // Source wins on a higher rev, and brings its own record with it. The
     // timestamp half carries a third mutant of its own, beyond the two named
     // above: a partial overwrite that copies `rev` onto the destination while
-    // keeping its old record dies here and nowhere else.
+    // keeping its old record. Measured RED here, and here only — an
+    // unguarded-spread spelling of the same idea would also break the
+    // arrival row, so "only" is about this spelling, not the whole class.
     expect(byId.get("ann_from_higher")?.rev).toBe(9);
     expect(byId.get("ann_from_higher")?.deletedAt).not.toBe(103);
 
@@ -1168,6 +1173,56 @@ describe("loadAndMerge — rename tombstone union (#1040)", () => {
     // The fold is a fold, not a move: the source ledger survives it. Its
     // teardown is the caller's "close" phase, not this function.
     expect(getTombstones(HASH_B)).toHaveLength(4);
+
+    cleanup();
+  });
+
+  it("the load-time seed unions file tombstones with the in-memory ledger, highest rev winning", async () => {
+    // The sibling of the fold rule above, 200 lines away and guarding the same
+    // window: `loadAndMerge` seeds from the file INTO the in-memory ledger, and
+    // the in-memory side may hold a migrated-forward delete the file does not
+    // carry yet (#1040 window a3). If a lower-rev file record could clobber it,
+    // that delete is lost and the annotation resurrects.
+    //
+    // Measured as genuinely open before this spec: making the seed
+    // unconditional, and inverting its comparison, BOTH survived the whole
+    // annotation suite. The fold rule was pinned and this one was not.
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeAnnotationDoc(HASH_A, FILE_A, {
+        annotations: [],
+        tombstones: [
+          { id: "ann_file_loses", rev: 2, deletedAt: 100 },
+          { id: "ann_file_wins", rev: 9, deletedAt: 109 },
+          { id: "ann_tie", rev: 3, deletedAt: 103 },
+        ],
+      }),
+    );
+    await store0.flush();
+    resetStoreForTesting();
+    resetForTesting();
+
+    // In-memory ledger, as a rename's fold-forward would have left it.
+    recordTombstone(HASH_A, "ann_file_loses", 4); // → rev 5, beats the file's 2
+    recordTombstone(HASH_A, "ann_file_wins", 2); // → rev 3, loses to the file's 9
+    recordTombstone(HASH_A, "ann_tie", 2); // → rev 3, an exact tie
+
+    const ydoc = new Y.Doc();
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+
+    const byId = new Map(getTombstones(HASH_A).map((t) => [t.id, t]));
+    expect(byId.size).toBe(3);
+
+    // The in-memory record is the one that must not be lost.
+    expect(byId.get("ann_file_loses")?.rev).toBe(5);
+    // The file legitimately wins when it is strictly newer.
+    expect(byId.get("ann_file_wins")?.rev).toBe(9);
+    // Tie → the in-memory side is preserved, same as the fold. The rev is 3
+    // either way, so as there the timestamp is the whole discriminator: the
+    // file's is a literal, the ledger's is a stamped `Date.now()`.
+    expect(byId.get("ann_tie")?.rev).toBe(3);
+    expect(byId.get("ann_tie")?.deletedAt).not.toBe(103);
 
     cleanup();
   });
@@ -1229,9 +1284,32 @@ describe("recordTombstone + getTombstones", () => {
   });
 
   it("is idempotent: duplicate tombstone at same rev is a no-op", () => {
-    recordTombstone(HASH_A, "ann_x", 3);
-    recordTombstone(HASH_A, "ann_x", 3);
-    expect(getTombstones(HASH_A)).toHaveLength(1);
+    // The length assertion alone does not say "no-op": relaxing the guard from
+    // `existing.rev >= newRev` to `>` lets the second call OVERWRITE the record
+    // with a fresh `deletedAt` while the count stays 1. Measured — that mutant
+    // survived the whole annotation suite before this spec asserted the record.
+    //
+    // The overwrite is not cosmetic. `deletedAt` is what `cleanupStaleTombstones`
+    // ages against, so a re-record resets the retention clock; and same-rev
+    // double-recording is a LIVE path, not a hypothetical — it is the contract
+    // this function's docblock names, and `rename-recovery`'s `rev - 1` reseed
+    // is exactly what produces it.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      recordTombstone(HASH_A, "ann_x", 3);
+      const first = getTombstones(HASH_A)[0];
+
+      vi.setSystemTime(new Date("2026-01-02T00:00:00Z"));
+      recordTombstone(HASH_A, "ann_x", 3);
+
+      const after = getTombstones(HASH_A);
+      expect(after).toHaveLength(1);
+      expect(after[0].rev).toBe(first.rev);
+      expect(after[0].deletedAt).toBe(first.deletedAt);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("getTombstones returns a defensive copy (mutation does not leak)", () => {
@@ -1402,9 +1480,9 @@ describe("observer-driven tombstones (#695)", () => {
     // what the warning announces.
     //
     // The tombstone MUST be produced by the observer here, not planted with
-    // `recordTombstone`: planting it makes this a duplicate of #14 that stays
-    // green with the whole `hasRev` fallback deleted, because then the test's
-    // own literal supplies the rev rather than the branch under test.
+    // `recordTombstone`: a planted one stays green with the whole `hasRev`
+    // fallback deleted, because then the test's own literal supplies the rev
+    // rather than the branch under test.
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
@@ -1441,7 +1519,19 @@ describe("observer-driven tombstones (#695)", () => {
     const cleanup2 = await loadAndMerge(syncCtx(ydoc, store));
     const survivor = annMap.get("ann_legacy") as AnnotationRecordV1 | undefined;
     expect(survivor?.content).toBe("reborn");
-    cleanup2();
+
+    // Positive control, on the same ledger, because "survives" is an OUTCOME
+    // that a merge doing nothing at all also produces. Measured: disabling the
+    // delete branch entirely (`if (false && stone.rev > ymapAnn.rev)`) left the
+    // assertion above green — it pins the rule against being LOOSENED, not
+    // against being deleted. Dropping the live copy below the tombstone proves
+    // the branch is live before the survival claim leans on it.
+    cleanup2("swap");
+    annMap.set("ann_legacy", annRecord({ id: "ann_legacy", rev: 0, content: "stale" }));
+
+    const cleanup3 = await loadAndMerge(syncCtx(ydoc, store));
+    expect(annMap.get("ann_legacy")).toBeUndefined();
+    cleanup3();
   });
 
   it("a delete whose old value HAS a rev tombstones at rev+1 and does not warn", () => {
@@ -1616,8 +1706,8 @@ describe("observer cleanup — tombstone survival (#333)", () => {
   it("cleanup with no argument defaults to the close phase", () => {
     // The two specs above always pass an explicit phase, so neither can see
     // the DEFAULT in `(phase: ObserverCleanupPhase = "close")` being flipped.
-    // Nothing else in the suite can either: roughly 45 specs in this file call
-    // a bare `cleanup()` as teardown, but none asserts ledger state afterwards,
+    // Nothing else in the suite can either: dozens of specs in this file call a
+    // bare `cleanup()` as teardown, but none asserts ledger state afterwards,
     // and `resetForTesting()` runs on both sides of every spec — so a default
     // of `"swap"` would leak nothing and the whole suite would stay green.
     //
