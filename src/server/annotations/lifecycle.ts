@@ -1141,12 +1141,19 @@ function writeReply(
  * `tests/server/annotation-reply-seam.test.ts` pins the importer set
  * in both directions: no MCP-side module may import this, and this is the only
  * unguarded producer of a newly authored reply **that any request can reach**.
- * The absolute phrasing would be false: `file-io/docx-comments.ts` builds
- * imported reply records and writes them with a bare `repliesMap.set` during
- * `.docx` ingest, bypassing this module entirely. That path is driven by a file
- * the user chose to open, never by an MCP call, which is why it is out of this
- * seam rather than a hole in it — but a reader trusting "the only producer"
- * would not go looking for it.
+ * The absolute phrasing would be false: `file-io/docx-comments.ts` writes
+ * imported reply records during `.docx` ingest, bypassing this module entirely.
+ * That path is driven by a file the user chose to open, never by an MCP call,
+ * which is why it is out of this seam rather than a hole in it — but a reader
+ * trusting "the only producer" would not go looking for it.
+ *
+ * **Which modules may write one is now pinned rather than described**, by
+ * `tests/server/docx-import-write-seam.test.ts` (ADR-035 Unit 8h): the import
+ * path funnels through two module-private writers that stamp the author. Read
+ * that pin at its real width — it owns the set of writers WITHIN
+ * `docx-comments.ts`, not across modules, so it proves the import path has one
+ * door rather than that no other module could open its own. The rationale above is what a census cannot carry, so
+ * it stays here; the enumeration moved to where it can fail.
  *
  * `actor` is not a parameter: this entry is the browser's by definition, and
  * `browser` is the one origin outside `CHANNEL_SKIP`. A parameter here would be
