@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import { IMPORT_AUTHOR_MAX, IMPORT_REPLY_BODY_CAP } from "../../src/server/annotations/schema.js";
 import { isCanonicalWordId } from "../../src/server/file-io/docx-comment-id.js";
 import {
+  annotationPreImage,
   calculateCommentRanges,
   type DocxComment,
   extractDocxComments,
@@ -11,6 +12,7 @@ import {
   injectCommentsAsAnnotations,
   parseCommentMetadata,
   parseCommentThreading,
+  replyPreImage,
 } from "../../src/server/file-io/docx-comments.js";
 import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
 import { refreshRange } from "../../src/server/positions.js";
@@ -921,6 +923,101 @@ describe("importAnnotationId", () => {
     const a = importAnnotationId("1", 0, 5, "body");
     const b = importAnnotationId("10", 5, 0, "body");
     expect(a).not.toBe(b);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The id gate — two reachable collisions, and the vectors that prove the fix
+// moved no real document's ids
+// ---------------------------------------------------------------------------
+
+describe("import id collision gate", () => {
+  // Both mint functions concatenate untrusted fields under one separator, which
+  // lets a token shift across a field boundary: two different comments hash to
+  // one id, the second is dropped as a duplicate, and for replies the loss
+  // rides out into the re-saved .docx because export reads off the replies map.
+  //
+  // These two pins are the defect itself. Each was measured colliding before
+  // `isCanonicalWordId` gated the ids, so each fails if the gate is removed.
+  it("does not collide when a NUL shifts a token across an annotation field boundary", () => {
+    // The annotation delimiter is \0, so a space cannot forge it — but a
+    // literal NUL byte in comments.xml survives htmlparser2 into both the
+    // attribute and the text node, and that DID collide. (A `&#0;` reference
+    // does not: htmlparser2 folds it to U+FFFD.)
+    const a = importAnnotationId(`1\0${"2"}`, 3, 4, "x");
+    const b = importAnnotationId("1", 2, 3, `4\0${"x"}`);
+    expect(a).not.toBe(b);
+  });
+
+  it("does not collide when a space shifts a token across a reply field boundary", () => {
+    // The easier of the two: the reply separator is an ordinary space and two
+    // of its three fields are free text, so this needed only a w:id containing
+    // a space rather than a NUL.
+    expect(importReplyId("1", "2", "x y")).not.toBe(importReplyId("1", "2 x", "y"));
+  });
+
+  // The gate works by admitting only canonical (digits-only) ids into the
+  // original formula, which is what makes the shift unconstructible: digits
+  // carry neither a space nor a NUL, from/to are numeric, and bodyText is last
+  // and therefore free. Everything else takes a tagged fallback pre-image.
+  //
+  // Asserted on the PRE-IMAGE rather than on digests, because that is where the
+  // invariant lives — comparing two ids can only show they happen to differ,
+  // which stays true under a formula that has stopped separating the domains.
+  it("separates canonical and fallback pre-images by their first character", () => {
+    expect(annotationPreImage("7", 34, 901, "x")).toMatch(/^[0-9]/);
+    expect(annotationPreImage("c-9182", 34, 901, "x")).not.toMatch(/^[0-9]/);
+    expect(replyPreImage("1", "2", "b")).toMatch(/^[0-9]/);
+    expect(replyPreImage("1", "2 x", "b")).not.toMatch(/^[0-9]/);
+  });
+
+  it("carries the non-canonical tag, which the first-character check alone does not pin", () => {
+    // Written because the battery caught it: deleting NON_CANONICAL_TAG left
+    // every spec above GREEN. The check that survived it is real but the tag is
+    // not what satisfies it — `JSON.stringify` already opens with `[`, so the
+    // domains stay disjoint on JSON's shape alone and the constant reads
+    // load-bearing while pinning nothing.
+    //
+    // Both are kept, because they fail independently: JSON's bracket is a
+    // property of a library's output format, and the tag is ours. This spec is
+    // what makes deleting the tag cost a deliberate edit.
+    expect(annotationPreImage("c-9182", 34, 901, "x")).toMatch(/^nc:/);
+    expect(replyPreImage("1", "2 x", "b")).toMatch(/^nc:/);
+    expect(annotationPreImage("7", 34, 901, "x")).not.toMatch(/^nc:/);
+  });
+
+  it("keeps a fallback id in the bare import-<hash> shape", () => {
+    // #337 deleted a parse of the id's shape and `docx-apply.test.ts` pins that
+    // it stays deleted, so the fallback must NOT take a distinguishing id
+    // prefix. Its domain separation lives in the pre-image instead.
+    expect(importAnnotationId("c-9182", 1, 2, "x")).toMatch(/^import-[0-9a-f]{12}$/);
+    expect(importReplyId("a b", "c", "x")).toMatch(/^import-reply-[0-9a-f]{12}$/);
+  });
+
+  // Golden vectors. These are the whole safety argument for touching a hash
+  // whose output is a persisted, user-visible identity: if any of them moved,
+  // every imported annotation in every existing document would lose its
+  // identity and duplicate on the next open of the same .docx.
+  //
+  // The expected values were computed from the PRE-change formula in a
+  // standalone script, never from this code — a vector generated by the
+  // implementation under test only asserts that it agrees with itself.
+  it("mints byte-identical ids for canonical inputs (pinned to pre-gate values)", () => {
+    expect(importAnnotationId("7", 34, 901, "review this")).toBe("import-336008096266");
+    expect(importAnnotationId("12", 0, 0, "")).toBe("import-aaf0b0a329eb");
+    expect(importAnnotationId("3", 1, 9, "héllo — 世界 🌍")).toBe("import-5e7a9b1caf83");
+    expect(importAnnotationId("5", 2, 8, `a\0${"b"}`)).toBe("import-74c547447fc5");
+
+    expect(importReplyId("1", "2", "body")).toBe("import-reply-5263fba4eaea");
+    expect(importReplyId("4", "5", "")).toBe("import-reply-8dd1c7c2e78b");
+    expect(importReplyId("6", "7", "héllo 🌍")).toBe("import-reply-7d870b7d3762");
+  });
+
+  it("moves ids only for non-canonical inputs, which no Word export produces", () => {
+    // The narrow, deliberate cost: a record imported from a crafted file before
+    // this change re-imports once as a duplicate. OOXML types w:id as an
+    // integer, so that population is empty for any document Word wrote.
+    expect(importAnnotationId("c-9182", 34, 901, "review this")).not.toBe("import-71a4425a9a98");
   });
 });
 

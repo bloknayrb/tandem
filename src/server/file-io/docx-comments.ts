@@ -25,12 +25,72 @@ import {
 } from "./docx-walker.js";
 
 /**
+ * Tag opening every NON-canonical hash pre-image, and the whole
+ * domain-separation argument in one constant.
+ *
+ * A canonical pre-image starts with `commentId`, which the gates below admit
+ * only through `isCanonicalWordId` — decimal digits. So a canonical pre-image
+ * ALWAYS begins with a digit and a fallback pre-image NEVER does. That single
+ * character is what makes the two branches disjoint, and
+ * `docx-comments.test.ts` asserts it on the builders directly rather than
+ * inferring it from digests.
+ *
+ * It is a tag on the *pre-image*, deliberately not on the id. A fallback id
+ * keeps the plain `import-<hash>` shape because `docx-apply.test.ts` pins that
+ * a post-#337 import id is a bare hash with no dash after the prefix — #337
+ * deleted a parse of the id's shape and that spec is what stops it returning.
+ */
+const NON_CANONICAL_TAG = "nc:";
+
+/**
+ * The exact bytes hashed for an annotation id. Exported so the
+ * domain-separation invariant above is testable as a property of the
+ * *pre-image*, which is where it actually lives — a test over digests can only
+ * observe that two ids happen to differ.
+ */
+export function annotationPreImage(
+  commentId: string,
+  from: number,
+  to: number,
+  bodyText: string,
+): string {
+  // Canonical: today's exact bytes, so every real document's ids are unmoved.
+  if (isCanonicalWordId(commentId)) return `${commentId}\0${from}\0${to}\0${bodyText}`;
+  // Fallback: JSON is injective over these fields — it renders a raw NUL as the
+  // six characters `\u0000`, never a byte, so no field can forge the delimiter.
+  return `${NON_CANONICAL_TAG}${JSON.stringify([commentId, from, to, bodyText])}`;
+}
+
+/** The exact bytes hashed for a reply id. Exported for the same reason. */
+export function replyPreImage(
+  rootCommentId: string,
+  replyCommentId: string,
+  bodyText: string,
+): string {
+  if (isCanonicalWordId(rootCommentId) && isCanonicalWordId(replyCommentId)) {
+    return `${rootCommentId} ${replyCommentId} ${bodyText}`;
+  }
+  return `${NON_CANONICAL_TAG}${JSON.stringify([rootCommentId, replyCommentId, bodyText])}`;
+}
+
+/**
  * Deterministic annotation id for an imported Word comment.
  *
  * Inputs (commentId + range + comment body) are stable across repeated imports
  * of the same .docx, so re-opening or force-reloading the file produces the
  * same id — which lets the injection loop dedupe against the existing map
  * instead of accumulating duplicates in the durable annotation store.
+ *
+ * **The delimiter is load-bearing and the fields are untrusted.** Concatenating
+ * them under one separator lets a token shift across a field boundary: two
+ * different comments produce one id, the second is dropped as a duplicate, and
+ * the loss persists into the re-saved .docx. `\0` alone does not prevent that —
+ * a literal NUL byte in `comments.xml` survives htmlparser2 into both the
+ * attribute and the text node (a `&#0;` reference does not; that folds to
+ * U+FFFD), so `("1\0" + "2", 3, 4, "x")` and `("1", 2, 3, "4\0x")` hashed the
+ * same id before the gate below. `isCanonicalWordId` is what closes it:
+ * digits-only admits neither a NUL nor a space, `from`/`to` are numeric, and
+ * `bodyText` is last and therefore free to contain anything.
  */
 export function importAnnotationId(
   commentId: string,
@@ -40,7 +100,7 @@ export function importAnnotationId(
 ): string {
   const hash = crypto
     .createHash("sha256")
-    .update(`${commentId}\0${from}\0${to}\0${bodyText}`)
+    .update(annotationPreImage(commentId, from, to, bodyText))
     .digest("hex")
     .slice(0, 12);
   return `import-${hash}`;
@@ -52,6 +112,13 @@ export function importAnnotationId(
  * force-reloading dedupes against the existing replies map rather than
  * accumulating duplicates. Distinct prefix from `importAnnotationId` so a reply
  * id can never collide with a note id.
+ *
+ * **This one was the easier collision of the two**, because its separator is an
+ * ordinary space and two of its three fields are free text: `("1", "2", "x y")`
+ * and `("1", "2 x", "y")` minted the same id, needing only a `w:id` containing
+ * a space rather than a NUL. Both ids are gated for that reason. The separator
+ * itself is deliberately unchanged — changing it would rewrite every existing
+ * reply id and duplicate every reply on the next import.
  */
 export function importReplyId(
   rootCommentId: string,
@@ -60,7 +127,7 @@ export function importReplyId(
 ): string {
   const hash = crypto
     .createHash("sha256")
-    .update(`${rootCommentId} ${replyCommentId} ${bodyText}`)
+    .update(replyPreImage(rootCommentId, replyCommentId, bodyText))
     .digest("hex")
     .slice(0, 12);
   return `import-reply-${hash}`;
@@ -582,7 +649,24 @@ export function injectCommentsAsAnnotations(
       // them without duplicates. Untrusted body/author are length-bounded.
       for (const reply of comment.replies ?? []) {
         const replyId = importReplyId(comment.commentId, reply.commentId, reply.bodyText);
-        if (repliesMap.has(replyId)) continue;
+        const clash = repliesMap.get(replyId) as AnnotationReply | undefined;
+        if (clash) {
+          // Normally a re-import of a reply already present — the dedup this id
+          // exists for, and silence is right. But the same `continue` also
+          // swallowed a genuine id COLLISION, and that path drops a reply the
+          // user still has in their .docx, with the loss carrying through to the
+          // re-saved file because export reads off this map. `importReplyId`'s
+          // gate makes distinct inputs collide only via SHA-256 itself, so this
+          // is now near-unreachable; it is logged rather than assumed away
+          // because the failure is invisible from the document. Keyed on the
+          // stored body differing, so the ordinary re-import stays quiet.
+          if (clash.text !== reply.bodyText.slice(0, IMPORT_REPLY_BODY_CAP)) {
+            console.error(
+              `[docx-comments] reply id collision on ${replyId}: a different reply is already stored under this id, so this one was not imported (root=${comment.commentId})`,
+            );
+          }
+          continue;
+        }
         const replyRecord: AnnotationReply = {
           id: replyId,
           annotationId: effectiveKey,
