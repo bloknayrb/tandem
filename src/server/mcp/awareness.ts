@@ -6,7 +6,6 @@ import {
   Y_MAP_ACTIVITY,
   Y_MAP_CHAT,
   Y_MAP_CHAT_STREAM,
-  Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
@@ -15,7 +14,6 @@ import type {
   Annotation,
   AnnotationReply,
   ChatMessage,
-  FlatOffset,
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
@@ -25,7 +23,7 @@ import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/q
 import { hideFromAI, type ModeState, readModeState, reportedMode } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
-import { extractText, getCurrentDoc } from "./document.js";
+import { getCurrentDoc } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
 import { checkInboxOutputShape } from "./output-schemas.js";
 import {
@@ -318,9 +316,8 @@ export function registerAwarenessTools(server: McpServer): void {
         // still unseen; closing the round there would report a delivery that
         // did not happen. Past this line the full pass runs.
         resolveDeliveryRound();
-        const doc = store.ydoc;
         const allAnnotations = store.listAnnotations();
-        const fullText = extractText(doc);
+        const fullText = store.getText();
 
         // WS-A2: single live read of the three-state mode, used both to gate
         // the Solo privacy hold (`hideFromAI` in the surfacer) and to report
@@ -329,34 +326,32 @@ export function registerAwarenessTools(server: McpServer): void {
         const modeState = readModeState();
 
         // Refresh only unsurfaced annotations; batch Y.Map writes.
-        // refreshAnnotation returns the refreshed annotation (the underlying
-        // refreshRange yields a tagged RefreshResult per ADR-032); the inbox
-        // surfacer doesn't currently distinguish refresh outcomes. A future
-        // enhancement could route `degraded` / `failed` annotations into a
-        // separate notification.
-        const unsurfaced: Annotation[] = [];
-        store.transactMcp(() => {
-          for (const raw of allAnnotations) {
-            const lastSurfacedEditedAt = surfacedIds.get(ledgerKey(store.documentId, raw.id));
-            // Not yet surfaced
-            if (lastSurfacedEditedAt === undefined) {
-              unsurfaced.push(store.refreshAnnotation(raw));
-              continue;
-            }
-            // Already surfaced — check if it's been edited since
-            if ((raw.editedAt ?? 0) > lastSurfacedEditedAt) {
-              unsurfaced.push(store.refreshAnnotation(raw));
-            }
-          }
-        });
-
-        const { userActions, userResponses } = processUnsurfacedInboxAnnotations(
-          unsurfaced,
+        // `store.refreshAnnotations` returns the refreshed records (the
+        // underlying refreshRange yields a tagged RefreshResult per ADR-032) and
+        // owns the single origin-tagged transaction; the inbox surfacer doesn't
+        // currently distinguish refresh outcomes. A future enhancement could
+        // route `degraded` / `failed` annotations into a separate notification.
+        //
+        // **This calls the exported function rather than the private one, and
+        // that is the point of Unit 8j-2's A2.** The selection loop used to be
+        // duplicated here, inline inside a `store.transactMcp`, while every
+        // ledger/Solo/dedup spec drove the exported copy. One loop now, and the
+        // transaction boundary belongs to the store method rather than to this
+        // call site — which is what stops it from being dropped by a later edit
+        // that looks local and correct.
+        //
+        // `modeState` and `wasEmittedViaChannel` are passed EXPLICITLY. Both
+        // default, and the `modeState` default is the fail-closed-sounding
+        // `"indeterminate"`, which is not fail-closed for an unmarked record:
+        // `hideFromAI` then holds only records already stamped `heldInSolo`.
+        const { userActions, userResponses } = processInboxAnnotations(
+          allAnnotations,
           fullText,
           surfacedIds,
+          (anns) => store.refreshAnnotations(anns),
+          store.documentId,
           modeState,
           wasEmittedViaChannel,
-          store.documentId,
         );
 
         // WS-A2 userReplies bucket — new user replies on comment threads, held in
@@ -393,18 +388,10 @@ export function registerAwarenessTools(server: McpServer): void {
           }
         });
 
-        // Current user activity
-        const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
-        const selection = userAwareness.get(Y_MAP_SELECTION) as
-          | { from: FlatOffset; to: FlatOffset; timestamp: number }
-          | undefined;
-        const activity = userAwareness.get(Y_MAP_ACTIVITY) as
-          | {
-              isTyping: boolean;
-              cursor: number;
-              lastEdit: number;
-            }
-          | undefined;
+        // Current user activity. `getUserAwareness()` is typed rather than a
+        // `getMap` returning the raw Y.Map — a map accessor would be the `ydoc`
+        // hatch under a new name.
+        const { selection, activity } = store.getUserAwareness();
 
         // Reported mode is the two-state view of the same live read used for
         // the hold gate: indeterminate (mode key absent, e.g. restart) collapses
@@ -514,14 +501,42 @@ export function isUserActive(
 }
 
 /**
- * Process annotations into inbox buckets. Exported for testing.
+ * Process annotations into inbox buckets.
  * Mutates surfacedIds to track which annotations have been surfaced.
+ *
+ * **This is the `tandem_checkInbox` handler's own path, not a mirror of it
+ * (ADR-035 Unit 8j-2).** Until this unit it was labelled "exported for testing"
+ * and had **zero production callers**: the handler called the private
+ * {@link processUnsurfacedInboxAnnotations} directly and re-implemented the
+ * selection-and-refresh loop below inline, inside its own `store.transactMcp`.
+ * 21 specs drove this copy. A mutation to the handler's *selection* half would
+ * still have reddened `annotation-promote-pull-surface.test.ts`, which drives
+ * the real tool — but the refresh half was observed by nothing at all.
+ *
+ * **`refreshAll` is a BATCH, and that is the load-bearing part.** A
+ * per-annotation `refreshFn` cannot preserve the single origin-tagged
+ * transaction the handler used to open around the whole loop: the natural
+ * wiring, `(a) => store.refreshAnnotation(a)`, opens one transaction per record,
+ * and the shape one step further — an unwrapped call — is an untagged `map.set`
+ * that `audit:origins` cannot see, because it cannot follow a write reached
+ * through a helper. Making the callee own the boundary is what removes that as a
+ * caller's choice. `YDocStore.refreshAnnotations` is the production
+ * implementation; `refreshAnnotation` (singular) no longer exists.
+ *
+ * **Callers must pass `modeState` and `wasChannelEmitted` explicitly.** Both
+ * default, and the `modeState` default is `"indeterminate"`, under which
+ * `hideFromAI` holds only records already stamped `heldInSolo` — so a call that
+ * stops at `refreshAll` surfaces unmarked user records in a live Solo session.
+ * That is not invisible (the "holds it in live Solo, and does so by AUTHOR" spec
+ * in `annotation-promote-pull-surface.test.ts` uses a deliberately unmarked
+ * record and reds), but it has exactly one killer, which is why the defaults are
+ * called out here rather than left to be discovered.
  */
 export function processInboxAnnotations(
   allAnnotations: Annotation[],
   fullText: string,
   surfaced: Map<string, number>,
-  refreshFn: (ann: Annotation) => Annotation,
+  refreshAll: (anns: Annotation[]) => Annotation[],
   /**
    * Scopes the ledger key. Required — a bare-id key silently drops the same
    * imported Word comment in a second document. See `surfacedIds`.
@@ -536,15 +551,20 @@ export function processInboxAnnotations(
   userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
 } {
-  const unsurfaced: Annotation[] = [];
+  // Select first, refresh once. The two halves are separable because the
+  // selection reads only the pre-refresh records and a stable ledger — a refresh
+  // of one annotation cannot change another's selection outcome — so batching
+  // costs no fidelity against the per-item loop this replaces.
+  const candidates: Annotation[] = [];
   for (const raw of allAnnotations) {
     const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, raw.id));
     if (lastSurfacedEditedAt === undefined) {
-      unsurfaced.push(refreshFn(raw));
+      candidates.push(raw);
     } else if ((raw.editedAt ?? 0) > lastSurfacedEditedAt) {
-      unsurfaced.push(refreshFn(raw));
+      candidates.push(raw);
     }
   }
+  const unsurfaced = refreshAll(candidates);
 
   return processUnsurfacedInboxAnnotations(
     unsurfaced,

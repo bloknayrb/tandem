@@ -180,6 +180,47 @@ describe("MCP tool integration — annotation tools", () => {
     expect(parsed.data.annotationId).toMatch(/^ann_/);
   });
 
+  it("tandem_comment refuses a range overlapping a heading prefix (Critical Rule 6)", async () => {
+    // **Nothing pinned this at the handler level until ADR-035 Unit 8j-2.** The
+    // only `INVALID_RANGE` assertions in the suite were in `positions.test.ts`,
+    // against `validateRange` directly, with `rejectHeadingOverlap` passed by
+    // the spec itself — so they measure the flag's implementation, never that a
+    // caller supplies it. `document-edit.test.ts`'s "heading prefix rejection"
+    // is a hand-copied mirror of `applyEdit` that its own comment admits must
+    // be kept in sync, and it reaches neither `anchoredRange` nor this tool.
+    //
+    // That gap is why `YDocStore.anchorRange` hardcodes the flag instead of
+    // taking it as a parameter: a boolean argument is the shape a later edit
+    // drops with no type error and no red. This spec is the thing that would
+    // have gone red, and it drives the REGISTERED tool rather than a helper.
+    //
+    // Flat offsets include heading markup (see the coordinate systems in
+    // `positions.ts`), so `0..6` starts inside `## ` and ends inside the text.
+    setupDoc("mcp-ann-heading", "## Title\n\nBody text here");
+
+    const result = await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 6, text: "on the heading" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_RANGE");
+
+    // **The control, and it is what makes the assertion above mean anything.**
+    // `INVALID_RANGE` has several producers, so a refusal alone does not show
+    // the HEADING branch fired — a wrong document, an unresolvable offset or an
+    // inverted range would read identically. Same document, same tool, a range
+    // that clears the prefix: it must succeed. Without this line the spec stays
+    // green against a fixture that could never have been accepted at all.
+    const ok = await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 10, to: 14, text: "on the body" },
+    });
+    const okParsed = parseResult(ok);
+    expect(okParsed.error).toBe(false);
+    expect(okParsed.data.annotationId).toMatch(/^ann_/);
+  });
+
   it("tandem_comment records textSnapshotTruncated when the range exceeds the cap (#1486)", async () => {
     // The call site, not the helper. `captureSnapshot` returns `{text, truncated}`
     // and the handler has to spread the second half onto the annotation — a

@@ -131,7 +131,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (ann) => ann, DOC_KEY);
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, DOC_KEY);
     // Only comments are surfaced; highlights and notes are excluded
     expect(result.userActions).toHaveLength(1);
     expect(result.userActions.find((a) => a.type === "comment")).toBeTruthy();
@@ -152,7 +152,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY);
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, DOC_KEY);
     expect(result.userResponses).toHaveLength(1);
     expect(result.userResponses[0].status).toBe("accepted");
   });
@@ -166,7 +166,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY);
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, DOC_KEY);
     expect(result.userActions).toHaveLength(0);
     expect(result.userResponses).toHaveLength(0);
   });
@@ -180,10 +180,10 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const first = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY);
+    const first = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, DOC_KEY);
     expect(first.userActions).toHaveLength(1);
 
-    const second = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY);
+    const second = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, DOC_KEY);
     expect(second.userActions).toHaveLength(0);
   });
 
@@ -205,7 +205,7 @@ describe("processInboxAnnotations", () => {
       collectAnnotations(map, DOC_HASH),
       extractText(ydoc),
       surfaced,
-      (a) => a,
+      (anns) => anns,
       DOC_KEY,
     );
     expect(first.userActions).toHaveLength(1);
@@ -217,7 +217,7 @@ describe("processInboxAnnotations", () => {
       collectAnnotations(map, DOC_HASH),
       extractText(ydoc),
       surfaced,
-      (a) => a,
+      (anns) => anns,
       DOC_KEY,
       "tandem",
       (payloadId) => payloadId === getAnnotationEditedChannelKey(id, 2000),
@@ -268,7 +268,7 @@ describe("processInboxAnnotations", () => {
       collectAnnotations(map, DOC_HASH),
       extractText(ydoc),
       new Map<string, number>(),
-      (a) => a,
+      (anns) => anns,
       DOC_KEY,
       "tandem",
       wasEmittedViaChannel,
@@ -308,7 +308,7 @@ describe("processInboxAnnotations", () => {
       collectAnnotations(map, DOC_HASH),
       extractText(ydoc),
       new Map<string, number>(),
-      (a) => a,
+      (anns) => anns,
       DOC_KEY,
       "tandem",
       wasEmittedViaChannel,
@@ -345,7 +345,7 @@ describe("processInboxAnnotations", () => {
       collectAnnotations(map, DOC_HASH),
       extractText(ydoc),
       surfaced,
-      (a) => a,
+      (anns) => anns,
       DOC_KEY,
     );
 
@@ -356,7 +356,7 @@ describe("processInboxAnnotations", () => {
       collectAnnotations(map, DOC_HASH),
       extractText(ydoc),
       surfaced,
-      (a) => a,
+      (anns) => anns,
       DOC_KEY,
     );
 
@@ -365,27 +365,46 @@ describe("processInboxAnnotations", () => {
     expect(surfaced.get(`${DOC_KEY}:${id}`)).toBe(3000);
   });
 
-  it("calls refreshFn on each unsurfaced annotation", () => {
+  it("refreshes the unsurfaced candidates in ONE batch call, not one call each", () => {
+    // **Rewritten, not migrated (ADR-035 Unit 8j-2).** This was "calls refreshFn
+    // on each unsurfaced annotation", counting invocations and asserting `1`
+    // against a single seeded annotation — so a per-item → batch signature
+    // change would have left the count at 1 and the spec green while its own
+    // NAME became false. Two annotations, and both halves of the new claim are
+    // asserted: the batch fires exactly once, and it receives every candidate.
+    //
+    // The one-call half is the part that matters. `refreshAll` owns a single
+    // `withMcp` transaction in production (`YDocStore.refreshAnnotations`), so a
+    // caller that reverted to per-item refreshing would either open N
+    // transactions or, one step further, none at all — an untagged `map.set`
+    // that `audit:origins` cannot see because it is reached through a helper.
     const ydoc = setupDoc("inbox-5", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    createAnnotation(map, ydoc, "comment", unanchored(0, 5), "test", { author: "user" });
+    const first = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "one", {
+      author: "user",
+    });
+    const second = createAnnotation(map, ydoc, "comment", unanchored(6, 11), "two", {
+      author: "user",
+    });
 
     const allAnns = collectAnnotations(map, DOC_HASH);
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    let refreshCalled = 0;
+    const batches: string[][] = [];
     processInboxAnnotations(
       allAnns,
       fullText,
       surfaced,
-      (ann) => {
-        refreshCalled++;
-        return ann;
+      (anns) => {
+        batches.push(anns.map((a) => a.id));
+        return anns;
       },
       DOC_KEY,
+      "tandem",
     );
-    expect(refreshCalled).toBe(1);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toStrictEqual([first, second]);
   });
 
   it("includes text snippets from annotation ranges", () => {
@@ -397,7 +416,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY);
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, DOC_KEY);
     expect(result.userActions[0].textSnippet).toBe("quick");
   });
 });
@@ -419,7 +438,14 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY, "solo");
+    const result = processInboxAnnotations(
+      allAnns,
+      fullText,
+      surfaced,
+      (anns) => anns,
+      DOC_KEY,
+      "solo",
+    );
     expect(result.userActions).toHaveLength(0);
     // Ledger must be untouched — the item stays "unsurfaced" for release.
     expect(surfaced.has(`${DOC_KEY}:${id}`)).toBe(false);
@@ -437,7 +463,14 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     const surfaced = new Map<string, number>();
 
     // Solo poll: held.
-    const solo = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY, "solo");
+    const solo = processInboxAnnotations(
+      allAnns,
+      fullText,
+      surfaced,
+      (anns) => anns,
+      DOC_KEY,
+      "solo",
+    );
     expect(solo.userActions).toHaveLength(0);
 
     // Flip to Tandem: same annotation, same ledger — must now surface exactly once.
@@ -445,7 +478,7 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
       allAnns,
       fullText,
       surfaced,
-      (a) => a,
+      (anns) => anns,
       DOC_KEY,
       "tandem",
     );
@@ -454,7 +487,14 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     expect(surfaced.get(`${DOC_KEY}:${id}`)).toBe(0);
 
     // A subsequent Tandem poll dedups normally (proves the release wrote the ledger).
-    const again = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY, "tandem");
+    const again = processInboxAnnotations(
+      allAnns,
+      fullText,
+      surfaced,
+      (anns) => anns,
+      DOC_KEY,
+      "tandem",
+    );
     expect(again.userActions).toHaveLength(0);
   });
 
@@ -471,7 +511,14 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY, "solo");
+    const result = processInboxAnnotations(
+      allAnns,
+      fullText,
+      surfaced,
+      (anns) => anns,
+      DOC_KEY,
+      "solo",
+    );
     expect(result.userResponses).toHaveLength(1);
   });
 
@@ -494,7 +541,7 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
       allAnns,
       fullText,
       surfaced,
-      (a) => a,
+      (anns) => anns,
       DOC_KEY,
       "indeterminate",
     );
@@ -964,7 +1011,7 @@ describe("inbox ledgers are document-scoped", () => {
         collectAnnotations(map, DOC_HASH),
         extractText(ydoc),
         surfaced,
-        (a) => a,
+        (anns) => anns,
         docKey,
         "tandem",
       );

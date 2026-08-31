@@ -41,7 +41,7 @@ import {
 } from "../../src/server/mcp/annotations.js";
 import { getDocumentStore, YDocStore } from "../../src/server/mcp/document-store.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { MCP_ORIGIN } from "../../src/shared/origins.js";
+import { MCP_ORIGIN, withBrowser } from "../../src/shared/origins.js";
 import type { AnchoredRangeResult } from "../../src/shared/positions/index.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation, AnnotationType } from "../../src/shared/types.js";
@@ -321,13 +321,86 @@ describe("YDocStore.listAnnotationsRefreshed", () => {
   });
 });
 
+describe("YDocStore.refreshAnnotations — the batch that replaced transactMcp", () => {
+  it("persists a subset's refreshed ranges in exactly ONE mcp-tagged transaction", () => {
+    // **This spec is the transaction boundary (ADR-035 Unit 8j-2).** Until this
+    // unit the inbox handler opened `store.transactMcp(…)` itself and called a
+    // `refreshAnnotation` SINGULAR inside it. With `transactMcp` gone, the
+    // singular would have survived as a public method whose every unwrapped call
+    // is a bare `map.set` with a `null` origin — and `audit:origins` cannot see
+    // that, because it cannot follow a write reached through a helper. So the
+    // batch owns the `withMcp`, and this asserts both halves of that.
+    //
+    // **Filtered by the KEY the transaction changed, and asserting length 1.**
+    // A bare `toContain(MCP_ORIGIN)` is satisfied by any other tagged
+    // transaction in the flow and stays green with the refresh write deleted
+    // entirely; a length check alone cannot tell one tagged transaction from one
+    // untagged one. Together they kill both mutants: refreshing outside
+    // `withMcp` (wrong origin) and refreshing per-annotation (two transactions).
+    const ydoc = setupDoc("refresh-batch", "Hello world content here");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const store = new YDocStore(ydoc, FILE_PATH, "refresh-batch");
+    const first = mint(ydoc, "comment", rangeOf(6, 11, ydoc), "on world");
+    const second = mint(ydoc, "comment", rangeOf(12, 19, ydoc), "on content");
+
+    const frag = ydoc.getXmlFragment("default");
+    const para = frag.get(0) as Y.XmlElement;
+    const xtext = para.get(0) as Y.XmlText;
+    ydoc.transact(() => xtext.insert(0, "XXX "), MCP_ORIGIN);
+
+    const origins: unknown[] = [];
+    const observer = (events: Array<Y.YEvent<any>>, txn: Y.Transaction) => {
+      // Only transactions that touched one of OUR two annotation keys count —
+      // the fixture above is itself an `MCP_ORIGIN` transaction, and counting it
+      // would make the length assertion pass for the wrong reason.
+      const touched = events.some((e) =>
+        [...e.changes.keys.keys()].some((k) => k === first || k === second),
+      );
+      if (touched) origins.push(txn.origin);
+    };
+    map.observeDeep(observer);
+    try {
+      const refreshed = store.refreshAnnotations([
+        map.get(first) as Annotation,
+        map.get(second) as Annotation,
+      ]);
+      expect(refreshed.map((a) => a.id)).toStrictEqual([first, second]);
+    } finally {
+      map.unobserveDeep(observer);
+    }
+
+    expect(origins, "one transaction, tagged mcp — not two, and not untagged").toStrictEqual([
+      MCP_ORIGIN,
+    ]);
+    expect((map.get(first) as Annotation).range.from).toBe(toFlatOffset(10));
+    expect((map.get(second) as Annotation).range.from).toBe(toFlatOffset(16));
+  });
+});
+
 describe("getDocumentStore factory", () => {
-  it("resolves the active document into a store", () => {
+  it("resolves the active document into a store — bound to THAT doc, not a copy", () => {
     const ydoc = setupDoc("factory-1", "Hello world");
     const store = getDocumentStore();
     expect(store).not.toBeNull();
-    expect(store!.ydoc).toBe(ydoc);
     expect(store!.getText()).toBe("Hello world");
+
+    // **Identity, asserted through behaviour (ADR-035 Unit 8j-2).** This was
+    // `expect(store!.ydoc).toBe(ydoc)` — a direct read of the escape hatch that
+    // unit removed, and the sixth of its six uses, hidden from every census
+    // regex by the non-null assertion. `toBe` on the field is not portable, and
+    // replacing it with a getter would just re-open the hatch for the test's
+    // convenience. Mutating the doc and watching the store observe it is the
+    // same claim — the store holds THIS doc, not a snapshot or a second one —
+    // and it stays true regardless of how the binding is stored.
+    withBrowser(ydoc, () => {
+      const fragment = ydoc.getXmlFragment("default");
+      const para = new Y.XmlElement("paragraph");
+      fragment.push([para]);
+      const text = new Y.XmlText();
+      para.push([text]);
+      text.insert(0, "Second block");
+    });
+    expect(store!.getText()).toContain("Second block");
   });
 
   it("returns null when no document is open", () => {

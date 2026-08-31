@@ -23,11 +23,13 @@
  * **Where Unit 8j actually got to (updated as it lands, so this never promises
  * a future).** 8j-1 deleted the `DocumentStore` *interface* — zero importers —
  * leaving `YDocStore` as the only type, and moved the wide-typed create wrapper
- * out of `src/`. The `ydoc` / `transactMcp` escape hatches named below are
- * closed by 8j-2 and are **still present until it lands**. The file itself is
- * collapsed, not deleted: after the hatches close it still owns document
- * resolution, and tracker row **8j** is titled "Collapse the shallow
- * DocumentStore" — collapse is what the row asks for.
+ * out of `src/`. 8j-2 **closed the `ydoc` / `transactMcp` escape hatches named
+ * below** — they no longer exist; every member of `YDocStore` is now named for
+ * what a handler does, and the doc and annotations map are `#private` because
+ * `private` erases and Y.js's `AbstractType` exposes a public `doc`. The file
+ * itself is collapsed, not deleted: it still owns document resolution, and
+ * tracker row **8j** is titled "Collapse the shallow DocumentStore" — collapse
+ * is what the row asks for.
  *
  * **`AnnotationLifecycle` is the seam callers hold. The store is a
  * compatibility shell.** (Unit 8b wrote "that Unit 8j deletes"; 8j collapses it
@@ -35,12 +37,16 @@
  *
  * - Unit 8's own instruction ends "collapse or delete `DocumentStore`". A seam
  *   scheduled for deletion cannot be the seam callers program against.
- * - `YDocStore` advertises `readonly ydoc` as an "escape hatch" and
- *   `transactMcp`. Removing exactly those two is Unit 8's own instruction in
+ * - `YDocStore` advertised `readonly ydoc` as an "escape hatch", plus
+ *   `transactMcp`. Removing exactly those two was Unit 8's own instruction in
  *   `docs/plans/2026-08-24-ai-assisted-maintainability-remediation.md` — ADR-035
- *   itself predates the store and never names it. **The lifecycle must never
- *   acquire either** — that is an invariant for Units 8c–8j, not a stylistic
- *   note.
+ *   itself predates the store and never names it — and 8j-2 did it. **The
+ *   lifecycle must never acquire either**, which is now the live half of this
+ *   bullet rather than a note about a pending unit: `AnnotationLifecycle` is
+ *   public on the store, so a `getRawDoc(): Y.Doc` added to THIS interface
+ *   reopens the hatch as `store.lifecycle.getRawDoc()` while the store's own
+ *   member pin stays green. Review constructed exactly that defeat, and the
+ *   interface's member list is pinned for it.
  * - `local-model/tools.ts` structurally cannot reach the store at all: its
  *   `DispatchCtx` carries a `Y.Doc`, a license flag and an agent identity, and
  *   no store. A seam that one of the two production writers cannot hold is not
