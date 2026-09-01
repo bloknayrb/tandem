@@ -530,6 +530,24 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     leftPanelVisible: parsed.leftPanelVisible === true,
     rightPanelVisible: parsed.rightPanelVisible !== false,
     schemaVersion: CURRENT_SCHEMA_VERSION,
+    // The one field here whose absent-key branch DISAGREES with its own
+    // `DEFAULTS` entry (:260 says `"annotations"`; this reads a missing key as
+    // `"chat"`). Every other field in this function is "known value, else
+    // `DEFAULTS.x`" -- do not copy this line as the pattern.
+    //
+    // It is drift, not design: at `60a373a` (Wave 4, where this file and
+    // `TANDEM_SETTINGS_KEY` were both born) `DEFAULTS.primaryTab` was `"chat"`
+    // and the two agreed. `6e82388` flipped the default and left this alone.
+    //
+    // Left as-is deliberately. It is reachable only from a blob that omits the
+    // key -- a hand-written test fixture, or the partial blob this file
+    // synthesises itself when `JSON.parse` yields a non-object -- never from a
+    // normal write, since `saveSettings` writes every key and a blob-less first
+    // run returns `DEFAULTS` without entering this validator. Flipping it would
+    // silently move the opening rail tab for the E2E specs that seed partial
+    // blobs, to fix a condition no user reaches. See
+    // `docs/perf-gate-results.md` and `tests/perf/performance.spec.ts`, both of
+    // which depend on today's behaviour.
     primaryTab: parsed.primaryTab === "annotations" ? "annotations" : "chat",
     panelOrder:
       parsed.panelOrder === "annotations-editor-chat"

@@ -7,7 +7,6 @@ import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import { SNAPSHOT_CAP } from "../shared/snapshot";
 import type { Annotation, CapturedAnchor, ChatMessage, TandemNotification } from "../shared/types";
-import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import { bannerStackHeight } from "./actions/bannerStackHeight.svelte.js";
 import {
@@ -211,7 +210,6 @@ const modeState = createTandemModeBroadcast(
   () => yjsSync.bootstrapYdoc,
   () => selectionDwellMs,
 );
-const layoutModel = createLayoutModel(settingsState, modeState);
 
 // Remapped-shortcut override layer (ADR-041). Rebuilt whenever the user's
 // customShortcuts change; the keydown handler reads it at call time.
@@ -220,6 +218,18 @@ const shortcutOverrides = $derived(buildOverrides(settingsState.settings.customS
 const effectiveShortcutLabels = $derived(effectiveBindingLabels(shortcutOverrides));
 
 const visibleAnnotations = $derived(yjsSync.annotations);
+// Below `visibleAnnotations` because the model reads it. The seed is an eager
+// read and `chatVisible` forward-references this binding, so it sits as early
+// as its own dependencies allow and no earlier.
+const layoutModel = createLayoutModel({
+  settingsState,
+  modeState,
+  getAnnotations: () => visibleAnnotations,
+  // Arrow, not a bare reference: defers the binding read to call time, so a
+  // future `function` -> `const arrow` conversion of the closer cannot turn
+  // this into a TDZ error.
+  closeTransientChat: () => closeTransientChat(),
+});
 const connectionBanner = createConnectionBanner(
   () => yjsSync.disconnectedSince,
   () => settingsState.settings.degradedBannerDelayMs,
@@ -822,7 +832,7 @@ function focusChat(): void {
   // Command/native focus is intentionally context-free. Only the explicit
   // Chat-tab selection capture path may attach an anchor to a message.
   capturedAnchor = null;
-  activeRailTab = "chat";
+  layoutModel.selectRailTab("chat");
   // A command reveal is intentionally independent from hover-float state and
   // saved rail/Solo preferences. Pinned rails simply switch to Chat.
   if (!effectiveRightVisible) {
@@ -1050,15 +1060,8 @@ $effect(() => {
   return () => document.documentElement.style.removeProperty("--tandem-editor-font-size");
 });
 
-// Right rail tabs are hard-coded to Annotations + Chat. The initial
-// selection still respects the user's `primaryTab` preference.
-let activeRailTab = $state<"annotations" | "chat">(
-  settingsState.settings.primaryTab === "chat" ? "chat" : "annotations",
-);
-
-const pendingAnnotationBadge = $derived(
-  activeRailTab === "annotations" ? 0 : visibleAnnotations.filter(isPendingReviewTarget).length,
-);
+// Right rail tabs are hard-coded to Annotations + Chat; selection and the
+// pending badge live in `layoutModel` (ADR-037, Unit 10b).
 
 let activeAnnotationId = $state<string | null>(null);
 let showHelp = $state(false);
@@ -1364,7 +1367,7 @@ const editorStage = createEditorStageModel({
 });
 
 function captureSelectionForChat() {
-  if (activeRailTab === "chat") return;
+  if (layoutModel.activeRailTab === "chat") return;
   if (!editor) return;
   const { from, to } = editor.state.selection;
   if (from === to) return;
@@ -1873,7 +1876,7 @@ const scrollPillEnabled = $derived(
   settingsState.settings.scrollPill && !!activeTab && !documentWorkspace.inSourceView,
 );
 const chatVisible = $derived(
-  activeRailTab === "chat" &&
+  layoutModel.activeRailTab === "chat" &&
     (effectiveRightVisible || railFloat.right || railFloatClosing.right || chatReveal),
 );
 const chatCanInsert = $derived(
@@ -1891,11 +1894,6 @@ function closeTransientChat(): void {
   if (!chatReveal) return;
   chatReveal = false;
   chatRevealDocumentId = null;
-}
-
-function selectRailTab(tab: "annotations" | "chat"): void {
-  if (tab !== "chat") closeTransientChat();
-  activeRailTab = tab;
 }
 
 function sendChatMessage(text: string): boolean {
@@ -2461,26 +2459,26 @@ const shouldShowModelPicker = $derived(
                    that is a keyboard behaviour change, not an additive fix. See #1452. -->
               <button
                 data-testid="annotations-tab"
-                aria-current={activeRailTab === "annotations" ? "page" : undefined}
-                class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
-                onclick={() => selectRailTab("annotations")}
+                aria-current={layoutModel.activeRailTab === "annotations" ? "page" : undefined}
+                class={"rail-tab" + (layoutModel.activeRailTab === "annotations" ? " on" : "")}
+                onclick={() => layoutModel.selectRailTab("annotations")}
               >
                 Annotations
-                {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
+                {#if layoutModel.activeRailTab !== "annotations" && layoutModel.pendingAnnotationBadge > 0}
                   <span class="rail-tab-badge">
-                    {pendingAnnotationBadge > 9 ? "9+" : pendingAnnotationBadge}
+                    {layoutModel.pendingAnnotationBadge > 9 ? "9+" : layoutModel.pendingAnnotationBadge}
                   </span>
                 {/if}
               </button>
               <button
                 data-testid="chat-tab"
-                aria-current={activeRailTab === "chat" ? "page" : undefined}
-                class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
+                aria-current={layoutModel.activeRailTab === "chat" ? "page" : undefined}
+                class={"rail-tab" + (layoutModel.activeRailTab === "chat" ? " on" : "")}
                 onmousedown={captureSelectionForChat}
-                onclick={() => selectRailTab("chat")}
+                onclick={() => layoutModel.selectRailTab("chat")}
               >
                 Chat
-                {#if activeRailTab !== "chat" && chatState.unreadCount > 0}
+                {#if layoutModel.activeRailTab !== "chat" && chatState.unreadCount > 0}
                   <span class="rail-tab-badge">
                     {chatState.unreadCount > 9 ? "9+" : chatState.unreadCount}
                   </span>
@@ -2521,7 +2519,7 @@ const shouldShowModelPicker = $derived(
             claudeWorkingAnnotationId={yjsSync.claudeWorking?.annotationId ?? null}
             tandemMode={modeState.tandemMode}
             {review}
-            visible={activeRailTab === "annotations"}
+            visible={layoutModel.activeRailTab === "annotations"}
           />
         </div>
         <PeekStrip
@@ -2874,7 +2872,7 @@ const shouldShowModelPicker = $derived(
         {activeAnnotationId}
         onEditorReady={(ed) => (editor = ed)}
         onAnnotationClick={(id) => {
-          activeRailTab = "annotations";
+          layoutModel.showAnnotations();
           activeAnnotationId = id;
         }}
         onClearAnnotation={() => {

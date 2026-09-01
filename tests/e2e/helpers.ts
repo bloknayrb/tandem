@@ -139,14 +139,20 @@ export function cleanupFixtureDir(dir: string): void {
 }
 
 /**
- * Switch the side panel to the Annotations tab.
+ * Switch the side panel to the Annotations tab and expand the filter bar.
  *
- * Wave 4 changed the default `primaryTab` setting to "chat", so in the
- * tabbed layout the SidePanel (which contains annotation cards) is mounted
- * but hidden via `display: none` behind the Chat tab. Any E2E test that
- * asserts `annotation-card-*` elements are VISIBLE must call this helper
- * after `page.goto("/")` — otherwise the cards exist in the DOM but
- * Playwright reports them as hidden.
+ * The SidePanel (which holds annotation cards) is always mounted and hidden
+ * with `display: none` behind whichever rail tab is not selected, so a spec
+ * that starts on Chat sees its cards as hidden rather than absent.
+ *
+ * **When the tab switch actually matters.** `DEFAULTS.primaryTab` is
+ * `"annotations"` and a blob-less run returns `DEFAULTS` without entering the
+ * settings validator, so most specs already open on Annotations and the click
+ * is a no-op. It is load-bearing only for a spec that seeds a PARTIAL settings
+ * blob omitting `primaryTab`: `normalizeKnownFields` reads a missing key as
+ * `"chat"` (see the comment at its `primaryTab` line), so those runs open on
+ * Chat. The filter-bar expansion below is unconditional and is why several
+ * specs that never touch settings still need this helper.
  *
  * **Silent-failure warning**: because the cards are still mounted when
  * hidden, `locator(...).count()` will return a non-zero value even without
@@ -154,10 +160,13 @@ export function cleanupFixtureDir(dir: string): void {
  * pass misleadingly. Prefer `toBeVisible` for annotation-card assertions,
  * or call this helper regardless.
  *
- * In three-panel layout mode, both panels are rendered side-by-side with
- * static headers instead of tab buttons — there is no `annotations-tab`
- * testid in that mode. The helper detects this and no-ops, so tests that
- * switch layout mid-flight still work.
+ * The `count() === 0` bail below was written for a "three-panel layout mode"
+ * that no longer exists — `grep -rn three-panel src/client/` finds only a
+ * `PanelSlot` doc comment and the v1→v2 settings migration reading a legacy
+ * value. It is kept as a cheap guard, but note what it does NOT cover: a
+ * collapsed right rail, where `annotations-tab` IS in the DOM (so `count()` is
+ * non-zero) but is not clickable, and the click below would hang rather than
+ * bail.
  */
 export async function switchToAnnotationsTab(page: Page): Promise<void> {
   const tab = page.locator("[data-testid='annotations-tab']");
