@@ -1,0 +1,139 @@
+{
+  "$comment": [
+    "Per-module coverage floors for the modules Units 5, 7, 8 and 10 of the",
+    "maintainability programme extracted. Read scripts/ci/coverage-gate.mjs first --",
+    "its header states what these floors can and cannot detect, and the answer is",
+    "narrower than 'coverage gate' suggests.",
+    "",
+    "floors: seeded from `observed` by rounding DOWN to the nearest half point,",
+    "which is inside the one-point allowance the unit instruction permits. A module",
+    "observed at 100 gets a floor of 100 and has no slack at all -- that is",
+    "deliberate, and the response to a red is the missing test, not a lower floor.",
+    "",
+    "observed: what the seeding run actually measured. Kept beside the floor so",
+    "tests/scripts/coverage-gate-wiring.test.ts can prove every floor is within the",
+    "allowance instead of taking the seeding script's word for it.",
+    "",
+    "minStatements: the instrumented statement count at seeding time. A percentage",
+    "cannot see logic MOVED into an ungated sibling -- the survivors keep the ratio",
+    "up -- so the gate also refuses a module whose statement count has collapsed.",
+    "",
+    "suite: one behavioural suite that owns this module. The floors live in the",
+    "advisory `coverage` job; this path is checked inside `check`, so deleting the",
+    "suite reds a REQUIRED job even while the floors cannot."
+  ],
+  "modules": [
+    {
+      "path": "src/server/documents/registry.ts",
+      "unit": "5",
+      "suite": "tests/server/documents-registry.test.ts",
+      "minStatements": 64,
+      "observed": { "statements": 96.87, "lines": 96.72, "branches": 100, "functions": 100 },
+      "floors": { "statements": 96.5, "lines": 96.5, "branches": 100, "functions": 100 }
+    },
+    {
+      "path": "src/server/documents/dirty.ts",
+      "unit": "5",
+      "suite": "tests/server/documents-dirty.test.ts",
+      "minStatements": 63,
+      "observed": { "statements": 96.82, "lines": 100, "branches": 91.66, "functions": 100 },
+      "floors": { "statements": 96.5, "lines": 100, "branches": 91.5, "functions": 100 }
+    },
+    {
+      "path": "src/server/documents/open.ts",
+      "unit": "7",
+      "suite": "tests/server/adr-034-open-characterization.test.ts",
+      "minStatements": 171,
+      "observed": { "statements": 97.07, "lines": 97.51, "branches": 91.39, "functions": 96 },
+      "floors": { "statements": 97, "lines": 97.5, "branches": 91, "functions": 96 }
+    },
+    {
+      "path": "src/server/documents/reload-family.ts",
+      "unit": "7",
+      "suite": "tests/server/reload-from-markdown.test.ts",
+      "minStatements": 94,
+      "observed": { "statements": 95.74, "lines": 95.45, "branches": 87.09, "functions": 100 },
+      "floors": { "statements": 95.5, "lines": 95, "branches": 87, "functions": 100 }
+    },
+    {
+      "path": "src/server/documents/watcher.ts",
+      "unit": "7",
+      "suite": "tests/server/file-watcher.test.ts",
+      "minStatements": 82,
+      "observed": { "statements": 92.68, "lines": 97.26, "branches": 84.61, "functions": 78.57 },
+      "floors": { "statements": 92.5, "lines": 97, "branches": 84.5, "functions": 78.5 }
+    },
+    {
+      "path": "src/server/annotations/lifecycle.ts",
+      "unit": "8",
+      "suite": "tests/server/annotation-create-lifecycle.test.ts",
+      "minStatements": 114,
+      "observed": { "statements": 97.36, "lines": 96.84, "branches": 97.67, "functions": 100 },
+      "floors": { "statements": 97, "lines": 96.5, "branches": 97.5, "functions": 100 }
+    },
+    {
+      "path": "src/server/annotations/projection.ts",
+      "unit": "8",
+      "suite": "tests/server/events/channel-projection-characterization.test.ts",
+      "minStatements": 56,
+      "observed": { "statements": 82.14, "lines": 81.81, "branches": 72.22, "functions": 100 },
+      "floors": { "statements": 82, "lines": 81.5, "branches": 72, "functions": 100 }
+    },
+    {
+      "path": "src/server/annotations/sync.ts",
+      "unit": "8",
+      "suite": "tests/server/annotations/sync.test.ts",
+      "minStatements": 224,
+      "observed": { "statements": 97.32, "lines": 98.92, "branches": 95.74, "functions": 96.96 },
+      "floors": { "statements": 97, "lines": 98.5, "branches": 95.5, "functions": 96.5 }
+    },
+    {
+      "path": "src/server/annotations/schema.ts",
+      "unit": "8",
+      "suite": "tests/server/annotations/schema.test.ts",
+      "minStatements": 91,
+      "observed": { "statements": 97.8, "lines": 97.77, "branches": 98.46, "functions": 100 },
+      "floors": { "statements": 97.5, "lines": 97.5, "branches": 98, "functions": 100 }
+    },
+    {
+      "path": "src/server/events/observers/annotations.ts",
+      "unit": "8",
+      "suite": "tests/server/events/channel-projection-characterization.test.ts",
+      "minStatements": 37,
+      "observed": { "statements": 89.18, "lines": 93.33, "branches": 87.17, "functions": 100 },
+      "floors": { "statements": 89, "lines": 93, "branches": 87, "functions": 100 }
+    },
+    {
+      "path": "src/server/events/observers/replies.ts",
+      "unit": "8",
+      "suite": "tests/server/replies-privacy.test.ts",
+      "minStatements": 18,
+      "observed": { "statements": 94.44, "lines": 100, "branches": 80, "functions": 100 },
+      "floors": { "statements": 94, "lines": 100, "branches": 80, "functions": 100 }
+    },
+    {
+      "path": "src/client/hooks/useDocumentWorkspace.svelte.ts",
+      "unit": "10a",
+      "suite": "tests/client/document-workspace.svelte.test.ts",
+      "minStatements": 160,
+      "observed": { "statements": 96.87, "lines": 97.18, "branches": 89.69, "functions": 100 },
+      "floors": { "statements": 96.5, "lines": 97, "branches": 89.5, "functions": 100 }
+    },
+    {
+      "path": "src/client/layout/model.svelte.ts",
+      "unit": "10b",
+      "suite": "tests/client/layout-model.svelte.test.ts",
+      "minStatements": 20,
+      "observed": { "statements": 100, "lines": 100, "branches": 100, "functions": 100 },
+      "floors": { "statements": 100, "lines": 100, "branches": 100, "functions": 100 }
+    },
+    {
+      "path": "src/client/layout/rail-content.svelte.ts",
+      "unit": "10c",
+      "suite": "tests/client/rail-content.svelte.test.ts",
+      "minStatements": 64,
+      "observed": { "statements": 100, "lines": 100, "branches": 100, "functions": 100 },
+      "floors": { "statements": 100, "lines": 100, "branches": 100, "functions": 100 }
+    }
+  ]
+}
