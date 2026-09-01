@@ -120,7 +120,7 @@ foundations.
 
 ---
 
-## Scene inventory (A1–A29)
+## Scene inventory (A1–A30)
 
 Each scene maps to a production surface. The **Production status** column reflects
 the real `src/client` repo, not the design prototype. Classification:
@@ -173,6 +173,7 @@ so that no row reads as drifting from a number it never owned by itself.
 | A27 | Annotation fly-to-margin — on submit, card launches from popover footprint into its margin slot | A8 submit → `MarginColumn.svelte` left/right | fly `480ms` (FLIP translate+scale, opacity ramps); underline `220ms` | **ADD** for the motion — two-margin layout already ships; the side split is the fixed C3 lock in `panels/marginSides.ts`: **LEFT = private notes** (`type === "note"`), **RIGHT = outbound comments + imported Word comments** (`author === "import" || type === "comment"`). Imports render **RIGHT from arrival** (by `author`), not left-until-promoted; highlights are inline (neither side) |
 | A28 | Selection-popup entrance — origin-anchored unroll + unfurl + cascade | A8 popup (`popup-format-row` + `popup-annotate-row`) | dwell `360ms`; lead-row unroll `360ms`; cascade `200ms` staggered; trail row `320ms +170ms`; selection deepen `240ms` | **ADD** — **supersedes A7**; unroll = animate `width` + `overflow:hidden`, **never `clip-path`** (clips box-shadow) |
 | A29 | New-tab menu morph — `+` tab button *is* the menu, single-shell two-stage | `NewTabPopover` + `.pop-anchor` | P1 width+radius `340ms`; P2 height `480ms +P1dur` (shared token, see note); rows cascade `200ms` 60ms stagger | **ADD** — replaces the old 160ms `popIn` scale. **Homonym:** A29 is *surface* A7's morph, distinct from *motion-scene* A7 |
+| A30 | Tab reorder drag — pill lifts + scales on recognition, siblings part to open the slot, release settles into place | `DocumentTabs.svelte` (wrappers) + `TabItem.svelte` (lifted pill), tokens in `tabs/tabDragMotion.css` | lift `160ms`; sibling shift `200ms`; settle `200ms`; shadow crossfade `160ms`; chrome `150ms` | **SHIPPED** — the one scene that landed without an inventory row. Reduce-motion is handled by **zeroing the tokens**, not by per-selector guards: the wrappers' durations are JS-computed per drag frame, so there is no fixed selector/value pair a guard could target (see the token-zeroing note below) |
 | — (s3) | Tab close — active tab fades + collapses, adjacent tabs reflow | `DocumentTabs.svelte` close | CSS lives only in the bundle's Svelte scene | **ADD** — extract the CSS from the scene before porting |
 
 **A14 supersession note.** The row above records the Batch-8 `Motion Wiring -

@@ -8,9 +8,15 @@
 
 ## Bundle references (cited throughout)
 
-- **App stylesheet:** OD project "Tandem Design System (1)" UUID
-  `2a0312b0-b34a-40e8-b9c8-306987dce4e2`, file `ui_kits/app/app.css`. Cited
+- **App stylesheet:** OD project "Tandem Design System" UUID
+  `019e2685-a2d8-7b24-8d55-864b738f47be`, file `ui_kits/app/app.css`. Cited
   as `app.css:NNN` below.
+  > **The `app.css:NNN` line numbers below are UNVERIFIED against this project.**
+  > They were written against the superseded "Tandem Design System (1)" bundle
+  > (`2a0312b0-…`), and repointing the project header does not make them resolve
+  > here. The **selector names** are the reliable half; treat the line numbers as
+  > hints until checked. Tracked with a date in
+  > [#1712](https://github.com/bloknayrb/tandem/issues/1712).
 - **Root tokens:** `colors_and_type.css` (same project). Token names
   reconciled against production in `token-audit.md`; the audit is the
   authority on which token wins when bundle and production differ.

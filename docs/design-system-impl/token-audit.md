@@ -5,7 +5,7 @@
 ## Sources
 
 - **Production:** [`index.html` lines 65–195 (`:root`), 291–353 (`[data-theme="dark"]`), 360–388 (`[data-theme="warm"]`)](../../index.html). Hand-tuned across PRs #556 (WCAG AA audit), #621 (dark-bg fix), #776 (calm-v7 dark canon).
-- **Bundle:** OpenDesign project `Tandem Design System (1)` (UUID `2a0312b0-b34a-40e8-b9c8-306987dce4e2`), file `colors_and_type.css`. Generated 2026-05-21 10:30 during the React → Svelte 5 port.
+- **Bundle:** OpenDesign project `Tandem Design System` (UUID `019e2685-a2d8-7b24-8d55-864b738f47be`), file `colors_and_type.css`. Originally generated 2026-05-21 10:30 during the React → Svelte 5 port, from the superseded project `Tandem Design System (1)` (`2a0312b0-b34a-40e8-b9c8-306987dce4e2`). **Any `app.css:NNN` / line-number citation downstream predates the repoint and is unverified against the current project — see [#1712](https://github.com/bloknayrb/tandem/issues/1712).**
 
 ## Resolution categories
 

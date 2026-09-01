@@ -52,7 +52,7 @@ When the umbrella merges to master, the rollup section gets promoted into the ve
 
 - Phase 0 commits (token audit, testid manifest, tutorial-anchor manifest, derived-spec, conflicts-resolved, this doc, perf-baseline) are infrastructure for the umbrella; they do NOT add CHANGELOG entries individually. The umbrella merge gets a single "**Design system re-skin infrastructure (docs/design-system-impl/, CI gates, snapshot baselines)**" bullet covering all of Phase 0.
 - Token additions from Phase 0c that any sub-PR actually consumes get a one-line note in that sub-PR's bullet (e.g. "uses new `--tandem-density-compact` token from bundle").
-- The CI token blocklist extension to `scripts/check-semantic-tokens.ts` gets a single `### Changed` bullet at umbrella merge: "**`check-semantic-tokens.ts` enforces bundle-origin color blocklist** — extends the existing CI gate."
+- The token blocklist extension to `scripts/check-semantic-tokens.ts` gets a single `### Changed` bullet at umbrella merge: "**`check-semantic-tokens.ts` enforces bundle-origin color blocklist** — extends the existing pre-commit gate." **Say pre-commit, not CI.** `check-semantic-tokens.ts` appears in no workflow file; it runs from `.husky/pre-commit` (via lint-staged), `npm run check:tokens`, and a warn-only PostToolUse hook. Calling it a CI gate here is where that error propagated from — see Conflict #6's enforcement status in `conflicts-resolved.md`.
 
 ## Phase 4 / motion follow-up
 
