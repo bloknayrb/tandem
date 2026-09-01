@@ -151,10 +151,28 @@ jobs:
   # the high end -- a claim a reader could disprove with the arithmetic in the
   # sentence carrying it.
   #
-  # NOT a threshold gate. Unit 3 of the maintainability programme publishes a
-  # baseline; per-module floors are Unit 13's, seeded from these numbers with at
-  # most a one-point rounding allowance. Nothing here fails for coverage being
-  # low.
+  # Since Unit 13 it IS a threshold gate, for 14 named modules only — there is
+  # still no repository-wide threshold, and nothing fails for the repo total
+  # being low. `scripts/ci/coverage-gate.mjs` compares
+  # `scripts/ci/coverage-policy.json` against the summary and exits non-zero on
+  # a module below its floor, uninstrumented, absent, or collapsed in size.
+  #
+  # **That gate is ADVISORY, because this job is not a required status check.**
+  # A red `coverage` does not block a merge today; making it required is a
+  # branch-protection setting, tracked in its own issue. Do not describe this
+  # job as blocking until that flips — re-measure with
+  # `gh api repos/bloknayrb/tandem/branches/master/protection` rather than
+  # trusting this comment.
+  #
+  # What DOES block is the wiring half: `tests/scripts/coverage-gate-wiring.test.ts`
+  # runs inside `check` and fails there if the gated set shrinks, a floor drifts
+  # past its allowance, a gated module's behavioural suite disappears, a
+  # coverage-ignore hint appears in a gated file, or this job gains anything
+  # that can mask a failure.
+  #
+  # A percentage floor detects new code arriving untested. It does NOT detect
+  # deleted behaviour — the arithmetic is in the comparator's header, and the
+  # named `suite` per module is what covers that gap.
   #
   # It DOES fail when the measurement did not happen, and there is no `|| true`
   # anywhere for that reason. "No repository-wide threshold" is a statement
