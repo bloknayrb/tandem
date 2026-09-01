@@ -1,9 +1,9 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
-import { onDestroy, tick, untrack } from "svelte";
+import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
 import { BYO_MODELS_ENABLED } from "../shared/constants";
-import { isScratchpadPath, isUploadPath, scratchpadUuidFromPath } from "../shared/paths";
+import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import { SNAPSHOT_CAP } from "../shared/snapshot";
 import type { Annotation, CapturedAnchor, ChatMessage, TandemNotification } from "../shared/types";
@@ -72,6 +72,7 @@ import { createClosedTabStack } from "./hooks/useClosedTabStack.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createCwdDrift } from "./hooks/useCwdDrift.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
+import { createDocumentWorkspace } from "./hooks/useDocumentWorkspace.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
 import { createRootEditorFont } from "./hooks/useEditorFont.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
@@ -131,13 +132,7 @@ import {
 import StatusBar from "./status/StatusBar.svelte";
 import { cwdDriftPill } from "./status/status-ai-view";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
-import {
-  tabIdsToCloseLeft,
-  tabIdsToCloseOthers,
-  tabIdsToCloseRight,
-} from "./tabs/tab-context-menu.js";
-import { saveExactTarget } from "./tabs/target-save.js";
-import { isRenamable, type OpenTab } from "./types.js";
+import { isRenamable } from "./types.js";
 import { MCP_BASE_URL } from "./utils/backend-ports";
 import { openFileForRuntime } from "./utils/browse-file";
 import { resolveDefaultModelChip } from "./utils/model-chip";
@@ -174,100 +169,6 @@ onDestroy(() => licenseStore.stop());
 // In-memory closed-tab history for Ctrl+Alt+T (reopen closed tab). Lifetime is
 // the app session; resets on reload. See useClosedTabStack.ts for rationale.
 const closedTabStack = createClosedTabStack();
-const inflightReopens = new Set<string>();
-
-function closeTabAndRecord(tabId: string) {
-  const tab = yjsSync.tabs.find((t) => t.id === tabId);
-  // #864: warn before closing a scratchpad that has unsaved content. Annotations
-  // are intentionally out of scope (accepted loss); only document text matters.
-  if (tab && isScratchpadPath(tab.filePath)) {
-    const uuid = scratchpadUuidFromPath(tab.filePath);
-    if (uuid && scratchpadPersistence.hasUnsavedContent(uuid)) {
-      const ok = window.confirm(
-        "This scratchpad has unsaved content that will be lost. Close it anyway?",
-      );
-      if (!ok) return;
-      // User accepted the loss — discard the recovery copy so the next
-      // scratchpad open doesn't restore the content they just dismissed.
-      scratchpadPersistence.clearUnsaved(uuid);
-    }
-  }
-  // #1021: warn before closing a tab with uncommitted markdown-source edits
-  // (mirrors the #864 scratchpad confirm above). The disk file is intact — this
-  // is loss of unsaved source-view work only.
-  if (sourceDirtyTabs.has(tabId)) {
-    const ok = window.confirm(
-      "This document has unsaved markdown-source edits that will be lost. Close it anyway?",
-    );
-    if (!ok) return;
-  }
-  if (tab && !isUploadPath(tab.filePath)) {
-    closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
-  }
-  // Drop any source-view flag + draft for the closed tab so the maps don't leak (#1021).
-  if (sourceViewTabs.has(tabId)) {
-    const next = new Set(sourceViewTabs);
-    next.delete(tabId);
-    sourceViewTabs = next;
-  }
-  clearSourceDraft(tabId);
-  // Drop the closed tab's remembered scroll position so scrollMemory doesn't
-  // leak across long sessions (mirrors the source-view/draft cleanup above; #1055).
-  scrollMemory.delete(tabId);
-  yjsSync.handleTabClose(tabId);
-}
-
-// Tab context-menu bulk closes (#923 Phase 2). The id lists are computed by
-// pure helpers (which guard against a stale right-clicked id closing every
-// tab) and snapshotted before the loop — closeTabAndRecord mutates the tab
-// list, so iterating live tabs would skip entries. Each close routes through
-// closeTabAndRecord so the scratchpad-unsaved guard + closed-tab stack apply.
-function closeOtherTabs(keepId: string) {
-  for (const id of tabIdsToCloseOthers(tabOrder.orderedTabs, keepId)) closeTabAndRecord(id);
-}
-
-function closeTabsToLeft(fromId: string) {
-  for (const id of tabIdsToCloseLeft(tabOrder.orderedTabs, fromId)) closeTabAndRecord(id);
-}
-
-function closeTabsToRight(fromId: string) {
-  for (const id of tabIdsToCloseRight(tabOrder.orderedTabs, fromId)) closeTabAndRecord(id);
-}
-
-async function reopenClosedTab() {
-  const rec = closedTabStack.pop();
-  if (!rec) return;
-  // Server may have rejected the original close (rare); also covers the
-  // close→reopen→close→reopen rapid cycle for the same path. If the file is
-  // still open, just activate it.
-  const existing = yjsSync.tabs.find((t) => t.filePath === rec.filePath);
-  if (existing) {
-    yjsSync.setActiveTabId(existing.id);
-    return;
-  }
-  if (inflightReopens.has(rec.filePath)) return;
-  inflightReopens.add(rec.filePath);
-  const handleFailure = (reason: string) => {
-    // Restore the record so the user can retry with another Ctrl+Alt+T;
-    // silent drop would also surprise users who expect LIFO to be retryable.
-    closedTabStack.push(rec);
-    const basename = rec.filePath.split(/[\\/]/).pop() || rec.filePath;
-    notifications.push({
-      id: `reopen-failed-${Date.now()}`,
-      type: "general-error",
-      severity: "error",
-      message: `Couldn't reopen ${basename}: ${reason}`,
-      dedupKey: `reopen-failed:${rec.filePath}`,
-      timestamp: Date.now(),
-    });
-  };
-  try {
-    const result = await openServerPath(rec.filePath);
-    if (!result.ok) handleFailure(result.error);
-  } finally {
-    inflightReopens.delete(rec.filePath);
-  }
-}
 
 const tabOrder = createTabOrder(() => yjsSync.tabs);
 createTabCycleKeyboard(
@@ -917,80 +818,6 @@ function openModelsSettings() {
   openSettingsModalWithAck();
 }
 
-function pushSaveNotification(severity: "info" | "warning" | "error", message: string): void {
-  notifications.push({
-    id: generateNotificationId(),
-    type: "launcher",
-    severity,
-    message,
-    timestamp: Date.now(),
-  });
-}
-
-/**
- * Save a live tab by id. The id is re-resolved at invocation time so later
- * tab-menu/native callers can safely target inactive tabs without capturing a
- * stale object. Plain Save promotes every editable upload-backed document;
- * once promoted, the same id resolves to `source: "file"` and writes in place.
- */
-async function saveDocumentTargetAfterSourceCommit(
-  tabId: string,
-  intent: "save" | "save-as",
-  expectedYdoc?: OpenTab["ydoc"],
-): Promise<boolean> {
-  const tab = yjsSync.tabs.find((candidate) => candidate.id === tabId);
-  if (!tab || (expectedYdoc && tab.ydoc !== expectedYdoc)) return false;
-
-  const needsPromotion = tab.source === "upload" || isUploadPath(tab.filePath);
-  if (needsPromotion) {
-    if (tab.readOnly) {
-      pushSaveNotification("warning", "Not saved — this document is read-only.");
-      return false;
-    }
-    const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
-    return triggerSaveAs({
-      activeDocId: tab.id,
-      defaultName: tab.filePath.slice(lastSlash + 1),
-      sourceFormat: tab.format,
-      notify: pushSaveNotification,
-    });
-  }
-
-  if (intent === "save-as") {
-    pushSaveNotification(
-      "info",
-      "Save As is for uploads and scratchpads; this document already saves to its file.",
-    );
-    return false;
-  }
-  return triggerSave(tab.id);
-}
-
-/**
- * Save one exact live tab incarnation. A source-view target must mount and
- * commit its draft before the post-commit persistence helper is allowed to
- * run; formatted documents can persist immediately.
- */
-async function saveDocumentTarget(tabId: string | null, intent: "save" | "save-as"): Promise<void> {
-  if (!tabId) {
-    pushSaveNotification("warning", "No active document to save.");
-    return;
-  }
-
-  await saveExactTarget<OpenTab>({
-    tabId,
-    intent,
-    resolveTarget: (id) => yjsSync.tabs.find((candidate) => candidate.id === id) ?? null,
-    isSameTarget: (before, after) => before.ydoc === after.ydoc,
-    isSourceView: (id) => sourceViewTabs.has(id),
-    activateTarget: (id) => yjsSync.setActiveTabId(id),
-    afterActivate: tick,
-    getSourceCommands: (id) => sourceViewCommands.get(id) ?? null,
-    saveCommitted: (target, nextIntent) =>
-      saveDocumentTargetAfterSourceCommit(target.id, nextIntent, target.ydoc),
-  });
-}
-
 function focusChat(): void {
   // Command/native focus is intentionally context-free. Only the explicit
   // Chat-tab selection capture path may attach an anchor to a message.
@@ -1074,12 +901,12 @@ const actionExecutor = mountActionExecutor({
   },
   closeActiveTab: () => {
     const id = yjsSync.activeTabId;
-    if (id) closeTabAndRecord(id);
+    if (id) documentWorkspace.closeTabAndRecord(id);
   },
   openFileDialog: () => requestOpenFile(),
   toggleLeftPanel: () => toggleLeftPanel(),
   toggleRightPanel: () => toggleRightPanel(),
-  reopenClosedTab: () => reopenClosedTab(),
+  reopenClosedTab: () => documentWorkspace.reopenClosedTab(),
   annotationNext: () => {
     const sorted = sortAnnotationsByPosition(visibleAnnotations);
     const nextId = nextAnnotationId(sorted, activeAnnotationId);
@@ -1112,11 +939,11 @@ const actionExecutor = mountActionExecutor({
     settingsState.updateSettings({
       formattingBarVisible: !settingsState.settings.formattingBarVisible,
     }),
-  toggleSourceView: () => requestToggleSourceView(),
+  toggleSourceView: () => documentWorkspace.requestToggleSourceView(),
   focusChat,
-  save: async () => saveDocumentTarget(yjsSync.activeTabId, "save"),
+  save: async () => documentWorkspace.saveDocumentTarget(yjsSync.activeTabId, "save"),
   saveAs: async () => {
-    await saveDocumentTarget(yjsSync.activeTabId, "save-as");
+    await documentWorkspace.saveDocumentTarget(yjsSync.activeTabId, "save-as");
   },
 });
 onDestroy(() => actionExecutor.dispose());
@@ -1241,59 +1068,6 @@ let marginLayerEl = $state<HTMLDivElement | null>(null);
 let slashCommandMenuOpen = $state(false);
 let findBarOpen = $state(false);
 let findBarForceScope = $state<"doc" | "tabs">("doc");
-// Per-tab raw-markdown source view (#1021). Ephemeral (not persisted): the set
-// of tab IDs currently showing the markdown source editor instead of WYSIWYG.
-let sourceViewTabs = $state(new Set<string>());
-// In-progress source text + dirty flags, keyed by tab ID, lifted out of
-// SourceView so uncommitted edits survive a tab switch (which unmounts the
-// component) and so tab close / app quit can warn before discarding them
-// (#1021 review SHOULD-FIX).
-let sourceDrafts = $state(new Map<string, string>());
-let sourceDirtyTabs = $state(new Set<string>());
-type SourceViewCommands = {
-  documentId: string;
-  save(intent: "save" | "save-as"): Promise<boolean>;
-  exit(): Promise<void>;
-};
-let sourceViewCommands = $state(new Map<string, SourceViewCommands>());
-
-function updateSourceViewCommands(documentId: string, commands: SourceViewCommands | null): void {
-  const next = new Map(sourceViewCommands);
-  if (commands) next.set(documentId, commands);
-  else next.delete(documentId);
-  sourceViewCommands = next;
-}
-
-function sourceCommandsForEvent(e: KeyboardEvent): SourceViewCommands | null {
-  const el = e.target as HTMLElement | null;
-  const container = el?.closest?.<HTMLElement>('[data-testid="source-view-container"]');
-  const documentId = container?.dataset.documentId;
-  return documentId ? (sourceViewCommands.get(documentId) ?? null) : null;
-}
-
-function updateSourceDraft(tabId: string, text: string, dirty: boolean): void {
-  const drafts = new Map(sourceDrafts);
-  const dirtyTabs = new Set(sourceDirtyTabs);
-  if (dirty) {
-    drafts.set(tabId, text);
-    dirtyTabs.add(tabId);
-  } else {
-    drafts.delete(tabId);
-    dirtyTabs.delete(tabId);
-  }
-  sourceDrafts = drafts;
-  sourceDirtyTabs = dirtyTabs;
-}
-
-function clearSourceDraft(tabId: string): void {
-  if (!sourceDrafts.has(tabId) && !sourceDirtyTabs.has(tabId)) return;
-  const drafts = new Map(sourceDrafts);
-  const dirtyTabs = new Set(sourceDirtyTabs);
-  drafts.delete(tabId);
-  dirtyTabs.delete(tabId);
-  sourceDrafts = drafts;
-  sourceDirtyTabs = dirtyTabs;
-}
 let outlineFocusTrigger = $state(0);
 let commentFocusTrigger = $state(0);
 let annotationFocusRequest = $state<{ nonce: number; kind: "comment" | "note" } | null>(null);
@@ -1651,19 +1425,19 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // stopPropagations — this is belt-and-suspenders against that invariant
     // being broken later: the global save must never write the stale Y.Doc to
     // disk underneath an open source edit (#1021 review must-fix).
-    const sourceCommands = sourceCommandsForEvent(e);
+    const sourceCommands = documentWorkspace.sourceCommandsForEvent(e);
     if (sourceCommands) {
       void sourceCommands.save("save");
       return;
     }
-    if (inSourceView) {
+    if (documentWorkspace.inSourceView) {
       return;
     }
-    void saveDocumentTarget(yjsSync.activeTabId, "save");
+    void documentWorkspace.saveDocumentTarget(yjsSync.activeTabId, "save");
   },
   "save-as": (e) => {
     // Don't hijack Ctrl+Shift+S while typing in a chat / annotation input.
-    const sourceCommands = sourceCommandsForEvent(e);
+    const sourceCommands = documentWorkspace.sourceCommandsForEvent(e);
     if (sourceCommands) {
       e.preventDefault();
       void sourceCommands.save("save-as");
@@ -1671,7 +1445,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     }
     if (shouldIgnoreSaveAsShortcut(e)) return;
     e.preventDefault();
-    void saveDocumentTarget(yjsSync.activeTabId, "save-as");
+    void documentWorkspace.saveDocumentTarget(yjsSync.activeTabId, "save-as");
   },
   "focus-chat": (e) => {
     if (shouldIgnoreShortcut(e)) return;
@@ -1679,7 +1453,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     focusChat();
   },
   "toggle-source-view": (e) => {
-    const sourceCommands = sourceCommandsForEvent(e);
+    const sourceCommands = documentWorkspace.sourceCommandsForEvent(e);
     if (sourceCommands) {
       e.preventDefault();
       void sourceCommands.exit();
@@ -1687,7 +1461,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     }
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    void requestToggleSourceView();
+    void documentWorkspace.requestToggleSourceView();
   },
   settings: (e) => {
     e.preventDefault();
@@ -1709,7 +1483,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
     const id = yjsSync.activeTabId;
-    if (id) closeTabAndRecord(id);
+    if (id) documentWorkspace.closeTabAndRecord(id);
   },
   "open-file": (e) => {
     if (shouldIgnoreShortcut(e)) return;
@@ -1734,7 +1508,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "reopen-closed-tab": (e) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    void reopenClosedTab();
+    void documentWorkspace.reopenClosedTab();
   },
   "new-tab-menu": (e) => {
     // shouldIgnoreShortcut suppresses only INPUT/TEXTAREA + IME — not
@@ -2022,8 +1796,39 @@ const isReadOnly = $derived(activeTab?.readOnly === true);
 // Kept separate from `isReadOnly` so document-level affordances (source view,
 // status indicator) keep their own meaning. (#1116)
 const editorReadOnly = $derived(isReadOnly || licenseStore.ui.showWall);
-const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
-const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
+// ADR-035 Unit 10a. Source view, the close/reopen funnel and the save entry
+// points live in `hooks/useDocumentWorkspace.svelte.ts` now. Constructed here
+// (not earlier) because `getActiveTab` / `getIsReadOnly` must close over
+// `activeTab` and `isReadOnly`, which are declared above.
+//
+// Every `getX` below reads live state in its body. An arrow closing over a
+// `const` snapshot typechecks identically and never updates — see the module's
+// docblock.
+const documentWorkspace = createDocumentWorkspace({
+  getTabs: () => yjsSync.tabs,
+  getActiveTabId: () => yjsSync.activeTabId,
+  getActiveTab: () => activeTab,
+  getIsReadOnly: () => isReadOnly,
+  getOrderedTabs: () => tabOrder.orderedTabs,
+  setActiveTabId: (tabId) => yjsSync.setActiveTabId(tabId),
+  closeTab: (tabId) => yjsSync.handleTabClose(tabId),
+  closedTabStack,
+  scratchpad: scratchpadPersistence,
+  openServerPath,
+  triggerSave,
+  triggerSaveAs,
+  pushNotification: (notification, action) => notifications.push(notification, action),
+  confirm: (message) => window.confirm(message),
+  closeEditorOverlays: () => {
+    findBarOpen = false;
+    slashCommandMenuOpen = false;
+    paletteOpen = false;
+  },
+  // Per-tab scroll memory stays here: it is DOM-bound (a bound element plus a
+  // requestAnimationFrame retry loop), so the funnel owns the timing of the
+  // eviction and App owns the cache (#1055).
+  onTabClosed: (tabId) => scrollMemory.delete(tabId),
+});
 /**
  * Tab stop on the scroll container, but ONLY when nothing else in it can take
  * focus and scroll it.
@@ -2045,7 +1850,9 @@ const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
  * Source view is excluded for the same reason — its textarea is focusable and
  * scrolls itself.
  */
-const editorScrollTabIndex = $derived(editorReadOnly && !inSourceView ? 0 : undefined);
+const editorScrollTabIndex = $derived(
+  editorReadOnly && !documentWorkspace.inSourceView ? 0 : undefined,
+);
 /**
  * Pre-narrowed to a plain boolean so `ScrollPill`'s effect subscribes to THIS
  * derived (which equality-checks its own value) rather than to `activeTab`,
@@ -2063,13 +1870,15 @@ const editorScrollTabIndex = $derived(editorReadOnly && !inSourceView ? 0 : unde
  * nothing.
  */
 const scrollPillEnabled = $derived(
-  settingsState.settings.scrollPill && !!activeTab && !inSourceView,
+  settingsState.settings.scrollPill && !!activeTab && !documentWorkspace.inSourceView,
 );
 const chatVisible = $derived(
   activeRailTab === "chat" &&
     (effectiveRightVisible || railFloat.right || railFloatClosing.right || chatReveal),
 );
-const chatCanInsert = $derived(!!editor && !!activeTab && !editorReadOnly && !inSourceView);
+const chatCanInsert = $derived(
+  !!editor && !!activeTab && !editorReadOnly && !documentWorkspace.inSourceView,
+);
 const chatState = createChatState({
   getCtrlYdoc: () => yjsSync.bootstrapYdoc,
   getInitialSyncComplete: () => yjsSync.ctrlInitialSyncComplete,
@@ -2161,79 +1970,6 @@ $effect(() => {
 $effect(() => {
   const activeId = yjsSync.activeTabId;
   if (chatReveal && activeId !== chatRevealDocumentId) closeTransientChat();
-});
-
-function enterSourceView(): void {
-  if (!activeTab) return;
-  const id = activeTab.id;
-  if (sourceViewTabs.has(id)) return;
-  const next = new Set(sourceViewTabs);
-  if (!canSourceView) return;
-  next.add(id);
-  // Source view replaces the Tiptap editor; close editor-bound overlays so
-  // they don't linger non-functional over the textarea.
-  findBarOpen = false;
-  slashCommandMenuOpen = false;
-  paletteOpen = false;
-  sourceViewTabs = next;
-}
-
-function enterSourceViewTarget(documentId: string): void {
-  const tab = yjsSync.tabs.find((candidate) => candidate.id === documentId);
-  if (!tab || tab.format !== "md" || tab.readOnly || sourceViewTabs.has(documentId)) return;
-  yjsSync.setActiveTabId(documentId);
-  const next = new Set(sourceViewTabs);
-  next.add(documentId);
-  findBarOpen = false;
-  slashCommandMenuOpen = false;
-  paletteOpen = false;
-  sourceViewTabs = next;
-}
-
-async function requestToggleSourceViewTarget(documentId: string): Promise<void> {
-  const tab = yjsSync.tabs.find((candidate) => candidate.id === documentId);
-  if (!tab || tab.format !== "md" || tab.readOnly) return;
-  yjsSync.setActiveTabId(documentId);
-  if (!sourceViewTabs.has(documentId)) {
-    enterSourceViewTarget(documentId);
-    return;
-  }
-  // An inactive SourceView is unmounted. Activate first, then wait for its
-  // command registration so a dirty draft is committed before exit.
-  await tick();
-  await sourceViewCommands.get(documentId)?.exit();
-}
-
-async function requestToggleSourceView(): Promise<void> {
-  const documentId = yjsSync.activeTabId;
-  if (!documentId) return;
-  if (sourceViewTabs.has(documentId)) {
-    await sourceViewCommands.get(documentId)?.exit();
-    return;
-  }
-  enterSourceView();
-}
-
-function exitSourceView(id: string): void {
-  if (!sourceViewTabs.has(id)) return;
-  const next = new Set(sourceViewTabs);
-  next.delete(id);
-  sourceViewTabs = next;
-  // Returning to WYSIWYG discards any in-progress draft (a dirty exit commits
-  // first via SourceView.handleExit, which already cleared it).
-  clearSourceDraft(id);
-}
-
-// Warn before unloading the page (reload / quit) while any source view holds
-// uncommitted edits — mirrors the scratchpad #864 beforeunload guard.
-$effect(() => {
-  const onBeforeUnload = (ev: BeforeUnloadEvent): void => {
-    if (sourceDirtyTabs.size === 0) return;
-    ev.preventDefault();
-    ev.returnValue = "You have unsaved markdown-source edits.";
-  };
-  window.addEventListener("beforeunload", onBeforeUnload);
-  return () => window.removeEventListener("beforeunload", onBeforeUnload);
 });
 
 // #842: when the user reaches the empty tab-bar state (e.g. closes the last
@@ -2576,9 +2312,9 @@ const shouldShowModelPicker = $derived(
         decorationsMuted={settingsState.settings.decorationsMuted}
         onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
         onOpenSettings={openSettingsModalWithAck}
-        sourceViewActive={inSourceView}
-        onToggleSourceView={canSourceView || inSourceView
-          ? () => void requestToggleSourceView()
+        sourceViewActive={documentWorkspace.inSourceView}
+        onToggleSourceView={documentWorkspace.canSourceView || documentWorkspace.inSourceView
+          ? () => void documentWorkspace.requestToggleSourceView()
           : null}
         onHide={() => settingsState.updateSettings({ formattingBarVisible: false })}
         onNotify={(n) => notifications.push(n)}
@@ -2968,13 +2704,13 @@ const shouldShowModelPicker = $derived(
     tabs={tabOrder.orderedTabs}
     activeTabId={yjsSync.activeTabId}
     onTabSwitch={yjsSync.setActiveTabId}
-    onTabClose={closeTabAndRecord}
-    onCloseToLeft={closeTabsToLeft}
-    onCloseOthers={closeOtherTabs}
-    onCloseToRight={closeTabsToRight}
-    onSaveTarget={saveDocumentTarget}
-    onToggleSourceViewTarget={requestToggleSourceViewTarget}
-    isTabInSourceView={(tabId) => sourceViewTabs.has(tabId)}
+    onTabClose={documentWorkspace.closeTabAndRecord}
+    onCloseToLeft={documentWorkspace.closeTabsToLeft}
+    onCloseOthers={documentWorkspace.closeOtherTabs}
+    onCloseToRight={documentWorkspace.closeTabsToRight}
+    onSaveTarget={documentWorkspace.saveDocumentTarget}
+    onToggleSourceViewTarget={documentWorkspace.requestToggleSourceViewTarget}
+    isTabInSourceView={documentWorkspace.isTabInSourceView}
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
     uniformTabWidth={settingsState.settings.uniformTabWidth}
@@ -2992,7 +2728,7 @@ const shouldShowModelPicker = $derived(
       )}
     renameTrigger={renameTabTrigger}
     closedTabTop={closedTabStack.top}
-    onReopenClosed={reopenClosedTab}
+    onReopenClosed={documentWorkspace.reopenClosedTab}
   />
 {/snippet}
 
@@ -3074,7 +2810,7 @@ const shouldShowModelPicker = $derived(
       tabindex={editorScrollTabIndex}
       class="editor-scroll tandem-scroll-fade-y"
       class:hide-raw-md={!settingsState.settings.showRawMarkdown}
-      class:tandem-scroll-pill-surface={!inSourceView}
+      class:tandem-scroll-pill-surface={!documentWorkspace.inSourceView}
       class:tandem-scroll-pill-host={scrollPillEnabled}
       use:scrollFade={"y"}
       role="main"
@@ -3108,7 +2844,7 @@ const shouldShowModelPicker = $derived(
          conflict unsurfaced there is not a dead end — exiting source view shows
          the banner, and the source-view commit route refuses while a conflict
          is pending, surfacing the reason inline. -->
-    {#if activeTab && !inSourceView}
+    {#if activeTab && !documentWorkspace.inSourceView}
       {#key activeTab.id}
         <ExternalConflictBanner
           ydoc={activeTab.ydoc}
@@ -3194,13 +2930,13 @@ const shouldShowModelPicker = $derived(
         onSendToClaude={marginHandlers.onSendToClaude}
       />
     {/snippet}
-    {#if inSourceView && activeTab}
+    {#if documentWorkspace.inSourceView && activeTab}
       <!-- Raw-markdown source view (#1021) replaces the WYSIWYG stage entirely.
            The Tiptap editor unmounts (editor → null); margin hooks park safely
            via their null-editor guards (see createMarginPositions).
 
            This UNMOUNTS marginLayerEl, which INVARIANT 1 below forbids across
-           *marginView* toggles. It's safe here because `inSourceView` is
+           *marginView* toggles. It's safe here because `documentWorkspace.inSourceView` is
            margin-independent state — no margin effect reads or writes it, so
            there's no bind:this feedback loop (the storm INVARIANT 1 guards is a
            self-triggering cycle, not a one-way unmount on an external toggle). -->
@@ -3211,12 +2947,12 @@ const shouldShowModelPicker = $derived(
         <SourceView
           documentId={activeTab.id}
           ydoc={activeTab.ydoc}
-          initialDraft={sourceDrafts.get(activeTab.id)}
-          onDraftChange={(documentId, text, dirty) => updateSourceDraft(documentId, text, dirty)}
+          initialDraft={documentWorkspace.sourceDrafts.get(activeTab.id)}
+          onDraftChange={(documentId, text, dirty) => documentWorkspace.updateSourceDraft(documentId, text, dirty)}
           onSave={(documentId, intent, ydoc) =>
-            saveDocumentTargetAfterSourceCommit(documentId, intent, ydoc)}
-          onCommandsChange={updateSourceViewCommands}
-          onExit={exitSourceView}
+            documentWorkspace.saveDocumentTargetAfterSourceCommit(documentId, intent, ydoc)}
+          onCommandsChange={documentWorkspace.updateSourceViewCommands}
+          onExit={documentWorkspace.exitSourceView}
         />
       {/key}
     {:else}
