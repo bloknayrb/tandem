@@ -1138,7 +1138,7 @@ Public surface (sketch):
 **Unit 10b amendment (2026-09-01, ADR-035 Unit 10b):** Rail-tab *selection* returns to
 the model, and the Wave I amendment's "narrows to visibility helpers" line is
 superseded to that extent. `createLayoutModel` now also owns `activeRailTab`,
-`pendingAnnotationBadge`, `selectRailTab` and `showAnnotations`, and the `RailTab`
+`pendingAnnotationBadge` and `selectRailTab`, and the `RailTab`
 type is re-introduced — but as a two-member union naming the right rail's two FIXED
 tabs, not as the movable-tab identifier Wave I deleted. **Nothing about tab movement
 comes back**: there is still no `moveTabs`, no `leftTabs`/`rightTabs`, and no
@@ -1150,6 +1150,35 @@ factory also moves to a single options object, matching `createEditorStageModel`
 deliberately NOT derived from it — `settingsState.settings` is wholesale-reassigned
 on every settings write, so a derived seed would reset the user's tab on an
 unrelated theme or font change.
+
+**Unit 10c amendment (2026-09-01, ADR-035 Unit 10c):** `showAnnotations` is gone
+and its one call site takes `selectRailTab("annotations")`. 10b kept it as a
+separate method because the extraction was behaviour-preserving and the two
+differ: `showAnnotations` did not fire the injected `closeTransientChat`. Now
+that `createRailContentModel` owns the reveal, the difference is one this
+project no longer wants — an annotation clicked in the document should not
+leave Chat floating over the rail that is supposed to show it.
+
+`selectRailTab` also **writes the tab before invoking the closer**, reversing
+master order. The write is the user's intent and the teardown is bookkeeping, so
+the tab write survives a throwing closer. **That is the whole of the claim, and
+an earlier draft of this amendment overstated it** — the closer still re-throws,
+so a caller's later statements are skipped either way; `onAnnotationClick`
+selects the tab and *then* sets the active annotation, and would land on
+Annotations with nothing selected. No wired closer can throw today, so this is
+defence against a future one. Both are behaviour changes, both are pinned: the
+ordering by a spec that records what the closer OBSERVES, because a call-count
+assertion cannot separate the two orders.
+
+The **reveal itself is not in this model.** `createRailContentModel`
+(`src/client/layout/rail-content.svelte.ts`) is a sibling holding what the right
+rail SHOWS — the chat reveal plus its captured anchor, and the annotation-review
+selection. It owns effects and window listeners where `createLayoutModel` owns
+none, and its state is per-document where every member here is app-global. The
+hover-float and rail-animation machinery stays in `App.svelte`: it paints
+through the same CSS classes but is rail *chrome*, and moving four timers, two
+rAF dances and a `transitionend` filter with no behavioural net is how a
+behaviour-preserving refactor stops preserving behaviour.
 
 **Wave I amendment (2026-05-18):** The cross-rail tab picker is retired entirely. The left rail is hard-coded to the outline; the right rail is hard-coded to Annotations + Chat. The `leftRailTabs` / `rightRailTabs` settings fields are removed from the schema (v4→v5 migration strips them), the `RailTab` type is gone, and `LayoutModel.moveTabs` + the `leftTabs` / `rightTabs` getters are deleted. Layout-model surface narrows to visibility helpers (`leftVisible`, `rightVisible`, `toggleLeft`, `toggleRight`). The orphan-rail rule from §3 no longer applies; neither rail can empty because its tab set is fixed.
 

@@ -111,8 +111,6 @@ export interface LayoutModel {
   toggleRight(): void;
   /** Select a rail tab, tearing down a transient chat reveal unless the target is Chat. */
   selectRailTab(tab: RailTab): void;
-  /** Show Annotations WITHOUT touching a transient chat reveal — see the note on the impl. */
-  showAnnotations(): void;
 }
 
 export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
@@ -181,30 +179,31 @@ export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
     });
   }
 
-  function selectRailTab(tab: RailTab): void {
-    if (tab !== "chat") opts.closeTransientChat();
-    activeRailTab = tab;
-  }
-
   /**
-   * The raw write from `App.svelte`'s `onAnnotationClick`, preserved
-   * byte-for-byte: it does NOT close a transient chat reveal, where
-   * `selectRailTab("annotations")` does.
+   * Select a rail tab, then tear down any transient chat reveal.
    *
-   * This is not an alias and must not be collapsed into `selectRailTab`. Unit
-   * 10b is a behaviour-preserving extraction, which is reason enough on its
-   * own — but for the record, the difference is hard to observe: the
-   * capture-phase window `pointerdown` listener App installs while a reveal is
-   * open already closes it for any click outside the right rail, so on the
-   * ordinary pointer path the reveal is gone before this runs. "Hard to
-   * observe" is not "impossible" (a synthetic click, or a keyboard reveal
-   * opened between pointerdown and click, reaches here with the reveal live),
-   * and an extraction is the wrong place to bet on the difference either way.
+   * **The order is the point, and it changed in Unit 10c.** 10b preserved
+   * master byte-for-byte, where the closer ran FIRST — so a closer that threw
+   * ate the user's click entirely: no tab switch, no toast, no warn. The tab
+   * write is the user's intent and the teardown is bookkeeping, so the intent
+   * lands first now.
    *
-   * Unifying the two is Unit 10c's call, once chat-reveal ownership moves.
+   * **The improvement is bounded, and an earlier draft of this comment
+   * overstated it.** The reorder does not reduce a throwing closer to a stale
+   * reveal — it still re-throws, so any statement the CALLER runs after this one
+   * is skipped. `onAnnotationClick` in `App.svelte` is exactly that shape: it
+   * selects the tab and then sets the active annotation, so a throwing closer
+   * would leave the rail switched to Annotations with nothing selected. What the
+   * reorder buys is the tab write, not the caller's whole interaction.
+   *
+   * It is also latent rather than live: the only closer wired in is
+   * `railContent.closeReveal()`, plain assignments behind a guard, which cannot
+   * throw. This is defence against a future fallible closer — and if one
+   * arrives, the fix is a `try`/`finally` here, not another reordering.
    */
-  function showAnnotations(): void {
-    activeRailTab = "annotations";
+  function selectRailTab(tab: RailTab): void {
+    activeRailTab = tab;
+    if (tab !== "chat") opts.closeTransientChat();
   }
 
   return {
@@ -223,6 +222,5 @@ export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
     toggleLeft,
     toggleRight,
     selectRailTab,
-    showAnnotations,
   };
 }
