@@ -66,8 +66,14 @@ Conventions used below:
 
 ## #9 — Animation Language Rollout (Phase 4, deferred)
 
-- **Resolution:** Defer the bundle's 9 motion scenes to a follow-up PR series after the umbrella merges. Tracked as [#798](https://github.com/bloknayrb/tandem/issues/798).
-- **Why:** Threading motion through every animated surface is roughly equal in scope to the visual re-skin itself. Doing both in one umbrella ~2x the work; the visual surfaces benefit from being in their final shape before motion lands. The umbrella merge is a v1.0-prep milestone; v1.0 GA gates on #798 closing.
+- **Resolution:** Defer the bundle's 9 motion scenes to a follow-up PR series after the umbrella merges. Tracked as [#798](https://github.com/bloknayrb/tandem/issues/798) — **closed COMPLETED 2026-08-09.**
+- **Why:** Threading motion through every animated surface is roughly equal in scope to the visual re-skin itself. Doing both in one umbrella ~2x the work; the visual surfaces benefit from being in their final shape before motion lands.
+- **Outcome (recorded 2026-09-01 — this replaces "v1.0 GA gates on #798 closing", which is spent).** #798 closed COMPLETED. What it actually settled:
+  - **Four scenes RETIRED**, named in the issue body: A3, A7-full, A19, A21.
+  - **A16a swatch-pulse is DROPPED, not retired** — a distinct disposition, recorded at `motion.md:162` (the picker auto-closes on select, so there is nothing to pulse). It appears only in the 2026-08-08 decision comment, not the issue body. Do not flatten these to "five retired".
+  - **A17 has no live home.** It was deferred to [#964](https://github.com/bloknayrb/tandem/issues/964), which is **closed NOT_PLANNED (2026-08-23)**. Writing "A17 → #964, deferred past v1.0" was true when #798 closed and is false now — it points a reader at a not-planned issue. If A17 is wanted, it needs a new one.
+  - **Two exemptions, not deferrals:** A6b (rail SVG connector) and A16b (highlight L→R wash), reviewed and accepted 2026-08-08 — see `motion.md:457-477`.
+  - The DoD is 7 of 8 (`motion.md:428-448`); the open box is the v1.0 GA gate "motion language coherent across all surfaces".
 - **Sub-PR constraint:** Sub-PRs in Phases 1–3 may use existing motion (don't strip what's there) but should not introduce new animation choreography. `motion.md` (deferred to land alongside #798's pickup) is the canonical reference for future scenes.
 
 ---
