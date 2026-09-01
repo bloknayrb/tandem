@@ -41,6 +41,7 @@ export interface SlashCommandItem {
 // Tiptap exposes StarterKit commands but doesn't generically type them on the
 // chain -- keep the narrow surface we actually call here.
 type SlashCommandChain = ReturnType<TiptapEditor["chain"]> & {
+  setParagraph: () => SlashCommandChain;
   toggleHeading: (attributes: { level: 1 | 2 | 3 }) => SlashCommandChain;
   toggleBulletList: () => SlashCommandChain;
   toggleOrderedList: () => SlashCommandChain;
@@ -64,21 +65,42 @@ function chain(editor: TiptapEditor): SlashCommandChain {
 const LIST_LINES: SvgIconElement = { tag: "path", attrs: { d: "M6 4.5h7M6 8h7M6 11.5h7" } };
 
 export const SLASH_COMMANDS: SlashCommandItem[] = [
-  // FIRST, and the position is load-bearing. `hint` is display-only and is
-  // excluded from the filter haystack (see `filterSlashCommands` below), so the
-  // "p" alias does nothing — order alone decides what `/p` + Enter inserts.
-  // `filterSlashCommands` preserves array order and the menu's selectedIndex
-  // carries as 0 across a query change, so appending Paragraph LAST would make
-  // `/p` insert a code block (keyword "pre" matches first) — the one outcome a
-  // reset command must never have.
+  // FIRST, and the position is load-bearing in two ways.
   //
-  // `setParagraph()` is the whole reset: Tiptap's `setNode` falls back to
-  // `clearNodes()` internally when `setBlockType` is not applicable, which is
-  // exactly the "already a paragraph" case inside a list item or blockquote.
-  // Do NOT "harden" this to `.clearNodes().setParagraph()` — that form throws
-  // `RangeError: Invalid content for node type hardBreak` on a heading or code
-  // block inside a list item, because the explicit clear and setNode's internal
-  // one both run over stale mapped positions. Pinned by a test.
+  // WHAT `/p` RESOLVES TO. `hint` is display-only and excluded from the filter
+  // haystack (see `filterSlashCommands` below), so the "p" alias does nothing
+  // for matching. `filterSlashCommands` preserves array order, and the plugin
+  // carries the PREVIOUS selectedIndex across a query change, clamped to the
+  // new list length (`extension.ts` — `value.active?.selectedIndex ?? 0`, then
+  // `Math.min(selectedIndex, items.length - 1)`). With no arrow-key input it
+  // therefore stays 0, which is what makes position 0 the target. Measured: an
+  // unqualified `/`, two ArrowDowns, then "p" leaves the index at 2 and inserts
+  // a horizontal rule — order decides only for the arrow-free path, which is
+  // the overwhelmingly common one. Appending Paragraph LAST would make `/p`
+  // insert a code block (it sits earlier in this array and matches "p" via its
+  // "pre" and "snippet" keywords) — the one outcome a reset command must never
+  // have. `horizontal-rule` also matches "p", via "separator".
+  //
+  // WHAT A BARE `/` + ENTER DOES. Index 0 is also the pre-selected row for an
+  // unqualified query, so this deliberately changes the menu's default action:
+  // it used to insert a Heading 1, and now runs a paragraph reset, which on an
+  // already-plain line is a visible no-op. That is the intended trade — Enter
+  // with no query is an ambiguous input, and doing nothing beats inserting a
+  // heading the user never asked for.
+  //
+  // `setParagraph()` is the whole command. Tiptap's `setNode` falls back to
+  // `clearNodes()` internally when `setBlockType` is not applicable, so the
+  // "already a paragraph inside a list item or blockquote" case is covered.
+  // Do NOT "harden" this to `.clearNodes().setParagraph()`: that form throws
+  // `RangeError: Invalid content for node type hardBreak` on any block that is
+  // NOT the first child of its wrapper — a plain paragraph as readily as a
+  // heading, and in a blockquote as readily as a list item. The explicit clear
+  // is fine; it is setNode's internal one that breaks, because it reads a
+  // position from the already-mutated chained doc and re-maps it through the
+  // transaction's accumulated mapping. The double-mapped position lands inside
+  // the paragraph's inline content, where `contentMatchAt().defaultType` is
+  // `hardBreak`. Verified against @tiptap/core 2.27.2 and pinned by
+  // `describe("paragraph slash command")` in tests/client/slash-command.test.ts.
   {
     id: "paragraph",
     label: "Paragraph",

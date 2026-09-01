@@ -124,7 +124,7 @@ describe("paragraph slash command", () => {
   // load-bearing and which every filter assertion below fails to cover: they
   // pin RELATIVE order inside a filtered result, so moving Paragraph to index 1
   // leaves them all green while `/` + Enter — the bare-menu flow, no query —
-  // silently inserts Heading 1. The E2E misses it too: with
+  // silently inserts Heading 1. The E2E did not cover it either: with
   // [heading-1, paragraph, heading-2] two ArrowDowns still land on heading-2.
   it("sits at index 0 so the bare menu defaults to it", () => {
     expect(SLASH_COMMANDS[0]?.id).toBe("paragraph");
@@ -138,7 +138,13 @@ describe("paragraph slash command", () => {
   // keyword set could be deleted and the suite would stay green. These four are
   // the discoverability aliases — the words someone types when they do not know
   // the command is called "Paragraph".
-  it.each(["normal", "body", "plain", "reset"])("is reachable by the '%s' alias", (alias) => {
+  it.each([
+    "normal",
+    "body",
+    "text",
+    "plain",
+    "reset",
+  ])("is reachable by the '%s' alias", (alias) => {
     expect(filterSlashCommands(alias).map((c) => c.id)).toContain("paragraph");
   });
 
@@ -152,11 +158,38 @@ describe("paragraph slash command", () => {
   });
 
   // Revert-pin for PLACEMENT, which is the load-bearing half. `hint` is not in
-  // the filter haystack, so the "p" alias contributes nothing — only array
-  // order decides. Moving Paragraph later makes `/p` + Enter insert a code
-  // block (keyword "pre"), which this catches.
+  // the filter haystack, so the "p" alias contributes nothing to matching —
+  // array order is what puts Paragraph first. Moving it later makes `/p`
+  // resolve to a code block, which this catches.
   it("is what '/p' resolves to first", () => {
     expect(filterSlashCommands("p")[0]?.id).toBe("paragraph");
+  });
+
+  // The filter order above is only half the story, and the half that is easy to
+  // mistake for the whole. The plugin carries the PREVIOUS selectedIndex across
+  // a query change rather than resetting to 0, so "first in the filtered list"
+  // and "what Enter runs" coincide only on the arrow-free path. Measured here
+  // both ways so the source comment's claim is pinned rather than asserted:
+  // type `/p` and Enter runs paragraph; press ArrowDown twice first and the
+  // carried index 2 runs horizontal-rule instead. Not a defect — sticky
+  // selection is deliberate — but a reader who believes the index resets will
+  // not think to test this path.
+  it("carries the previous selectedIndex across a query change", () => {
+    editor.chain().focus().insertContent("/").run();
+    for (let i = 0; i < 2; i++) {
+      const active = slashCommandPluginKey.getState(editor.state)?.active;
+      if (!active) throw new Error("menu closed unexpectedly");
+      const next = (active.selectedIndex + 1) % filterSlashCommands(active.query).length;
+      editor.view.dispatch(
+        editor.state.tr.setMeta(slashCommandPluginKey, { type: "select", selectedIndex: next }),
+      );
+    }
+    editor.chain().focus().insertContent("p").run();
+
+    const active = slashCommandPluginKey.getState(editor.state)?.active;
+    expect(active?.query).toBe("p");
+    expect(active?.selectedIndex).toBe(2);
+    expect(filterSlashCommands("p")[active?.selectedIndex ?? 0]?.id).toBe("horizontal-rule");
   });
 
   it("resets a list item to a top-level paragraph", () => {
@@ -184,10 +217,20 @@ describe("paragraph slash command", () => {
   });
 
   // THE regression pin. `chain().clearNodes().setParagraph().run()` throws
-  // `RangeError: Invalid content for node type hardBreak` on this exact
-  // document: the explicit clearNodes lifts the block, then setNode's INTERNAL
-  // clearNodes fallback re-runs over stale mapped positions and
-  // contentMatchAt().defaultType resolves to hardBreak.
+  // `RangeError: Invalid content for node type hardBreak` here. The explicit
+  // clearNodes lifts the block correctly; it is setNode's INTERNAL clearNodes
+  // fallback that breaks, reading a position from the already-mutated chained
+  // doc and re-mapping it through the transaction's accumulated mapping. The
+  // double-mapped position lands inside the paragraph's inline content, where
+  // contentMatchAt().defaultType is hardBreak.
+  //
+  // The trigger is BROADER than these two fixtures: measured against
+  // @tiptap/core 2.27.2 the hardened form throws on any block that is not the
+  // first child of its wrapper — an ordered list, a blockquote, and a plain
+  // paragraph as readily as a heading. So the leading `<p>x</p>` is
+  // load-bearing in both fixtures; drop it and neither form throws. Two cases
+  // are pinned rather than the whole matrix because the matrix belongs to
+  // Tiptap, not to us — these are the two a maintainer would hit.
   //
   // Plain setParagraph() does not throw, which is why the command is written
   // that way. This test is what stops someone "hardening" it back.
@@ -201,7 +244,7 @@ describe("paragraph slash command", () => {
     expect(editor.getHTML()).toBe("<ul><li><p>x</p><p>hello</p></li></ul>");
   });
 
-  it("converts a code block inside a list item", () => {
+  it("converts a code block that follows a paragraph inside a list item", () => {
     editor.commands.setContent("<ul><li><p>x</p><pre><code>hello</code></pre></li></ul>");
     editor.commands.setTextSelection(8);
     runParagraph();
