@@ -164,15 +164,13 @@ jobs:
   # `gh api repos/bloknayrb/tandem/branches/master/protection` rather than
   # trusting this comment.
   #
-  # What DOES block is the wiring half: `tests/scripts/coverage-gate-wiring.test.ts`
-  # runs inside `check` and fails there if the gated set shrinks, a floor drifts
-  # past its allowance, a gated module's behavioural suite disappears, a
-  # coverage-ignore hint appears in a gated file, or this job gains anything
-  # that can mask a failure.
-  #
   # A percentage floor detects new code arriving untested. It does NOT detect
-  # deleted behaviour — the arithmetic is in the comparator's header, and the
-  # named `suite` per module is what covers that gap.
+  # deleted behaviour — the arithmetic is in the comparator's header. The half
+  # that catches deletion, and the half that blocks, are the same one:
+  # `tests/scripts/coverage-gate-wiring.test.ts` runs inside `check` and fails
+  # there if the gated set shrinks, a floor drifts past its allowance, a gated
+  # module's named behavioural suite disappears, a coverage-ignore hint appears
+  # in a gated file, or this job becomes conditional.
   #
   # It DOES fail when the measurement did not happen, and there is no `|| true`
   # anywhere for that reason. "No repository-wide threshold" is a statement

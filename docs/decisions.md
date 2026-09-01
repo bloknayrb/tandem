@@ -1888,3 +1888,72 @@ Inverting the default fixes all three at once: deny is structural, and the hand-
 **Reopen condition:** a supported client that must write to `/api` from another machine. `API_BASE` in `src/client/utils/fileUpload.ts` is a hardcoded `127.0.0.1`, so no shipped client can today; that constant is the thing to change first, deliberately.
 
 **Cross-references:** [ADR-045](#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id), #1293 (the unconditional per-handler gate), #1121 F6/F7, #1291 (CORS denies by absence).
+
+## ADR-051: An Advisory CI Job's Guarantees Are Enforced by a Wiring Test Inside `check`
+
+**Status:** Accepted (2026-09-01)
+
+**Context.** Only five checks are required on `master`: `check`, the three
+`rust-test` legs, and `windows-acl-proof`. Everything else — `coverage`, CodeQL
+— reports red without blocking a merge. That is a deliberate cost decision, not
+an oversight, and it is a repo setting rather than a tracked file.
+
+But a job outside the required set still carries guarantees people rely on, and
+those guarantees are disarmable by editing a file: append `|| true` to the npm
+script it runs, add `continue-on-error: true`, put an `if:` on the job, delete an
+entry from the policy it reads. **Every one of those leaves the workflow looking
+correct and the job reporting success.** This project has produced that failure
+three times (#1229), which is why the acceptance harness's step carries no `if:`,
+no `continue-on-error` and no `|| true`, and why `check` fails when any of that
+changes.
+
+**Decision.** The pattern, now used four times, is: **the job does the work; a
+wiring test inside `check` pins the job's shape and the inputs it reads.** The
+work stays where it is cheap. The disarming becomes expensive, because disarming
+it means editing something a required check reads.
+
+Instances:
+
+| Job / mechanism | The wiring test in `check` |
+|---|---|
+| `typecheck:tests` | `tests/scripts/typecheck-tests-wiring.test.ts` |
+| `windows-acl-proof` | `tests/scripts/windows-acl-proof-wiring.test.ts` |
+| `coverage` baseline manifest | `tests/scripts/coverage-manifest-wiring.test.ts` |
+| `coverage` per-module floors | `tests/scripts/coverage-gate-wiring.test.ts` |
+
+**What a wiring test must do, from what has actually defeated one:**
+
+1. **Pin an npm script by EXACT EQUALITY, never `toContain`.** A `|| true`
+   appended to the script leaves `ci.yml` byte-identical, so a test that reads
+   only the workflow sees nothing.
+2. **Read YAML attributes as parsed fields, never as substrings of the file.**
+   `continue-on-error` is a sibling of `run:` and never appears inside a shell
+   line, so `expect(runLine).not.toContain("continue-on-error")` is close to
+   unconditionally true. `coverage-manifest-wiring.test.ts` shipped that check
+   and had to fix it; `coverage-gate-wiring.test.ts` then wrote a second copy of
+   the same mistake before review caught it.
+3. **Pin the SET, not the shape of the members.** A gate that validates each
+   entry it finds reports success truthfully after one entry is deleted. The
+   list of what is gated belongs in the test as a literal, so shrinking it fails.
+4. **Assert presence, never with a default.** `upload?.if ?? "always()"` passes
+   when the key is absent, and absent is the regression.
+5. **One owner per fact.** Two tests asserting the same property of the same job
+   through two different mechanisms will eventually disagree about it. Name the
+   owner in a comment and assert only the delta.
+
+**Consequences.** A red advisory job still does not block a merge — this pattern
+does not change that, and describing such a job as "enforced" is the overclaim it
+exists to make unnecessary. What it buys is that the job cannot be *silently*
+neutered: the guarantee's shape is pinned by something that does block. Whether a
+given advisory job should become required is a separate, dated decision (#1728
+for `coverage`).
+
+**Declined:** moving the work itself into `check`. For `coverage` that was
+measured — on the 2026-09-01 master run `check` took 15m43s and `coverage` 5m36s
+in parallel, so folding the instrumented suite into `check` would have added
+about three minutes to the critical path and bought nothing that making the job
+required would not buy for free.
+
+**Cross-references:** #1229 (a gate needs a third outcome), #1399 (the
+acceptance-harness step's unconditional shape), #1529 (`windows-acl-proof`),
+#1616 (`typecheck:tests`), #1728 (should `coverage` be required).

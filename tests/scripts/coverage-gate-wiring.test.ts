@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { MAX_FLOOR_ALLOWANCE, METRICS } from "../../scripts/ci/coverage-gate.mjs";
 
 /**
@@ -157,19 +158,24 @@ describe("coverage gating — no coverage-ignore hints in gated files", () => {
 });
 
 /**
- * The `coverage:` job's YAML body, sliced out by indentation.
+ * The parsed `coverage:` job.
  *
- * Both CI checks below read it, and they must read the SAME text: an earlier
- * draft sliced the job two different ways and one of them silently covered the
- * whole rest of the file, which would have passed on any `if:` anywhere below.
+ * **Parsed, not sliced, and that is the finding rather than the style.** The
+ * first draft carved the job out of the raw text and asserted
+ * `not.toContain("continue-on-error")` over it — which
+ * `coverage-manifest-wiring.test.ts` had already found to be close to
+ * unconditionally true, because `continue-on-error` is a YAML sibling of `run:`
+ * and never appears inside a shell line. That file's comment records the same
+ * check being fixed once already; writing a second, weaker copy of it one file
+ * over is how the two would have disagreed about the same job.
  */
-function coverageJobBody(): string {
-  const ci = read(".github/workflows/ci.yml");
-  const start = ci.indexOf("\n  coverage:");
-  expect(start, "ci.yml has no coverage job").toBeGreaterThan(-1);
-  const rest = ci.slice(start + 1);
-  const nextJob = rest.search(/\n {2}\w[\w-]*:\n/);
-  return nextJob === -1 ? rest : rest.slice(0, nextJob);
+function coverageJob() {
+  const workflow = parse(read(".github/workflows/ci.yml")) as {
+    jobs: Record<string, { steps?: { run?: string; if?: string }[]; if?: string }>;
+  };
+  const job = workflow.jobs.coverage;
+  expect(job, "no `coverage` job in ci.yml").toBeDefined();
+  return job;
 }
 
 describe("coverage gating — CI and npm wiring", () => {
@@ -185,21 +191,21 @@ describe("coverage gating — CI and npm wiring", () => {
     );
   });
 
-  it("keeps the coverage job running that script with nothing that can mask a failure", () => {
-    const job = coverageJobBody();
-    expect(job).toContain("npm run test:coverage");
-    expect(job).not.toContain("|| true");
-  });
-
-  it("does not let the coverage job be skipped or made non-fatal", () => {
-    // `continue-on-error` on the step or the job, and an `if:` that can evaluate
-    // false, both turn a red gate into a green run. `if: always()` on the
-    // artifact upload is the one sanctioned use, so it is admitted by name
-    // rather than by a loose match.
-    const job = coverageJobBody();
-    expect(job).not.toContain("continue-on-error");
-    const ifs = [...job.matchAll(/^\s*if:\s*(.+)$/gm)].map((m) => m[1].trim());
-    expect(ifs).toEqual(["always()"]);
+  it("does not let the coverage job or its measurement step be skipped", () => {
+    // An `if:` that can evaluate false turns a red gate into a green run, and
+    // this is the half `coverage-manifest-wiring.test.ts` does NOT cover: it
+    // asserts `continue-on-error` is falsy on the job and the step, and that the
+    // artifact upload keeps its `if: always()`, but it never asserts the job and
+    // the measurement step carry no `if:` of their own. That gap is this test.
+    //
+    // Deliberately NOT re-asserting `continue-on-error` or `|| true` here. Both
+    // are owned by that file, against the same parsed job, and a second copy is
+    // a second thing to keep in agreement rather than a second layer.
+    const job = coverageJob();
+    expect(job.if, "the coverage job is conditional").toBeUndefined();
+    const run = (job.steps ?? []).find((s) => s.run?.includes("test:coverage"));
+    expect(run, "the coverage job never runs test:coverage").toBeDefined();
+    expect(run?.if, "the measurement step is conditional").toBeUndefined();
   });
 
   it("keeps the comparator on disk where the script points", () => {

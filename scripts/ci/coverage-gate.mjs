@@ -130,8 +130,12 @@ export function evaluateGate({ policy, summary, repoRoot }) {
     // and v8 reports 100 % branch coverage over nothing, clearing any floor.
     // Checking only `statements.total` would be the same zero-of-zero hole one
     // metric over.
-    let uninstrumented = false;
-    for (const metric of METRICS) {
+    // Every metric is examined before the module is abandoned, and both bad
+    // arms accumulate identically. An earlier draft `break`-ed on MALFORMED and
+    // fell through on UNINSTRUMENTED, so a module with both reported only the
+    // first -- the opposite of the rule the floor loop below is tested against
+    // ("report every failing metric, not just the first").
+    const unusable = METRICS.filter((metric) => {
       const entry = measured[metric];
       if (!entry || typeof entry.pct !== "number" || typeof entry.total !== "number") {
         failures.push({
@@ -139,8 +143,7 @@ export function evaluateGate({ policy, summary, repoRoot }) {
           kind: "MALFORMED",
           detail: `summary entry has no usable \`${metric}\``,
         });
-        uninstrumented = true;
-        break;
+        return true;
       }
       if (entry.total === 0) {
         failures.push({
@@ -148,10 +151,11 @@ export function evaluateGate({ policy, summary, repoRoot }) {
           kind: "UNINSTRUMENTED",
           detail: `\`${metric}\` measured 0/0, which satisfies any floor including 100`,
         });
-        uninstrumented = true;
+        return true;
       }
-    }
-    if (uninstrumented) continue;
+      return false;
+    });
+    if (unusable.length > 0) continue;
 
     const floorStatements = Math.floor(mod.minStatements * MIN_STATEMENT_RATIO);
     if (measured.statements.total < floorStatements) {
