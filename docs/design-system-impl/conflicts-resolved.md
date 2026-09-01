@@ -50,7 +50,16 @@ Conventions used below:
 - **Resolution:** Production tokens win for shipped colors. Bundle contributes ONLY new tokens that have no production analogue.
 - **Why:** Production tokens passed the WCAG AA audit (#556) and the v7 dark-mode pass (#776). Wholesale adoption of the bundle's tokens risks regressing the audit on every surface. The protected-token list in `token-audit.md` is non-negotiable (`--tandem-author-{user,claude}`, `--tandem-claude-focus-{bg,border}`, `--tandem-suggestion*`).
 - **Sub-PR constraint:** A bundle color may only appear in production CSS if (a) it has no production equivalent, OR (b) a per-token WCAG re-audit is committed alongside the change.
-- **Enforcement status:** the original Phase 0 plan called for `scripts/check-semantic-tokens.ts` to ship a bundle-token blocklist as a CI-blocking mechanical gate. The Phase 0c commit landed the token-audit doc and the protected-token snapshot test but NOT the blocklist extension — building the blocklist requires deriving the exact bundle-color set as a follow-up, tracked in [#799](https://github.com/bloknayrb/tandem/issues/799). Sub-PRs in Phases 1–3 enforce this conflict via the audit doc + reviewer attention rather than a CI block until #799 lands. #799 should ship before Phase 3 starts.
+- **Enforcement status (corrected 2026-09-01 — #799 shipped, but NOT as the CI gate this line promised).** The original Phase 0 plan called for `scripts/check-semantic-tokens.ts` to ship a bundle-token blocklist as a **CI-blocking** mechanical gate. [#799](https://github.com/bloknayrb/tandem/issues/799) genuinely landed the blocklist — `BUNDLE_BLOCKLIST_HEX` is exported at `scripts/check-semantic-tokens.ts:950`, documented at `:930` as "issue #799 / Conflict #6", with the enforcement loop at `:1240`. **What did not land is the CI half.** The script appears in **no** file under `.github/workflows/`. It runs from exactly three places:
+  1. **`.husky/pre-commit`** via lint-staged (`package.json:97-99`, on `src/client/**`) — this is the real gate, and it is bypassable by anything that skips hooks.
+  2. **`npm run check:tokens`** (`package.json:71`), by hand.
+  3. **`.claude/hooks/check-token-violation.sh:36`**, a PostToolUse hook that is **warn-only**.
+
+  `.husky/pre-push` does **not** run it.
+
+  **The CI nuance matters and "no CI involvement" would be its own oversimplification.** CI's `check` job does run `tests/cli/check-semantic-tokens.test.ts` via `npm test`, but that suite feeds `checkContent` synthetic strings with fake paths and never walks the real tree. So it pins the blocklist's *contents* — deleting entries goes red — while a blocklisted hex newly introduced into real `src/client` **does not fail CI**.
+
+  So Conflict #6's aspiration is met locally and unmet in CI. If the CI-blocking property is actually wanted, that is a new piece of work, not a closed one.
 
 ## #7 — Paragraph Authorship Gutter (Sub-PRs 1.3, 1.5, 3.10)
 
