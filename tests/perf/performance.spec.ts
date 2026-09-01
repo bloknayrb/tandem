@@ -178,13 +178,12 @@ test.describe("v1.0 performance gate", () => {
       // `primaryTab` must be present TOO, and it is not redundant. A written
       // blob does NOT inherit `DEFAULTS` for its absent keys: `loadSettings`
       // routes it through `normalizeKnownFields`, which clamps field by field,
-      // and `primaryTab` is the one field in that function whose absent-key
-      // branch does not land on `DEFAULTS` —
+      // and `primaryTab`'s absent-key branch does not land on `DEFAULTS` —
       // `parsed.primaryTab === "annotations" ? "annotations" : "chat"` reads a
       // MISSING key as `"chat"`, the opposite of `DEFAULTS.primaryTab`. (Real
-      // users never hit this: `saveSettings` writes every key, and a blob-less
-      // first run returns `DEFAULTS` without going through the validator. It
-      // bites only a partial blob like this one.) Landing on Chat leaves the
+      // users never hit this: `updateSettings` persists the full merged
+      // object, and a blob-less first run returns `DEFAULTS` (with
+      // `reduceMotion` resolved) without going through the validator. It bites only a partial blob like this one.) Landing on Chat leaves the
       // Annotations panel `display: none` — PanelSlot toggles visibility with
       // CSS, so its cards stay in the DOM at zero size — and every rail-scoped
       // assertion below would fail on an element that is present and correct.

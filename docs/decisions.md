@@ -1091,6 +1091,14 @@ Comment extraction migrates from `.docx`'s `load()` body into the adapter's opti
 
 **Status:** Accepted; implemented (verified against `src/` 2026-05-25) — `createLayoutModel` in `src/client/layout/model.svelte.ts`, consumed by `App.svelte` (`leftVisible` / `rightVisible` / `toggleLeft` / `toggleRight`). Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15; landed across the redesign waves.
 
+> **The Context and Decision sections below are historical** — they describe the
+> pre-Wave-I product and are preserved as the record of why the model was built,
+> not as a description of the code. `moveTabToRail`, `disabledLeftTabs`,
+> `leftRailTabs` and `rightRailTabs` do not exist. Read the two amendments at the
+> end of this ADR for the current surface; an agent sent to "complete the layout
+> model" from the sketch below will implement things that were deliberately
+> deleted.
+
 **Context:** Panel-visibility and rail-tab state is encoded as four settings fields on `settingsState` plus a derivation in `App.svelte`:
 
 - `leftPanelVisible: boolean`, `rightPanelVisible: boolean` (raw user preference; persisted).
@@ -1126,6 +1134,22 @@ Public surface (sketch):
 - Migrations stay in `useTandemSettings.ts`. The model trusts that `settingsState.settings` is v2-shaped.
 - Future features (rail collapse, density modes affecting rail width, additional `RailTab` values like `'search'` or `'history'`) land as model extensions, not as changes propagated across four files.
 - This is a client-only refactor; no ADR or memory entries about server architecture change. Pairs with no other ADR in this grilling pass — independent.
+
+**Unit 10b amendment (2026-09-01, ADR-035 Unit 10b):** Rail-tab *selection* returns to
+the model, and the Wave I amendment's "narrows to visibility helpers" line is
+superseded to that extent. `createLayoutModel` now also owns `activeRailTab`,
+`pendingAnnotationBadge`, `selectRailTab` and `showAnnotations`, and the `RailTab`
+type is re-introduced — but as a two-member union naming the right rail's two FIXED
+tabs, not as the movable-tab identifier Wave I deleted. **Nothing about tab movement
+comes back**: there is still no `moveTabs`, no `leftTabs`/`rightTabs`, and no
+per-rail tab persistence. This restores a member of the model's originally chartered
+surface (the Decision section's sketch lists `activeLeftTab` / `activeRightTab` /
+`setActiveTab`), which Wave I removed only because the tab set became fixed. The
+factory also moves to a single options object, matching `createEditorStageModel`.
+`activeRailTab` is seeded once from the persisted `primaryTab` preference and is
+deliberately NOT derived from it — `settingsState.settings` is wholesale-reassigned
+on every settings write, so a derived seed would reset the user's tab on an
+unrelated theme or font change.
 
 **Wave I amendment (2026-05-18):** The cross-rail tab picker is retired entirely. The left rail is hard-coded to the outline; the right rail is hard-coded to Annotations + Chat. The `leftRailTabs` / `rightRailTabs` settings fields are removed from the schema (v4→v5 migration strips them), the `RailTab` type is gone, and `LayoutModel.moveTabs` + the `leftTabs` / `rightTabs` getters are deleted. Layout-model surface narrows to visibility helpers (`leftVisible`, `rightVisible`, `toggleLeft`, `toggleRight`). The orphan-rail rule from §3 no longer applies; neither rail can empty because its tab set is fixed.
 

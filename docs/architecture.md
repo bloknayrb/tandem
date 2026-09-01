@@ -987,6 +987,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `cowork/` -- Cowork onboarding, admin-declined and settings surfaces (ADR-044)
 - `shell/` -- Window chrome: `TitleBar.svelte` (Solo/Tandem toggle) and siblings
 - `layout/`, `status/`, `annotations/`, `keychain/`, `tauri/` -- layout model, status surfaces, annotation UI, keychain bridge, Tauri IPC wrappers
+- `layout/model.svelte.ts` -- `createLayoutModel`: both rails' **persisted** visibility, and the right rail's tab selection + pending badge (ADR-037 + Unit 10b). `rightVisible` is not "on screen" -- the float and chat-reveal terms live in `App.svelte`
 - `positions.ts` -- Unified client position module: `annotationToPmRange` (with `method` diagnostic), `pmSelectionToFlat`, `flatOffsetToPmPos`/`pmPosToFlatOffset`
 - Tiptap editor with collaboration extensions, connects to Hocuspocus via WebSocket (@hocuspocus/provider)
 - `App.svelte` -- Layout + UI state only; `useYjsSync` hook (`src/client/hooks/`) manages `OpenTab` objects (one per open document), each with its own Y.Doc + provider
