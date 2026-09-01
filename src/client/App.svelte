@@ -218,9 +218,10 @@ const shortcutOverrides = $derived(buildOverrides(settingsState.settings.customS
 const effectiveShortcutLabels = $derived(effectiveBindingLabels(shortcutOverrides));
 
 const visibleAnnotations = $derived(yjsSync.annotations);
-// Below `visibleAnnotations` because the model reads it. The seed is an eager
-// read and `chatVisible` forward-references this binding, so it sits as early
-// as its own dependencies allow and no earlier.
+// Below `visibleAnnotations` for readability, not out of necessity: the only
+// eager read the factory performs is `settings.primaryTab`, and both the
+// annotation thunk and the badge derivation are lazy. Moving this line is
+// safe; the ordering just keeps the model next to what it reads.
 const layoutModel = createLayoutModel({
   settingsState,
   modeState,

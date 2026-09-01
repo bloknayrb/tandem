@@ -530,21 +530,24 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     leftPanelVisible: parsed.leftPanelVisible === true,
     rightPanelVisible: parsed.rightPanelVisible !== false,
     schemaVersion: CURRENT_SCHEMA_VERSION,
-    // The one field here whose absent-key branch DISAGREES with its own
-    // `DEFAULTS` entry (:260 says `"annotations"`; this reads a missing key as
-    // `"chat"`). Every other field in this function is "known value, else
-    // `DEFAULTS.x`" -- do not copy this line as the pattern.
+    // Reads a MISSING key as `"chat"` while `DEFAULTS.primaryTab` (:260) is
+    // `"annotations"` -- do not copy this line as the pattern. `reduceMotion`
+    // (:565) also diverges from its `DEFAULTS` entry, but deliberately: the
+    // blob-less path at the bottom of `loadSettings` resolves it the same way,
+    // so the two agree on what a user actually gets. This field is the one
+    // where they do not.
     //
-    // It is drift, not design -- `6e82388` flipped the default and left this
-    // line alone -- and it is LEFT AS IS deliberately. It is reachable only
-    // from a blob that omits the key: a hand-written test fixture, or the
-    // partial blob this file synthesises when `JSON.parse` yields a non-object.
-    // Never from a normal write, since `saveSettings` writes every key and a
+    // It is drift -- `6e82388` flipped the default and left this line alone --
+    // and it is LEFT AS IS deliberately. It is reachable only from a blob that
+    // omits the key: a hand-written test fixture, or the partial blob this
+    // file synthesises when `JSON.parse` yields a non-object. Never from a
+    // normal write, since `updateSettings`
+    // (`useTandemSettings.svelte.ts`) persists the full merged object, and a
     // blob-less first run returns `DEFAULTS` without entering this validator.
-    // Flipping it would silently move the opening rail tab for the E2E specs
-    // that seed partial blobs, to fix a condition no user reaches. See
-    // `docs/perf-gate-results.md` and `tests/perf/performance.spec.ts`, both of
-    // which depend on today's behaviour.
+    // Flipping it would silently move the opening rail tab for every E2E spec
+    // that seeds a partial blob, to fix a condition no user reaches. Those
+    // specs are the dependents, and `tests/e2e/helpers.ts`'s
+    // `switchToAnnotationsTab` is what absorbs it today.
     primaryTab: parsed.primaryTab === "annotations" ? "annotations" : "chat",
     panelOrder:
       parsed.panelOrder === "annotations-editor-chat"

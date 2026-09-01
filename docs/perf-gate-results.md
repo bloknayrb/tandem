@@ -39,12 +39,11 @@ happens otherwise.
 `primaryTab` is seeded explicitly and is **not** redundant with the shipped
 default. A hand-written settings blob does not inherit `DEFAULTS` for the keys
 it omits: `loadSettings` clamps it field by field through
-`normalizeKnownFields`, and `primaryTab` is the single field there whose
-absent-key branch does not land on `DEFAULTS` — it reads a missing key as
-`"chat"`, the opposite of `DEFAULTS.primaryTab`. (No user is affected:
-`saveSettings` writes every key, and a first run with no blob at all returns
-`DEFAULTS` without entering the validator. Only a partial blob like the spec's
-hits it.) Left unset, the rail opens on Chat, the Annotations panel is
+`normalizeKnownFields`, and `primaryTab`'s absent-key branch reads a missing
+key as `"chat"`, the opposite of `DEFAULTS.primaryTab`. (No user is affected:
+`updateSettings` persists the full merged object, and a first run with no blob
+at all returns `DEFAULTS` without entering the validator. Only a partial blob
+like the spec's hits it.) Left unset, the rail opens on Chat, the Annotations panel is
 `display: none` — `PanelSlot` toggles with CSS, so its cards stay in the DOM at
 zero size — and every rail-scoped measurement below fails against an element
 that is present and correct.

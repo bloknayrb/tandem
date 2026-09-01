@@ -15,13 +15,16 @@
  * Returned shape uses getters so consumers see reactivity through the
  * settings store underneath — same pattern as `useTandemSettings.svelte.ts`.
  *
- * **Every member is a getter, including the scalar `activeRailTab`.** A plain
- * value property is the failure this file is most exposed to: it returns the
- * correct string at every direct read, so a unit test that re-reads the model
- * after each mutation passes while template reactivity is completely dead —
- * the rail would stop switching and nothing but a rendered assertion would
- * notice. Never destructure this object at a call site, and never spread it:
- * both invoke the getters once and freeze the result.
+ * **Every reactive VALUE is a getter, including the scalar `activeRailTab`.**
+ * (The four actions are plain function properties.) A plain value property is
+ * the failure this file is most exposed to: it returns the correct answer at
+ * every direct read, so a unit test that re-reads the model after each
+ * mutation passes while template reactivity is completely dead — the rail
+ * would stop switching and nothing but a rendered assertion would notice.
+ * Only an effect-run count separates the two, which is why two specs in
+ * `tests/client/layout-model.svelte.test.ts` count runs rather than values.
+ * Never destructure this object at a call site, and never spread it: both
+ * invoke the getters once and freeze the result.
  *
  * Wave I removed the cross-rail tab picker. The left rail is hard-coded to
  * the outline; the right rail is hard-coded to Annotations + Chat. The
@@ -124,6 +127,16 @@ export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
 
   // Zero while the Annotations tab is already showing: the badge exists to
   // advertise unreviewed work on the tab you are NOT looking at.
+  //
+  // So this is a BADGE value, not a count of pending annotations, and the name
+  // has to keep carrying that. Its sibling `chatState.unreadCount` is a true
+  // count and is NOT zeroed on tab-active, which is why `App.svelte` can reuse
+  // it for the collapsed-rail `chat-unread-peek`. The two sit side by side in
+  // the same markup with opposite semantics. A future consumer that reads this
+  // member as "how many are pending" — a peek, a taskbar badge, a status line
+  // — gets 0 exactly when the user happens to be on Annotations, silently.
+  // Today the template guards it with the same `activeRailTab !== "annotations"`
+  // test, so the zeroing is double-covered and unobservable.
   const pendingAnnotationBadge = $derived(
     activeRailTab === "annotations"
       ? 0
