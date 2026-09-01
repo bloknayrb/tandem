@@ -41,8 +41,6 @@ const originalTruncated = $derived(isSnapshotTruncated(annotation));
   {isReviewTarget}
   {isEditing}
   {canEdit}
-  badgeBg="var(--tandem-suggestion-bg)"
-  badgeFg="var(--tandem-suggestion-fg-strong)"
   {onEnterEdit}
 />
 

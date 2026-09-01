@@ -40,6 +40,13 @@ const SURFACES = [
   "accent-bg",
   "author-user-bg",
   "author-claude-bg",
+  // Currently `var(--tandem-surface-muted)`, already swept two entries up, so
+  // this adds no new number today. It is here because the alias is the thing
+  // that could change: give imports their own tint and the sweep must follow
+  // without anyone remembering to come back. An unswept pair is
+  // indistinguishable from a passing one, which is the whole argument for this
+  // list being wide.
+  "author-import-bg",
   "success-bg",
   "warning-bg",
   "error-bg",

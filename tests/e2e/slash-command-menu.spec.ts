@@ -63,11 +63,27 @@ test("slash menu supports arrow-key selection", async ({ page }) => {
   const menu = page.getByRole("listbox", { name: "Slash commands" });
   await expect(menu).toBeVisible();
 
+  // Assert the SELECTION MOVED, by name — not that a particular index happens
+  // to hold a particular command. The previous form pressed ArrowDown and
+  // asserted an `h2`, which only worked because heading-1 sat at index 0. It
+  // went red the moment a command was inserted above it — this spec runs in the
+  // required `check` job, so the breakage was loud, not silent — but the
+  // failure message points at the menu rather than at the array. "Press it
+  // twice" would just re-encode the same fragility. Naming the option is what
+  // the sibling test above already does, and it survives any future insertion.
   await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("Enter");
+  await expect(menu.getByRole("option", { name: "Heading 1" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 
+  await page.keyboard.press("Enter");
   await expect(menu).toBeHidden();
-  await expect(page.locator(".tiptap h2").first()).toContainText("first paragraph");
+  // Scope by TEXT, not `.first()` — the fixture opens with an `# Test Document`
+  // title, so the first `h1` in the editor is that heading and never changes.
+  // The sibling tests get away with `.first()` only because they assert h2/h3,
+  // which the fixture has none of at that level.
+  await expect(page.locator(".tiptap h1", { hasText: "first paragraph" })).toBeVisible();
 });
 
 test("slash menu supports pointer selection", async ({ page }) => {

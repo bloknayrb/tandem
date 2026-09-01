@@ -125,6 +125,23 @@
         --tandem-author-claude-fg: oklch(0.24 0.03 55);
         --tandem-author-user-bg: color-mix(in srgb, var(--tandem-author-user) 10%, var(--tandem-surface));
         --tandem-author-claude-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, var(--tandem-surface));
+        /* Third authorship tint, completing the set so annotation cards can be
+           tinted by AUTHOR alone (user / claude / import) with type carried by
+           an icon instead of a colour.
+
+           Deliberately an ALIAS, not a hand-authored per-theme value like its
+           two siblings above. Import is neutral-by-intent — it is the "not one
+           of us" ground, and surface-muted is already exactly that in every
+           theme. Aliasing means this single :root definition re-resolves
+           correctly in [data-theme="dark"], [data-theme="warm"] AND the
+           forced-colors block (where surface-muted becomes Canvas), so there is
+           no fourth place to forget. Copying the literal instead would silently
+           regress warm, which defines its own surface-muted.
+
+           Rendering for imports is byte-identical to the pre-token behaviour;
+           what this buys is the NAME, so "tint is author-keyed" is true in the
+           stylesheet rather than only inside a Svelte branch. */
+        --tandem-author-import-bg: var(--tandem-surface-muted);
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
         /* Per-agent authorship colors (#1123 M4, ADR-039). Keyed to the closed

@@ -7,8 +7,10 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  openAnnotatePopup,
   openSettingsViaBrandMenu,
   selectTextStable,
+  submitAnnotation,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -301,6 +303,49 @@ const SURFACES: Surface[] = [
     // fg-muted, fg-subtle and fg-faint adjacent in a single header row, and a
     // rank inversion between two of those tiers went undetected through a full
     // green run. An empty container is not the surface.
+    //
+    // BOTH author tints, not just one. Cards are tinted by AUTHOR, so a single
+    // Claude comment renders the whole header stack on --tandem-author-claude-bg
+    // and leaves --tandem-author-user-bg unscanned — the same "an empty
+    // container is not the surface" mistake one level in. The note below is a
+    // real user annotation and is the only way to get the user tint on screen:
+    // notes are user-only by ADR-027, so no MCP tool can create one.
+    //
+    // WHAT THIS DOES NOT BUY, stated because the obvious reading is wrong.
+    // Adding the note does NOT make this a contrast gate for the user tint.
+    // Measured (#1721): paint the note card `#4a4a4a` — mid-grey behind dark
+    // body text, an unmissable AA failure — and all three themes still report
+    // `violations: []`, so the assertion below does not gate it.
+    //
+    // The structural reason is certain and is the durable half: NOTHING in this
+    // suite reads `results.incomplete`, so whatever axe files there is
+    // unasserted by construction. `color-contrast` is not in `disableRules`, so
+    // the rule does run — this is a bucketing gap, not a disabled rule.
+    //
+    // The exact mechanism is NOT established, and an earlier version of this
+    // comment asserted one it could not support. That run observed 25
+    // color-contrast nodes under `incomplete` against 17 under `passes`, but a
+    // faithful standalone repro of these tints — `oklch` tokens, `color-mix`
+    // grounds, the clip-path hidden word — reports the bad card as a plain
+    // VIOLATION with zero incomplete under the same axe version. So it is
+    // something structural in the live app (overlap/obscuring is the likely
+    // check), not the modern colour syntax, which is the first thing the next
+    // reader will suspect. Do not repeat the earlier claim that a
+    // `.withRules(["color-contrast"])` scan finds violations the default scan
+    // buckets away: `withRules` narrows which rules RUN, it does not change how
+    // a rule buckets a node, and those two probes were not the same page state.
+    // Fixing this is suite-wide work, hence the issue rather than a patch here.
+    //
+    // What the note IS worth: it puts a second card variant through every OTHER
+    // rule — roles, names, the visually-hidden badge word, the Private pill —
+    // none of which have that problem.
+    //
+    // And two things nothing covers anywhere: axe's color-contrast rule
+    // evaluates TEXT, so the highlight icon's `<svg>` fill against the card tint
+    // and the note dot's hollow `<span>` border are unevaluated by construction.
+    // `token-contrast.spec.ts` covers what is expressible as a token pair,
+    // including the import tint — which needs a `.docx` import to render and so
+    // has no card here.
     open: async (page) => {
       await bootWithContent(page);
       await mcp.callTool("tandem_comment", {
@@ -308,8 +353,14 @@ const SURFACES: Surface[] = [
         to: 15,
         text: "Contrast probe — exercises the muted/subtle/faint header stack.",
       });
+      await selectFirstParagraph(page);
+      await openAnnotatePopup(page);
+      await page
+        .locator("[data-testid='popup-annotation-input']")
+        .fill("Contrast probe — the user tint, which no Claude annotation can render.");
+      await submitAnnotation(page, "note");
       await switchToAnnotationsTab(page);
-      await expect(page.locator("[data-testid^='annotation-card-']").first()).toBeVisible({
+      await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
         timeout: 10_000,
       });
     },

@@ -50,7 +50,16 @@ Conventions used below:
 - **Resolution:** Production tokens win for shipped colors. Bundle contributes ONLY new tokens that have no production analogue.
 - **Why:** Production tokens passed the WCAG AA audit (#556) and the v7 dark-mode pass (#776). Wholesale adoption of the bundle's tokens risks regressing the audit on every surface. The protected-token list in `token-audit.md` is non-negotiable (`--tandem-author-{user,claude}`, `--tandem-claude-focus-{bg,border}`, `--tandem-suggestion*`).
 - **Sub-PR constraint:** A bundle color may only appear in production CSS if (a) it has no production equivalent, OR (b) a per-token WCAG re-audit is committed alongside the change.
-- **Enforcement status:** the original Phase 0 plan called for `scripts/check-semantic-tokens.ts` to ship a bundle-token blocklist as a CI-blocking mechanical gate. The Phase 0c commit landed the token-audit doc and the protected-token snapshot test but NOT the blocklist extension — building the blocklist requires deriving the exact bundle-color set as a follow-up, tracked in [#799](https://github.com/bloknayrb/tandem/issues/799). Sub-PRs in Phases 1–3 enforce this conflict via the audit doc + reviewer attention rather than a CI block until #799 lands. #799 should ship before Phase 3 starts.
+- **Enforcement status (corrected 2026-09-01 — #799 shipped, but NOT as the CI gate this line promised).** The original Phase 0 plan called for `scripts/check-semantic-tokens.ts` to ship a bundle-token blocklist as a **CI-blocking** mechanical gate. [#799](https://github.com/bloknayrb/tandem/issues/799) genuinely landed the blocklist — `BUNDLE_BLOCKLIST_HEX` is exported at `scripts/check-semantic-tokens.ts:950`, documented at `:930` as "issue #799 / Conflict #6", with the enforcement loop at `:1240`. **What did not land is the CI half.** The script appears in **no** file under `.github/workflows/`. It runs from exactly three places:
+  1. **`.husky/pre-commit`** via lint-staged (`package.json:97-99`, on `src/client/**`) — this is the real gate, and it is bypassable by anything that skips hooks.
+  2. **`npm run check:tokens`** (`package.json:71`), by hand.
+  3. **`.claude/hooks/check-token-violation.sh:36`**, a PostToolUse hook that is **warn-only**.
+
+  `.husky/pre-push` does **not** run it.
+
+  **The CI nuance matters and "no CI involvement" would be its own oversimplification.** CI's `check` job does run `tests/cli/check-semantic-tokens.test.ts` via `npm test`, but that suite feeds `checkContent` synthetic strings with fake paths and never walks the real tree. So it pins the blocklist's *contents* — deleting entries goes red — while a blocklisted hex newly introduced into real `src/client` **does not fail CI**.
+
+  So Conflict #6's aspiration is met locally and unmet in CI. If the CI-blocking property is actually wanted, that is a new piece of work, not a closed one.
 
 ## #7 — Paragraph Authorship Gutter (Sub-PRs 1.3, 1.5, 3.10)
 
@@ -61,13 +70,29 @@ Conventions used below:
 ## #8 — AnnotationCard Architecture (Sub-PR 1.5)
 
 - **Resolution:** Visual-only layer. Preserve the five-file split (`Note/Comment/Suggestion/Highlight/ImportedCard.svelte`) plus dispatcher plus shared chrome (`AnnotationCardActions`, `AnnotationCardHeader`, `AnnotationSnippet`).
-- **Why:** ADR-027 codifies audience-first annotation handling. The five-file split is the structural enforcement: Note's render path is intentionally segregated from Comment's so the "Send to Claude" affordance literally cannot leak into a private note's render. Bundle's 68-line single-component demo would re-couple them. Additionally, the taxonomy in `derived-spec.md` is five rows because suggestions are Claude-only — users author notes, comments, and highlights, never suggestions.
+- **Why (rewritten 2026-09-01 — the previous rationale stated the opposite of the shipped feature).** ADR-027 codifies audience-first annotation handling, and the five-file split keeps `NoteCard`'s render path separate from `CommentCard`'s because a note and a comment have different **destinations** — not because "Send to Claude" is dangerous on a note.
+
+  > **The sentence this replaces said the split exists "so the 'Send to Claude' affordance literally cannot leak into a private note's render." That is backwards.** `canSendToClaude` is `author === "user" && type === "note" && isPending` (`src/client/panels/annotation-context-menu.ts:76`) — the affordance exists **only** on private notes. It is the note's own promotion control, and note→comment promotion is the feature. Left standing, the old sentence instructed a reader to delete a shipped capability. It also contradicted its own file two sections up: Conflict #5 documents `Ctrl/Cmd+Enter = Send to Claude` as a shipped keybinding and calls ADR-027's "Note to self / Send to Claude" fork *structurally primary*.
+
+  The property actually worth protecting is narrower, and it lives server-side: **a `type: "note"` annotation reaches Claude by exactly one route — the user pressing Send to Claude, which rewrites it to `type: "comment"`, `audience: "outbound"`** (`src/client/panels/annotation-actions.ts:74-86`). Every Claude-facing surface excludes notes independently: `tandem_getAnnotations` (`server/mcp/annotations.ts:396`), `tandem_exportAnnotations` (`:612`), `tandem_checkInbox` (`server/mcp/awareness.ts:610,632`), the channel narrow (`server/events/observers/annotations.ts:90`), and the resolve/remove/edit/reply `invalid-note` envelopes.
+
+  **This guarantee is type-keyed, not audience-keyed.** Do not restate it as "private annotations are never sent to Claude": user highlights carry `audience: "private"` (`editor/toolbar/Toolbar.svelte:797`) and *are* returned by `tandem_getAnnotations`, which filters on type alone. That gap is tracked in [#1710](https://github.com/bloknayrb/tandem/issues/1710).
+
+  Bundle's 68-line single-component demo would re-couple the render paths, which is the real reason to keep the split.
+
+  **Caveat on the "five rows" claim below.** The taxonomy in `derived-spec.md` is described as five rows because suggestions are Claude-only — but the dispatcher has **no author check** on the `suggestedText` branch (`AnnotationCard.svelte`), so a user-authored suggestion would render `SuggestionCard` today. The sub-PR constraint's "the UI must never render a user-authored suggestion" is a stated intent, not an enforced invariant.
 - **Sub-PR constraint:** Lift typography/spacing/color from bundle's `AnnotationCard.svelte` into the five production components individually. Keep the dispatcher. Preserve `data-testid="annotation-private-pill"`. Explicitly forbid merging Note + Comment render paths. The `tandem_createAnnotation` server tool should reject a user-authored annotation with `suggestedText` set (filed as a follow-up if not already enforced); the UI must never render a user-authored suggestion.
 
 ## #9 — Animation Language Rollout (Phase 4, deferred)
 
-- **Resolution:** Defer the bundle's 9 motion scenes to a follow-up PR series after the umbrella merges. Tracked as [#798](https://github.com/bloknayrb/tandem/issues/798).
-- **Why:** Threading motion through every animated surface is roughly equal in scope to the visual re-skin itself. Doing both in one umbrella ~2x the work; the visual surfaces benefit from being in their final shape before motion lands. The umbrella merge is a v1.0-prep milestone; v1.0 GA gates on #798 closing.
+- **Resolution:** Defer the bundle's 9 motion scenes to a follow-up PR series after the umbrella merges. Tracked as [#798](https://github.com/bloknayrb/tandem/issues/798) — **closed COMPLETED 2026-08-09.**
+- **Why:** Threading motion through every animated surface is roughly equal in scope to the visual re-skin itself. Doing both in one umbrella ~2x the work; the visual surfaces benefit from being in their final shape before motion lands.
+- **Outcome (recorded 2026-09-01 — this replaces "v1.0 GA gates on #798 closing", which is spent).** #798 closed COMPLETED. What it actually settled:
+  - **Four scenes RETIRED**, named in the issue body: A3, A7-full, A19, A21.
+  - **A16a swatch-pulse is DROPPED, not retired** — a distinct disposition, recorded at `motion.md:162` (the picker auto-closes on select, so there is nothing to pulse). It appears only in the 2026-08-08 decision comment, not the issue body. Do not flatten these to "five retired".
+  - **A17 has no live home.** It was deferred to [#964](https://github.com/bloknayrb/tandem/issues/964), which is **closed NOT_PLANNED (2026-08-23)**. Writing "A17 → #964, deferred past v1.0" was true when #798 closed and is false now — it points a reader at a not-planned issue. If A17 is wanted, it needs a new one.
+  - **Two exemptions, not deferrals:** A6b (rail SVG connector) and A16b (highlight L→R wash), reviewed and accepted 2026-08-08 — see `motion.md:457-477`.
+  - The DoD is 7 of 8 (`motion.md:428-448`); the open box is the v1.0 GA gate "motion language coherent across all surfaces".
 - **Sub-PR constraint:** Sub-PRs in Phases 1–3 may use existing motion (don't strip what's there) but should not introduce new animation choreography. `motion.md` (deferred to land alongside #798's pickup) is the canonical reference for future scenes.
 
 ---

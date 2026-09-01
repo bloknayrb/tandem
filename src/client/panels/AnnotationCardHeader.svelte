@@ -3,7 +3,13 @@ import type { Snippet } from "svelte";
 import type { Annotation } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { agentColor } from "../utils/agent-color";
-import { formatRelativeTime, getAuthorLabel, getDisplayType } from "./annotation-card-helpers";
+import {
+  formatRelativeTime,
+  getAuthorLabel,
+  getDisplayType,
+  getHighlightSwatchColor,
+} from "./annotation-card-helpers";
+import { ANNOTATION_TYPE_GLYPHS } from "./annotation-type-icon";
 
 interface Props {
   annotation: Annotation;
@@ -11,24 +17,13 @@ interface Props {
   isReviewTarget?: boolean;
   isEditing: boolean;
   canEdit: boolean;
-  badgeBg: string;
-  badgeFg: string;
   onEnterEdit: () => void;
   /** Optional extra pill rendered next to the type badge (e.g. Private pill on NoteCard). */
   extraPill?: Snippet;
 }
 
-let {
-  annotation,
-  isPending,
-  isReviewTarget,
-  isEditing,
-  canEdit,
-  badgeBg,
-  badgeFg,
-  onEnterEdit,
-  extraPill,
-}: Props = $props();
+let { annotation, isPending, isReviewTarget, isEditing, canEdit, onEnterEdit, extraPill }: Props =
+  $props();
 
 const agentLabel = createAgentLabel();
 const displayType = $derived(getDisplayType(annotation));
@@ -45,15 +40,65 @@ const dotColor = $derived(
     ? agentColor(annotation.agentIdentity)
     : "var(--tandem-author-user)",
 );
+// Both MUST be $derived. As plain consts they freeze at mount with no type
+// error and no failing test: recolour a highlight and the swatch keeps the old
+// colour; edit a suggestion to drop suggestedText and the icon stays
+// "replacement" forever. `displayType` above is already reactive, which is
+// exactly what makes a plain-const lookup off it stale.
+const glyph = $derived(ANNOTATION_TYPE_GLYPHS[displayType]);
+// Highlights carry the user's chosen colour on the icon itself — the one place
+// that colour still appears now that the card body is tinted by author.
+const glyphFill = $derived(glyph.filled ? getHighlightSwatchColor(annotation) : "none");
 </script>
 
 <div class="ach-row">
   <span class="ach-type">
+    <!-- Type icon. Explicit width/height are REQUIRED — a viewBox alone leaves
+         an <svg> with no intrinsic size, so it resolves to 300x150 and blows
+         out the header (worst in the 160px narrow margin band). -->
     <span
       class="ach-badge annotation-type-badge"
-      style="background: {badgeBg}; color: {badgeFg};"
+      role="img"
+      aria-label={glyph.label}
+      title={glyph.label}
     >
-      {displayType}
+      <svg
+        viewBox="0 0 16 16"
+        width="13"
+        height="13"
+        fill={glyphFill}
+        stroke="currentColor"
+        stroke-width="1.2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        {#each glyph.paths as d (d)}
+          <path {d} />
+        {/each}
+      </svg>
+      <!-- The type WORD, hidden in normal rendering and revealed under
+           forced-colors. In High Contrast every authorship tint collapses to
+           Canvas, so the card's background stops distinguishing anything — and
+           with the word gone the type would have no carrier at all. (Author
+           still reads: `.ach-author` renders "You"/"Assistant"/"Imported" as
+           real text.)
+
+           This is a VISUAL fallback only, not an accessibility one — the
+           obvious reading of a clip-path-hidden span is wrong here. The
+           wrapper is `role="img"` with an `aria-label`, which makes its whole
+           subtree presentational: a screen reader announces the label and never
+           reaches this span. That is the intended behaviour (the name is
+           already there, and reading it twice would be worse), but it means
+           deleting the span costs sighted High Contrast users everything and
+           costs AT users nothing, so an a11y audit will not catch it. The
+           forced-colors e2e assertion is the only thing that does.
+
+           It also does not paint at every density: at stub density the whole
+           `.ach-type` group is `display: none` from AnnotationCard, so under
+           forcing the type has no carrier there either. That is a deliberate
+           narrow-margin tradeoff, not a gap this span can close. -->
+      <span class="ach-badge-word">{glyph.label}</span>
     </span>
     {#if extraPill}{@render extraPill()}{/if}
     {#if annotation.heldInSolo}
@@ -97,7 +142,7 @@ const dotColor = $derived(
         class="ach-dot"
         data-testid="annotation-author-dot-{annotation.id}"
         aria-hidden="true"
-        style="background: {dotColor};"
+        style="background: {dotColor}; border-color: {dotColor};"
       ></span>
     {/if}
     {authorLabel}
@@ -129,13 +174,25 @@ const dotColor = $derived(
     color: var(--tandem-fg-muted);
     font-size: 11px;
   }
+  /* Icon badge. The old text-pill recipe (mono font, uppercase, letter-spacing,
+     `padding: 1px 7px`, pill radius) is gone deliberately: four of those were
+     inert on an SVG, but padding is NOT — it applies to replaced elements, so
+     keeping it would render a 13px glyph inside a wide empty pill. */
   .ach-badge {
-    font-family: var(--tandem-font-mono);
-    font-size: var(--tandem-text-2xs);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    padding: 1px 7px;
-    border-radius: var(--tandem-r-pill);
+    display: inline-flex;
+    align-items: center;
+    color: var(--tandem-fg-muted);
+    flex-shrink: 0;
+  }
+  /* Visually hidden, but revealed in forced-colors below — NOT `display: none`,
+     which would take it out of the box the reveal needs. */
+  .ach-badge-word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   /* WS-A2: amber "Held" pill — matches the held-annotation banner token family
      (--tandem-warning-*). Signals a Solo-created comment the AI hasn't seen yet. */
@@ -205,8 +262,44 @@ const dotColor = $derived(
   }
 
   @media (forced-colors: active) {
-    .annotation-type-badge {
+    /* In High Contrast the three authorship tints all become Canvas, so the
+       card ground can no longer say who wrote it and the icon's own colours
+       are force-adjusted. Swap to the word: it is the only carrier of type
+       that survives. */
+    .annotation-type-badge svg {
+      display: none;
+    }
+    /* MEASURED, not precautionary. `.ach-row` is `space-between` with
+       `overflow: hidden` and `.ach-badge` is `flex-shrink: 0`, so once the
+       13px glyph becomes a padded word the row cannot give anywhere: at the
+       side panel's 250px the content wanted 278px and the right-hand 28px —
+       the tail of `.ach-author`, i.e. the timestamp — was silently cut off.
+       That was with "Private note"; "Suggested replacement" is 75% wider.
+       Wrapping is the only fix that costs nothing: shrinking the badge would
+       truncate the ONLY type carrier that survives forcing, and shortening the
+       labels would throw away the accessible name. Height is cheap here and
+       clipping is not. `flex-wrap` is the load-bearing half and is pinned by
+       forced-colors.spec.ts's headerClipped assertion — drop it and that goes
+       red. `row-gap` is cosmetic (it keeps the wrapped lines off each other)
+       and is NOT pinned by anything. */
+    .ach-row,
+    .ach-type {
+      flex-wrap: wrap;
+      row-gap: 4px;
+    }
+    .ach-badge-word {
+      position: static;
+      width: auto;
+      height: auto;
+      overflow: visible;
+      clip-path: none;
+      font-family: var(--tandem-font-mono);
+      font-size: var(--tandem-text-2xs);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 1px 7px;
       border: 1px solid ButtonText;
+      border-radius: var(--tandem-r-pill);
     }
   }
 </style>

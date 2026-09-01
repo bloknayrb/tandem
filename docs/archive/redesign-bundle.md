@@ -7,6 +7,7 @@
 ### Canonical sources
 
 - **OpenDesign project:** `Tandem Design System (1)` (UUID `2a0312b0-b34a-40e8-b9c8-306987dce4e2`). Pull via `mcp__open-design__*` tools.
+  > **Historical, deliberately not repointed (2026-09-01).** The live design system now lives in `Tandem Design System` (`019e2685-a2d8-7b24-8d55-864b738f47be`), and the two active docs — `design-system-impl/derived-spec.md` and `token-audit.md` — were updated to cite it. This file is *not*, because it documents one specific import performed on 2026-05-21 from the project named above; rewriting the UUID would make it claim an import that never happened from a project that did not then exist. **If you are looking for the current design system, use the new UUID; if you are reading this file, you want the old one.**
 - **Source zip:** `C:\Users\blokn\Downloads\Tandem Design System (1).zip` (2026-05-21, 141 files; ~37 Svelte components + 3 `.svelte.ts` hooks across 4 prototypes; root `colors_and_type.css`; 4 local font woff2/ttf; 3 static HTML specs).
 - **Bundle rules:** see the bundle's own `CLAUDE.md` (Svelte 5, Vite 6, plain CSS custom properties, local `@font-face`, `.svelte.ts` per-instance factory hooks, lowercase DOM events).
 
