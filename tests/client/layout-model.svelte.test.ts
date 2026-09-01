@@ -30,6 +30,7 @@ import type {
 } from "../../src/client/hooks/useTandemSettings.svelte.js";
 import { createLayoutModel } from "../../src/client/layout/model.svelte.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { makeAnnotation } from "../helpers/ydoc-factory.js";
 
 function makeSettingsState(initial: Partial<TandemSettings>): TandemSettingsState {
   let settings = $state<TandemSettings>({
@@ -100,17 +101,17 @@ function makeRailHarness(
   };
 }
 
-/** A pending annotation that `isPendingReviewTarget` accepts. */
+/**
+ * A pending annotation that `isPendingReviewTarget` accepts.
+ *
+ * `makeAnnotation` already defaults to `author: "claude" / type: "comment" /
+ * status: "pending"`, so this is just an id. The hand-rolled literal it
+ * replaces had `range: { start, end }` where the type is `{ from, to }` — a
+ * shape error a double cast hid, and which only went unnoticed because
+ * `isPendingReviewTarget` never reads the range.
+ */
 function pending(id: string): Annotation {
-  return {
-    id,
-    type: "comment",
-    author: "claude",
-    status: "pending",
-    range: { start: 0, end: 1 },
-    text: "t",
-    createdAt: 0,
-  } as unknown as Annotation;
+  return makeAnnotation({ id });
 }
 
 describe("LayoutModel visibility", () => {
@@ -228,18 +229,13 @@ describe("LayoutModel rail-tab selection", () => {
   });
 
   it("re-runs a subscribed effect when the tab changes", () => {
-    // The failure this spec exists for: returning `activeRailTab` as a plain
-    // value property instead of a getter. A frozen scalar returns the correct
-    // string at every DIRECT read, so every other spec in this block passes
-    // while template reactivity is completely dead — the rail would stop
-    // switching and only a rendered assertion would notice.
-    //
-    // Counting effect RUNS is what separates the two: an effect subscribed to
-    // a getter re-runs on write; an effect that read a frozen string
-    // subscribed to nothing and never runs again. Reading the value back does
-    // NOT discriminate, not even through a local `$derived` — the compiler
-    // warns that such a local captures only its initial value, which is the
-    // same blindness this spec exists to catch.
+    // Pins the getter invariant in the model's file header (a plain value
+    // property instead of a getter). Counting effect RUNS is what separates
+    // the two: an effect subscribed to a getter re-runs on write; an effect
+    // that read a frozen string subscribed to nothing and never runs again.
+    // Reading the value back does NOT discriminate, not even through a local
+    // `$derived` — the compiler warns that such a local captures only its
+    // initial value, which is the same blindness this spec exists to catch.
     const h = makeRailHarness({ primaryTab: "annotations" });
     let runs = 0;
     const seen: string[] = [];

@@ -145,14 +145,13 @@ export function cleanupFixtureDir(dir: string): void {
  * with `display: none` behind whichever rail tab is not selected, so a spec
  * that starts on Chat sees its cards as hidden rather than absent.
  *
- * **When the tab switch actually matters.** `DEFAULTS.primaryTab` is
- * `"annotations"` and a blob-less run returns `DEFAULTS` without entering the
- * settings validator, so most specs already open on Annotations and the click
- * is a no-op. It is load-bearing only for a spec that seeds a PARTIAL settings
- * blob omitting `primaryTab`: `normalizeKnownFields` reads a missing key as
- * `"chat"` (see the comment at its `primaryTab` line), so those runs open on
- * Chat. The filter-bar expansion below is unconditional and is why several
- * specs that never touch settings still need this helper.
+ * **When the tab switch actually matters.** Most specs already open on
+ * Annotations, so the click is a no-op; it is load-bearing only for a spec
+ * that seeds a PARTIAL settings blob omitting `primaryTab`, which opens on
+ * Chat instead (the why is commented at that field in
+ * `src/client/hooks/useTandemSettings.ts`). The filter-bar expansion below is
+ * unconditional, and is why specs that never touch settings still need this
+ * helper.
  *
  * **Silent-failure warning**: because the cards are still mounted when
  * hidden, `locator(...).count()` will return a non-zero value even without

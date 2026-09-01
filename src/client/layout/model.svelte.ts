@@ -1,10 +1,16 @@
 /**
  * Layout model (ADR-037).
  *
- * Encapsulates the right rail's two questions, which `App.svelte` used to
- * answer in two different places: **is it showing** (derived visibility, with
- * solo-mode suppression, plus the toggles) and **what is it showing**
- * (`activeRailTab` and the pending-annotation badge).
+ * Owns both rails' **persisted** visibility (with solo-mode suppression and
+ * the toggles) and, since Unit 10b, the right rail's tab *selection* — which
+ * of its two fixed tabs is showing, plus the pending-annotation badge.
+ *
+ * **`rightVisible` is the persisted half only, not "the rail is on screen".**
+ * Effective on-screen visibility is
+ * `rightVisible || railFloat.right || railFloatClosing.right || chatReveal`,
+ * and the three float/reveal terms live in `App.svelte` (Unit 10c's
+ * territory). A consumer that reads `rightVisible` as "visible to the user"
+ * is wrong in exactly the states 10c exists to own.
  *
  * Returned shape uses getters so consumers see reactivity through the
  * settings store underneath — same pattern as `useTandemSettings.svelte.ts`.
@@ -27,10 +33,19 @@
 import { untrack } from "svelte";
 import type { Annotation } from "../../shared/types.js";
 import { isPendingReviewTarget } from "../../shared/types.js";
+import type { PrimaryTab } from "../hooks/useTandemSettings.js";
 import type { TandemSettingsState } from "../hooks/useTandemSettings.svelte.js";
 
-/** The right rail's two fixed tabs. */
-export type RailTab = "annotations" | "chat";
+/**
+ * The right rail's two fixed tabs.
+ *
+ * An alias rather than its own union: `PrimaryTab` is the same two literals,
+ * and the persisted `primaryTab` setting seeds this. Re-declaring it would
+ * leave two unions that nothing keeps in sync. The alias exists because
+ * "which tab is selected" and "which tab the user prefers to open on" read
+ * differently at their use sites even though the sets coincide.
+ */
+export type RailTab = PrimaryTab;
 
 /** Sliver of the mode store the layout model needs. */
 export interface LayoutModeStateLike {
@@ -47,6 +62,14 @@ export interface LayoutModelOptions {
    * filter: routing the badge through the review hook would couple this model
    * to a module Unit 10c is about to restructure. What is worth sharing is the
    * `isPendingReviewTarget` predicate, and both sites already import it.
+   *
+   * A third option exists and was not taken: injecting `getPendingCount:
+   * () => number` and keeping the definition of "pending" out of a layout
+   * module entirely. That is arguably the cleaner boundary — it is the only
+   * reason this file imports from `shared/types` at all. It loses on testing:
+   * the filter would move inline into `App.svelte`, where nothing covers it,
+   * and moving an untested expression out of reach is the opposite of this
+   * unit's point. Revisit when Unit 10c reshapes review coordination.
    */
   getAnnotations: () => Annotation[];
   /**
