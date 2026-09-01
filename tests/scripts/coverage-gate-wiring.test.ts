@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -76,7 +78,13 @@ describe("coverage policy — the gated set", () => {
   });
 
   it("names no module twice", () => {
-    expect(new Set(GATED).size).toBe(GATED.length);
+    // Read from the POLICY, not from `GATED`. This asserted
+    // `new Set(GATED).size === GATED.length` — a literal array checked against
+    // itself, which cannot fail for any content of the file it claims to be
+    // testing. Harmless only because the equality check above would catch a real
+    // duplicate first, which is the definition of a spec carrying no weight.
+    const paths = policy.modules.map((m) => m.path);
+    expect(new Set(paths).size, "the policy names a module twice").toBe(paths.length);
   });
 
   it("points every gated path at a file that exists", () => {
@@ -91,6 +99,22 @@ describe("coverage policy — the gated set", () => {
     for (const m of policy.modules) {
       expect(typeof m.suite, `${m.path} has no suite`).toBe("string");
       expect(existsSync(path.join(ROOT, m.suite)), `${m.suite} is missing`).toBe(true);
+    }
+  });
+
+  it("names a suite that actually references the module it is the suite for", () => {
+    // `existsSync` alone is satisfied by any file on disk, so it would accept a
+    // suite pointed at something unrelated — and `suite` is the half of this
+    // gate that detects DELETED behaviour, so a suite that does not touch the
+    // module is the one failure that matters most here.
+    //
+    // The check is a text reference rather than an import graph: a suite may
+    // reach a module through a harness or a helper, and demanding a direct
+    // import would push those onto a weaker check instead of a stronger one.
+    for (const m of policy.modules) {
+      const stem = path.basename(m.path).replace(/\.svelte\.ts$|\.ts$/, "");
+      const source = read(m.suite);
+      expect(source.includes(stem), `${m.suite} never mentions ${stem}`).toBe(true);
     }
   });
 });
@@ -124,6 +148,18 @@ describe("coverage policy — the floors", () => {
         expect(gap, `${m.path}.${metric} spends ${gap} points`).toBeLessThanOrEqual(
           MAX_FLOOR_ALLOWANCE,
         );
+      }
+    }
+  });
+
+  it("sets no floor to zero", () => {
+    // A floor of 0 passes at any coverage, forever, while still satisfying
+    // "never above observed" and "within the allowance". It is the zero-of-zero
+    // hole expressed as a value rather than as a denominator, and nothing else
+    // in this file forbids it.
+    for (const m of policy.modules) {
+      for (const metric of METRICS) {
+        expect(m.floors[metric], `${m.path}.${metric} has a floor of 0`).toBeGreaterThan(0);
       }
     }
   });
@@ -206,6 +242,61 @@ describe("coverage gating — CI and npm wiring", () => {
     const run = (job.steps ?? []).find((s) => s.run?.includes("test:coverage"));
     expect(run, "the coverage job never runs test:coverage").toBeDefined();
     expect(run?.if, "the measurement step is conditional").toBeUndefined();
+  });
+
+  it("runs its own main() when invoked as a script, and says so", () => {
+    // The CLI entry point is the one piece `coverage-gate.test.ts` cannot reach:
+    // it drives the pure `evaluateGate` directly and never spawns the file. So
+    // the `import.meta.url === argv[1]` guard, the two try/catch blocks and the
+    // exit codes had nothing covering them — and if that guard ever stops
+    // matching, `main()` never runs, nothing is printed, and the process exits
+    // **0**. That is the #1229 shape in the only uncovered part of this gate.
+    //
+    // Asserted on OUTPUT rather than on a specific code, because `check` runs
+    // with no coverage report on disk (exit 3, cannot-evaluate) while a local
+    // run after `test:coverage` has one (exit 0 or 1). What must never happen is
+    // the combination this asserts against: exit 0 with the script having said
+    // nothing, which is what a dead guard looks like from the outside.
+    const r = spawnSync(process.execPath, [path.join(ROOT, "scripts/ci/coverage-gate.mjs")], {
+      encoding: "utf8",
+    });
+    const output = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    expect(output, "the gate produced no output at all").toContain("[coverage-gate]");
+    expect([0, 1, 3], `unexpected exit ${r.status}`).toContain(r.status);
+    if (r.status === 0) {
+      // A pass has to look like a pass, not like a script that fell through.
+      expect(output).toContain("at or above their floors");
+    }
+  });
+
+  it("exits 3, not 0, when it cannot find a coverage report to judge", () => {
+    // The spec above cannot see this: `coverage/coverage-summary.json` resolves
+    // against the SCRIPT's own directory, so a local run that has one always
+    // takes the pass/fail path and the cannot-evaluate branch is never entered.
+    // Changing its `process.exit(EXIT_CANNOT_EVALUATE)` to `process.exit(0)`
+    // survived every other spec in both files — which is #1229 exactly: a gate
+    // that reports success when it could not evaluate is worse than no gate.
+    //
+    // Made reachable by copying the script AND its policy into a temp tree, so
+    // `repoRoot` resolves there: the policy read succeeds, and the summary read
+    // is the only thing missing. No repo file is touched.
+    const tmp = mkdtempSync(path.join(tmpdir(), "coverage-gate-"));
+    try {
+      const ci = path.join(tmp, "scripts", "ci");
+      mkdirSync(ci, { recursive: true });
+      for (const f of ["coverage-gate.mjs", "coverage-policy.json"]) {
+        copyFileSync(path.join(ROOT, "scripts/ci", f), path.join(ci, f));
+      }
+
+      const r = spawnSync(process.execPath, [path.join(ci, "coverage-gate.mjs")], {
+        encoding: "utf8",
+      });
+      const output = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+      expect(output).toContain("cannot read coverage/coverage-summary.json");
+      expect(r.status, `a missing report must not read as a pass (exit ${r.status})`).toBe(3);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("keeps the comparator on disk where the script points", () => {

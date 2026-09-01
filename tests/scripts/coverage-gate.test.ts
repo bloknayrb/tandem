@@ -204,6 +204,33 @@ describe("evaluateGate — SHRUNK", () => {
     expect(v.failures[0].detail).toContain("200");
   });
 
+  it("puts the shrink boundary at a FIXED count, not wherever the constant happens to be", () => {
+    // The pair below derives its threshold from MIN_STATEMENT_RATIO itself, so
+    // it agrees with the constant no matter what the constant is — it pins the
+    // arithmetic and not the tolerance. Changing 0.75 to 0.5 or 0.95 survived
+    // every other spec in this file, which is a real loosening of how much logic
+    // can move to an ungated sibling before SHRUNK fires.
+    //
+    // Seeded at 200, the floor is Math.floor(200 * 0.75) = 150: 150 passes and
+    // 149 fails. Both halves are asserted, because the passing one alone is
+    // satisfied by a tolerance of zero.
+    const seeded = 200;
+    const atFloor = evaluateGate({
+      policy: policyFor(MOD, {}, seeded),
+      summary: summaryFor(MOD, {}, 150),
+      repoRoot: REPO,
+    });
+    expect(atFloor.ok, "150 of a seeded 200 should pass at a 0.75 ratio").toBe(true);
+
+    const belowFloor = evaluateGate({
+      policy: policyFor(MOD, {}, seeded),
+      summary: summaryFor(MOD, {}, 149),
+      repoRoot: REPO,
+    });
+    expect(belowFloor.ok, "149 of a seeded 200 should fail at a 0.75 ratio").toBe(false);
+    expect(belowFloor.failures[0].kind).toBe("SHRUNK");
+  });
+
   it("tolerates ordinary shrinkage inside the ratio", () => {
     // Deliberately generous: refactoring inside a module moves the count, and a
     // gate that fires on that is a gate people learn to edit rather than read.
@@ -280,6 +307,30 @@ describe("relativizeSummaryKey", () => {
     );
   });
 
+  it("relativizes a WINDOWS-shaped key regardless of the platform running this", () => {
+    // The seam that mattered and was not observable before: floors are seeded on
+    // Windows and the gate runs on ubuntu. The old implementation used the
+    // ambient `path.relative`/`path.sep`, which is correct on each platform but
+    // means a mutant hardcoding `/` is indistinguishable from the real thing on
+    // ubuntu — the suite only ever saw its own platform's separator.
+    expect(
+      relativizeSummaryKey(
+        "C:\\Users\\x\\tandem\\src\\client\\layout\\model.svelte.ts",
+        "C:\\Users\\x\\tandem",
+      ),
+    ).toBe("src/client/layout/model.svelte.ts");
+  });
+
+  it("relativizes a POSIX-shaped key regardless of the platform running this", () => {
+    // The other direction, which is what CI actually feeds it.
+    expect(
+      relativizeSummaryKey(
+        "/home/runner/work/tandem/tandem/src/server/documents/open.ts",
+        "/home/runner/work/tandem/tandem",
+      ),
+    ).toBe("src/server/documents/open.ts");
+  });
+
   it("does not let a nested src/ directory impersonate the repo's own", () => {
     // The report includes `infra/license-issuance-worker/src/crypto.ts`, so a
     // matcher keyed on a trailing `/src/<path>` would resolve a policy entry of
@@ -297,8 +348,10 @@ describe("exported constants", () => {
     // coverage-gate-wiring.test.ts. Re-deriving either there would let the two
     // copies drift.
     expect(MAX_FLOOR_ALLOWANCE).toBe(1);
-    expect(MIN_STATEMENT_RATIO).toBeGreaterThan(0);
-    expect(MIN_STATEMENT_RATIO).toBeLessThan(1);
+    // By exact value, because the shrink-boundary spec above is written against
+    // 0.75. A range assertion let the tolerance move to 0.5 or 0.95 with every
+    // spec in this file still green.
+    expect(MIN_STATEMENT_RATIO).toBe(0.75);
     expect(METRICS).toEqual(["statements", "lines", "branches", "functions"]);
   });
 });

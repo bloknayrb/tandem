@@ -12,8 +12,14 @@
  *
  *  - Deleting a COVERED branch removes it from the numerator and the
  *    denominator together. `open.ts` sits at 85/93 branches; one deletion is
- *    84/92 = 91.30 %, still over its 91 floor. Fourteen deletions are needed
- *    before the ratio breaches.
+ *    84/92 = 91.30 %, still over its 91 floor. It takes FIVE — 81/89 = 91.01 %
+ *    still passes, 80/88 = 90.91 % is the first that fails.
+ *
+ *    (This said fourteen until review re-derived it. Fourteen is the answer for
+ *    a floor of 90, which is not the floor shipped for this module. The
+ *    correction cuts the slack by roughly a third and does not change the
+ *    conclusion — one deletion is still invisible — but a comment whose whole
+ *    job is to say how much slack a floor has must not overstate it.)
  *  - Deleting an UNCOVERED branch RAISES the percentage.
  *  - On a module observed at 100 % the ratio is deletion-proof by construction:
  *    45/45 and 44/44 are both 100 %.
@@ -77,9 +83,18 @@ const pct = (n) => `${n.toFixed(2)}%`;
  * `infra/license-issuance-worker/src/` inside the same report, so a policy path
  * of `src/crypto.ts` would match a worker file. Resolve against the repo root
  * and compare whole relative paths.
+ *
+ * **Separators are normalized first and the arithmetic is `path.posix`, so this
+ * does not depend on which platform is running it.** The earlier version used
+ * the ambient `path.relative` and `path.sep`, which is correct on each platform
+ * but makes the two cases untestable from one: on ubuntu `path.sep` is already
+ * `/`, so a mutant that hardcoded `/` was indistinguishable from the real thing.
+ * The floors were seeded on Windows and the gate runs on ubuntu, so that is
+ * exactly the seam that needed to be observable rather than merely correct.
  */
 export function relativizeSummaryKey(key, repoRoot) {
-  return path.relative(repoRoot, key).split(path.sep).join("/");
+  const slashes = (p) => p.replace(/\\/g, "/");
+  return path.posix.relative(slashes(repoRoot), slashes(key));
 }
 
 /**
