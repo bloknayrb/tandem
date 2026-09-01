@@ -946,6 +946,16 @@ const actionExecutor = mountActionExecutor({
       if (ann) review.scrollToAnnotation(ann);
     }
   },
+  // `activeOrFirstPending` resolves the accept/dismiss target: the selected
+  // annotation, or the first pending review target when nothing is selected.
+  // All three call sites in this file go through it, so the command palette and
+  // the Ctrl+Enter shortcut cannot diverge (review finding).
+  //
+  // **Each one keeps its own `author !== "user"` guard, and that is load-bearing
+  // rather than defensive.** The fallback branch is always a Claude target, but
+  // the active branch returns whatever is selected -- which can be a user
+  // highlight overlapping a Claude comment (#768). Folding the guard into the
+  // model would also filter the fallback and change behaviour; a spec pins that.
   annotationAccept: () => {
     const cur = railContent.activeOrFirstPending();
     if (cur && cur.author !== "user") review.handleAccept(cur.id);
@@ -1994,12 +2004,6 @@ const review = useAnnotationReview({
       timestamp: Date.now(),
     }),
 });
-
-// Resolve target for accept/dismiss: the explicitly-selected annotation, or —
-// when nothing is selected (the empty resting state) — the first pending review
-// target. Shared by the Ctrl+Enter shortcut and the command-palette
-// accept/dismiss commands so the two surfaces can never diverge (review finding).
-// The two branches differ in what they can return: the fallback
 
 // #649: Word-style margin annotation view.
 // PR 1 ships minimum viable — bubbles appear at correct Y, naive scroll sync

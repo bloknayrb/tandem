@@ -6,6 +6,7 @@ import {
   createFixtureDir,
   McpTestClient,
   RAIL_HANDLE_TESTID,
+  setRailVisible,
 } from "./helpers";
 
 /**
@@ -72,10 +73,26 @@ const RIGHT_HANDLE = `[data-testid='${RAIL_HANDLE_TESTID.right}']`;
  * bet this file does not need to take. One spec below drives the chord anyway,
  * so the binding itself stays covered.
  */
+/**
+ * Seed the hover setting, open `sample.md`, and wait for its tab.
+ *
+ * Every spec but the document-switch one starts exactly here, and the seeding
+ * has to happen before `page.goto` -- which is the step easiest to drop when
+ * copying a test, and drops silently.
+ */
+async function bootWithSample(page: import("@playwright/test").Page): Promise<void> {
+  await disableHoverReveal(page);
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+}
+
 async function openReveal(page: import("@playwright/test").Page) {
   // Rail collapsed: `focusChat` only reveals when the rail is NOT already up.
-  await page.keyboard.press("Alt+Shift+ArrowRight");
-  await expect(page.locator(RIGHT_HANDLE)).toHaveCount(0);
+  // `setRailVisible` rather than the chord inline -- it presses only when the
+  // rail is not already in the wanted state, where a bare press would toggle a
+  // collapsed rail back open and fail the assertion it is paired with.
+  await setRailVisible(page, "right", false);
 
   await page.evaluate(() => window.dispatchEvent(new CustomEvent("tandem:focus-chat")));
   const reveal = page.locator(REVEAL);
@@ -99,10 +116,7 @@ test.afterEach(async () => {
 test("focusChat over a collapsed rail opens the reveal, and the rail stays collapsed", async ({
   page,
 }) => {
-  await disableHoverReveal(page);
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("/");
-  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+  await bootWithSample(page);
 
   await openReveal(page);
 
@@ -113,13 +127,9 @@ test("focusChat over a collapsed rail opens the reveal, and the rail stays colla
 });
 
 test("Ctrl+Shift+J opens the reveal too", async ({ page }) => {
-  await disableHoverReveal(page);
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("/");
-  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+  await bootWithSample(page);
 
-  await page.keyboard.press("Alt+Shift+ArrowRight");
-  await expect(page.locator(RIGHT_HANDLE)).toHaveCount(0);
+  await setRailVisible(page, "right", false);
 
   // The bound chord, so the keybinding is covered and not only the window
   // event the other specs use.
@@ -129,10 +139,7 @@ test("Ctrl+Shift+J opens the reveal too", async ({ page }) => {
 });
 
 test("Escape closes the reveal", async ({ page }) => {
-  await disableHoverReveal(page);
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("/");
-  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+  await bootWithSample(page);
 
   const reveal = await openReveal(page);
   // From the composer, because that is where focus lands and because the
@@ -143,10 +150,7 @@ test("Escape closes the reveal", async ({ page }) => {
 });
 
 test("a click outside the rail closes the reveal", async ({ page }) => {
-  await disableHoverReveal(page);
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("/");
-  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+  await bootWithSample(page);
 
   const reveal = await openReveal(page);
   await page.locator(".ProseMirror").click();
@@ -154,10 +158,7 @@ test("a click outside the rail closes the reveal", async ({ page }) => {
 });
 
 test("a click INSIDE the reveal does not close it", async ({ page }) => {
-  await disableHoverReveal(page);
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("/");
-  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+  await bootWithSample(page);
 
   const reveal = await openReveal(page);
   // The capture-phase `pointerdown` handler returns early for any target inside
@@ -169,10 +170,7 @@ test("a click INSIDE the reveal does not close it", async ({ page }) => {
 });
 
 test("sending a message closes the reveal", async ({ page }) => {
-  await disableHoverReveal(page);
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("/");
-  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+  await bootWithSample(page);
 
   const reveal = await openReveal(page);
   await page.locator(COMPOSER).fill("characterization message");
@@ -211,10 +209,7 @@ test("#1719: selecting Annotations from inside the reveal collapses the whole ra
   // hidden" is equally true once #1719 is fixed, which would leave a pin that
   // stays green through its own repair. A fix leaves the rail OPEN on
   // Annotations, so asserting the rail is fully collapsed is what fails then.
-  await disableHoverReveal(page);
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-  await page.goto("/");
-  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+  await bootWithSample(page);
 
   const reveal = await openReveal(page);
   await page.locator("[data-testid='annotations-tab']").click();
