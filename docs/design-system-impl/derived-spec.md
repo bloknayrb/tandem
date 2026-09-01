@@ -118,19 +118,22 @@ Each row:
   fade-and-slide. Edit form open/close = no motion (form swap in place).
 - **Anti-patterns.** **Do NOT use a left-border edge color for the card.**
   The visual taxonomy below is BACKGROUND TINT + HEADER (author dot +
-  name + type badge), NOT a colored border. The README "Annotation card
+  name + type icon), NOT a colored border. The README "Annotation card
   edge colors" line is stale text superseded by the current
-  `AnnotationCard.svelte`. Do NOT branch the tint on
-  `author === "claude"` directly — the discriminator is the production
-  card variant (NoteCard / CommentCard / SuggestionCard / ImportedCard /
-  HighlightCard), each owning its own background-tint class. Do NOT
-  introduce a colored author-dot for the imported card — imported
-  annotations carry a Word commentor byline ("Sarah · 2024-12-05" in
-  italic at `--tandem-fg-subtle`), not the user/Claude authorship dot.
-  Do NOT add a type badge to NoteCard — notes hide the badge per
-  `AnnotationCard.svelte:31` (`{#if anno.type !== 'highlight'}` was the
-  bundle's gate; notes show the badge there but production keys on
-  audience and may suppress).
+  `AnnotationCard.svelte`. **Tint IS branched on author, deliberately** —
+  a single `cardTint` in `AnnotationCard.svelte` reads `annotation.author`
+  and returns one of three tokens. An earlier revision of this file said
+  the opposite ("the discriminator is the production card variant, each
+  owning its own background-tint class"); that instruction predates the
+  author-tint change and following it now would reintroduce the
+  contradiction the change removed, since two variants can share an
+  author. Do NOT introduce a colored author-dot for the imported card —
+  imported annotations carry a Word commentor byline ("Sarah · 2024-12-05"
+  in italic at `--tandem-fg-subtle`), not the user/Claude authorship dot.
+  Notes DO carry a type icon; what distinguishes them is a **hollow**
+  author dot, keyed in CSS off `[data-annotation-type="note"]` on the card
+  root. A prior instruction here said to suppress the badge on `NoteCard`;
+  that was the text-pill era and no longer applies.
 
 ### 3.4 Batch + bulk actions — C7 BatchPromoteBar, C8 BulkActions
 
@@ -302,13 +305,62 @@ the annotation is for picks the variant first, with author and
 (`note`, `comment-user`, `suggest`, `highlight` in `samples.ts:32–51`)
 map to production's five-component split.
 
-| audience  | author   | suggestedText | Production variant | Bundle `cardType` | Background tint | Header (dot + name + badge) | Actions row |
-| --------- | -------- | ------------- | ------------------ | ----------------- | --------------- | --------------------------- | ----------- |
-| `private` | `user`   | —             | `NoteCard`         | `note`            | default surface (no tint) | cobalt dot · "You" · no badge | Send to Claude (neutral + coral disc) · Archive (ghost) |
-| `claude`  | `user`   | —             | `CommentCard`      | `comment-user`    | cobalt tint (`oklch(0.987 0.005 250)` / `oklch(0.24 0.03 250)`) | cobalt dot · "You" · "Comment" badge (cobalt) | Resolve (primary) · Edit (ghost) · Delete (ghost) |
-| `claude`  | `claude` | —             | `CommentCard`      | (`comment`, no tint variant) | default surface | coral dot · "Claude" · "Comment" badge (cobalt) | Resolve (primary) · Edit (ghost) · Delete (ghost) |
-| `claude`  | `claude` | present       | `SuggestionCard`   | `suggest`         | violet tint (`oklch(0.985 0.008 295)` / `oklch(0.24 0.04 295)`) | coral dot · "Claude" · "Suggestion" badge (violet) | Accept (primary) · Dismiss (ghost) · Edit (ghost) |
-| `claude`  | `import` | —             | `ImportedCard`     | (production-only) | default surface | no author dot · italic byline "Sarah · 2024-12-05" (`--tandem-fg-subtle`) | Promote (primary) · Dismiss (ghost) |
+**Two axes, and they are separate on purpose.** *Author* picks the background
+tint; *type* picks the header icon. The variant component picks neither — it
+owns the body and the actions row. Before this split the tint was per-variant,
+which put a user comment and a user note on different grounds while both
+carried the same authorship dot, so the rail contradicted itself. Three tints,
+three authors:
+
+| `annotation.author` | Background tint |
+| --- | --- |
+| `user`   | `var(--tandem-author-user-bg)` |
+| `claude` | `var(--tandem-author-claude-bg)` |
+| `import` | `var(--tandem-author-import-bg)` (aliases `--tandem-surface-muted`) |
+
+`isReviewTarget` overrides all three with `var(--tandem-accent-bg)`; that is a
+state, not a taxonomy row.
+
+The **type icon** is a 13×13 `<svg>` at `viewBox 0 0 16 16`, `stroke:
+currentColor`, keyed on the *display* type — `comment`, `note`, `highlight` or
+`replacement` (the last derived from `suggestedText !== undefined`, not
+stored). It replaced a text pill: the pill spent horizontal room the 160px
+narrow margin band does not have, and it repeated what the card body already
+says. Only `highlight` is filled, and its fill is the user's picked highlight
+colour — the one place that colour still appears now that the body is tinted
+by author. The icon is hidden at stub density; its accessible name sits on the
+wrapping `role="img"`, and a visually-hidden word is revealed under
+`forced-colors: active`, where every tint collapses to `Canvas`.
+
+| audience  | author   | suggestedText | Production variant | Bundle `cardType` | Background tint | Header (dot + name + icon) | Actions row |
+| --------- | -------- | ------------- | ------------------ | ----------------- | --------------- | -------------------------- | ----------- |
+| `private` | `user`   | —             | `NoteCard`         | `note`            | user tint | **hollow** cobalt dot · "You" · note icon | Send to Claude (neutral + coral disc) · Archive (ghost) |
+| `claude`  | `user`   | —             | `CommentCard`      | `comment-user`    | user tint | cobalt dot · "You" · comment icon | Resolve (primary) · Edit (ghost) · Delete (ghost) |
+| `claude`  | `claude` | —             | `CommentCard`      | (`comment`)       | claude tint | agent-coloured dot · "Claude" · comment icon | Resolve (primary) · Edit (ghost) · Delete (ghost) |
+| `claude`  | `claude` | present       | `SuggestionCard`   | `suggest`         | claude tint | agent-coloured dot · "Claude" · replacement icon | Accept (primary) · Dismiss (ghost) · Edit (ghost) |
+| `private` | `import` | —             | `ImportedCard`     | (production-only) | import tint | no author dot · italic byline "Sarah · 2024-12-05" (`--tandem-fg-subtle`) · note icon (accessible name "Private note") | Promote (primary) · Dismiss (ghost) |
+
+Note the first column on that last row: imported Word comments land as
+`type: "note"`, `audience: "private"`, `author: "import"`
+(`src/server/file-io/docx-comments.ts:635-637`), and `BatchPromoteBar` is what
+flips all three at once. An earlier revision of this table said `claude`, which
+read as though an import were visible to the AI on arrival. It is not.
+
+Privacy is carried by **three** header signals, not one, and which of them are
+present depends on the row:
+
+- the **hollow note dot** — user-authored notes only, since `ImportedCard` has
+  no author dot at all;
+- the **Private pill**, at full/compact/clamped density;
+- the **note glyph**, whose accessible name is literally "Private note", and
+  which is what `ImportedCard` relies on.
+
+`getCardLabel` also prefixes the card's own aria-label with `private `, so the
+signal survives even where every visual carrier is suppressed. The hollow dot
+is deliberately zero-width-cost — it swaps `background` for a `border` on an
+element that already exists, so it cannot disturb the stub-density width
+budget. Do not replace it with a pill or an extra glyph without re-checking
+that budget, and do not treat it as load-bearing on its own.
 
 **Suggestions are Claude-only.** Users can author notes, comments, and
 highlights; they cannot author suggestions. A `suggestedText` field on a
@@ -324,7 +376,7 @@ from the user-picked highlight color in `HIGHLIGHT_COLOR_VARS`
 **Header chrome details (per `app.css:518–547`):**
 - `.author-dot` = 6×6px circle, `var(--tandem-author-user)` or `var(--tandem-author-claude)` background, `flex-shrink: 0`
 - `.author-name` = 11px, 600 weight; cobalt for user (`oklch(0.35 0.14 245)`), gold for Claude (`oklch(0.40 0.12 45)` light, `oklch(0.78 0.12 45)` dark)
-- `.type-badge` = 9px monospace pill, uppercase, with per-type tints (violet for `.suggest`, cobalt for `.comment`)
+- `.annotation-type-badge` = the 13×13 type-icon wrapper, `role="img"` with the type as its accessible name. It replaced the bundle's `.type-badge` 9px monospace pill, and the per-type *pill tints* (violet for `.suggest`, cobalt for `.comment`) went with it — the icon is `currentColor`, and the card's author tint carries the colour signal now.
 - `.card-time` = 9px monospace at `--tandem-fg-faint`, right-aligned via `margin-left: auto`
 
 **Anti-patterns:**
@@ -332,17 +384,23 @@ from the user-picked highlight color in `HIGHLIGHT_COLOR_VARS`
   load-bearing correction vs the older design. Background tint is the
   primary signal; the border is the standard 1px `var(--tandem-border)`
   all the way around.
-- Do NOT branch tint on `author === "claude"` directly — the production
-  card variant (`NoteCard` / `CommentCard` / `SuggestionCard` /
-  `ImportedCard`) owns the tint via its own CSS class. The variant IS
-  the predicate; the dispatcher just routes.
+- Do NOT move the tint back onto the card variants. It is keyed on
+  `annotation.author` in exactly one place (`cardTint` in
+  `AnnotationCard.svelte`) so that two variants sharing an author cannot
+  disagree. An earlier revision of this list said the opposite; it
+  predates the change.
 - Do NOT change the protected tokens (`--tandem-author-user`,
   `--tandem-author-claude`, `--tandem-suggestion*`) without re-running
   `token-protection.test.ts`. The card chrome reads them through the
   audited values, not via local overrides.
 - Do NOT show the author dot for `ImportedCard` — imported annotations
   came from a Word commentor, not a Claude/user author; the header
-  byline replaces the dot.
+  byline replaces the dot. Imports do still get a tint of their own
+  (`--tandem-author-import-bg`); "no dot" is about the dot only.
+- Do NOT give the type icon a colour of its own. It is `currentColor`
+  everywhere except the `highlight` fill, which carries the user's picked
+  highlight colour. A second coloured element in the header competes with
+  the author dot for the same signal.
 - Do NOT add an `Accept` action to non-suggestion cards. The bundle's
   `card-actions` row is type-specific:
   - `note` → Send to Claude (neutral `.aca-btn--send` + coral destination disc), Archive (ghost)

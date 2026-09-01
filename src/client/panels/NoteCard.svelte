@@ -21,8 +21,6 @@ let { annotation, isPending, isReviewTarget, isEditing, canEdit, onEnterEdit }: 
   {isReviewTarget}
   {isEditing}
   {canEdit}
-  badgeBg="var(--tandem-warning-bg)"
-  badgeFg="var(--tandem-warning-fg-strong)"
   {onEnterEdit}
 >
   {#snippet extraPill()}

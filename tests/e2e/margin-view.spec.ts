@@ -1200,6 +1200,14 @@ test("C-2: stub band collapses every card to a pip that fits the column and stay
   // is clickable (stub ≠ display:none).
   await expect(cardA.locator(".aca-body")).toBeHidden();
   await expect(cardA.locator("[data-testid^='accept-btn-']")).toBeHidden();
+  // The header's type row goes too, and it needs its own assertion rather than
+  // riding on the two above. `.ach-type` is the last selector in a
+  // comma-separated group in AnnotationCard.svelte, so a change that unhides
+  // only IT leaves every other member of that group hiding correctly. Since the
+  // type badge became an icon it is the widest thing in that row, and the stub
+  // track is where width is scarcest — the scrollWidth gate below is measured
+  // on a pip that fits comfortably, so it will not reliably catch the spill.
+  await expect(cardA.locator(".ach-type")).toBeHidden();
 
   // THE ACCEPTANCE GATE (advisor): the stub card must FIT inside its column —
   // no horizontal spill past the column edge (the clipping bug the continuum

@@ -48,8 +48,6 @@ let {
       {isReviewTarget}
       {isEditing}
       {canEdit}
-      badgeBg="var(--tandem-surface-sunk)"
-      badgeFg="var(--tandem-fg-muted)"
       {onEnterEdit}
     />
 

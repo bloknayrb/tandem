@@ -2,7 +2,48 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatRelativeTime,
   getAuthorLabel,
+  getCardTint,
 } from "../../src/client/panels/annotation-card-helpers";
+import type { Annotation } from "../../src/shared/types";
+
+describe("getCardTint (author is the tint axis)", () => {
+  // A `Record` over the union, NOT a hand-written array. An array annotated
+  // `Annotation["author"][]` is not required to be complete, so the previous
+  // form's claim to be "exhaustive over the union" was false: add a fourth
+  // author role and the array silently keeps three entries, `getCardTint`'s
+  // final branch returns the USER tint, and the suite stays green — the exact
+  // fall-through this is supposed to prevent. A `Record` keyed on the union
+  // fails to compile until the new role is listed.
+  //
+  // Values are spelled out rather than interpolated from the key for the same
+  // reason the mapping exists: `var(--tandem-author-${author}-bg)` would be
+  // satisfied by any implementation that interpolates, including one naming a
+  // token that does not exist. `card-tint-tokens.test.ts` closes the other half
+  // by checking these strings resolve against index.html.
+  const EXPECTED: Record<Annotation["author"], string> = {
+    user: "var(--tandem-author-user-bg)",
+    claude: "var(--tandem-author-claude-bg)",
+    import: "var(--tandem-author-import-bg)",
+  };
+
+  it.each(Object.entries(EXPECTED))("maps %s to %s", (author, token) => {
+    expect(getCardTint(author as Annotation["author"])).toBe(token);
+  });
+
+  it("gives every author a DISTINCT token", () => {
+    expect(new Set(Object.values(EXPECTED)).size).toBe(Object.keys(EXPECTED).length);
+  });
+
+  // The `import` branch is the reason this function was extracted from
+  // AnnotationCard.svelte at all. `annotation-lifecycle.spec.ts` pins user vs
+  // claude against a real stylesheet, but rendering an imported card needs a
+  // `.docx` import, so without this assertion that branch is covered nowhere:
+  // deleting it would fall through to the user tint, and an imported Word
+  // comment would render as though the user had written it.
+  it("does not let an import fall through to the user tint", () => {
+    expect(getCardTint("import")).not.toBe(getCardTint("user"));
+  });
+});
 
 // #1123 M3: the agent byline prefers the specific authoring model's
 // `agentIdentity.displayName`, then the active-model family label, then a
