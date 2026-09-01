@@ -63,17 +63,21 @@ test("slash menu supports arrow-key selection", async ({ page }) => {
   const menu = page.getByRole("listbox", { name: "Slash commands" });
   await expect(menu).toBeVisible();
 
-  // Two presses, not one: the unfiltered list is [paragraph, heading-1,
-  // heading-2, ...], so index 2 is heading-2. This assertion is positional and
-  // therefore fragile by nature — it broke silently when Paragraph was inserted
-  // at index 0. If it fails again after a command is added, check the array
-  // order in `slash-menu/commands.ts` before assuming the menu is broken.
+  // Assert the SELECTION MOVED, by name — not that a particular index happens
+  // to hold a particular command. The previous form pressed ArrowDown and
+  // asserted an `h2`, which only worked because heading-1 sat at index 0; it
+  // broke silently when a command was inserted above it, and "press it twice"
+  // would just re-encode the same fragility. Naming the option is what the
+  // sibling test above already does, and it survives any future insertion.
   await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("Enter");
+  await expect(menu.getByRole("option", { name: "Heading 1" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 
+  await page.keyboard.press("Enter");
   await expect(menu).toBeHidden();
-  await expect(page.locator(".tiptap h2").first()).toContainText("first paragraph");
+  await expect(page.locator(".tiptap h1").first()).toContainText("first paragraph");
 });
 
 test("slash menu supports pointer selection", async ({ page }) => {

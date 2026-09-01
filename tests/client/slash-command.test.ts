@@ -120,9 +120,26 @@ describe("paragraph slash command", () => {
     command.run(editor);
   }
 
-  // Revert-pin for the KEYWORD set.
+  // Pins ARRAY POSITION 0, which is the one thing the source comment calls
+  // load-bearing and which every filter assertion below fails to cover: they
+  // pin RELATIVE order inside a filtered result, so moving Paragraph to index 1
+  // leaves them all green while `/` + Enter — the bare-menu flow, no query —
+  // silently inserts Heading 1. The E2E misses it too: with
+  // [heading-1, paragraph, heading-2] two ArrowDowns still land on heading-2.
+  it("sits at index 0 so the bare menu defaults to it", () => {
+    expect(SLASH_COMMANDS[0]?.id).toBe("paragraph");
+  });
+
   it("is the only match for its own label", () => {
     expect(filterSlashCommands("paragraph").map((c) => c.id)).toEqual(["paragraph"]);
+  });
+
+  // The label match above exercises NO keyword, so without this the whole
+  // keyword set could be deleted and the suite would stay green. These four are
+  // the discoverability aliases — the words someone types when they do not know
+  // the command is called "Paragraph".
+  it.each(["normal", "body", "plain", "reset"])("is reachable by the '%s' alias", (alias) => {
+    expect(filterSlashCommands(alias).map((c) => c.id)).toContain("paragraph");
   });
 
   // "para" is NOT unique, which is genuinely surprising and worth pinning
@@ -174,16 +191,21 @@ describe("paragraph slash command", () => {
   //
   // Plain setParagraph() does not throw, which is why the command is written
   // that way. This test is what stops someone "hardening" it back.
-  it("does not throw on a heading that follows a paragraph inside a list item", () => {
+  // Asserting the OUTPUT, not merely `not.toThrow()`. A throw still fails the
+  // test (the expectation never runs), so this keeps the full crash pin AND
+  // additionally pins the correct conversion — strictly stronger at no cost.
+  it("converts a heading that follows a paragraph inside a list item", () => {
     editor.commands.setContent("<ul><li><p>x</p><h2>hello</h2></li></ul>");
     editor.commands.setTextSelection(8);
-    expect(() => runParagraph()).not.toThrow();
+    runParagraph();
+    expect(editor.getHTML()).toBe("<ul><li><p>x</p><p>hello</p></li></ul>");
   });
 
-  it("does not throw on a code block inside a list item", () => {
+  it("converts a code block inside a list item", () => {
     editor.commands.setContent("<ul><li><p>x</p><pre><code>hello</code></pre></li></ul>");
     editor.commands.setTextSelection(8);
-    expect(() => runParagraph()).not.toThrow();
+    runParagraph();
+    expect(editor.getHTML()).toBe("<ul><li><p>x</p><p>hello</p></li></ul>");
   });
 });
 
@@ -255,9 +277,16 @@ describe("slash command plugin state", () => {
     // is easy to miss when scanning keywords. Substring match on label +
     // keywords, so a match can come from either.
     //
-    // This is a counter, not a behavioural pin: it goes red for any new command
-    // containing "h" anywhere in its label or keywords. Bump it knowingly.
-    expect(filterSlashCommands("h")).toHaveLength(6);
+    // Asserting ids rather than a length: same revert-protection, but a failure
+    // names WHAT changed instead of reporting `6 !== 7`, and it pins order too.
+    expect(filterSlashCommands("h").map((command) => command.id)).toEqual([
+      "paragraph",
+      "heading-1",
+      "heading-2",
+      "heading-3",
+      "task-list",
+      "horizontal-rule",
+    ]);
     expect(state?.active?.selectedIndex).toBeLessThan(filterSlashCommands("h").length);
   });
 });
