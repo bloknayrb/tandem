@@ -38,7 +38,7 @@ import type {
   TandemSettings,
   TandemSettingsState,
 } from "../../src/client/hooks/useTandemSettings.svelte.js";
-import { createLayoutModel } from "../../src/client/layout/model.svelte.js";
+import { createLayoutModel, type LayoutModel } from "../../src/client/layout/model.svelte.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
 
@@ -118,16 +118,27 @@ function makeRailHarness(
   // `$state`, not a plain array: see harness rule 1 in the file header.
   let annotations = $state<Annotation[]>(initial.annotations ?? []);
   const closeCalls: string[] = [];
-  const model = createLayoutModel({
+  // What the closer SEES when it runs, one entry per call. Unit 10c reordered
+  // `selectRailTab` to write the tab before invoking the closer, and a bare
+  // call counter cannot tell the two orders apart.
+  const tabAtCloseTime: (string | undefined)[] = [];
+  const model: LayoutModel = createLayoutModel({
     settingsState: settings,
     modeState: makeModeState(),
     getAnnotations: () => annotations,
-    closeTransientChat: () => closeCalls.push("close"),
+    closeTransientChat: () => {
+      closeCalls.push("close");
+      // Reads `model` through the closure rather than a captured value: the
+      // closer runs at call time, long after construction, and reading the
+      // live model is the whole instrument.
+      tabAtCloseTime.push(model.activeRailTab);
+    },
   });
   return {
     model,
     settings,
     closeCalls,
+    tabAtCloseTime,
     setAnnotations(next: Annotation[]) {
       annotations = next;
     },
@@ -537,15 +548,30 @@ describe("LayoutModel rail-tab selection", () => {
     expect(h.closeCalls).toEqual([]);
   });
 
-  it("showAnnotations does NOT close a transient chat reveal", () => {
-    // The discriminating fact between the two writers, and the only reachable
-    // one: `showAnnotations` is the raw write from `onAnnotationClick`, which
-    // never called the closer. Collapsing it into `selectRailTab` would add a
-    // teardown that site does not perform.
+  it("writes the tab BEFORE calling the closer", () => {
+    // Unit 10c reversed master order. The closer used to run first, so a closer
+    // that threw ate the click entirely -- no tab switch, no toast, no warn.
+    // Asserting the call COUNT cannot see this: both orders call it once. The
+    // instrument is what the closer observes when it runs.
     const h = makeRailHarness({ primaryTab: "chat" });
-    h.model.showAnnotations();
-    expect(h.model.activeRailTab).toBe("annotations");
-    expect(h.closeCalls).toEqual([]);
+    h.model.selectRailTab("annotations");
+    expect(h.tabAtCloseTime).toEqual(["annotations"]);
+  });
+
+  it("a throwing closer still leaves the tab switched", () => {
+    // The consequence the reorder exists for, asserted directly rather than
+    // inferred from the ordering spec above.
+    const settings = makeSettingsState({ primaryTab: "chat" });
+    const model = createLayoutModel({
+      settingsState: settings,
+      modeState: makeModeState(),
+      getAnnotations: () => [],
+      closeTransientChat: () => {
+        throw new Error("closer exploded");
+      },
+    });
+    expect(() => model.selectRailTab("annotations")).toThrow("closer exploded");
+    expect(model.activeRailTab).toBe("annotations");
   });
 });
 

@@ -111,8 +111,6 @@ export interface LayoutModel {
   toggleRight(): void;
   /** Select a rail tab, tearing down a transient chat reveal unless the target is Chat. */
   selectRailTab(tab: RailTab): void;
-  /** Show Annotations WITHOUT touching a transient chat reveal — see the note on the impl. */
-  showAnnotations(): void;
 }
 
 export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
@@ -181,30 +179,19 @@ export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
     });
   }
 
-  function selectRailTab(tab: RailTab): void {
-    if (tab !== "chat") opts.closeTransientChat();
-    activeRailTab = tab;
-  }
-
   /**
-   * The raw write from `App.svelte`'s `onAnnotationClick`, preserved
-   * byte-for-byte: it does NOT close a transient chat reveal, where
-   * `selectRailTab("annotations")` does.
+   * Select a rail tab, then tear down any transient chat reveal.
    *
-   * This is not an alias and must not be collapsed into `selectRailTab`. Unit
-   * 10b is a behaviour-preserving extraction, which is reason enough on its
-   * own — but for the record, the difference is hard to observe: the
-   * capture-phase window `pointerdown` listener App installs while a reveal is
-   * open already closes it for any click outside the right rail, so on the
-   * ordinary pointer path the reveal is gone before this runs. "Hard to
-   * observe" is not "impossible" (a synthetic click, or a keyboard reveal
-   * opened between pointerdown and click, reaches here with the reveal live),
-   * and an extraction is the wrong place to bet on the difference either way.
-   *
-   * Unifying the two is Unit 10c's call, once chat-reveal ownership moves.
+   * **The order is the point, and it changed in Unit 10c.** 10b preserved
+   * master byte-for-byte, where the closer ran FIRST — so a closer that threw
+   * ate the user's click entirely: no tab switch, no toast, no warn. The tab
+   * write is the user's intent and the teardown is bookkeeping, so the intent
+   * lands first now and a throwing closer costs a stale reveal rather than the
+   * whole interaction.
    */
-  function showAnnotations(): void {
-    activeRailTab = "annotations";
+  function selectRailTab(tab: RailTab): void {
+    activeRailTab = tab;
+    if (tab !== "chat") opts.closeTransientChat();
   }
 
   return {
@@ -223,6 +210,5 @@ export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
     toggleLeft,
     toggleRight,
     selectRailTab,
-    showAnnotations,
   };
 }

@@ -2799,7 +2799,7 @@ const shouldShowModelPicker = $derived(
         activeAnnotationId={railContent.activeAnnotationId}
         onEditorReady={(ed) => (editor = ed)}
         onAnnotationClick={(id) => {
-          layoutModel.showAnnotations();
+          layoutModel.selectRailTab("annotations");
           railContent.setActiveAnnotationId(id);
         }}
         onClearAnnotation={() => {
