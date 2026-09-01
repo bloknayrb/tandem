@@ -532,7 +532,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     // Reads a MISSING key as `"chat"` while `DEFAULTS.primaryTab` (:260) is
     // `"annotations"` -- do not copy this line as the pattern. `reduceMotion`
-    // (:565) also diverges from its `DEFAULTS` entry, but deliberately: the
+    // (:567) also diverges from its `DEFAULTS` entry, but deliberately: the
     // blob-less path at the bottom of `loadSettings` resolves it the same way,
     // so the two agree on what a user actually gets. This field is the one
     // where they do not.

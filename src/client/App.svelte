@@ -220,8 +220,9 @@ const effectiveShortcutLabels = $derived(effectiveBindingLabels(shortcutOverride
 const visibleAnnotations = $derived(yjsSync.annotations);
 // Below `visibleAnnotations` for readability, not out of necessity: the only
 // eager read the factory performs is `settings.primaryTab`, and both the
-// annotation thunk and the badge derivation are lazy. Moving this line is
-// safe; the ordering just keeps the model next to what it reads.
+// annotation thunk and the badge derivation are lazy. Moving it relative to
+// `visibleAnnotations` is safe; the ordering just keeps the model next to what
+// it reads. It still cannot rise above `settingsState` and `modeState`.
 const layoutModel = createLayoutModel({
   settingsState,
   modeState,

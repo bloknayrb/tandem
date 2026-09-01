@@ -20,9 +20,18 @@
  * the failure this file is most exposed to: it returns the correct answer at
  * every direct read, so a unit test that re-reads the model after each
  * mutation passes while template reactivity is completely dead — the rail
- * would stop switching and nothing but a rendered assertion would notice.
- * Only an effect-run count separates the two, which is why two specs in
- * `tests/client/layout-model.svelte.test.ts` count runs rather than values.
+ * would stop switching and nothing but a rendered assertion would notice, or,
+ * in a unit test, an effect that subscribes to the member and records what it
+ * sees. Four specs in `tests/client/layout-model.svelte.test.ts` do that, one
+ * per reactive value. Two things they must keep doing, both learned by running
+ * the mutants: re-reading the value cannot discriminate, not even through a
+ * local `$derived` (the compiler warns such a local captures only its initial
+ * value); and the RUN COUNT alone cannot either. A getter that still performs
+ * a tracked read while returning a frozen value passes `expect(runs).toBe(2)`
+ * and fails only on the recorded values — and since `settings` is a
+ * whole-object signal reassigned on every write, any tracked read of it
+ * re-runs the effect on an unrelated theme change. Never reduce one of those
+ * specs to a bare run count.
  * Never destructure this object at a call site, and never spread it: both
  * invoke the getters once and freeze the result.
  *
@@ -93,7 +102,8 @@ export interface LayoutModel {
   readonly rightVisible: boolean;
   /** Which of the right rail's two fixed tabs is selected. */
   readonly activeRailTab: RailTab;
-  /** Pending-review count for the Annotations tab's badge; 0 while that tab is active. */
+  /** Badge value for the Annotations tab: pending review targets, or 0 while that tab is
+   *  active. Not a count of pending annotations — see the note at the derivation. */
   readonly pendingAnnotationBadge: number;
   /** Toggle the left panel's persisted visibility. */
   toggleLeft(): void;
@@ -120,7 +130,10 @@ export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
   // a font pick or a shortcut remap — yanking the user out of Chat mid-message
   // on input that has nothing to do with rail tabs. `untrack` is belt-and-
   // braces at today's call site (a factory body is not a reaction) and becomes
-  // load-bearing the moment anyone constructs this model from inside one.
+  // load-bearing the moment anyone constructs this model from inside one --
+  // which is not hypothetical cover for an unpinned guard: a spec builds the
+  // model inside an `$effect` and writes an unrelated key, and removing
+  // `untrack` turns it red.
   let activeRailTab = $state<RailTab>(
     untrack(() => settingsState.settings.primaryTab) === "chat" ? "chat" : "annotations",
   );
@@ -129,14 +142,22 @@ export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
   // advertise unreviewed work on the tab you are NOT looking at.
   //
   // So this is a BADGE value, not a count of pending annotations, and the name
-  // has to keep carrying that. Its sibling `chatState.unreadCount` is a true
-  // count and is NOT zeroed on tab-active, which is why `App.svelte` can reuse
-  // it for the collapsed-rail `chat-unread-peek`. The two sit side by side in
-  // the same markup with opposite semantics. A future consumer that reads this
-  // member as "how many are pending" — a peek, a taskbar badge, a status line
-  // — gets 0 exactly when the user happens to be on Annotations, silently.
-  // Today the template guards it with the same `activeRailTab !== "annotations"`
-  // test, so the zeroing is double-covered and unobservable.
+  // has to keep carrying that. A future consumer that reads this member as
+  // "how many are pending" — a peek, a taskbar badge, a status line — gets 0
+  // exactly when the user happens to be on Annotations, silently. Today the
+  // template guards it with the same `activeRailTab !== "annotations"` test
+  // (`App.svelte`), so the zeroing is double-covered and unobservable.
+  //
+  // Its sibling `chatState.unreadCount` is the contrast worth knowing, and it
+  // is subtler than "one zeroes and one does not". That `$derived`
+  // (`useChatState.svelte.ts`) has no tab branch, so the VALUE is never
+  // synthesised to zero — but an `$effect` there calls
+  // `acknowledgeVisibleMessages` whenever `getVisible()` (wired to
+  // `chatVisible`) is true, so an on-screen Chat tab still drives it to 0,
+  // through `seenIds` rather than a ternary. `chat-unread-peek` works anyway
+  // because it renders only while `!effectiveRightVisible` — precisely when
+  // `chatVisible` is false and nothing acknowledges. Do not copy either
+  // mechanism without checking which one you actually need.
   const pendingAnnotationBadge = $derived(
     activeRailTab === "annotations"
       ? 0

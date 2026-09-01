@@ -21,11 +21,15 @@
  *    rebuilds the model after mutating cannot tell a live derivation from a
  *    frozen one, because a fresh model computes the right answer either way.
  *
- * Rule 1 is easy to break for exactly one of the two stores. Until round 2 of
- * this unit's review, `modeState` was the inert literal `{ tandemMode:
- * "tandem" }` at every construction site, so hoisting `modeState.tandemMode`
- * out of `rightVisible`'s `$derived` — freezing the mode at construction —
- * survived all 19 specs. Both stores go through `$state` now.
+ * Rule 1 has now been broken twice, and the second time was inside the fix
+ * for the first. Round 2 of this unit's review found `modeState` was the inert
+ * literal `{ tandemMode: "tandem" }` at every construction site, so hoisting
+ * `modeState.tandemMode` out of `rightVisible`'s `$derived` survived all 19
+ * specs. The fix said "both stores are `$state`-backed now" — and there are
+ * THREE derived sources. `railTabStubs`'s `getAnnotations` was still a plain
+ * array at twelve sites, unexploitable only because none of those twelve
+ * asserts the badge. All three go through `$state` now; if a fourth source is
+ * ever added, it belongs in this list on the day it is added.
  */
 
 import { flushSync } from "svelte";
@@ -96,8 +100,12 @@ function makeModeState(initial: "tandem" | "solo" = "tandem") {
  * so a spec can never mutate another's fixture.
  */
 function railTabStubs() {
+  // `$state`, not a plain literal, per harness rule 1 — `getAnnotations` is
+  // the model's third derived source. A fresh proxy per call rather than a
+  // shared constant, so a spec can never mutate another's fixture.
+  const annotations = $state<Annotation[]>([]);
   return {
-    getAnnotations: () => [] as Annotation[],
+    getAnnotations: () => annotations,
     closeTransientChat: () => {},
   };
 }
@@ -153,6 +161,52 @@ describe("LayoutModel visibility", () => {
     expect(model.leftVisible).toBe(false);
   });
 
+  it("re-runs a subscribed effect when leftVisible changes", () => {
+    // The getter invariant for `leftVisible`. `App.svelte` feeds this straight
+    // into `effectiveLeftVisible`, so a getter that answers direct reads
+    // correctly while subscribing to nothing would leave the outline rail not
+    // responding to its own toggle — and every read-back spec is blind to it.
+    const settings = makeSettingsState({ leftPanelVisible: true });
+    const model = createLayoutModel({
+      settingsState: settings,
+      modeState: makeModeState(),
+      ...railTabStubs(),
+    });
+    let runs = 0;
+    const seen: boolean[] = [];
+    const dispose = $effect.root(() => {
+      $effect(() => {
+        runs += 1;
+        seen.push(model.leftVisible);
+      });
+    });
+    try {
+      flushSync();
+      expect(runs).toBe(1);
+      settings.updateSettings({ leftPanelVisible: false });
+      flushSync();
+      expect(runs).toBe(2);
+      expect(seen).toEqual([true, false]);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("leftVisible has NO solo suppression, unlike the right rail", () => {
+    // The asymmetry is deliberate and documented on `leftVisible`, but every
+    // other spec that touches it builds the model in tandem mode, so adding
+    // the right rail's suppression term here as a "symmetry" refactor passes
+    // the whole file. In solo with the rail suppressed, the outline panel
+    // would silently disappear along with the annotations rail.
+    const settings = makeSettingsState({ leftPanelVisible: true, soloRailHidden: true });
+    const model = createLayoutModel({
+      settingsState: settings,
+      modeState: makeModeState("solo"),
+      ...railTabStubs(),
+    });
+    expect(model.leftVisible).toBe(true);
+  });
+
   it("rightVisible is true when settings.rightPanelVisible and not solo-hidden", () => {
     const settings = makeSettingsState({ rightPanelVisible: true, soloRailHidden: false });
     const model = createLayoutModel({
@@ -189,11 +243,16 @@ describe("LayoutModel visibility", () => {
     // solo mode ALONE — passes every other visibility spec, because the only
     // solo row present also has `soloRailHidden: true`.
     const settings = makeSettingsState({ rightPanelVisible: true, soloRailHidden: false });
+    const mode = makeModeState("solo");
     const model = createLayoutModel({
       settingsState: settings,
-      modeState: makeModeState("solo"),
+      modeState: mode,
       ...railTabStubs(),
     });
+    // Witness the mode: `true` is also the tandem answer, so without this the
+    // spec would pass even if the harness ignored its argument entirely, and
+    // its whole discriminating power would sit in the `soloRailHidden` half.
+    expect(mode.tandemMode).toBe("solo");
     expect(model.rightVisible).toBe(true);
   });
 
@@ -274,13 +333,60 @@ describe("LayoutModel.toggleRight", () => {
       modeState: makeModeState(),
       ...railTabStubs(),
     });
+    // "Nothing else" has to be asserted over the whole object, not over the
+    // one sibling key that happened to come to mind: a hide that also wrote
+    // `primaryTab` or `leftPanelVisible` passes a two-key assertion. The
+    // sibling that matters is `soloRailHidden` — setting it would make the
+    // next solo-mode show a no-op from the user's side — but naming it is not
+    // the same as covering the claim.
+    const before: Record<string, unknown> = { ...settings.settings };
+    model.toggleRight();
+    const after: Record<string, unknown> = { ...settings.settings };
+    expect(after.rightPanelVisible).toBe(false);
+    expect(model.rightVisible).toBe(false);
+    delete before.rightPanelVisible;
+    delete after.rightPanelVisible;
+    expect(after).toEqual(before);
+  });
+
+  it("hides in tandem mode even with a stale soloRailHidden set", () => {
+    // The state the file builds at the visibility block but never toggles in.
+    // Inlining `rightVisible` as `rightPanelVisible && !soloRailHidden` — the
+    // obvious "avoid the derived read" refactor — takes the SHOW branch here
+    // and the collapse chevron becomes a dead button.
+    const settings = makeSettingsState({ rightPanelVisible: true, soloRailHidden: true });
+    const model = createLayoutModel({
+      settingsState: settings,
+      modeState: makeModeState(),
+      ...railTabStubs(),
+    });
+    expect(model.rightVisible).toBe(true);
+
     model.toggleRight();
     expect(settings.settings.rightPanelVisible).toBe(false);
-    // The hide branch writes ONE key. A hide that also set `soloRailHidden`
-    // would make the next solo-mode show a no-op from the user's side, and
-    // asserting only `rightPanelVisible` cannot see it.
-    expect(settings.settings.soloRailHidden).toBe(false);
+    expect(settings.settings.soloRailHidden).toBe(true);
+  });
+
+  it("reads the CURRENT mode on each toggle, not the mode at construction", () => {
+    // `toggleRight` reads `modeState.tandemMode` a second time, and every
+    // other toggle spec fixes the mode at construction — so hoisting that read
+    // into the factory body survives all of them. The user starts in tandem,
+    // switches to solo, hides the rail, and clicks to bring it back: with a
+    // frozen mode `soloRailHidden` is never cleared and the rail stays gone.
+    const settings = makeSettingsState({ rightPanelVisible: true, soloRailHidden: true });
+    const mode = makeModeState("tandem");
+    const model = createLayoutModel({
+      settingsState: settings,
+      modeState: mode,
+      ...railTabStubs(),
+    });
+
+    mode.setMode("solo");
     expect(model.rightVisible).toBe(false);
+
+    model.toggleRight();
+    expect(settings.settings.soloRailHidden).toBe(false);
+    expect(model.rightVisible).toBe(true);
   });
 
   it("branches on rightVisible, not on the raw rightPanelVisible setting", () => {
@@ -344,14 +450,52 @@ describe("LayoutModel rail-tab selection", () => {
     expect(h.model.activeRailTab).toBe("chat");
   });
 
+  it("does NOT subscribe its seed when constructed inside a reaction", () => {
+    // The `untrack` on the seed. Round 1 of this review excluded it from the
+    // mutation battery as unkillable by construction -- true only while every
+    // construction site is a factory body, which is not a reaction. It IS
+    // killable in the case the comment at the seed says the guard exists for:
+    // build the model from inside an effect, then write an unrelated settings
+    // key. Without `untrack`, the seed read of `settings.primaryTab`
+    // subscribes the enclosing effect to the whole wholesale-reassigned
+    // settings object, so a theme change re-runs it -- which in `App.svelte`
+    // would mean rebuilding the model, reverting the current tab to the
+    // persisted preference mid-session.
+    const settings = makeSettingsState({ primaryTab: "chat" });
+    let runs = 0;
+    const dispose = $effect.root(() => {
+      $effect(() => {
+        runs += 1;
+        createLayoutModel({
+          settingsState: settings,
+          modeState: makeModeState(),
+          ...railTabStubs(),
+        });
+      });
+    });
+    try {
+      flushSync();
+      expect(runs).toBe(1);
+
+      settings.updateSettings({ theme: "dark" });
+      flushSync();
+      expect(runs).toBe(1);
+    } finally {
+      dispose();
+    }
+  });
+
   it("re-runs a subscribed effect when the tab changes", () => {
     // Pins the getter invariant in the model's file header (a plain value
-    // property instead of a getter). Counting effect RUNS is what separates
-    // the two: an effect subscribed to a getter re-runs on write; an effect
-    // that read a frozen string subscribed to nothing and never runs again.
-    // Reading the value back does NOT discriminate, not even through a local
-    // `$derived` — the compiler warns that such a local captures only its
-    // initial value, which is the same blindness this spec exists to catch.
+    // property instead of a getter). An effect subscribed to a getter re-runs
+    // on write; one that read a frozen string subscribed to nothing and never
+    // runs again. Reading the value back does NOT discriminate, not even
+    // through a local `$derived` — the compiler warns such a local captures
+    // only its initial value, the same blindness this spec exists to catch.
+    //
+    // The `seen` assertion is not decoration: the run count alone passes for a
+    // getter that still performs a tracked read while returning a frozen
+    // value. Keep both.
     const h = makeRailHarness({ primaryTab: "annotations" });
     let runs = 0;
     const seen: string[] = [];
@@ -361,14 +505,19 @@ describe("LayoutModel rail-tab selection", () => {
         seen.push(h.model.activeRailTab);
       });
     });
-    flushSync();
-    expect(runs).toBe(1);
+    try {
+      flushSync();
+      expect(runs).toBe(1);
 
-    h.model.selectRailTab("chat");
-    flushSync();
-    expect(runs).toBe(2);
-    expect(seen).toEqual(["annotations", "chat"]);
-    dispose();
+      h.model.selectRailTab("chat");
+      flushSync();
+      expect(runs).toBe(2);
+      expect(seen).toEqual(["annotations", "chat"]);
+    } finally {
+      // try/finally, like its three siblings: a failing assertion here would
+      // otherwise leak the root for the rest of the file.
+      dispose();
+    }
   });
 
   it("closes a transient chat reveal when selecting Annotations", () => {
@@ -449,12 +598,44 @@ describe("LayoutModel.pendingAnnotationBadge", () => {
   });
 
   it("reports the true count, uncapped", () => {
-    // The badge is a number, not a display string: a `Math.min(9, ...)` cap
-    // belongs at the template, and one added here would be invisible to every
-    // other spec, all of which use counts below 3.
-    const many = Array.from({ length: 12 }, (_, i) => pending(`a${i}`));
-    const h = makeRailHarness({ primaryTab: "chat", annotations: many });
+    // The badge is a number, not a display string: a cap belongs at the
+    // template, and one added here would be invisible to every other spec,
+    // all of which use counts below 3. Asserted at two magnitudes, because a
+    // single sample only rules out caps below it — a `Math.min(99, ...)`
+    // badge-width guard passes any one assertion at 12.
+    const h = makeRailHarness({ primaryTab: "chat" });
+    h.setAnnotations(Array.from({ length: 12 }, (_, i) => pending(`a${i}`)));
     expect(h.model.pendingAnnotationBadge).toBe(12);
+    h.setAnnotations(Array.from({ length: 150 }, (_, i) => pending(`b${i}`)));
+    expect(h.model.pendingAnnotationBadge).toBe(150);
+  });
+
+  it("re-runs a subscribed effect when the badge changes", () => {
+    // The getter invariant for `pendingAnnotationBadge`, the last of the four
+    // reactive values to get one. `App.svelte` reads this member straight into
+    // the template, so a getter that subscribes to nothing would freeze the
+    // badge at whatever it was when the rail first rendered — new pending
+    // suggestions would never advertise themselves, and every read-back spec
+    // in this block would still pass.
+    const h = makeRailHarness({ primaryTab: "chat" });
+    let runs = 0;
+    const seen: number[] = [];
+    const dispose = $effect.root(() => {
+      $effect(() => {
+        runs += 1;
+        seen.push(h.model.pendingAnnotationBadge);
+      });
+    });
+    try {
+      flushSync();
+      expect(runs).toBe(1);
+      h.setAnnotations([pending("a"), pending("b")]);
+      flushSync();
+      expect(runs).toBe(2);
+      expect(seen).toEqual([0, 2]);
+    } finally {
+      dispose();
+    }
   });
 
   it("drops to 0 when the user switches to the Annotations tab", () => {

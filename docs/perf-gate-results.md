@@ -42,7 +42,7 @@ it omits: `loadSettings` clamps it field by field through
 `normalizeKnownFields`, and `primaryTab`'s absent-key branch reads a missing
 key as `"chat"`, the opposite of `DEFAULTS.primaryTab`. (No user is affected:
 `updateSettings` persists the full merged object, and a first run with no blob
-at all returns `DEFAULTS` without entering the validator. Only a partial blob
+at all returns `DEFAULTS` (with `reduceMotion` resolved) without entering the validator. Only a partial blob
 like the spec's hits it.) Left unset, the rail opens on Chat, the Annotations panel is
 `display: none` — `PanelSlot` toggles with CSS, so its cards stay in the DOM at
 zero size — and every rail-scoped measurement below fails against an element

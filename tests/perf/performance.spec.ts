@@ -182,8 +182,8 @@ test.describe("v1.0 performance gate", () => {
       // `parsed.primaryTab === "annotations" ? "annotations" : "chat"` reads a
       // MISSING key as `"chat"`, the opposite of `DEFAULTS.primaryTab`. (Real
       // users never hit this: `updateSettings` persists the full merged
-      // object, and a blob-less first run returns `DEFAULTS` without going
-      // through the validator. It bites only a partial blob like this one.) Landing on Chat leaves the
+      // object, and a blob-less first run returns `DEFAULTS` (with
+      // `reduceMotion` resolved) without going through the validator. It bites only a partial blob like this one.) Landing on Chat leaves the
       // Annotations panel `display: none` — PanelSlot toggles visibility with
       // CSS, so its cards stay in the DOM at zero size — and every rail-scoped
       // assertion below would fail on an element that is present and correct.
