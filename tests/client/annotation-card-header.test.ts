@@ -25,8 +25,6 @@ function renderHeader(annotation: Annotation) {
       isPending: true,
       isEditing: false,
       canEdit: false,
-      badgeBg: "transparent",
-      badgeFg: "inherit",
       onEnterEdit: () => {},
     },
   });
@@ -56,5 +54,54 @@ describe("AnnotationCardHeader author dot color (#1123 M4)", () => {
   it("a user annotation is unaffected by identity wiring", () => {
     const { container } = renderHeader(makeAnnotation({ author: "user" }));
     expect(dotStyle(container)).toContain("background: var(--tandem-author-user);");
+  });
+});
+
+describe("AnnotationCardHeader type icon (author-tint model)", () => {
+  function badge(container: HTMLElement): HTMLElement {
+    const el = container.querySelector<HTMLElement>(".annotation-type-badge");
+    expect(el).toBeTruthy();
+    return el as HTMLElement;
+  }
+
+  // Queried by CLASS, not by a data-testid, deliberately: adding a testid would
+  // force a testid-set snapshot regeneration and a manifest update under
+  // Critical Rule 7, for a purely internal assertion handle.
+  it("renders a sized svg glyph, never an unsized one", () => {
+    const { container } = renderHeader(makeAnnotation());
+    const svg = badge(container).querySelector("svg");
+    expect(svg).toBeTruthy();
+    // A viewBox alone gives an <svg> no intrinsic size — it resolves to the
+    // 300x150 replaced-element default and blows out the header. There is no
+    // CSS sizing rule for this icon, so the attributes are load-bearing.
+    expect(svg?.getAttribute("width")).toBe("13");
+    expect(svg?.getAttribute("height")).toBe("13");
+  });
+
+  it("names the type accessibly even though the word is visually hidden", () => {
+    const { container } = renderHeader(makeAnnotation({ type: "note", author: "user" }));
+    expect(badge(container).getAttribute("aria-label")).toBe("Private note");
+  });
+
+  it("paints a highlight's chosen color onto the icon, not the card", () => {
+    const { container } = renderHeader(
+      makeAnnotation({ type: "highlight", author: "user", color: "green" }),
+    );
+    const svg = badge(container).querySelector("svg");
+    expect(svg?.getAttribute("fill")).toBe("var(--tandem-highlight-green)");
+  });
+
+  it("leaves non-highlight glyphs unfilled so they read as outlines", () => {
+    const { container } = renderHeader(makeAnnotation({ type: "comment" }));
+    expect(badge(container).querySelector("svg")?.getAttribute("fill")).toBe("none");
+  });
+
+  it("distinguishes a suggestion from a plain comment by glyph", () => {
+    const { container: plain } = renderHeader(makeAnnotation({ type: "comment" }));
+    const { container: sugg } = renderHeader(
+      makeAnnotation({ type: "comment", suggestedText: "replacement" }),
+    );
+    expect(badge(plain).getAttribute("aria-label")).toBe("Comment");
+    expect(badge(sugg).getAttribute("aria-label")).toBe("Suggested replacement");
   });
 });

@@ -5,7 +5,7 @@ import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { activationKeydown } from "../utils/keyboard-activate";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
-import { getCardLabel, getHighlightBorder } from "./annotation-card-helpers";
+import { getCardLabel } from "./annotation-card-helpers";
 import CommentCard from "./CommentCard.svelte";
 import type { Density } from "./cardDensity";
 import { cardEnter, cardExit } from "./cardMotion";
@@ -147,19 +147,27 @@ $effect(() => {
     replyOpenNonce = req.nonce;
   }
 });
-// Per-type body tint replaces the old 3px left-edge border (Conflict #8
-// "lift color" interpretation, sub-PR 1.5 — full-taxonomy tints so every type
-// stays differentiated, not just the two the bundle tints). getHighlightBorder
-// is called inside the derivation so the highlight tint re-tracks annotation.color.
-const cardTint = $derived.by(() => {
-  if (annotation.author === "import") return "var(--tandem-surface-muted)";
-  if (annotation.type === "highlight")
-    return `color-mix(in srgb, ${getHighlightBorder(annotation)} 18%, var(--tandem-surface))`;
-  if (annotation.type === "note") return "var(--tandem-warning-bg)";
-  if (annotation.suggestedText !== undefined) return "var(--tandem-suggestion-bg)";
-  if (annotation.author === "claude") return "var(--tandem-author-claude-bg)";
-  return "var(--tandem-author-user-bg)";
-});
+// Tint is AUTHOR, always — three values, one per author role. Type is carried
+// by the header's icon instead (`annotation-type-icon.ts`).
+//
+// This replaces a six-branch derivation that mixed the two axes: it tinted by
+// type for note/highlight/suggestion and by author for everything else, so one
+// colour was asked to answer two questions and answered neither cleanly. A
+// Claude-authored highlight looked identical to a user-authored one — and the
+// tutorial seeds highlights as `author: "claude"`, so that collision was on the
+// first card every new user meets. Meanwhile the margin leader lines pointing
+// AT these cards were already author-keyed (`leaderColorForAuthor`), so the
+// rail contradicted itself.
+//
+// The highlight's picked colour is not lost — it moved to the type icon, which
+// is the one place it still means something.
+const cardTint = $derived(
+  annotation.author === "claude"
+    ? "var(--tandem-author-claude-bg)"
+    : annotation.author === "import"
+      ? "var(--tandem-author-import-bg)"
+      : "var(--tandem-author-user-bg)",
+);
 
 // Review-target override wins over the type tint; the accent ring is applied
 // via the .is-review-target class (see the style block below) so it composes
@@ -540,6 +548,31 @@ function onCardClick(event: MouseEvent) {
   .is-density-clamped :global(.aca-undo-row),
   .is-density-clamped :global(.aca-standalone) {
     display: none;
+  }
+
+  /* PRIVACY SIGNAL — a note's author dot is a ring, not a disc.
+
+     Under author-tint a note and a comment by the same person share a card
+     ground, so the amber that used to mean "private" is gone. The Private pill
+     covers the full/compact/clamped bands, but it lives inside `.ach-type`,
+     which stub hides outright — and it is `aria-hidden`, so it was never the
+     accessibility answer either. At stub density the tint WAS the only
+     surviving note signal.
+
+     A hollow dot costs zero width, so it cannot disturb the stub scrollWidth
+     gate the way a larger glyph would; it needs no new markup, because
+     `data-annotation-type` is already on the card root; and it survives
+     forced-colors, where a CanvasText border is still a border.
+
+     Keyed on `type === "note"`, deliberately NOT on `audience`. Notes are what
+     ADR-027 actually defends; `audience: "private"` is the muddled field —
+     user highlights carry it and are still returned to Claude (#1710). */
+  /* The whole selector must sit inside one `:global(...)` — `.ach-dot` belongs
+     to AnnotationCardHeader, so a Svelte-scoped trailing class gets this
+     component's hash appended and matches nothing. */
+  :global([data-annotation-type="note"] .ach-dot) {
+    background: transparent !important;
+    border: 1.5px solid var(--tandem-author-user);
   }
 
   /* Stub (stub band, inactive): a ~22px anchor pip — the 6px author dot only.

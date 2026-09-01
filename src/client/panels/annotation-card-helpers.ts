@@ -34,7 +34,18 @@ export function formatRelativeTime(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString();
 }
 
-export function getDisplayType(ann: Annotation): string {
+/**
+ * The four kinds a card can present as: the three stored `type` values plus
+ * `replacement`, which is a comment carrying `suggestedText`.
+ *
+ * Narrowed from a bare `string` so `ANNOTATION_TYPE_GLYPHS` can be an
+ * exhaustive `Record` over it. With `string` the icon lookup would need a
+ * fallback branch, and a fallback is precisely how a missing glyph turns into
+ * a silently-blank icon instead of a type error.
+ */
+export type AnnotationDisplayType = Annotation["type"] | "replacement";
+
+export function getDisplayType(ann: Annotation): AnnotationDisplayType {
   if (ann.suggestedText !== undefined) return "replacement";
   return ann.type;
 }

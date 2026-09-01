@@ -23,8 +23,6 @@ let { annotation, isPending, isReviewTarget, isEditing, canEdit, onEnterEdit }: 
   {isReviewTarget}
   {isEditing}
   {canEdit}
-  badgeBg="var(--tandem-surface-sunk)"
-  badgeFg="var(--tandem-fg-muted)"
   {onEnterEdit}
 />
 
