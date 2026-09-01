@@ -4,7 +4,11 @@ import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
   createFixtureDir,
+  cssAlpha,
   McpTestClient,
+  openAnnotatePopup,
+  selectTextStable,
+  submitAnnotation,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -41,6 +45,77 @@ test.afterEach(async () => {
   await cleanupAllOpenDocuments(mcp);
   await mcp.close();
   cleanupFixtureDir(tmpDir);
+});
+
+/**
+ * The author-tint model, pinned where it actually renders.
+ *
+ * Two rules ship here and neither is visible to a unit test, because both are
+ * composited: the card background is an inline `var(--tandem-author-*-bg)` that
+ * only resolves against a real stylesheet, and the hollow note dot is a
+ * `:global([data-annotation-type="note"] .ach-dot)` rule in a PARENT component
+ * styling a CHILD component's element. Delete either and every vitest suite
+ * stays green.
+ *
+ * WHY THE DOT IS LOAD-BEARING. It is the only privacy signal left in the
+ * header. Notes and comments authored by the same person now share a tint by
+ * design — that is the point of tinting by author — so the tint cannot
+ * distinguish them, and the type icon is hidden entirely at stub density. The
+ * hollow dot is what remains, and it was chosen because swapping `background`
+ * for a `border` on an element that already exists costs zero width and so
+ * cannot disturb the stub-density budget.
+ *
+ * Asserting the two cards DIFFER rather than pinning literal colours: the
+ * tokens are free to be retuned (token-contrast.spec.ts owns their contrast),
+ * but a user card and a Claude card collapsing to the same ground is the
+ * regression, and it is invisible in a screenshot diff of either card alone.
+ */
+test("cards are tinted by author, and a note's dot is hollow", async ({ page }) => {
+  await openWithComment(tmpDir, "Claude-authored comment");
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", { timeout: 10_000 });
+
+  // A note can only be made through the UI — notes are user-only by ADR-027,
+  // so no MCP tool can create one.
+  await editor.click();
+  await selectTextStable(editor.locator("p").first());
+  await openAnnotatePopup(page);
+  await page.locator("[data-testid='popup-annotation-input']").fill("User-authored note");
+  await submitAnnotation(page, "note");
+
+  await switchToAnnotationsTab(page);
+  const cards = page.locator("[data-testid^='annotation-card-']");
+  await expect(cards).toHaveCount(2, { timeout: 10_000 });
+
+  const read = async (type: "note" | "comment") => {
+    const card = page.locator(`[data-testid^='annotation-card-'][data-annotation-type="${type}"]`);
+    await expect(card).toHaveCount(1);
+    return card.evaluate((el) => {
+      const dot = el.querySelector("[data-testid^='annotation-author-dot-']");
+      if (!dot) throw new Error("card has no author dot");
+      const dotStyle = getComputedStyle(dot);
+      return {
+        cardBg: getComputedStyle(el).backgroundColor,
+        dotBg: dotStyle.backgroundColor,
+        dotBorder: parseFloat(dotStyle.borderTopWidth),
+      };
+    });
+  };
+
+  const note = await read("note");
+  const comment = await read("comment");
+
+  expect(
+    note.cardBg,
+    "a user note and a Claude comment must not share a background — author IS the tint axis",
+  ).not.toBe(comment.cardBg);
+
+  // `transparent` computes to rgba(0, 0, 0, 0); read the alpha rather than
+  // matching a string, since the serialization is not guaranteed.
+  expect(cssAlpha(note.dotBg), `the note dot must have no fill; got ${note.dotBg}`).toBe(0);
+  expect(note.dotBorder, "a hollow dot with no border is an invisible dot").toBeGreaterThan(0);
+  expect(cssAlpha(comment.dotBg), `a comment dot must stay filled; got ${comment.dotBg}`).toBe(1);
 });
 
 test("document loads in editor", async ({ page }) => {

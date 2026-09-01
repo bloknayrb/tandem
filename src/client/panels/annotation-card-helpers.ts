@@ -62,6 +62,28 @@ export function getCardLabel(ann: Annotation): string {
   return `${isPrivate ? "private " : ""}${displayType} annotation${trunc ? ": " + trunc : ""}, ${ann.status}`;
 }
 
+/**
+ * Background tint for an annotation card, keyed on AUTHOR.
+ *
+ * Author is the tint axis and type is the icon axis — deliberately separate.
+ * Tinting per card variant instead put a user comment and a user note on
+ * different grounds while both carried the same authorship dot, so the rail
+ * contradicted itself.
+ *
+ * Extracted rather than left inline in `AnnotationCard.svelte` so the `import`
+ * branch is reachable from a unit test. The other two are pinned end-to-end by
+ * `annotation-lifecycle.spec.ts`, but rendering an imported card needs a
+ * `.docx` import, so that branch would otherwise be covered by nothing.
+ *
+ * The review-target override (`--tandem-accent-bg`) is NOT here: it is a state,
+ * not a taxonomy row, and it belongs with the rest of the card's state styling.
+ */
+export function getCardTint(author: Annotation["author"]): string {
+  if (author === "claude") return "var(--tandem-author-claude-bg)";
+  if (author === "import") return "var(--tandem-author-import-bg)";
+  return "var(--tandem-author-user-bg)";
+}
+
 export function getHighlightBorder(ann: Annotation): string {
   if (ann.type === "highlight" && ann.color) {
     return HIGHLIGHT_COLOR_VARS[normalizeHighlightColor(ann.color)];

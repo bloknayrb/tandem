@@ -296,6 +296,23 @@ export async function submitAnnotation(page: Page, audience: "note" | "comment")
 }
 
 /**
+ * Alpha channel of a computed CSS color, 0–1.
+ *
+ * `getComputedStyle` serializes an unset/`transparent` background as
+ * `rgba(0, 0, 0, 0)` but an opaque one as `rgb(r, g, b)` — three components,
+ * no alpha. The obvious regex for "the last number before the paren" reads the
+ * BLUE channel out of the three-component form, so `rgb(0, 0, 0)` scores an
+ * alpha of 0 and an opaque black fill passes a "must be transparent"
+ * assertion. Count the components instead: 4 means the last one is alpha,
+ * anything else is opaque.
+ */
+export function cssAlpha(color: string): number {
+  const parts = color.match(/[\d.]+/g);
+  if (!parts) return 1;
+  return parts.length === 4 ? Number(parts[3]) : 1;
+}
+
+/**
  * Wait for `n` animation frames inside the page. Use after viewport resizes or
  * other DOM mutations that propagate through ResizeObserver → Svelte `$state` →
  * `$effect` → DOM, instead of `page.waitForTimeout(fixedMs)`.

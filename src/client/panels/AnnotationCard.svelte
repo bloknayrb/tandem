@@ -5,7 +5,7 @@ import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { activationKeydown } from "../utils/keyboard-activate";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
-import { getCardLabel } from "./annotation-card-helpers";
+import { getCardLabel, getCardTint } from "./annotation-card-helpers";
 import CommentCard from "./CommentCard.svelte";
 import type { Density } from "./cardDensity";
 import { cardEnter, cardExit } from "./cardMotion";
@@ -161,13 +161,7 @@ $effect(() => {
 //
 // The highlight's picked colour is not lost — it moved to the type icon, which
 // is the one place it still means something.
-const cardTint = $derived(
-  annotation.author === "claude"
-    ? "var(--tandem-author-claude-bg)"
-    : annotation.author === "import"
-      ? "var(--tandem-author-import-bg)"
-      : "var(--tandem-author-user-bg)",
-);
+const cardTint = $derived(getCardTint(annotation.author));
 
 // Review-target override wins over the type tint; the accent ring is applied
 // via the .is-review-target class (see the style block below) so it composes

@@ -4,6 +4,7 @@ import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
   createFixtureDir,
+  cssAlpha,
   McpTestClient,
   openAnnotatePopup,
   submitAnnotation,
@@ -322,9 +323,11 @@ test("destination markers stay distinguishable by shape, not colour", async ({ p
   // resolving to the `rgba(0, 0, 0, 0)` it does in ordinary rendering — this
   // run returns `rgba(255, 255, 255, 0)`. The RGB triple is the UA's business;
   // alpha 0 is the thing that makes the ring a ring.
-  const noteAlpha = Number(
-    /rgba?\([^)]*?(?:,\s*([\d.]+))?\)$/.exec(shapes.note.background)?.[1] ?? "1",
-  );
+  // Was a hand-rolled regex taking "the last number before the paren", which
+  // reads the BLUE channel out of a three-component `rgb()` — so an opaque
+  // black fill scored alpha 0 and passed this very assertion. `cssAlpha`
+  // counts components instead.
+  const noteAlpha = cssAlpha(shapes.note.background);
   expect(noteAlpha, `the private marker must have no fill; got ${shapes.note.background}`).toBe(0);
 
   // The audience toggle's SELECTED state. Under forcing, the sliding thumb's

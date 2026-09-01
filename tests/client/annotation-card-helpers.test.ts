@@ -2,7 +2,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatRelativeTime,
   getAuthorLabel,
+  getCardTint,
 } from "../../src/client/panels/annotation-card-helpers";
+import type { Annotation } from "../../src/shared/types";
+
+describe("getCardTint (author is the tint axis)", () => {
+  // Exhaustive over the union rather than three hand-picked cases: `author` is
+  // a closed set, so a fourth role added without a tint would otherwise fall
+  // through to the user tint silently — a new author looking like the user is
+  // exactly the collision this model exists to prevent.
+  const AUTHORS: Annotation["author"][] = ["user", "claude", "import"];
+
+  it.each(AUTHORS)("maps %s to its own token", (author) => {
+    expect(getCardTint(author)).toBe(`var(--tandem-author-${author}-bg)`);
+  });
+
+  it("gives every author a DISTINCT token", () => {
+    const tints = AUTHORS.map(getCardTint);
+    expect(new Set(tints).size).toBe(AUTHORS.length);
+  });
+
+  // The `import` branch is the reason this function was extracted from
+  // AnnotationCard.svelte at all. `annotation-lifecycle.spec.ts` pins user vs
+  // claude against a real stylesheet, but rendering an imported card needs a
+  // `.docx` import, so without this assertion that branch is covered nowhere:
+  // deleting it would fall through to the user tint, and an imported Word
+  // comment would render as though the user had written it.
+  it("does not let an import fall through to the user tint", () => {
+    expect(getCardTint("import")).not.toBe(getCardTint("user"));
+  });
+});
 
 // #1123 M3: the agent byline prefers the specific authoring model's
 // `agentIdentity.displayName`, then the active-model family label, then a
