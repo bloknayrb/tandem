@@ -347,7 +347,7 @@ popup-highlight-{*}
 popup-note-submit
 popup-show-formatbar-btn
 railFloat.left ? "rail-float-left" : undefined
-railFloat.right || chatReveal ? "rail-float-right" : undefined
+railFloat.right || railContent.revealOpen ? "rail-float-right" : undefined
 reachability-harness
 recent-file-{*}
 recent-files-list

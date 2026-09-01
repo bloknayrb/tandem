@@ -4,9 +4,7 @@ import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
 import { BYO_MODELS_ENABLED } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
-import { toPmPos } from "../shared/positions/types";
-import { SNAPSHOT_CAP } from "../shared/snapshot";
-import type { Annotation, CapturedAnchor, ChatMessage, TandemNotification } from "../shared/types";
+import type { Annotation, ChatMessage, TandemNotification } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import { bannerStackHeight } from "./actions/bannerStackHeight.svelte.js";
 import {
@@ -104,6 +102,7 @@ import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
 import { createEditorStageModel } from "./layout/editor-stage.svelte";
 import { createLayoutModel } from "./layout/model.svelte";
+import { createRailContentModel } from "./layout/rail-content.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import {
   editAnnotation as marginEditAnnotation,
@@ -118,7 +117,6 @@ import MarginColumn from "./panels/MarginColumn.svelte";
 import { isLeftMarginAnnotation, isRightMarginAnnotation } from "./panels/marginSides";
 import PeekStrip from "./panels/PeekStrip.svelte";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
-import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import { addressedAiNotice } from "./status/addressed-ai-notice.js";
@@ -230,7 +228,20 @@ const layoutModel = createLayoutModel({
   // Arrow, not a bare reference: defers the binding read to call time, so a
   // future `function` -> `const arrow` conversion of the closer cannot turn
   // this into a TDZ error.
-  closeTransientChat: () => closeTransientChat(),
+  closeTransientChat: () => railContent.closeReveal(),
+});
+// What the rail SHOWS, next to the model for whether it is shown (ADR-035 Unit
+// 10c). The two reference each other -- `selectRailTab` tears down a reveal,
+// and the reveal reads the selected tab -- and both sides take thunks, so
+// neither construction order breaks and there is nothing to keep in sync here.
+const railContent = createRailContentModel({
+  getActiveRailTab: () => layoutModel.activeRailTab,
+  getEffectiveRightVisible: () => effectiveRightVisible,
+  getFindBarOpen: () => findBarOpen,
+  getEditor: () => editor,
+  getActiveTabId: () => yjsSync.activeTabId,
+  getVisibleAnnotations: () => visibleAnnotations,
+  getFirstReviewTarget: () => review.getReviewTargets()[0],
 });
 const connectionBanner = createConnectionBanner(
   () => yjsSync.disconnectedSince,
@@ -833,14 +844,12 @@ function openModelsSettings() {
 function focusChat(): void {
   // Command/native focus is intentionally context-free. Only the explicit
   // Chat-tab selection capture path may attach an anchor to a message.
-  capturedAnchor = null;
+  railContent.setCapturedAnchor(null);
   layoutModel.selectRailTab("chat");
-  // A command reveal is intentionally independent from hover-float state and
-  // saved rail/Solo preferences. Pinned rails simply switch to Chat.
-  if (!effectiveRightVisible) {
-    chatRevealDocumentId = yjsSync.activeTabId;
-    chatReveal = true;
-  }
+  // `openReveal` is a no-op over a pinned rail -- see the guard at its
+  // definition, which is where the "pinned rails simply switch to Chat" rule
+  // now lives.
+  railContent.openReveal();
   queueMicrotask(() =>
     document.querySelector<HTMLTextAreaElement>('[data-testid="chat-composer-input"]')?.focus(),
   );
@@ -921,28 +930,28 @@ const actionExecutor = mountActionExecutor({
   reopenClosedTab: () => documentWorkspace.reopenClosedTab(),
   annotationNext: () => {
     const sorted = sortAnnotationsByPosition(visibleAnnotations);
-    const nextId = nextAnnotationId(sorted, activeAnnotationId);
+    const nextId = nextAnnotationId(sorted, railContent.activeAnnotationId);
     if (nextId) {
-      activeAnnotationId = nextId;
+      railContent.setActiveAnnotationId(nextId);
       const ann = sorted.find((a) => a.id === nextId);
       if (ann) review.scrollToAnnotation(ann);
     }
   },
   annotationPrev: () => {
     const sorted = sortAnnotationsByPosition(visibleAnnotations);
-    const prevId = prevAnnotationId(sorted, activeAnnotationId);
+    const prevId = prevAnnotationId(sorted, railContent.activeAnnotationId);
     if (prevId) {
-      activeAnnotationId = prevId;
+      railContent.setActiveAnnotationId(prevId);
       const ann = sorted.find((a) => a.id === prevId);
       if (ann) review.scrollToAnnotation(ann);
     }
   },
   annotationAccept: () => {
-    const cur = activeOrFirstPending();
+    const cur = railContent.activeOrFirstPending();
     if (cur && cur.author !== "user") review.handleAccept(cur.id);
   },
   annotationDismiss: () => {
-    const cur = activeOrFirstPending();
+    const cur = railContent.activeOrFirstPending();
     if (cur && cur.author !== "user") review.handleDismiss(cur.id);
   },
   selectBlock: () => editor?.chain().focus().selectParentNode().run(),
@@ -1065,9 +1074,7 @@ $effect(() => {
 // Right rail tabs are hard-coded to Annotations + Chat; selection and the
 // pending badge live in `layoutModel` (ADR-037, Unit 10b).
 
-let activeAnnotationId = $state<string | null>(null);
 let showHelp = $state(false);
-let capturedAnchor = $state<CapturedAnchor | null>(null);
 let editor = $state<TiptapEditor | null>(null);
 let marginLayerEl = $state<HTMLDivElement | null>(null);
 let slashCommandMenuOpen = $state(false);
@@ -1132,9 +1139,13 @@ const toggleLeftPanel = () => {
   focusToggleTarget("left", nextVisible);
 };
 const toggleRightPanel = () => {
-  if (chatReveal) {
+  if (railContent.revealOpen) {
     railPinSnap.right = true;
-    chatReveal = false;
+    // Was a raw `chatReveal = false`, which left `chatRevealDocumentId` set.
+    // Routing through the closer clears it too -- a behaviour change, inert
+    // today because the document-switch effect reads `chatReveal` first and
+    // `focusChat` re-seeds both, but stated rather than discovered.
+    railContent.closeReveal();
     requestAnimationFrame(() => (railPinSnap.right = false));
   }
   pinFromFloat("right");
@@ -1172,10 +1183,6 @@ const railAnimating = $state({ left: false, right: false });
 // exit), not a lifecycle phase. Kept as separate booleans because each maps 1:1
 // to a CSS class; promote to an explicit enum if a fourth phase ever lands.
 const railFloat = $state({ left: false, right: false });
-// Command-driven Chat-only float. Unlike railFloat, this never mutates saved
-// panel visibility and has an explicit send/Escape/outside/tab/pin lifecycle.
-let chatReveal = $state(false);
-let chatRevealDocumentId: string | null = null;
 // Set for ONE frame when a hover-float is pinned: the floated panel is already
 // painted at full width over the editor, so the shell must snap to that width
 // (transition suppressed) instead of replaying the 14→full open from collapsed,
@@ -1368,28 +1375,6 @@ const editorStage = createEditorStageModel({
   rightRailWidthPx: rightPanelWidth,
 });
 
-function captureSelectionForChat() {
-  if (layoutModel.activeRailTab === "chat") return;
-  if (!editor) return;
-  const { from, to } = editor.state.selection;
-  if (from === to) return;
-  const range = pmSelectionToFlat(editor.state.doc, { from: toPmPos(from), to: toPmPos(to) });
-  const text = editor.state.doc.textBetween(from, to, "\n");
-  capturedAnchor = {
-    ...range,
-    // Keeps the in-band ellipsis that annotations shed in #1486, deliberately.
-    // Not because it stays on this machine — it is rendered in the message
-    // history and travels to the AI in the `tandem_checkInbox` payload — but
-    // because nothing ever writes it BACK into the document. That is the whole
-    // of why the ellipsis was dangerous on annotations: undo restored it as
-    // three literal characters. With no restore path there is no such hazard,
-    // and a visible "there's more" is worth more to a reader than a flag.
-    // `SnapshotBearing` requires an `id` specifically so this cannot be handed
-    // to `isSnapshotTruncated` by mistake — see `shared/snapshot.ts`.
-    textSnapshot: text.length > SNAPSHOT_CAP ? `${text.slice(0, SNAPSHOT_CAP - 3)}...` : text,
-  };
-}
-
 /**
  * App-level keydown handler. The pure shortcut-matching logic lives in
  * `matchShortcut` (see `hooks/useAppShortcuts.ts`) so it's testable in
@@ -1556,7 +1541,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "annotation-accept-or-dismiss": (e, ctx) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    const cur = activeOrFirstPending();
+    const cur = railContent.activeOrFirstPending();
     if (cur && cur.author !== "user") {
       if (ctx?.shift) review.handleDismiss(cur.id);
       else review.handleAccept(cur.id);
@@ -1627,9 +1612,9 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
     const sorted = sortAnnotationsByPosition(visibleAnnotations);
-    const nextId = nextAnnotationId(sorted, activeAnnotationId);
+    const nextId = nextAnnotationId(sorted, railContent.activeAnnotationId);
     if (nextId) {
-      activeAnnotationId = nextId;
+      railContent.setActiveAnnotationId(nextId);
       const ann = sorted.find((a) => a.id === nextId);
       if (ann) review.scrollToAnnotation(ann);
     }
@@ -1638,9 +1623,9 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
     const sorted = sortAnnotationsByPosition(visibleAnnotations);
-    const prevId = prevAnnotationId(sorted, activeAnnotationId);
+    const prevId = prevAnnotationId(sorted, railContent.activeAnnotationId);
     if (prevId) {
-      activeAnnotationId = prevId;
+      railContent.setActiveAnnotationId(prevId);
       const ann = sorted.find((a) => a.id === prevId);
       if (ann) review.scrollToAnnotation(ann);
     }
@@ -1703,25 +1688,6 @@ $effect(() => {
 // to the editor (e.g. after jumping to a match) while find is still open, neither
 // guard above would catch the stray deselect. Reads happen at event time, outside
 // any tracking scope, so the effect registers once with current values.
-$effect(() => {
-  function onEscape(e: KeyboardEvent) {
-    if (e.key !== "Escape" || e.defaultPrevented) return;
-    if (activeAnnotationId === null || findBarOpen) return;
-    const el = document.activeElement as HTMLElement | null;
-    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
-    const inEditingSurface =
-      !el ||
-      el === document.body ||
-      !!el.closest(
-        '.ProseMirror, [data-testid="editor-root"], [data-testid="annotation-list-scroll-container"]',
-      );
-    if (!inEditingSurface) return;
-    e.preventDefault();
-    activeAnnotationId = null;
-  }
-  window.addEventListener("keydown", onEscape);
-  return () => window.removeEventListener("keydown", onEscape);
-});
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
@@ -1879,7 +1845,7 @@ const scrollPillEnabled = $derived(
 );
 const chatVisible = $derived(
   layoutModel.activeRailTab === "chat" &&
-    (effectiveRightVisible || railFloat.right || railFloatClosing.right || chatReveal),
+    (effectiveRightVisible || railFloat.right || railFloatClosing.right || railContent.revealOpen),
 );
 const chatCanInsert = $derived(
   !!editor && !!activeTab && !editorReadOnly && !documentWorkspace.inSourceView,
@@ -1892,18 +1858,12 @@ const chatState = createChatState({
   getVisible: () => chatVisible,
 });
 
-function closeTransientChat(): void {
-  if (!chatReveal) return;
-  chatReveal = false;
-  chatRevealDocumentId = null;
-}
-
 function sendChatMessage(text: string): boolean {
-  const sent = chatState.send(text, yjsSync.activeTabId ?? undefined, capturedAnchor);
+  const sent = chatState.send(text, yjsSync.activeTabId ?? undefined, railContent.capturedAnchor);
   if (!sent) return false;
-  capturedAnchor = null;
+  railContent.setCapturedAnchor(null);
   window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "chat" } }));
-  closeTransientChat();
+  railContent.closeReveal();
   return true;
 }
 
@@ -1943,33 +1903,6 @@ $effect(() => {
     window.removeEventListener("tandem:focus-chat", onFocus);
     window.removeEventListener("tandem:insert-chat-message", onInsert);
   };
-});
-
-$effect(() => {
-  if (!chatReveal) return;
-  const onPointerDown = (event: PointerEvent) => {
-    const target = event.target as Node | null;
-    const rail = document.querySelector(".rail-shell-right");
-    if (target && rail?.contains(target)) return;
-    closeTransientChat();
-  };
-  const onEscape = (event: KeyboardEvent) => {
-    if (event.key !== "Escape" || event.defaultPrevented) return;
-    event.preventDefault();
-    closeTransientChat();
-    editor?.view.focus();
-  };
-  window.addEventListener("pointerdown", onPointerDown, true);
-  window.addEventListener("keydown", onEscape, true);
-  return () => {
-    window.removeEventListener("pointerdown", onPointerDown, true);
-    window.removeEventListener("keydown", onEscape, true);
-  };
-});
-
-$effect(() => {
-  const activeId = yjsSync.activeTabId;
-  if (chatReveal && activeId !== chatRevealDocumentId) closeTransientChat();
 });
 
 // #842: when the user reaches the empty tab-bar state (e.g. closes the last
@@ -2013,7 +1946,7 @@ const review = useAnnotationReview({
   getEditor: () => editor,
   getAnnotations: () => visibleAnnotations,
   onActiveAnnotationChange: (id) => {
-    activeAnnotationId = id;
+    railContent.setActiveAnnotationId(id);
   },
   getScrollBehavior: () => (settingsState.settings.reduceMotion ? "auto" : "smooth"),
   // Read live, not captured: Save-As promotes a document in place, so the same
@@ -2021,7 +1954,7 @@ const review = useAnnotationReview({
   getFormat: () => activeTab?.format,
   // Lets the hook's auto-set effect avoid clobbering externally-set ids
   // (e.g., from Alt+]/Alt+[ keyboard navigation).
-  getActiveAnnotationId: () => activeAnnotationId,
+  getActiveAnnotationId: () => railContent.activeAnnotationId,
   onApplyFailed: (ann) =>
     notifications.push({
       // Keyed by ann.id (matches dedupKey below), not Date.now() — two
@@ -2067,16 +2000,6 @@ const review = useAnnotationReview({
 // target. Shared by the Ctrl+Enter shortcut and the command-palette
 // accept/dismiss commands so the two surfaces can never diverge (review finding).
 // The two branches differ in what they can return: the fallback
-// (getReviewTargets()[0]) is always a Claude target because getReviewTargets()
-// excludes user notes/highlights, but the active branch returns WHATEVER is
-// selected — which can be a user highlight overlapping a Claude comment (#768).
-// So the `author !== "user"` guard at call sites is load-bearing for the active
-// branch, not just defense-in-depth.
-function activeOrFirstPending(): Annotation | undefined {
-  return activeAnnotationId
-    ? visibleAnnotations.find((a) => a.id === activeAnnotationId)
-    : review.getReviewTargets()[0];
-}
 
 // #649: Word-style margin annotation view.
 // PR 1 ships minimum viable — bubbles appear at correct Y, naive scroll sync
@@ -2427,11 +2350,13 @@ const shouldShowModelPicker = $derived(
         class:collapsed={!effectiveRightVisible}
         class:animating={railAnimating.right}
         class:dragging={dragResizeRight.dragging}
-        class:rail-floating-chrome={railFloat.right || railFloatClosing.right || chatReveal}
-        class:floating={railFloat.right || chatReveal}
+        class:rail-floating-chrome={railFloat.right ||
+          railFloatClosing.right ||
+          railContent.revealOpen}
+        class:floating={railFloat.right || railContent.revealOpen}
         class:float-closing={railFloatClosing.right}
         class:pin-snap={railPinSnap.right}
-        data-testid={railFloat.right || chatReveal ? "rail-float-right" : undefined}
+        data-testid={railFloat.right || railContent.revealOpen ? "rail-float-right" : undefined}
         style={effectiveRightVisible ? `width: ${dragResizeRight.width}px;` : ""}
         onmouseenter={() => onRailShellEnter("right")}
         onmouseleave={() => onRailShellLeave("right")}
@@ -2439,7 +2364,7 @@ const shouldShowModelPicker = $derived(
         onfocusout={(e) => onRailShellFocusOut("right", e)}
         ontransitionend={(e) => onRailShellTransitionEnd("right", e)}
       >
-        {#if railFloat.right || railFloatClosing.right || chatReveal}
+        {#if railFloat.right || railFloatClosing.right || railContent.revealOpen}
           <div
             class="rail-float-shadow rail-float-shadow-right"
             style={`width: ${dragResizeRight.width}px;`}
@@ -2476,7 +2401,7 @@ const shouldShowModelPicker = $derived(
                 data-testid="chat-tab"
                 aria-current={layoutModel.activeRailTab === "chat" ? "page" : undefined}
                 class={"rail-tab" + (layoutModel.activeRailTab === "chat" ? " on" : "")}
-                onmousedown={captureSelectionForChat}
+                onmousedown={() => railContent.captureSelectionForChat()}
                 onclick={() => layoutModel.selectRailTab("chat")}
               >
                 Chat
@@ -2497,8 +2422,8 @@ const shouldShowModelPicker = $derived(
             {openDocs}
             claudeActive={yjsSync.claudeActive}
             claudeStatus={yjsSync.claudeStatus}
-            {capturedAnchor}
-            onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+            capturedAnchor={railContent.capturedAnchor}
+            onCapturedAnchorChange={(a) => railContent.setCapturedAnchor(a)}
             onSend={sendChatMessage}
             onClear={() => chatState.clear()}
             onExport={exportChatToScratchpad}
@@ -2514,8 +2439,8 @@ const shouldShowModelPicker = $derived(
             ydoc={activeTab?.ydoc ?? null}
             activeDocFormat={activeTab?.format}
             documentId={activeTab?.id}
-            {activeAnnotationId}
-            onActiveAnnotationChange={(id) => (activeAnnotationId = id)}
+            activeAnnotationId={railContent.activeAnnotationId}
+            onActiveAnnotationChange={(id) => railContent.setActiveAnnotationId(id)}
             reduceMotion={settingsState.settings.reduceMotion}
             storeReadOnly={yjsSync.storeReadOnly}
             claudeWorkingAnnotationId={yjsSync.claudeWorking?.annotationId ?? null}
@@ -2631,7 +2556,7 @@ const shouldShowModelPicker = $derived(
       onClose={() => (paletteOpen = false)}
       {editor}
       annotations={visibleAnnotations}
-      onFocusAnnotation={(id) => { activeAnnotationId = id; }}
+      onFocusAnnotation={(id) => railContent.setActiveAnnotationId(id)}
     />
 
     <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
@@ -2871,14 +2796,14 @@ const shouldShowModelPicker = $derived(
         readOnly={editorReadOnly}
         currentFilePath={activeTab!.filePath}
         format={activeTab!.format}
-        {activeAnnotationId}
+        activeAnnotationId={railContent.activeAnnotationId}
         onEditorReady={(ed) => (editor = ed)}
         onAnnotationClick={(id) => {
           layoutModel.showAnnotations();
-          activeAnnotationId = id;
+          railContent.setActiveAnnotationId(id);
         }}
         onClearAnnotation={() => {
-          activeAnnotationId = null;
+          railContent.setActiveAnnotationId(null);
         }}
         onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
         onFocusChat={focusChat}
@@ -2915,11 +2840,11 @@ const shouldShowModelPicker = $derived(
         edgeInset={geom.inset}
         gap={geom.gap}
         {mode}
-        {activeAnnotationId}
+        activeAnnotationId={railContent.activeAnnotationId}
         repliesById={marginReplies.byId}
         reduceMotion={settingsState.settings.reduceMotion}
         onClick={(ann) => {
-          activeAnnotationId = ann.id;
+          railContent.setActiveAnnotationId(ann.id);
           review.scrollToAnnotation(ann);
         }}
         onAccept={review.handleAccept}
