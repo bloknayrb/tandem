@@ -231,9 +231,17 @@ const layoutModel = createLayoutModel({
   closeTransientChat: () => railContent.closeReveal(),
 });
 // What the rail SHOWS, next to the model for whether it is shown (ADR-035 Unit
-// 10c). The two reference each other -- `selectRailTab` tears down a reveal,
-// and the reveal reads the selected tab -- and both sides take thunks, so
-// neither construction order breaks and there is nothing to keep in sync here.
+// 10c). The two reference each other -- `selectRailTab` tears down a reveal, and
+// the reveal reads the selected tab -- so whichever is built first holds a thunk
+// over a `const` still in its temporal dead zone.
+//
+// **What makes that safe is not the thunks; it is that neither factory calls the
+// other during construction.** Master's closer closed over a HOISTED
+// `function closeTransientChat`, live from the top of the script, where this one
+// closes over `railContent` -- so the margin that used to make ordering a
+// non-question is gone. Nothing may run between these two statements that can
+// reach `selectRailTab`: no event dispatch, no eager read, no effect flush, or
+// this is a `ReferenceError` at startup rather than a stale reveal.
 const railContent = createRailContentModel({
   getActiveRailTab: () => layoutModel.activeRailTab,
   getEffectiveRightVisible: () => effectiveRightVisible,

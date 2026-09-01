@@ -222,6 +222,24 @@ describe("createRailContentModel — reveal lifecycle", () => {
     expect(h.model.revealOpen).toBe(true);
   });
 
+  it("Escape hands focus back to the editor after closing the reveal", () => {
+    // Declared NO-INSTRUMENT in the battery on the grounds that the unit specs
+    // inject a null editor. That was the classification being wrong, not the
+    // call being uncoverable -- the handler only needs `view.focus` to exist, so
+    // a spy stands in for a real editor. Review pushed back and was right.
+    const focus = vi.fn();
+    const h = mount({ getEditor: () => ({ view: { focus } }) as unknown as Editor });
+    h.model.openReveal();
+    flushSync();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    flushSync();
+
+    // The half the reveal assertion cannot see: Escape closes the float AND
+    // returns the caret, so the user can keep typing where they left off.
+    expect(h.model.revealOpen).toBe(false);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
   it("revealOpen is reactive, not a frozen value", () => {
     const h = mount();
     const seen: boolean[] = [];
@@ -272,6 +290,25 @@ describe("createRailContentModel — captured anchor", () => {
     const snapshot = h.model.capturedAnchor?.textSnapshot ?? "";
     expect(snapshot).toHaveLength(SNAPSHOT_CAP);
     expect(snapshot.endsWith("...")).toBe(true);
+    editor.destroy();
+  });
+
+  it("leaves a selection of exactly SNAPSHOT_CAP characters untruncated", () => {
+    // The boundary, and the ONLY length at which `>` and `>=` disagree. The spec
+    // above uses SNAPSHOT_CAP * 2, where both operators truncate identically --
+    // so on its own it leaves the comparison unpinned, and a `>=` would shorten
+    // a legitimately full-length snapshot by three characters and append an
+    // ellipsis it did not earn.
+    const exact = "y".repeat(SNAPSHOT_CAP);
+    const editor = new Editor({
+      extensions: buildSchemaExtensions(),
+      content: `<p>${exact}</p>`,
+    });
+    const h = mount({ getEditor: () => editor });
+    editor.commands.setTextSelection({ from: 1, to: exact.length + 1 });
+
+    h.model.captureSelectionForChat();
+    expect(h.model.capturedAnchor?.textSnapshot).toBe(exact);
     editor.destroy();
   });
 

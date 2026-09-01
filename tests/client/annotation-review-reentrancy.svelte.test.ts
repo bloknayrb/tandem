@@ -1,6 +1,8 @@
 import { render } from "@testing-library/svelte";
 import { flushSync } from "svelte";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import type { RailTab } from "../../src/client/layout/model.svelte.js";
+import { createRailContentModel } from "../../src/client/layout/rail-content.svelte.js";
 import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
 import type { Annotation } from "../../src/shared/types.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
@@ -37,8 +39,14 @@ import { makeAnnotation } from "../helpers/ydoc-factory.js";
  * only mounted and asserted "no error" would pass with the effect never having
  * reached its write at all.
  *
- * No production change accompanies this file. It is the baseline the extraction
- * gets to fail against, not a description of the extraction.
+ * No production change accompanies the first suite. It is the baseline the
+ * extraction gets to fail against, not a description of the extraction.
+ *
+ * The second suite closes the gap that leaves: `activeIdCell` is a hand-built
+ * lookalike of what Unit 10c ships, so on its own this file argues by
+ * SIMILARITY — it would stay green against a real model whose setter did
+ * something else entirely. The integration suite at the bottom drives the same
+ * transition through `createRailContentModel` itself.
  */
 
 /** A `$state` cell shaped like the one Unit 10c will expose from its model. */
@@ -143,6 +151,93 @@ describe("useAnnotationReview auto-advance — reentrancy", () => {
     // termination argument: `null` returns at the effect's first guard, so a
     // setter that re-invalidates on every write still cannot get a second write
     // out of it.
+    expect(h.writes).toEqual([null]);
+    expect(h.active()).toBeNull();
+  });
+});
+
+describe("useAnnotationReview auto-advance — through the real rail-content model", () => {
+  const live = makeAnnotation({ id: "a1", author: "claude", status: "pending" });
+  const next = makeAnnotation({ id: "a2", author: "claude", status: "pending" });
+
+  let disposeRoot: (() => void) | null = null;
+  afterEach(() => {
+    disposeRoot?.();
+    disposeRoot = null;
+  });
+
+  /**
+   * The same non-pending transition, with `createRailContentModel` standing
+   * where `activeIdCell` stood. Nothing above this line touches the shipped
+   * model, so without this the suite pins a stub that happens to resemble it.
+   *
+   * The model is built inside an `$effect.root` because its three `$effect`s
+   * need an owner: `render()` gives the HOOK a component context, not the model.
+   */
+  function mountIntegrated(initialActive: string | null, initial: Annotation[]) {
+    let annotations = $state<Annotation[]>(initial);
+    const writes: (string | null)[] = [];
+    let model!: ReturnType<typeof createRailContentModel>;
+
+    disposeRoot = $effect.root(() => {
+      model = createRailContentModel({
+        getActiveRailTab: () => "annotations" as RailTab,
+        getEffectiveRightVisible: () => true,
+        getFindBarOpen: () => false,
+        getEditor: () => null,
+        getActiveTabId: () => "doc-1",
+        getVisibleAnnotations: () => annotations,
+        getFirstReviewTarget: () => annotations.find((a) => a.status === "pending"),
+      });
+    });
+    flushSync();
+    model.setActiveAnnotationId(initialActive);
+    flushSync();
+
+    render(UseAnnotationReviewHarness, {
+      props: {
+        params: {
+          getYdoc: () => null,
+          getEditor: () => null,
+          getAnnotations: () => annotations,
+          getActiveAnnotationId: () => model.activeAnnotationId,
+          onActiveAnnotationChange: (id: string | null) => {
+            writes.push(id);
+            model.setActiveAnnotationId(id);
+          },
+          getScrollBehavior: () => "auto" as ScrollBehavior,
+        },
+        onReady: () => {},
+      },
+    });
+    flushSync();
+
+    return {
+      writes,
+      active: () => model.activeAnnotationId,
+      setAnnotations(next: Annotation[]) {
+        annotations = next;
+        flushSync();
+      },
+    };
+  }
+
+  it("advances exactly once through the shipped model's setter", () => {
+    const h = mountIntegrated("a1", [live, next]);
+    expect(h.writes).toEqual([]);
+
+    h.setAnnotations([{ ...live, status: "accepted" }, next]);
+
+    // Same three assertions as the stub suite, so a divergence between the two
+    // is attributable to the model rather than to the fixture.
+    expect(h.writes).toEqual(["a2"]);
+    expect(h.active()).toBe("a2");
+  });
+
+  it("settles on null through the shipped model's setter", () => {
+    const h = mountIntegrated("a1", [live]);
+    h.setAnnotations([{ ...live, status: "dismissed" }]);
+
     expect(h.writes).toEqual([null]);
     expect(h.active()).toBeNull();
   });

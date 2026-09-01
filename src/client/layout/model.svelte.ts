@@ -186,8 +186,20 @@ export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
    * master byte-for-byte, where the closer ran FIRST — so a closer that threw
    * ate the user's click entirely: no tab switch, no toast, no warn. The tab
    * write is the user's intent and the teardown is bookkeeping, so the intent
-   * lands first now and a throwing closer costs a stale reveal rather than the
-   * whole interaction.
+   * lands first now.
+   *
+   * **The improvement is bounded, and an earlier draft of this comment
+   * overstated it.** The reorder does not reduce a throwing closer to a stale
+   * reveal — it still re-throws, so any statement the CALLER runs after this one
+   * is skipped. `onAnnotationClick` in `App.svelte` is exactly that shape: it
+   * selects the tab and then sets the active annotation, so a throwing closer
+   * would leave the rail switched to Annotations with nothing selected. What the
+   * reorder buys is the tab write, not the caller's whole interaction.
+   *
+   * It is also latent rather than live: the only closer wired in is
+   * `railContent.closeReveal()`, plain assignments behind a guard, which cannot
+   * throw. This is defence against a future fallible closer — and if one
+   * arrives, the fix is a `try`/`finally` here, not another reordering.
    */
   function selectRailTab(tab: RailTab): void {
     activeRailTab = tab;

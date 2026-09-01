@@ -1160,11 +1160,15 @@ project no longer wants — an annotation clicked in the document should not
 leave Chat floating over the rail that is supposed to show it.
 
 `selectRailTab` also **writes the tab before invoking the closer**, reversing
-master order. The write is the user's intent and the teardown is bookkeeping,
-so a throwing closer now costs a stale reveal rather than the whole click. Both
-are behaviour changes, both are pinned: the ordering by a spec that records what
-the closer OBSERVES, because a call-count assertion cannot separate the two
-orders.
+master order. The write is the user's intent and the teardown is bookkeeping, so
+the tab write survives a throwing closer. **That is the whole of the claim, and
+an earlier draft of this amendment overstated it** — the closer still re-throws,
+so a caller's later statements are skipped either way; `onAnnotationClick`
+selects the tab and *then* sets the active annotation, and would land on
+Annotations with nothing selected. No wired closer can throw today, so this is
+defence against a future one. Both are behaviour changes, both are pinned: the
+ordering by a spec that records what the closer OBSERVES, because a call-count
+assertion cannot separate the two orders.
 
 The **reveal itself is not in this model.** `createRailContentModel`
 (`src/client/layout/rail-content.svelte.ts`) is a sibling holding what the right
