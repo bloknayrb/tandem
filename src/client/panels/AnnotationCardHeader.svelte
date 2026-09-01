@@ -7,7 +7,7 @@ import {
   formatRelativeTime,
   getAuthorLabel,
   getDisplayType,
-  getHighlightBorder,
+  getHighlightSwatchColor,
 } from "./annotation-card-helpers";
 import { ANNOTATION_TYPE_GLYPHS } from "./annotation-type-icon";
 
@@ -48,7 +48,7 @@ const dotColor = $derived(
 const glyph = $derived(ANNOTATION_TYPE_GLYPHS[displayType]);
 // Highlights carry the user's chosen colour on the icon itself — the one place
 // that colour still appears now that the card body is tinted by author.
-const glyphFill = $derived(glyph.filled ? getHighlightBorder(annotation) : "none");
+const glyphFill = $derived(glyph.filled ? getHighlightSwatchColor(annotation) : "none");
 </script>
 
 <div class="ach-row">
@@ -82,7 +82,22 @@ const glyphFill = $derived(glyph.filled ? getHighlightBorder(annotation) : "none
            Canvas, so the card's background stops distinguishing anything — and
            with the word gone the type would have no carrier at all. (Author
            still reads: `.ach-author` renders "You"/"Assistant"/"Imported" as
-           real text.) Cheap insurance; costs nothing in the normal case. -->
+           real text.)
+
+           This is a VISUAL fallback only, not an accessibility one — the
+           obvious reading of a clip-path-hidden span is wrong here. The
+           wrapper is `role="img"` with an `aria-label`, which makes its whole
+           subtree presentational: a screen reader announces the label and never
+           reaches this span. That is the intended behaviour (the name is
+           already there, and reading it twice would be worse), but it means
+           deleting the span costs sighted High Contrast users everything and
+           costs AT users nothing, so an a11y audit will not catch it. The
+           forced-colors e2e assertion is the only thing that does.
+
+           It also does not paint at every density: at stub density the whole
+           `.ach-type` group is `display: none` from AnnotationCard, so under
+           forcing the type has no carrier there either. That is a deliberate
+           narrow-margin tradeoff, not a gap this span can close. -->
       <span class="ach-badge-word">{glyph.label}</span>
     </span>
     {#if extraPill}{@render extraPill()}{/if}
@@ -127,7 +142,7 @@ const glyphFill = $derived(glyph.filled ? getHighlightBorder(annotation) : "none
         class="ach-dot"
         data-testid="annotation-author-dot-{annotation.id}"
         aria-hidden="true"
-        style="background: {dotColor};"
+        style="background: {dotColor}; border-color: {dotColor};"
       ></span>
     {/if}
     {authorLabel}
@@ -253,6 +268,24 @@ const glyphFill = $derived(glyph.filled ? getHighlightBorder(annotation) : "none
        that survives. */
     .annotation-type-badge svg {
       display: none;
+    }
+    /* MEASURED, not precautionary. `.ach-row` is `space-between` with
+       `overflow: hidden` and `.ach-badge` is `flex-shrink: 0`, so once the
+       13px glyph becomes a padded word the row cannot give anywhere: at the
+       side panel's 250px the content wanted 278px and the right-hand 28px —
+       the tail of `.ach-author`, i.e. the timestamp — was silently cut off.
+       That was with "Private note"; "Suggested replacement" is 75% wider.
+       Wrapping is the only fix that costs nothing: shrinking the badge would
+       truncate the ONLY type carrier that survives forcing, and shortening the
+       labels would throw away the accessible name. Height is cheap here and
+       clipping is not. `flex-wrap` is the load-bearing half and is pinned by
+       forced-colors.spec.ts's headerClipped assertion — drop it and that goes
+       red. `row-gap` is cosmetic (it keeps the wrapped lines off each other)
+       and is NOT pinned by anything. */
+    .ach-row,
+    .ach-type {
+      flex-wrap: wrap;
+      row-gap: 4px;
     }
     .ach-badge-word {
       position: static;

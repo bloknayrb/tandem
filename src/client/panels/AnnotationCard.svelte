@@ -547,26 +547,48 @@ function onCardClick(event: MouseEvent) {
   /* PRIVACY SIGNAL — a note's author dot is a ring, not a disc.
 
      Under author-tint a note and a comment by the same person share a card
-     ground, so the amber that used to mean "private" is gone. The Private pill
-     covers the full/compact/clamped bands, but it lives inside `.ach-type`,
-     which stub hides outright — and it is `aria-hidden`, so it was never the
-     accessibility answer either. At stub density the tint WAS the only
-     surviving note signal.
+     ground, so the amber that used to mean "private" is gone. This is a
+     visual belt-and-braces signal, NOT the load-bearing one — be careful not
+     to overstate it:
+       - the card root's `aria-label` prefixes "private " at every density
+         (`getCardLabel`), which is the accessibility answer;
+       - in the margin, notes render in the LEFT column and comments in the
+         right (`marginSides.ts`), and that split is density-independent —
+         so it, not this ring, is what actually carries the signal in the one
+         band where `.ach-type` is hidden;
+       - at full/compact/clamped there is also the Private pill and the lock
+         glyph, whose accessible name is literally "Private note".
+     The ring earns its place by covering the side panel, where there is no
+     left/right split and where a note and a comment by the same author would
+     otherwise differ only inside `.ach-type`.
 
-     A hollow dot costs zero width, so it cannot disturb the stub scrollWidth
-     gate the way a larger glyph would; it needs no new markup, because
-     `data-annotation-type` is already on the card root; and it survives
-     forced-colors, where a CanvasText border is still a border.
+     A hollow dot costs zero width (`box-sizing: border-box` is global), so it
+     cannot disturb the stub scrollWidth gate the way a larger glyph would; it
+     needs no new markup, because `data-annotation-type` is already on the card
+     root; and it survives forced-colors, where a CanvasText border is still a
+     border.
 
      Keyed on `type === "note"`, deliberately NOT on `audience`. Notes are what
      ADR-027 actually defends; `audience: "private"` is the muddled field —
      user highlights carry it and are still returned to Claude (#1710). */
   /* The whole selector must sit inside one `:global(...)` — `.ach-dot` belongs
      to AnnotationCardHeader, so a Svelte-scoped trailing class gets this
-     component's hash appended and matches nothing. */
+     component's hash appended and matches nothing.
+
+     `border-color` is NOT set here. The header emits it inline alongside the
+     dot's background so the ring tracks the ANNOTATION'S OWN author colour —
+     `agentColor(agentIdentity)` for an agent, the user token otherwise.
+     Hardcoding `--tandem-author-user` here looked right (notes are user-only
+     today) but is wrong for a legacy `flag`: `sanitizeAnnotation` migrates
+     `flag` -> `note` while preserving `author`, so a Claude-written flag
+     renders a Claude-tinted card with a user-coloured ring — the tint and the
+     dot contradicting each other, which is the exact failure this whole change
+     removes. `!important` IS needed on `background` (the inline style would
+     otherwise win) and is deliberately absent on the border half. */
   :global([data-annotation-type="note"] .ach-dot) {
     background: transparent !important;
-    border: 1.5px solid var(--tandem-author-user);
+    border-width: 1.5px;
+    border-style: solid;
   }
 
   /* Stub (stub band, inactive): a ~22px anchor pip — the 6px author dot only.

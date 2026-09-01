@@ -7,19 +7,31 @@ import {
 import type { Annotation } from "../../src/shared/types";
 
 describe("getCardTint (author is the tint axis)", () => {
-  // Exhaustive over the union rather than three hand-picked cases: `author` is
-  // a closed set, so a fourth role added without a tint would otherwise fall
-  // through to the user tint silently — a new author looking like the user is
-  // exactly the collision this model exists to prevent.
-  const AUTHORS: Annotation["author"][] = ["user", "claude", "import"];
+  // A `Record` over the union, NOT a hand-written array. An array annotated
+  // `Annotation["author"][]` is not required to be complete, so the previous
+  // form's claim to be "exhaustive over the union" was false: add a fourth
+  // author role and the array silently keeps three entries, `getCardTint`'s
+  // final branch returns the USER tint, and the suite stays green — the exact
+  // fall-through this is supposed to prevent. A `Record` keyed on the union
+  // fails to compile until the new role is listed.
+  //
+  // Values are spelled out rather than interpolated from the key for the same
+  // reason the mapping exists: `var(--tandem-author-${author}-bg)` would be
+  // satisfied by any implementation that interpolates, including one naming a
+  // token that does not exist. `card-tint-tokens.test.ts` closes the other half
+  // by checking these strings resolve against index.html.
+  const EXPECTED: Record<Annotation["author"], string> = {
+    user: "var(--tandem-author-user-bg)",
+    claude: "var(--tandem-author-claude-bg)",
+    import: "var(--tandem-author-import-bg)",
+  };
 
-  it.each(AUTHORS)("maps %s to its own token", (author) => {
-    expect(getCardTint(author)).toBe(`var(--tandem-author-${author}-bg)`);
+  it.each(Object.entries(EXPECTED))("maps %s to %s", (author, token) => {
+    expect(getCardTint(author as Annotation["author"])).toBe(token);
   });
 
   it("gives every author a DISTINCT token", () => {
-    const tints = AUTHORS.map(getCardTint);
-    expect(new Set(tints).size).toBe(AUTHORS.length);
+    expect(new Set(Object.values(EXPECTED)).size).toBe(Object.keys(EXPECTED).length);
   });
 
   // The `import` branch is the reason this function was extracted from

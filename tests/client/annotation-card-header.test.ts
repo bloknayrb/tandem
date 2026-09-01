@@ -3,6 +3,7 @@
 import { render } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
 import AnnotationCardHeader from "../../src/client/panels/AnnotationCardHeader.svelte";
+import { ANNOTATION_TYPE_GLYPHS } from "../../src/client/panels/annotation-type-icon";
 import type { Annotation } from "../../src/shared/types";
 
 function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
@@ -18,16 +19,18 @@ function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
   } as Annotation;
 }
 
+function headerProps(annotation: Annotation) {
+  return {
+    annotation,
+    isPending: true,
+    isEditing: false,
+    canEdit: false,
+    onEnterEdit: () => {},
+  };
+}
+
 function renderHeader(annotation: Annotation) {
-  return render(AnnotationCardHeader, {
-    props: {
-      annotation,
-      isPending: true,
-      isEditing: false,
-      canEdit: false,
-      onEnterEdit: () => {},
-    },
-  });
+  return render(AnnotationCardHeader, { props: headerProps(annotation) });
 }
 
 function dotStyle(container: HTMLElement): string {
@@ -103,5 +106,102 @@ describe("AnnotationCardHeader type icon (author-tint model)", () => {
     );
     expect(badge(plain).getAttribute("aria-label")).toBe("Comment");
     expect(badge(sugg).getAttribute("aria-label")).toBe("Suggested replacement");
+  });
+});
+
+describe("annotation type glyphs are distinguishable", () => {
+  // The render tests below prove an <svg> appears and carries a name. They do
+  // NOT prove the four types look or sound different from each other: blanking
+  // every `paths` array, or swapping two types' path data, or giving two types
+  // the same `label`, all left the suite green. A type badge that renders the
+  // same mark for a private note and an outbound comment is worse than none.
+  const glyphs = Object.values(ANNOTATION_TYPE_GLYPHS);
+
+  it("gives every type a non-empty path set", () => {
+    for (const [type, glyph] of Object.entries(ANNOTATION_TYPE_GLYPHS)) {
+      expect(glyph.paths.length, `${type} has no path data`).toBeGreaterThan(0);
+      expect(
+        glyph.paths.every((d) => d.trim() !== ""),
+        `${type} has an empty path`,
+      ).toBe(true);
+    }
+  });
+
+  it("draws a DIFFERENT shape for every type", () => {
+    expect(new Set(glyphs.map((g) => g.paths.join("|"))).size).toBe(glyphs.length);
+  });
+
+  it("names every type DIFFERENTLY", () => {
+    // The label is the accessible name, so two types sharing one is a
+    // screen-reader collision, not just a cosmetic one. `highlight` was the
+    // unpinned member: no aria-label test rendered it.
+    expect(new Set(glyphs.map((g) => g.label)).size).toBe(glyphs.length);
+  });
+
+  it("fills the highlight glyph and only the highlight glyph", () => {
+    const filled = Object.entries(ANNOTATION_TYPE_GLYPHS)
+      .filter(([, g]) => g.filled)
+      .map(([type]) => type);
+    expect(filled).toEqual(["highlight"]);
+  });
+});
+
+describe("AnnotationCardHeader stays reactive to the annotation it is given", () => {
+  // The source comment says a plain `const` here would freeze at mount "with no
+  // type error and no failing test" — which was still true after the icon
+  // landed, because nothing re-rendered with changed props. Both paths below
+  // are reachable from real UI: the highlight colour picker, and
+  // `tandem_editAnnotation` adding suggestedText to a pending comment.
+  it("repaints the swatch when a highlight is recoloured", async () => {
+    const green = makeAnnotation({ type: "highlight", author: "user", color: "green" });
+    const { container, rerender } = render(AnnotationCardHeader, {
+      props: headerProps(green),
+    });
+    expect(container.querySelector(".annotation-type-badge svg")?.getAttribute("fill")).toBe(
+      "var(--tandem-highlight-green)",
+    );
+
+    await rerender(
+      headerProps(makeAnnotation({ type: "highlight", author: "user", color: "yellow" })),
+    );
+    expect(container.querySelector(".annotation-type-badge svg")?.getAttribute("fill")).toBe(
+      "var(--tandem-highlight-yellow)",
+    );
+  });
+
+  it("switches the glyph when a comment gains suggestedText", async () => {
+    const comment = makeAnnotation({ type: "comment" });
+    const { container, rerender } = render(AnnotationCardHeader, {
+      props: headerProps(comment),
+    });
+    expect(container.querySelector(".annotation-type-badge")?.getAttribute("aria-label")).toBe(
+      ANNOTATION_TYPE_GLYPHS.comment.label,
+    );
+
+    await rerender(headerProps(makeAnnotation({ type: "comment", suggestedText: "replacement" })));
+    expect(container.querySelector(".annotation-type-badge")?.getAttribute("aria-label")).toBe(
+      ANNOTATION_TYPE_GLYPHS.replacement.label,
+    );
+  });
+});
+
+describe("AnnotationCardHeader author dot presence", () => {
+  it("omits the dot entirely for an import", () => {
+    // An imported Word comment has no user/Claude author, and `dotColor`'s else
+    // branch is the USER token — so dropping this guard paints an import as
+    // though the user wrote it, which is the collision the tint model exists to
+    // prevent. Nothing rendered an `import` author before this.
+    const { container } = renderHeader(makeAnnotation({ author: "import" }));
+    expect(container.querySelector("[data-testid^='annotation-author-dot-']")).toBeNull();
+  });
+
+  it("renders the dot for user and claude", () => {
+    for (const author of ["user", "claude"] as const) {
+      const { container } = renderHeader(makeAnnotation({ author }));
+      expect(
+        container.querySelector("[data-testid^='annotation-author-dot-']"),
+        `${author} must keep its dot`,
+      ).not.toBeNull();
+    }
   });
 });

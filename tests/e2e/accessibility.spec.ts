@@ -315,12 +315,26 @@ const SURFACES: Surface[] = [
     // Adding the note does NOT make this a contrast gate for the user tint.
     // Measured (#1721): paint the note card `#4a4a4a` — mid-grey behind dark
     // body text, an unmissable AA failure — and all three themes still report
-    // `violations: []`. axe files 25 color-contrast nodes under `incomplete`
-    // against 17 under `passes`, and the assertion below reads only
-    // `violations`. The same page scanned with `.withRules(["color-contrast"])`
-    // finds 4 real violations inside this card, so axe can see it; the bucket
-    // we assert on is what drops it. Fixing that is suite-wide work, hence the
-    // issue rather than a local patch here.
+    // `violations: []`, so the assertion below does not gate it.
+    //
+    // The structural reason is certain and is the durable half: NOTHING in this
+    // suite reads `results.incomplete`, so whatever axe files there is
+    // unasserted by construction. `color-contrast` is not in `disableRules`, so
+    // the rule does run — this is a bucketing gap, not a disabled rule.
+    //
+    // The exact mechanism is NOT established, and an earlier version of this
+    // comment asserted one it could not support. That run observed 25
+    // color-contrast nodes under `incomplete` against 17 under `passes`, but a
+    // faithful standalone repro of these tints — `oklch` tokens, `color-mix`
+    // grounds, the clip-path hidden word — reports the bad card as a plain
+    // VIOLATION with zero incomplete under the same axe version. So it is
+    // something structural in the live app (overlap/obscuring is the likely
+    // check), not the modern colour syntax, which is the first thing the next
+    // reader will suspect. Do not repeat the earlier claim that a
+    // `.withRules(["color-contrast"])` scan finds violations the default scan
+    // buckets away: `withRules` narrows which rules RUN, it does not change how
+    // a rule buckets a node, and those two probes were not the same page state.
+    // Fixing this is suite-wide work, hence the issue rather than a patch here.
     //
     // What the note IS worth: it puts a second card variant through every OTHER
     // rule — roles, names, the visually-hidden badge word, the Private pill —

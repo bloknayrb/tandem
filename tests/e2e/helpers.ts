@@ -296,20 +296,54 @@ export async function submitAnnotation(page: Page, audience: "note" | "comment")
 }
 
 /**
- * Alpha channel of a computed CSS color, 0–1.
+ * Alpha channel of a computed CSS color, 0-1.
  *
  * `getComputedStyle` serializes an unset/`transparent` background as
- * `rgba(0, 0, 0, 0)` but an opaque one as `rgb(r, g, b)` — three components,
- * no alpha. The obvious regex for "the last number before the paren" reads the
+ * `rgba(0, 0, 0, 0)` but an opaque one as `rgb(r, g, b)` — three components, no
+ * alpha. The obvious regex for "the last number before the paren" reads the
  * BLUE channel out of the three-component form, so `rgb(0, 0, 0)` scores an
  * alpha of 0 and an opaque black fill passes a "must be transparent"
- * assertion. Count the components instead: 4 means the last one is alpha,
- * anything else is opaque.
+ * assertion. That is the bug this replaced.
+ *
+ * Counting components instead is NOT enough, and getting that wrong once is
+ * why this is spelled out. Chrome already serializes this app's computed
+ * backgrounds as `color(srgb ...)` and `oklch(...)`, and a digit-bearing
+ * colorspace re-creates the identical failure: `color(display-p3 1 0 0)` has
+ * four digit runs, so a counting parser reports an opaque red as fully
+ * transparent, and `color(rec2020 0.5 0.2 0.1)` hands back the blue channel
+ * again. So: anchor on the `/` that modern CSS color syntax REQUIRES before an
+ * alpha, and only fall back to the legacy comma form.
+ *
+ * Unparseable input throws rather than defaulting. A helper whose failure mode
+ * is "reports opaque" turns a broken assertion into a passing one, which is the
+ * whole class of bug this exists to prevent.
  */
 export function cssAlpha(color: string): number {
-  const parts = color.match(/[\d.]+/g);
-  if (!parts) return 1;
-  return parts.length === 4 ? Number(parts[3]) : 1;
+  const value = color.trim();
+  if (value === "transparent") return 0;
+
+  // Modern syntax: rgb() / oklch() / color() / hsl() with `/ <alpha>`.
+  const slashed = /\/\s*([\d.]+)(%?)\s*\)\s*$/.exec(value);
+  if (slashed) {
+    const raw = Number(slashed[1]);
+    return slashed[2] === "%" ? raw / 100 : raw;
+  }
+
+  // Legacy comma form: rgba(r, g, b, a) / hsla(...). Exactly four components,
+  // and only for a function whose name we recognise — `color(a b c d)` is a
+  // colorspace plus three channels, not four channels.
+  const legacy = /^(rgba?|hsla?)\(([^)]*)\)$/i.exec(value);
+  if (legacy) {
+    const parts = legacy[2].split(/[\s,]+/).filter(Boolean);
+    if (parts.length === 4) return Number(parts[3]);
+    if (parts.length === 3) return 1;
+  }
+
+  // Anything else with a recognisable function head and no alpha is opaque:
+  // `color(srgb 0.9 0.9 0.9)`, `oklch(0.55 0.14 245)`, `#rrggbb`, `red`.
+  if (/^(#|[a-z-]+\()/i.test(value) || /^[a-z]+$/i.test(value)) return 1;
+
+  throw new Error(`cssAlpha: unrecognised color serialization ${JSON.stringify(color)}`);
 }
 
 /**

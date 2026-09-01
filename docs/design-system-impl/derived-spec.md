@@ -338,13 +338,29 @@ wrapping `role="img"`, and a visually-hidden word is revealed under
 | `claude`  | `user`   | —             | `CommentCard`      | `comment-user`    | user tint | cobalt dot · "You" · comment icon | Resolve (primary) · Edit (ghost) · Delete (ghost) |
 | `claude`  | `claude` | —             | `CommentCard`      | (`comment`)       | claude tint | agent-coloured dot · "Claude" · comment icon | Resolve (primary) · Edit (ghost) · Delete (ghost) |
 | `claude`  | `claude` | present       | `SuggestionCard`   | `suggest`         | claude tint | agent-coloured dot · "Claude" · replacement icon | Accept (primary) · Dismiss (ghost) · Edit (ghost) |
-| `claude`  | `import` | —             | `ImportedCard`     | (production-only) | import tint | no author dot · italic byline "Sarah · 2024-12-05" (`--tandem-fg-subtle`) | Promote (primary) · Dismiss (ghost) |
+| `private` | `import` | —             | `ImportedCard`     | (production-only) | import tint | no author dot · italic byline "Sarah · 2024-12-05" (`--tandem-fg-subtle`) · note icon (accessible name "Private note") | Promote (primary) · Dismiss (ghost) |
 
-The hollow note dot is the **only** thing carrying privacy in the header, and
-it is deliberately zero-width-cost: it swaps `background` for a `border` on an
+Note the first column on that last row: imported Word comments land as
+`type: "note"`, `audience: "private"`, `author: "import"`
+(`src/server/file-io/docx-comments.ts:635-637`), and `BatchPromoteBar` is what
+flips all three at once. An earlier revision of this table said `claude`, which
+read as though an import were visible to the AI on arrival. It is not.
+
+Privacy is carried by **three** header signals, not one, and which of them are
+present depends on the row:
+
+- the **hollow note dot** — user-authored notes only, since `ImportedCard` has
+  no author dot at all;
+- the **Private pill**, at full/compact/clamped density;
+- the **note glyph**, whose accessible name is literally "Private note", and
+  which is what `ImportedCard` relies on.
+
+`getCardLabel` also prefixes the card's own aria-label with `private `, so the
+signal survives even where every visual carrier is suppressed. The hollow dot
+is deliberately zero-width-cost — it swaps `background` for a `border` on an
 element that already exists, so it cannot disturb the stub-density width
 budget. Do not replace it with a pill or an extra glyph without re-checking
-that budget.
+that budget, and do not treat it as load-bearing on its own.
 
 **Suggestions are Claude-only.** Users can author notes, comments, and
 highlights; they cannot author suggestions. A `suggestedText` field on a

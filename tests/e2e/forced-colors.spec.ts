@@ -369,3 +369,87 @@ test("destination markers stay distinguishable by shape, not colour", async ({ p
     shapes.send.background,
   );
 });
+
+test("the annotation type survives forcing as a word, not just an icon", async ({ page }) => {
+  // The ONLY carrier of annotation type under High Contrast, and until now
+  // nothing referenced `.ach-badge-word` or the `@media (forced-colors: active)`
+  // block that reveals it. Deleting either left the suite green while the type
+  // lost every carrier at once: the card tint collapses to Canvas (so author
+  // and type both stop being colour-coded), and the glyph is hidden precisely
+  // because a force-adjusted 13px outline is not a reliable discriminator.
+  //
+  // Asserting a real bounding box rather than `toBeVisible()`: the word is
+  // hidden by `clip-path: inset(50%)` at 1x1, which Playwright still reports as
+  // visible. A reveal that undoes only SOME of the five hiding properties would
+  // pass a visibility check and paint nothing.
+  await boot(page);
+
+  const editor = page.locator(".tiptap");
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  await openAnnotatePopup(page);
+  await page.locator("[data-testid='popup-annotation-input']").fill("forced-colors type check");
+  await submitAnnotation(page, "note");
+
+  const badge = page.locator(".annotation-type-badge").first();
+  await expect(badge).toBeVisible({ timeout: 10_000 });
+
+  const shape = await badge.evaluate((el) => {
+    const svg = el.querySelector("svg") as SVGElement | null;
+    const word = el.querySelector(".ach-badge-word") as HTMLElement | null;
+    const wordRect = word?.getBoundingClientRect();
+    return {
+      svgDisplay: svg ? getComputedStyle(svg).display : "missing",
+      hasWord: Boolean(word),
+      wordText: word?.textContent?.trim() ?? "",
+      wordWidth: wordRect?.width ?? 0,
+      wordHeight: wordRect?.height ?? 0,
+      wordClipPath: word ? getComputedStyle(word).clipPath : "missing",
+    };
+  });
+
+  expect(shape.hasWord, "the visually-hidden type word is gone from the markup").toBe(true);
+  expect(shape.svgDisplay, "the glyph must be hidden under forcing, not doubled up").toBe("none");
+  expect(shape.wordText.toLowerCase()).toContain("note");
+  expect(
+    shape.wordClipPath,
+    `the reveal must undo clip-path; got ${shape.wordClipPath}`,
+  ).not.toContain("inset(50%)");
+  expect(shape.wordWidth, "the revealed word has no width — it paints nothing").toBeGreaterThan(4);
+  expect(shape.wordHeight, "the revealed word has no height — it paints nothing").toBeGreaterThan(
+    4,
+  );
+
+  // This half FOUND A BUG rather than confirming one, so it is not decoration.
+  // The reveal swaps a 13px glyph for a padded word, `.ach-badge` is
+  // `flex-shrink: 0`, and `.ach-row` is `space-between` with
+  // `overflow: hidden` — so the row had nowhere to give. At the side panel's
+  // 250px the content wanted 278px and the right-hand 28px was silently cut
+  // off: the tail of `.ach-author`, i.e. the timestamp. Invisible in every
+  // other spec, because nothing else renders this row with a word in the badge.
+  //
+  // The fix is `flex-wrap: wrap` + `row-gap` on `.ach-row` and `.ach-type`
+  // inside the forced-colors block of AnnotationCardHeader.svelte. Delete
+  // either declaration and headerClipped goes back to true.
+  //
+  // COVERAGE BOUND, because the passing number below is easy to over-read:
+  // this measures "Private note" (12 characters), which is what this card
+  // shows. The longest label in the set is "Suggested replacement" at 21, and
+  // it is still NOT covered — seeding a suggestion into this fixture needs the
+  // MCP document-open sequence the other specs do, and doing it just to widen
+  // this assertion put a second unrelated failure mode into a test whose job
+  // is the reveal. That gap is #1724.
+  const row = await badge.evaluate((el) => {
+    const header = el.closest(".ach-row") as HTMLElement | null;
+    const author = header?.querySelector(".ach-author") as HTMLElement | null;
+    if (!header || !author) throw new Error("the badge is not inside a card header row");
+    return {
+      headerClipped: header.scrollWidth > header.clientWidth + 1,
+      authorClipped: author.scrollWidth > author.clientWidth + 1,
+      authorWidth: author.getBoundingClientRect().width,
+    };
+  });
+  expect(row.headerClipped, "the revealed word overflows the header row").toBe(false);
+  expect(row.authorClipped, "the revealed word starved the author side out of the row").toBe(false);
+  expect(row.authorWidth, "the author side was squeezed to nothing").toBeGreaterThan(20);
+});

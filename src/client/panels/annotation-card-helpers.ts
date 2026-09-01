@@ -84,9 +84,21 @@ export function getCardTint(author: Annotation["author"]): string {
   return "var(--tandem-author-user-bg)";
 }
 
-export function getHighlightBorder(ann: Annotation): string {
-  if (ann.type === "highlight" && ann.color) {
-    return HIGHLIGHT_COLOR_VARS[normalizeHighlightColor(ann.color)];
-  }
-  return "var(--tandem-author-user)";
+/**
+ * The colour to paint a highlight's filled type glyph.
+ *
+ * `normalizeHighlightColor` exists precisely to default a missing colour to
+ * yellow, so this must NOT short-circuit on `!ann.color` before calling it.
+ * The previous form did, and returned the user authorship token instead — so a
+ * colourless highlight painted YELLOW in the document (`extensions/annotation.ts`
+ * calls `normalizeHighlightColor` unguarded) while its card swatch painted
+ * cobalt. That mattered little when this fed a faint 18%-mixed card wash; as an
+ * opaque 13px swatch it is the loudest colour in the header, and an authorship
+ * token appearing there is the exact collision the two-axis model forbids.
+ *
+ * The `type === "highlight"` half of the old guard was redundant too: the only
+ * caller reaches this behind `glyph.filled`, which only `highlight` sets.
+ */
+export function getHighlightSwatchColor(ann: Annotation): string {
+  return HIGHLIGHT_COLOR_VARS[normalizeHighlightColor(ann.color)];
 }
