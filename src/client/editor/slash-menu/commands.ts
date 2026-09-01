@@ -1,6 +1,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 
 export type SlashCommandId =
+  | "paragraph"
   | "heading-1"
   | "heading-2"
   | "heading-3"
@@ -63,6 +64,29 @@ function chain(editor: TiptapEditor): SlashCommandChain {
 const LIST_LINES: SvgIconElement = { tag: "path", attrs: { d: "M6 4.5h7M6 8h7M6 11.5h7" } };
 
 export const SLASH_COMMANDS: SlashCommandItem[] = [
+  // FIRST, and the position is load-bearing. `hint` is display-only and is
+  // excluded from the filter haystack (see `filterSlashCommands` below), so the
+  // "p" alias does nothing — order alone decides what `/p` + Enter inserts.
+  // `filterSlashCommands` preserves array order and the menu's selectedIndex
+  // carries as 0 across a query change, so appending Paragraph LAST would make
+  // `/p` insert a code block (keyword "pre" matches first) — the one outcome a
+  // reset command must never have.
+  //
+  // `setParagraph()` is the whole reset: Tiptap's `setNode` falls back to
+  // `clearNodes()` internally when `setBlockType` is not applicable, which is
+  // exactly the "already a paragraph" case inside a list item or blockquote.
+  // Do NOT "harden" this to `.clearNodes().setParagraph()` — that form throws
+  // `RangeError: Invalid content for node type hardBreak` on a heading or code
+  // block inside a list item, because the explicit clear and setNode's internal
+  // one both run over stale mapped positions. Pinned by a test.
+  {
+    id: "paragraph",
+    label: "Paragraph",
+    keywords: ["normal", "body", "text", "plain", "reset"],
+    hint: "p",
+    icon: { kind: "glyph", glyph: "¶" },
+    run: (editor) => chain(editor).setParagraph().run(),
+  },
   {
     id: "heading-1",
     label: "Heading 1",

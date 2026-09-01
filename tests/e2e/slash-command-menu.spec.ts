@@ -63,6 +63,12 @@ test("slash menu supports arrow-key selection", async ({ page }) => {
   const menu = page.getByRole("listbox", { name: "Slash commands" });
   await expect(menu).toBeVisible();
 
+  // Two presses, not one: the unfiltered list is [paragraph, heading-1,
+  // heading-2, ...], so index 2 is heading-2. This assertion is positional and
+  // therefore fragile by nature — it broke silently when Paragraph was inserted
+  // at index 0. If it fails again after a command is added, check the array
+  // order in `slash-menu/commands.ts` before assuming the menu is broken.
+  await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
 

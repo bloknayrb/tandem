@@ -101,6 +101,92 @@ describe("table slash command (#995)", () => {
   });
 });
 
+describe("paragraph slash command", () => {
+  let editor: Editor;
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    ({ editor, container } = makeEditor());
+  });
+
+  afterEach(() => {
+    editor.destroy();
+    container.remove();
+  });
+
+  function runParagraph() {
+    const command = SLASH_COMMANDS.find((c) => c.id === "paragraph");
+    if (!command) throw new Error("paragraph command missing");
+    command.run(editor);
+  }
+
+  // Revert-pin for the KEYWORD set.
+  it("is the only match for its own label", () => {
+    expect(filterSlashCommands("paragraph").map((c) => c.id)).toEqual(["paragraph"]);
+  });
+
+  // "para" is NOT unique, which is genuinely surprising and worth pinning
+  // rather than leaving for the next person to rediscover: horizontal-rule
+  // carries the keyword "se-para-tor", so a substring match on "para" catches
+  // it too. Paragraph still wins on order. If that ever flips, `/para` + Enter
+  // silently inserts a horizontal rule.
+  it("still ranks first for the ambiguous 'para' prefix", () => {
+    expect(filterSlashCommands("para").map((c) => c.id)).toEqual(["paragraph", "horizontal-rule"]);
+  });
+
+  // Revert-pin for PLACEMENT, which is the load-bearing half. `hint` is not in
+  // the filter haystack, so the "p" alias contributes nothing — only array
+  // order decides. Moving Paragraph later makes `/p` + Enter insert a code
+  // block (keyword "pre"), which this catches.
+  it("is what '/p' resolves to first", () => {
+    expect(filterSlashCommands("p")[0]?.id).toBe("paragraph");
+  });
+
+  it("resets a list item to a top-level paragraph", () => {
+    editor.commands.setContent("<ul><li><p>hello</p></li></ul>");
+    editor.commands.setTextSelection(4);
+    runParagraph();
+    expect(editor.getHTML()).toBe("<p>hello</p>");
+  });
+
+  // Documents SHIPPED behaviour, and it is the inverse of what you may expect:
+  // the wrapper survives only when the block is NOT already a paragraph. A
+  // blockquoted paragraph unwraps completely; a blockquoted heading keeps its
+  // quote and only retypes the block. Unwrapping that second case needs two
+  // SEPARATE command calls, not a longer chain — see the throw test below.
+  it("unwraps a blockquoted paragraph but only retypes a blockquoted heading", () => {
+    editor.commands.setContent("<blockquote><p>hello</p></blockquote>");
+    editor.commands.setTextSelection(4);
+    runParagraph();
+    expect(editor.getHTML()).toBe("<p>hello</p>");
+
+    editor.commands.setContent("<blockquote><h2>hello</h2></blockquote>");
+    editor.commands.setTextSelection(4);
+    runParagraph();
+    expect(editor.getHTML()).toBe("<blockquote><p>hello</p></blockquote>");
+  });
+
+  // THE regression pin. `chain().clearNodes().setParagraph().run()` throws
+  // `RangeError: Invalid content for node type hardBreak` on this exact
+  // document: the explicit clearNodes lifts the block, then setNode's INTERNAL
+  // clearNodes fallback re-runs over stale mapped positions and
+  // contentMatchAt().defaultType resolves to hardBreak.
+  //
+  // Plain setParagraph() does not throw, which is why the command is written
+  // that way. This test is what stops someone "hardening" it back.
+  it("does not throw on a heading that follows a paragraph inside a list item", () => {
+    editor.commands.setContent("<ul><li><p>x</p><h2>hello</h2></li></ul>");
+    editor.commands.setTextSelection(8);
+    expect(() => runParagraph()).not.toThrow();
+  });
+
+  it("does not throw on a code block inside a list item", () => {
+    editor.commands.setContent("<ul><li><p>x</p><pre><code>hello</code></pre></li></ul>");
+    editor.commands.setTextSelection(8);
+    expect(() => runParagraph()).not.toThrow();
+  });
+});
+
 describe("slash command display metadata", () => {
   // Guards against a future command shipping without the icon/hint the B3
   // re-skin renders. Display-only fields, so this lives outside the filter
@@ -165,8 +251,13 @@ describe("slash command plugin state", () => {
     const state = slashCommandPluginKey.getState(editor.state);
     expect(state?.active?.query).toBe("h");
     // h1, h2, h3, horizontal-rule (via "horizontal"), task-list (via
-    // "checkbox"/"checklist") — substring match on label + keywords.
-    expect(filterSlashCommands("h")).toHaveLength(5);
+    // "checkbox"/"checklist"), and paragraph — whose LABEL ends in "h", which
+    // is easy to miss when scanning keywords. Substring match on label +
+    // keywords, so a match can come from either.
+    //
+    // This is a counter, not a behavioural pin: it goes red for any new command
+    // containing "h" anywhere in its label or keywords. Bump it knowingly.
+    expect(filterSlashCommands("h")).toHaveLength(6);
     expect(state?.active?.selectedIndex).toBeLessThan(filterSlashCommands("h").length);
   });
 });
