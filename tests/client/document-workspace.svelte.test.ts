@@ -60,6 +60,13 @@ interface HarnessInit {
   activeTabId?: string | null;
   readOnly?: boolean;
   hasUnsaved?: boolean;
+  /**
+   * Display order, which in production is `useTabOrder`'s reordered list and is
+   * NOT the document order `getTabs` returns. Defaulting the two to the same
+   * array made the distinction untestable: `getOrderedTabs` could be swapped
+   * for `getTabs` in the source and every bulk-close spec stayed green.
+   */
+  orderedTabs?: OpenTab[];
 }
 
 interface Harness {
@@ -70,6 +77,14 @@ interface Harness {
   /** Queued confirm() answers, consumed in order. */
   confirmReplies: boolean[];
   calls: {
+    saveAsArgs: { activeDocId: string; defaultName: string; sourceFormat: string }[];
+    /**
+     * Every collaborator call in order, as `"name:arg"`. The per-collaborator
+     * arrays below answer "did it happen"; only this one answers "in what
+     * order", which is what a title like "evicts scroll memory BEFORE the close
+     * lands" actually claims.
+     */
+    log: string[];
     closeTab: string[];
     setActiveTabId: string[];
     onTabClosed: string[];
@@ -127,6 +142,8 @@ function harness(init: HarnessInit = {}): Harness {
   const stack: ClosedTabRecord[] = [];
   const confirmReplies: boolean[] = [];
   const calls: Harness["calls"] = {
+    saveAsArgs: [],
+    log: [],
     closeTab: [],
     setActiveTabId: [],
     onTabClosed: [],
@@ -144,12 +161,13 @@ function harness(init: HarnessInit = {}): Harness {
     getActiveTabId: () => state.activeTabId,
     getActiveTab: () => state.tabs.find((t) => t.id === state.activeTabId),
     getIsReadOnly: () => state.readOnly,
-    getOrderedTabs: () => state.tabs,
+    getOrderedTabs: () => init.orderedTabs ?? state.tabs,
     setActiveTabId: (id) => {
       calls.setActiveTabId.push(id);
       state.activeTabId = id;
     },
     closeTab: (id) => {
+      calls.log.push(`closeTab:${id}`);
       calls.closeTab.push(id);
       state.tabs = state.tabs.filter((t) => t.id !== id);
     },
@@ -171,7 +189,14 @@ function harness(init: HarnessInit = {}): Harness {
       calls.triggerSave.push(id);
       return true;
     },
-    triggerSaveAs: async () => true,
+    triggerSaveAs: async (args) => {
+      calls.saveAsArgs.push({
+        activeDocId: args.activeDocId,
+        defaultName: args.defaultName,
+        sourceFormat: args.sourceFormat,
+      });
+      return true;
+    },
     pushNotification: ((notification: Record<string, unknown>) => {
       calls.notifications.push(notification);
     }) as unknown as CreateDocumentWorkspaceOpts["pushNotification"],
@@ -186,7 +211,10 @@ function harness(init: HarnessInit = {}): Harness {
     closeEditorOverlays: () => {
       calls.closeEditorOverlays += 1;
     },
-    onTabClosed: (id) => calls.onTabClosed.push(id),
+    onTabClosed: (id) => {
+      calls.log.push(`onTabClosed:${id}`);
+      calls.onTabClosed.push(id);
+    },
   };
 
   let ws!: DocumentWorkspace;
@@ -394,8 +422,25 @@ describe("createDocumentWorkspace — canSourceView / inSourceView", () => {
 
   it("inSourceView tracks the ACTIVE tab, not merely whether any tab is in source view", () => {
     const h = harness({ tabs: [tab({ id: "a" }), tab({ id: "b" })] });
+    // The run count is here for a reason the membership assertions cannot cover:
+    // `enterSourceViewTarget` also calls `setActiveTabId`, and that write alone
+    // dirties `inSourceView`. So a version of the mutator that mutated the Set
+    // in place would still read `true` below — the derivation recomputes for the
+    // *other* dependency and picks the value off the mutated Set. Only a reader
+    // of `sourceViewTabs` itself can see the missing notification.
+    let runs = 0;
+    const stop = $effect.root(() => {
+      $effect(() => {
+        runs = runs + 1;
+        void h.ws.sourceViewTabs.size;
+      });
+    });
+    flushSync();
+    expect(runs).toBe(1);
+
     h.ws.enterSourceViewTarget("a");
     flushSync();
+    expect(runs).toBe(2);
     expect(h.ws.inSourceView).toBe(true);
 
     h.state.activeTabId = "b";
@@ -404,6 +449,7 @@ describe("createDocumentWorkspace — canSourceView / inSourceView", () => {
     expect(h.ws.inSourceView).toBe(false);
     expect(h.ws.isTabInSourceView("a")).toBe(true);
 
+    stop();
     h.dispose();
   });
 
@@ -476,6 +522,39 @@ describe("createDocumentWorkspace — source view commands", () => {
     h.dispose();
   });
 
+  it("registering and clearing commands notifies, it does not mutate the Map in place", () => {
+    const h = harness();
+    let runs = 0;
+    const stop = $effect.root(() => {
+      $effect(() => {
+        runs = runs + 1;
+        // Reading through the public `sourceCommandsForEvent` would not do:
+        // that is a plain Map lookup and tracks nothing. The dependency has to
+        // be the boxed collection, which only the exported reader reaches.
+        void h.ws.sourceViewCommandCount;
+      });
+    });
+    flushSync();
+    expect(runs).toBe(1);
+
+    h.ws.updateSourceViewCommands("a", {
+      documentId: "a",
+      save: async () => true,
+      exit: async () => {},
+    });
+    flushSync();
+    expect(runs).toBe(2);
+    expect(h.ws.sourceViewCommandCount).toBe(1);
+
+    h.ws.updateSourceViewCommands("a", null);
+    flushSync();
+    expect(runs).toBe(3);
+    expect(h.ws.sourceViewCommandCount).toBe(0);
+
+    stop();
+    h.dispose();
+  });
+
   it("sourceCommandsForEvent resolves via the container's documentId dataset", () => {
     const h = harness();
     const commands = { documentId: "a", save: async () => true, exit: async () => {} };
@@ -509,9 +588,37 @@ describe("createDocumentWorkspace — the close funnel", () => {
   it("closes, records to the stack, and evicts scroll memory before the close lands", () => {
     const h = harness();
     h.ws.closeTabAndRecord("a");
-    expect(h.calls.closeTab).toEqual(["a"]);
-    expect(h.calls.onTabClosed).toEqual(["a"]);
+    // The ordered log, not the two per-collaborator arrays: this title claims a
+    // sequence, and swapping the two calls left every previous assertion green.
+    // App evicts scroll memory keyed by tab id, so it must run while the tab is
+    // still a tab.
+    expect(h.calls.log).toEqual(["onTabClosed:a", "closeTab:a"]);
     expect(h.stack).toEqual([{ filePath: "/docs/a.md", closedAt: expect.any(Number) }]);
+    h.dispose();
+  });
+
+  it("evicting the closed tab's source-view flag notifies, it does not mutate in place", () => {
+    const h = harness();
+    h.ws.enterSourceView();
+    flushSync();
+    let runs = 0;
+    const stop = $effect.root(() => {
+      $effect(() => {
+        runs = runs + 1;
+        void h.ws.sourceViewTabs.size;
+      });
+    });
+    flushSync();
+    expect(runs).toBe(1);
+
+    h.ws.closeTabAndRecord("a");
+    flushSync();
+    // No spec read `sourceViewTabs` after a close before this one, so the
+    // funnel's own eviction could mutate the boxed Set in place and stay green.
+    expect(runs).toBe(2);
+    expect(h.ws.sourceViewTabs.has("a")).toBe(false);
+
+    stop();
     h.dispose();
   });
 
@@ -588,6 +695,20 @@ describe("createDocumentWorkspace — the close funnel", () => {
     h.dispose();
   });
 
+  it("bulk closes follow DISPLAY order, not document order", () => {
+    // `useTabOrder` reorders tabs independently of the document list, so these
+    // two must not be the same array. With the harness defaulting them to one
+    // list, swapping `getOrderedTabs()` for `getTabs()` in the source passed
+    // every bulk-close spec.
+    const tabs = [tab({ id: "a" }), tab({ id: "b" }), tab({ id: "c" })];
+    const h = harness({ tabs, orderedTabs: [tabs[2], tabs[1], tabs[0]] });
+    h.ws.closeTabsToLeft("a");
+    // Display order is c, b, a — so "left of a" is c and b, which is the exact
+    // opposite of what document order would give.
+    expect([...h.calls.closeTab].sort()).toEqual(["b", "c"]);
+    h.dispose();
+  });
+
   it("closeTabsToLeft and closeTabsToRight close only their side", () => {
     const left = harness({ tabs: [tab({ id: "a" }), tab({ id: "b" }), tab({ id: "c" })] });
     left.ws.closeTabsToLeft("c");
@@ -598,6 +719,56 @@ describe("createDocumentWorkspace — the close funnel", () => {
     right.ws.closeTabsToRight("a");
     expect([...right.calls.closeTab].sort()).toEqual(["b", "c"]);
     right.dispose();
+  });
+});
+
+describe("createDocumentWorkspace — the beforeunload guard", () => {
+  // The single thing standing between a page reload and uncommitted markdown
+  // source edits. The file header names it as the reason the harness needs an
+  // effect root, and then nothing fired it until this block.
+  function fireBeforeUnload(): { prevented: boolean; returnValue: unknown } {
+    const ev = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;
+    window.dispatchEvent(ev);
+    return { prevented: ev.defaultPrevented, returnValue: ev.returnValue };
+  }
+
+  it("stays silent with no dirty drafts", () => {
+    const h = harness();
+    flushSync();
+    expect(fireBeforeUnload().prevented).toBe(false);
+    h.dispose();
+  });
+
+  it("prevents the unload once a draft is dirty", () => {
+    const h = harness();
+    h.ws.updateSourceDraft("a", "unsaved", true);
+    flushSync();
+    const { prevented, returnValue } = fireBeforeUnload();
+    expect(prevented).toBe(true);
+    expect(returnValue).toBe("You have unsaved markdown-source edits.");
+    h.dispose();
+  });
+
+  it("goes quiet again once the draft is cleared", () => {
+    const h = harness();
+    h.ws.updateSourceDraft("a", "unsaved", true);
+    flushSync();
+    h.ws.clearSourceDraft("a");
+    flushSync();
+    // A guard that nags after the work is committed trains users to click
+    // through it, which is the same as not having one.
+    expect(fireBeforeUnload().prevented).toBe(false);
+    h.dispose();
+  });
+
+  it("unregisters the listener on dispose", () => {
+    const h = harness();
+    h.ws.updateSourceDraft("a", "unsaved", true);
+    flushSync();
+    h.dispose();
+    // A leaked listener fires the dialog from a torn-down workspace, which in
+    // the app means a reload nagging about a document that is no longer open.
+    expect(fireBeforeUnload().prevented).toBe(false);
   });
 });
 
@@ -663,6 +834,52 @@ describe("createDocumentWorkspace — reopen", () => {
     h.dispose();
   });
 
+  it("a deduped concurrent reopen puts its record back on the stack", async () => {
+    const h = harness({ tabs: [], activeTabId: null });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.setOpenServerPathResult(async () => {
+      await gate;
+      return { ok: true };
+    });
+    h.stack.push({ filePath: "/docs/x.md", closedAt: 1 });
+    h.stack.push({ filePath: "/docs/x.md", closedAt: 2 });
+
+    const first = h.ws.reopenClosedTab();
+    const second = h.ws.reopenClosedTab();
+    release?.();
+    await Promise.all([first, second]);
+
+    // The stack dedups only CONSECUTIVE duplicates, so close X / close Y /
+    // close X really does hold the same path twice. Dropping the popped record
+    // made the user's next Ctrl+Alt+T a silent no-op with the entry gone.
+    expect(h.stack).toEqual([{ filePath: "/docs/x.md", closedAt: 1 }]);
+    h.dispose();
+  });
+
+  it("a thrown openServerPath is handled like a returned failure", async () => {
+    const h = harness({ tabs: [], activeTabId: null });
+    h.setOpenServerPathResult(async () => {
+      throw new Error("network down");
+    });
+    h.stack.push({ filePath: "/docs/gone.md", closedAt: 1 });
+
+    await expect(h.ws.reopenClosedTab()).resolves.toBeUndefined();
+    // `openServerPath` became an INJECTED dependency in Unit 10a, and its type
+    // says it never throws. A type is not an enforcement: without a catch, a
+    // throw skips the restore, loses the record with no toast, and escapes as
+    // an unhandled rejection through App's `void reopenClosedTab()` sites.
+    expect(h.stack).toEqual([{ filePath: "/docs/gone.md", closedAt: 1 }]);
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      severity: "error",
+      dedupKey: "reopen-failed:/docs/gone.md",
+    });
+    h.dispose();
+  });
+
   it("an empty stack is a silent no-op", async () => {
     const h = harness({ tabs: [], activeTabId: null });
     await h.ws.reopenClosedTab();
@@ -723,6 +940,71 @@ describe("createDocumentWorkspace — save entry points", () => {
     // write one document's content over another's file.
     expect(ok).toBe(false);
     expect(h.calls.triggerSave).toEqual([]);
+    h.dispose();
+  });
+
+  it("saving an INACTIVE source-view tab routes through its command, not straight to disk", async () => {
+    // The discriminating case, and the reason the per-id binding matters. Tab
+    // "b" is in source view; "a" is active. `isSourceView` is bound per-id
+    // (`sourceViewTabs.has(id)`), so saving "b" must activate it and hand off to
+    // its registered command, which commits the draft first.
+    //
+    // Bind it to the active-tab-wide `inSourceView` instead — an easy and
+    // plausible mistake — and "b" takes the formatted branch, `triggerSave`
+    // writes the pre-commit content, and whatever the user just typed is gone
+    // with no error. `tabs/target-save.ts` has its own specs, but they run
+    // against their own mock deps and structurally cannot see this module's
+    // bindings.
+    const h = harness({ tabs: [tab({ id: "a" }), tab({ id: "b" })], activeTabId: "a" });
+    let committed = 0;
+    h.ws.enterSourceViewTarget("b");
+    h.state.activeTabId = "a";
+    h.ws.updateSourceViewCommands("b", {
+      documentId: "b",
+      save: async () => {
+        committed += 1;
+        return true;
+      },
+      exit: async () => {},
+    });
+    flushSync();
+
+    // Reset the call log AFTER setup. `enterSourceViewTarget` activates "b"
+    // itself, so a `toContain("b")` below would be satisfied by that earlier
+    // call and pass with the save path's own activate step deleted — which is
+    // exactly what a mutation run showed.
+    h.calls.setActiveTabId.length = 0;
+
+    await h.ws.saveDocumentTarget("b", "save");
+    expect(committed).toBe(1);
+    expect(h.calls.triggerSave).toEqual([]);
+    // It must activate the target itself: an unmounted SourceView has no
+    // commands registered, so saving without activating cannot commit.
+    expect(h.calls.setActiveTabId).toEqual(["b"]);
+    h.dispose();
+  });
+
+  it("a formatted tab persists directly, without waiting on any command", async () => {
+    const h = harness();
+    await h.ws.saveDocumentTarget("a", "save");
+    // The other side of the same branch: no source view, so no commit hop.
+    expect(h.calls.triggerSave).toEqual(["a"]);
+    h.dispose();
+  });
+
+  it("promotes an upload through Save As with a basename, not the whole path", async () => {
+    const h = harness({
+      tabs: [tab({ id: "u", filePath: "upload://u/nested/doc.md", source: "upload" })],
+      activeTabId: "u",
+    });
+    const ok = await h.ws.saveDocumentTargetAfterSourceCommit("u", "save");
+    expect(ok).toBe(true);
+    // The stub used to record nothing, so nothing asserted the envelope: a
+    // regression here pre-fills the Save As dialog with `upload://u/nested/doc.md`
+    // as the filename.
+    expect(h.calls.saveAsArgs).toEqual([
+      { activeDocId: "u", defaultName: "doc.md", sourceFormat: "md" },
+    ]);
     h.dispose();
   });
 

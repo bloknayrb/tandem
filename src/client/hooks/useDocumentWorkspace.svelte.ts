@@ -13,7 +13,8 @@
  * **It does not own tabs or the active tab, and must not.** The unit's original
  * instruction said this workspace "must own active document, tab" — that
  * described a component that no longer exists. `yjsSync.svelte.ts` has owned
- * `tabs` and `activeTabId` (its own `$state`, `:157-158`) along with
+ * `tabs` and `activeTabId` (its own `$state` cells `tabsState` /
+ * `activeTabIdState`, exposed as those two getters) along with
  * `setActiveTabId` / `handleTabClose` / `handleTabRename` for some time, and
  * taking them back here would be a regression wearing an extraction's clothes.
  * Tab *ordering* likewise stays in `useTabOrder`, the reopen LIFO in
@@ -34,10 +35,10 @@
  * is the only assertion shape that can tell the two apart: `.has(id)` reads true
  * either way, because a `Set` is a mutable reference.
  *
- * **Destructuring rule, stated precisely.** The GETTERS below
+ * **Destructuring rule, stated precisely.** The five GETTERS below
  * (`sourceViewTabs`, `sourceDrafts`, `sourceDirtyTabs`, `canSourceView`,
- * `inSourceView`, `sourceDirtyCount`) must be read through the object at each
- * use — destructuring them snapshots the current value forever. The METHODS are
+ * `inSourceView`) must be read through the object at each use — destructuring
+ * them snapshots the current value forever. The METHODS are
  * ordinary closures over this factory's state and destructure safely; do not
  * "fix" a method destructure on the strength of the getter rule.
  *
@@ -133,8 +134,13 @@ export interface CreateDocumentWorkspaceOpts {
    */
   closeEditorOverlays: () => void;
 
-  /** Close funnel notifies App so it can evict the tab's remembered scroll position. */
-  onTabClosed?: (tabId: string) => void;
+  /**
+   * Close funnel notifies App so it can evict the tab's remembered scroll
+   * position. REQUIRED, not optional: on master this was an unconditional
+   * `scrollMemory.delete(tabId)` inside the funnel, so an optional callback
+   * would let a future consumer leak scroll memory forever with no signal.
+   */
+  onTabClosed: (tabId: string) => void;
 }
 
 export interface DocumentWorkspace {
@@ -143,6 +149,15 @@ export interface DocumentWorkspace {
   readonly sourceDirtyTabs: ReadonlySet<string>;
   readonly canSourceView: boolean;
   readonly inSourceView: boolean;
+  /**
+   * Size of the registered-commands map. Exists so the fourth copy-on-write
+   * collection has a reactive observer at all: `sourceCommandsForEvent` is a
+   * plain Map lookup and tracks nothing, so without this a mutator rewritten
+   * to `.set(...)` in place notified nobody and every spec stayed green. The
+   * commands themselves stay unexported -- they are closures over a mounted
+   * component, not data a consumer should reach into.
+   */
+  readonly sourceViewCommandCount: number;
 
   isTabInSourceView: (tabId: string) => boolean;
   updateSourceViewCommands: (documentId: string, commands: SourceViewCommands | null) => void;
@@ -342,7 +357,7 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     clearSourceDraft(tabId);
     // App evicts the closed tab's remembered scroll position (#1055). It stays
     // there because it is a DOM concern; the funnel still owns the *timing*.
-    opts.onTabClosed?.(tabId);
+    opts.onTabClosed(tabId);
     opts.closeTab(tabId);
   }
 
@@ -374,7 +389,14 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
       opts.setActiveTabId(existing.id);
       return;
     }
-    if (inflightReopens.has(rec.filePath)) return;
+    if (inflightReopens.has(rec.filePath)) {
+      // Put it back. The stack dedups only CONSECUTIVE duplicates, so a
+      // close X / close Y / close X sequence really does hold the same path
+      // twice; dropping the popped record here would make the user's next
+      // Ctrl+Alt+T a silent no-op with the entry gone for good.
+      opts.closedTabStack.push(rec);
+      return;
+    }
     inflightReopens.add(rec.filePath);
     const handleFailure = (reason: string) => {
       // Restore the record so the user can retry with another Ctrl+Alt+T;
@@ -393,6 +415,13 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     try {
       const result = await opts.openServerPath(rec.filePath);
       if (!result.ok) handleFailure(result.error);
+    } catch (err) {
+      // The injected implementation catches internally today, so its type says
+      // it never throws -- but a type is not an enforcement, and this became an
+      // injected dependency only in Unit 10a. Without this branch a throw skips
+      // handleFailure, loses the record silently, and escapes as an unhandled
+      // rejection through App's `void reopenClosedTab()` call sites.
+      handleFailure(err instanceof Error ? err.message : String(err));
     } finally {
       inflightReopens.delete(rec.filePath);
     }
@@ -485,6 +514,9 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     },
     get inSourceView() {
       return inSourceView;
+    },
+    get sourceViewCommandCount() {
+      return sourceViewCommands.size;
     },
 
     isTabInSourceView: (tabId: string) => sourceViewTabs.has(tabId),
