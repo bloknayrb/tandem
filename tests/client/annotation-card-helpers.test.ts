@@ -3,6 +3,8 @@ import {
   formatRelativeTime,
   getAuthorLabel,
   getCardTint,
+  getDisplayAuthor,
+  presentsAsImport,
 } from "../../src/client/panels/annotation-card-helpers";
 import type { Annotation } from "../../src/shared/types";
 
@@ -122,5 +124,66 @@ describe("formatRelativeTime", () => {
     // diffMin goes negative → < 1 → "just now"; documents the contract so a
     // future-dated annotation never renders a nonsensical "-3m ago".
     expect(formatRelativeTime(NOW + 5 * MIN)).toBe("just now");
+  });
+});
+
+describe("getDisplayAuthor / presentsAsImport (#1714)", () => {
+  // The split this fix introduces: `author` is the STORAGE role and decides
+  // what the user may DO with a record; the display author decides what the
+  // user is TOLD about it. They diverge for exactly one record shape — a note
+  // or comment imported from a `.docx` and then promoted, which
+  // `promotedAnnotation` rewrites to `author: "user"` while carrying the
+  // reviewer's name through in `importSource`.
+  const base = (over: Partial<Annotation> = {}): Annotation =>
+    ({
+      id: "a1",
+      type: "comment",
+      author: "user",
+      status: "pending",
+      content: "Body",
+      range: { from: 0, to: 1 },
+      timestamp: 0,
+      ...over,
+    }) as Annotation;
+
+  it("a promoted import presents as an import despite author 'user'", () => {
+    const ann = base({ importSource: { author: "Dana Reviewer", file: "draft.docx" } });
+    expect(presentsAsImport(ann)).toBe(true);
+    expect(getDisplayAuthor(ann)).toBe("import");
+  });
+
+  it("a genuine import with no author name still presents as an import", () => {
+    // Provenance is checked first, but `author` is the fallback — a Word comment
+    // whose author string is missing has no byline and is still not the user's.
+    // Keying ONLY on provenance would send this record to the ordinary comment
+    // card and give it the You dot, which is the same bug with a different
+    // input.
+    const ann = base({ author: "import" });
+    expect(presentsAsImport(ann)).toBe(true);
+    expect(getDisplayAuthor(ann)).toBe("import");
+  });
+
+  it("does not treat a blank or whitespace-only provenance author as a byline", () => {
+    for (const author of ["", "   "]) {
+      const ann = base({ importSource: { author, file: "draft.docx" } });
+      expect(presentsAsImport(ann), `author ${JSON.stringify(author)}`).toBe(false);
+      expect(getDisplayAuthor(ann)).toBe("user");
+    }
+  });
+
+  it("leaves user and claude alone", () => {
+    expect(getDisplayAuthor(base())).toBe("user");
+    expect(getDisplayAuthor(base({ author: "claude" }))).toBe("claude");
+    expect(presentsAsImport(base({ author: "claude" }))).toBe(false);
+  });
+
+  it("feeds the label and the tint, so both follow provenance", () => {
+    // The two helpers this is threaded into. Asserted here as well as in the
+    // component spec because the component can only see the header — the tint
+    // is applied in `AnnotationCard` and the leader colour in `MarginColumn`,
+    // and all three read the same accessor.
+    const ann = base({ importSource: { author: "Dana Reviewer", file: "draft.docx" } });
+    expect(getAuthorLabel(getDisplayAuthor(ann))).toBe("Imported");
+    expect(getCardTint(getDisplayAuthor(ann))).toBe("var(--tandem-author-import-bg)");
   });
 });

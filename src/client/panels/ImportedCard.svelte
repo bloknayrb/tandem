@@ -4,8 +4,23 @@ import AnnotationCardHeader from "./AnnotationCardHeader.svelte";
 import AnnotationSnippet from "./AnnotationSnippet.svelte";
 
 interface Props {
-  /** Any annotation authored by import (Word comments). */
-  annotation: Annotation & { author: "import" };
+  /**
+   * A genuine, unpromoted import — `author === "import"`, which the one dispatch
+   * site in `AnnotationCard.svelte` enforces.
+   *
+   * The reviewer byline used to live here and moved to `AnnotationCardHeader`
+   * in #1714. It had to: a PROMOTED import keeps the reviewer's name but is an
+   * ordinary editable comment, so it renders as `CommentCard`/`SuggestionCard`
+   * and would otherwise have shown no byline at all. Keeping the byline here
+   * and routing promoted records in was the alternative, and it costs them
+   * markdown rendering and the suggestion diff, neither of which this card has.
+   *
+   * The type stays plain `Annotation` rather than `& { author: "import" }`: the
+   * intersection was never load-bearing (`importSource` is optional on the base
+   * type, so it narrowed nothing that is read here) and only forced a cast at
+   * the call site.
+   */
+  annotation: Annotation;
   isPending: boolean;
   isReviewTarget?: boolean;
   isEditing: boolean;
@@ -50,18 +65,6 @@ let {
       {canEdit}
       {onEnterEdit}
     />
-
-    {#if annotation.importSource?.author}
-      <!-- Reviewer attribution byline. Imports carry the original Word
-           commenter's name; surfacing it lets the user decide which
-           reviewer's comments to promote without opening the source file. -->
-      <div
-        data-testid="annotation-import-byline-{annotation.id}"
-        style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-bottom: 4px;"
-      >
-        From: <span style="font-weight: 500;">{annotation.importSource.author}</span>
-      </div>
-    {/if}
 
     <AnnotationSnippet annotationId={annotation.id} text={annotation.textSnapshot} />
 

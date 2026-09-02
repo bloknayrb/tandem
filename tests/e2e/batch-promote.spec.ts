@@ -179,4 +179,24 @@ test("docx reviewer comments import as private notes, then batch-promote to Clau
   expect(after.notesExcluded ?? 0).toBe(0);
   // And the promoted comments are present in Claude's view.
   expect(after.count).toBe(2);
+
+  // --- #1714: promotion rewrites `author` so the USER can act on the record,
+  // and must not rewrite whose words those are. The MCP assertions directly
+  // above still read `author: "user"` — that is the point, and their staying
+  // green unchanged is what makes this a display-only fix.
+  //
+  // Before it, the card left `ImportedCard` the instant the author flipped: the
+  // reviewer byline vanished and the shared header painted the "You" dot over a
+  // colleague's unedited sentence. This is the only check that watches the DOM
+  // through a real `.docx` import and a real promotion.
+  await expect(bylines).toHaveCount(2);
+  await expect(bylines.first()).toContainText("Reviewer1");
+  await expect(page.locator("[data-testid^='annotation-author-dot-']")).toHaveCount(0);
+
+  // The author FILTER follows the same rule, and this is the assertion for a
+  // decision rather than a bug: the chip is labelled "Imported" and carries the
+  // import pip, so a promoted import hiding from it while its own card reads
+  // "From: Reviewer1" would be the same contradiction one surface over.
+  await page.getByTestId("filter-author-import").click();
+  await expect(page.locator("[data-testid^='annotation-import-byline-']")).toHaveCount(2);
 });

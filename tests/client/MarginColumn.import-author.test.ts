@@ -59,3 +59,61 @@ describe("MarginColumn — import-author render path", () => {
     expect(circle?.getAttribute("fill")).toBe("var(--tandem-fg-subtle)");
   });
 });
+
+describe("MarginColumn — a PROMOTED import keeps the import leader (#1714)", () => {
+  // The leader line points AT a card that reads "From: <reviewer>". Keyed on the
+  // raw `author` it would stroke in the USER colour and carry
+  // `data-tandem-author="user"`, so the line and the bubble it lands on would
+  // disagree about whose comment it is.
+  function promotedImport(id: string): Annotation {
+    return {
+      id,
+      author: "user",
+      type: "comment",
+      range: range(0, 5),
+      content: "Word comment text, promoted",
+      status: "pending",
+      timestamp: 1_700_000_000_000,
+      importSource: { author: "Alice", file: "/test.docx" },
+    };
+  }
+
+  function renderOne(ann: Annotation) {
+    return render(MarginColumn, {
+      annotations: [ann],
+      positions: new Map<string, number>([[ann.id, 100]]),
+      side: "right",
+      width: 240,
+      edgeInset: 8,
+      gap: 24,
+      activeAnnotationId: null,
+      repliesById: new Map(),
+      onClick: () => {},
+    });
+  }
+
+  it("strokes and labels a promoted import as an import", () => {
+    const { container } = renderOne(promotedImport("ann-promoted"));
+    const path = container.querySelector<SVGPathElement>('path[data-annotation-id="ann-promoted"]');
+    const circle = container.querySelector<SVGCircleElement>(
+      'circle[data-annotation-id="ann-promoted"]',
+    );
+
+    expect(path?.getAttribute("data-tandem-author")).toBe("import");
+    expect(circle?.getAttribute("data-tandem-author")).toBe("import");
+    expect(path?.getAttribute("stroke")).toBe("var(--tandem-fg-subtle)");
+    expect(circle?.getAttribute("fill")).toBe("var(--tandem-fg-subtle)");
+  });
+
+  it("leaves an ordinary user comment on the user leader", () => {
+    // The negative control. The attribute and the stroke are asserted together
+    // on purpose: they are set from two separate expressions in the template,
+    // and the bug being fixed is precisely two expressions disagreeing.
+    const plain = { ...promotedImport("ann-plain"), importSource: undefined };
+    const { container } = renderOne(plain);
+    const path = container.querySelector<SVGPathElement>('path[data-annotation-id="ann-plain"]');
+
+    expect(path?.getAttribute("data-tandem-author")).toBe("user");
+    expect(path?.getAttribute("stroke")).toBe("var(--tandem-author-user)");
+  });
+});

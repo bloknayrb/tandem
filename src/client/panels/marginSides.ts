@@ -27,5 +27,11 @@ export function isLeftMarginAnnotation(a: Annotation): boolean {
 
 /** True when `a` renders in the RIGHT margin (outbound comments + imports). */
 export function isRightMarginAnnotation(a: Annotation): boolean {
+  // Deliberately NOT `getDisplayAuthor` (#1714): the exemption is the invariant
+  // that `promotedAnnotation` retypes `note -> comment` in the same write that
+  // rewrites the author, so a promoted record always satisfies the `comment`
+  // disjunct here. A promotion path that ever preserved the type would break
+  // `isLeftMarginAnnotation` above harder than this line — it would put a third
+  // party's words in the private-notes column.
   return a.author === "import" || a.type === "comment";
 }

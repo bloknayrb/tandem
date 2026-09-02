@@ -33,6 +33,20 @@ function renderHeader(annotation: Annotation) {
   return render(AnnotationCardHeader, { props: headerProps(annotation) });
 }
 
+/**
+ * The author LABEL alone.
+ *
+ * `.ach-author` also wraps the optional "(edited)" marker, the authorship dot
+ * and the relative timestamp, so its `textContent` is `"Imported 12/31/1969"`
+ * in this fixture — an assertion on the whole span is an assertion about the
+ * clock. Removing the timestamp child leaves the label and nothing else.
+ */
+function authorLabelText(container: HTMLElement): string {
+  const span = container.querySelector(".ach-author")?.cloneNode(true) as HTMLElement | undefined;
+  span?.querySelector(".ach-time")?.remove();
+  return span?.textContent?.trim() ?? "";
+}
+
 function dotStyle(container: HTMLElement): string {
   const dot = container.querySelector("[data-testid='annotation-author-dot-annotation-1']");
   expect(dot).toBeTruthy();
@@ -182,6 +196,55 @@ describe("AnnotationCardHeader stays reactive to the annotation it is given", ()
     expect(container.querySelector(".annotation-type-badge")?.getAttribute("aria-label")).toBe(
       ANNOTATION_TYPE_GLYPHS.replacement.label,
     );
+  });
+});
+
+describe("AnnotationCardHeader — a PROMOTED import is still a colleague's comment (#1714)", () => {
+  // `promotedAnnotation` rewrites `author: "import" -> "user"` so the user can
+  // edit and reply, and carries `importSource` through untouched. This header is
+  // where that showed: it painted the "You" dot and said "You" over a third
+  // party's unedited words.
+  //
+  // The header is asserted rather than the card, deliberately — it is SHARED by
+  // `ImportedCard` and the ordinary comment card, so a fix that only re-keyed
+  // the card dispatch would route the record back into `ImportedCard` and still
+  // render the dot and the label inside it. That was the first draft.
+  const promoted = () =>
+    makeAnnotation({
+      author: "user",
+      importSource: { author: "Dana Reviewer", file: "draft.docx", commentId: "c1" },
+    });
+
+  it("omits the You dot for a promoted import", () => {
+    const { container } = renderHeader(promoted());
+    expect(container.querySelector("[data-testid^='annotation-author-dot-']")).toBeNull();
+  });
+
+  it("labels a promoted import 'Imported', not 'You'", () => {
+    const { container } = renderHeader(promoted());
+    expect(authorLabelText(container)).toBe("Imported");
+  });
+
+  it("still says You for a user annotation that has no import provenance", () => {
+    // The negative control, and the reason the predicate is keyed on a populated
+    // `importSource.author` rather than on the field's mere presence: without
+    // this, "route everything through the import branch" passes both specs
+    // above.
+    const { container } = renderHeader(makeAnnotation({ author: "user" }));
+    expect(authorLabelText(container)).toBe("You");
+    expect(container.querySelector("[data-testid^='annotation-author-dot-']")).not.toBeNull();
+  });
+
+  it("still says You when importSource carries a BLANK author", () => {
+    // A record with provenance that names nobody has no byline to show, so it
+    // must not be dragged out of the ordinary user treatment. Whitespace-only
+    // counts as blank — `.trim()` is what makes that true, and dropping it
+    // leaves this the only spec that notices.
+    const { container } = renderHeader(
+      makeAnnotation({ author: "user", importSource: { author: "   ", file: "draft.docx" } }),
+    );
+    expect(authorLabelText(container)).toBe("You");
+    expect(container.querySelector("[data-testid^='annotation-author-dot-']")).not.toBeNull();
   });
 });
 
