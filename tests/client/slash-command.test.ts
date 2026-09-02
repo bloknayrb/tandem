@@ -1,10 +1,9 @@
 import { Editor } from "@tiptap/core";
-import Table from "@tiptap/extension-table";
-import TableCell from "@tiptap/extension-table-cell";
-import TableHeader from "@tiptap/extension-table-header";
-import TableRow from "@tiptap/extension-table-row";
-import StarterKit from "@tiptap/starter-kit";
+import Collaboration from "@tiptap/extension-collaboration";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ySyncPluginKey } from "y-prosemirror";
+import * as Y from "yjs";
+import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import {
   filterSlashCommands,
   findSlashCommandMatch,
@@ -12,23 +11,43 @@ import {
   SlashCommandExtension,
   slashCommandPluginKey,
 } from "../../src/client/editor/slash-menu";
+import { loadMarkdown, saveMarkdown } from "../../src/server/file-io/markdown";
 
+/**
+ * THE PRODUCTION SCHEMA, and that is the point of this helper (#1720).
+ *
+ * This suite used to build `StarterKit.configure({ history: false })` plus the
+ * four stock Table extensions. The shipped editor (`Editor.svelte`) builds
+ * `buildSchemaExtensions()`, which configures StarterKit
+ * `{ listItem: false, paragraph: false }` and substitutes `ListItemCheckbox`
+ * (content `block+`, widened for #1664) and `SoftWrapParagraph`, and registers
+ * the table nodes itself. Stock `listItem` is `paragraph block*`.
+ *
+ * That one difference produced a wrong bug report. `<li><h2>x</h2></li>` is
+ * ILLEGAL under `paragraph block*`, so ProseMirror repairs it at PARSE time —
+ * inserting an empty paragraph and pushing the heading out to the parent item —
+ * and #1720 read the repair as slash-command corruption. Under `block+` the
+ * shape is legal, parses intact, and the command retypes it in place. A suite
+ * that measures a schema production does not use has already cost one wrong
+ * diagnosis; it does not get to cost a second.
+ *
+ * The `Y.Doc` is not incidental either: `Collaboration` is what puts a real
+ * `ySyncPlugin` in the state, which the remote-insertion spec below needs in
+ * order to be testing anything.
+ */
 function makeEditor() {
   const container = document.createElement("div");
   document.body.appendChild(container);
+  const ydoc = new Y.Doc();
   const editor = new Editor({
     element: container,
     extensions: [
-      StarterKit.configure({ history: false }),
-      Table,
-      TableRow,
-      TableCell,
-      TableHeader,
+      ...buildSchemaExtensions(),
+      Collaboration.configure({ document: ydoc }),
       SlashCommandExtension,
     ],
-    content: "",
   });
-  return { editor, container };
+  return { editor, container, ydoc };
 }
 
 describe("slash command parsing", () => {
@@ -114,10 +133,29 @@ describe("paragraph slash command", () => {
     container.remove();
   });
 
-  function runParagraph() {
+  function runParagraphOn(target: Editor) {
     const command = SLASH_COMMANDS.find((c) => c.id === "paragraph");
     if (!command) throw new Error("paragraph command missing");
-    command.run(editor);
+    command.run(target);
+  }
+
+  function runParagraph() {
+    runParagraphOn(editor);
+  }
+
+  /** First position inside the text node containing `needle`. */
+  function posOf(target: Editor, needle: string): number {
+    let found = -1;
+    target.state.doc.descendants((node, pos) => {
+      if (found >= 0) return false;
+      if (node.isText && node.text?.includes(needle)) {
+        found = pos + node.text.indexOf(needle) + 1;
+        return false;
+      }
+      return true;
+    });
+    if (found < 0) throw new Error(`"${needle}" not found in ${target.getHTML()}`);
+    return found;
   }
 
   // Pins ARRAY POSITION 0, which is the one thing the source comment calls
@@ -249,6 +287,131 @@ describe("paragraph slash command", () => {
     editor.commands.setTextSelection(8);
     runParagraph();
     expect(editor.getHTML()).toBe("<ul><li><p>x</p><p>hello</p></li></ul>");
+  });
+
+  /**
+   * #1720 reported that a heading or code block in a DOUBLY-nested list item
+   * comes out corrupted — an orphan empty `<li>` plus the converted block
+   * re-parented into the outer item. It does not, under the schema this editor
+   * actually has. The report was measured against a stock-StarterKit harness,
+   * where `listItem` is `paragraph block*` and `<li><h2>` is illegal, so the
+   * damage is done by ProseMirror's PARSE-TIME repair before any command runs.
+   *
+   * Each case therefore asserts TWICE, and the first assertion is the load-
+   * bearing one. Pinning only the post-command HTML would go red under a
+   * revert of `ListItemCheckbox`'s `block+` — but it would read as a slash-
+   * command regression, sending the next person into `commands.ts` and its
+   * `clearNodes` docblock. The parse assertion says where the break is.
+   */
+  const DEEP_CASES: Array<[string, string, string]> = [
+    [
+      "a heading",
+      "<ul><li><p>a</p><ul><li><h2>deep</h2></li></ul></li></ul>",
+      "<ul><li><p>a</p><ul><li><p>deep</p></li></ul></li></ul>",
+    ],
+    [
+      "a code block",
+      "<ul><li><p>a</p><ul><li><pre><code>deep</code></pre></li></ul></li></ul>",
+      "<ul><li><p>a</p><ul><li><p>deep</p></li></ul></li></ul>",
+    ],
+    [
+      "a heading that follows a paragraph in the same item",
+      "<ul><li><p>a</p><ul><li><p>x</p><h2>deep</h2></li></ul></li></ul>",
+      "<ul><li><p>a</p><ul><li><p>x</p><p>deep</p></li></ul></li></ul>",
+    ],
+    [
+      "a heading in an ordered list",
+      "<ol><li><p>a</p><ol><li><h2>deep</h2></li></ol></li></ol>",
+      "<ol><li><p>a</p><ol><li><p>deep</p></li></ol></li></ol>",
+    ],
+  ];
+
+  it.each(
+    DEEP_CASES,
+  )("parses %s in a doubly-nested item intact, then retypes it in place (#1720)", (_label, input, expected) => {
+    editor.commands.setContent(input);
+    // Parse-time. A `paragraph block*` listItem reports HERE, naming the
+    // schema rather than the command.
+    expect(editor.getHTML()).toBe(input);
+
+    editor.commands.setTextSelection(posOf(editor, "deep"));
+    runParagraph();
+    expect(editor.getHTML()).toBe(expected);
+  });
+
+  /**
+   * The behaviour #1720 got right, pinned as CURRENT behaviour rather than as
+   * desired behaviour.
+   *
+   * `/p` on a block that is ALREADY a paragraph has nothing to retype, so
+   * `setNode` falls through to `clearNodes()`, which lifts out of EVERY
+   * wrapper. At depth 1 with no siblings that is the documented reset above
+   * ("resets a list item to a top-level paragraph"). With siblings it must
+   * split the list — you cannot have a paragraph in the middle of one — and at
+   * depth 2 the lift goes all the way to the document root, taking the OUTER
+   * list apart as well. The issue's own table calls the sibling-free version of
+   * this "lifts correctly".
+   *
+   * Whether the lift should stop at the nearest list item instead is a design
+   * question, tracked separately. These pins exist so that changing it is a
+   * deliberate act with a visible diff, and so nobody re-derives the current
+   * shape from scratch the way #1720 did.
+   */
+  const LIFT_CASES: Array<[string, string, string]> = [
+    [
+      "splits the list when the item has siblings",
+      "<ul><li><p>x</p></li><li><p>deep</p></li></ul>",
+      "<ul><li><p>x</p></li></ul><p>deep</p>",
+    ],
+    [
+      "lifts to the document ROOT from depth 2, taking the outer list apart",
+      "<ul><li><p>a</p><ul><li><p>x</p></li><li><p>deep</p></li></ul></li></ul>",
+      "<ul><li><p>a</p></li></ul><ul><li><p>x</p></li></ul><p>deep</p>",
+    ],
+  ];
+
+  it.each(LIFT_CASES)("/p on an already-paragraph item %s", (_label, input, expected) => {
+    editor.commands.setContent(input);
+    editor.commands.setTextSelection(posOf(editor, "deep"));
+    runParagraph();
+    expect(editor.getHTML()).toBe(expected);
+  });
+
+  it("leaves the nesting alone when the target is NOT already a paragraph", () => {
+    // The discriminator for the two blocks above, and the reason the
+    // precondition is "already a paragraph" rather than "nested": the same
+    // shape with a heading in it retypes in place and keeps both lists. Without
+    // this, "nesting is what breaks it" survives every other spec here.
+    editor.commands.setContent(
+      "<ul><li><p>a</p><ul><li><p>x</p></li><li><h2>deep</h2></li></ul></li></ul>",
+    );
+    editor.commands.setTextSelection(posOf(editor, "deep"));
+    runParagraph();
+    expect(editor.getHTML()).toBe(
+      "<ul><li><p>a</p><ul><li><p>x</p></li><li><p>deep</p></li></ul></li></ul>",
+    );
+  });
+
+  it("round-trips a doubly-nested heading through markdown (#1720)", () => {
+    // The user-facing statement of the same fact, and the surface a schema
+    // regression reaches first: what lands on disk. `setContent` above proves
+    // the command; this proves the whole chain the user actually drives —
+    // markdown -> Y.Doc -> ProseMirror -> command -> Y.Doc -> markdown.
+    const { editor: bound, container: boundContainer, ydoc } = makeEditor();
+    try {
+      loadMarkdown(ydoc, "- a\n\n  - ## deep\n");
+      bound.commands.setTextSelection(posOf(bound, "deep"));
+      runParagraphOn(bound);
+      expect(saveMarkdown(ydoc)).toBe("- a\n\n  - deep\n");
+    } finally {
+      // The suite's own afterEach only owns the beforeEach editor, so this
+      // second one cleans up after itself — `makeEditor` appends to
+      // document.body, and a discarded handle leaks the node for the rest of
+      // the run.
+      bound.destroy();
+      boundContainer.remove();
+      ydoc.destroy();
+    }
   });
 });
 
@@ -391,12 +554,29 @@ describe("slash command open gating (#998)", () => {
   });
 
   it("does NOT open from a remote (y-sync) insertion", () => {
+    // The forged meta is `{ isChangeOrigin: true }` and NOT a bare `true`, and
+    // the difference is the whole spec. The slash menu itself only checks
+    // truthiness, so a boolean satisfies its gate and this assertion passes
+    // either way — but the REAL `ySyncPlugin.apply` reads `change.isChangeOrigin`
+    // off the meta value, gets `undefined` from a boolean, and treats the
+    // transaction as an ordinary LOCAL edit. Under a boolean this spec silently
+    // tests local-insertion suppression while claiming to test remote.
+    //
+    // The plugin-state read is the assertion that can actually fail, and it is
+    // NOT the more obvious "the text never reached the Y.Doc" — that one is
+    // false, which measuring it is how I found out. `ySyncPlugin`'s view update
+    // diffs the PM doc into the CRDT outside the origin check, so a forged
+    // remote transaction propagates either way; `isChangeOrigin` governs
+    // re-entrancy, and the plugin's own state is the only place a bare `true`
+    // is visibly discarded.
     editor.chain().focus().run();
     const pos = editor.state.selection.from;
     const tr = editor.state.tr.insertText("/h", pos);
-    tr.setMeta("y-sync$", true);
+    tr.setMeta("y-sync$", { isChangeOrigin: true });
     editor.view.dispatch(tr);
+
     expect(active()).toBeNull();
+    expect(ySyncPluginKey.getState(editor.state)?.isChangeOrigin).toBe(true);
   });
 
   it("opens when '/' is typed over a non-empty selection", () => {
