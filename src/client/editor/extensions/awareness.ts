@@ -2,6 +2,7 @@ import { Extension } from "@tiptap/core";
 import type { Node as PmNode } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import { ySyncPluginKey } from "y-prosemirror";
 import * as Y from "yjs";
 import {
   TYPING_DEBOUNCE,
@@ -16,7 +17,8 @@ import { toFlatOffset, toPmPos } from "../../../shared/positions/types";
 import type { ClaudeAwareness } from "../../../shared/types";
 import { flatOffsetToPmPos, pmSelectionToFlat } from "../../positions";
 
-const awarenessPluginKey = new PluginKey("tandemAwareness");
+/** Exported so a test can read the decoration set back; see #1669. */
+export const awarenessPluginKey = new PluginKey("tandemAwareness");
 
 /**
  * Build decorations for Claude's awareness state:
@@ -115,6 +117,20 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
           },
           apply(tr, decorationSet, _oldState, newState) {
             if (tr.getMeta(awarenessPluginKey)) {
+              const claude = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
+              return buildAwarenessDecorations(newState.doc, claude ?? null);
+            }
+            // #1669, the third plugin with this defect and the one where it is
+            // most self-defeating: this decoration exists to show where Claude
+            // is WHILE Claude writes, and a remote sync replaces the doc, so
+            // every write Claude makes erased the marker pointing at it. The
+            // mechanism is in docs/gotchas.md, "A remote sync REPLACES the doc".
+            //
+            // No perf gate is needed the way `annotation.ts` needs one: the
+            // awareness map holds a single entry, and `buildAwarenessDecorations`
+            // returns the empty set immediately when it is absent — which is the
+            // common case, since it is only populated while Claude is active.
+            if (tr.getMeta(ySyncPluginKey)) {
               const claude = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
               return buildAwarenessDecorations(newState.doc, claude ?? null);
             }
