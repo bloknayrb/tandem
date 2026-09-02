@@ -21,6 +21,7 @@ import {
   replyToAnnotation,
   sendNoteToClaude,
 } from "./annotation-actions";
+import { getDisplayAuthor } from "./annotation-card-helpers";
 import {
   canAccept,
   canDismiss,
@@ -270,7 +271,11 @@ const filteredData = $derived.by(() => {
     if (filterType === "all") matchType = true;
     else if (filterType === "with-replacement") matchType = a.suggestedText !== undefined;
     else matchType = a.type === filterType;
-    const matchAuthor = filterAuthor === "all" || a.author === filterAuthor;
+    // The DISPLAY author (#1714). The chip is labelled "Imported" and carries
+    // the import pip, so a promoted import hiding from it while its own card
+    // reads "From: <reviewer>" is the same contradiction this issue is about,
+    // one surface over. The "You" filter correspondingly does not claim it.
+    const matchAuthor = filterAuthor === "all" || getDisplayAuthor(a) === filterAuthor;
     const matchStatus = filterStatus === "all" || a.status === filterStatus;
     if (matchType && matchAuthor && matchStatus) filtered.push(a);
   }

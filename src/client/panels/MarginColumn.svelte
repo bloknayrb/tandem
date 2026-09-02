@@ -5,6 +5,7 @@ import { getVisibleReplies } from "../annotations/replies";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import type { MarginMode } from "../layout/editor-stage.svelte";
 import AnnotationCard from "./AnnotationCard.svelte";
+import { getDisplayAuthor } from "./annotation-card-helpers";
 import {
   canAccept,
   canDismiss,
@@ -416,7 +417,11 @@ $effect(() => subscribeAnnotationActions());
       {@const isActive = ann.id === activeAnnotationId}
       {@const adjTop = adjTopRaw ?? rawTop}
       {@const endY = adjTop + LEADER_BUBBLE_INSET_PX}
-      {@const color = leaderColorForAuthor(ann.author, ann.agentIdentity)}
+      <!-- The DISPLAY author (#1714): the leader points AT a card that says
+           "From: <reviewer>", so a promoted import must keep the muted import
+           stroke or the line and the bubble it lands on disagree. -->
+      {@const color = leaderColorForAuthor(getDisplayAuthor(ann), ann.agentIdentity)}
+      {@const displayAuthor = getDisplayAuthor(ann)}
       {@const d = bezierLeaderPath({
         startX: editorX,
         startY: rawTop,
@@ -425,7 +430,7 @@ $effect(() => subscribeAnnotationActions());
       })}
       <path
         data-annotation-id={ann.id}
-        data-tandem-author={ann.author}
+        data-tandem-author={displayAuthor}
         {d}
         stroke={color}
         stroke-width={isActive ? 1.8 : 1.1}
@@ -436,7 +441,7 @@ $effect(() => subscribeAnnotationActions());
       <circle
         data-testid="margin-anchor-dot"
         data-annotation-id={ann.id}
-        data-tandem-author={ann.author}
+        data-tandem-author={displayAuthor}
         cx={editorX}
         cy={rawTop}
         r={isActive ? 3 : 2}

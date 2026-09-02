@@ -6,6 +6,7 @@ import { agentColor } from "../utils/agent-color";
 import {
   formatRelativeTime,
   getAuthorLabel,
+  getDisplayAuthor,
   getDisplayType,
   getHighlightSwatchColor,
 } from "./annotation-card-helpers";
@@ -27,8 +28,10 @@ let { annotation, isPending, isReviewTarget, isEditing, canEdit, onEnterEdit, ex
 
 const agentLabel = createAgentLabel();
 const displayType = $derived(getDisplayType(annotation));
+// The DISPLAY author, not the stored one. A promoted import reads "user" here
+// and would say "You" over a colleague's unedited words (#1714).
 const authorLabel = $derived(
-  getAuthorLabel(annotation.author, agentLabel.family, annotation.agentIdentity),
+  getAuthorLabel(getDisplayAuthor(annotation), agentLabel.family, annotation.agentIdentity),
 );
 // 6px authorship dot before the author label. `user` carries the fixed user
 // token; `claude` carries the per-agent color (#1123 M4) — `agentColor` falls
@@ -137,7 +140,11 @@ const glyphFill = $derived(glyph.filled ? getHighlightSwatchColor(annotation) : 
     {#if annotation.editedAt}
       <span class="ach-edited">(edited)</span>
     {/if}
-    {#if annotation.author !== "import"}
+    <!-- The actual "You" dot gate, and the site the first draft of this fix
+         missed: this header is SHARED by ImportedCard and the ordinary comment
+         card, so re-keying only the card dispatch would have routed a promoted
+         import back into ImportedCard and still painted the dot inside it. -->
+    {#if getDisplayAuthor(annotation) !== "import"}
       <span
         class="ach-dot"
         data-testid="annotation-author-dot-{annotation.id}"

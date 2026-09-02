@@ -4,6 +4,7 @@ import { TextSelection } from "prosemirror-state";
 import { untrack } from "svelte";
 import type { Annotation } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
+import { getDisplayAuthor } from "../panels/annotation-card-helpers";
 import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import type { HeadingEntry } from "../utils/headings";
@@ -142,7 +143,10 @@ const headingAnnotationCounts = $derived.by(() => {
         if (!ann.suggestedText) continue;
       } else if (ann.type !== activeFilterType) continue;
     }
-    if (activeFilterAuthor !== "all" && ann.author !== activeFilterAuthor) continue;
+    // The DISPLAY author, matching `SidePanel`'s own filter exactly (#1714) —
+    // the outline ticks and the rail are filtered by the same chip, so they
+    // must agree on what it selects.
+    if (activeFilterAuthor !== "all" && getDisplayAuthor(ann) !== activeFilterAuthor) continue;
     if (activeFilterStatus !== "all" && ann.status !== activeFilterStatus) continue;
     try {
       annPositions.push(flatOffsetToPmPos(ed.state.doc, ann.range.from));

@@ -2,6 +2,47 @@ import { HIGHLIGHT_COLOR_VARS, normalizeHighlightColor } from "../../shared/cons
 import type { AgentIdentity, Annotation } from "../../shared/types";
 
 /**
+ * Whether a record carries a THIRD PARTY's provenance — a `.docx` reviewer's
+ * name that survived whatever happened to `author` afterwards.
+ *
+ * `promotedAnnotation` rewrites `author: "import" -> "user"` so the user can
+ * edit, reply to and remove a colleague's comment they took ownership of, and
+ * `...rest` carries `importSource` through verbatim. Every display surface that
+ * branched on `author === "import"` therefore stopped recognising it: the card
+ * left `ImportedCard`, the header painted the "You" dot and `getAuthorLabel`
+ * said "You" — over a third party's unedited words (#1714).
+ *
+ * Trimmed and non-empty, because an `importSource` with a blank author names
+ * nobody and there is no byline to show.
+ */
+export function presentsAsImport(ann: Annotation): boolean {
+  if ((ann.importSource?.author ?? "").trim() !== "") return true;
+  // A genuine import whose Word comment carried no author name still presents
+  // as an import — it just has no byline. Keyed second so provenance wins.
+  return ann.author === "import";
+}
+
+/**
+ * The author role a card should PRESENT as, which is not always `ann.author`.
+ *
+ * The split is the fix for #1714 and it is the whole design: `author` is the
+ * STORAGE role and governs what the user may DO (`canEdit`/`canRemove`/
+ * `canReply` stay keyed on it, deliberately — the user promoted the record, so
+ * acting on it is their intent). This is the DISPLAY role and governs what the
+ * user is TOLD. Presenting a colleague's words as your own is the bug; being
+ * able to act on words you promoted is the feature.
+ *
+ * Every display site takes its existing author-keyed helper unchanged and feeds
+ * it this instead of the raw field, so there is one place to be wrong rather
+ * than six. Routing only the card dispatch through it was the first draft, and
+ * it would have sent the record back to `ImportedCard` while the shared header
+ * inside it still said "You".
+ */
+export function getDisplayAuthor(ann: Annotation): Annotation["author"] {
+  return presentsAsImport(ann) ? "import" : ann.author;
+}
+
+/**
  * Author label for an annotation. The agent ("claude") branch prefers the
  * specific authoring model's `agentIdentity.displayName` (#1123 M3 — the
  * local-model collaborator stamps it per record), then the user's active model
@@ -9,6 +50,10 @@ import type { AgentIdentity, Annotation } from "../../shared/types";
  * BYO models are dark, `agentIdentity` is always absent so this is byte-
  * identical to the pre-M3 label. `import` and `user` are author roles, not the
  * agent, and are unaffected.
+ *
+ * Callers pass `getDisplayAuthor(ann)`, not `ann.author` — see #1714. The
+ * parameter stays the bare role rather than the annotation so this remains a
+ * total function over three cases with nothing to misread.
  */
 export function getAuthorLabel(
   author: Annotation["author"],
@@ -77,6 +122,10 @@ export function getCardLabel(ann: Annotation): string {
  *
  * The review-target override (`--tandem-accent-bg`) is NOT here: it is a state,
  * not a taxonomy row, and it belongs with the rest of the card's state styling.
+ *
+ * Callers pass `getDisplayAuthor(ann)` (#1714): a promoted import keeps the
+ * muted import ground, because the card above it still says whose words those
+ * are.
  */
 export function getCardTint(author: Annotation["author"]): string {
   if (author === "claude") return "var(--tandem-author-claude-bg)";

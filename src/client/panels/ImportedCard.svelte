@@ -4,8 +4,16 @@ import AnnotationCardHeader from "./AnnotationCardHeader.svelte";
 import AnnotationSnippet from "./AnnotationSnippet.svelte";
 
 interface Props {
-  /** Any annotation authored by import (Word comments). */
-  annotation: Annotation & { author: "import" };
+  /**
+   * Any annotation that PRESENTS as an import — `getDisplayAuthor(ann) ===
+   * "import"`, which the one dispatch site in `AnnotationCard.svelte` enforces.
+   *
+   * Deliberately not `Annotation & { author: "import" }` any more: since #1714
+   * a promoted import renders here with `author: "user"`, so that intersection
+   * was a lie the call site papered over with a cast. The `importSource?.`
+   * accesses below were already optional-chained, so nothing here relied on it.
+   */
+  annotation: Annotation;
   isPending: boolean;
   isReviewTarget?: boolean;
   isEditing: boolean;

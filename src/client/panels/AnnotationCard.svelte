@@ -5,7 +5,7 @@ import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { activationKeydown } from "../utils/keyboard-activate";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
-import { getCardLabel, getCardTint } from "./annotation-card-helpers";
+import { getCardLabel, getCardTint, getDisplayAuthor } from "./annotation-card-helpers";
 import CommentCard from "./CommentCard.svelte";
 import type { Density } from "./cardDensity";
 import { cardEnter, cardExit } from "./cardMotion";
@@ -161,7 +161,9 @@ $effect(() => {
 //
 // The highlight's picked colour is not lost — it moved to the type icon, which
 // is the one place it still means something.
-const cardTint = $derived(getCardTint(annotation.author));
+// `getDisplayAuthor`, not `annotation.author` — a promoted import keeps the
+// import ground (#1714). See the helper for why display and storage split.
+const cardTint = $derived(getCardTint(getDisplayAuthor(annotation)));
 
 // Review-target override wins over the type tint; the accent ring is applied
 // via the .is-review-target class (see the style block below) so it composes
@@ -272,9 +274,9 @@ function onCardClick(event: MouseEvent) {
       <span class="tandem-claude-typing-dot"></span>
     </div>
   {/if}
-  {#if annotation.author === "import"}
+  {#if getDisplayAuthor(annotation) === "import"}
     <ImportedCard
-      annotation={annotation as Annotation & { author: "import" }}
+      {annotation}
       {isPending}
       {isReviewTarget}
       {isEditing}
