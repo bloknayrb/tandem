@@ -108,7 +108,7 @@ test("tab switching shows tab-specific content", async ({ page }) => {
   await page.locator("[data-testid='settings-modal-tab-collaboration']").click();
   await expect(page.locator("[data-testid='settings-modal-display-name']")).toBeVisible();
   await expect(
-    page.locator("[data-testid='settings-modal-default-mode-tandem-btn']"),
+    page.locator("[data-testid='settings-modal-solo-rail-hidden-toggle']"),
   ).toBeVisible();
 
   // Shortcuts tab.

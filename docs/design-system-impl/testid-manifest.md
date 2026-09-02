@@ -202,8 +202,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `settings-modal-mcp-status`, `settings-modal-tab-{*}`,
   `settings-modal-display-name`, `settings-modal-shortcuts-list`,
   `settings-modal-app-info-footer`
-- `settings-modal-default-mode-{tandem,solo}-btn`,
-  `settings-modal-solo-rail-hidden-toggle`,
+- `settings-modal-solo-rail-hidden-toggle`,
   `settings-modal-dwell-time-slider`,
   `settings-modal-selection-toolbar-toggle`,
   `settings-modal-margin-view-toggle`,

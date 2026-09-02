@@ -131,11 +131,6 @@ const CASES: ControlCase[] = [
     innerInput: true,
   },
   {
-    name: "SettingsCollaborationTab default-mode radio",
-    component: SettingsCollaborationTab,
-    testid: "settings-modal-default-mode-solo-btn",
-  },
-  {
     name: "SettingsCollaborationTab solo-rail checkbox",
     component: SettingsCollaborationTab,
     testid: "settings-modal-solo-rail-hidden-toggle",

@@ -5,7 +5,6 @@ import {
   TANDEM_SETTINGS_KEY,
 } from "../../shared/constants";
 import { type ModelProvider, VALID_MODEL_PROVIDERS } from "../../shared/models/contract.js";
-import type { TandemMode } from "../../shared/types.js";
 import type { ShortcutChord } from "../actions/keybindings.js";
 import { parseCustomShortcuts } from "../actions/shortcut-conflicts.js";
 
@@ -145,7 +144,6 @@ export interface TandemSettings {
    */
   defaultSaveDirectory: string | null;
   density: Density;
-  defaultMode: TandemMode;
   highContrast: boolean;
   annotationPatterns: boolean;
   selectionToolbar: boolean;
@@ -256,7 +254,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 19,
+  schemaVersion: 20,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorMeasure: "comfortable",
@@ -271,7 +269,6 @@ const DEFAULTS: TandemSettings = {
   fontByExtension: {},
   defaultSaveDirectory: null,
   density: "cozy",
-  defaultMode: "tandem",
   highContrast: false,
   annotationPatterns: false,
   selectionToolbar: true,
@@ -503,8 +500,16 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  *   an explicit override); `normalizeKnownFields` defaults a missing field to
  *   `true` so upgrading users gain the affordance without opting in, and
  *   preserves an explicit `false`.
+ * v19→v20: remove `defaultMode` (#1623). It was stored, validated, migrated
+ *   and unit-tested, and read by nothing — the live mode has always come from
+ *   the `tandem:mode` localStorage key that the mode toggle writes, so a user
+ *   who set Solo here never started in Solo. Rather than wire it up, the
+ *   setting and its Settings → Collaboration radiogroup were deleted:
+ *   persisting the toggle already expresses the same intent, and two sources
+ *   for one preference can only disagree. The field is deleted on read and
+ *   listed in REMOVED_FIELDS so it cannot resurrect via forward-compat.
  */
-export const CURRENT_SCHEMA_VERSION = 19;
+export const CURRENT_SCHEMA_VERSION = 20;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -597,10 +602,6 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
       parsed.density === "compact" || parsed.density === "cozy" || parsed.density === "spacious"
         ? parsed.density
         : DEFAULTS.density,
-    defaultMode:
-      parsed.defaultMode === "solo" || parsed.defaultMode === "tandem"
-        ? parsed.defaultMode
-        : DEFAULTS.defaultMode,
     highContrast: parsed.highContrast === true,
     annotationPatterns: parsed.annotationPatterns === true,
     selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
@@ -858,6 +859,19 @@ export function loadSettings(): TandemSettings {
         // normalizeKnownFields defaults a missing value to true.
         parsed = { ...parsed, schemaVersion: 19 };
       }
+      if (parsed.schemaVersion === 19) {
+        // v19→v20: remove `defaultMode` (#1623) — a setting nothing read. There
+        // is no value to carry anywhere: the mode the user actually gets has
+        // always come from `tandem:mode`, a separate key with its own
+        // lifecycle, so a stored `"solo"` here was already inert and migrating
+        // it into that key would CHANGE behaviour rather than preserve it.
+        // The strip is belt-and-suspenders — normalizeKnownFields already drops
+        // the unknown key, and REMOVED_FIELDS blocks the forward-compat
+        // passthrough.
+        const next: Record<string, unknown> = { ...parsed, schemaVersion: 20 };
+        delete next.defaultMode;
+        parsed = next;
+      }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
       // is the contract `createTandemSettings.updateSettings` checks.
@@ -914,6 +928,7 @@ export function loadSettings(): TandemSettings {
           "showAnnotationDecorations",
           "editorWidthPercent",
           "holdAnnotationsWhileOffline",
+          "defaultMode",
         ]);
         const futureFields: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(parsed)) {

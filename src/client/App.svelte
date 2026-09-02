@@ -207,6 +207,10 @@ const selectionDwellMs = $derived(settingsState.settings.selectionDwellMs);
 const modeState = createTandemModeBroadcast(
   () => yjsSync.bootstrapYdoc,
   () => selectionDwellMs,
+  // #1621: the broadcast must wait for the ctrl provider's first sync, or it
+  // races it and loses a CRDT tie silently. `createChatState` below already
+  // takes `ctrlInitialSyncComplete` for the same reason.
+  () => yjsSync.ctrlInitialSyncComplete,
 );
 
 // Remapped-shortcut override layer (ADR-041). Rebuilt whenever the user's

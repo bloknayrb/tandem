@@ -128,38 +128,6 @@ test("editor-measure presets thread through to the stage's --editor-measure CSS 
   }
 });
 
-test("settings dialog surfaces default mode and persists it", async ({ page }) => {
-  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
-
-  await page.goto("/");
-  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
-
-  await openSettingsViaBrandMenu(page);
-  const modal = page.locator("[data-testid='settings-modal']");
-  await expect(modal).toBeVisible({ timeout: 2_000 });
-
-  await page.locator("[data-testid='settings-modal-tab-collaboration']").click();
-  const soloDefault = modal.locator("[data-testid='settings-modal-default-mode-solo-btn']");
-  await expect(soloDefault).toBeVisible();
-  await soloDefault.click();
-  await expect(soloDefault).toHaveAttribute("aria-checked", "true");
-
-  const savedDefaultMode = await page.evaluate((key) => {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as { defaultMode?: string }).defaultMode : null;
-  }, TANDEM_SETTINGS_KEY);
-  expect(savedDefaultMode).toBe("solo");
-
-  await page.reload();
-  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
-  await openSettingsViaBrandMenu(page);
-  const reloadedModal = page.locator("[data-testid='settings-modal']");
-  await reloadedModal.locator("[data-testid='settings-modal-tab-collaboration']").click();
-  await expect(
-    reloadedModal.locator("[data-testid='settings-modal-default-mode-solo-btn']"),
-  ).toHaveAttribute("aria-checked", "true");
-});
-
 test("settings dialog sections and About panel reflect the redesign closeout", async ({ page }) => {
   await page.route("**/api/info", async (route) => {
     // The client bootstraps its collaboration layer from this route too: it

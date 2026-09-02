@@ -47,41 +47,6 @@ $effect(() => {
   />
 </div>
 
-<div>
-  <div id="settings-modal-default-mode-label" class="settings-section-label">Default Mode</div>
-  <div
-    role="radiogroup"
-    aria-labelledby="settings-modal-default-mode-label"
-    class="settings-mode-btns"
-  >
-    <button
-      type="button"
-      data-testid="settings-modal-default-mode-tandem-btn"
-      role="radio"
-      aria-checked={ctx.settings.defaultMode === "tandem"}
-      disabled={ctx.readOnly}
-      onclick={() => ctx.onUpdate({ defaultMode: "tandem" })}
-      class="settings-mode-btn"
-    >
-      Tandem
-    </button>
-    <button
-      type="button"
-      data-testid="settings-modal-default-mode-solo-btn"
-      role="radio"
-      aria-checked={ctx.settings.defaultMode === "solo"}
-      disabled={ctx.readOnly}
-      onclick={() => ctx.onUpdate({ defaultMode: "solo" })}
-      class="settings-mode-btn"
-    >
-      Solo
-    </button>
-  </div>
-  <div class="settings-hint" style="margin-top: var(--tandem-space-1);">
-    Sets the preferred starting mode for new sessions.
-  </div>
-</div>
-
 <label
   data-testid="settings-modal-solo-rail-hidden-toggle"
   style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;"

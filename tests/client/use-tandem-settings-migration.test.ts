@@ -417,6 +417,36 @@ describe("loadSettings — migration chain", () => {
     expect(raw(s).holdAnnotationsWhileOffline).toBeUndefined();
   });
 
+  // v19→v20: drop `defaultMode` (#1623), a setting read by nothing. The mode
+  // the user actually gets has always come from the separate `tandem:mode` key,
+  // so there is nothing to carry forward — only a dead field to strip.
+  it("v19→v20: strips defaultMode", () => {
+    writeRaw({ schemaVersion: 19, defaultMode: "solo", theme: "dark" });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(raw(s).defaultMode).toBeUndefined();
+    expect(s.theme).toBe("dark");
+  });
+
+  it("a full v2→current migration also strips defaultMode", () => {
+    writeRaw({ schemaVersion: 2, defaultMode: "solo" });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(raw(s).defaultMode).toBeUndefined();
+  });
+
+  it("forward-compat strips defaultMode via REMOVED_FIELDS", () => {
+    // The half the version bump alone does not cover: a blob written by a
+    // FUTURE client takes the `> CURRENT_SCHEMA_VERSION` branch, skipping every
+    // migration step, and its unknown keys pass through verbatim. Without the
+    // REMOVED_FIELDS entry the retired name would ride back onto the settings
+    // object and pin a contract this removal intends to retire.
+    writeRaw({ schemaVersion: 99, defaultMode: "solo" });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(raw(s).defaultMode).toBeUndefined();
+  });
+
   it("v1 blob with showIntegrationWizard migrates fully stripping it", () => {
     writeRaw({
       schemaVersion: 1,
@@ -755,7 +785,6 @@ describe("loadSettings — migration chain", () => {
       editorFont: "serif" as const,
       fontByExtension: { md: "mono" },
       density: "spacious" as const,
-      defaultMode: "solo" as const,
       highContrast: true,
       annotationPatterns: true,
       selectionToolbar: false,
@@ -788,7 +817,6 @@ describe("loadSettings — migration chain", () => {
     expect(s.editorFont).toBe("serif");
     expect(s.fontByExtension).toEqual({ md: "mono" });
     expect(s.density).toBe("spacious");
-    expect(s.defaultMode).toBe("solo");
     expect(s.highContrast).toBe(true);
     expect(s.annotationPatterns).toBe(true);
     expect(s.selectionToolbar).toBe(false);
