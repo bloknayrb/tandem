@@ -274,7 +274,15 @@ function onCardClick(event: MouseEvent) {
       <span class="tandem-claude-typing-dot"></span>
     </div>
   {/if}
-  {#if getDisplayAuthor(annotation) === "import"}
+  <!-- The STORAGE author, deliberately (#1714). Which card variant renders is
+       a question about what the record IS, and a promoted import is an
+       ordinary editable comment: `ImportedCard` renders its body as plain
+       text and has no suggestion diff, so routing a promoted record here
+       would render markdown literally and hide a `suggestedText` the header
+       is simultaneously advertising. The ATTRIBUTION is what follows the
+       display author -- the byline, dot and label all live in the shared
+       header, and the ground tint above. -->
+  {#if annotation.author === "import"}
     <ImportedCard
       {annotation}
       {isPending}

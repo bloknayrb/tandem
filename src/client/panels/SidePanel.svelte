@@ -271,10 +271,12 @@ const filteredData = $derived.by(() => {
     if (filterType === "all") matchType = true;
     else if (filterType === "with-replacement") matchType = a.suggestedText !== undefined;
     else matchType = a.type === filterType;
-    // The DISPLAY author (#1714). The chip is labelled "Imported" and carries
-    // the import pip, so a promoted import hiding from it while its own card
-    // reads "From: <reviewer>" is the same contradiction this issue is about,
-    // one surface over. The "You" filter correspondingly does not claim it.
+    // The chip is labelled "Imported" and carries the import pip, so a promoted
+    // import hiding from it while its own card reads "From: <reviewer>" is the
+    // same contradiction #1714 is about, one surface over. The consequence is
+    // real and accepted: the "You" chip correspondingly does NOT claim a record
+    // the user owns and is the only one who can edit. The chip agrees with the
+    // card, which is the axis a person reads.
     const matchAuthor = filterAuthor === "all" || getDisplayAuthor(a) === filterAuthor;
     const matchStatus = filterStatus === "all" || a.status === filterStatus;
     if (matchType && matchAuthor && matchStatus) filtered.push(a);
@@ -540,11 +542,11 @@ $effect(() => {
   // Prune against the FILTERED visible list, not the raw annotations list:
   // if FilterBar hides imports, the BatchPromoteBar must clear too, otherwise
   // the user sees "N selected / Send N to Claude" with no visible cards.
-  // Raw `author`, not `getDisplayAuthor` (#1714), and this pair is deliberate:
-  // this asks "may this record still be promoted", which is a STORAGE question.
-  // `promotedAnnotation` rewrites the author AND retypes `note -> comment` in
-  // one write, so an already-promoted record fails the `type` half regardless
-  // of which author accessor is used here.
+  // Raw `author`, not `getDisplayAuthor` (#1714), here and at its twin on the
+  // checkbox gate further down — this asks "may this record still be promoted",
+  // which is a STORAGE question. `promotedAnnotation` rewrites the author AND
+  // retypes `note -> comment` in one write, so an already-promoted record fails
+  // the `type` half regardless of which author accessor is used.
   const validIds = new Set(
     filteredData.pending.filter((a) => a.author === "import" && a.type === "note").map((a) => a.id),
   );

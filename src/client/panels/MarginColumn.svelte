@@ -417,9 +417,9 @@ $effect(() => subscribeAnnotationActions());
       {@const isActive = ann.id === activeAnnotationId}
       {@const adjTop = adjTopRaw ?? rawTop}
       {@const endY = adjTop + LEADER_BUBBLE_INSET_PX}
-      <!-- The DISPLAY author (#1714): the leader points AT a card that says
-           "From: <reviewer>", so a promoted import must keep the muted import
-           stroke or the line and the bubble it lands on disagree. -->
+      <!-- The leader points AT a card that says "From: <reviewer>", so a
+           promoted import keeps the muted import stroke (#1714) — otherwise the
+           line and the bubble it lands on disagree about whose comment it is. -->
       {@const displayAuthor = getDisplayAuthor(ann)}
       {@const color = leaderColorForAuthor(displayAuthor, ann.agentIdentity)}
       {@const d = bezierLeaderPath({

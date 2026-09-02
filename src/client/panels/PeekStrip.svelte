@@ -57,6 +57,8 @@ function dotClass(a: Annotation): string {
   if (a.type === "comment" && a.suggestedText != null) return "suggest";
   // The DISPLAY author (#1714): a promoted import keeps the import dot, so the
   // sliver agrees with the card it is previewing rather than contradicting it.
+  // The sliver previews the rail it is hiding, so its dot must agree with the
+  // card behind it — a promoted import keeps the import dot (#1714).
   const author = getDisplayAuthor(a);
   if (author === "claude") return "claude";
   if (author === "import") return "import";
