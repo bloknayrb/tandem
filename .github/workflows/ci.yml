@@ -25,7 +25,7 @@ on:
 # tagless. `permissions: {}` would 403 there, and the failure would look like a
 # harness bug rather than a permissions one.
 #
-# Declared at workflow level rather than per job, deliberately: all five jobs need
+# Declared at workflow level rather than per job, deliberately: all six jobs need
 # the identical minimum, and inheritance means a job added later is least-privileged
 # by default instead of silently reacquiring the repo default. A future job needing
 # more takes a job-level block — which REPLACES rather than merges, so such an
@@ -223,6 +223,36 @@ jobs:
             coverage/coverage-summary.json
             coverage/index.html
             coverage/**/*.html
+
+  # Is the Node runtime we BUNDLE still current on its line? (#1747)
+  #
+  # The pin sat at 22.17.0 for fourteen months while five security releases went
+  # past it, and nothing noticed -- the jobs above all run `node-version: 22`,
+  # the latest, so the suite never exercises the runtime that ships to desktop
+  # users. Nothing in the test tree can notice either: the version is a constant,
+  # and whether it is STALE is a fact about the outside world.
+  #
+  # Advisory on purpose, and it stays that way. This is the only job here that
+  # reaches the network, so making it required would let a nodejs.org outage
+  # block every merge -- and the thing it detects (a pin going stale over
+  # months) is never urgent enough to justify that. It reports 3, not 0, when it
+  # cannot evaluate, so an outage is distinguishable from "all clear".
+  #
+  # tests/scripts/node-sidecar-pin-wiring.test.ts parses this job and fails --
+  # inside `check` -- if it is disarmed or removed (ADR-051). It needs no
+  # `npm ci` and no token, which is what keeps the permissions note above true.
+  node-sidecar-pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+
+      - name: Bundled Node pin is current
+        run: node scripts/ci/node-sidecar-pin.mjs
+        timeout-minutes: 5
 
   check:
     runs-on: ubuntu-latest
