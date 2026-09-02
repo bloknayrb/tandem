@@ -147,11 +147,64 @@ Each row:
   `translateY(8px)` → `translateY(0)` over 240ms ease-out. Sticky bar
   stays mounted until selection clears; selection-clear = reverse of
   enter, 200ms.
+- **Hold state = the ACCENT family, decided 2026-08-31.** Recorded here
+  because it was decided nowhere tracked: the handoff manifest specified
+  the *warning* family, production shipped *accent*, and the reconciliation
+  pass left it as "reconcile before redraw" rather than settling it. Accent
+  wins. A batch of imported notes waiting to be promoted is a **neutral
+  pending state, not a problem** — warning tokens would make an ordinary
+  step of the import flow read as broken. Conflict #6's "production tokens
+  win" default already pointed the same way, and switching would have
+  carried a per-token WCAG re-audit for a change that makes the surface
+  worse. Do not re-raise this as a divergence; it is a settled call.
+
+- **C7 and C8 STACK. They are not mutually exclusive, and nothing may make
+  them so.** The manifest's exclusivity rule was false and is retired
+  (decided 2026-08-31). `SidePanel.svelte` renders `BatchPromoteBar` and
+  `BulkActions` as unconditional siblings on **independent gates** — one
+  fires on checked imported notes (`selectedCount`), the other on pending
+  review items (`pendingCount > 1`) — so both can be live at once. The
+  gates are independent because the *states* are independent. Adding a
+  priority rule so only one renders would silently hide a real affordance
+  in order to make a layout problem go away, which is why it was rejected
+  rather than adopted as the cheap fix.
+
+- **Where they actually sit, measured 2026-09-01 — this is NOT what the
+  handoff manifest says, and a canvas drawn from the manifest would be
+  drawn against fiction.** The manifest's standing anti-pattern for both
+  rows reads *"position absolute at rail bottom — never floats above the
+  rail's `overflow: hidden` track."* None of that describes shipped code:
+
+  - Both bars are in **normal flow near the TOP of the panel**, between
+    `FilterBar`/`ApplyChangesButton` and the `role="list"` container. Not
+    the bottom, and not absolutely positioned.
+  - The panel root is `display: flex; flex-direction: column;
+    overflow-y: auto` — **the whole panel scrolls**, there is no separate
+    inner track, and nothing is `overflow: hidden`.
+  - The list is `flex: 1`, so the bars simply take height off the top of
+    it. There is **no height budget to reserve**; flow already does it.
+  - They are **positioned inconsistently with each other**:
+    `BatchPromoteBar` is `position: sticky; top: 0` with a background and
+    `z-index: var(--tandem-z-base)`; `BulkActions` has no positioning at
+    all. So when both are live, the promote bar pins to the top of the
+    scrolling panel and the bulk bar **scrolls away underneath it**.
+
+  That inconsistency, not a height budget, is the real open question. What
+  the 3.4 canvas owes: a **fixed order** (promote-above-bulk is what
+  markup order gives today), and a decision on **which bars stick** — both,
+  neither, or the current split — with the answer applied to both
+  components rather than left as an accident of one having `sticky` and
+  the other not. Whatever is chosen must survive the two bars being live
+  simultaneously, since that is a reachable state and not an edge case.
+
 - **Anti-patterns.** Do NOT show count = 0 (hide instead). Do NOT add a
   third action button — the primary CTA is "Send N to Claude" (C7) or
   "Accept N" / "Dismiss N" (C8); a third action invites accidental
   destructive use. Do NOT block scroll under the bar — the bar sits over
-  the editor, the editor must still scroll behind it.
+  the editor, the editor must still scroll behind it. Do NOT make one bar
+  suppress the other (see above) — that reads as a simplification and is a
+  regression. Do NOT copy the manifest's "absolute at rail bottom" phrasing
+  into a canvas — it has never matched the code.
 
 ### 3.5 Margin column (risky) — C4 MarginColumn
 
