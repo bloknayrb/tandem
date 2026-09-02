@@ -95,9 +95,24 @@ const isCI = process.env.CI === "true";
  */
 function verifyCommittedChecksum(archivePath, archiveName, nodeVersion, targetTriple) {
   if (nodeVersion !== DEFAULT_NODE_VERSION) {
+    // An explicit `--node-version` is a deliberate override and has no committed
+    // hash, so this check has nothing to compare against and steps aside.
+    //
+    // Say what that actually leaves, rather than "the fetched SHASUMS256.txt
+    // alone", which reads like a second line of defence and outside CI is not
+    // one: every failure branch in `verifyChecksum` below warns and RETURNS when
+    // `isCI` is false, so on a developer machine a failed or blocked fetch means
+    // the archive is verified by nothing at all. That degradation predates this
+    // change and is deliberate (it keeps an offline build working); what did not
+    // exist before was a comment implying coverage it does not have.
+    //
+    // The pinned path is unaffected either way -- it reaches the committed hash
+    // below, which throws on mismatch and never degrades.
     console.warn(
       `Node ${nodeVersion} was requested explicitly (pin is ${DEFAULT_NODE_VERSION}) -- ` +
-        "no committed hash to check against; relying on the fetched SHASUMS256.txt alone.",
+        "no committed hash to check against. Outside CI the fetched SHASUMS256.txt " +
+        "check also degrades to a warning if it cannot be reached, so this archive " +
+        "may end up verified by nothing. Build the pinned version for an integrity-checked binary.",
     );
     return;
   }

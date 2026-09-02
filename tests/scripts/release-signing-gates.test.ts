@@ -144,6 +144,144 @@ fi
 echo "Apple signing material present."
 `;
 
+/**
+ * The EXECUTABLE lines of a `run:` body — everything that is not blank, not a
+ * comment, and not a message (`echo` / `Write-Host`), indentation kept. A
+ * message that REDIRECTS is a state write, not a message, and stays.
+ *
+ * This exists because of a defeat found in adversarial review, and one defeat
+ * beat three separate assertions in this file at once. Every check here that was
+ * not exact equality asserted that some TEXT WAS PRESENT, and no text check can
+ * see whether the text it matched is still REACHABLE. All three of these leave
+ * every scanned literal physically in the file, and all three ship an unsigned
+ * or unverified artifact:
+ *
+ *   if false && [ -z "$APPLE_API_KEY_BASE64" ]; then              (decode, dead)
+ *   if ! { codesign --verify --deep --strict ... || true; }; then (always true)
+ *   if ($errors.Count -gt 0 -and $false) {                        (Windows, dead)
+ *
+ * The fix is not three more assertions naming those three shapes. Fixing the
+ * named instances is not enumerating the category, and the next neutralizer has
+ * a shape nobody listed. It is to pin the executable body by exact equality, so
+ * that any edit to a line that RUNS must also edit this file.
+ *
+ * **This corrects an argument made when the guard was first written.** Exact
+ * equality was rejected for the long bodies because they are ~69 lines, get
+ * legitimately edited, break on a CRLF renormalize, and carry eight em-dashes —
+ * so the cheapest repair (paste in whatever the workflow says now) would be
+ * indistinguishable from the attack. Every one of those objections is about the
+ * PROSE: the comments, the error text, the em-dashes. Excluding prose removes
+ * the objection and keeps the strength. What remains churns only when a CHECK
+ * changes, and a diff to it is legible — a reviewer who sees
+ * `+ "if false && [ -z ..."` land in a test file knows what they are looking at,
+ * which is not true inside a 69-line literal.
+ *
+ * Residuals, stated rather than papered over. A neutralizer that adds no
+ * executable line and edits none would still pass; nothing found so far has that
+ * shape, since shadowing a command with a shell function is itself an executable
+ * line. And this says nothing about the step's `shell:`, `if:` or `env:` — those
+ * are asserted separately below, which is why they are separate assertions.
+ */
+function executableLines(run: string | undefined): string[] {
+  return (run ?? "").split("\n").filter((line) => {
+    const t = line.trim();
+    if (t === "") return false;
+    if (t.startsWith("#")) return false;
+    const isMessage = t.startsWith("echo ") || t.startsWith("Write-Host ");
+    if (isMessage && !/>>?\s/.test(t)) return false;
+    return true;
+  });
+}
+
+// Generated from the workflow at the time this guard was written, not typed by
+// hand. Updating one is a deliberate act: read the diff as a claim about what
+// the gate now does.
+const DECODE_EXEC: string[] = [
+  'if [ -z "$APPLE_API_KEY_BASE64" ]; then',
+  "  exit 1",
+  "fi",
+  "umask 077",
+  'mkdir -p "$RUNNER_TEMP/private_keys"',
+  'KEY_PATH="$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8"',
+  'printf \'%s\' "$APPLE_API_KEY_BASE64" | base64 -d > "$KEY_PATH"',
+  'chmod 600 "$KEY_PATH"',
+  'echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"',
+];
+
+const MACOS_VERIFY_EXEC: string[] = [
+  'if [ -z "$APPLE_CERTIFICATE" ]; then',
+  "  exit 1",
+  "fi",
+  "shopt -s nullglob",
+  "apps=(src-tauri/target/*/release/bundle/macos/*.app src-tauri/target/release/bundle/macos/*.app)",
+  "if [ ${#apps[@]} -eq 0 ]; then",
+  "  exit 1",
+  "fi",
+  "errors=0",
+  'for app in "${apps[@]}"; do',
+  '  if ! codesign --verify --deep --strict --verbose=2 "$app"; then',
+  "    errors=1",
+  "    continue",
+  "  fi",
+  '  if ! xcrun stapler validate "$app"; then',
+  "    errors=1",
+  "    continue",
+  "  fi",
+  '  sidecar="$app/Contents/MacOS/node-sidecar"',
+  '  if [ ! -e "$sidecar" ]; then',
+  "    errors=1",
+  "    continue",
+  "  fi",
+  '  if ! codesign -d --entitlements - "$sidecar" 2>&1 | strings | grep -q "com.apple.security.cs.allow-jit"; then',
+  "    errors=1",
+  "    continue",
+  "  fi",
+  '  reaper="$app/Contents/MacOS/tandem-reaper"',
+  '  if [ ! -e "$reaper" ]; then',
+  "    errors=1",
+  "    continue",
+  "  fi",
+  "done",
+  "dmg_count=0",
+  "for dmg in src-tauri/target/*/release/bundle/dmg/*.dmg src-tauri/target/release/bundle/dmg/*.dmg; do",
+  '  [ -e "$dmg" ] || continue',
+  "  dmg_count=$((dmg_count + 1))",
+  '  if ! codesign --verify --strict --verbose=2 "$dmg"; then',
+  "    errors=1",
+  "  fi",
+  '  if xcrun stapler validate "$dmg" >/dev/null 2>&1; then',
+  "  else",
+  "  fi",
+  "done",
+  'if [ "$dmg_count" -eq 0 ]; then',
+  "fi",
+  'if [ "$errors" -ne 0 ]; then exit 1; fi',
+];
+
+const WINDOWS_VERIFY_EXEC: string[] = [
+  "$bundleFiles = @()",
+  "$bundleFiles += Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' -ErrorAction SilentlyContinue",
+  "$bundleFiles += Get-ChildItem -Path 'src-tauri/target/release/bundle/msi'  -Filter '*.msi' -ErrorAction SilentlyContinue",
+  "if ($bundleFiles.Count -eq 0) {",
+  "  exit 1",
+  "}",
+  "$errors = @()",
+  "foreach ($f in $bundleFiles) {",
+  "  $sig = Get-AuthenticodeSignature -FilePath $f.FullName",
+  "  if ($sig.Status -ne 'Valid') {",
+  '    $errors += "$($f.FullName): Status=$($sig.Status) StatusMessage=$($sig.StatusMessage)"',
+  "  } elseif (-not $sig.TimeStamperCertificate) {",
+  '    $errors += "$($f.FullName): signature missing RFC 3161 timestamp"',
+  "  } else {",
+  "    $tsSubject = if ($sig.TimeStamperCertificate) { $sig.TimeStamperCertificate.Subject } else { '(none)' }",
+  "  }",
+  "}",
+  "if ($errors.Count -gt 0) {",
+  '  $errors | ForEach-Object { Write-Host "::error::$_" }',
+  "  exit 1",
+  "}",
+];
+
 // The complete set of names the gate tests, derived below from the conditionals
 // themselves. ADR-051 rule 3 — deriving it from `env:` keys instead would pass a
 // name that is present in env but never actually tested.
@@ -204,27 +342,23 @@ describe("the macOS release legs fail closed on missing signing material (#1746)
     // It used to `exit 0` on an empty key. Deleting that in favour of "the
     // validate step runs first" would be a claim about ORDER, which nothing here
     // asserts and a reordering edit would break silently.
+    expect(executableLines(DECODE_GATE.run)).toEqual(DECODE_EXEC);
     expect(DECODE_GATE.run).toContain('echo "::error::APPLE_API_KEY_BASE64 is empty');
-    expect(DECODE_GATE.run).toMatch(/^\s*exit 1$/m);
-    expect(DECODE_GATE.run).not.toMatch(/^\s*exit 0\b/m);
   });
 
   it("the macOS verify step refuses an unsigned bundle instead of skipping", () => {
-    // The body is 69 lines and gets legitimately edited, so pinning it whole
-    // would break on re-indentation, on a CRLF renormalize, and on any real
-    // change — and the cheapest repair for that (paste in whatever it says now)
-    // is indistinguishable from the attack. Pin the branch that matters, and
-    // sweep structurally for the family.
+    // Every line that runs, pinned exactly. `toContain("codesign --verify
+    // --deep --strict")` was the original and is satisfied by
+    // `if ! { codesign --verify --deep --strict ... || true; }`, which can never
+    // report a failure — see executableLines() above for why the whole category,
+    // not the three known spellings, is what this now closes.
     const run = MACOS_VERIFY.run ?? "";
-    expect(run).toContain('if [ -z "$APPLE_CERTIFICATE" ]; then');
+    expect(executableLines(run)).toEqual(MACOS_VERIFY_EXEC);
+    // The message is prose and deliberately outside the pin, but it is the only
+    // thing that tells a human WHY the release stopped, so assert it survives.
     expect(run).toContain(
       'echo "::error::APPLE_CERTIFICATE is empty — this bundle is unsigned and un-notarized, and Gatekeeper will refuse it on every Mac (#1746)."',
     );
-    expect(run.match(/^\s*exit 0\b/m)).toBeNull();
-    // The artifact-level checks are what actually prove signing; assert they are
-    // still the ones being run.
-    expect(run).toContain("codesign --verify --deep --strict");
-    expect(run).toContain("xcrun stapler validate");
   });
 
   it("the verify step checks the .dmg users download, not only the staged .app", () => {
@@ -238,11 +372,11 @@ describe("the macOS release legs fail closed on missing signing material (#1746)
     // over PowerShell is defeated by `if (-not $env:X) { return }` or by
     // `$ErrorActionPreference = 'SilentlyContinue'`. This is the parity half of
     // #1746 — the two platforms disagreeing is the whole finding.
+    // `/\$errors\.Count -gt 0/` is unanchored, so it still matches inside
+    // `if ($errors.Count -gt 0 -and $false) {` — which can never be true, leaving
+    // the `exit 1` below it dead while both regexes stay green. Pin what runs.
     const run = windowsVerifyStep().run ?? "";
-    expect(run).toContain("Get-AuthenticodeSignature");
-    expect(run).toContain("TimeStamperCertificate");
-    expect(run).toMatch(/\$errors\.Count -gt 0/);
-    expect(run).toMatch(/exit 1/);
+    expect(executableLines(run)).toEqual(WINDOWS_VERIFY_EXEC);
   });
 
   describe("nothing swallows a failure", () => {

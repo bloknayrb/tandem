@@ -105,15 +105,60 @@ describe("the bundled Node pin is checked for drift (#1747)", () => {
     });
 
     it("is what the downloader actually uses", () => {
-      // `toContain("DEFAULT_NODE_VERSION")` would pass on a file that imports
-      // the constant and then falls back to a literal anyway, which is the exact
-      // shape of the bug being fixed.
+      // `toContain("DEFAULT_NODE_VERSION")` would pass on a file that imports the
+      // constant and then falls back to a literal anyway, which is the exact
+      // shape of the bug being fixed. So the binding is pinned, and so is the
+      // absence of a dotted version literal anywhere in the file.
       const source = readFileSync(path.join(ROOT, "scripts/download-node-sidecar.mjs"), "utf-8");
       expect(source).toContain(
         'const nodeVersion = getArg("--node-version") || DEFAULT_NODE_VERSION;',
       );
       const literals = [...source.matchAll(/\b(\d{2}\.\d+\.\d+)\b/g)].map((m) => m[1]);
       expect(literals, "a hardcoded Node version literal is back in the downloader").toEqual([]);
+    });
+
+    it("routes every consumer through that one binding, not a shadow of it", () => {
+      // Adversarial review defeated the two assertions above together. Both are
+      // about the DECLARATION, and neither says the declaration is what gets
+      // USED. Add this after it and everything above stays green:
+      //
+      //   let effectiveNodeVersion = nodeVersion;
+      //   if (!process.env.CI) effectiveNodeVersion = ["22", "17", "0"].join(".");
+      //
+      // then thread `effectiveNodeVersion` into the download and verify calls.
+      // The required line is still present verbatim, and the literal sweep finds
+      // nothing because "22", "17" and "0" are never contiguous in the source —
+      // reinstating the stale-version fallback #1747 removed, off CI, where it
+      // would be found by a user rather than a test.
+      //
+      // Scanning harder for split literals is the wrong repair: any scan for a
+      // TEXT SHAPE loses to a different spelling. Key on the structural fact
+      // instead — every site that consumes a version takes `nodeVersion`, and
+      // `nodeVersion` is assigned exactly once.
+      const source = readFileSync(path.join(ROOT, "scripts/download-node-sidecar.mjs"), "utf-8");
+
+      for (const consumer of [
+        "const url = `https://nodejs.org/dist/v${nodeVersion}/${archiveName}`;",
+        "verifyCommittedChecksum(archivePath, archiveName, nodeVersion, targetTriple);",
+        "await verifyChecksum(archivePath, archiveName, nodeVersion);",
+        "extractZip(archivePath, nodeVersion, info, outputPath);",
+        "extractTarGz(archivePath, nodeVersion, info, outputPath);",
+        "recorded === nodeVersion",
+      ]) {
+        expect(source, `a version consumer no longer reads \`nodeVersion\`: ${consumer}`).toContain(
+          consumer,
+        );
+      }
+
+      // Exactly one assignment, so the binding above cannot be reassigned later
+      // and cannot be a `let` that something rewrites. Declaration only — the
+      // matches inside function signatures are parameters, not assignments.
+      const assignments = [
+        ...source.matchAll(/^\s*(?:const |let |var )?nodeVersion\s*=(?!=)/gm),
+      ].map((m) => m[0].trim());
+      expect(assignments, "nodeVersion is assigned more than once").toEqual([
+        "const nodeVersion =",
+      ]);
     });
 
     it("re-downloads when the on-disk sidecar is a different version, or unmarked", () => {
