@@ -1048,6 +1048,40 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
               };
             }
 
+            // #1669, same defect as `annotation.ts` and with NO recovery path
+            // here at all: this branch only ever `.map()`s, and mapping is what
+            // loses the marks. y-prosemirror's `_typeChanged` REPLACES the doc
+            // with one ReplaceStep spanning all of it, and `InlineType.map`
+            // maps `from` with assoc +1 and `to` with assoc -1, so every inline
+            // decoration collapses to `from >= to` and is dropped.
+            //
+            // The overlay survives today only by coincidence: every MCP content
+            // write also stamps `Y_MAP_AUTHORSHIP`, so this plugin's own Y.Map
+            // observer rebuilds it. That is a property of the current write
+            // paths, not of the design — a content-only path added later makes
+            // the overlay go dark by the identical mechanism, silently.
+            //
+            // Gated on `visible` for the same reason the branch below is: with
+            // the overlay off there is nothing to draw, and the toggle defaults
+            // to OFF, so the common case pays nothing. `buildAuthorshipDecorations`
+            // ALSO short-circuits on `!visible`, so the guard is not what makes
+            // the result empty — it is what stops the call happening at all. A
+            // spec asserting the empty result therefore cannot see this guard
+            // disappear; the one that can asserts the plugin state object comes
+            // back by IDENTITY, which only the fall-through return produces.
+            if (tr.getMeta(ySyncPluginKey) && pluginState.visible) {
+              return {
+                visible: pluginState.visible,
+                decorations: buildAuthorshipDecorations(
+                  newState.doc,
+                  authorshipMap,
+                  ydoc,
+                  pluginState.visible,
+                ),
+                capture,
+              };
+            }
+
             if (tr.docChanged && pluginState.visible) {
               return {
                 visible: pluginState.visible,

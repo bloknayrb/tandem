@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ySyncPluginKey } from "y-prosemirror";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants";
 
@@ -14,7 +15,20 @@ import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants";
 
 // --- ProseMirror mocks ---
 
-const EMPTY_SENTINEL = Symbol("DecorationSet.empty");
+/**
+ * Stands in for `DecorationSet.empty`, and it must be MAPPABLE (#1669).
+ *
+ * It was a `Symbol`, which is identity-unique but has no `.map()` — so any spec
+ * that drove the plugin down a path where the empty set gets mapped forward
+ * crashed with "decorationSet.map is not a function" instead of asserting. The
+ * real `DecorationSet.empty.map()` returns `DecorationSet.empty`, so returning
+ * itself is the faithful behaviour, and identity still distinguishes it from a
+ * mapped non-empty set — which is the whole distinction #1669 turns on.
+ */
+const EMPTY_SENTINEL: { _tag: string; map: () => unknown } = {
+  _tag: "DecorationSet.empty",
+  map: () => EMPTY_SENTINEL,
+};
 let buildDecorationsResult: unknown = EMPTY_SENTINEL;
 
 vi.mock("@tiptap/pm/view", () => ({
@@ -55,6 +69,35 @@ vi.mock("@tiptap/core", () => ({
   },
 }));
 
+/**
+ * Counts every ENTRY the decoration walk visits, and it has to be counted here
+ * rather than at the resolver.
+ *
+ * A result-only assertion cannot distinguish "the #610 perf gate
+ * short-circuited" from "the walk ran and found nothing to draw" — with an
+ * all-hidden map both yield `DecorationSet.empty` — so the gate needs a
+ * behavioural counter. The obvious place is the `annotationToPmRange` mock, and
+ * that place is WRONG: `buildDecorations` filters on `visible[ann.type]` BEFORE
+ * it resolves anything, so a hidden annotation contributes zero resolver calls
+ * whether the gate fired or not. A counter there is green against the mutation
+ * it exists to kill. `sanitizeAnnotation` is the first statement inside
+ * `annotationsMap.forEach`, ahead of every filter, so counting it sees the walk
+ * itself — measured: moving the y-sync branch above the `hasVisibleAnnotations`
+ * return reds this counter and leaves a resolver counter untouched.
+ */
+let walkCalls = 0;
+
+vi.mock("../../src/shared/sanitize", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/shared/sanitize")>();
+  return {
+    ...actual,
+    sanitizeAnnotation: (...args: Parameters<typeof actual.sanitizeAnnotation>) => {
+      walkCalls++;
+      return actual.sanitizeAnnotation(...args);
+    },
+  };
+});
+
 vi.mock("../../src/client/positions", () => ({
   annotationToPmRange(_ann: unknown, _doc: unknown, _ydoc: unknown) {
     return buildDecorationsResult === EMPTY_SENTINEL
@@ -76,10 +119,25 @@ function getPlugin(ydoc: Y.Doc) {
   return plugins[0];
 }
 
-function makeTr(opts: { docChanged: boolean; meta?: boolean | object }) {
+/**
+ * A fake transaction whose `getMeta` is KEY-AWARE, which it was not until #1669.
+ *
+ * The old mock returned `opts.meta` for every key it was handed. That is not a
+ * cosmetic infidelity: the plugin has a generic `if (meta) { …rebuild… }` branch
+ * keyed on `annotationPluginKey`, so a spec representing "a y-sync transaction"
+ * by setting a truthy meta tripped THAT branch instead and went green on
+ * unmodified master — asserting a fix while proving nothing about it. A
+ * key-blind stub cannot distinguish the two branches it is being used to tell
+ * apart.
+ *
+ * `ySync` is the real `ySyncPluginKey` object from y-prosemirror, matched by
+ * identity, so a spec cannot accidentally satisfy it with a string.
+ */
+function makeTr(opts: { docChanged: boolean; meta?: boolean | object; ySync?: boolean }) {
   return {
     docChanged: opts.docChanged,
-    getMeta: () => {
+    getMeta: (key: unknown) => {
+      if (key === ySyncPluginKey) return opts.ySync ? { isChangeOrigin: true } : undefined;
       if (opts.meta === undefined) return undefined;
       return opts.meta;
     },
@@ -110,6 +168,7 @@ function addAnnotation(ydoc: Y.Doc, id = "ann-1") {
 
 beforeEach(() => {
   buildDecorationsResult = EMPTY_SENTINEL;
+  walkCalls = 0;
 });
 
 describe("annotation plugin apply() recovery branch", () => {
@@ -244,6 +303,168 @@ describe("annotation plugin apply() recovery branch", () => {
     expect(result).not.toBe(EMPTY_SENTINEL);
 
     viewReturn.destroy();
+  });
+
+  it("rebuilds on a y-sync transaction instead of mapping the wiped set", () => {
+    // #1669. y-prosemirror's `_typeChanged` does not patch the PM doc, it
+    // REPLACES it — one ReplaceStep spanning the whole document. `InlineType.map`
+    // maps `from` with assoc +1 and `to` with assoc −1, so every inline
+    // decoration collapses to `from >= to` and is dropped. Highlights, comment
+    // underlines and suggestion squiggles vanish on any MCP content write.
+    //
+    // The existing recovery branch cannot catch it, because it is keyed on
+    // OBJECT IDENTITY: `decorationSet === DecorationSet.empty`.
+    // `DecorationSet.mapInner` returns the `empty` singleton only when both
+    // `local` and the mapped `children` are empty, and after one map the
+    // children array survives non-empty — so sync N wipes, the gate fails on
+    // N+1, and it can only fire on N+2, after which `recoveryAttempted` latches.
+    // `tandem_edit` does not touch the annotations map, so the Y.Map observer
+    // never re-arms it and the user has to type twice to get their marks back.
+    //
+    // The decoration set handed in here is deliberately NON-EMPTY. Passing
+    // `DecorationSet.empty` would exercise the pre-existing recovery branch and
+    // pass on unmodified master — testing the wrong mechanism while looking
+    // like a regression pin for this one.
+    const ydoc = new Y.Doc();
+    addAnnotation(ydoc);
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const wiped = { map: () => "mapped-forward" };
+    const result = plugin.spec.state.apply(
+      makeTr({ docChanged: true, ySync: true }),
+      wiped,
+      fakeState,
+      fakeState,
+    );
+
+    expect(result).not.toBe("mapped-forward");
+    expect(result).not.toBe(EMPTY_SENTINEL);
+  });
+
+  it("does not walk the map on a y-sync transaction when nothing is visible", () => {
+    // The #610 gate, on the new branch, and it is the ONLY gate that branch has
+    // — no `recoveryAttempted` check, no empty-identity check. Without it a
+    // document whose annotations are all hidden pays a full O(n) walk on every
+    // remote character a collaborator types.
+    //
+    // The map is deliberately NON-EMPTY and its one entry is a hidden type: an
+    // empty map makes the assertion vacuous, because the walk would find
+    // nothing and return the same empty set the gate returns. `walkCalls` is
+    // the discriminator — it separates "short-circuited" from "walked and found
+    // nothing", which a result assertion cannot. It counts `sanitizeAnnotation`
+    // rather than the resolver deliberately; see its docblock, and note that
+    // the resolver-based version of this spec was green against the very
+    // mutation it was written to kill.
+    setVisibility({ comment: true, highlight: true, note: false });
+    const ydoc = new Y.Doc();
+    addTypedAnnotation(ydoc, "note");
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    walkCalls = 0;
+    const result = plugin.spec.state.apply(
+      makeTr({ docChanged: true, ySync: true }),
+      { map: () => "mapped-forward" },
+      fakeState,
+      fakeState,
+    );
+
+    expect(result).toBe(EMPTY_SENTINEL);
+    expect(walkCalls, "the gate must short-circuit before any walk").toBe(0);
+    clearVisibility();
+  });
+
+  it("honours the per-type visibility toggle on a y-sync rebuild", () => {
+    // The user's own privacy toggle, on the path an MCP write takes. Passing
+    // `ALL_VISIBLE` here instead of the closure `visible` would paint a note the
+    // user deliberately hid back into the document on every remote write — and
+    // nothing else in the suite covers it, because the whole `#596 -> 1.13`
+    // block predates this branch and never drives a y-sync transaction.
+    //
+    // Display-only, so ADR-027's server-side guarantee is untouched either way:
+    // the note stays out of every MCP read regardless of what is painted.
+    setVisibility({ comment: true, highlight: true, note: false });
+    const ydoc = new Y.Doc();
+    addTypedAnnotation(ydoc, "comment", "ann-comment");
+    addTypedAnnotation(ydoc, "note", "ann-note");
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const result = plugin.spec.state.apply(
+      makeTr({ docChanged: true, ySync: true }),
+      { map: () => "mapped-forward" },
+      fakeState,
+      fakeState,
+    ) as { decorations?: Array<{ attrs: Record<string, string> }> };
+
+    const types = (result.decorations ?? []).map((d) => d.attrs["data-annotation-type"]);
+    expect(types).toContain("comment");
+    expect(types).not.toContain("note");
+    clearVisibility();
+  });
+
+  it("latches after a successful y-sync rebuild so the next empty edit does not retry", () => {
+    // The latch is the #610 protection and it is easy to get backwards. A
+    // successful rebuild means "recovered — do not re-run O(n) until the
+    // annotations map itself changes"; only the Y.Map observer clears it.
+    // Setting it FALSE here instead would unlatch after a PARTIAL rebuild (one
+    // annotation resolves, others stay permanently unresolvable), so the next
+    // local edit that maps the set to empty retries, fails, does not latch on
+    // failure, and retries again on the following keystroke — the original
+    // O(n)-per-keystroke storm.
+    const ydoc = new Y.Doc();
+    addAnnotation(ydoc);
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const rebuilt = plugin.spec.state.apply(
+      makeTr({ docChanged: true, ySync: true }),
+      { map: () => "mapped-forward" },
+      fakeState,
+      fakeState,
+    );
+    expect(rebuilt).not.toBe(EMPTY_SENTINEL);
+
+    // A plain local edit arriving with an already-empty set: the recovery
+    // branch would rebuild if the latch had not been set.
+    const after = plugin.spec.state.apply(
+      makeTr({ docChanged: true }),
+      EMPTY_SENTINEL,
+      fakeState,
+      fakeState,
+    );
+    expect(after).toBe(EMPTY_SENTINEL);
+  });
+
+  it("leaves the latch alone when the y-sync rebuild comes back empty", () => {
+    // Mirrors the existing docChanged branch: a FAILED rebuild deliberately
+    // does not latch, so the next transaction may retry. Latching on failure
+    // would make a document whose annotations are briefly unresolvable stay
+    // undecorated until the map changes.
+    const ydoc = new Y.Doc();
+    addAnnotation(ydoc);
+    buildDecorationsResult = EMPTY_SENTINEL;
+
+    const plugin = getPlugin(ydoc);
+    expect(
+      plugin.spec.state.apply(
+        makeTr({ docChanged: true, ySync: true }),
+        { map: () => "mapped-forward" },
+        fakeState,
+        fakeState,
+      ),
+    ).toBe(EMPTY_SENTINEL);
+
+    // Now the annotations resolve again; the retry must still be available.
+    buildDecorationsResult = "non-empty";
+    const retried = plugin.spec.state.apply(
+      makeTr({ docChanged: true }),
+      EMPTY_SENTINEL,
+      fakeState,
+      fakeState,
+    );
+    expect(retried).not.toBe(EMPTY_SENTINEL);
   });
 
   it("always rebuilds on annotationPluginKey meta (observer dispatch)", () => {

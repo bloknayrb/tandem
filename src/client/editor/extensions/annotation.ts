@@ -2,6 +2,7 @@ import { Extension } from "@tiptap/core";
 import type { Node as PmNode } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import { ySyncPluginKey } from "y-prosemirror";
 import * as Y from "yjs";
 import {
   DECORATION_VISIBILITY_KEY,
@@ -291,6 +292,67 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                 : DecorationSet.empty;
             }
             if (!hasVisibleAnnotations) return DecorationSet.empty;
+            // #1669: a remote/MCP sync REPLACES the doc rather than patching it,
+            // so mapping is not an option here — it is what loses the marks.
+            // y-prosemirror's `_typeChanged` emits one ReplaceStep spanning the
+            // whole document, and `InlineType.map` maps `from` with assoc +1 and
+            // `to` with assoc -1, so every inline decoration collapses to
+            // `from >= to` and is dropped.
+            //
+            // This has to be its own branch rather than a widened recovery gate,
+            // because that gate is keyed on OBJECT IDENTITY
+            // (`decorationSet === DecorationSet.empty`) and the wiped set is not
+            // the singleton: `mapChildren` always returns a fresh `DecorationSet`
+            // once there are children to map, so the first mapped result cannot
+            // be `empty` however empty it is. Sync N wipes; at N+1 the set has no
+            // children left, `mapInner` finally yields the singleton, and only at
+            // N+2 can the gate fire. `tandem_edit` never touches the annotations
+            // map, so the Y.Map observer does not re-arm it either — and the user
+            // has to type twice to get their own highlights back.
+            //
+            // The #610 perf gate is the `hasVisibleAnnotations` return directly
+            // above, not a conjunct here: a document with nothing to draw pays no
+            // walk on a remote transaction. What actually fires this is every
+            // remote character a collaborator types, every MCP write, every
+            // watcher reload and every undo replay — NOT, as an earlier draft of
+            // this comment said, a held-down undo as the upper bound. That is
+            // affordable only because `_typeChanged` is already re-serializing
+            // the whole fragment on the same transaction, so the walk is O(doc)
+            // alongside work that is already O(doc). It is also why nothing
+            // expensive belongs in this branch: a `readAgentFamilyLabel()` call
+            // was here and was removed, because it reaches `loadSettings()` —
+            // a synchronous `localStorage` read, a `JSON.parse` and the whole
+            // migration chain — per remote keystroke, to recover a label that
+            // only changes when the user picks a different model. The cached
+            // `agentFamily` is refreshed by the meta branch, the toggle branch
+            // and the Y.Map observer, which are the moments it can change.
+            //
+            // Local PM->Y edits carry no ySync meta (y-prosemirror's own `mux`
+            // mutex suppresses the re-entrant fire) and no awareness- or
+            // cursor-only transaction is tagged. Verified against the pinned
+            // y-prosemirror 1.3.7, not assumed.
+            //
+            // One honest limit on what the rebuild buys: for an annotation with
+            // no live `relRange`, `annotationToPmRange` falls back to the stored
+            // FLAT offsets, so a write earlier in the document leaves the mark on
+            // the wrong text until the server refreshes the range. That is still
+            // strictly better than dropping it, which is what mapping did.
+            if (tr.getMeta(ySyncPluginKey)) {
+              const rebuilt = buildDecorations(
+                newState.doc,
+                annotationsMap,
+                ydoc,
+                visible,
+                agentFamily,
+              );
+              // Latch on SUCCESS only, matching the recovery branch below: a
+              // successful rebuild means "recovered, do not re-run O(n) until
+              // the annotations map changes", and only the Y.Map observer
+              // clears it. Clearing it here instead would unlatch after a
+              // PARTIAL rebuild and reopen the #610 per-keystroke storm.
+              if (rebuilt !== DecorationSet.empty) recoveryAttempted = true;
+              return rebuilt;
+            }
             if (tr.docChanged) {
               // Y.Map observer can fire before y-prosemirror populates the doc,
               // leaving decorationSet empty despite visible annotations in the
