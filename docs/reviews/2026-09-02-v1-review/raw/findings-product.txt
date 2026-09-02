@@ -1,0 +1,176 @@
+STATUS: partial
+
+# Reviewer M — Product readiness (first-time paying, non-technical customer)
+Repo: <repo> @ master 3fb6408 (v0.24.1). Read-only review. No server started in this run.
+Evidence tags: [ran:] = executed this session before the interrupt; [read:] = read from source; [inferred] = not verified.
+Already-reported items (mock keychain/Cowork 401, Quit hard-kills sidecar, deferred launcher never released, stdio bridge version refusal, shim-removal no-op, doctor ignores port env, Ctrl+N/W/T, wikilinks, docx images, .html saved:true, welcome.md not refreshed, RC tag auto-update, monitor "restart Tandem", IME Enter) are NOT repeated below.
+
+## Findings — high confidence
+
+M-1. HIGH — Solo-mode copy in the toggle and the tutorial promises more than the code enforces (selections and document text are never held)
+  src/client/editor/toolbar/ModeToggle.svelte:30,38 ; sample/welcome.md (Solo bullet) ; enforcement: src/server/events/queue.ts:182-245, src/server/mode.ts:84-89, src/server/mcp/awareness.ts:377-386
+  [read: src/server/mcp/awareness.ts:370-390]
+  The toggle tooltip and welcome.md tell the customer that Solo means Claude "won't see" what they are doing, but only annotation:* and chat events are gated by shouldForwardExternally/isUserPrivacyHeld; tandem_checkInbox still returns selectedText and the live document (awareness.ts:377-386 has no mode branch) and tandem_getTextContent is ungated. README.md's wording ("holds your annotations") is accurate — the in-product copy is the one a customer actually reads, and it is the one that overstates. Confidence: high.
+
+M-2. HIGH — A Claude Code that is installed but not logged in becomes a "Restart Claude Code" loop with no login guidance anywhere in the product
+  src/server/launcher/supervisor.ts:1205-1250 ; src/client/hooks/useAiReadiness.svelte.ts:256-259 ; src/client/components/EmptyState.svelte ("Claude Code has stopped." → "Restart Claude Code")
+  [read: src/server/launcher/supervisor.ts:1200-1260]
+  The supervisor's circuit breaker only distinguishes cliUsable from not (lastError = "circuit-open" | "cli-unusable"); an auth failure on the child's first turn exits non-zero, is counted as a crash, and after 10 attempts the client shows the generic restart chip whose only actions are Restart / Start a fresh conversation. docs/troubleshooting.md:123-137 names "expired login" as a cause but the remedy it gives is start-fresh, not "run `claude` in a terminal and sign in", so the paying customer whose only mistake is never having logged in has no path out of the loop. Confidence: medium-high (auth-exit code path not executed this run).
+
+M-3. HIGH — Browser/npm distribution has no way to open a file from disk through the UI; user-guide documents a "Path input" that does not exist
+  src/client/components/FileOpenDialog.svelte (Browse… → hidden <input type=file> upload in browser) ; src/client/components/tabs/NewTabMenu.svelte:123 (input is "Search recent files…") ; docs/user-guide.md:138
+  [read: src/client/components/FileOpenDialog.svelte]
+  In the non-Tauri build "Browse…" performs an upload://, which the product then treats as read-only and answers tandem_save with a session-only save, so the npm customer who followed README's "opens the same editor in a browser" can never edit-and-save their own file from the UI. The user guide's "Path input" is the feature that would fix this and it is not in the component tree. Confidence: high.
+
+M-4. MEDIUM — Wizard headline "We couldn't find Claude on this computer." is shown even when the CLI is INSTALLED_ON_PATH but never run
+  src/client/components/IntegrationWizardModal.svelte:863-904 ; presence enum src/shared/integrations/contract.ts:301
+  [read: src/client/components/IntegrationWizardModal.svelte:855-910]
+  The headline is keyed on existing.length===0, not on presence, so a customer who installed Claude Code five minutes ago reads that it is missing, then two lines further down reads "Claude Code is installed. Open a new terminal and run `claude` once" — two contradictory sentences on one card. The Install CTA is correctly gated on NOT_INSTALLED, so only the headline is wrong. Confidence: high.
+
+M-5. MEDIUM — "One click connects Claude Code" (welcome.md, README) but every wizard path ends in a terminal instruction
+  sample/welcome.md ; README.md (one-click install) ; IntegrationWizardModal.svelte:894-895, 1029-1034, 1091-1101 ("Restart Claude Code, then type /mcp to verify…")
+  [read: src/client/components/IntegrationWizardModal.svelte:1025-1105]
+  After the one-click installer succeeds the Done step still says "Config written — waiting for Claude to connect" and the what's-next list tells the user to open a terminal, run `claude`, and type `/mcp`; a non-technical desktop customer does not know what a terminal is and the app never explains. The "one click" promise is only true for the config-write half. Confidence: high.
+
+M-6. MEDIUM — Raw errno / absolute paths reach save-failure toasts on loopback (which is every desktop customer)
+  src/server/mcp/document-service.ts:543-557, 879-893, 1380-1395 (`Save failed for X: ${e.message}`) ; src/client/actions/builtin.svelte.ts:425 (`Save failed: ${message}`) ; scrub is non-loopback only: src/server/mcp/routes/_shared.ts:125-300 (GENERIC_ERROR_MESSAGE)
+  [read: src/server/mcp/document-service.ts:540-560]
+  EACCES/ENOSPC/EBUSY surface as e.g. "Save failed for report.docx: EACCES: permission denied, open '/Users/…/report.docx.tmp-1234'" with no next step; the customer cannot tell whether their document is safe. The non-loopback branch already has GENERIC_ERROR_MESSAGE, so the human-readable mapping exists and simply is not applied to the local case. Confidence: high.
+
+M-7. MEDIUM — Desktop wizard and Settings render CLI-only push-route instructions to desktop-app customers
+  IntegrationWizardModal.svelte:1147-1167 (`claude --dangerously-load-development-channels server:tandem-channel`, `tandem setup --apply --with-channel-shim`, "needs Tandem's npm package, which the desktop app does not install") ; SettingsClaudeCodeTab.svelte:440-452
+  [read: src/client/components/IntegrationWizardModal.svelte:1140-1170]
+  The block is not gated on distribution, so a desktop-only customer is shown a flag named "dangerously" and a command that the same paragraph admits they cannot run. It reads as a warning about their install rather than an advanced option. Confidence: high.
+
+M-8. MEDIUM — Restart control is named three different things
+  src/client/components/NetworkSettings.svelte ("Restart sidecar" button) ; src-tauri/src/lib.rs:1729 ("Settings → Network → Restart server") ; docs/troubleshooting.md:159 ("Restart server") ; src/client/App.svelte:290 ("Sidecar failed to restart — see logs")
+  [read: src-tauri/src/lib.rs:1720-1735]
+  The Rust server-failure dialog sends the customer to a button that does not exist under that name, and "sidecar" is internal vocabulary with no gloss anywhere in the UI. "see logs" has no link and the app never says where logs are. Confidence: high.
+
+M-9. MEDIUM — Trial banner can display "24 of 14 days left" after a clock change (dark until flag flip)
+  src/server/license/license-state.ts:127-144 (daysRemaining = ceil(...), unclamped) ; src/client/components/LicenseBanner.svelte ("{n} of 14 days left in your Tandem trial")
+  [read: src/server/license/license-state.ts:120-150]
+  firstRunAt is read from trial.json and the remaining count is never clamped to [0, TRIAL_DAYS], so a system clock set backwards (common on a fresh laptop before NTP sync) produces a nonsensical count. Ships dark; becomes customer-facing at v1.0 the moment LICENSE_GATE_ENABLED flips. Confidence: high.
+
+M-10. MEDIUM — Updater's "You're running the latest version" has no branch for an ended update window (dark until flag flip)
+  src-tauri/src/lib.rs:2157-2168 (show_up_to_date_dialog) vs :2212-2223 (entitled_license_id reads update_window_current) ; only SettingsLicenseTab.svelte:56-63 warns
+  [read: src-tauri/src/lib.rs:2150-2225]
+  docs/licensing-explained.md says the endpoint list is replaced, not fallen back to, so a customer past their window is told "No Updates Available" forever with no hint that a renewal is what unlocks them. The Settings tab warning exists but nobody who clicked "Check for Updates" in the tray is looking there. Confidence: high (matches the CLAUDE.md-acknowledged failure mode; copy gap is the delta).
+
+M-11. LOW — Internal vocabulary leaks in first-15-minute surfaces
+  SettingsAboutTab.svelte ("MCP SDK", "Transport HTTP", "Token rotated…", "opt in with TANDEM_SENTRY_DSN", "try `tandem doctor` in a terminal") ; SettingsClaudeCodeTab.svelte ("Auto-launcher is not available in this Tandem build.", "Folder picker permission denied or IPC error") ; builtin.svelte.ts:642 ("Failed to acquire launcher nonce") ; EmptyState.svelte ("sync server", "MCP-capable AI client") ; SettingsLicenseTab.svelte ("or run `tandem activate <file>`") ; NetworkSettings.svelte ("run `tandem rotate-token` in the CLI", "run `tandem start --port <N>`")
+  [read: src/client/components/settings-tabs/SettingsAboutTab.svelte]
+  Every `tandem …` hint is shown inside the desktop app, which does not install the CLI, so the hint is a dead end by construction. None of these are blocking, but they are in Settings and error toasts a first-run customer will hit. Confidence: high.
+
+M-12. LOW — "Reject" vs "Dismiss" vs "reject" for the same action
+  src/client/components/panels/BulkActions.svelte:51 ("Accept"/"Reject") ; annotation card ("Dismiss") ; docs/user-guide.md ("Dismiss") ; README.md ("reject")
+  [read: src/client/components/panels/BulkActions.svelte:30-55]
+  A customer taught "Dismiss" by the card and the tutorial meets "Reject" in the bulk bar and cannot tell whether it is a stronger action (it is not). Confidence: high.
+
+M-13. LOW — extends #1521: LicenseWall read-only copy promises "chatting with Claude" which the read-only surface does not deliver
+  src/client/components/LicenseWall.svelte ("continue in read-only mode, where your documents stay open for reading, exporting, and chatting with Claude")
+  [read: src/client/components/LicenseWall.svelte]
+  Delta only: #1521 tracks the behaviour; the copy still lists chat as a read-only benefit, so when the gate flips the wall itself will be wrong on its first display. Confidence: high.
+
+M-14. LOW — skills/tandem/SKILL.md (shipped to users) and troubleshooting.md:76 tell the customer to "Start the Tauri app or run `tandem start`"
+  skills/tandem/SKILL.md (v12) ; docs/troubleshooting.md:76
+  [read: skills/tandem/SKILL.md]
+  "Tauri" is the framework name, never shown in the product; a customer reads it as a different app. This string is spoken to them by Claude inside a chat, so it lands with more authority than a doc. Confidence: high.
+
+## Findings — remaining
+
+M-15. LOW — ErrorBoundary shows the raw exception in a <pre> with no recovery action beyond reload
+  src/client/components/ErrorBoundary.svelte
+  [read: src/client/components/ErrorBoundary.svelte]
+  "Something didn't go as planned" is fine; the stack beneath it is not, and there is no "your document is saved/unsaved" line, which is the only thing the customer wants to know at that moment. Confidence: high.
+
+M-16. LOW — useFirstRunNeeded treats a fetch failure as "wizard not needed" silently
+  src/client/hooks/useFirstRunNeeded.svelte.ts
+  [read: src/client/hooks/useFirstRunNeeded.svelte.ts]
+  If the first /api/integrations/first-run-needed call races the sidecar boot, the wizard is skipped and the customer lands on welcome.md with "No AI is connected yet" and no idea a wizard exists (the tray item "Setup AI Assistant" is the only other entry). Confidence: medium (race not reproduced).
+
+M-17. LOW — Wizard dismissal is keyed per server version, so every update re-opens the wizard for an already-connected user
+  src/client/App.svelte:705-740 (tandem:wizard-dismissed keyed by version) ; server needed=false only when an entry exists (integrations/api-routes.ts:599-650)
+  [read: src/client/App.svelte:700-745]
+  Server-side `needed` should suppress it when an entry exists, so this only bites the customer who dismissed without connecting — but that is exactly the customer the wizard is for, and they see it again on each update with no "don't show again". Confidence: medium.
+
+M-18. LOW — Welcome tutorial step 2 ("Ask a question") has no AI-absent branch
+  src/client/components/OnboardingTutorial.svelte ; src/client/hooks/useTutorial.svelte.ts
+  [read: src/client/components/OnboardingTutorial.svelte]
+  On a fresh install with no Claude connected the step asks the customer to send a chat message; the send succeeds with the "saved while no AI was connected" notice (App.svelte:654) and the tutorial waits for a reply that will never come. The step should detect the no-AI state and point at Connect AI. Confidence: medium.
+
+## Unchecked leads (empirical passes were prepared but never executed before the interrupt)
+
+- 500-page document (scratchpad/docs/long-report.md, 1.45 MB) open/type latency and whether the 50 MB cap message is the only size guard. [inferred]
+- 200 annotations in the side panel: scroll/virtualisation, bulk-bar behaviour. [inferred]
+- File deleted while open: expected "Failed to reload X from disk" toast, then silent autosave skip "Source file no longer exists" (document-service.ts:268-402) — needs confirming the customer is told the save is being skipped. [inferred]
+- Permission-denied / disk-full toasts: expected raw errno per M-6; not reproduced. [inferred]
+- npm `tandem` started while the desktop app is running: index.ts:300-370 waits 30 s on the store lock then goes read-only, and :580-581 then calls freePort(wsPort)/freePort(mcpPort) — if that ordering holds, the CLI kills the desktop sidecar's ports after deciding to be read-only. Would be HIGH if confirmed; ran out of budget. [inferred]
+- DocumentHealth panel ("No analysis available.") — whether it is reachable in a default desktop layout. [inferred]
+- `tandem start --port <N>` (hint in NetworkSettings.svelte) — flag existence in src/cli/start.ts not confirmed. [inferred]
+- Two windows / sleep-wake reconnect: ConnectionBanner 30 s and "Reconnecting… (attempt N)" copy read; behaviour not exercised. [inferred]
+- Unparseable .docx open path (populate.ts:95-145 toasts) not exercised. [inferred]
+- Cowork / WSL paths: tracked in #1704; not re-examined.
+
+## Doc drift
+
+- docs/user-guide.md:387 "Undo/redo is not yet available" vs user-guide.md:80 context-menu Undo/Redo and src/client/editor/editor-extensions.ts:266-268. [read: docs/user-guide.md:380-390]
+- docs/user-guide.md:138 "Path input" — no such control (M-3). [read: src/client/components/FileOpenDialog.svelte]
+- docs/user-guide.md:509,527 — "developer console", `buildDecorations()`, "Tauri log output" in a user guide. [read: docs/user-guide.md:505-530]
+- docs/troubleshooting.md opens with `npm run doctor` (source-checkout only); the desktop customer has no npm. [read: docs/troubleshooting.md:1-30]
+- docs/troubleshooting.md:141 "Tandem kills stale processes on :3478/:3479" vs release-smoke-checklist claim that the npm server gives up — one of them is wrong; ties to the freePort lead above. [inferred]
+- README.md "Real-time updates" section (Monitor tool, TaskStop, Git Bash, per-account gate) is developer prose in the customer-facing README. [read: README.md]
+- welcome.md Solo bullet (M-1) and "one click connects Claude Code" (M-5). [read: sample/welcome.md]
+
+## Verified fine
+
+- Solo pull-side gates present at src/server/mcp/annotations.ts:403,414,623,645,815 and awareness.ts:607,707; push-side at queue.ts:182-245; indeterminate mode fails closed (mode.ts:84-89). [read]
+- Notes (ADR-027) never leave the machine via export/inbox/observers: sanitize.ts audience derivation, narrowForChannel refusal, export notesFiltered; residual gaps are tracked (#1656/#1698/#1710/#1619). [read]
+- Wizard Done header is gated on a real MCP connection, not on config-write success; Claude Desktop path shows the NO_PUSH note honestly. [read: IntegrationWizardModal.svelte:1025-1040]
+- No-AI send notices carry a Connect/Setup CTA (App.svelte:639-683). [read]
+- Connection copy is graduated: 3 s empty-state, 30 s banner, "Reconnecting… (attempt N, Ns)". [read: useConnectionBanner.svelte.ts, StatusBar.svelte]
+- External-conflict, fidelity-report, review-only and settings-readonly banners are plain-language with keep/reload choices. [read]
+- Single-instance plugin present (Cargo.toml:75, lib.rs:865); 50 MB open cap with clear message (open.ts:645-672); store-lock → read-only with notification (index.ts:300-370). [read]
+- docx comment-import failures produce a toast rather than silent loss (populate.ts:95-145). [read]
+- OS file-association rejection copy is buffered and shown (validate_open_candidate). [read]
+- Live probe before interrupt: first-run-needed → needed:true and claude-cli-status → NOT_INSTALLED with claude off PATH; tandem_status/tandem_search shapes match docs. [ran: node scratchpad/probe-search.mjs]
+
+## Smoke-checklist candidates
+
+1. Fresh desktop install with Claude Code installed but never logged in — confirm the customer is told to sign in, not to restart (M-2).
+2. Wizard with CLI installed but never run — headline must not say "couldn't find Claude" (M-4).
+3. On a gate-on build: Check for Updates with an ended update window — dialog must mention renewal (M-10).
+4. Trial banner after setting the system clock back a day (M-9).
+5. Tray "Setup AI Assistant" from a dismissed-wizard state on the version after an update (M-17).
+6. Welcome tutorial step 2 with no AI connected (M-18).
+7. Start `tandem` from npm while the desktop app is running; confirm the desktop app survives (freePort lead).
+8. Save to a read-only file and to a full disk — read the toast aloud to a non-technical person (M-6).
+
+# Addendum (verification pass, 4 non-write calls spent; amends the sections above)
+
+## Findings — high confidence (additional)
+
+M-19. HIGH — npm `tandem` started while the desktop app is running waits 30 s, goes read-only, then SIGKILLs the desktop app's server
+  src/server/index.ts:300-370 (store-lock retry → lock stays "readonly", no exit) → :580-581 (`freePort(wsPort); freePort(mcpPort)` unconditionally) ; src/server/platform.ts:214-244 (freePortUnix: `lsof -ti TCP:<port> -sTCP:LISTEN` → `process.kill(pid, "SIGKILL")`) and :179-212 (freePortWindows: `taskkill /F` on every netstat holder)
+  [read: src/server/index.ts:300-370,578-586 + src/server/platform.ts:179-244]
+  Nothing between the read-only lock outcome and freePort() checks whether the port holder is another Tandem, so a customer who installed both the desktop app and the npm package (README offers both) and types `tandem` in a terminal kills the desktop app's sidecar under their open documents; the desktop then auto-restarts the sidecar up to MAX_RESTARTS=3 (sidecar.rs:136) and the two fight over the ports until the Server Error dialog appears. The Windows smoke run (docs/release-smoke-checklist.md:209-214) recorded the CLI as "gives up rather than displacing the app" — that reading is consistent with the desktop sidecar winning the restart race, not with the CLI refraining, and the same doc's next sentence ("will then take the ports the moment the app releases them") is the kill path being observed. Confidence: high on the code path (both platforms kill unconditionally); medium on which process wins on Windows. Not run this session.
+
+M-20. MEDIUM — Settings → Network tells the customer to run `tandem start --port <N>`, and no such flag exists
+  src/client/components/NetworkSettings.svelte:212 ; src/cli/index.ts:180-181 (`start` takes no options) ; src/cli/start.ts:11-45 (reads only TANDEM_MCP_PORT / TANDEM_URL env)
+  [read: src/cli/start.ts:11-45 + src/cli/index.ts:175-185]
+  The only working mechanism is the TANDEM_PORT / TANDEM_MCP_PORT / TANDEM_URL env triple documented in docs/troubleshooting.md:141-150; the in-app hint sends the customer to a command that starts the server on the default ports and silently ignores the argument. On the desktop build the hint is doubly dead because the CLI is not installed (see M-11). Confidence: high.
+
+## Unchecked leads — amendments
+- The "npm `tandem` while desktop runs" lead is PROMOTED to M-19 (code path read on both platforms); what remains unverified is only the observed winner of the restart race.
+- The `tandem start --port` lead is RESOLVED as M-20.
+- Remaining unchecked: 500-page doc, 200 annotations, file-deleted-while-open toast sequence, permission-denied/disk-full toast text, DocumentHealth reachability, two-windows/sleep-wake, bad .docx, Cowork/WSL (#1704).
+
+## Doc drift — amendments
+- docs/troubleshooting.md:141 "Tandem kills stale processes on :3478/:3479 at startup" is accurate but incomplete: it kills ANY listener, including a running Tandem desktop app (M-19). The word "stale" is the false promise. [read: src/server/platform.ts:179-244]
+- docs/release-smoke-checklist.md:209-214 "retries for 30s and gives up rather than displacing the app" contradicts the code (M-19); the checklist item should be re-worded so the next operator does not certify the kill as "correct behaviour". [read: docs/release-smoke-checklist.md:200-216]
+- docs/troubleshooting.md:159 and src-tauri/src/lib.rs:1729 both say "Settings → Network → Restart server"; the button is labelled "Restart sidecar" (M-8). [read]
+
+## Coverage against scratchpad/manifests/product.md
+The manifest lists 185 files touched in the earlier transcript; every finding above cites a file in that set except src/server/platform.ts (added this pass, M-19) and src/cli/start.ts (in the set). Manifest areas with no finding because they read fine: AccessibilitySettings, AppearanceSettings, EditorSettings, HelpModal, CoworkAdminDeclinedModal, PushRoutesInfo, TitleBar, DocumentTabs/TabItem/tab-context-menu, the annotation card family (AnnotationBody/Header/EditForm, CommentCard, HighlightCard, ImportedCard, NoteCard, ReplyThread, SuggestionCard, BatchPromoteBar), url-safety/anchor-intercept, useFileDrop/useTauriFileDrop, fileUpload, startup-rejection, docx-size-gate, file-watcher. Manifest areas read but only partially judged (copy read, behaviour not exercised): yjsSync, useUpdateAvailable/usePendingUpdateBanner, doc-backup.
+
+STATUS: complete

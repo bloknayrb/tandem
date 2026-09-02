@@ -1,0 +1,140 @@
+STATUS: partial
+
+=== PROBE 5 (license-status, gate dark) — RESULT: CONFIRMED (no PII on the dark path) ===
+NOTE: the route is GET /api/license/status (src/shared/api-paths.ts:84 API_LICENSE_STATUS).
+      GET /api/license-status (the name in the probe brief) is 404.
+curl -s http://127.0.0.1:4919/api/license/status -> HTTP/1.1 200
+  {"gateActive":false,"status":"licensed","updateWindowCurrent":true,"licenseInstalled":false}
+`licenseInstalled` IS present and false. No name/email/licenseId field on the dark path — the
+`license: meta` / `licenseId` fields only appear on the gate-active licensed branch
+(src/server/license/license-state.ts:100-108). Not a bug.
+Worth flagging for UI copy: with the gate dark the status STRING is literally "licensed" while
+`gateActive:false`, so any client that keys off `status` alone without reading `gateActive`
+will render "licensed" for every unlicensed user.
+
+=== PROBE 4 (loopback / origin invariants) — RESULT: CONFIRMED ===
+(a) POST /api/save, Content-Type: text/plain, NO Origin, from loopback
+    -> HTTP/1.1 403 {"error":"FORBIDDEN","code":"BAD_ORIGIN","message":"Origin not allowlisted for /api/save"}
+    The #1320 simple-request CSRF fix is live: assertOriginAllowlisted fails closed on a MISSING Origin.
+(a2) Same with `Origin: http://localhost:5173` -> 403 BAD_ORIGIN.
+     src/server/mcp/api-routes.ts:112-121 — LOCALHOST_ORIGIN_RE is `^https?://(127\.0\.0\.1|tauri.localhost)(:\d+)?$`
+     plus the exact `tauri://localhost`. The hostname "localhost" is NOT in the allowlist, only the
+     literal IP. Any browser page served from http://localhost:<port> is refused by every
+     origin-gated /api route; the Vite dev client must be reached via 127.0.0.1.
+(a3) Same with `Origin: http://127.0.0.1:4919` -> HTTP/1.1 200 {"data":{"status":"saved"}}
+     (empty text/plain body tolerated; saved the active document).
+(b) POST /api/open {"filePath":"/etc/hostname"}, NO Origin, loopback
+    -> HTTP/1.1 400 {"error":"BAD_REQUEST","message":"Unsupported file format: . Supported: .md, .markdown, .txt, .html, .htm, .docx"}
+    Rejected on EXTENSION, not on path. /etc/passwd -> 400 likewise.
+(b2) POST /api/open {"filePath":"<scratch>/exp-probe/outside.md"}, NO Origin, loopback
+    -> HTTP/1.1 200 {"data":{"documentId":"outside-4a0dyt","filePath":"<scratch>/exp-probe/outside.md",
+       "fileName":"outside.md","format":"md","readOnly":false,"source":"file",...}}
+    CONFIRMS the documented exemption (open carries no origin gate, because the Tauri sidecar POSTs it
+    via reqwest with no Origin) AND #1666: the resolver is not root-confined — any absolute path with an
+    allowlisted extension opens read-write.
+IMPACT: the origin gate holds where documented; `open` is exactly as wide as #1666 says, and the
+extension allowlist is the only filter on the caller-supplied path.
+
+=== PROBE 6 part 1 (mode-release statuses, gate dark) ===
+NOTE: route is POST /api/mode/release (API_MODE_RELEASE, api-routes.ts:396). /api/mode-release is 404.
+  Origin: http://localhost:4919 -> 403 {"error":"FORBIDDEN","code":"BAD_ORIGIN",...}   <-- localhost name not allowlisted
+  no Origin                     -> 403 BAD_ORIGIN
+  Origin: http://evil.example   -> 403 BAD_ORIGIN
+  Origin: http://127.0.0.1:4919 -> 200 {"data":{"released":0}}
+RESULT: CONFIRMED, with the correction that only the 127.0.0.1 literal (or tauri origins) passes.
+
+=== PROBE 3 (oversized WebSocket frames) — RESULT: CONFIRMED (asymmetry between the two ws servers) ===
+Script: <scratch>/exp-probe/wsprobe.mjs (uses <repo>/node_modules/ws via a symlink).
+Server node pid 7716. RSS in KB from `ps -o rss= -p 7716`.
+
+A. Hocuspocus, ws://127.0.0.1:4918/probe-room
+   idle connect, send nothing        -> "STILL OPEN after 6s, no close" (no pre-auth idle timeout observed)
+   20 MiB  binary frame              -> CLOSE code=4403 reason=Forbidden   (application-level auth reject)
+   90 MiB  binary frame              -> CLOSE code=4403 reason=Forbidden
+       RSS min 178,928 KB -> peak 331,404 KB during the send (+152 MB for one 90 MiB frame)
+   120 MiB binary frame              -> CLOSE code=1009 (ws default maxPayload = 100 MiB)
+       RSS 169,024 -> 202,700 KB; process survived, no crash.
+   src: src/server/yjs/provider.ts:101-106 — `new Hocuspocus({ address: "127.0.0.1", ... })` sets NO
+   `maxPayload`, so ws's 100 MiB default applies. The 4403 is Hocuspocus `onAuthenticate` (the
+   generationId token check) and it fires only AFTER ws has assembled the whole message — so an
+   UNAUTHENTICATED peer can force ~100 MiB of buffering per socket, repeatedly, and the socket is
+   not closed while idle.
+B. Wake socket, ws://127.0.0.1:4919/api/wake
+   20 MiB binary frame -> send cb err = "write ECONNRESET", CLOSE code=1006 — capped, nothing buffered.
+   src: src/server/events/wake-socket.ts:172 — `new WebSocketServer({ noServer: true, maxPayload: 1024 })`,
+   with a comment explaining exactly the hazard Hocuspocus is still exposed to.
+SEVERITY: medium when TANDEM_BIND_HOST is non-loopback (LAN mode); low on the default 127.0.0.1 bind,
+where only a local process can reach :4918. Not a crash — memory-amplification / DoS only.
+IMPACT: the reasoning that produced `maxPayload: 1024` on /api/wake was never applied to the
+Hocuspocus server, which is the one that actually accepts large legitimate frames; a pre-auth peer
+gets ~100 MiB of buffering per connection with no idle disconnect.
+
+=== PROBE 1 part B (traversal, static layer ACTUALLY mounted) — RESULT: REFUTED (no traversal) ===
+Server: node <repo>/dist/server/index.js (log: "[Tandem] Serving client from <repo>/dist/client").
+All requests with `curl --path-as-is`:
+  /../../etc/passwd             -> 200 text/html 50985 bytes
+  /%2e%2e/%2e%2e/etc/passwd     -> 200 text/html 50985
+  /.git/HEAD                    -> 200 text/html 50985
+  /..%2f..%2fpackage.json       -> 200 text/html 50985
+  /../package.json              -> 200 text/html 50985
+  /%2e%2e%2f%2e%2e%2fetc%2fpasswd -> 200 text/html 50985
+  /assets/../../package.json    -> 200 text/html 50985
+  /index.html                   -> 200 text/html 50985   <-- identical length
+  /favicon.png                  -> 200 image/png (real asset, so static IS serving)
+Body in EVERY traversal case is byte-identical to index.html:
+  <!DOCTYPE html><html lang="en">  <head>    <meta charset="UTF-8" /> ...
+grep for `root:x:` and for the package.json name field across all four: no match — NO LEAK.
+src: src/server/mcp/server.ts:824-834 — `express.static(CLIENT_DIST, {index:"index.html"})` followed by
+`app.get("/{*path}", res.sendFile(indexPath))`. express.static/serve-static normalizes and rejects the
+traversal (falls through), and the catch-all SPA route then answers 200 with index.html. That is why an
+earlier probe saw 200 on these paths: it is the SPA fallback, not the target file.
+CONCLUSION: the earlier "200 on /../../etc/passwd" finding is a FALSE POSITIVE. The only real note is
+that the SPA fallback answers 200 for every unmatched path including /.git/HEAD, so a scanner keying on
+status alone will report phantom hits.
+
+=== PROBE 6 part 2 (gate ARMED + expired trial) — RESULT: CONFIRMED ===
+Server restarted with TANDEM_LICENSE_GATE=1 and <scratch>/exp-probe/data/trial.json =
+  {"version":1,"firstRunAt":"2020-01-01T00:00:00Z"}
+GET /api/license/status -> {"gateActive":true,"status":"restricted","updateWindowCurrent":false}
+MCP over HTTP (initialize -> Mcp-Session-Id eeead643-dbfd-4b63-a2c6-4326b887f177):
+  tools/call tandem_getTextContent (read) -> 200, real document text returned. UNGATED, as designed.
+  tools/call tandem_edit {"from":0,"to":1,"newText":"Z"} ->
+    {"error":true,"code":"LICENSE_REQUIRED","message":"Your Tandem trial has ended, so Tandem's editing
+     and annotation tools are unavailable. Reading, opening and exporting still work, and the document
+     itself is untouched. Activate a license to re-enable editing: https://tandem.ink"}
+  POST /api/mode/release (Origin: http://127.0.0.1:4919) -> HTTP/1.1 200 {"data":{"released":0}}
+Both halves behave as documented: Surface B blocks the mutating MCP tool; /api/mode/release is not in
+the gated set and still answers 200. No bug found; the gate is not leaking into the mode surface.
+
+=== PROBE 7 (empty firstRunAt resets the trial) — RESULT: CONFIRMED ===
+Wrote <scratch>/exp-probe/data/trial.json = {"version":1,"firstRunAt":""} and restarted with
+TANDEM_LICENSE_GATE=1.
+  trial.json on disk after boot: {"version":1,"firstRunAt":""}   (NOT rewritten — startTrialClock uses
+  flag "wx", so an existing file is never replaced)
+  GET /api/license/status ->
+    {"gateActive":true,"status":"trial","updateWindowCurrent":false,
+     "trial":{"firstRunAt":"2026-09-02T19:07:23.576Z","expiresAt":"2026-09-16T19:07:23.576Z","daysRemaining":14}}
+src: src/server/license/license-state.ts:128-130
+    const tf = readJson<TrialFile>(trialFilePath(appDataDir));
+    const firstRunAt = tf?.firstRunAt ? new Date(tf.firstRunAt).getTime() : nowMs;
+    const expiresAt = firstRunAt + TRIAL_MS;
+`""` is falsy, so it takes the `: nowMs` branch — the same branch as an ABSENT file. Because the state is
+re-resolved per dispatch (no cache) and the file is never rewritten, this is not a one-time reset but a
+PERPETUAL 14-days-remaining trial: firstRunAt is recomputed as "now" on every call.
+SEVERITY: low / by design. The header comment on the same block says "Trial clock (soft by design —
+ADR-040 §3). Absent file => day 0", so a local user editing their own trial.json is inside the accepted
+model. Two things worth stating anyway, because neither is written down: (1) the reset is achieved by
+BLANKING a field rather than deleting the file, which is not the shape the "absent file" comment
+describes; (2) a NON-EMPTY but unparseable value behaves oppositely — new Date("nope").getTime() is NaN,
+so expiresAt is NaN, `nowMs < NaN` is false, and it falls through to `restricted`, i.e. fails CLOSED.
+So the trial file's failure direction depends on whether the corruption is falsy or merely invalid.
+
+=== CLEANUP VERIFICATION ===
+$ ss -ltn | grep -E '4918|4919'   -> (no output) => "no listeners on 4918/4919"
+$ ps -eo pid,args | grep -E "server/inde|exp-probe/run|tsx src" | grep -v grep -> none
+$ git status --porcelain (in <repo>) -> (empty; repo untouched)
+All probe servers used TANDEM_APP_DATA_DIR under the scratchpad; nothing written to $HOME.
+Note: <repo>/sample/welcome.md was the auto-opened startup document and the
+POST /api/save probe (4a3) re-saved it; git status is clean, so the round-trip was byte-identical.
+
+STATUS: complete

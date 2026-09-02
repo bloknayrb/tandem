@@ -1,0 +1,190 @@
+STATUS: partial
+# CRDT / coordinate-system review — master 3fb6408 (v0.24.1)
+Reviewer: crdt-reviewer. Read-only. Nothing in the repository was modified.
+
+## Findings — high confidence
+
+### A. Medium — Endpoint-only heading check lets tandem_edit swallow a heading via the separator before it
+- Location: src/server/positions.ts:154-169 (validateRange rejectHeadingOverlap), src/shared/positions/ydoc.ts (resolveToElement: separator offset resolves to END of previous element, clampedFromPrefix=false), src/server/mcp/document.ts:~621-720 (tandem_edit cross-block branch), src/server/mcp/document-model.ts:147-156 (comment acknowledging the gap)
+- Evidence: [read: src/server/positions.ts:154-169; src/server/mcp/document-model.ts:147-156; src/server/mcp/document.ts:~621-720]
+- Failure: For flat text "para\n## Head\nnext", a caller issues tandem_edit(from=4, to=9) — `from` sits on the `\n` separator (resolves to end of "para", not clamped) and `to` sits inside "Head". Both endpoints pass rejectHeadingOverlap even though the range spans the literal "## " prefix, so the cross-element branch deletes the heading node and merges its tail into the paragraph — a Critical Rule 6 bypass; the same range is accepted by tandem_comment with a textSnapshot that contains "\n## ".
+- Confidence: high (the code comment at document-model.ts:147-156 states this is known-but-unhandled; no test covers a range that starts on the separator).
+
+### C. Low — Zero-length ranges are accepted and become permanently `failed` on the first insert at that point
+- Location: src/server/positions.ts:121 (validateRange only rejects from > to), src/server/positions.ts:276-282 (refreshRange inverted → failed, record untouched)
+- Evidence: [read: src/server/positions.ts:110-125, 240-290]
+- Failure: tandem_comment(from=10, to=10) anchors `from` with assoc 0 and `to` with assoc -1 at the same index; the first character typed at offset 10 puts `to` before `from`, so every subsequent refresh logs console.error and returns kind "failed" with the stale flat range, and the client skips the decoration (from>=to) — the comment exists in the panel but can never be painted or repaired.
+- Confidence: high on mechanics (Yjs assoc semantics), medium on how often callers mint from===to (the client Toolbar guards it; MCP does not).
+
+### D. Medium — `repaired` arm re-anchors from stale flat offsets with no textSnapshot check on the MCP read path
+- Location: src/server/positions.ts:254-275 (refreshRange partial/dead → repair from ann.range), src/server/documents/watcher.ts:210-270 (only the reload path runs the textSnapshot relocation pass afterwards), src/server/mcp/document-store.ts (listAnnotationsRefreshed discards kind)
+- Evidence: [read: src/server/positions.ts:240-290; src/server/documents/watcher.ts:170-330]
+- Failure: An annotation whose paragraph was deleted and retyped (dead XmlText → relRange resolves null) is "repaired" by tandem_getAnnotations from its old flat range, which now covers unrelated text; it is then rendered via `rel` with no client warning, and the stored textSnapshot is never consulted even though it is exactly the signal that would detect the drift. Possibly extends #1632 (lost-target accept): the delta is that the server itself silently re-targets before accept is ever reached.
+- Confidence: high on the code path; medium on overlap with #1632 (issue body not read — gh CLI missing).
+
+### G. Low — MCP `from`/`to` are bare z.number(); fractional/negative offsets reach anchoredRange (delta to the bounds finding already reported)
+- Location: src/server/mcp/annotations.ts (tandem_comment schema), src/server/mcp/document.ts (tandem_edit schema), src/server/annotations/schema.ts:55-115 (durable DocumentRangeSchema requires int nonnegative)
+- Evidence: [read: src/server/mcp/annotations.ts; src/server/annotations/schema.ts:55-115]
+- Failure: tandem_comment(from=2.5, to=7) passes validation, anchors a RelativePosition with a fractional index, and the record later fails the durable-store int schema on save/load, dropping the annotation from the envelope. Delta only: the upper-bound/surrogate part is already reported; this is the schema-level int/nonnegative gap.
+- Confidence: high.
+
+### J. Low — OutlinePanel counts annotations by stale flat range.from, ignoring relRange
+- Location: src/client/components/OutlinePanel.svelte:148
+- Evidence: [read: src/client/components/OutlinePanel.svelte:148]
+- Failure: After the user inserts a paragraph above an annotated section, the outline attributes the annotation to the wrong heading until the server next refreshes the flat range (only on an MCP read), while the editor decoration (relRange) is already correct — the two views disagree.
+- Confidence: high.
+
+## Findings — remaining
+
+### E. Medium (High if verified) — Enter before annotated text in the same paragraph collapses the annotation to zero length
+- Location: node_modules/y-prosemirror/src/plugins/sync-plugin.js:~1145-1300 (updateYFragment: split edits the left element's XmlText in place, deleting the tail, and inserts a new element for the remainder), src/server/positions.ts:240-290 (refreshRange treats the collapsed range as "updated")
+- Evidence: [inferred]
+- Failure: With "aaa [bbb] ccc" annotated on bbb, the user presses Enter after "aaa " — y-prosemirror deletes "bbb ccc" from the first XmlText and inserts a fresh XmlText for the new paragraph, so both anchors (deleted items) collapse to the deletion point in the OLD paragraph; refreshRange resolves from===to at end of "aaa " and reports kind "updated", overwriting the stored flat range, and the annotation vanishes from the editor with no warning. If confirmed this is High: paragraph splitting is the most common edit a reviewer makes.
+- Confidence: medium — depends on updateYFragment's delete-then-insert order versus a possible move; slated for tsx verification below.
+
+### B. Low — `to` landing on the first char of a heading prefix (half-open exclusive end) is rejected as HEADING_OVERLAP
+- Location: src/server/positions.ts:154-169 (both endpoints run through resolveToElement/clampedFromPrefix with identical treatment)
+- Evidence: [read: src/server/positions.ts:154-169]
+- Failure: tandem_comment over exactly the last paragraph before a heading, with `to` = index of the separator + 1 (i.e. the `#`), is rejected with HEADING_OVERLAP even though the half-open range [from,to) contains no prefix character; callers computing `to` from indexOf of the next "## " hit this.
+- Confidence: medium (whether `to` = separator index is what callers naturally produce depends on their arithmetic).
+
+### F. Low — A `from` anchored exactly on a hardBreak/separator resolves back one char later
+- Location: src/shared/positions/ydoc.ts (flatOffsetToRelPos ±1 retry; findXmlTextAtOffset returns null ON separator/hardBreak), src/server/positions.ts (relPosToFlatOffset)
+- Evidence: [read: src/shared/positions/ydoc.ts; src/server/positions.ts:relPosToFlatOffset]
+- Failure: tandem_comment(from=<offset of "\n" hardBreak>, to=…) succeeds, but the stored relRange points at the next XmlText's index 0, so the first refresh returns range.from+1 and reports "updated" — the flat range drifts by one on a no-edit round trip and the textSnapshot no longer matches from that offset.
+- Confidence: medium.
+
+### H. Low — refreshAllRanges `kind` is discarded by every MCP consumer except docx export
+- Location: src/server/mcp/document-store.ts (listAnnotationsRefreshed maps to .annotation), src/server/mcp/annotations.ts (tandem_getAnnotations)
+- Evidence: [read: src/server/mcp/document-store.ts; src/server/mcp/annotations.ts]
+- Failure: Claude calls tandem_getAnnotations after a concurrent edit inverted a comment's anchors; the tool returns the stale flat range with no "failed"/"degraded" marker, so Claude then calls tandem_edit on offsets that no longer correspond to the comment's text. Also doc drift versus ADR-032 (see below).
+- Confidence: high on code, low on severity.
+
+## Unchecked leads
+- I. mammoth `ignoreEmptyParagraphs: true` (node_modules/mammoth/lib/document-to-html.js:34) versus docx-walker counting one "\n" per <w:p>: an empty Word paragraph between two commented paragraphs would shift every later comment by one. May already be inside #1693 or the docx-walker contract finding another reviewer filed; not run.
+- E verification pending (see below).
+- Watcher relocation prefix-search for truncated (200-char) snapshots: not checked whether a snapshot ending mid-surrogate or with trailing "\n" from captureSnapshot's break handling can fail to match its own source text.
+- Cross-block tandem_edit merge (mergeInlineTail) with an annotation whose `to` anchor sits in the deleted trailing block — whether it becomes `failed` or silently `updated` — not run.
+- #1632 / #1693 issue bodies not read (gh CLI absent), so the "extends" deltas for D and I are unconfirmed.
+
+## Doc drift
+- ADR-032 (docs/decisions.md) says MCP error responses switch on refreshRange `kind`; in code only tandem_exportAnnotations' docx path reads `failed` — tandem_getAnnotations, tandem_editAnnotation and the inbox path discard it. [read: src/server/mcp/document-store.ts; docs/decisions.md ADR-032]
+- docs/architecture.md:310-389 describes the heading-prefix guard as "no annotation may start or end inside a prefix"; it does not mention that a range may *span* a prefix (finding A), and document-model.ts:147-156 documents that gap only in a code comment.
+- CLAUDE.md Y.js gotcha "Strip dead relRange RelativePositions, never preserve them" is honoured by refreshRange, but the doc does not say the re-attachment is from the *stale flat range without snapshot verification* (finding D).
+
+## Verified fine
+- assoc pair (from 0 / to -1) consistent at all three mint sites: anchoredRange, anchorFlatRange (shared/positions/ydoc.ts), tutorial-annotations.
+- Separator accounting (+1 per top-level element boundary, none after last; nested container siblings also joined by "\n"; hardBreak = 1 char) agrees across resolveToElement, relPosToFlatOffset, extractTextWithBreaks, flatDocLength, collectBlocks, flatOffsetToPmPos/pmPosToFlatOffset, pmDocFlatText, flatTextForPmRange, docx-walker.
+- Heading prefix applied top-level only on both server (extractText/flattenHeadingText) and client (pmDocFlatText); headingPrefixLength is the single source.
+- XmlText identity: findXmlText / findXmlTextInParallel match by object identity, not text; two identical headings are distinct anchors.
+- Inverted-range detection: server refreshRange → `failed` + console.error; client annotationToPmRange → console.warn + flat fallback with method 'flat'; buildDecorations warns on rel→flat and skips from>=to.
+- Attach-before-populate respected in mdast-ydoc (two-pass), docx-html, hardbreak-normalize, plaintext-flatten, ensureBlockChild.
+- Creation paths through anchoredRange: tandem_comment (store.anchorRange), tandem_importAnnotations, tutorial (withInternal), docx comment inject (withInternal), watcher reload (single withReload wrapping refresh + relocation), lazy attach in refreshAllRanges (withMcp unless skipTransact). No raw doc.transact seen in the files read.
+- tandem_getTextContent uses extractText, never extractMarkdown.
+- UTF-16 units used consistently by Yjs, ProseMirror, JS strings and the docx walker; CRLF normalised to LF at load (line-endings.ts).
+- validateRange textSnapshot relocation picks the candidate nearest `from`; watcher relocation handles truncated snapshots by prefix search.
+- Client-created annotations (Toolbar/highlight-toggle, withBrowser, flat range only, from===to guarded) receive relRange lazily on the next server read.
+- #1669 decoration rebuild on ySyncPluginKey meta present; applySuggestion snapshot guard (snapshotContradicts) uses flatTextForPmRange consistent with server extractText.
+
+============================================================
+FINAL REVISION — supersedes the partial report above (same findings, evidence upgraded after a live y-prosemirror experiment).
+Experiment script: <scratchpad>/exp/crdt-verify.ts
+(run: cd scratchpad/exp && npx tsx crdt-verify.ts — in-memory Y.Doc + happy-dom Tiptap Editor with Collaboration; no server, no ports, nothing under HOME or the repo.)
+Non-write tool calls used after the first write: 4 of 6.
+============================================================
+
+## Findings — high confidence
+
+### E. High — Pressing Enter anywhere before an annotation in the same paragraph collapses the annotation to zero length and the server records the collapse as "updated"
+- Location: src/server/positions.ts:276-289 (refreshRange resolves relRange, from===to is not treated as failure, stored range overwritten as kind "updated"); node_modules/y-prosemirror/src/plugins/sync-plugin.js:~1145-1300 (updateYFragment implements a split as delete-tail-from-left-XmlText + insert new element)
+- Evidence: [ran: cd scratchpad/exp && npx tsx crdt-verify.ts — section E, live Tiptap Editor + Collaboration, editor.commands.splitBlock()]
+- Failure: Document "aaa bbb ccc", Claude comment on "bbb" (flat 4-7, relRange anchored). The user puts the caret after "aaa " and presses Enter: y-prosemirror deletes "bbb ccc" from the first XmlText and inserts a fresh paragraph, so both RelativePositions collapse to the deletion point; the next tandem_getAnnotations/refreshRange returns kind=updated range={4,4} and WRITES that to the Y.Map — the flat fallback is destroyed too, the client skips the decoration (from>=to), and the comment is orphaned with no console.warn/error anywhere. Same result when Enter is pressed after "a" (annotation entirely inside the moved tail: range={1,1}) and partial loss when Enter lands inside the annotation (range={4,5}, covers "b" only). Only Enter *after* the annotation is safe (kind=ok).
+- Why it matters: splitting a long paragraph is the most ordinary edit a reviewer makes; every Claude comment in the tail of that paragraph is silently lost, and because the "updated" arm persists the collapsed range there is no recovery — textSnapshot relocation runs only on the watcher reload path, never on the MCP read path or the client.
+- Possibly adjacent to open #1737 ("tell Claude not to insert line breaks mid-paragraph") — issue body not read; if that issue is about this mechanism the delta is that it is the *user's* Enter through y-prosemirror, not a Claude-inserted break, and that the server-side "updated" arm makes it irreversible.
+- Recommendation: in refreshRange treat a resolved from===to on a previously non-empty range as `failed`/`degraded` (do not persist), and run the textSnapshot relocation (already implemented in watcher.ts) on that arm; longer term, anchor `to` with a relative position in the element that *received* the tail (y-prosemirror move semantics cannot be recovered post hoc, so relocation by snapshot is the practical fix).
+- Confidence: high (reproduced live).
+
+### D. Medium — `repaired` arm re-anchors from stale flat offsets with no textSnapshot check, even when the snapshot is present
+- Location: src/server/positions.ts:254-275; src/server/documents/watcher.ts:210-270 (the only relocation pass); src/server/mcp/document-store.ts (listAnnotationsRefreshed drops `kind`)
+- Evidence: [ran: crdt-verify.ts section D]
+- Failure: "one / two / three" with a comment on "two" (textSnapshot "two"); the user deletes the "two" paragraph and a new paragraph "ZZZZ" is inserted at the top. tandem_getAnnotations returns kind=repaired with range {4,7}, which now covers "\non" — a range that straddles a separator and unrelated text — and the fresh relRange is minted there, so the client paints it via `rel` with no warning; the stored textSnapshot "two" was never consulted. Possibly extends #1632 (lost-target accept): the delta is that the server re-targets silently before any accept is reached.
+- Confidence: high (reproduced).
+
+### A. Medium — Endpoint-only heading check lets tandem_edit / tandem_comment span a heading prefix
+- Location: src/server/positions.ts:154-169; src/shared/positions/ydoc.ts resolveToElement (separator → end of previous element, not clamped); src/server/mcp/document.ts:~621-720 (cross-block branch); src/server/mcp/document-model.ts:147-156 (comment acknowledging the gap)
+- Evidence: [ran: crdt-verify.ts section A — validateRange(doc,4,9,{rejectHeadingOverlap:true}) and validateRange(doc,0,9,…) both return ok on flat "para\n## Head\nnext"]
+- Failure: tandem_edit(from=4 or 0, to=9) on that document passes rejectHeadingOverlap although [from,to) contains the literal "## ", so the cross-element branch deletes the heading node and merges "ad" into the paragraph — Critical Rule 6 ("tandem_edit rejects heading markup ranges") is bypassed for any range that *crosses* a heading rather than *starting/ending* inside its prefix. tandem_comment accepts the same range.
+- Confidence: high (validateRange reproduced; the tandem_edit deletion path is read, not run).
+
+### C. Low — Zero-length ranges are accepted and become permanently `failed` on the first insert at that point
+- Location: src/server/positions.ts:121 (only from>to rejected), :276-282 (inverted → failed, record untouched)
+- Evidence: [ran: crdt-verify.ts section C — anchoredRange(doc,5,5) accepted; after inserting one char at 5, refreshRange logs "inverted CRDT range … resolved [6, 5]" and returns kind=failed]
+- Failure: tandem_comment(from=10,to=10) succeeds; the first keystroke at that offset inverts the anchors (from assoc 0 sticks right, to assoc -1 sticks left), so every later read logs console.error and returns the stale flat range, and the editor never paints it. The client Toolbar guards from===to; MCP does not.
+- Confidence: high.
+
+### F. Low — A `from` anchored on a hardBreak offset drifts +1 on a no-edit refresh
+- Location: src/shared/positions/ydoc.ts (flatOffsetToRelPos ±1 retry; findXmlTextAtOffset null on hardBreak); src/server/positions.ts relPosToFlatOffset
+- Evidence: [ran: crdt-verify.ts section F — flat "line one\nline two", anchoredRange(8,12) stores {8,12}; immediate refreshRange returns kind=updated {9,12}]
+- Failure: A comment created with `from` on the soft break is rewritten to start one char later on the very next read with no document change, so the stored range/snapshot disagree with what was requested; any caller that re-derives offsets from the snapshot then misses by one.
+- Confidence: high.
+
+### G. Low — MCP `from`/`to` are bare z.number(); fractional/negative offsets reach anchoredRange (delta to the bounds finding already reported by another reviewer)
+- Location: src/server/mcp/annotations.ts (tandem_comment schema), src/server/mcp/document.ts (tandem_edit schema), src/server/annotations/schema.ts:55-115 (durable schema requires int nonnegative)
+- Evidence: [read: src/server/mcp/annotations.ts; src/server/annotations/schema.ts:55-115]
+- Failure: tandem_comment(from=2.5,to=7) is accepted and anchors a fractional index; the record later fails the durable int/nonnegative schema and is dropped from the envelope. Delta only: the missing `.int().nonnegative()` on the tool schemas.
+- Confidence: high.
+
+### J. Low — OutlinePanel attributes annotations by stale flat range.from, ignoring relRange
+- Location: src/client/components/OutlinePanel.svelte:148
+- Evidence: [read: src/client/components/OutlinePanel.svelte:148]
+- Failure: After inserting a paragraph above an annotated section the outline counts the annotation under the wrong heading until the next MCP read refreshes the flat range, while the editor decoration (relRange) is already correct.
+- Confidence: high.
+
+## Findings — remaining
+
+### B. Low — `to` on the first char of a heading prefix (half-open exclusive end) is rejected as HEADING_OVERLAP
+- Location: src/server/positions.ts:154-169
+- Evidence: [ran: crdt-verify.ts section B — validateRange(0,4) ok, validateRange(0,5) HEADING_OVERLAP on "para\n## Head"]
+- Failure: A caller that computes `to` as the index of the next heading's "#" (indexOf("## ")) gets HEADING_OVERLAP even though [from,to) contains no prefix char; they must back off to the separator. Cosmetic/API-ergonomic; the asymmetry is undocumented.
+- Confidence: high on behaviour, low on severity.
+
+### H. Low — refreshAllRanges `kind` is discarded by every MCP consumer except docx export
+- Location: src/server/mcp/document-store.ts (listAnnotationsRefreshed → .annotation), src/server/mcp/annotations.ts (tandem_getAnnotations)
+- Evidence: [read: src/server/mcp/document-store.ts; src/server/mcp/annotations.ts]
+- Failure: After E, C or D above, tandem_getAnnotations returns the annotation with no failed/degraded/repaired marker, so Claude edits offsets that no longer point at the commented text. Fixing this would also give E and D a visible symptom.
+- Confidence: high.
+
+## Unchecked leads
+- I. mammoth `ignoreEmptyParagraphs: true` (node_modules/mammoth/lib/document-to-html.js:34) vs docx-walker counting one "\n" per <w:p>: an empty Word paragraph between commented paragraphs would shift later comment offsets by one. May already be inside #1693 or the docx-walker contract finding another reviewer filed. Not run.
+- Client-side rescue for E: no textSnapshot relocation was found under src/client in the files read (annotation.ts buildDecorations has none); a grep for relocat/textSnapshot listed only src/shared and src/server files, but the listing was capped at 20 so a client site is not excluded.
+- Whether Undo after the split in E restores the anchors: Yjs undo re-inserts new items with new ids, so the RelativePositions should stay collapsed; not run.
+- Cross-block tandem_edit merge (mergeInlineTail) with an annotation whose `to` sits in the deleted trailing block — expected to behave like E (collapse, "updated"); not run.
+- Watcher relocation prefix search with a truncated 200-char snapshot that ends mid-surrogate or with a trailing "\n" from captureSnapshot's break handling; not checked.
+- #1632 / #1693 / #1737 bodies not read (gh CLI absent), so the "extends" deltas above are unconfirmed.
+
+## Doc drift
+- ADR-032 (docs/decisions.md) states MCP error responses switch on refreshRange `kind`; in code only the docx comment-export path reads `failed` — tandem_getAnnotations, tandem_editAnnotation and the inbox path discard it (finding H).
+- docs/architecture.md:310-389 and CLAUDE.md Critical Rule 6 describe the heading guard as "no annotation/edit may start or end inside a prefix"; neither says a range may *span* a prefix (finding A), which document-model.ts:147-156 records only in a code comment.
+- CLAUDE.md Y.js gotcha "Strip dead relRange RelativePositions, never preserve them — a stale one blocks the lazy re-attachment recovery path" implies re-attachment is a recovery; it re-attaches from the *unverified stale flat range* (finding D). The gotcha should say the recovery is snapshot-blind on the MCP path.
+- docs/architecture.md coordinate section does not mention that RelativePositions do not survive a y-prosemirror paragraph split (finding E) — the "survive concurrent edits" claim needs that caveat.
+
+## Verified fine
+- assoc pair (from 0 / to -1) consistent at all three mint sites: anchoredRange, anchorFlatRange (src/shared/positions/ydoc.ts), tutorial-annotations; inverted detection fires as designed (section C run).
+- Separator accounting (+1 per top-level boundary, none after last; nested container siblings joined by "\n"; hardBreak = 1 char) agrees across resolveToElement, relPosToFlatOffset, extractTextWithBreaks, flatDocLength, collectBlocks, flatOffsetToPmPos/pmPosToFlatOffset, pmDocFlatText, flatTextForPmRange, docx-walker. extractText output in the runs matched expectations ("para\n## Head\nnext", "line one\nline two", "aaa \nbbb ccc").
+- Heading prefix applied top-level only on both server (flattenHeadingText) and client (pmDocFlatText); headingPrefixLength single source.
+- XmlText identity: findXmlText / findXmlTextInParallel match by object identity; two identical headings are distinct anchors.
+- Inverted-range detection: server → `failed` + console.error (observed); client annotationToPmRange → console.warn + flat fallback, method 'flat'; buildDecorations warns on rel→flat and skips from>=to.
+- Attach-before-populate respected in mdast-ydoc (two-pass), docx-html, hardbreak-normalize, plaintext-flatten, ensureBlockChild.
+- Creation paths through anchoredRange: tandem_comment (store.anchorRange), tandem_importAnnotations, tutorial (withInternal), docx comment inject (withInternal), watcher reload (single withReload wrapping refresh + relocation), lazy attach in refreshAllRanges (withMcp unless skipTransact). No raw doc.transact seen in the files read.
+- tandem_getTextContent uses extractText, never extractMarkdown.
+- UTF-16 units consistent across Yjs, ProseMirror, JS strings and the docx walker; CRLF normalised to LF at load.
+- validateRange textSnapshot relocation picks the candidate nearest `from`; watcher relocation handles truncated snapshots by prefix search.
+- Client-created annotations (Toolbar/highlight-toggle, withBrowser, flat range only, from===to guarded) receive relRange lazily on the next server read.
+- #1669 decoration rebuild on ySyncPluginKey meta present; applySuggestion snapshot guard (snapshotContradicts) uses flatTextForPmRange consistent with server extractText.
+- Enter pressed *after* an annotation in the same paragraph leaves it intact (kind=ok, section E run).
+
+## Coverage against scratchpad/manifests/crdt.md
+Covered (read, and where noted run): every file in the manifest under src/shared/positions, src/server/positions.ts, src/server/mcp/{document,document-model,document-store,annotations,tutorial-annotations,navigation}.ts, src/server/documents/watcher.ts, src/server/file-io/{mdast-ydoc,docx-walker,docx-comments,docx-html,hardbreak-normalize,plaintext-flatten,line-endings,markdown}.ts, src/server/annotations/{schema,doc-hash}.ts, src/client/positions.ts, src/client/editor/extensions/{annotation,awareness}.ts, Toolbar.svelte/highlight-toggle.ts, useAnnotationReview.svelte.ts, OutlinePanel.svelte, docs/architecture.md 310-389, y-prosemirror sync-plugin.js.
+Not covered or only skimmed: src/server/annotations/migrations/ (relRange migration shapes), src/server/annotations/{lifecycle,sync,projection}.ts beyond the origin helpers, src/server/file-io/{docx-apply,docx-comment-export,docx}.ts (tracked-changes and export round-trip math), src/server/mcp/list-edit.ts beyond its bounds check, src/server/mcp/routes/, src/client/editor/find-replace/ and find-replace.ts (whether find/replace edits go through withBrowser and how they move anchors), src/server/local-model/tools.ts, tests/client/flat-offset-container-boundary.test.ts. No differential harness across all three coordinate systems was built beyond crdt-verify.ts; the docx comment offset path was read, not run.
+
+STATUS: complete

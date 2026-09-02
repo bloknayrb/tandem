@@ -1,0 +1,216 @@
+STATUS: partial
+
+=== ITEM 1 — mammoth ignoreEmptyParagraphs vs docx walker ===
+RESULT: CONFIRMED bug. Severity: High.
+Script: <scratchpad>/exp/e1-docx.ts  (CASE 1)
+Fixture: hand-built OOXML zip via jszip; <w:p>Alpha [beta]</w:p><w:p/><w:p>Gamma [delta]</w:p>,
+one Word comment on "beta", one on "delta". Imported through the REAL path:
+getAdapter("docx").parse() -> .apply() (src/server/file-io/index.ts:111 parse / :253 apply),
+i.e. mammoth -> htmlToYDoc -> injectCommentsAsAnnotations.
+Key output:
+  walker flat : "Alpha beta\n\nGamma delta"
+  ydoc   flat : "Alpha beta\nGamma delta"
+  ann on "beta"  range={"from":6,"to":10}  covers="beta"    <- correct
+  ann on "delta" range={"from":18,"to":23} covers="elta"    <- WRONG, off by +1
+Explanation:
+  src/server/file-io/docx-walker.ts:200-205 — every <w:p> after the first adds exactly
+  one "\n" to the offset accumulator, empty or not.
+  node_modules/mammoth/lib/document-to-html.js:34 (`ignoreEmptyParagraphs: true` default)
+  and :104-108 — an empty paragraph converts to zero content, so no <p> is emitted and
+  htmlToYDoc creates no block. Tandem never passes ignoreEmptyParagraphs
+  (src/server/file-io/docx.ts:47 passes only `{styleMap:["u => u"]}`).
+  Drift is +1 flat char per empty paragraph, cumulative for the rest of the document.
+User impact: every Word comment after the first blank paragraph in a .docx anchors one
+character (or N, for N blank paragraphs) to the right of the text it was attached to, so
+imported review comments point at the wrong words and the mis-anchored range is written
+back on save.
+
+=== ITEM 2 — w:tab in a table cell, and w:br w:type="page" ===
+RESULT (w:tab, incl. inside a table cell): REFUTED — offsets are correct.
+RESULT (w:br w:type="page"): CONFIRMED bug. Severity: High.
+Script: same file, CASE 2a (tab in <w:tc>), CASE 2b (page break), CASE 2c (tab in plain <w:p>).
+Key output:
+  CASE 2a  walker "Intro\n head cellword\nTail last"  ydoc "Intro\n\thead cellword\nTail last"
+           ann covers "cellword"  and  "last"          <- both correct (tab = 1 char on both sides)
+  CASE 2c  walker "A B zed"  ydoc "A\tB zed"  ann covers "zed"  <- correct
+  CASE 2b  walker "Before After target\nNext word"     ydoc "BeforeAfter target\nNext word"
+           ann on "target" range={"from":13,"to":19} covers="arget\n"   <- WRONG, +1 and spills
+           ann on "word"   range={"from":25,"to":29} covers="ord"       <- WRONG, +1
+Explanation:
+  src/server/file-io/docx-walker.ts:164 SINGLE_CHAR_ELEMENTS contains "w:br" with no
+  breakType discrimination, and :267-269 counts 1 char for it.
+  node_modules/mammoth/lib/document-to-html.js:337-352 — convertBreak wraps an EMPTY
+  content list; htmlPathForBreak returns `htmlPaths.topLevelElement("br")` only for
+  `breakType === "line"`, and `htmlPaths.empty` for page/column breaks. So a page break
+  contributes ZERO characters to the import while the walker counts one.
+  (The tab case is safe because mammoth emits a literal "\t" — document-to-html.js:373 —
+  matching the walker's 1-char placeholder; the placeholder differs in VALUE (" " vs "\t")
+  but not in length, so only walker-flatText string comparisons, not offsets, are affected.)
+User impact: any Word document with a manual page break (very common in real reviewed
+documents) mis-anchors every comment after it by one character per break, and a range can
+spill across the block boundary as seen above.
+
+=== ITEM 3 — markdown table cell with an escaped pipe (\|) ===
+RESULT: REFUTED — the escape survives and the table stays a table.
+Script: <scratchpad>/exp/e3-table.ts
+(loadMarkdown / saveMarkdown from src/server/file-io/markdown.ts — the same pair tandem_save uses.)
+Key output:
+  in   : "| h1 | h2 |\n| --- | --- |\n| a \\| b | c |\n"
+  flat : "h1\nh2\na | b\nc"                      <- cell text is the unescaped "a | b"
+  nodes: table                                    <- still one table node
+  out  : "| h1 | h2 |\n| - | - |\n| a \\| b | c |\n"
+  roundtrip stable: true
+Only difference vs input is the delimiter row normalising "---" to "-", which is
+remark-stringify's canonical form and is idempotent (out === out2).
+Side observation (Low, not the asked question): an UNESCAPED pipe inside a code span
+("| `a | b` | c |") is split into cells per the GFM spec, and remark-stringify then pads
+the header row with an extra empty column ("| h1 | h2 | |"), so a ragged input row that
+GFM would have truncated becomes a visible third column. Stable on re-save; input is
+malformed markdown to begin with.
+
+=== ITEM 4 — hard break inside a heading ===
+RESULT: REFUTED for the offset model (no miscount, correct accept/reject).
+        One genuine but Low-severity fidelity loss found on the SAVE side.
+Scripts: exp/e4-heading.ts and exp/e4b.ts
+Findings:
+ a) "# a\\" + newline + "b" is NOT a heading with a break — CommonMark ends the ATX
+    heading at the newline, so it parses as heading("a\") + paragraph("b").
+      flat "# a\\\nb"; range on "b" [5,6): validateRange plain = ok,
+      validateRange rejectHeadingOverlap = ok (correct — "b" is a paragraph).
+ b) A real heading-with-hardBreak needs setext ("a\\" / "b" / "==="). There:
+      nodes: heading(lvl=1)[text:"a", hardBreak, text:"b"]
+      flat : "# a b"  (len 5) — the hardBreak occupies exactly ONE flat char,
+             rendered as a space by src/server/mcp/document-model.ts:311
+             (`flattenHeadingText`), while in a paragraph the same node renders "\n"
+             (document-model.ts:212-226). Length is 1 in both cases, so nothing miscounts.
+      range on "b" [4,5): validateRange plain = ok, rejectHeadingOverlap = ok,
+      anchoredRange ok + fullyAnchored=true.
+    Control proving the heading guard is live: on "# abc", validateRange(0,3,
+    {rejectHeadingOverlap:true}) = {"ok":false,"code":"HEADING_OVERLAP"} while (2,5) = ok.
+ c) SAVE-side loss (Low): a hardBreak inside a heading does not survive saveMarkdown —
+      "a\\\nb\n===\n"  -> flat "# a b" -> save "# a b\n"   (break gone, stable thereafter)
+      "a\\\nb\n"       -> flat "a\nb"  -> save "a\\\nb\n"   (paragraph break DOES survive)
+    Cause: Tandem serialises headings as ATX, and a hard break is unrepresentable in an
+    ATX heading, so mdast-util-to-markdown emits a space. Correct-by-necessity rather
+    than a coordinate bug, but it is a silent one-way conversion of a setext heading.
+User impact: none for tandem_edit ranges; a setext heading containing a line break is
+flattened to one line the first time the file is saved.
+
+=== ITEM 5 — cross-block tandem_edit merge vs an annotation anchored in the tail block ===
+RESULT: CONFIRMED bug. Severity: High.
+Script: <scratchpad>/exp/e5-merge.ts
+(faithful replication of the cross-element branch of tandem_edit,
+src/server/mcp/document.ts:702-740 — same helpers, same order, same withMcp origin),
+controls in exp/e5b.ts.
+Key output — annotation on "zeta", the LAST word of paragraph 2, which the edit does not
+touch (edit range [6,23) ends before it):
+  flat before : "Alpha beta gamma\nDelta epsilon zeta"
+  annotation  : "zeta" [31,35) anchored: true fullyAnchored: true
+  flat after  : "Alpha XXepsilon zeta"        (20 chars)
+  refresh kind: repaired  range: {"from":31,"to":35}  covers: ""  status: pending
+  expected    : [16,20) = "zeta"
+  VERDICT     : WRONG  — the range is past EOF and refreshRange reports a healthy "repaired"
+Two further shapes, both mis-anchoring onto unrelated text rather than failing:
+  annotation spanning the join   -> "repaired" range {11,23} covers "ilon zeta"
+  annotation inside the deletion -> "repaired" range {11,22} covers "ilon zeta"
+(only these two log "[positions] refreshRange: partial CRDT resolution ... (from: ok, to: dead)";
+the headline case logs NOTHING because both ends died.)
+Controls that isolate the cause (exp/e5b.ts):
+  same-block edit before the annotation      -> kind "updated", range {15,19}, covers "zeta"  OK
+  merge of p1+p2 with annotation in p3       -> kind "updated", range {22,27}, covers "final" OK
+Explanation:
+  src/server/mcp/document-model.ts:803-819 `mergeInlineTail` folds the end block onto the
+  start block by CLONING — `mergeXmlTextDelta`, `appendClonedXmlText`, `child.clone()` —
+  and src/server/mcp/document.ts:739 then deletes the emptied tail element. Every Yjs item
+  the tail's surviving text was made of is destroyed, so both RelativePositions resolve to
+  null.
+  src/server/positions.ts:254-269 then takes the dead-relRange branch and re-anchors from
+  `ann.range`, i.e. the STALE PRE-EDIT FLAT OFFSETS, returning kind "repaired" with
+  `ann.range` UNCHANGED (only relRange is replaced). Nothing clamps to document length and
+  nothing checks the textSnapshot, so an out-of-bounds or mis-pointed range is written back
+  to the annotation map (document-store.ts:229/266 call refreshAllRanges on every list).
+  "repaired" is not in the `failed` bucket that refreshAllRanges:324-330 warns about, so the
+  corruption is silent.
+User impact: one cross-paragraph tandem_edit silently detaches every annotation living in
+the second block — including comments on text the edit never touched — leaving them either
+pointing past the end of the document (invisible/undecoratable) or highlighting unrelated
+words, with status still "pending" and no warning to user or model.
+
+=== ITEM 6 — truncated textSnapshot at a surrogate-pair / hard-break boundary ===
+RESULT (b) hard break at the cap boundary: REFUTED — relocation finds its own text.
+RESULT (a) surrogate pair split by the cap: CONFIRMED bug. Severity: Medium.
+Scripts: exp/e6-snapshot.ts (relocation pass replicated verbatim from
+src/server/documents/watcher.ts:214-262) and exp/e6b.ts (accept-guard impact).
+Key output:
+  (a) emoji straddling the 200-char cap
+      snapshot len 200 truncated true
+      snapshot tail : "xxxxx\ud83d"  lastCharCode d83d  loneSurrogate: true
+      wellFormed    : false
+      relocate(unchanged doc): {"action":"valid (no move)"}                <- fine in-process
+      after Yjs update round-trip: snapshot identical: false | tail now "xxxxx�"
+      relocate(after round-trip): {"action":"NOT FOUND (RANGE_GONE)"}      <- BUG
+  (b) hard break at the cap boundary
+      snapshot tail "yyyyy\n"; relocate before and after round-trip: "valid (no move)"
+  (c) control, untruncated: valid before and after.
+  e6b.ts (the accept guard, src/shared/snapshot.ts snapshotContradicts):
+      pre-roundtrip  contradicts: false
+      post-roundtrip contradicts: true   | snapshot changed: true
+      post-JSON      contradicts: false  | snapshot changed: false
+Explanation:
+  src/server/mcp/annotations.ts:186-187 — `text.slice(0, SNAPSHOT_CAP)` is a UTF-16
+  code-unit slice with no surrogate-boundary guard, so a capped snapshot can end on a
+  lone high surrogate (`SNAPSHOT_CAP = 200`, src/shared/snapshot.ts:34).
+  The record is then stored in Y.Map(annotations); Yjs serialises strings as UTF-8
+  (Y.encodeStateAsUpdate — used for session persistence at src/server/session/manager.ts:81
+  and :358, for the doc swap at src/server/yjs/provider.ts:171, and for every client sync),
+  and a lone surrogate is not encodable, so it comes back as U+FFFD. The JSON disk path is
+  lossless (\udXXX escape), so only the CRDT path corrupts it — which is the path the
+  server's own restore uses.
+  After that the snapshot is no longer a substring of its own document:
+  validateRange(..., {textSnapshot: probe}) returns RANGE_GONE, and the watcher's
+  relocation pass treats RANGE_GONE as "leave as-is" (watcher.ts:261 comment), so the
+  annotation is permanently un-relocatable; snapshotContradicts now returns true, so the
+  accept paths that gate on it refuse the suggestion.
+User impact: an annotation whose text is longer than 200 characters and happens to have an
+emoji or other astral character exactly at the 200-char boundary silently becomes
+un-relocatable after a server restart or client sync, and its suggestion can no longer be
+accepted — with no error surfaced anywhere.
+
+=== ITEM 7 — undo after the block-split anchor collapse ===
+RESULT: REFUTED for plain undo (anchors DO recover their original span).
+        CONFIRMED bug for the "collapse survives a re-anchor, then undo" variant. Severity: Medium.
+Scripts (vitest + happy-dom + real Tiptap/Collaboration/y-prosemirror):
+  /tmp/.../scratchpad/harness/f-undo.test.ts   (split inside a longer range)
+  /tmp/.../scratchpad/harness/f2-undo.test.ts  (the three collapse shapes + undo)
+  /tmp/.../scratchpad/harness/f3-undo.test.ts  (collapse, re-anchor, then undo)
+  run: cd .../harness && npx vitest run --config vitest.config.ts f2-undo.test.ts
+Baseline reproduction of the reviewer's finding E (exp/crdt-verify.ts, section E):
+  split at ann start (after 'aaa '): range {4,7} -> {4,4}  collapsed
+  split before ann   (after 'a')   : range {4,7} -> {1,1}  collapsed (annotation text untouched!)
+  split inside ann   (after 'aaa b'): range {4,7} -> {4,5}  truncated
+f2 (undo immediately after the split):
+  split at ann start : after split {4,4} collapsed -> after undo kind=ok       {4,7} covers "bbb"
+  split before ann   : after split {1,1} collapsed -> after undo kind=ok       {4,7} covers "bbb"
+  split inside ann   : after split {4,5}           -> after undo kind=updated  {4,7} covers "bbb"
+  Recovery holds both for the pristine record and for the record as the split left it,
+  because refreshRange (src/server/positions.ts:287) rewrites only `range` and keeps the
+  original `relRange`, and the RelativePositions resolve correctly again once y-prosemirror's
+  undo removes the split.
+f3 (the failure mode): if the collapsed record is RE-ANCHORED before the undo — which is
+exactly what a reload/restart does, since the persisted relRange no longer resolves against
+a freshly rebuilt Y.Doc and src/server/positions.ts:241-249/263-268 re-anchors from the
+stored flat offsets — the collapse becomes permanent:
+    after split : kind=updated  range={"from":4,"to":4} collapsed=true
+    re-anchored : kind=attached range={"from":4,"to":4} collapsed=true
+    html after undo: <p>aaa bbb ccc</p>
+    [positions] refreshRange: inverted CRDT range for annotation a1: resolved [11, 4] from flat [4, 4]
+    undo(reanch): kind=failed range={"from":4,"to":4} collapsed=true
+  The two zero-width anchors re-attached at the split point resolve to opposite ends after the
+  undo (from -> 11, to -> 4), tripping the inverted-range guard at src/server/positions.ts:276-282,
+  so the annotation is frozen collapsed for the rest of its life.
+User impact: pressing Enter at or before an annotated range collapses the annotation's
+highlight to a zero-width point; Ctrl+Z restores it as long as it happens in the same
+session, but if the document is reloaded or the app restarted while it is collapsed, undoing
+the split afterwards never brings the highlight back and the record is permanently "failed".
+
+STATUS: complete

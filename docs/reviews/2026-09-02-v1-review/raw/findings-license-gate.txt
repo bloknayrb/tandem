@@ -1,0 +1,329 @@
+STATUS: complete
+
+REVIEW: the licensing gate as it will behave once ARMED
+Repo <repo> @ master 3fb6408 (v0.24.1). Read-only review; nothing under the repo changed.
+
+================================================================
+FINDINGS — HIGH CONFIDENCE
+================================================================
+
+[High] The update window gates nobody: an expired/unentitled device falls back to the PUBLIC endpoint
+src-tauri/src/lib.rs:2212-2246; src-tauri/tauri.conf.json:107-109; infra/license-update-worker/src/worker.ts:~128-135
+[read: src-tauri/src/lib.rs:2212-2246]
+entitled_license_id() returns None for every non-entitled case (gate dark, trial, restricted, EXPIRED
+WINDOW, sidecar unreachable, scrubbed body); build_updater() then calls app.updater(), which uses
+tauri.conf.json's endpoints — https://github.com/bloknayrb/tandem/releases/latest/download/latest.json,
+public and unauthenticated. The gated Worker merely proxies PUBLIC_LATEST_JSON_URL, i.e. the same bytes.
+A buyer whose one-year window ended is therefore offered and installs every future release, and
+docs/security.md:179's "serves new builds only while the update window is current" is false. Confidence: high.
+
+[High] "One const flips at v1.0" is wrong — LICENSE_UPDATE_ENDPOINT is the empty string
+src-tauri/src/lib.rs:171 (`const LICENSE_UPDATE_ENDPOINT: &str = "";`) and lib.rs:2213-2215
+[read: src-tauri/src/lib.rs:171,2212-2216]
+entitled_license_id() early-returns None on the empty endpoint, so the entire entitlement/KV/update-window
+mechanism is dead until a SECOND const is edited, in a different language and a different build system from
+the one CLAUDE.md and docs/licensing-explained.md name. Flipping LICENSE_GATE_ENABLED alone arms enforcement
+while leaving every device unentitled and silently on the public endpoint; nothing warns. Confidence: high.
+
+[High] The "missing entitlement ⇒ You're up to date forever" failure has NO client-side detector
+infra/license-update-worker/src/worker.ts:31-42 + 90-101; src/client/components/settings-tabs/SettingsLicenseTab.svelte:56-65; src-tauri/src/lib.rs:2158-2170
+[read: infra/license-update-worker/src/worker.ts:18-42,85-135]
+The only in-app signal, `license-update-window-ended`, renders on `status.gateActive && status === "licensed"
+&& !status.updateWindowCurrent` — i.e. on the LOCAL expiresAt. In the case the docs call the worst one (window
+current locally, KV entry missing/evicted/namespace-mismatched) that condition is false, the warning does not
+render, the Worker answers 204 with `reason:"unknown-id"` LOGGED ONLY and never returned, and the app says
+"You're up to date." A licensed buyer is starved of updates with every surface reporting health.
+Distinct from the already-reported "up-to-date dialog has no ended-window branch", which covers the expired
+case; this is the current-window case, where even the Settings warning is silent. Confidence: high.
+
+[Medium] Running the suite armed changes nothing — the armed run is a no-op by construction
+[ran: TANDEM_LICENSE_GATE=1 npx vitest run] -> 615 files passed, 1 skipped; 10140 passed, 24 skipped, 0 failed.
+[ran: npx tsx probe (scratchpad/probe.ts) against a scratch app-data dir]
+With no trial.json present, resolveLicenseState(gateEnabled:true) returns
+{status:"trial", daysRemaining:14} (license-state.ts:128-143), which passes licenseGateResult() and
+applyConnectionGate(). So TANDEM_LICENSE_GATE=1 cannot make any integration test observe restricted
+behaviour, and every license unit test injects `gateEnabled` itself rather than reading the flag. Nothing in
+the suite exercises the product with the gate ARMED AND RESTRICTED; the day it flips is untested end-to-end.
+Confidence: high.
+
+[Medium] trial.json fails OPEN for a falsy firstRunAt and CLOSED for a malformed one
+src/server/license/license-state.ts:129
+[ran: npx tsx probe — results below]
+  firstRunAt "" / null / 0, and a corrupt (unparseable) trial.json -> trial, daysRemaining 14, EVERY LAUNCH
+  firstRunAt "not-a-date"                                          -> restricted
+`tf?.firstRunAt ? new Date(...).getTime() : nowMs` is a truthiness test, so one class of corruption is an
+unlimited rolling trial and another is instant lockout with no in-app remedy. A user who wants a free trial
+forever writes `{"version":1,"firstRunAt":0}`; a user whose file got truncated in a backup restore gets locked
+out. Extends the already-reported NaN-fails-closed item with its fail-open twin. Confidence: high.
+
+[Medium] POST /api/mode-release mutates the annotation store while restricted, ungated and unenumerated
+src/server/mcp/routes/mode-release.ts:80-107; src/server/mcp/api-routes.ts:396
+[read: src/server/mcp/routes/mode-release.ts:60-107]
+The handler writes Y_MAP_MODE into CTRL_ROOM and then calls clearHeldMarkersForDoc() on every open document —
+per its own docblock "rev-bumped and durable" annotation-marker writes. It carries no licenseGateMiddleware
+and no in-handler licenseGate(), and appears in neither half of the enumerated gated set nor in the
+"deliberately ungated" sentence (licensing-explained.md:235-237). A restricted user pressing the Solo->Tandem
+release control still mutates persisted annotation records while every other browser annotation write
+(annotation-reply, remove-annotation, and all Y.Doc writes via Surface A) is refused. Confidence: medium-high.
+
+[Medium] Settings tells a desktop-only buyer to run `tandem activate`, which the desktop app does not install
+src/client/components/settings-tabs/SettingsLicenseTab.svelte:78-80; src/server/mcp/routes/license.ts:143-144
+[read: src-tauri/tauri.conf.json:44-47,59-68]
+The bundle ships binaries/node-sidecar + tandem-reaper and resources dist/server, dist/channel,
+dist/stdio-bridge, dist/client — there is no dist/cli and nothing puts `tandem` on PATH. The Settings hint and
+the LOCAL_ONLY activation-error copy ("or run `tandem activate` on it") both name a command a Tauri-only user
+does not have, at exactly the moment activation has already failed. Confidence: high.
+
+[Medium] docs/licensing-explained.md:24 promises double-clicking the .license file works; no association exists
+docs/licensing-explained.md:23-24 vs src-tauri/tauri.conf.json:74-100
+[read: src-tauri/tauri.conf.json:74-100]
+fileAssociations covers md/markdown, txt, html, docx only. The issuance Worker treats the attachment as "the
+primary path" (infra/license-issuance-worker/src/worker.ts:670-675,798-804). A buyer following the Part-1
+instruction double-clicks tandem.license and the OS offers no handler. Confidence: high.
+
+[Medium] Surface A is per-connection; mid-session enforcement rests on a client poll that swallows errors
+src/server/yjs/provider.ts:130-157; src/client/hooks/useLicense.svelte.ts:25,65-75,85-95; src/client/App.svelte:163
+[read: src/server/yjs/provider.ts:130-158]
+onAuthenticate evaluates the gate once, at authentication; connection.readOnly is never revisited. The only
+thing that converts a trial->restricted edge into enforcement on an OPEN editor is the client's own 60s poll
+firing yjsSync.rebuildForLicenseChange(). poll()'s catch is empty (useLicense.svelte.ts:72-74), so a client
+whose /api/license/status keeps failing keeps a writable document room indefinitely, as does any WebSocket
+holder that is not Tandem's own bundle. Extends the already-flagged security.md:178 "re-checked per request";
+the delta is that the compensating control is client-side and silently degradable. Confidence: high.
+
+[Medium] Restricted mode lets Claude resolve annotations but forbids the human from doing so
+tests/server/license-gate-coverage.test.ts:71-75; src/server/license/connection-gate.ts:12-18; src/server/mcp/api-routes.ts:475,479
+[read: tests/server/license-gate-coverage.test.ts:69-109]
+tandem_resolveAnnotation is deliberately ungated so triage is not blocked — but the human's equivalent is a
+Y.Doc write over a connection Surface A has clamped read-only, and /api/annotation-reply and
+/api/remove-annotation are middleware-gated. So the escape hatch the coverage test names holds only for the
+AI. licensing-explained.md:314-317 predicts this ("a read-only clamp is exactly what would stop the user
+resolving their own annotations") but frames it as a reason the amendment deletes Surface A; it is live
+behaviour of the code that flips. Confidence: high.
+
+================================================================
+FINDINGS — REMAINING
+================================================================
+
+[Medium] TANDEM_APP_DATA_DIR relocates trial.json AND license.json, so CLI and sidecar can disagree
+src/server/platform.ts:10-14  [read: src/server/platform.ts:7-14]
+`tandem activate x.license` writes license.json under whatever TANDEM_APP_DATA_DIR the shell has; the desktop
+sidecar reads whatever it was spawned with. A buyer gets "License activated for Jane Doe" and the app still
+shows the wall, with no surface naming the path. It is also a one-line trial reset (consistent with the
+deliberately-soft clock, but worth stating alongside it). Confidence: high.
+
+[Medium] The pinned public key is a single un-rotatable const with no dated tracking issue
+src/server/license/public-key.ts:10-20  [read: src/server/license/public-key.ts:1-23]
+The file states the constraint itself, including "it has to happen before the first sale or not at all" — a
+deadline. Per CLAUDE.md's dated-gate rule that needs a dated issue title; the deadline lives only in this
+comment. A key compromise after the first sale drops every customer to restricted, mid-session for anyone
+whose client re-polls. The cheap fix the comment names (accept an array) is not implemented. Confidence: high.
+
+[Low] LicenseUi.editable is dead code; the real clamp is ui.showWall
+src/client/utils/license-ui.ts:42-43,63,73,84,94 vs src/client/App.svelte:1791
+[read: grep over src/client for `ui.editable` — no consumer]
+App.svelte:1791 computes `editorReadOnly = isReadOnly || licenseStore.ui.showWall` and passes it at :2812.
+Nothing reads `ui.editable`, so tests/client/license-ui.test.ts asserting it proves nothing about the editor,
+and a future change to `editable` alone would be silently inert. Confidence: high.
+
+[Low] `tandem activate <dir>` / unreadable file throws an uncaught exception instead of the per-code copy
+src/cli/license.ts:126 (call) vs 127-141 (try/catch)  [read: src/cli/license.ts:120-141]
+resolveLicenseInput() runs OUTSIDE the try, so fs.readFileSync on a directory (EISDIR) or an unreadable file
+(EACCES) escapes as a raw Node stack trace. The same call is an unbounded read that precedes
+activateLicense()'s MAX_NORMALIZE_INPUT check. Confidence: high.
+
+[Low] There is no deactivation or removal path
+[ran: grep -rni "deactivate|removeLicense" src/cli src/server/license src/server/mcp/routes/license.ts — no hits]
+No CLI verb, no DELETE route, no Settings control. Moving a license off a shared or sold machine requires
+knowing to delete license.json by hand from an OS-specific app-data path. Confidence: high.
+
+[Low] The verifier brands metadata with no runtime shape validation
+src/server/license/verifier.ts:112-132  [read: src/server/license/verifier.ts:99-143]
+`return signedLicense.metadata as SignatureVerified` — nothing asserts id/name/email/expiresAt/version exist or
+are strings. Downstream happens to fail safely (missing/garbage version -> knownVersion false -> unlicensed;
+missing expiresAt -> new Date(undefined) NaN -> updateWindowCurrent false; missing id -> licenseId undefined ->
+updater drops to the public endpoint), but by accident of caller defensiveness, not by contract. Only the key
+holder can produce such a blob, so this is hygiene. Confidence: high.
+
+[Low] The dark path is not free, and leaks an install boolean to LAN callers
+src/server/mcp/routes/license.ts:63-73,88-96,116-123  [read: src/server/mcp/routes/license.ts:29-123]
+handleGetLicenseStatus and scrubForNonLoopback both call darkInstallInfo(), which re-resolves with
+gateEnabled:true — a real file read plus an Ed25519 verify — on every status request today, including the
+non-loopback one, which returns `licenseInstalled` (a boolean about the host machine) to LAN peers. Both are
+deliberate and commented; noted because question 9 asks whether the dark path alters behaviour, and it does
+do work today, just nothing user-visible. Confidence: high.
+
+================================================================
+ARMED SUITE RESULTS
+================================================================
+
+[ran: TANDEM_LICENSE_GATE=1 npx vitest run tests/server/license-activation-errors.test.ts
+ tests/server/license-connection-gate.test.ts tests/server/license-force-open-gate.test.ts
+ tests/server/license-gate-coverage.test.ts tests/server/license-gate.test.ts tests/server/license-kv-store.test.ts
+ tests/server/license-state.test.ts tests/server/license-status-route.test.ts tests/server/license.test.ts
+ tests/cli/license.test.ts]
+  10 files passed / 137 tests passed / 0 failed. Includes license-gate-coverage.test.ts armed: passes.
+
+[ran: TANDEM_LICENSE_GATE=1 npx vitest run tests/client/license-rebuild.test.ts
+ tests/client/license-store.svelte.test.ts tests/client/license-ui.test.ts
+ tests/server/license-issuance-worker.test.ts tests/server/license-update-worker.test.ts
+ tests/server/sign-license-script.test.ts tests/docs]
+  27 files passed / 267 tests passed / 0 failed.
+
+[ran: TANDEM_LICENSE_GATE=1 npx vitest run]  (full suite)
+  615 files passed, 1 skipped; 10140 passed, 24 skipped, 0 failed. Duration 188s.
+
+NO FAILURES ANYWHERE. Every license test asserts dark behaviour only in the sense that it injects
+`gateEnabled` explicitly (resolveLicenseState / applyConnectionGate / licenseGateResult all take it as a
+parameter or take a LicenseState), so the env flag is irrelevant to them; and every non-license test is
+unaffected because the armed default state is `trial`, not `restricted`. To make an armed run meaningful the
+harness would have to seed a backdated trial.json into a per-test TANDEM_APP_DATA_DIR.
+
+Probe results (trial-clock arithmetic), now = 2026-09-02T12:00:00Z, TRIAL_DAYS=14:
+  no trial.json                    -> trial,      daysRemaining 14
+  firstRunAt 20d ago               -> restricted
+  firstRunAt exactly 14d ago       -> restricted   (boundary is exclusive, correct)
+  firstRunAt 10d in the FUTURE     -> trial,      daysRemaining 24   <-- unclamped ceil, already reported
+  firstRunAt "not-a-date"          -> restricted   (NaN fails closed, already reported)
+  firstRunAt ""                    -> trial,      daysRemaining 14   <-- NEW, fails OPEN
+  firstRunAt null                  -> trial,      daysRemaining 14   <-- NEW, fails OPEN
+  firstRunAt 0                     -> trial,      daysRemaining 14   <-- NEW, fails OPEN
+  firstRunAt "2026-08-25"          -> trial,      daysRemaining 6    (date-only parsed as UTC midnight; a
+                                                   user west of UTC sees the trial end up to a day early)
+  trial.json corrupt (bad JSON)    -> trial,      daysRemaining 14   <-- NEW, fails OPEN
+
+================================================================
+GATED-SET AUDIT
+================================================================
+Sources: gatedTool/licenseGate grep over src/; api-routes.ts:380-520; licensing-explained.md:214-237;
+tests/server/license-gate-coverage.test.ts:53-109.
+
+MUTATION SET (the enumerated 13 + the force pair)
+| Name                     | MCP gated?              | /api gated?                  | Listed in doc? |
+|--------------------------|-------------------------|------------------------------|----------------|
+| tandem_edit              | yes (document.ts:567)   | no twin                      | yes            |
+| tandem_appendContent     | yes (document.ts:949)   | no twin                      | yes            |
+| tandem_editList          | yes (document.ts:810)   | no twin (doc says so)        | yes            |
+| tandem_scratchpad        | yes (document.ts:463)   | yes (api-routes.ts:435)      | yes (both)     |
+| tandem_comment           | yes (annotations.ts:276)| no twin                      | yes            |
+| tandem_suggest (stub)    | yes (annotations.ts:341)| no twin                      | yes            |
+| tandem_highlight (stub)  | yes (annotations.ts:241)| no twin                      | yes            |
+| tandem_flag (stub)       | yes (annotations.ts:362)| no twin                      | yes            |
+| tandem_editAnnotation    | yes (annotations.ts:525)| no twin                      | yes            |
+| tandem_annotationReply   | yes (annotations.ts:856)| yes (api-routes.ts:475)      | yes (both)     |
+| tandem_removeAnnotation  | yes (annotations.ts:479)| yes (api-routes.ts:479)      | yes (both)     |
+| tandem_applyChanges      | yes (docx-apply.ts:455) | yes (api-routes.ts:442)      | yes (both)     |
+| tandem_restoreBackup     | yes (docx-apply.ts:506) | yes (api-routes.ts:458)      | yes (both)     |
+| tandem_open force:true   | yes in-handler (document.ts:409) | yes in-handler (routes/open.ts:15) | prose only |
+| (browser-only) document/reload        | n/a        | yes (api-routes.ts:450)      | yes            |
+| (browser-only) external-conflict/resolve | n/a     | yes (api-routes.ts:464-471)  | yes            |
+
+BOTH DIRECTIONS VERIFIED: the doc's MCP list of 13 == the 13 gatedTool call sites exactly; the doc's /api list
+of 7 == the 7 licenseGateMiddleware mounts exactly. No gated route has an ungated MCP twin, and no gated MCP
+tool has an ungated /api twin. license-gate-coverage.test.ts additionally pins the 19-name UNGATED list, so
+accidentally gating a read tool is caught too.
+
+MUTATING /api ROUTES THAT ARE UNGATED AND NOT NAMED IN THE DOC'S "deliberately ungated" SENTENCE
+(licensing-explained.md:235-237 covers reads, plain open, save/export, GET, chat, tandem_resolveAnnotation):
+  /api/mode-release      <-- writes durable annotation markers; see the finding above
+  /api/close, /api/rename, /api/upload, /api/sessions/delete, /api/sessions/clear,
+  /api/store/reclaim-lock, /api/rotate-token, /api/shutdown,
+  /api/models*, /api/integrations/*, /api/launcher/*, /api/channel-*
+Of these only mode-release touches document/annotation state. The rest are tab, session, config or process
+management and are defensibly out of a content-write gate — but the doc's ungated sentence does not reach
+them, so the enumeration that IS the /api half's review does not actually cover the /api surface.
+The coverage test's UNGATED list DOES name tandem_rename / tandem_close / tandem_switchDocument /
+tandem_convertToMarkdown with rationale; the doc does not. The MCP half is better documented than the /api half.
+
+================================================================
+UNCHECKED LEADS
+================================================================
+- ADR-040 itself in docs/decisions.md, and docs/licensing-operations.md beyond greps: not read in full.
+- infra/license-issuance-worker/ beyond the email/attachment copy: a separate reviewer owns the workers.
+- Whether validate_open_candidate in src-tauri would even accept a .license path if an association were added.
+- src/server/local-model/tools.ts:305 keeps a THIRD copy of the gate decision (`isLicenseRestricted ??
+  licenseGate()`), doubly dark today (BYO_MODELS_ENABLED false). Not audited for divergence from
+  licenseGateResult; licensing-explained.md:305-310 already calls it "a template for the next mistake".
+- Whether Hocuspocus's connection.readOnly actually rejects awareness writes as well as document writes
+  (assumed from the docblock; not exercised).
+- LICENSE_STATUS_URL is hardcoded to http://127.0.0.1:3479 (src-tauri/src/lib.rs:164). I did not establish
+  whether the sidecar can ever bind a different port; if it can, entitlement routing silently degrades to the
+  public endpoint, and if another process holds 3479 the updater asks it about licensing.
+- The E2E suite was not run (out of scope per instructions), so no armed browser-level evidence.
+
+================================================================
+DOC DRIFT
+================================================================
+1. docs/security.md:179 — "serves new builds only while the update window is current". False: an expired
+   window routes to the public GitHub manifest (High finding 1).
+2. docs/security.md:176 / CLAUDE.md "one const flips at v1.0" — there are at least two consts in two
+   languages (tsup.config.ts:20 and src-tauri/src/lib.rs:171), plus a decision about whether to keep the
+   public endpoint in tauri.conf.json:107-109.
+3. docs/licensing-explained.md:23-24 — "double-click the file" has no file association.
+4. docs/licensing-explained.md:235-237 — the "deliberately ungated" sentence does not reach /api/mode-release,
+   close, rename, upload, sessions/*, store/reclaim-lock, rotate-token, shutdown.
+5. src/server/mcp/api-routes.ts:447-448 — the comment says "POST is gated on origin allowlist + loopback
+   inside the handler" for API_DOCUMENT_RAW, but only app.get(API_DOCUMENT_RAW) is registered; there is no
+   POST route. Stale comment describing a route that no longer exists.
+6. src/server/license/public-key.ts:11-13 — "replacing it drops every existing customer to restricted,
+   mid-session, clamping their open documents read-only via connection-gate.ts". Not mid-session:
+   applyConnectionGate runs only in onAuthenticate, so it clamps on the NEXT connection (or when the
+   client's 60s poll triggers a provider rebuild).
+7. docs/licensing-explained.md:255 "12 gatedTool, 1 conditional in-handler, 16 ungated" — already reported by
+   another reviewer as the 13/1/19 count drift; confirmed here: 13 gatedTool sites, 1 in-handler, 19 in the
+   coverage test's UNGATED list.
+
+================================================================
+VERIFIED FINE
+================================================================
+- Byte-identical while dark (question 9): dist/server/index.js and dist/cli/index.js both contain
+  `defineValue = true ? false : void 0`, so readGateFlag never consults TANDEM_LICENSE_GATE in a built
+  bundle and GATE_ENABLED is false. tsup.config.ts:20,85,121 injects the define into exactly the server and
+  cli bundles. resolveLicenseState returns `{gateActive:false}` before touching disk (license-state.ts:72-74),
+  ensureTrialStarted no-ops (license-state.ts:181), applyConnectionGate no-ops (connection-gate.ts:32),
+  licenseGateResult no-ops (license-gate.ts:42). The one thing the dark path does do is darkInstallInfo()'s
+  read+verify on the status route — see the Low finding. [ran: grep over dist/]
+- Surface A never clamps CTRL_ROOM: connection-gate.ts:17 tests `documentName !== ctrlRoom` and
+  applyConnectionGate is called with CTRL_ROOM from the shared constant. Chat/mode/awareness survive.
+- The force-reload gate sits BEFORE any mutation on both halves: document.ts:409 before openFromDisk,
+  routes/open.ts:15 before openFromDisk, both outside the inner try.
+- Canonicalization is injective for the attack that matters: canonicalize() sorts keys recursively over the
+  PARSED object, so stripping a field, adding a field, or re-ordering keys all change the signed bytes and
+  yield BAD_SIGNATURE; a duplicate JSON key collapses before canonicalization, so it cannot smuggle a
+  different value past a valid signature. Null-prototype accumulator blocks __proto__ key loss.
+- Size bounds are layered and each is applied to the string that is actually consumed: raw <= 20_000 before
+  any allocation (verifier.ts:70), post-normalize <= 10_000 (verifier.ts:93, correctly re-checked because
+  stripping an interior `=` can lengthen the decode), decoded payload <= 4096 before JSON.parse and before
+  canonicalObject's recursion (verifier.ts:106).
+- SignatureVerified brand does its job: resolveLicenseState's `verify` dep is typed to it, so the
+  expiry-checking verifyLicense cannot be wired into the run gate. Paid licenses run forever;
+  updateWindowCurrent is computed separately from expiresAt (license-state.ts:100-107).
+- Activation is verify-then-persist (license-state.ts:229-254): a bad blob after a good one never overwrites
+  license.json, and WRITE_FAILED is isolated in its own try so a filesystem error is reported as ours (500)
+  rather than as a bad key (400).
+- license.json is written 0600 via atomicWriteConfigFile (integrations/storage.ts:139-168, `open(tmp,"wx",0o600)`
+  plus a chmod backstop) — correct for the only identity PII Tandem writes to disk.
+- Blob bytes and crypto messages never cross to the wire: only LicenseVerifyCode/LicenseActivationCode do
+  (verifier.ts:43-52, routes/license.ts:169-179), and the copy is static per code (shared/license-copy.ts).
+- Dismissing the LicenseWall does not re-enable editing: `dismissed` is local to the component, ui.showWall
+  stays true, and App.svelte:1791 keeps editorReadOnly true. "Continue in read-only mode" is honest.
+- The mid-session restricted->licensed direction works: licenseStore.set() from the activate response fires
+  reconcileTransition, which calls yjsSync.rebuildForLicenseChange() and re-runs onAuthenticate.
+- The update Worker is a genuine non-oracle: all five rejection reasons return byte-identical 204, including
+  a thrown upstream fetch (worker.ts:118-133).
+- resolveLiveLicenseState is cache-free, so activation elsewhere takes effect on the next dispatch.
+
+================================================================
+COVERAGE
+================================================================
+Read: CLAUDE.md licensing section + Critical Rule 9; docs/licensing-explained.md Parts 1-2 and the gated-set /
+AI-surface sections; the licensing paragraphs of docs/security.md; all of src/server/license/**; 
+src/server/mcp/license-gate.ts, routes/license.ts, routes/open.ts, routes/mode-release.ts, api-routes.ts
+registration block; src/server/yjs/provider.ts onAuthenticate; src/server/index.ts trial init; src/cli/license.ts;
+src/shared/license-copy.ts; src/client LicenseWall / LicenseBanner / LicenseActivateForm / SettingsLicenseTab /
+useLicense.svelte.ts / license-ui.ts and the App.svelte wiring; src-tauri/src/lib.rs updater block and
+tauri.conf.json; infra/license-update-worker/src/worker.ts; tests/server/license-gate-coverage.test.ts.
+Ran: three armed vitest invocations (targeted, client/worker/docs, full suite) and one tsx probe of the trial
+clock against a scratch app-data dir. Did not run E2E, did not start a server, did not touch 3478/3479, wrote
+nothing under <repo> or the real HOME.
+Budget used: ~47 tool calls.

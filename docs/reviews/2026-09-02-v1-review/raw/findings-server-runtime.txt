@@ -1,0 +1,157 @@
+STATUS: partial
+
+# Server-runtime review (C) — src/server/{index,bind-check,auth,events,launcher,integrations,license,local-model,models}, Tauri sidecar lifecycle
+Base: master 3fb6408 (v0.24.1). Read-only. Repo untouched. No server started; ports 3478/3479 never touched.
+
+## Findings — high confidence
+
+### H1. Desktop Quit hard-kills the sidecar; the graceful /api/shutdown flush only runs on restart/update
+- Severity: High
+- Where: src-tauri/src/lib.rs:1404 (tray MENU_QUIT -> app.exit(0)), src-tauri/src/lib.rs:1574 (Linux no-tray CloseRequested -> exit(0)), src-tauri/src/lib.rs:1613 (RunEvent::Exit => kill_sidecar), src-tauri/src/sidecar.rs:~182 and src-tauri/src/lib.rs:~2362 (the only two callers of stop_sidecar_gracefully)
+- Evidence: [read: src-tauri/src/lib.rs:1395-1412,1549-1592,1600-1640,2340-2420; src-tauri/src/sidecar.rs:170-330]
+- Failure: Every desktop Quit path ends in RunEvent::Exit -> kill_sidecar (a bare child.kill()), and there is no ExitRequested / prevent_exit handler anywhere in src-tauri, so the server's shutdown() sequence (autoSaveAllToDisk + saveCurrentSession + closeMcpSession + supervisor.stop + releaseStoreLock) never runs on Quit. With autosave and session persistence both on a 60 s cadence (src/server/session/manager.ts:25, documents/autosave.ts) and no client beforeunload save, up to 60 s of edits plus the open-tab set are silently lost on every Quit; the launched Claude Code child is left to the reaper's SIGKILL with no flush, and the store lock file is left behind for the next boot's PID-liveness check. #1088 (CHANGELOG) fixed exactly this for restart_sidecar and perform_install by adding stop_sidecar_gracefully, but Quit was not given the same treatment.
+- Confidence: high (the absence of any ExitRequested handler and the single kill_sidecar arm at RunEvent::Exit were confirmed by grep across src-tauri/src).
+
+### H2. Supervisor stdin write to a dead/closing child raises an unhandled stream 'error' -> uncaughtException -> process.exit(1) with no flush
+- Severity: High
+- Where: src/server/launcher/supervisor.ts:~900-927 (sendTurn: spawned.stdin.write(serializeUserTurn(text), cb)), supervisor.ts:1088 (only spawned.on("error")), supervisor.ts:1123 (spawned.on("exit")), src/server/index.ts:154-178 (handleFatalError)
+- Evidence: [ran: node scratchpad/epipe2.mjs, epipe3.mjs, epipe4.mjs (Node v22.22.2)]
+- Failure: In Node 22 a write to a child's stdin whose read end is closed (child closed fd 0 / is mid-exit) invokes the write callback with EPIPE AND emits 'error' on the child.stdin Writable; a ChildProcess-level 'error' listener does NOT catch it, so with no stdin.on("error") the error becomes uncaughtException. handleFatalError only swallows known Hocuspocus messages, so the whole Tandem server exits 1 — skipping autoSaveAllToDisk/saveCurrentSession/releaseStoreLock — because the launched Claude Code child happened to be exiting while a wake turn was written (the wake-on-annotation path and the bootstrap-turn-on-spawn path both race the child's lifetime). The safe case (child already reaped by Node -> stdin destroyed -> ERR_STREAM_DESTROYED via callback only) is the one the code's callback handling covers; the mid-exit window is the one it does not. No supervisor test covers a stdin error (grep of tests/server for EPIPE/stdin.*error: none).
+- Confidence: high for the mechanism (reproduced three ways); medium that the window is hit in practice — it needs a wake write during the child's exit, which the circuit-breaker/relaunch loop makes likelier, not rarer.
+
+### H3. Store-lock retry runs BEFORE freePort: a second instance stalls 30 s, then SIGKILLs the live holder and runs read-only for the whole session
+- Severity: Medium
+- Where: src/server/index.ts:302-372 (store lock acquire with 30 s retry in HTTP mode), src/server/index.ts:580-581 (freePort), src/server/annotations/store.ts:125-260 (PID-only isPidAlive liveness), src-tauri/src/sidecar.rs:95-140 (HEALTH_TIMEOUT 30 s, comment admitting the lock retry is unsized)
+- Evidence: [read: src/server/index.ts:302-372,580-635; src/server/annotations/store.ts:125-260; src-tauri/src/sidecar.rs:95-140]
+- Failure: When a healthy Tandem already holds the lock and 3478/3479 (the documented "npm global + desktop" or double-launch case), the newcomer spins on the lock for 30 s (the holder is alive, so PID liveness never releases it), gives up into read-only annotations mode, and only then reaches freePort, which SIGKILLs the healthy holder to take its ports — so the user's original instance dies without flush (see H1 consequences) and the survivor is the one that already decided it is read-only for the rest of its life. During those 30 s the Tauri health poll (HEALTH_TIMEOUT 30 s) is answering against the OLD process's /health, so the desktop can report "healthy" against a sidecar that is about to be killed. The ordering (lock -> freePort) is the inverse of what would make the lock a guard.
+- Confidence: high on ordering and on the SIGKILL-the-holder outcome (freePort's kill semantics are pinned by the E2E gotcha in CLAUDE.md); medium on the "desktop reports healthy against the old process" tail, which is inferred from HEALTH_TIMEOUT overlap rather than run.
+
+### H4. MAX_CONFIG_BYTES (5 MiB) contradicts apply.ts's own "routinely multi-megabyte" note; an oversize ~/.claude.json makes the wizard fail generically and the boot sweep silently skip
+- Severity: Medium
+- Where: src/server/integrations/apply.ts:217-223 (MAX_CONFIG_BYTES = 5 MiB, applied in readConfigForMutation/applyConfig), apply.ts:1735 (comment: .claude.json is "routinely multi-megabyte"), apply.ts:1856-1971 (refreshAllMcpEntryBinaries: "untouched (oversize)" stderr only)
+- Evidence: [read: src/server/integrations/apply.ts:217-223,1007-1194,1243-1278,1735,1856-1971]
+- Failure: Claude Code's ~/.claude.json grows with project history/caches and the file itself says it is routinely multi-megabyte, so a 5 MiB cap is not a corruption tripwire but a ceiling real users will cross. Past it the setup wizard returns WRITE_FAILED with no size hint (the size error is mapped to the generic code), and the boot-time binary-path refresh silently leaves the stale node path in place — after an update the Claude Code MCP entry then points at a binary that no longer exists and the user sees "Tandem MCP failed to connect" with nothing in doctor pointing at size (doctor has no MAX_CONFIG_BYTES handling; grep confirmed).
+- Confidence: high that the cap and the comment conflict and that the failure surfaces are generic; medium on how many real configs exceed 5 MiB.
+
+### H5. applyConfig replaces a malformed ~/.claude.json with a fresh one, while readConfigForMutation refuses to — the wizard path is the destructive one and reports success
+- Severity: Medium
+- Where: src/server/integrations/apply.ts:1056-1147 (malformed JSON -> backup to .broken-backups -> "replacing with fresh config" at 1133-1135), apply.ts:1243-1278 (readConfigForMutation: never creates, never replaces malformed)
+- Evidence: [read: src/server/integrations/apply.ts:1007-1194,1243-1278]
+- Failure: If the wizard's read races Claude Code's own rewrite of ~/.claude.json (or hits any transient truncation), applyConfig treats the parse failure as "broken config", moves the user's whole file — every project entry, OAuth/account block, MCP servers — into .broken-backups and writes a fresh config containing only Tandem, logging to stderr only while the wizard UI reports "applied". The sibling reader in the same module already encodes the safer policy (refuse and leave the file alone), so the two writers disagree on whether a parse failure is authority to replace. Whether Claude Code writes ~/.claude.json atomically (which would make the torn-read trigger impossible) is NOT verified — see Unchecked leads.
+- Confidence: high on the code path and the reporting asymmetry; medium on the real-world trigger frequency.
+
+## Findings — remaining
+
+### R1. Production stderr filter drops util.format: "%s" placeholders are emitted literally and Error stacks are lost
+- Severity: Low
+- Where: src/server/index.ts:76-94 (filteredError uses args.map(String).join(" "))
+- Evidence: [ran: node -e replaying the filter on a console.error("[FileWatcher] Failed to watch %s:", path, err) call -> "[FileWatcher] Failed to watch %s: /x/y.md Error: boom"]
+- Failure: 48 console sites in src/server use printf-style "%s"; in production builds they print the literal "%s" followed by the args and String(err) loses the stack. Every field report from a shipped build is degraded logs.
+- Confidence: high.
+
+### R2. Sentry events carry hostname (server_name) and absolute local file paths in stack frames despite sendDefaultPii:false
+- Severity: Low (privacy, opt-in telemetry only)
+- Where: src/server/sentry.ts (init: defaultIntegrations:false, sendDefaultPii:false, beforeSend scrubs only message/exception values), node_modules/@sentry/node-core/build/cjs/sdk/client.js:14 (server_name defaults to os.hostname() unless includeServerName===false)
+- Evidence: [ran: node --experimental-strip-types scratchpad/sentry-probe.mjs with Tandem's exact init options]
+- Failure: The emitted event contains server_name=<machine hostname>, contexts.runtime, and frames with absolute filename paths (which embed the user's home directory / username on all three OSes). docs/security.md's privacy section describes Sentry as scrubbed; the scrubber never sees these fields. Fix is includeServerName:false plus a frame-path rewriter (or the RewriteFrames integration, which defaultIntegrations:false removed).
+- Confidence: high.
+
+### R3. Stdio mode never exits on stdin EOF; an orphaned stdio server keeps :3478 and the store lock
+- Severity: Low
+- Where: src/server/index.ts:735-752 (stdio branch), node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js:8-30 (transport onclose on stdin end is not wired to process exit)
+- Evidence: [read: src/server/index.ts:735-752; node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js:8-30]
+- Failure: When the MCP host drops the stdio child (Claude Code exit/crash), the transport closes but nothing calls shutdown() or process.exit, so the process lingers holding Hocuspocus :3478 and the annotations store lock; the next HTTP-mode launch then hits H3's 30 s stall and SIGKILL. docs/configuration.md:16 says the stdio server "exits when Claude Code disconnects" — it does not. Also TANDEM_TRANSPORT=<anything not "http"> silently selects stdio (no validation).
+- Confidence: high on code; medium on frequency (depends on whether the host kills the process group).
+
+### R4. installSkill / refreshExistingSkillIfStale overwrite a hand-edited ~/.claude/skills/tandem/SKILL.md with no backup
+- Severity: Low
+- Where: src/server/integrations/apply.ts:2030-2036 (installSkill unconditional write), apply.ts:2080-2164 (refreshExistingSkillIfStale: version-compare on frontmatter only, then atomicWrite)
+- Evidence: [read: src/server/integrations/apply.ts:2030-2036,2080-2164]
+- Failure: The staleness check reads only the frontmatter version; a user who customised the body but kept the version is clobbered on the next boot where the bundled version is newer, and unlike the config writers there is no backup. CLAUDE.md documents the version-refresh behaviour but not that user edits are discarded.
+- Confidence: high.
+
+### R5. On Windows "SIGTERM then wait 6 s" is TerminateProcess; comments promising Claude Code a flush window are false there
+- Severity: Low
+- Where: src/server/index.ts:229-233 (comment), src/server/launcher/supervisor.ts:1342-1409 (stopInternal SIGTERM -> 6 s -> SIGKILL)
+- Evidence: [read: src/server/index.ts:229-233; src/server/launcher/supervisor.ts:1342-1409]
+- Failure: Node's child.kill("SIGTERM") on Windows is an immediate TerminateProcess, so the launched Claude Code gets no flush window and the 6 s grace is dead time; the reaper (reaper/src/windows.rs) does the same. Not data-losing for Tandem itself, but the comment and docs/architecture.md's launcher section overstate the guarantee.
+- Confidence: high.
+
+### R6. license-state.ts: malformed firstRunAt yields NaN and fails CLOSED (restricted) while the comment says the trial fails OPEN — dark today
+- Severity: Low (inert while LICENSE_GATE_ENABLED=false)
+- Where: src/server/license/license-state.ts:~129
+- Evidence: [read: src/server/license/license-state.ts:100-170]
+- Failure: Date.parse of a corrupt firstRunAt gives NaN; the elapsed-days comparison with NaN falls through to the restricted branch rather than the "treat as day 0" branch the surrounding comment promises. Only matters at the v1.0 flag flip; worth fixing before then because the licensing doc lists "trial clock fails open" as a property.
+- Confidence: high on the arithmetic; medium that no upstream validation already rejects the value (the trial-clock writer in trial-clock.ts always writes an ISO string, so the corrupt case needs manual edit or disk corruption).
+
+### R7. resolveInitialLauncherReason reports "stdio-mode" in HTTP mode during the startup window
+- Severity: Low
+- Where: src/server/launcher/initial-reason.ts (reason derived from MCP-server-not-yet-started state), src/server/index.ts:728-734 (launcher started after servers)
+- Evidence: [read: src/server/launcher/initial-reason.ts; src/server/index.ts:637-734]
+- Failure: The reason enum keys off "HTTP MCP server absent" which is also true for the few hundred ms before startMcpServerHttp resolves, so an early GET /api/launcher/status can claim stdio-mode to an HTTP client; the client has no "stdio-mode" string (grep) so it renders the generic branch. Cosmetic today.
+- Confidence: medium.
+
+### R8. existing-config.ts reads ~/.claude.json with no BOM strip and no size cap, unlike apply.ts
+- Severity: Low
+- Where: src/server/integrations/existing-config.ts (readFile + JSON.parse), vs apply.ts:217-223 and the BOM strip in readConfigForMutation
+- Evidence: [read: src/server/integrations/existing-config.ts]
+- Failure: GET /api/integrations/existing parses a BOM-prefixed (Windows editor) config as malformed and reports "no existing entry", so the wizard offers a fresh install that applyConfig will then treat per H5. The two readers disagree on what a valid file is.
+- Confidence: high on the divergence; medium on user impact.
+
+### R9. Orphaned .tandem-setup-<uuid>.tmp files in ~/ and ~/.claude/ are never reaped
+- Severity: Low
+- Where: src/server/integrations/apply.ts (atomicWrite temp naming), src/server/index.ts (boot-time orphan reaper sweeps annotations + sessions dirs only — by design per CLAUDE.md)
+- Evidence: [read: src/server/integrations/apply.ts atomicWrite; src/server/index.ts:~120-150]
+- Failure: A crash between temp write and rename leaves a 0600 temp beside the user's config forever. Harmless but visible, and the reaper's "never user dirs" rule means the fix has to be local to atomicWrite (unlink on failure path).
+- Confidence: high.
+
+### R10. queue.ts tracks emitted payload ids before forwardExternally decides to drop the event
+- Severity: Low
+- Where: src/server/events/queue.ts:~268
+- Evidence: [read: src/server/events/queue.ts:240-300]
+- Failure: An id is added to emittedPayloadIds/trackedEvents before the Solo gate drops it externally, so a later mode flip to Tandem cannot replay it (it looks already-delivered). Currently unobservable because replaySince re-filters from the buffer, but any future "resend held events on mode release" feature will trip on it.
+- Confidence: medium.
+
+## Unchecked leads
+- Whether Claude Code writes ~/.claude.json atomically (temp+rename). If yes, H5's torn-read trigger collapses to "only on genuine corruption" and H5 drops to Low; if no, H5 is a real race on every wizard run while Claude Code is open. Not verified (would need the Claude Code binary or its source).
+- Tauri health poll during H3's 30 s window: sidecar.rs polls /health without a generation/PID check, so I believe it can pass against the OLD process; not run.
+- macOS/Linux: sidecar_job.rs is Windows-only and #800 says the Unix orphan reaper "never landed" — a Tauri crash (not Quit) likely leaves the Node sidecar running and holding ports; not reproduced.
+- supervisor.ts bootstrap turn written "on spawn": whether the child's stdin can be closed before the first write on a fast-fail spawn (bad cwd) — this would be the concrete trigger for H2; not run against a real claude binary.
+- Store-lock PID liveness (store.ts:139) vs PID reuse after reboot: a reused PID keeps the lock "alive" and forces read-only; plausible, not demonstrated.
+
+## Doc drift
+- docs/security.md:33 says the auth token file is written "temp file + rename"; writeTokenToFile (src/server/auth/token-store.ts) uses open(path,"wx",0o600)+writeFile with no rename. Only the CLI rotate path (src/cli/rotate-token.ts:48-57) is atomic. [read]
+- docs/security.md:163 describes the launched Claude Code environment as "a scrubbed env"; supervisor.ts:825 spawns with env: process.env (already reported by another reviewer — delta here is that the doc claims the opposite). [read]
+- docs/security.md:170 says the launcher "cannot outlive Tandem" on all platforms; that holds via the reaper for Linux/macOS SIGTERM, but on Quit (H1) the reaper gets a SIGKILL cascade with no flush, and on Tauri crash (Unchecked lead 3) there is no Unix job object. [read]
+- docs/security.md:178 says Surface A read-only marking is "re-checked per request"; provider.ts:130-175 evaluates it in onAuthenticate, i.e. once per WebSocket connection. Inert while dark, but wrong at the flip. [read]
+- docs/configuration.md:16 "stdio server exits when Claude Code disconnects" — false (R3). docs/cli.md:19,47 repeat the claim. [read]
+- src/server/index.ts:229-233 comment promises Claude Code a flush window on SIGTERM; false on Windows (R5). [read]
+- CLAUDE.md "Architecture" says Tauri Quit is graceful since #1088; CHANGELOG #1088 entry scopes the fix to restart/update only, and the code agrees with CHANGELOG (H1). [read]
+
+## Verified fine
+- Startup ordering claims in CLAUDE.md (opens before bind in HTTP mode; MCP before Hocuspocus in stdio) match index.ts:591-660,735-752. [read]
+- Solo gate: exactly three external subscribers (sse.ts:101, wake-socket.ts:250, supervisor.ts:122); replaySince (sse.ts:70) is the only buffer reader and filters via shouldForwardExternally; isUserPrivacyHeld strips user annotation/reply content before buffering unless mode==="tandem"; local-model collaborator subscribes "internal" and is dark. No leak path found. [read]
+- Auth: 32-byte CSPRNG base64url token, SHA-256 + timingSafeEqual compare, per-IP limiter (5/10 min, /64 for v6), 60 s previous-token grace on rotate, loopback via req.socket.remoteAddress only with exact 127.0.0.1/::1/::ffff:127.0.0.1. [read]
+- bind-check.ts and enforceLoopbackMutation (keyed by method AND path, NON_LOOPBACK_ALLOWED exactly the channel family + DELETE /api/chat). [read]
+- wake-socket.ts: loopback + Host + Origin guards, payload-free frames, heartbeat; sse.ts keepalive guarded against closed res. [read]
+- Licensing inertness: __LICENSE_GATE_ENABLED__ defined in both server and cli tsup entries; GATE_ENABLED importers are index.ts:290, provider.ts:150, license-state.ts:166, cli/license.ts; provider fast-path skips read-only marking; gatedTool/licenseGate are no-ops; only the activation route and darkInstallInfo touch disk, by design. Ed25519 key pinned, signature-only verify with SignatureVerified brand. [read]
+- Local-model: start() returns before wire() while BYO_MODELS_ENABLED is false; /api/models routes mounted but loopback+origin gated; validateEndpoint loopback-only with localhost->127.0.0.1 and redirect:"error". [read]
+- Reaper (reaper/src/linux.rs, macos.rs): SIGTERM forwarding + waitpid; windows.rs job object. [read]
+- Integrations routes: apply has nonce + mutex + schema re-parse; install-claude-code mutex without nonce; /api/integrations/existing scrubs env/headers; claude-cli-status enum-only. assertPathSafe UNC screen before fs, symlink walk, roots [homedir, tmpdir]. [read]
+- Supervisor identity guards, lock, circuit breaker (10/5 min), 10-min latch breaker, resume gated on cwd match. [read]
+- notifications.ts buffer bounds; version-check.ts network failure tolerant; error-filter.ts known-Hocuspocus list matches handleFatalError. [read]
+
+## Corrections after verification (2 non-write calls spent; supersede the matching lines above)
+- H1 stands as a code finding, but the Doc-drift bullet "CLAUDE.md says Tauri Quit is graceful since #1088" is RETRACTED: CLAUDE.md makes no such claim, and docs/architecture.md:843 documents Quit as "Kill sidecar, then exit". CHANGELOG:683 (#1088) confirms the graceful path was scoped to restart_sidecar + perform_install only, and src-tauri/src/sidecar_job.rs:6 itself notes "RunEvent::Exit => kill_sidecar(app) only fires on a graceful shutdown". So H1 is documented-but-lossy: the same ~60 s loss #1088 called a bug on restart is the accepted behaviour on Quit, with the Linux no-tray path (lib.rs:1574 exit(0)) also skipping RunEvent::Exit cleanup ordering guarantees. Severity stays High (silent data loss on the most common exit path). [read: src-tauri/src/lib.rs:1613, sidecar.rs:187,268-307, lib.rs:2362, CHANGELOG.md:683, docs/architecture.md:843]
+- H2 confirmed against source: supervisor.ts:901-922 checks `stdin?.writable` then `stdin.write(..., cb)`; the only `stdin` references in the file are 67,135,821,901-922,1024 — no `stdin.on("error")` anywhere. [read: src/server/launcher/supervisor.ts grep]
+- R6 confirmed: license-state.ts:129-131 — `new Date(tf.firstRunAt).getTime()` on a malformed string is NaN, `expiresAt = NaN`, `nowMs < NaN` is false, execution falls to the `restricted` return. The inline comment only promises "Absent file ⇒ day 0"; the fails-open claim is ADR-040 §3's "soft by design", so this is a narrower drift than stated above. [read: src/server/license/license-state.ts:127-152]
+- Doc drift RETRACTED: docs/configuration.md:16 does NOT claim the stdio server exits on disconnect (it only describes the transport). The docs/cli.md:19,47 repetition was never verified and is withdrawn too. R3 stands as a code-only finding (orphaned stdio process holds :3478 + store lock). [read: docs/configuration.md:14-18]
+- Doc drift REWORDED: docs/security.md:163 does not say "scrubbed env"; it says the AI does not see "any environment variables that aren't surfaced through MCP tools". The delta to the already-reported supervisor.ts:825 full-env spawn is that the launched Claude Code process inherits every variable Tandem holds (incl. TANDEM_AUTH_TOKEN injected by sidecar.rs:430 in desktop builds), so the sentence is false for the auto-launched session specifically. [read: docs/security.md:163]
+- Doc drift REPLACED: security.md:170 is the Sentry paragraph, not a "cannot outlive Tandem" claim (that claim is withdrawn). What :170 does say is that crash events are sent "scrubbing home-directory paths to ~/[user]"; the probe in R2 shows stack-frame `filename` fields and `server_name` bypass the beforeSend scrubber, so :170 overstates the scrub for frames. [ran: node --experimental-strip-types scratchpad/sentry-probe.mjs]
+- Doc drift CONFIRMED verbatim: security.md:33 "written atomically (temp file + rename)" vs token-store.ts open("wx")+writeFile; security.md:178 "both re-checked per request" vs provider.ts onAuthenticate per-connection; index.ts:229-233 "SIGTERM gives Claude a chance to flush" false on Windows. [read]
+
+## Coverage vs manifest (scratchpad/manifests/server-runtime.md)
+Covered (read in full or in the load-bearing slices): src/server/index.ts, bind-check.ts, auth/{middleware,token-store}.ts, shared/auth/token-file.ts, events/** (queue, sse, wake-socket, delivery-state, push-liveness, file-sync-registry, observers/*, types) + shared/events/wake-scope.ts, launcher/** (supervisor, api-routes, cwd-preview, initial-reason) + shared/launcher/contract.ts, integrations/** (all 13 modules incl. apply.ts in full), license/** (all) + mcp/license-gate.ts + mcp/routes/license.ts + tsup.config.ts defines + yjs/provider.ts:130-175, local-model/** (all 8), models/** (all 4), mcp/server.ts (full), mcp/routes/{shutdown,rotate-token}.ts, mcp/api-routes.ts:80-135,195-300, mcp/awareness.ts:590-640, platform/notifications/startup-file/version-check/sentry/error-filter/mode/chat-stream-staleness/file-watcher.ts, annotations/store.ts lock slices, documents/autosave.ts, session/manager.ts:25-110, shared/integrations/{detect-claude-cli,path-lookup}.ts, reaper/src/*.rs, src-tauri/src/{sidecar,sidecar_job}.rs + lib.rs lifecycle slices, docs (security, integrations, licensing-explained, architecture slices, ADR-028/031/038/039/040/045/049, configuration, troubleshooting, cli).
+Not covered (in or adjacent to my area, not read): src/server/session/persist.ts body (only referenced), src/server/mcp/channel-routes.ts (listed in manifest from a grep hit only, never read), src/server/file-io/* (doc-backup, reaper, atomic writes — owned by another reviewer but they back H1/H3's loss claims), src/server/yjs/provider.ts outside 130-175, tests/server/launcher/* (only grepped for EPIPE/stdin coverage), docs/data-locations.md and docs/user-guide.md (grep hits only), src/cli/doctor.ts beyond the MAX_CONFIG_BYTES grep, infra/license-*-worker/ (out of scope, not read). No scratch server was started; no port was touched; no repo file was modified.
+
+STATUS: complete

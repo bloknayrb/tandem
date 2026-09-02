@@ -12,6 +12,7 @@ The v0.12.0 prep batch (8 parallel units, PRs #634–#641) shipped 2026-05-14. W
 
 - `docs/v10-triage.md` — every row marked Core / Defer / Cut
 - A maintainer-local planning doc (not in the repo) — wave structure, exit criteria, verification gates, risk register. Anything load-bearing from it that a contributor needs belongs in this file or in `docs/v10-triage.md`.
+- [reviews/2026-09-02-v1-review/](reviews/2026-09-02-v1-review/README.md) — the pre-v1.0 code review (base v0.24.1): 84 issues under the `v1-review` label, fix tracks A–K, the next-minor release gate, and the decisions still open. Plan fix work from there.
 
 **Working wave plan** (each ~2–5 days; one Bryan-review pass at end of each wave; max 2 CRITICAL/HIGH PRs per wave):
 

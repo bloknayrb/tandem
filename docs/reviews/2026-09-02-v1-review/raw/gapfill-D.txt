@@ -1,0 +1,175 @@
+STATUS: partial
+
+=== 1. Node.js 22.x security releases after 22.17.0 ===
+
+ANSWER:
+Yes, 22.17.0 (released ~2025-06) is affected by multiple CVEs fixed in later 22.x releases. Node.js 22.x security releases since 22.17.0, in order:
+
+- v22.17.1 (2025-07-15): fixes CVE-2025-27210 (Windows Device Names Bypass Path Traversal Protection, High). [22.17.0 IS affected — this is the very next patch after the pinned version.]
+- v22.22.0 (2026-06-18): fixes 11 CVEs affecting 22.x: CVE-2026-48933 (High, WebCrypto AES integer overflow/DoS), CVE-2026-48618 (High, TLS wildcard-depth auth bypass via unicode dot separator), CVE-2026-48615 (Medium, proxy credential leak in error message), CVE-2026-48617 (Low, Permission Model bypass via process.report.writeReport), CVE-2026-48619 (Medium, unbounded memory growth in node:http2 via ORIGIN frames), CVE-2026-48937 (Medium, HTTP/2 session cleanup after GOAWAY — affects 22.x/24.x only), CVE-2026-48928 (Medium, uppercase SNI context matching mTLS bypass), CVE-2026-48930 (Medium, embedded-nul hostnames authority rebinding), CVE-2026-48934 (Medium, TLS host identity verification bypass via session reuse), CVE-2026-48935 (Low, Permission Model bypass via FileHandle.utimes), CVE-2026-48931 (Low, HTTP response queue poisoning via TOCTOU race in http.Agent).
+  NOTE: search summary said fixed version "v22.23.0" for this release page's dependency listing (llhttp 9.4.2/nghttp2 1.69.0/openssl 3.5.7/undici 6.27.0) — there is a version-number discrepancy between "v22.22.0" (announced release date framing) and "v22.23.0" (page's stated fixed-version); flagging this as unresolved — recommend verifying exact tag via nodejs.org/en/download/releases before pinning, but the CVE set and date (2026-06-18) are solid.
+- v22.22.2 (2026-03-24 release window): fixes CVE-2026-21637 (High, incomplete SNICallback try/catch fix), CVE-2026-21710 (High, DoS via __proto__ header in req.headersDistinct), CVE-2026-21712 (Medium, assertion error in node_url.cc), CVE-2026-21713 (Medium, timing side-channel in HMAC verification), CVE-2026-21714 (Medium, memory leak in HTTP/2 server via WINDOW_UPDATE), CVE-2026-21717 (Medium, HashDoS in V8), CVE-2026-21715 (Low, Permission Model bypass in realpathSync.native), CVE-2026-21716 (Low, CVE-2024-36137 patch bypass for FileHandle.chmod/chown). [CVE-2026-21711, UDS bind/listen Permission Model bypass, Medium, did NOT list 22.x per the fetch summary — treat as not-applicable to 22.x.]
+- v22.22.0 (2025-12-15 release window, per Jan 13 2026 bulletin): fixes CVE-2025-55131 (High, non-zerofilled Buffer/Uint8Array via timeout race), CVE-2025-55130 (High, FS permission bypass via crafted symlinks), CVE-2025-59465 (High, HTTP/2 server crash on malformed HEADERS frame), CVE-2025-59466 (Medium, uncatchable stack-overflow via async_hooks), CVE-2025-59464 (Medium, memory leak / DoS in TLS client cert processing), CVE-2026-21636 (Medium, Permission Model bypass via unchecked UDS connections), CVE-2026-21637 (Medium — same CVE later re-flagged High in March release notes above, PSK/ALPN callback exceptions bypass error handlers), CVE-2025-55132 (Low, fs.futimes bypasses read-only permission model).
+  NOTE: two different bulletins report "v22.22.0" as the fixed version (Dec 2025/Jan 2026 bulletin) and the June 2026 bulletin's summary also said v22.23.0 for its own fix — there is version-numbering noise across my fetch summaries (these were AI-summarized fetches, not raw diffs). The CVE IDs, severities and the fact 22.x is affected are corroborated across independent bulletins; exact version-number sequencing should be double-checked against https://nodejs.org/en/download/releases or `nodejs.org/dist/index.json` before being relied on for a precise "which patch fixed which CVE" table.
+- v22.23.2 (2026-07-29): fixes 11 CVEs, 22.x-applicable ones: CVE-2026-56846 (High, HTTP/2 retained headers bypass maxSessionMemory), CVE-2026-56848 (High, HTTP/2 re-entrant send heap-use-after-free), CVE-2026-58043 (High, Permission Model path matching over-grants FS access), CVE-2026-56850 (Medium, HTTPS Agent mTLS identity reuse across PFX certs), CVE-2026-58040 (Medium, HTTPS Agent session reuse skips hostname verification), CVE-2026-58042 (Medium, dns.resolveAny() aborts on many-A-record responses), CVE-2026-58045 (Medium, node:zlib sync APIs crash on spoofed TypedArray length), CVE-2026-56847 (Low, Permission Model trace events write outside allowlist), CVE-2026-58039 (Low, Permission Model process reports write outside allowlist), CVE-2026-58044 (Low, HTTP parser header truncation enables request smuggling). [CVE-2026-58041, node:sqlite SQLTagStore iterator replay, only listed for 24.x/26.x, not 22.x.]
+
+BOTTOM LINE: Yes — 22.17.0 is affected by numerous CVEs (starting with CVE-2025-27210, fixed in the very next release 22.17.1) up through the CVE-2026-56846/56848/58043 family fixed in 22.23.2 (2026-07-29), which appears to be the latest 22.x security release as of 2026-09-02. Tandem should bump the pinned sidecar version well past 22.17.0 — ideally to the latest 22.x LTS.
+
+SOURCES:
+- https://nodejs.org/en/blog/vulnerability/july-2025-security-releases (2025-07-15)
+- https://nodejs.org/en/blog/vulnerability/december-2025-security-releases (bulletin dated 2026-01-13, covers Dec 2025 release)
+- https://nodejs.org/en/blog/vulnerability/march-2026-security-releases (2026-03-24)
+- https://nodejs.org/en/blog/vulnerability/june-2026-security-releases (2026-06-18)
+- https://nodejs.org/en/blog/vulnerability/july-2026-security-releases (2026-07-29)
+DATE OF SOURCES: as labeled above (2025-07-15 through 2026-07-29); retrieved 2026-09-02.
+CONFIDENCE: Medium-high on "22.17.0 is affected by multiple later-fixed CVEs" and the CVE ID lists (cross-checked across bulletins). Low-medium on the exact fixed-version-number sequence (22.22.0 vs 22.23.0 vs 22.23.2 appears inconsistently across my fetch summaries, which were AI-paraphrased rather than raw page text) — verify exact version numbers directly against nodejs.org/dist/index.json before citing a specific "fixed in vX.Y.Z" in a doc.
+
+=== 2. Tauri bundler (2.x): prerelease semver in NSIS vs MSI/WiX ===
+
+ANSWER:
+- MSI/WiX: Since tauri-bundler 1.2.0, the bundler supports a prerelease identifier and a build-metadata number for the .msi target, but requires each to be numeric-only (this constraint originates from the Windows Installer ProductVersion/UpgradeCode versioning model, which WiX maps onto). A non-numeric prerelease or build string (e.g. "rc.1", or build metadata with hex like "+1a2b3c4d") is REJECTED for MSI/WiX with a build error to the effect of "optional build metadata in app version must be numeric-only." The overall `version` field must still be semver-compliant.
+- NSIS: Originally shared the same numeric-only restriction (a bug — GitHub issue #8038, "NSIS bundler: semver version metadata is required to be numeric-only," argued this restriction should only ever have applied to WiX, since Windows' VIProductVersion/ProductVersion display string can accept arbitrary text for NSIS installers). This was fixed by PR #12136 ("fix(windows): removed NSIS semver build version numeric-only ... "), which changes NSIS to WARN rather than hard-fail on non-numeric build metadata: non-numeric build/prerelease components are replaced with ".0" when constructing the strictly-numeric `VIProductVersion`/`VIFileVersion` fields (which Windows requires in X.X.X.X numeric form), while the original full version string (e.g. "1.0.0-rc.1") is preserved elsewhere (e.g. the installer's displayed ProductVersion / DisplayVersion).
+- Net effect for `1.0.0-rc.1` specifically: NSIS accepts it (mapped to a numeric-only VIProductVersion like 1.0.0.0 for the Windows resource fields, with the real string kept for display); MSI/WiX rejects a literal "-rc.1" prerelease unless it is numeric-only (WiX would need something like a numeric prerelease convention, or the tag stripped/converted, otherwise the build fails).
+
+SOURCES:
+- https://github.com/tauri-apps/tauri/issues/8038 ("NSIS bundler: semver version metadata is required to be numeric-only")
+- https://github.com/tauri-apps/tauri/pull/12136 ("fix(windows): removed NSIS semver build version numeric-only...")
+- https://v2.tauri.app/release/tauri-bundler/v1.2.0/ (changelog entry: ".msi bundle target" prerelease/build-number numeric-only support added)
+DATE: issue/PR content as currently on GitHub (fetched 2026-09-02); tauri-bundler 1.2.0 changelog is historical (v1.x line, mechanism carried into 2.x bundler per issue discussion referencing current NSIS/WiX bundlers).
+CONFIDENCE: Medium — based on AI-summarized fetches of the issue/PR/changelog text rather than a direct diff read of the current tauri-bundler 2.x source (`crates/tauri-bundler/src/bundle/windows/{msi,nsis}.rs`); the WiX numeric-only requirement is well corroborated across 3 independent sources, the NSIS warn-and-fallback behavior rests on PR #12136's description as summarized (recommend a source-code read of that PR's diff if this needs to be load-bearing).
+
+=== 3 & 4. tauri-plugin-updater 2.x version comparison and URL template expansion ===
+
+ANSWER (3):
+Default comparison in `Updater::check()` (plugins-workspace, `plugins/updater/src/updater.rs`) is:
+```rust
+let should_update = match self.version_comparator.as_ref() {
+    Some(comparator) => comparator(self.current_version.clone(), release.clone()),
+    None => release.version > self.current_version,
+};
+```
+- This is strict semver greater-than (`>`) via the `semver` crate's `Version` ordering when no custom `version_comparator` is supplied via the builder.
+- Semver ordering rules apply, which means a PRERELEASE manifest version is treated as OLDER than the corresponding stable version (semver spec: `1.0.0-rc.1 < 1.0.0`), i.e. the plugin does NOT treat a prerelease as newer than a stable release by default — it follows standard semver precedence, which ranks any prerelease below its associated normal version.
+- No downgrade path exists in the default comparator: `release.version > self.current_version` is false whenever the manifest is older or equal, so `should_update` is false and no downgrade is offered. A downgrade is only possible if the app supplies a custom `version_comparator` via the builder that returns `true` for an older manifest version — the plugin supports this via `.version_comparator()`/`.updater_builder()` as an explicit escape hatch, but it's opt-in application code, not default behavior.
+
+ANSWER (4):
+Template variables (`{{target}}`, `{{arch}}`, `{{current_version}}`, and also `{{bundle_type}}` per the fetched source) are substituted via plain string `.replace()` calls inside `Updater::check()`, applied to `self.endpoints` uniformly — and `self.endpoints` is populated from EITHER the `tauri.conf.json`-configured endpoints OR endpoints passed programmatically via `.endpoints()` on the builder (`self.endpoints.unwrap_or_else(|| self.context.config.endpoints.clone())`). Substitution happens in the same code path regardless of source, so custom endpoints passed via `updater_builder().endpoints(...)` DO get `{{target}}`/`{{arch}}`/`{{current_version}}` expanded at runtime, identically to config-file endpoints.
+
+SOURCES:
+- https://raw.githubusercontent.com/tauri-apps/plugins-workspace/v2/plugins/updater/src/updater.rs (fetched 2026-09-02, v2 branch)
+DATE: fetched 2026-09-02, tracking the `v2` branch tip (not a pinned tag/commit — recommend re-fetching a pinned tag e.g. `tauri-plugin-updater-v2.x.y` if an exact line citation is required for documentation).
+CONFIDENCE: Medium-high on the semver `>` comparator and the downgrade-requires-custom-comparator conclusion (matches semver crate semantics and the quoted code). Medium on the exact quoted code block, since it came through WebFetch's summarizing model rather than a raw text read — if this needs to be a literal source citation with line numbers, re-fetch via `gh api` or raw diff against a pinned version tag rather than relying on this summary.
+
+=== 5. GitHub CodeQL default setup vs advanced setup + codeql-config.yml ===
+
+ANSWER:
+- "Advanced setup" (a repo-committed `.github/workflows/codeql.yml` using `github/codeql-action/init`) honours a repo-committed `.github/codeql/codeql-config.yml` (including `paths-ignore`) via the `config-file` parameter passed to the `init` action step.
+- "Default setup" (the one-click Settings → Code security → CodeQL analysis toggle, no workflow file) does NOT automatically read any file at `.github/codeql/codeql-config.yml` just by its presence in the repo. However, default setup CAN be customized with a configuration file — but only by explicitly setting the `github-codeql-config-file` REPOSITORY PROPERTY (settable at the org level as a default, or per-repo) to point at a config file path; GitHub then merges that file's settings (e.g. `paths-ignore`) into the auto-generated default-setup configuration. There is no auto-discovery of a conventionally-named file for default setup — an explicit repository-property pointer is required.
+- So: a bare `.github/codeql/codeql-config.yml` committed to the repo with no other action is read by advanced-setup workflows (via `config-file:`) but is INVISIBLE to default setup unless someone also sets the `github-codeql-config-file` repository property to reference it.
+
+SOURCES:
+- https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning
+- https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/manage-your-configuration/edit-default-setup
+DATE: fetched 2026-09-02 (live GitHub Docs pages, versioned to current GitHub product behavior as of that date).
+CONFIDENCE: High — the "github-codeql-config-file repository property" requirement is a direct quote pulled from the docs page and is a specific, checkable mechanism name, not a vague paraphrase.
+
+=== 6. Cloudflare Workers: KV namespace id cross-check across workers ===
+
+ANSWER: CONFIRMED — no cross-check exists.
+- `wrangler.toml`'s `kv_namespaces` entries are just `{ binding, id }` pairs; `id` must be a real KV namespace id in the account (Wrangler/the Cloudflare API validates that the id EXISTS in the account at deploy time — deploying with a nonexistent id fails, e.g. reports like "a namespace ... already exists [code: 10014]" or 404-style "namespace not found" errors when the id is wrong/missing), but this is existence-validation only.
+- There is no mechanism, in Wrangler or the Cloudflare API, that checks whether two different Workers' `kv_namespaces` entries that happen to share the same `binding` name ("MY_KV") point at the same or a "compatible" underlying namespace id. Each Worker script independently declares whichever `id` it wants for a given binding name; Cloudflare's platform has no concept of a binding name being a cross-worker identity — the binding name is purely local to how the one Worker's code refers to that namespace. Two workers can use the same binding name "MY_KV" bound to entirely different namespace ids, or different binding names bound to the same namespace id, with zero validation or warning either way.
+
+SOURCES:
+- https://developers.cloudflare.com/workers/wrangler/configuration/ (kv_namespaces binding/id schema)
+- https://github.com/cloudflare/workers-sdk/issues/1902, /issues/5634 (illustrate id-must-exist-in-account failure modes, and per-worker independence of bindings)
+DATE: fetched 2026-09-02.
+CONFIDENCE: High on the core claim (no cross-worker cross-check) — this follows directly from the binding-is-per-worker-script design documented in Cloudflare's own config reference; it is an architectural fact rather than a subtle behavior, so it is not the kind of claim likely to have silently changed.
+
+=== 7. Claude Code: public documentation of atomic writes (temp file + rename) to ~/.claude.json ===
+
+ANSWER: UNKNOWN / not explicitly documented as such — but with circumstantial confirmation.
+- No official Anthropic documentation or changelog entry explicitly states "Claude Code writes ~/.claude.json atomically via a temp-file-plus-rename pattern."
+- HOWEVER, the official Claude Code changelog (code.claude.com/docs/en/changelog) DOES contain an entry for v2.1.239 (dated 2026-08-21 per fetch): "Windows: startup no longer stalls on repeated rename retries when ~/.claude.json is read-only" — this confirms Claude Code performs RENAME operations against ~/.claude.json (consistent with a temp-file+rename write pattern) and that it retries them, but the changelog does not use the word "atomic" nor spell out the temp-file mechanism.
+- Independent corroboration (not official docs, but observed/reported behavior): GitHub issues on anthropics/claude-code (#29051 "claude.json corrupted by concurrent writes (no atomic write...)", #28966, #28837) and a third-party blog post describe temp files literally named `.claude.json.tmp.{PID}.{unix-ms-timestamp}` appearing next to `~/.claude.json`, which is strong circumstantial evidence of a temp-file+rename write strategy — but these are user reports/reverse-engineering, not Anthropic documentation, and issue #29051's very title argues NO atomic write currently protects against concurrent-process corruption (i.e., the mechanism may exist per-write but doesn't fully prevent races between multiple Claude Code processes).
+- Given the instruction to answer UNKNOWN if nothing public documents it explicitly: answer is UNKNOWN as an explicit documented guarantee, though the write-then-rename MECHANISM is indirectly evidenced by the official changelog's "rename retries" wording plus community bug reports.
+
+SOURCES:
+- https://code.claude.com/docs/en/changelog (v2.1.239 entry, "rename retries" language)
+- https://github.com/anthropics/claude-code/issues/29051 ("claude.json corrupted by concurrent writes (no atomic write / file ...")
+- https://github.com/anthropics/claude-code/issues/28966, https://github.com/anthropics/claude-code/issues/28837
+- https://israynotarray.com/en/ai/2026/07/30/claude-json-tmp-files-safe-to-delete/ (third-party, describes `.claude.json.tmp.{PID}.{timestamp}` naming)
+DATE: fetched 2026-09-02; changelog entry dated 2026-08-21.
+CONFIDENCE: Medium on "mechanism exists" (temp file + rename), Low/UNKNOWN on "is this officially documented as an atomicity guarantee" (it is not, per the instructions' bar for an explicit statement) — and issue #29051's title suggests the guarantee is contested/incomplete even if the mechanism exists.
+
+=== 8. `keyring` Rust crate 3.6.x: mock fallback + platform features ===
+
+ANSWER:
+- Confirmed via the keyring-rs README (v3.6.2): "If you don't enable any credential stores that are supported on a given platform, the _mock_ keystore will be the default on that platform," and the mock credential store "is always present" on every platform. So with NO platform feature enabled, `keyring` 3.x falls back to the in-memory/mock store rather than failing to compile or panicking at runtime.
+- The README explicitly says the crate abandoned a default feature set starting at v3: "the notion of a default feature set has gone away" — i.e., in keyring 3.x you must opt in to real platform backends explicitly; nothing is on by default.
+- Exact Cargo feature names (confirmed from the crate's Cargo.toml at tag v3.6.2, open-source-cooperative/keyring-rs):
+  - macOS/iOS: `apple-native` (pulls in `security-framework`)
+  - Windows: `windows-native` (pulls in `windows-sys` + `byteorder`)
+  - Linux, kernel keyutils backend: `linux-native` (pulls in the `linux-keyutils` crate) — combine with `linux-native-sync-persistent` (adds `sync-secret-service`) or `linux-native-async-persistent` (adds `async-secret-service`) for keyutils-plus-D-Bus-persistence combos.
+  - Linux/BSD, D-Bus Secret Service backend: `sync-secret-service` (enables `dbus-secret-service`) or `async-secret-service` (enables `secret-service` + `zbus`) — README also names `dbus-secret-service` as the go-to feature for FreeBSD/OpenBSD.
+  - Other flags: `crypto-rust` / `crypto-openssl` (crypto backend choice for secret-service), `tokio` / `async-io` (async runtime choice for zbus), `vendored` (statically link libdbus/openssl).
+  - No separate named "mock" feature exists — mock is a built-in fallback store, not a feature flag.
+
+SOURCES:
+- https://raw.githubusercontent.com/open-source-cooperative/keyring-rs/v3.6.2/README.md
+- https://raw.githubusercontent.com/open-source-cooperative/keyring-rs/v3.6.2/Cargo.toml
+DATE: fetched 2026-09-02, pinned to tag v3.6.2.
+CONFIDENCE: High — pulled directly from the tagged README and Cargo.toml (via WebFetch's summarization, but cross-checked between the two files and internally consistent — feature names appear identically in both summaries).
+
+STATUS: complete
+
+## Follow-up
+
+=== 9. tauri-plugin-updater 2.x: HTTP 204 handling in check() ===
+
+ANSWER:
+204 No Content is treated as "no update available" and returns Ok(None) — it is NOT an error or parse failure. Quoted lines from `plugins/updater/src/updater.rs` (v2 branch):
+
+```rust
+if StatusCode::NO_CONTENT == res.status() {
+    log::debug!("update endpoint returned 204 No Content");
+    return Ok(None);
+};
+```
+
+This is checked before attempting to parse a response body as the update manifest JSON, so an empty-body 204 response short-circuits cleanly to "no update" rather than hitting a JSON-parse error.
+
+SOURCE: https://raw.githubusercontent.com/tauri-apps/plugins-workspace/v2/plugins/updater/src/updater.rs (fetched via WebFetch, v2 branch tip, 2026-09-02)
+CONFIDENCE: High — this is a small, specific, quotable snippet and matches Tauri's documented updater-server contract (server should return 204 when there's no applicable update), so it is consistent with known behavior. Caveat: quote came through WebFetch's summarizing model rather than a raw diff/grep, and the fetch targeted the `v2` branch tip rather than a pinned release tag, so exact line numbers and the precise tagged-version match are not guaranteed — re-fetch pinned to a specific `tauri-plugin-updater-v2.x.y` tag if this needs to be cited with a line number.
+
+=== 10. tauri-plugin-updater 2.x: does UpdaterBuilder::endpoints() reject non-https URLs? ===
+
+ANSWER:
+It rejects non-https endpoints by default in release builds, but the enforcement is gated by a `dangerous_insecure_transport_protocol` config flag and appears to differ between debug and release builds. `UpdaterBuilder::endpoints()` calls into `crate::config::validate_endpoints(&endpoints, self.context.config.dangerous_insecure_transport_protocol)`:
+
+```rust
+pub fn endpoints(mut self, endpoints: Vec<Url>) -> Result<Self> {
+    crate::config::validate_endpoints(
+        &endpoints,
+        self.context.config.dangerous_insecure_transport_protocol,
+    )?;
+    self.endpoints.replace(endpoints);
+    Ok(self)
+}
+```
+
+Inside `validate_endpoints` (`plugins/updater/src/config.rs`), the scheme check is:
+
+```rust
+if url.scheme() != "https" {
+```
+
+Behavior as summarized from the fetch:
+- `dangerous_insecure_transport_protocol == false` (the default): a non-`https` endpoint URL causes the validator to return `Err(crate::Error::InsecureTransportProtocol)` in RELEASE builds (hard rejection, propagated as an `Err` out of `.endpoints()`); in DEBUG builds the same condition instead only logs/emits a warning and does NOT error, i.e. `http://` is accepted with a warning during development.
+- `dangerous_insecure_transport_protocol == true`: the scheme check is bypassed entirely — `http://` (or any non-https scheme) is accepted silently, no warning, no error. This flag is the documented escape hatch (it's also a `tauri.conf.json` updater-plugin setting, not just a builder-time toggle) for intentionally using an insecure transport.
+
+So: NOT "accept silently" by default, and NOT "only warn" in release — it's a hard `Err` rejection in release, softened to a warn-only in debug builds, and fully bypassed when the app opts into `dangerous_insecure_transport_protocol = true`.
+
+SOURCE: https://raw.githubusercontent.com/tauri-apps/plugins-workspace/v2/plugins/updater/src/config.rs (fetched via WebFetch, v2 branch tip, 2026-09-02)
+CONFIDENCE: Medium-high on the overall shape (hard error by default, flag-gated bypass) — consistent with the `InsecureTransportProtocol` error variant name and the flag's own name (`dangerous_...`) implying it's an explicit, named opt-out rather than a silent default. Medium on the specific debug-vs-release split (warn-only in debug, error in release): this detail came from the WebFetch summarization rather than a literal grep of a `#[cfg(debug_assertions)]` gate, so it should be verified with a raw source read (e.g. `git show` on a pinned tag) before being stated as fact in a security-relevant document — the debug/release split is plausible but is the least-certain part of this answer.
+
+STATUS: complete

@@ -1,0 +1,101 @@
+STATUS: partial
+
+# Test-suite review — Tandem master 3fb6408 (v0.24.1) — reviewer J (tests/**)
+
+Baseline (scratchpad/baseline-vitest.txt): 614 files passed / 2 skipped (616); 10138 tests passed / 26 skipped; exit 0.
+Census: 672 test/spec files (249 client, 243 server, 55 e2e, 21 docs, 19 shared, 18 cli, 17 scripts, 15 design-system-impl, 14 monitor, 11 build, 4 channel, 1 plugin, 1 perf, 1 helpers, 1 crdt, 2 root). vi.mock/doMock: 210 sites in 97 files. Snapshot assertions: exactly one (testid-set.snap.txt).
+
+## Findings — high confidence
+
+H1. `tandem_comment rejects invalid arguments` cannot fail — High
+  tests/server/mcp-tool-integration.test.ts:307-318  [read: tests/server/mcp-tool-integration.test.ts:305-320]
+  The body is `try { await client.callTool({name:"tandem_comment", arguments:{from:0,to:5}}) } catch { /* expected */ }` with no `expect` on either branch, so it is green whether Zod rejects, the SDK throws, or the tool silently creates an annotation with no text. A regression that drops the `text` requirement (or the whole schema) leaves this "rejects invalid arguments" spec passing. Confidence: high.
+
+H2. Critical Rule 9's "MCP half is CI-enforced" has a bare-registration hole — High
+  tests/server/license-gate-coverage.test.ts:~125-140  [read: tests/server/license-gate-coverage.test.ts:1-152; ran: grep of registration sites in src/server/mcp]
+  The completeness spec derives `registered` from `/(?:gatedTool|withErrorBoundary)\(\s*"(tandem_\w+)"/`, i.e. it only sees tools that already went through one of the two wrappers, so a new mutator registered bare as `server.tool("tandem_x", …, handler)` is neither GATED, UNGATED, nor "unclassified" — it is invisible and ships ungated with the suite green. `tests/docs/tool-count-drift.test.ts:~27` does derive names from `server.(tool|registerTool)("tandem_*")` (all 33 are currently wrapped, verified), but it compares only against the *counts* in docs/mcp-tools.md and CLAUDE.md, so updating "33/30" in the docs is enough to pass both; the license test should reuse that derivation and assert registered ⊆ classified. Confidence: high.
+
+H3. coverage-gate-wiring's "suite references the module" check is vacuous — Medium
+  tests/scripts/coverage-gate-wiring.test.ts:~100-112  [read: tests/scripts/coverage-gate-wiring.test.ts:1-306]
+  The check is `read(m.suite).includes(stem)` where the stems are `registry, dirty, open, reload-family, watcher, lifecycle, projection, sync, schema, annotations, replies, useDocumentWorkspace, model, rail-content`; nine of those are ordinary English or ubiquitous identifiers, so any test file that says "open" or "sync" satisfies the "suite for open.ts / sync.ts" claim. Combined with the existence-only check above it, the "deletion half" of the gate is defeated by hollowing the suite (delete every `it`, or `describe.skip`) while the file stays on disk; ADR-051's promise that "deleting the suite reds a REQUIRED job" holds only for `rm`. Confidence: high.
+
+H4. The user→Claude direction is never driven end to end — Medium
+  tests/e2e/annotation-lifecycle.spec.ts:196-222, tests/e2e/*.spec.ts  [ran: grep -rnoE "tandem_checkInbox|tandem_reply|tandem_save|Control\+s" tests/e2e/*.spec.ts]
+  `tandem_checkInbox` appears in zero of the 55 Playwright specs; every accept/dismiss/reply/chat-send test asserts the browser side only (card moves to "1 resolved", reveal closes, reply toggle expands). Nothing in E2E proves that a UI accept produces an `annotation:accepted` inbox item, that a chat send is readable by Claude, or that the accept reached the server's Y.Map at all (annotation-lifecycle:196 would pass on a client-local status flip). Solo-mode E2E (keyboard-shortcuts:222, settings-and-filters:393, mode-toggle-geometry) asserts pill geometry and toggle state, never that annotations are held/released. Unit coverage exists (mcp-tool-integration, events/queue), so this is a journey gap, not a hole. Confidence: high.
+
+## Findings — remaining
+
+R1. Zero-assertion "does not throw" specs — Low
+  tests/server/awareness.test.ts:130 (`resetInbox clears the set` — comment says "No assertions needed"); tests/server/changelog-path.test.ts:32 (`returns undefined …` never asserts the return); tests/server/file-watcher.test.ts:178 (`is a no-op for unwatched paths`); tests/server/integrations/apply.test.ts:335 (`accepts a config just under the 5 MiB cap` never reads the file back).  [read: each cited range]
+  All four pass on any non-throwing implementation, including one that returns the wrong value or writes nothing; the titles claim behaviour the bodies do not check. Confidence: high.
+
+R2. Permanently skipped E2E tests kept in live specs — Low
+  tests/e2e/keyboard-a11y.spec.ts:271 `test.skip(true, "tabbed rail layout is not active…")`; tests/e2e/settings-modal.spec.ts:155 `test.skip("Ctrl+, … superseded …")`.  [read: grep output]
+  Both are unconditional skips that will never run and inflate the spec's apparent coverage of rail-switcher keyboard access and Ctrl+, respectively; the second is a duplicate of settings-and-filters:267. Confidence: high.
+
+R3. Orphan test artefacts — Low
+  tests/fixtures/mcp-config-sample.json (0 readers anywhere in tests/, scripts/, src/) [ran: grep -rn mcp-config-sample tests scripts src]; tests/helpers/css-source.test.ts is a `.test.ts` living in the helpers directory, collected by the node project's `tests/**/*.test.ts` include but imported by nothing [ran: importer sweep over tests/helpers/*.ts]. Confidence: high.
+
+R4. Silent pass on symlink-creation failure — Low
+  tests/server/launcher/cwd-preview.test.ts:255 `catch { return; // unprivileged Windows without Developer Mode — skip }`  [read: 248-258]
+  On a Windows box without Developer Mode the spec returns green with zero assertions and no skip mark; CI is ubuntu so this only misleads local Windows runs. Confidence: high.
+
+R5. `npm run perf:gate` has no CI runner — Low (may extend #1333/#1734 — delta: the gate is not merely mis-specified, it is never executed by ci.yml)
+  .github/workflows/ci.yml (no step invokes perf:gate or tests/perf/playwright.config.ts)  [read: .github/workflows/ci.yml full]
+  The perf spec and its condition thresholds exist only for hand runs, so the perf regressions #1333/#1734 argue about are unobserved on every PR. Confidence: high.
+
+## Unchecked leads
+- `src/server/file-watcher` is vi.mock'ed in 15 test files while CLAUDE.md says the watcher lives in `src/server/documents/watcher.ts`; the target file exists (mock is not a no-op) but whether it is a re-export shim that the subjects still import, or a stale module the subjects no longer touch, is unverified.
+- tests/hooks/test_workflow_state.sh (the only file in tests/hooks) — not obviously invoked by any npm script or CI step; if nothing runs it, the workflow-state hook logic is untested.
+- annotation-remove-seam: the sanctioned-importer sweep is `filesMentioning("removeAnnotationRecord")`; the reply-seam explicitly forbids alias bindings/re-exports of `addUserReply`, but I did not confirm the remove-seam has the equivalent alias guard (lines ~231-240 partially read).
+- tests/build/linux-runtime-deps.test.ts `it.runIf(isEnabled)` — gated on a Cargo feature flag read at test time; not checked whether the feature is enabled in the checked-in Cargo.toml (if not, every dependency assertion is skipped and only the "does not declare" negative runs).
+- `describe.skipIf(!existsSync(bundlePath))` pattern: only version-baked and build-artifact found (already tracked by others); other `dist/`-dependent specs (stdio-smoke, monitor-smoke) run as scripts after Build, so they are fine — not fully enumerated.
+
+## Doc drift
+- ci.yml "Upload Playwright report" step comment says test-results/ carries trace.zip / video.webm / screenshots "configured in playwright.config.ts via trace/screenshot/video"; playwright.config.ts `use` sets only `baseURL` and `headless` — no trace, screenshot or video option exists, so a CI-only E2E failure uploads no trace. [read: playwright.config.ts full; ci.yml]
+- CLAUDE.md Critical Rule 7: "sub-PRs may add selectors but must not remove one. Enforced by testid-coverage.test.ts". The test asserts exact set equality against a file snapshot; a removal fails only until `vitest -u` is run, so "must not remove" is enforced by PR review of the snapshot diff, not by the test. (Distinct from #1709, which is about `dataset.testid` visibility.) [read: tests/design-system-impl/testid-coverage.test.ts full]
+- coverage-gate-wiring comment "There are none in src/ today" (coverage-ignore hints) — verified true (0 hits for v8/c8/istanbul ignore across src/), but the sweep itself covers only the 14 gated files; the sentence reads as if the whole tree were swept. [ran: grep -rnE "v8 ignore|c8 ignore|istanbul ignore" src/]
+- ADR-051 / CLAUDE.md "a floor is not protection against deleted behaviour … the per-module suite path is the half that detects deletion" — see H3: the suite half detects file deletion only.
+
+## Verified fine (what I checked and found sound)
+- No `.only` anywhere in tests/; no `it.todo`/`test.fixme`; the skipIf/runIf set is entirely platform-gated (win32/posix/linux) plus the two BYO_MODELS-gated E2E specs (expected while the flag is dark) and the two build-artifact specs already tracked.
+- No un-awaited `expect(...).rejects/.resolves` (0 hits); no `expect(async () => …).toThrow` misuse; the 7 empty `catch {}` blocks are all afterEach cleanup or `addInitScript` localStorage seeding, never around an assertion.
+- Every `if (!x.ok) return;` / `if (!out.drifted) return;` early return in a test body is preceded by an `expect` on the same predicate (reload.test.ts, cwd-preview.test.ts, adr027-note-write-guards.test.ts, platform.test.ts) — type narrowing, not silent skips.
+- Subject-mocking: no test vi.mocks a module whose stem matches its own; no test mocks every src module it imports; no vi.mock target points at a non-existent file. Hook-return mocks for useCoworkStatus / useClaudeCliStatus / useIntegrationWizard / useModels / useReachabilityCheck / useAutostart match the real hooks' return keys (extra keys seen by the heuristic were nested fixture fields).
+- Helper-based assertions (expectPerSessionAutoArmContract, settle, clickCopy, expectAligned, accepted/refused, parseEqual, expectSuffixRejection, expectSurvivesBind, expectFetchWithTimeoutEndpoint, expectPullAuthorityContract, assertSingleBatchedPopulate, expectWithinMs) all assert or throw — the 37 scanner hits reduced to the 5 real zero-assertion specs in H1/R1.
+- Wiring tests that hold as claimed (each parses ci.yml as YAML and pins exact commands, `if:` absence, `continue-on-error` absence, `needs:` absence, step ordering): typecheck-tests-wiring (also: exact package.json script equality, no suffix-glob includes, strict-family flags, orphan sweep wider than the configs' globs), acceptance-harness-wiring (also spawns run_acceptance_tests.py against zero-collected / all-skipped fixture suites and asserts exit 1), windows-acl-proof-wiring (also drift-guard: every spec spawning real icacls must be in the list; per-describe ≥1 passed/0 skipped), coverage-gate-wiring (set pinned, floors ≤1pt below observed, no zero floors, CLI exits 3 with no report — all except the H3 stem check), e2e-guard-wiring (ports disjoint from product/dev, backend never adopted, harness ports absent from docs/troubleshooting.md and from the shipped bundle).
+- Claims tests that hold: loopback-gate-claims derives the ungated route set from source and requires each doc to enumerate it and state its size; tool-count-drift derives registration from `server.tool/registerTool`; audit-origins.test.ts asserts zero findings over src/ AND positive controls (raw transact flagged, unknown tag flagged, every wrapper accepted); documents-open.test.ts derives the reload-family vocabulary from its exports, pins the importer set and each importer's allowed symbols; annotation-reply-seam forbids alias bindings/re-exports of `addUserReply` and pins exactly one unguarded producer; annotation-remove-seam drives `handleRemoveAnnotation` at the route (200 + map cleared), asserts BROWSER_ORIGIN vs MCP_ORIGIN via transaction listeners, and pins the importer set; css-pipeline-contract runs real lightningcss with the targets read from the real Vite config and probes the real .svelte declarations.
+- Coverage policy: 14 modules, floors = observed rounded down to 0.5 (max gap 0.5pt); minStatements shrink check at 75%; UNINSTRUMENTED per-metric 0/0 refused; ABSENT refused; cannot-evaluate exits 3; `coverage.include` covers .svelte and `coverage:` block is at root (project-level would be discarded — documented and correct). Floors sit within half a point of current values by design; they cannot catch deletion (documented) and do catch new untested code arriving in a gated file.
+- Fixtures: no annotation-JSON fixtures exist (all schema tests build records inline); SCHEMA_VERSION = 1 with dormant migrateUp — nothing to go stale. tests/fixtures/roundtrip/*.md and welcome-snapshot.md each have a reader.
+- vitest projects: client (happy-dom, tests/client/**) and node (everything else via `exclude`, not negated include — the 0/0-coverage hazard is documented and avoided); 15s timeouts both projects.
+- Playwright: reserved ports 4573/4728/4729, `reuseExistingServer:false` for the backend, e2e-guard as absolute globalSetup, wizard disabled by env, isolated app-data dir — all as documented.
+
+# ---- Completion append (resumed run; 6-call verification budget) ----
+
+## Findings — high confidence (additions / evidence upgrades)
+
+H1 (upgrade) — evidence now [ran: timeout 120 npx vitest run tests/server/mcp-tool-integration.test.ts -t "rejects invalid arguments" --reporter=verbose] → `✓ tandem_comment rejects invalid arguments (missing required field) 26ms`, 1 passed / 60 skipped. The spec passes in isolation with its only control-flow being an empty catch; nothing about the tool's validation is observed. Severity High, confidence high.
+
+H3 (upgrade) — evidence now [ran: per-stem `grep -rlF <stem> tests --include=*.test.ts | wc -l`]: registry 77, dirty 21, open 277, reload-family 10, watcher 25, lifecycle 57, projection 27, sync 314, schema 87, annotations 131, replies 44, useDocumentWorkspace 2, model 166, rail-content 3. For 11 of the 14 gated modules, well over a tenth of the test tree (for `open`/`sync`, roughly half) satisfies the "suite references the module" pin, so the check distinguishes nothing; only useDocumentWorkspace and rail-content are meaningfully pinned. Severity Medium, confidence high.
+
+H5. tests/hooks/test_workflow_state.sh has no runner — Low
+  tests/hooks/test_workflow_state.sh  [ran: grep -rln test_workflow_state package.json .husky .github .claude scripts tests]
+  The only file under tests/hooks is a 9.6 KB shell test for the per-session workflow-state hooks, and no npm script, husky hook, CI step, or .claude document invokes it, so the hook logic CLAUDE.md describes (`block-plan-without-agent-review.sh`, state pruning) is tested by nothing that ever runs. Severity Low (dev tooling, not product), confidence high.
+
+## Unchecked leads (final state)
+- annotation-remove-seam alias/re-export guard for `removeAnnotationRecord`: not located in the ranges read (lines 226-245 show only the origin assertion); the reply-seam has one, the remove-seam may not. Low importance — a re-export would still be caught by `filesMentioning` on the re-exporting file, only a *renamed* re-export evades.
+- `src/server/file-watcher.ts` is a live module (4 src importers vs 1 for `documents/watcher`), so the 15 vi.mock sites are not no-ops. Whether it re-exports `documents/watcher.ts` (making CLAUDE.md's "the watcher is documents/watcher.ts" accurate) or is a parallel implementation is unverified — doc-accuracy lead only.
+- Solo-mode hold/release: judged from E2E titles only (keyboard-shortcuts:222, settings-and-filters:393, mode-toggle-geometry:137-321); bodies not read, so "no E2E asserts held annotations" is [read: titles], confidence medium.
+
+## Doc drift (additions)
+- CLAUDE.md "The reload family is documents/reload-family.ts … `mcp/file-opener.ts` is gone" is fine, but the same section's framing of the watcher as `src/server/documents/watcher.ts` (coverage policy path) coexists with `src/server/file-watcher.ts` being what 4 src modules and 15 test mocks target — one of the two names is the seam and the docs should say which.
+
+## Verified fine (additions)
+- tests/build/linux-runtime-deps.test.ts: `isEnabled` is parsed from the real src-tauri/Cargo.toml `features = [...]` line, so the runIf gate tracks the checked-in build, not a hardcoded flag.
+- vi.mock targets: none missing on disk (rechecked via the file-watcher case).
+
+## Coverage against manifest (scratchpad/manifests/tests.md)
+Covered: vitest.config.ts, playwright.config.ts, ci.yml, coverage-policy.json + coverage-gate.mjs + coverage-gate-wiring; full grep inventories over tests/** (skip/only/todo/skipIf/runIf, zero-assertion, subject-mock, stale-mock, un-awaited promise assertions, try/catch); the wiring/claims tests listed under "Verified fine" read in full or assertion-stripped (typecheck-tests, acceptance-harness, windows-acl-proof, coverage-gate, e2e-guard, loopback-gate-claims, tool-count-drift, audit-origins, license-gate-coverage, testid-coverage, css-pipeline-contract, documents-open, annotation-remove-seam, annotation-reply-seam); E2E title map for all 55 specs plus annotation-lifecycle.spec.ts in full; fixtures + schema version; e2e/helpers.ts export surface.
+Not covered: tests/perf and tests/tauri-driver contents (only their CI status); tests/crdt, tests/shared, tests/channel, tests/monitor, tests/plugin bodies beyond grep inventories; `McpTestClient.callTool` error handling in tests/e2e/helpers.ts (whether an `isError` tool result is thrown or silently returned — if silent, every E2E `mcp.callTool` precondition can fail without failing the test; unverified, would be Medium if true); the remaining ~15 tests/docs/*-claims tests not named above (documents-boundary, config-writer-set-claims, native-theme-claims beyond one spec, startup-open-failure-wiring, stateless-transport, ai-surface-inventory, security-findings, tauri-command-registration, cwd-dependent-checks, channel-shim-optin, monitor-arming, registry-primitive-containment, link-enforcement-point, welcome-links, client-info-shape, slash-menu-guide, related-test-hook, node-floor); tests/scripts screenshot-redaction, tauri-webdriver-pin, pre-push-delete-only-skip, src-control-characters, make-perf-doc, build-reaper; Playwright flakiness patterns beyond `retries: 1` (no per-spec `test.slow`/`fixme` found by grep).
+
+STATUS: complete

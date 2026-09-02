@@ -1,0 +1,158 @@
+STATUS: partial
+# Reviewer I — CI, build, packaging, release (tandem @ 3fb6408, 2026-09-02)
+
+## Findings — high confidence
+
+High | Dependabot config is the unedited template: `package-ecosystem: ""` — version updates have never been configured
+.github/dependabot.yml:8
+[read: .github/dependabot.yml:1-11]
+GitHub rejects an empty ecosystem, so no npm, cargo, or github-actions version-update PRs are ever opened; only alert-driven security PRs (repo setting, independent of this file) can arrive. The release skill's "check every dependency bump against the Dependabot alert list" therefore covers a stream that does not exist, and nothing ever bumps action pins, the Node sidecar, or Cargo deps.
+Confidence: high (file content is unambiguous; GitHub's schema requires a value from a fixed enum).
+
+High | Release workflow hands every signing secret to floating-tag actions; only azure/login is SHA-pinned
+.github/workflows/tauri-release.yml:219 (pinned) vs :59,158,183,189,194,317 (`actions/checkout@v6`, `setup-node@v6`, `dtolnay/rust-toolchain@stable`, `swatinem/rust-cache@v2`, `tauri-apps/tauri-action@v0`); also :80,358 `github-script@v8`
+[read: .github/workflows/tauri-release.yml:210-348]
+`tauri-apps/tauri-action@v0` receives `TAURI_SIGNING_PRIVATE_KEY(+PASSWORD)`, `APPLE_CERTIFICATE(+PASSWORD)`, `APPLE_TEAM_ID`, the decoded App Store Connect .p8 path, and runs inside the Azure OIDC session — a compromised v0 tag (tj-actions-style) exfiltrates the updater key, at which point every installed desktop app trusts attacker-signed `latest.json` and there is no key rotation path in tauri.conf.json. The one pinned action's comment shows the author knows the practice; it was applied to the action holding the least material. Compounds with the dependabot finding: SHA pins without an updater rot, which is presumably why they were avoided.
+Confidence: high.
+
+High | macOS signing/notarization gate passes vacuously when the Apple secrets are empty — and signing is live, so this is now a silent-unsigned-release path, not a "pre-cert" state
+.github/workflows/tauri-release.yml:299-306 (Decode key: `exit 0` when APPLE_API_KEY_BASE64 unset), :465-474 (Verify macOS: `::notice` + `exit 0` when APPLE_CERTIFICATE unset), :335-348 (tauri-action itself skips signing/notarization on empty env)
+[read: .github/workflows/tauri-release.yml:289-348, 455-540]
+A deleted, renamed, or expired `APPLE_CERTIFICATE` secret (or an environment/secret scoping change) produces an unsigned, un-notarized .app with the whole matrix green, `release-check` green, and `verify-release-manifest` green (it checks keys and `.sig`, not codesign). The smoke checklist §2 says CI "verifies this most" and only hardware proves Gatekeeper UX — so the human step trusts exactly the gate that would have skipped. The Windows leg fails hard on a missing `TAURI_SIGNING_PRIVATE_KEY` (:281-287), so the asymmetry is unintentional, not policy.
+Confidence: high on mechanism; the comment at :462-464 still calls this the "pre-cert state" although v0.22.1+ ship notarized per docs/release-smoke-checklist.md.
+
+Medium | An RC tag would be auto-updated onto every user: `create-release` hard-codes `prerelease: false`, the release skill publishes with `--latest`, and the updater reads `releases/latest/download/latest.json`
+.github/workflows/tauri-release.yml:116; .claude/skills/release/SKILL.md:171; src-tauri/tauri.conf.json:~97 (`plugins.updater.endpoints`)
+[read: tauri-release.yml:109-119; SKILL.md:168-172; tauri.conf.json]
+docs/release-smoke-checklist.md §5 plans `v1.0.0-rc.*` tags; semver `1.0.0-rc.1 > 0.24.1`, so once the draft is published `--latest` GitHub's `latest` alias points at the RC and every 0.24.x desktop install is offered it on next check. Nothing in `verify-release-manifest` or the skill distinguishes an RC; the only defence is Bryan remembering `--prerelease` and omitting `--latest`, which the skill text actively contradicts.
+Confidence: high on mechanism; whether MSI/NSIS accept a prerelease `version` is an unchecked lead.
+
+Medium | Bundled Node sidecar is pinned to 22.17.0 (2025-06-24), 13 patch releases and at least three security releases behind, with no bump mechanism
+scripts/download-node-sidecar.mjs:172 (`"22.17.0"`)
+[ran: curl https://nodejs.org/dist/index.json — latest v22 is 22.23.2 (2026-07-28); 22.17.1, 22.22.0, 22.22.2 were security releases (CVE-2025-27210, CVE-2025-55130, CVE-2026-21710 et al.)]
+Every desktop install runs the server (HTTP on loopback, LAN-exposable via TANDEM_BIND_HOST) on a runtime carrying published CVEs, and the only way it moves is someone editing this literal by hand — Dependabot cannot see it even when configured. The release checklist has no "sidecar Node current?" row.
+Confidence: high.
+
+Medium | `check` runs `Test` before `Build`, so the two dist-gated suites skip in every CI run and pass vacuously
+.github/workflows/ci.yml:275-276 (Test) vs :311-312 (Build); tests/build/version-baked.test.ts:21 (`describe.skipIf(!existsSync(dist/server/index.js))`); tests/monitor/build-artifact.test.ts:9-10,17 (early `return` when dist missing)
+[ran: npx vitest run tests/build/version-baked.test.ts tests/monitor/build-artifact.test.ts — 4 tests pass only after `npm run build`; baseline-vitest.txt shows the "Skipping: run npm run build:server first" warning in the CI-shaped run]
+The release skill (step 3) presents `version-baked.test.ts` as the guard that catches a stale `APP_VERSION` bundle — that guard only exists on a developer's machine; CI's `Test` step has never executed it. Same #1529 shape the repo already fixed once for `icacls`: a skipped suite reports as a passed file.
+Confidence: high.
+
+Medium | npm publish depends on a long-lived `NPM_TOKEN` that npm now caps at 90 days for write-scoped granular tokens; nothing tracks its expiry
+.github/workflows/publish.yml:25-27
+[read: publish.yml:1-27] + web: github.blog changelog 2025-11-05 (classic tokens revoked 2025-11-19; write granular tokens max 90-day lifetime, 7-day default)
+The next `v*` publish after the token lapses fails at `npm publish` with a 401/403, after the GitHub release is already public and `latest.json` already points users at it — the npm half (plugin `npx -y tandem-editor@<new>` pins, `tandem setup`) silently keeps resolving the previous version. The job already has `id-token: write`, so npm Trusted Publishing (OIDC) would remove the secret entirely.
+Confidence: medium (cannot see the token's type or creation date; the policy is confirmed).
+
+Medium | `npm i -g tandem-editor` installs ~393 packages when the shipped CLI needs 5: 44 of 49 `dependencies` are either bundled into the self-contained server bundle or client-only
+package.json:117-166 (`dependencies`); tsup.config.ts:34-47 (`noExternal: [/.*/]` for server/channel/monitor/stdio-bridge), :105-125 (CLI externalises `dependencies`)
+[ran: node cross-check of every bare specifier in dist/cli/index.js against package.json — externals are exactly @modelcontextprotocol/sdk, env-paths, update-notifier, zod; @napi-rs/keyring is the only server external; `npm ls --omit=dev --all --json` = 393 unique prod packages vs ~148 for the needed closure]
+A customer's global install can fail on a transitive dependency of tiptap/yjs/mammoth/docx/sentry/@tauri-apps that no shipped code path resolves, and the attack surface of the installed tree is ~2.5x what runs. Moving the 44 to devDependencies is safe by construction because tsup bundles devDependencies and Vite bundles the client.
+Confidence: high on the measurement; medium on "safe by construction" (ws's optional `bufferutil`/`utf-8-validate` are try/catch-guarded; ajv `require("ajv/dist/runtime/*")` occurrences are codegen string literals, not live requires — verified in the bundle).
+
+## Findings — remaining
+
+Low | `publish.yml` fires on any `release: published` — no `v*` guard, no tag==package.json assertion
+.github/workflows/publish.yml:3-6, 15, 25
+[read: publish.yml:1-27]
+A release created on any tag (or a re-published draft) runs `npm publish` from that tag's checkout and ships whatever `package.json.version` says; for an already-published version it 403s harmlessly, for a bumped-but-unreleased branch it publishes early. `create-release` guards tag==tauri.conf.json, but nothing on the npm side does.
+Confidence: high on mechanism; Bryan is the only pusher so exposure is operational, not adversarial.
+
+Low | Playwright `retries: 1` plus report upload only `if: failure()` — flakes pass green and their evidence is never kept; ci.yml claims trace/video/screenshot artefacts that the config does not enable
+playwright.config.ts:~42 (`retries: 1`); .github/workflows/ci.yml:371-382 (`if: failure()`, comment at :376-379); playwright.config.ts `use:` has only baseURL/headless
+[ran: grep -n "trace\|video\|screenshot" playwright.config.ts → only comment hits]
+A spec that fails once and passes on retry is a green job with no artefact, so the flake rate is invisible; when a spec does fail, `test-results/` holds no trace.zip because `trace` is Playwright's default `off`, contradicting the comment that justifies uploading it.
+Confidence: high.
+
+Low | lint-staged key `"**/*.json !package-lock.json"` is not lint-staged syntax and matches zero files
+package.json:~97 (`lint-staged`)
+[ran: lint-staged's own `generateTasks` against the config — that task's fileList is `[]` for package.json/plugin.json/tsconfig.json]
+JSON is never biome-formatted at commit; CI's `biome check .` catches root/src/tests/scripts JSON, but `.claude-plugin/*.json`, `.github/**` and `infra/**` are outside biome's `files.includes` and so are never formatted anywhere. Correct form is the array/negation glob, e.g. `"!(package-lock).json"` or a `**/*.json` key with `--files-ignore-unknown`.
+Confidence: high.
+
+Low | Source maps with full `sourcesContent` (1,725 sources, 1,528 from node_modules) ship in the npm tarball and are copied into the desktop bundle
+tsup.config.ts:63,80 (`sourcemap: true`); src-tauri/tauri.conf.json `bundle.resources` `../dist/server/` (whole dir)
+[ran: npm pack --dry-run — unpacked 29.8 MB of which dist/server/index.js.map is 15.2 MB and all maps ≈18 MB; node parse of the map]
+Every installer and the npm package carry ~18 MB of dependency source that nothing reads at runtime (no `--enable-source-maps`, no Sentry upload step). Not a correctness bug; it is the majority of install size.
+Confidence: high on measurement.
+
+Low | `check-font-assets.mjs` looks for `dist/index.html`, a path Vite never writes (outDir is `dist/client`), so only the source `index.html` is ever scanned
+scripts/check-font-assets.mjs:5-7
+[read: scripts/check-font-assets.mjs:1-32; ran: npm run build → dist/client/index.html exists, dist/index.html does not]
+The built HTML — the thing actually shipped — is never inspected; a Vite plugin/transform injecting a remote font `<link>` would pass. Today source and build agree, so the gate is redundant rather than vacuous.
+Confidence: high.
+
+Low | pre-push runs `biome check src/ tests/` while CI runs `biome check .`
+.husky/pre-push:~43; .github/workflows/ci.yml:250-251; biome.json `files.includes`
+[read: both files]
+`scripts/**`, `packages/**`, root `*.ts/json/html` are formatted only by lint-staged at commit and only checked in CI — a `HUSKY=0` commit or an unstaged-then-staged script passes the hook and fails `check`. CONTRIBUTING documents the narrower form as authoritative.
+Confidence: high.
+
+Low | `infra/**` is in no tsconfig `include` and outside biome's `files.includes`; it is typechecked only transitively via `tsconfig.tests.node.json` through the two worker tests; no wrangler version pin or lockfile
+tsconfig.json:24 (`include: ["src"]`); biome.json:16-26; infra/*/wrangler.toml:13 and :7 (`compatibility_date = "2024-09-23"`)
+[read: tsconfig*.json, biome.json, infra/**]
+`npm run typecheck` (the build gate) never reads the Workers; a type error there surfaces only through `typecheck:tests`, and only in the parts the tests import. `npx wrangler deploy` uses whatever wrangler is current that day.
+Confidence: high.
+
+Low | `Verify Windows signatures` accepts any valid Authenticode signer (TODO to pin the subject is still open)
+.github/workflows/tauri-release.yml:~717-724
+[read: tauri-release.yml:692-731]
+A wrong certificate profile or a swapped Trusted Signing account would pass as long as the signature validates and is timestamped. The TODO says "after first signed rc"; several signed releases have shipped since.
+Confidence: high.
+
+Low | Floating `dtolnay/rust-toolchain@stable` in both CI and release; `rust-version = "1.77.2"` MSRV is built on no leg
+.github/workflows/ci.yml:50,92; tauri-release.yml:189; src-tauri/Cargo.toml:9
+[read]
+Release binaries are built with whatever stable is current on tag day (non-reproducible across re-runs), and the declared MSRV is a promise nothing checks.
+Confidence: high.
+
+Low | ci.yml's "Clear ports before E2E" list (4573/4728/4729) is a hand copy of `scripts/test-ports.ts` that no wiring test pins
+.github/workflows/ci.yml:329-336; scripts/test-ports.ts:32-38
+[ran: grep -rn "fuser\|Clear ports" tests → no hits]
+A renumber in test-ports.ts leaves CI freeing the old pair; the comment says "keep in sync" and nothing enforces it — the exact shape the e2e-guard-wiring test was written to prevent elsewhere.
+Confidence: high.
+
+Low | `src/cli` and `src/stdio-bridge` are typechecked only by the root config, which carries the DOM lib
+tsconfig.server.json:7 (include omits them); tsconfig.json:4 (`lib` includes DOM); ci.yml:259-266 acknowledges `src/cli`
+[read]
+Server-side code in those trees can reference browser globals (`window`, `fetch` typings from DOM) and pass typecheck; the server config's DOM-free invariant doesn't reach the CLI that ships as `bin`.
+Confidence: high.
+
+Low | knip: 22 unused files, 9 unused exports, one duplicate export — several are shipped client/server modules, not spikes
+[ran: npx knip --include files]
+Shipped-tree hits: src/client/panels/DocumentHealth.svelte, src/client/hooks/useReviewCompletion.svelte.ts, src/client/utils/portal.ts, src/server/file-io/spike-docx-export.ts, src/server/integrations/index.ts; plus tests/perf/playwright.config.ts + global-setup.ts (harness entries knip.json does not declare, so knip reports them as dead). Duplicate export `TANDEM_SITE_URL|TANDEM_PURCHASE_URL` in src/shared/constants.ts. Also 6 "unlisted dependencies" (prosemirror-state/-model, domhandler, mdast, lightningcss, @testing-library/dom) imported directly but present only transitively.
+Confidence: high on the report; whether each file is genuinely dead is not verified.
+
+## Unchecked leads
+- Required status-check set on `master` could not be measured: GitHub API is blocked in this session (no `gh`, REST returns "GitHub access is not enabled"). Note `reaper-build` (ci.yml:84-99, comment: "fails a PR, not a release tag") is NOT in the set CLAUDE.md documents as required (`check`, 3× `rust-test`, `windows-acl-proof`) — if that documentation is accurate, a red reaper-build does not block a merge.
+- Whether tauri-bundler's MSI/WiX path accepts a prerelease `version` (`1.0.0-rc.1`) or strips/refuses it — relevant to the RC finding.
+- Whether CodeQL default setup honours `.github/codeql/codeql-config.yml` (`paths-ignore: src/server/annotations/rename-recovery.ts`) — there is no CodeQL workflow in the repo, so this is default setup; docs describe the config file for advanced setup. If ignored, the effect is extra alerts, not a hole.
+- NPM_TOKEN type and expiry (see the npm-token finding).
+- Node 22.21.1 / 22.23.1 security status (22.17.1, 22.22.0, 22.22.2 confirmed security).
+- Whether any Dependabot PR has ever been opened on the repo (would confirm the dependabot.yml finding empirically; API blocked).
+- `Swatinem/rust-cache@v2` restoring master-branch caches into the signed release build — poisoning needs master write, so low; not traced further.
+- The `release` environment has no protection rules, so a `v*` tag on ANY commit (not just master) runs the full signed build with all secrets; publish still needs a human. Not verified against repo settings.
+- Release asset sizes (to quantify the sourcemap-in-installer point) — HEAD requests returned no Content-Length through the proxy.
+
+## Doc drift
+- CONTRIBUTING.md:146-149 says pre-push runs three steps; `.husky/pre-push` runs four (`npm run typecheck:tests` was added between biome and vitest). [read both]
+- CONTRIBUTING.md:129 and :135-137 say `npm run test:e2e` "refuses to run while Tandem or dev:server holds :3479, and frees :3478/:3479" and cannot run alongside `dev:server` — stale since #1492: the harness runs on reserved 4728/4729 (scripts/test-ports.ts) and CLAUDE.md says it coexists with a running Tandem. [read]
+- docs/cli.md "npm run scripts" table omits `typecheck:tests`, `test:coverage`, `test:e2e`, `test:e2e:ui`. [ran: script-name diff]
+- .github/workflows/ci.yml:376-379 claims Playwright trace/screenshot/video are configured in playwright.config.ts; they are not (see finding).
+- tauri-release.yml:462-464 calls the empty-`APPLE_CERTIFICATE` branch the "pre-cert state"; signing has been live since v0.22.1 per docs/release-smoke-checklist.md.
+- `npm run check:links` baseline reports 1 broken link: docs/plans/2026-08-28-unit-07c-file-opener-deletion.md → ../decisions.md#adr-034-file-open-pipeline (heading missing). check:links runs in neither CI nor hooks (CONTRIBUTING says so).
+- `docs/workflows.md` is a Tauri resource but not in npm `files`; server handles the undefined path (src/server/mcp/server.ts:177) — fine, just asymmetric between the two distributions.
+- README/CONTRIBUTING both state Node 22.12.0 — consistent with `engines`; the CLI's own guard (src/cli/node-version.ts) checks major ≥22 only (falls under open #1533, not re-reported).
+
+## Verified fine
+- Six version surfaces agree at 0.24.1: package.json, .claude-plugin/plugin.json (5 pins), src-tauri/Cargo.toml, src-tauri/tauri.conf.json, package-lock.json root (both `version` and `packages[""].version`), src-tauri/Cargo.lock `tandem-desktop`. `git grep -F 0.24.1` shows no stragglers; `tests/plugin/plugin-version-pin.test.ts` genuinely compares surfaces 1–4 incl. monitor `command` strings. reaper/Cargo.toml (0.1.0) and tests/tauri-driver (0.0.0) are independent, not surfaces.
+- License gate: `tsup.config.ts:20` `LICENSE_GATE_ENABLED = false` compiles to `defineValue = true ? false : void 0` in both dist/server and dist/cli; the `TANDEM_LICENSE_GATE` env fallback is unreachable in built output; the only remaining `__LICENSE_GATE_ENABLED__` token in dist is inside a warning string; channel/monitor/stdio-bridge bundles contain no gate or version defines and need none. The `gateEnabled: true` sites (license-state.ts:262, routes/license.ts:67, cli/license.ts:111) are deliberate preview resolution, not enforcement. The stray `__APP_VERSION__` in dist/cli is dead code behind the `__TANDEM_VERSION__` branch (apply.ts:196-197). `APP_VERSION`/`__MCP_SDK_VERSION__` fully substituted in dist/server.
+- Fresh `npm run build` exits 0, leaves `git status` clean; `scripts/ci/verify-harness-stripped.mjs`, `monitor-smoke.mjs`, `stdio-smoke.mjs` all pass against it; `build-client.mjs` scrubs `VITE_TANDEM_*` and `verify-harness-stripped` is the second line.
+- npm tarball (47 files, 7.2 MB packed) includes dist/{server,cli,client,channel,monitor,stdio-bridge}, sample/, skills/tandem/SKILL.md, .claude-plugin/{plugin,marketplace}.json, CHANGELOG.md, LICENSE, README; excludes tests/, src-tauri/, .claude/, docs/, screenshots, .env, dist/perf-client. `skill-content.ts` and `start.ts` resolve resources relative to dist/cli correctly for both layouts. Every bare import in dist/cli is in `dependencies`; @napi-rs/keyring platform packages are in the lock; `ws` optional natives are try/catch-guarded; ajv `require("ajv/dist/runtime/*")` in dist/server are codegen string literals (ajv is in the prod closure via the MCP SDK anyway). `main`/`exports`/`bin` all point at dist/cli/index.js (shebang banner present).
+- Workflows: ci.yml has workflow-level `permissions: contents: read`, no `pull_request_target`, no secrets; claude-code-review.yml is `pull_request` gated to same-repo, non-draft, non-Bot with explicit scopes and a 15-min cap; tauri-release.yml has explicit per-job permissions (`release-check: {}`), `concurrency` with `cancel-in-progress: false`, secrets consumed via `env:` not echoed, .p8 written under umask 077 and wiped `always()`, Windows signing refuses non-tag refs; `create-release` refuses duplicate releases and checks tag==tauri.conf.json; `verify-release-manifest` asserts all 11 keys, dangling URLs and `.sig` presence — and the live v0.24.1 `latest.json` has exactly those 11 keys.
+- download-node-sidecar.mjs verifies SHA256 against SHASUMS256.txt and fails closed when `CI=true`; build-reaper.mjs allowlists triples. windows-acl-proof.mjs refuses non-Windows and requires per-describe pass counts. run-acceptance-harness.mjs never masks a non-zero child. e2e-guard.ts is fail-closed with only ECONNREFUSED as "clear"; e2e-server.mjs re-validates the wipe dir by basename. pre-push delete-only skip requires a positive ref sighting (tested by tests/scripts/pre-push-delete-only-skip.test.ts).
+- vitest: two projects, 15 s timeouts, no `retry`, coverage at root with `include` src/**/*.{ts,svelte} (no exclusions that hide code beyond `.d.ts`); coverage-gate.mjs is pure and its wiring test lives in `check`. Playwright backend `reuseExistingServer: false`, ports from test-ports.ts, `workers: 1`.
+- .gitattributes (LF everywhere, `diff` on docx-comments.ts, binaries listed), .editorconfig, `.husky/pre-commit` shebang present, `.husky/_` untracked, `keys/`, `.dev.vars*`, `.mcp.json`, `.env*` gitignored. infra Workers: secrets only via `wrangler secret put`, `compatibility_date` pinned, `SUPPORT_EMAIL` fail-closed, no-update responses byte-identical, both workers unit-tested under `npm test` with real Ed25519 keys; `LICENSE_UPDATE_ENDPOINT` is `""` in lib.rs so the public endpoint is used while dark.
+- ESLint (255 warnings, 0 errors) and Biome are split cleanly: biome `linter.enabled: false` (format only), eslint is the linter; CI runs both. tsconfig.tests.* include whole directories per the wiring rule.
+STATUS: complete

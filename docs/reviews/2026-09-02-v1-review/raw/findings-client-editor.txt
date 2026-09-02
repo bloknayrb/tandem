@@ -1,0 +1,119 @@
+STATUS: partial
+
+# Client editor core review — findings (area D: src/client/editor/**, src/client/positions.ts, src/client/hooks/**, .svelte.ts rune modules)
+
+Harness: <scratchpad>/harness/
+(vitest + happy-dom + Tiptap + Collaboration + real src/client extensions; run with
+`cd <harness> && <repo>/node_modules/.bin/vitest run --config ./vitest.config.ts <file>`).
+Files: a-bugs.test.ts (A cursor, B find-replace, C structural edits vs annotations),
+d-flat.test.ts (24-shape PM<->flat corpus), e-keys.test.ts (E1 slash-in-code, E2 AltGr, E3 Ctrl+Enter).
+Nothing in the repository was modified. No server was started; ports 3478/3479 untouched.
+
+## Findings — high confidence
+
+### High — Typing-activity `cursor` is a ProseMirror position, but the server publishes it as a flat offset
+src/client/editor/extensions/awareness.ts:225-256 ; src/server/mcp/awareness.ts:269, :438 ; src/server/document-store.ts:336
+[ran: vitest run --config ./vitest.config.ts a-bugs.test.ts]
+Plugin 2 of the awareness extension writes `Y_MAP_ACTIVITY.cursor = state.selection.from` (a PM position, which counts node boundaries) while the sibling `Y_MAP_SELECTION` write goes through `pmSelectionToFlat` correctly; `tandem_getActivity` / `tandem_checkInbox` pass `activity.cursor` through untouched into the same field family the docs show as a flat offset (docs/mcp-tools.md:907-925 "cursor": 142, no caveat) and skills/tandem/SKILL.md:79 tells Claude to check it before annotating near the cursor. In the harness doc `"# Title\nSome text here\none\ntwo Zthree"`, `activity.cursor` read 38 while the same caret's flat `selection.from` was 32, so a Claude that honours the skill avoids the wrong region (here "hree" instead of the true caret) and the drift grows with every block boundary above the caret.
+Confidence: high (reproduced end-to-end, both writers and both readers read).
+
+### High — Find/Replace positions are off by one per preceding hard break; replace corrupts text
+src/client/editor/extensions/find-replace.ts:74-88 (walkMatches), :258-270 (replaceActive), :272-309 (replaceAll)
+[ran: vitest run --config ./vitest.config.ts a-bugs.test.ts]
+`walkMatches` searches `node.textContent` (in which a hardBreak contributes zero characters) but converts match indices with `pos + 1 + idx` (in which a hardBreak occupies one position), so every match after a `<br>` in the same textblock is shifted one position left per break, and the shifted range is what `replaceActive`/`replaceAll` hand to `insertText`. Reproduced: `<p>alpha<br>bravo charlie</p>` find "bravo" → match {6,11} = `<br>brav`; replaceActive("XXXXX") → `<p>alphaXXXXXo charlie</p>` (break deleted, wrong letters replaced); `replaceAll` cat→dog on `<p>one<br>two<br>cat sat</p>` → `<p>one<br>twdogat sat</p>`. Highlights show the same shift, so the user sees the wrong text selected before pressing Replace.
+Confidence: high. Fix shape: walk `node.forEach` text children (or `textBetween(pos+1, pos+node.nodeSize-1, "￼")`) so hardBreak is one char in both coordinate systems.
+
+### High — Slash menu opens inside code blocks and rewrites code on Enter
+src/client/editor/slash-menu/extension.ts:80-108 (resolveActiveSlashCommand), :342-345 (Enter) ; slash-menu/commands.ts:104-110, :260-267
+[ran: vitest run --config ./vitest.config.ts e-keys.test.ts]
+`resolveActiveSlashCommand` gates on `isSlashMenuSuppressed()`, an empty selection and the `/(?:^|\s)\/([A-Za-z0-9 -]*)$/` regex on `$from.parent.textBetween`, but never on `$from.parent.type.spec.code`, so typing a path like `cd /t` (or any `/word` at a line start) inside a fenced code block opens the menu; Enter — the key that inserts a newline in code — is captured, `executeSlashCommand` deletes the "/t" and runs the first match. Reproduced: `<pre><code>echo hi\n</code></pre>` + "/e" + Enter became `<p>echo hi\n</p>`; `cd /t` + Enter became `<p>cd </p>` (text deleted, code block converted to a paragraph). Tiptap's own suggestion utility has an explicit `allowedPrefixes`/`allow` hook for exactly this; Tandem's custom matcher lacks the equivalent.
+Confidence: high.
+
+### Medium — Ctrl+Enter both inserts a hard break AND accepts the pending annotation
+src/client/hooks/useAppShortcuts.ts:266 ; src/client/App.svelte:1563-1571 ; node_modules/@tiptap/extension-hard-break/dist/index.js:62-63 ; src/client/editor/extensions/plaintext-breaks.ts:86-89
+[ran: vitest run --config ./vitest.config.ts e-keys.test.ts]
+Tiptap's HardBreak (and Tandem's PlaintextBreaks for .txt) bind `Mod-Enter` and handle it inside ProseMirror (`defaultPrevented: true`), but the window keydown listener in `useAppShortcuts` still matches `Enter` with `ctrlKey` as `annotation-accept-or-dismiss`, and the App.svelte dispatcher checks `shouldIgnoreShortcut` (INPUT/TEXTAREA/isComposing only — contenteditable is not covered) but never `e.defaultPrevented`. With the caret in the editor and a pending Claude comment, Ctrl+Enter inserts `<br>` at the caret and accepts the annotation in the same keystroke; Ctrl+Shift+Enter inserts `<br>` and dismisses it. Reproduced in harness (HardBreak run gave `<br>` + defaultPrevented; `matchShortcut` on the identical event returned `annotation-accept-or-dismiss`).
+Confidence: high that both fire; Medium severity because it needs a pending annotation and the caret in the document (the documented "accept from anywhere" affordance is what makes it reachable).
+
+### Medium — AltGr (Windows/Linux Ctrl+Alt) characters are swallowed by Ctrl shortcuts on non-US layouts
+src/client/hooks/useAppShortcuts.ts:126-312 (matchShortcut: `const mod = e.ctrlKey || e.metaKey`, no `altKey` gate on KeyS/KeyN/KeyW/KeyO/KeyF/KeyG/Digit1-9/Enter; `altKey && KeyT/KeyA/KeyM` branches)
+[ran: vitest run --config ./vitest.config.ts e-keys.test.ts]
+On Windows, AltGr is delivered as `ctrlKey && altKey`, and because matching is by `e.code` (documented as the layout-independence choice) the branch cannot see that the produced character is a letter: Polish `ś` (AltGr+S) → `save`, `ń` → `new-scratchpad`, `ó` → `open-file`, `ą` → `toggle-authorship`, Romanian `ț` (AltGr+T) → `reopen-closed-tab`, Czech/German `{`/`[` on Digit7/Digit8 → `pick-tab`; each handler calls `preventDefault()`, so the character never reaches the document. Users on pl/ro/cs/de/hu layouts lose ordinary letters and brackets while typing prose. Fix: return null when `e.ctrlKey && e.altKey && !e.metaKey` for the non-Alt branches (Chrome's own convention), or gate on `e.key.length === 1 && !/^[a-z0-9]$/i.test(e.key)`.
+Confidence: high on the code path (harness), medium that real Chromium/WebView2 delivers the exact flags (well-documented, not run here).
+
+### Medium — Heading toggle on an annotated paragraph shifts the annotation and the server stamps it `repaired` from stale offsets (extends the already-reported repaired-arm finding)
+src/client/positions.ts (relRangeToPmPositions null path) ; src/server/positions.ts refreshRange
+[ran: vitest run --config ./vitest.config.ts a-bugs.test.ts]
+Delta only: toggling a paragraph to a heading via y-prosemirror rebuilds the Y.XmlElement, so both RelativePositions die; the client falls back to the stale flat range, which now points three characters early once the `## ` prefix is counted ("charlie" → "vo char"), and the server's `refreshRange` re-anchors from the same stale flats and thereafter reports `ok` forever. Same root cause as the reported repaired-arm bug; this is a third door (heading toggle) alongside join and the reported cases, and it is the one a user hits from the toolbar with no text editing at all. List wrap and Enter-at-start were fine.
+Confidence: high.
+
+## Findings — remaining
+
+### Medium — Enter handlers in five inputs ignore `isComposing` (IME users submit/commit on the composition Enter)
+src/client/panels/ChatPanel.svelte:184 ; src/client/editor/toolbar/LinkEditor.svelte:42 ; src/client/editor/find-replace/FindReplaceBar.svelte:256 ; src/client/tabs/TabRenameInput.svelte:55 ; src/client/components/CommandPalette.svelte:344 ; src/client/components/OutlinePanel.svelte:116
+[read: src/client/panels/ChatPanel.svelte:180-190]
+Only `matchShortcut` and `shouldIgnoreShortcut` check `e.isComposing`; each of these listens for `key === "Enter"` and acts (send chat message, apply link, jump to next match, commit rename, run palette command) with `preventDefault()`. For Japanese/Chinese/Korean input the Enter that confirms the candidate is delivered as a keydown with `isComposing: true` (and, in Safari, a trailing keydown with keyCode 229), so a chat message is sent with the half-converted text and the link editor commits a partial URL. Chat is the worst: the message goes to Claude and cannot be recalled.
+Confidence: medium (code read; behaviour is the standard IME contract, not run in a browser).
+
+### Medium — Toolbar `capturedRange` is a PM range frozen while the comment composer has focus; remote edits above it are not mapped
+src/client/editor/toolbar/Toolbar.svelte:738-749, :788-793, :821-825
+[read: src/client/editor/toolbar/Toolbar.svelte:730-830]
+`captureSelectionRange` stores raw `{from,to}` PM positions when the composer opens and re-capture is suppressed while `popupHasFocus()`; `createAnnotation` uses `capturedRange ?? editor.state.selection` and sends it via `pmToFlat` at submit time. If Claude (y-sync) inserts or deletes text above the captured span while the user is typing the comment, the stored positions are not mapped through the remote transaction, so the annotation lands on shifted text. A `Mapping`/`tr.mapping.map` in the `transaction` handler (or storing a `TextSelection` bookmark) fixes it.
+Confidence: medium (read; the y-sync rebuild path is exactly the #1669 class, not executed here).
+
+### Low — Active-annotation pulse class is lost when the decoration set is rebuilt
+src/client/editor/Editor.svelte:287-303 ; src/client/editor/editor.css:305-315
+[read: src/client/editor/Editor.svelte:280-310]
+The `$effect` adds `.tandem-annotation-active` to the `[data-annotation-id]` spans imperatively and only re-runs when the active id changes; a #1669-style y-sync rebuild replaces the decoration DOM, so the highlighted span silently loses its pulse until the user picks another annotation. Cosmetic.
+Confidence: medium.
+
+### Low — macOS Option+[ / Option+] produce “ ” on US layout and are claimed for annotation navigation
+src/client/hooks/useAppShortcuts.ts (Alt+BracketLeft/BracketRight branches)
+[inferred]
+Matching by `e.code` means the typographic quote keys on macOS US (Option+[ = “, Option+] = ‘) and the `[`/`]` on many European layouts (AltGr+8/9 on de) are intercepted. Documented as a deliberate choice; recorded so the trade-off is explicit in the review.
+Confidence: medium.
+
+### Low — Slash menu runs DOM `querySelector`s on every transaction
+src/client/editor/slash-menu/extension.ts (isSlashMenuSuppressed)
+[read: src/client/editor/slash-menu/extension.ts:60-110]
+`isSlashMenuSuppressed` queries the document for open popups on each PM transaction including cursor moves; harmless today, but it is a hot-path DOM read inside `appendTransaction`/`view.update`. Perf nit.
+Confidence: high that it runs; low impact.
+
+## Unchecked leads
+- Browser build: Ctrl+W / Ctrl+N / Ctrl+T are browser-reserved in Chrome/Firefox (cannot be `preventDefault`ed), so `close-tab`, `new-scratchpad`, `reopen-closed-tab` are desktop-only in effect. A grep for those chords in HelpModal returned nothing, so whether the help text over-promises them in the browser build is unconfirmed.
+- Whether `tandem_getActivity`'s consumers in skills/tandem/SKILL.md ever subtract structure (they don't in the text I read) — the fix is on the writer side regardless.
+- Undo: 10 s Yjs UndoManager capture window and `trackedOrigins` were not exercised in the harness (no time to build a two-origin scenario); reading suggests remote `ySyncPluginKey` changes are excluded correctly.
+- Paste handler URL-over-selection path was read and looks fine; large HTML paste sanitisation (script/style stripping) was not exercised.
+
+## Doc drift
+- docs/mcp-tools.md:907-925, :951 — `activity.cursor` is shown alongside flat-offset fields with no coordinate-system note; with the bug above fixed the doc is right, until then it is wrong.
+- docs/architecture.md coordinate-systems section never states that flat offsets are UTF-16 code units (emoji/astral = 2). Both client and server agree (verified across 24 shapes in d-flat.test.ts) so no bug, but an MCP client counting code points will be off.
+- Nested headings (heading inside a list item) carry NO `#` prefix in flat text on both sides — consistent, but `tandem_getTextContent` cannot show them as headings; worth one sentence in docs/mcp-tools.md.
+- useAppShortcuts.ts header comment claims `e.code` gives layout independence; it gives key-position independence at the cost of the AltGr collision above.
+
+## Verified fine
+- PM↔flat mapping (src/client/positions.ts vs src/server/mcp/document-model.ts extractText) agrees byte-for-byte on all 24 corpus shapes: emoji/ZWJ, block image, image in list, hr first/in list, nested lists, blockquote>list>code, tables incl. empty cells, empty paragraphs, heading in list, task list, ordered start, code block with blank line, hard break in list item, links/inline code, CRLF soft wrap, footnotes, frontmatter, html block; mapping is monotonic; per-char round trip and `resolveToTextblock` agree. [ran: d-flat.test.ts]
+- Flat offsets that sit exactly on a container separator resolve `from` one char late — that is the documented assoc-directed retry in shared/positions/ydoc.ts:389-419 and `anchoredRange` mints ranges accordingly; not a bug.
+- Editor.svelte creation `$effect` is not re-triggered by inline arrow props; coalescing tick used in FormattingToolbar and FindReplaceBar; heading-collapse rAF cleanup; table align commands; listener/timer cleanup in annotation, ping, awareness, slash, scroll-pill, Toolbar and yjsSync extensions; review hook timers cleared on destroy; find-replace `replaceAll` after destroy is caught; PlaintextBreaks code-block exemption; ListItemCheckbox Enter fallthrough; hooks' `$effect`/getter patterns; hardBreak embeds normalised by hardbreak-normalize.ts at all three producers (docx-html, mdast-ydoc, list-edit).
+- Awareness selection writes on remote sync are harmless (collapsed writes only clear the server buffer).
+
+## Playwright candidates
+- Find "bravo" in a paragraph containing `Shift+Enter` then Replace → assert the `<br>` survives and only "bravo" changed.
+- In a fenced code block type `cd /t` then Enter → assert the block is still `pre > code` and text is `cd /t\n`.
+- With a pending Claude comment and the caret in the editor press Ctrl+Enter → assert no `<br>` inserted (or no accept), whichever policy is chosen.
+- Move the caret to the last paragraph, wait for `isTyping`, read `/api` activity → assert `cursor` equals the flat `selection.from`.
+- Set keyboard layout to pl-PL, type `ś` in the editor → assert the letter appears and no save toast.
+
+## Addendum (post-verification, 2 non-write calls spent; 4 unused)
+
+### Low — Ctrl+N / Ctrl+W / Ctrl+T are documented unconditionally, but the browser build cannot claim them
+docs/user-guide.md:406-409 ; README.md:104 ; src/client/components/OnboardingTutorial.svelte:42 ; src/client/hooks/useAppShortcuts.ts (no tauri/isDesktop gate on KeyN/KeyW/KeyT)
+[read: docs/user-guide.md:400-412]
+Chromium and Firefox treat Ctrl+N (new window), Ctrl+W (close tab) and Ctrl+T (new tab) as browser-reserved — the page's `preventDefault()` is ignored — yet the shortcut table, the README and the first-run tutorial ("Open a tab or scratchpad with Ctrl+N") present them with no desktop-only caveat, and no doc or help surface mentions the browser limitation (grep for "reserved"/"intercept" across user-guide, troubleshooting, HelpModal, OnboardingTutorial returned nothing). In the npm-global browser install, Ctrl+W closes the Tandem tab itself (losing an unsaved scratchpad) and Ctrl+N opens a blank browser window instead of a scratchpad; the tutorial then tells a brand-new user to press the one key that does the wrong thing. Mitigation exists (ShortcutEditorList lets users remap) but nothing points them at it.
+Confidence: high on the doc/code state; the browser behaviour is the platform contract, not run here. Promotes the "Unchecked lead" above; keep the lead entry as resolved.
+
+## Coverage vs manifest (/tmp/.../scratchpad/manifests/client-editor.md — 96 files, 127 commands)
+Covered in depth (read + harness): src/client/positions.ts, src/shared/positions/ydoc.ts, src/shared/offsets.ts, src/server/positions.ts, src/server/mcp/document-model.ts, src/client/editor/extensions/{annotation,annotationPing,authorship,awareness,find-replace,heading-collapse,list-item-checkbox,plaintext-breaks}.ts, slash-menu/{extension,commands}.ts, toolbar/{Toolbar,FormattingToolbar}.svelte, find-replace/FindReplaceBar.svelte, Editor.svelte, editor.css, editor-extensions.ts, editor-props.ts, utils/url-safety.ts, scroll-pill*.ts, hooks/{useAppShortcuts,useTabKeyboardShortcuts,useTandemSettings}.ts, hooks/yjsSync.svelte.ts, panels/useAnnotationReview.svelte.ts, utils/coalescing-tick.ts, server/file-io/hardbreak-normalize.ts (+ its three callers), y-prosemirror sync-plugin.js internals, tests/client/{flat-offset-correspondence,flat-projection-equivalence}.test.ts and the roundtrip harness.
+Read only lightly / not covered: context-menu/** (opened the directory, did not audit each item's enable/disable predicate), SourceView.svelte (skimmed), the remaining ~55 hooks under src/client/hooks/** beyond the four named (listed in the manifest as the directory, not file-by-file — a sweep for `$state`-from-Tiptap-handler patterns was done by grep, not by reading each file), tables extension keymaps, image upload/paste path, undo/redo window (see Unchecked leads), review-mode Tab/Y/N/Z keys (read useAnnotationReview.svelte.ts timers/cleanup only, did not trace each key end-to-end), IME inside the editor itself (Tiptap handles it; only the sibling inputs were checked).
+
+STATUS: complete
