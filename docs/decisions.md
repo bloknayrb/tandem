@@ -1907,7 +1907,7 @@ three times (#1229), which is why the acceptance harness's step carries no `if:`
 no `continue-on-error` and no `|| true`, and why `check` fails when any of that
 changes.
 
-**Decision.** The pattern, now used four times, is: **the job does the work; a
+**Decision.** The pattern, now used seven times, is: **the job does the work; a
 wiring test inside `check` pins the job's shape and the inputs it reads.** The
 work stays where it is cheap. The disarming becomes expensive, because disarming
 it means editing something a required check reads.
@@ -1920,6 +1920,26 @@ Instances:
 | `windows-acl-proof` | `tests/scripts/windows-acl-proof-wiring.test.ts` |
 | `coverage` baseline manifest | `tests/scripts/coverage-manifest-wiring.test.ts` |
 | `coverage` per-module floors | `tests/scripts/coverage-gate-wiring.test.ts` |
+| Every workflow's actions are SHA-pinned | `tests/scripts/workflow-action-pin.test.ts` |
+| `tauri-release.yml`'s signing gates | `tests/scripts/release-signing-gates.test.ts` |
+| `node-sidecar-pin` | `tests/scripts/node-sidecar-pin-wiring.test.ts` |
+
+The last three (#1745–#1747) stretch the pattern in a direction worth naming,
+because two of them pin something that is not a *job*. `tauri-release.yml` and
+`dependabot.yml` run on a `v*` tag and on Dependabot's own schedule; neither is
+reachable from any required check, and neither has ever been read by anything
+in `tests/`. So the gap they close is not "an advisory job could be disarmed"
+but the stronger "nothing required has ever looked at this file at all" — the
+same argument one step further out. `node-sidecar-pin` is the ordinary case: an
+advisory job, pinned from inside `check`.
+
+**And state what a wiring test cannot buy.** `node-sidecar-pin-wiring.test.ts`
+pins the job's *shape*, never the pin's *currency*: nothing inside `check` can
+tell you the bundled Node is current, because that is a fact about the outside
+world. Only the advisory job can, and a red advisory job blocks nobody. What the
+wiring test adds is that the version cannot silently go *backwards* — which is
+why it pins the constant by exact literal rather than by shape. A wiring test
+makes disarming expensive; it does not make an advisory job blocking.
 
 **What a wiring test must do, from what has actually defeated one:**
 

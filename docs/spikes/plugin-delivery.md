@@ -176,7 +176,7 @@ track of.
 Two independent reports, both confirming the bare-command failure mode:
 
 - **macOS.** `tandem-channel` was invoking a bare `node` that did not resolve; the shim
-  never started. Fixed on that machine by pointing at Tandem's bundled Node (v22.17.0) by
+  never started. Fixed on that machine by pointing at Tandem's bundled Node (v22.23.2 since #1747; v22.17.0 at the time of the report) by
   absolute path. Also on that machine: `claude` itself lives in `~/.local/bin` and is not
   on PATH.
 - **macOS, same user.** The installed plugin's monitor fails on **every** session:
