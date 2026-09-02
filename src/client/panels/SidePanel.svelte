@@ -540,6 +540,11 @@ $effect(() => {
   // Prune against the FILTERED visible list, not the raw annotations list:
   // if FilterBar hides imports, the BatchPromoteBar must clear too, otherwise
   // the user sees "N selected / Send N to Claude" with no visible cards.
+  // Raw `author`, not `getDisplayAuthor` (#1714), and this pair is deliberate:
+  // this asks "may this record still be promoted", which is a STORAGE question.
+  // `promotedAnnotation` rewrites the author AND retypes `note -> comment` in
+  // one write, so an already-promoted record fails the `type` half regardless
+  // of which author accessor is used here.
   const validIds = new Set(
     filteredData.pending.filter((a) => a.author === "import" && a.type === "note").map((a) => a.id),
   );

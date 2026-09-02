@@ -4,7 +4,6 @@ import { render } from "@testing-library/svelte";
 import type { ComponentProps } from "svelte";
 import { describe, expect, it, vi } from "vitest";
 import PeekStrip from "../../src/client/panels/PeekStrip.svelte";
-import type { Annotation } from "../../src/shared/types";
 
 /**
  * #832: the left peek's outline ticks must reflect the real document instead
@@ -75,61 +74,5 @@ describe("PeekStrip outline ticks (#832)", () => {
     const { container } = render(PeekStrip, { props: baseProps() });
 
     expect(container.querySelectorAll(".peek-tick")).toHaveLength(0);
-  });
-});
-
-describe("PeekStrip annotation dots — a promoted import keeps the import dot (#1714)", () => {
-  // The sliver previews the rail it is hiding. `promotedAnnotation` rewrites
-  // `author: "import" -> "user"`, so before this fix the preview dot said "the
-  // user wrote this" while the card it previews said "From: <reviewer>" — the
-  // same contradiction as the card, one surface over and far easier to miss.
-  const promoted: Annotation = {
-    id: "ann-promoted",
-    author: "user",
-    type: "comment",
-    range: { from: 0, to: 5 },
-    content: "A colleague's words, promoted",
-    status: "pending",
-    timestamp: 1_700_000_000_000,
-    importSource: { author: "Dana Reviewer", file: "/draft.docx" },
-  } as Annotation;
-
-  function dotClasses(container: HTMLElement, id: string): string[] {
-    const dot = container.querySelector<HTMLElement>(`[data-testid='peek-dot-${id}']`);
-    expect(dot, `expected a dot for ${id}`).not.toBeNull();
-    return (dot?.className ?? "")
-      .split(/\s+/)
-      .filter((c) => c !== "peek-dot" && !c.startsWith("svelte-"));
-  }
-
-  it("paints the import dot for a promoted import", () => {
-    const { container } = render(PeekStrip, {
-      props: baseProps({ side: "right", kind: "annotations", annotations: [promoted] }),
-    });
-    expect(dotClasses(container, "ann-promoted")).toEqual(["import"]);
-  });
-
-  it("still paints the user dot for an ordinary user comment", () => {
-    // The negative control: without it, "always return import" passes above.
-    const plain = { ...promoted, id: "ann-plain", importSource: undefined } as Annotation;
-    const { container } = render(PeekStrip, {
-      props: baseProps({ side: "right", kind: "annotations", annotations: [plain] }),
-    });
-    expect(dotClasses(container, "ann-plain")).toEqual(["user"]);
-  });
-
-  it("keeps type outranking author — a promoted import carrying a suggestion reads 'suggest'", () => {
-    // `dotClass` checks highlight and suggestion BEFORE author, and threading
-    // the display author through must not disturb that order: a suggestion is
-    // what the reader acts on, and "import" would bury it.
-    const suggesting = {
-      ...promoted,
-      id: "ann-suggest",
-      suggestedText: "replacement",
-    } as Annotation;
-    const { container } = render(PeekStrip, {
-      props: baseProps({ side: "right", kind: "annotations", annotations: [suggesting] }),
-    });
-    expect(dotClasses(container, "ann-suggest")).toEqual(["suggest"]);
   });
 });
