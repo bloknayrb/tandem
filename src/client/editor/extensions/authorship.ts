@@ -1048,6 +1048,44 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
               };
             }
 
+            // #1669, the same defect as `annotation.ts` and with NO recovery path
+            // here at all: the `docChanged` branch BELOW only ever `.map()`s,
+            // and mapping is what loses the marks. The mechanism is in
+            // docs/gotchas.md, "A remote sync REPLACES the doc" — deliberately
+            // not re-derived here, because the two in-code copies had already
+            // drifted apart once.
+            //
+            // Most MCP content writes also stamp `Y_MAP_AUTHORSHIP`, so this
+            // plugin's own Y.Map observer rebuilds the overlay a moment later
+            // and the wipe reads as a flicker rather than a loss. **That is not
+            // true of all of them, today.** `stampClaudeRange` returns early on
+            // an empty insertion (`mcp/document.ts`), so a DELETE-ONLY
+            // `tandem_edit` is a content write with no stamp; `applyChanges` and
+            // the watcher/restore reload paths call no stamper at all. Those go
+            // dark permanently without this branch — so this is a live gap being
+            // closed, not a future-proofing measure.
+            //
+            // Gated on `visible` for the same reason the branch below is: with
+            // the overlay off there is nothing to draw, and the toggle defaults
+            // to OFF, so the common case pays nothing. `buildAuthorshipDecorations`
+            // ALSO short-circuits on `!visible`, so the guard is not what makes
+            // the result empty — it is what stops the call happening at all. A
+            // spec asserting the empty result therefore cannot see this guard
+            // disappear; the one that can asserts the plugin state object comes
+            // back by IDENTITY, which only the fall-through return produces.
+            if (tr.getMeta(ySyncPluginKey) && pluginState.visible) {
+              return {
+                visible: pluginState.visible,
+                decorations: buildAuthorshipDecorations(
+                  newState.doc,
+                  authorshipMap,
+                  ydoc,
+                  pluginState.visible,
+                ),
+                capture,
+              };
+            }
+
             if (tr.docChanged && pluginState.visible) {
               return {
                 visible: pluginState.visible,
