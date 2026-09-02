@@ -1,0 +1,222 @@
+STATUS: partial
+
+# Skill & plugin review — findings (master 3fb6408, v0.24.1, skill version 12)
+
+Scope reviewed: skills/tandem/SKILL.md, .claude-plugin/{plugin,marketplace}.json, src/monitor/**,
+sample/welcome.md, src/server/mcp/tutorial-annotations.ts (the brief's `src/server/file-io/tutorial.ts`
+does not exist), tests/skill-instruction-contract.test.ts, tests/plugin-manifest.test.ts,
+tests/plugin/plugin-version-pin.test.ts, docs/workflows.md, MCP tool descriptions in src/server/mcp/**,
+plus the per-tag history of SKILL.md fetched from GitHub (git log --follow unusable on this shallow clone).
+
+## Findings — high confidence
+
+H1. High — `.docx` review recipe `tandem_getAnnotations({ author: "import" })` can never return anything
+  skills/tandem/SKILL.md:110 (also docs/workflows.md:311-316)
+  [read: src/server/file-io/docx-comments.ts:496-504,636,742,766; src/server/mcp/annotations.ts getAnnotations handler]
+  Imported Word comments land as `type:"note"`, `audience:"private"`, `author:"import"`, and the
+  `tandem_getAnnotations` handler applies `results.filter(a => a.type !== "note")` after the author filter,
+  so the skill's recipe returns an empty list every time; once the user promotes a comment its author is
+  rewritten to `"user"` and its type to `"comment"`, so `author:"import"` matches nothing post-promotion either.
+  A Claude following the skill literally reports "no reviewer comments in this .docx" for a document full of
+  them, and the same dead recipe is reproduced in workflows.md. Not in the open-issue list (#1714/#1693 are
+  adjacent but describe different gaps). Confidence: high.
+
+H2. High — Accepting a `suggestedText` annotation via `tandem_resolveAnnotation` never applies the text
+  src/server/mcp/annotations.ts (tandem_resolveAnnotation handler → store.acceptAnnotation); src/client/panels/useAnnotationReview.svelte.ts:509-545
+  [read: useAnnotationReview.svelte.ts:505-545; src/server/annotations/lifecycle.ts accept path; grep applySuggestion src/server → no hits]
+  `applySuggestion` is invoked only inside the client-side `resolveAnnotation` handler; the server lifecycle
+  `accept` flips `status` only and no server observer reacts to it, so an MCP accept leaves the document text
+  untouched. The tool description ("Accept or dismiss an annotation") and SKILL.md never say this, so a
+  Claude that "applies" its own suggestions by accepting them (which the inbox then reports as a user response
+  — already reported by another reviewer) ends with an unchanged `.md` and a resolved annotation. No matching
+  open issue (search returned #694, #1680 — unrelated). Confidence: high.
+
+H3. Medium — Skill content changed without a version bump; upgraders on v0.18–v0.20.1 never received it
+  skills/tandem/SKILL.md frontmatter; src/server/integrations/apply.ts:~2091-2141 (`refreshSkillIfNewer`)
+  [ran: curl raw.githubusercontent.com/bloknayrb/tandem/<tag>/skills/tandem/SKILL.md for every tag v0.16.0–v0.24.1 + md5sum]
+  v0.18.0 and v0.19.0 shipped `version: 4` (md5 55d1e8ea); commits 1c9a9306a/6261ea460/3c92732d7 (2026-07-28)
+  rewrote the alreadyPushed/"check whether you already did" guidance but stayed at `version: 4`, so v0.20.0 and
+  v0.20.1 shipped a different v4 (md5 68fa0ce0) that `refreshSkillIfNewer` skipped on disk (`onDisk >= bundled`).
+  Anyone who upgraded within v0.18→v0.20.1 ran the stale skill until v0.21.0 (v9) — historical now, but the
+  gate is unguarded: `tests/skill-instruction-contract.test.ts` pins `version: 12` only, so the same slip
+  recurs on the next content-only edit. Per-tag table: v0.16.0 v3/901ffa84; v0.17.0 v3/901ffa84;
+  v0.18.0 v4/55d1e8ea; v0.19.0 v4/55d1e8ea; v0.20.0 v4/68fa0ce0; v0.20.1 v4/68fa0ce0; v0.21.0 v9/46d35ce1;
+  v0.22.0–v0.23.0 v11/73b09759; v0.24.0–v0.24.1 v12/9a200caf. Per-commit: 7 pre-2026-05-21 commits unversioned;
+  0c8978a8d v2; 4cf2544aa v3; c47aed758 v4; 1c9a9306a/6261ea460/3c92732d7 v4 (no bump); ac517f0a7 v5;
+  4ad567c5f v6; d3e8cba6f v6 (no bump, same-day pre-release, harmless); e3f120d23 v7; 33b3fb56f v8;
+  e71b75feb v9; 1818f2595 v10; fcade54a4 v11; 73d9041e3 v12. Confidence: high (measured).
+
+H4. Medium — Marketplace plugin ships the channel shim unconditionally, silencing the wake advisory
+  .claude-plugin/plugin.json (`mcpServers.tandem-channel`); pinned by tests/plugin-manifest.test.ts:42-56
+  [read: .claude-plugin/plugin.json; src/server/mcp/wake-advisory.ts:80-101; docs/architecture.md:566-577; src/channel/run.ts:207]
+  `tandem setup --apply` makes the shim opt-in (`--with-channel-shim`) precisely because a shim whose host never
+  negotiated channels is "attached-and-inert" and holds the external-subscriber slot, which is the condition
+  under which the wake advisory (fires only when `externalConsumerCount === 0`) goes quiet. The plugin manifest
+  spawns `tandem-editor@0.24.1 channel` for every plugin session regardless of the
+  `--dangerously-load-development-channels` flag, so plugin users get the inert-shim hazard by default and the
+  test locks it in. Closed #985 is related; whether this is a deliberate trade-off is unverified. Confidence: medium.
+
+H5. Medium (extends #1737) — Hard Rule 4 steers away from the tools that do handle structure and is stale for plaintext
+  skills/tandem/SKILL.md:25
+  [read: SKILL.md:22-26; src/server/mcp/document.ts tandem_appendContent/tandem_editList/tandem_edit descriptions; #1460 changelog]
+  The rule says newlines "become literal characters" and prescribes multiple `tandem_edit` calls or
+  `suggestedText`, but never names `tandem_appendContent` or `tandem_editList`, and since #1460 (v0.23.0,
+  2026-08-18 — before skill v12 on 08-19) a plaintext newline is REFUSED with INVALID_ARGUMENT rather than
+  inserted literally. Delta over #1737: the skill text is now wrong in both directions (false mechanism for
+  .txt, missing the escape hatch for .md). Confidence: high.
+
+## Findings — remaining
+
+R1. Medium — SKILL.md never names `tandem_annotationReply`
+  skills/tandem/SKILL.md:~60
+  [read: SKILL.md:51-64; src/server/mcp/annotations.ts tandem_annotationReply registration]
+  The Annotation Guide tells Claude to answer a user's comment via chat or a second comment; the reply tool,
+  which keeps the thread on the annotation and is the surface the user's UI shows, is absent from the skill.
+  Threads therefore fork into chat and the user's comment shows no reply. Confidence: high.
+
+R2. Medium [inferred] — Sub-agents polling `tandem_checkInbox` consume the orchestrator's inbox
+  docs/workflows.md:235-261 (multi-model pattern) + skills/tandem/SKILL.md workflow "poll every 2-3 tool calls"; src/server/mcp/awareness.ts (`surfacedIds`, chat marked read on collection)
+  [inferred]
+  The inbox ledger (`surfacedIds`) and chat `read` flag are process-global, not per-session, so any sub-agent
+  that loads the skill and polls between tool calls drains user messages before the orchestrator polls.
+  The user's chat appears answered-to-nobody. No open issue found. Confidence: medium.
+
+R3. Medium — No rule against `Edit`/`Write` on a file already open in Tandem
+  skills/tandem/SKILL.md (Hard Rules 22-26, Error Recovery 166-171)
+  [read: SKILL.md; src/server/mcp/document.ts tandem_save EXTERNAL_CONFLICT; file-watcher keep-vs-reload path]
+  Claude Code's own Edit/Write tools are the path of least resistance and nothing in the skill says the open
+  document must be mutated via `tandem_edit`; a direct file write hits the watcher, raises the keep-vs-reload
+  banner or later an EXTERNAL_CONFLICT on `tandem_save`, and the skill's Error Recovery has no entry for it.
+  Confidence: high on the gap, medium on frequency.
+
+R4. Low — Hard Rule 2 omits the `textSnapshotTruncated` caveat (#1486)
+  skills/tandem/SKILL.md:23
+  [read: SKILL.md:23; src/server/mcp/output-schemas.ts:~220]
+  "Quote the textSnapshot" is unconditional; a truncated snapshot quoted verbatim looks like a mangled
+  edit to the user. Delta over #1486: the skill, not just the tool, should say so. Confidence: high.
+
+R5. Low — Error Recovery table is narrow and stale
+  skills/tandem/SKILL.md:166-171
+  [read: SKILL.md:166-171; src/server/mcp/document.ts error codes]
+  INVALID_RANGE is described only as "stale offsets" though it also means heading-prefix overlap (Critical
+  Rule 6); EMPTY_DOCUMENT, EXTERNAL_CONFLICT, INVALID_ARGUMENT (plaintext newline), ANNOTATION_NOT_PENDING and
+  the `.docx` read-only refusal are not listed, so a Claude hitting them has no scripted recovery. Confidence: high.
+
+R6. Low — "Reacting to Events" names a `selection` field; the payload field is `anchor`
+  skills/tandem/SKILL.md:75
+  [read: src/server/mcp/output-schemas.ts:220-223]
+  Chat messages carry `anchor: {from, to, textSnapshot}`, not `selection`; a Claude looking for
+  `selection` finds nothing and misses the user's quoted range. Confidence: high.
+
+R7. Low — `.docx` workflow omits `heldFromExport`
+  skills/tandem/SKILL.md:107-121
+  [read: SKILL.md:107-121; src/server/mcp/docx-apply.ts result shape]
+  `tandem_applyChanges` reports held-back annotations via `heldFromExport`; the skill never tells Claude to
+  read it, so held comments are silently dropped from the round-trip narrative. Confidence: medium.
+
+R8. Low — Tool descriptions: read-only refusals still say "(.docx)"
+  src/server/mcp/document.ts:580, :956
+  [read: document.ts:580,956]
+  "Document is read-only (.docx). Use annotations instead." and "(.docx) — cannot append content." fire for
+  every read-only open (CHANGELOG on upgrade, View Changelog, `upload://`), so Claude tells the user the
+  Markdown file is a `.docx`. Confidence: high.
+
+R9. Low — `tandem_search` `query` says "supports regex" while `regex` defaults to false
+  src/server/mcp/navigation.ts (tandem_search input schema)
+  [read: navigation.ts tandem_search schema]
+  A Claude reading the `query` description passes a pattern without `regex: true` and gets a literal-string
+  miss. Confidence: high.
+
+R10. Low — `tandem_edit` `newText` says "(single paragraph — no newlines)" while the tool description
+  describes literal newlines and plaintext refuses them
+  src/server/mcp/document.ts (tandem_edit schema + description)
+  [read: document.ts tandem_edit]
+  Three statements about newlines disagree across schema, description and SKILL.md:25. Confidence: high.
+
+## Unchecked leads
+
+U1. Plugin marketplace install + `tandem setup --apply` on the same machine: does the user get two `tandem`
+  MCP servers (plugin `mcpServers.tandem` + user-level http entry from apply.ts:469) and double monitors?
+  Namespacing is host-side; not verifiable read-only. [inferred]
+U2. Whether H4's unconditional `tandem-channel` is a deliberate decision — no ADR/issue found in the calls spent.
+U3. Marketplace-install activation on macOS/Linux is unmeasured (docs/spikes/plugin-monitor-tty-activation.md admits it).
+U4. `scripts/spikes/run_acceptance_tests.py` and the acceptance harness were NOT read; `docs/spikes/plugin-delivery.md` only grepped.
+U5. The Claude Code `Monitor` tool schema (`{ ws: { url }, persistent: true }`) is host-side; only the spikes
+  are evidence that the wake section's call shape is right.
+
+## Doc drift
+
+D1. docs/workflows.md:336 — tutorial "highlight on the welcome heading"; the injected `tutorial-highlight-1`
+  targets body text at sample/welcome.md:3, not the H1. [read: src/server/mcp/tutorial-annotations.ts; welcome.md:1-9]
+D2. docs/workflows.md:~484 — E2E section still says `freePort` clears 3478/3479; stale since #1492 (reserved harness pairs). [read: workflows.md:~484; scripts/test-ports.ts]
+D3. docs/workflows.md:108-126 — example issues two `tandem_comment` calls for one range and says "Red highlight"; highlights are user-only and the palette is token-named. [read: workflows.md:108-126]
+D4. sample/welcome.md:28 — Solo "won't see ... edits": document text is never held (already-reported toggle finding, different surface). [read: welcome.md:28; src/server/events/shouldForwardExternally]
+D5. sample/welcome.md:13 "five kinds" of annotation vs docs/user-guide.md "three types". [read: welcome.md:13; user-guide.md]
+D6. docs/workflows.md:311-316 duplicates the dead `author:"import"` recipe (see H1).
+
+## Verified fine
+
+- Every tool and parameter named in SKILL.md exists in src/server/mcp/** with matching names/shapes
+  (33 registrations counted, 30 active + 3 deprecated stubs; tandem_highlight/suggest/flag return DEPRECATED).
+- Getting Woken section: `tandem_status` returns `wakeUrl` via `getWakeEndpoint()`; `GET /api/events?filter=wake`
+  is strict; wake frames are payload-free `{id,type,timestamp}` (src/shared/events/wake-scope.ts); advisory is
+  Solo-gated and `externalConsumerCount === 0`-gated; `Monitor`/`TaskStop` names match host tools; "where Claude
+  Code offers a Monitor tool" wording present; channel shim named as fallback.
+- SERVER_INSTRUCTIONS (server.ts:231-238) consistent with skill; supervisor bootstrap AND wake turns carry
+  SUPERVISOR_NO_ARM_CLAUSE (contract.ts:268-310); stdio bridge "not running" wording matches (mcp-stdio.ts:1245).
+- Plugin manifest: version pin 0.24.1 on every `npx -y tandem-editor@` (tests/plugin/plugin-version-pin.test.ts);
+  marketplace `tandem@tandem-editor` identity (marketplace.json name `tandem-editor`, plugin `tandem`, source
+  github bloknayrb/tandem); both monitor triggers `on-skill-invoke:tandem:tandem` and `on-skill-invoke:tandem`
+  present with distinct names (dedupe key pluginName:monitorName); no env on monitors; `mcp-stdio`/`channel`/
+  `monitor` subcommands exist in src/cli/index.ts; repo root has only `skills/` as plugin dir.
+- Monitor (src/monitor/run.ts): wake line is payload-free (`Tandem: <type> — call tandem_checkInbox`), gated by
+  `isWakeWorthy`; exhaustion notice only after `everConnected`; `getCachedMode` fails closed to "solo".
+- Tutorial: all four `TUTORIAL_ANNOTATIONS` targets (`tutorial-highlight-1/-comment-1/-suggest-1/-note-1`) exist in
+  sample/welcome.md (lines 3, 9, 50, 32); offsets computed at inject time via indexOf + anchoredRange;
+  idempotent on `map.has(id)`; injected only when path ends `sample/welcome.md` (open.ts:456-459); client gate
+  `getActiveTabFileName() === "welcome.md"` + `TUTORIAL_COMPLETED_KEY` try/catch; shortcuts in welcome.md and
+  the tutorial card match keybinding defaults (Ctrl+Alt+M comment-on-selection etc.).
+- Palette label "Relaunch Claude in this folder", Annotate toolbar button, settings labels referenced by the
+  skill/user-guide exist; troubleshooting.md anchor cited by SKILL.md exists.
+- tests/skill-instruction-contract.test.ts, tests/plugin-manifest.test.ts, tests/plugin/plugin-version-pin.test.ts:
+  `npx vitest run` → 3 files, 25 tests passed.
+
+## Addendum (after 2 further non-write calls: manifest read + ADR check)
+
+CORRECTION to H4 — downgrade to Low, and move U2 to resolved.
+  .claude-plugin/plugin.json `mcpServers.tandem-channel`; docs/decisions.md:378-400
+  [read: docs/decisions.md:376-400]
+  The entry is a recorded, permanent KEEP (ADR update 2026-08-08, closed 2026-08-09 via #1349), so it is
+  deliberate, not an oversight. What the ADR reasons about is the `exit 127` noise and whether the host spawns
+  the entry; it does not address the inert-consumer interaction that architecture.md:566-577 uses to make the
+  SAME entry opt-in for `setup --apply`. The remaining delta is narrow: in a plugin session the manifest monitor
+  is itself an external consumer, so the wake advisory is already (legitimately) silent whenever the monitor is
+  active; the shim only matters when the monitor fails to activate (`-p` mode, or the unmeasured macOS/Linux
+  path), where it alone holds the external-subscriber slot and hides the advisory from a Claude that has no
+  other push path. Worth one sentence in architecture.md §"Why tandem-channel Is Opt-In" saying the plugin
+  manifest is the exception and why. Confidence: high that it is deliberate; medium that the residual case matters.
+
+## Coverage vs manifest (scratchpad/manifests/skill-plugin.md)
+
+Covered (read in full or in relevant regions): skills/tandem/SKILL.md (full, current + 22 historical revisions
+by sha and 12 tags); .claude-plugin/plugin.json + marketplace.json (full); src/monitor/index.ts + run.ts (full);
+sample/welcome.md (full); src/server/mcp/tutorial-annotations.ts (full) + injection site open.ts:440-465;
+OnboardingTutorial.svelte + useTutorial.svelte.ts (full); tests/skill-instruction-contract.test.ts,
+tests/plugin-manifest.test.ts, tests/plugin/plugin-version-pin.test.ts (full + executed); docs/workflows.md
+(full); docs/mcp-tools.md (full); docs/user-guide.md (full); docs/spikes/plugin-monitor-tty-activation.md (full);
+ADR-027/-038/-047/-049 + the plugin-entry KEEP update; src/server/mcp/annotations.ts:220-900,
+awareness.ts:230-520, document.ts:190-262 + 380-1340, navigation.ts:115-200, docx-apply.ts:430-540,
+output-schemas.ts, server.ts SERVER_INSTRUCTIONS, wake-advisory.ts, events/sse.ts:1-60, channel/run.ts
+startEventBridge, shared/events/wake-scope.ts, shared/launcher/contract.ts:255-330, cli/index.ts (full),
+cli/skill-content.ts, cli/mcp-stdio.ts "not running" site, integrations/apply.ts (grep + skill/refresh region),
+client keybindings/palette/toolbar labels, useAnnotationReview.svelte.ts:505-600, README plugin sections,
+troubleshooting.md anchors.
+
+NOT covered / partial: `scripts/spikes/run_acceptance_tests.py` and the acceptance harness (not opened);
+`docs/spikes/plugin-delivery.md` (grep only); `src/server/mcp/diagnostics.ts` and `convert.ts` descriptions
+(registration grep only, not read line by line); `docx-apply.ts` outside 430-540; any `tests/monitor/**` or
+channel tests (not opened); `src/server/file-io/tutorial.ts` does not exist (manifest lists it because the
+brief named it — `tutorial-annotations.ts` is the real file); Monitor host tool schema (host-side, unverifiable).
+No dev server started, no E2E run, ports 3478/3479 untouched, nothing written under HOME, repo unmodified.
+
+STATUS: complete

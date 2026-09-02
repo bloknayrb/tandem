@@ -1,0 +1,196 @@
+STATUS: partial
+
+## Inventory 1: Conditional Test Gates
+
+| file:line | construct | gate expression (max 80 chars) |
+|---|---|---|
+| tests/build/linux-runtime-deps.test.ts:107 | it.runIf | !isEnabled |
+| tests/build/linux-runtime-deps.test.ts:95 | it.runIf | isEnabled |
+| tests/build/linux-runtime-deps.test.ts:99 | it.runIf | isEnabled |
+| tests/build/version-baked.test.ts:21 | describe.skipIf | !existsSync(bundlePath |
+| tests/cli/doctor-path-safety.test.ts:371 | it.runIf | process.platform === "win32" |
+| tests/cli/doctor-path-safety.test.ts:628 | it.runIf | process.platform !== "win32" |
+| tests/cli/doctor-path-safety.test.ts:809 | it.runIf | process.platform !== "win32" |
+| tests/cli/setup.test.ts:694 | it.skipIf | process.platform !== "win32" |
+| tests/cli/setup.test.ts:720 | describe.skipIf | process.platform !== "win32" |
+| tests/e2e/agent-identity.spec.ts:44 | test.skip | !BYO_MODELS_ENABLED, "Agent-identity UI gated off until BYO_MODELS_ENABLED (#112 |
+| tests/e2e/keyboard-a11y.spec.ts:271 | test.skip | true, "tabbed rail layout is not active; there is no switcher to assert on" |
+| tests/e2e/settings-modal.spec.ts:153 | test.skip | // Ctrl held does not). Left as `test.skip` rather than deleted so the history |
+| tests/e2e/settings-modal.spec.ts:155 | test.skip | "Ctrl+, opens the SettingsModal (manual path |
+| tests/e2e/settings-models.spec.ts:100 | test.skip | !BYO_MODELS_ENABLED, "Models UI gated off until BYO_MODELS_ENABLED (#1018/#1022 |
+| tests/scripts/acceptance-harness-wiring.test.ts:378 | test.skip | "disabled" |
+| tests/scripts/acceptance-harness-wiring.test.ts:391 | test.skip | "disabled" |
+| tests/scripts/acceptance-harness-wiring.test.ts:464 | test.skip | "one" |
+| tests/scripts/acceptance-harness-wiring.test.ts:468 | test.skip | "two" |
+| tests/scripts/acceptance-harness-wiring.test.ts:472 | test.skip | "three" |
+| tests/scripts/windows-acl-proof-wiring.test.ts:290 | it.skipIf | // A `it.skipIf` sneaked onto one case inside the Windows describe would |
+| tests/server/annotations/doc-hash.test.ts:28 | it.runIf | IS_WINDOWS |
+| tests/server/annotations/doc-hash.test.ts:39 | it.skipIf | IS_WINDOWS |
+| tests/server/annotations/doc-hash.test.ts:46 | it.runIf | IS_WINDOWS |
+| tests/server/annotations/doc-hash.test.ts:59 | it.runIf | IS_WINDOWS |
+| tests/server/document-service.test.ts:826 | it.skipIf | process.platform === "win32" |
+| tests/server/document-service.test.ts:898 | it.skipIf | process.platform === "win32" |
+| tests/server/docx-apply.test.ts:1230 | it.runIf | process.platform !== "win32" |
+| tests/server/export-path-canonicalization.test.ts:184 | it.runIf | POSIX |
+| tests/server/export-path-canonicalization.test.ts:204 | it.runIf | POSIX |
+| tests/server/export-path-canonicalization.test.ts:257 | it.runIf | POSIX |
+| tests/server/file-io/doc-backup-acl-repair.test.ts:46 | describe.skipIf | !WIN_ONLY |
+| tests/server/integrations/acl-win.test.ts:156 | describe.skipIf | WIN_ONLY |
+| tests/server/integrations/acl-win.test.ts:23 | describe.skipIf | !WIN_ONLY |
+| tests/server/integrations/apply-malformed.test.ts:188 | it.skipIf | !POSIX_ONLY |
+| tests/server/integrations/apply-malformed.test.ts:200 | it.skipIf | !POSIX_ONLY |
+| tests/server/integrations/apply-malformed.test.ts:231 | it.skipIf | !WIN_ONLY |
+| tests/server/integrations/apply.test.ts:127 | it.skipIf | !POSIX_ONLY |
+| tests/server/integrations/apply.test.ts:141 | it.skipIf | !POSIX_ONLY |
+| tests/server/integrations/apply.test.ts:171 | it.skipIf | !POSIX_ONLY |
+| tests/server/integrations/apply.test.ts:275 | it.skipIf | !POSIX_ONLY |
+| tests/server/integrations/apply.test.ts:527 | it.skipIf | !POSIX_ONLY |
+| tests/server/integrations/backup.test.ts:106 | it.skipIf | !POSIX_ONLY |
+| tests/server/integrations/storage.test.ts:130 | it.runIf | process.platform !== "win32" |
+| tests/server/integrations/storage.test.ts:286 | it.runIf | process.platform !== "win32" |
+| tests/server/integrations/storage.test.ts:99 | it.runIf | process.platform !== "win32" |
+| tests/server/launcher/supervisor.test.ts:155 | it.skipIf | process.platform === "win32" |
+| tests/server/launcher/supervisor.test.ts:268 | it.skipIf | process.platform !== "win32" |
+| tests/server/launcher/supervisor.test.ts:273 | it.skipIf | process.platform !== "win32" |
+| tests/server/restore-backup.test.ts:651 | it.runIf | process.platform !== "win32" |
+| tests/server/server-security-invariants.test.ts:379 | describe.skipIf | process.platform !== "linux" |
+| tests/server/token-store.test.ts:74 | it.skipIf | process.platform === "win32" |
+
+## Inventory 2: vi.mock() Targets by Test File Count
+
+| module specifier (normalised) | count | files mocking it (max 6, then +N) |
+|---|---|---|
+| ../../src/server/platform | 17 | tests/server/adr-034-open-characterization.test.ts, tests/server/chat-durable-clear.test.ts, tests/server/documents-open.test.ts, tests/server/docx-fidelity-report.test.ts, tests/server/docx-size-gate-call-sites.test.ts, tests/server/external-conflict.test.ts, +11 |
+| ../../src/server/file-watcher | 12 | tests/server/adr-034-open-characterization.test.ts, tests/server/docx-fidelity-report.test.ts, tests/server/docx-size-gate-call-sites.test.ts, tests/server/external-conflict.test.ts, tests/server/open-pipeline-cleanup-on-failure.test.ts, tests/server/open-pipeline-lifecycle.test.ts, +6 |
+| ../../src/server/notifications.js | 11 | tests/server/document-service.test.ts, tests/server/docx-size-gate-call-sites.test.ts, tests/server/evict-on-cleanup-failure.test.ts, tests/server/open-pipeline-cleanup-on-failure.test.ts, tests/server/open-pipeline-transact-batching.test.ts, tests/server/reload-from-disk-persistence.test.ts, +5 |
+| ../../src/client/hooks/useCoworkStatus.svelte | 9 | tests/client/claude-cli-install-not-detected.test.ts, tests/client/cowork-admin-declined-modal-keyboard.test.ts, tests/client/cowork-settings-mounted.test.ts, tests/client/integration-wizard-cowork.test.ts, tests/client/integration-wizard-install.test.ts, tests/client/integration-wizard-models.test.ts, +3 |
+| ../../src/client/cowork/cowork-invoke | 8 | tests/client/cowork-onboarding-step-mounted.test.ts, tests/client/cowork-preflight-hook.test.ts, tests/client/cowork-settings-mounted.test.ts, tests/client/integration-wizard-cowork.test.ts, tests/client/integration-wizard-push-support.test.ts, tests/client/live-regions-wizard.test.ts, +2 |
+| ../../src/client/cowork/cowork-helpers.js | 7 | tests/client/FileOpenDialog.test.ts, tests/client/network-settings-autostart.test.ts, tests/client/useFileDrop.test.ts, tests/client/useTauriFileDrop.test.ts, tests/client/useTauriTheme.svelte.test.ts, tests/client/useTheme-native-push.svelte.test.ts, +1 |
+| node:fs | 6 | tests/cli/doctor-path-safety.test.ts, tests/cli/rotate-token.test.ts, tests/cli/uninstall-scrub.test.ts, tests/server/file-watcher.test.ts, tests/server/integrations/node-binary.test.ts, tests/server/unc-guard-ordering.test.ts |
+| ../../src/client/hooks/useIntegrationWizard.svelte | 6 | tests/client/claude-cli-install-not-detected.test.ts, tests/client/integration-wizard-cowork.test.ts, tests/client/integration-wizard-install.test.ts, tests/client/integration-wizard-models.test.ts, tests/client/integration-wizard-push-support.test.ts, tests/client/live-regions-wizard.test.ts |
+| ../../../src/server/notifications.js | 6 | tests/server/annotations/rename-recovery.test.ts, tests/server/annotations/store.test.ts, tests/server/annotations/sync.test.ts, tests/server/annotations/tombstone-sweep.test.ts, tests/server/file-io/doc-backup-acl-repair.test.ts, tests/server/file-io/doc-backup.test.ts |
+| ../../src/server/documents/registry.js | 5 | tests/server/ctrl-meta-promote.test.ts, tests/server/event-queue-observer-split.test.ts, tests/server/event-queue.test.ts, tests/server/reload-from-markdown.test.ts, tests/server/security-1121.test.ts |
+| ../../src/client/hooks/useClaudeCliStatus.svelte | 5 | tests/client/integration-wizard-cowork.test.ts, tests/client/integration-wizard-install.test.ts, tests/client/integration-wizard-models.test.ts, tests/client/integration-wizard-push-support.test.ts, tests/client/live-regions-wizard.test.ts |
+| @tiptap/pm/view | 4 | tests/client/annotation-decoration.test.ts, tests/client/authorship-decoration.test.ts, tests/client/awareness-decoration.test.ts, tests/client/heading-collapse.test.ts |
+| @tiptap/pm/state | 4 | tests/client/annotation-decoration.test.ts, tests/client/authorship-decoration.test.ts, tests/client/awareness-decoration.test.ts, tests/client/heading-collapse.test.ts |
+| @tiptap/core | 4 | tests/client/annotation-decoration.test.ts, tests/client/authorship-decoration.test.ts, tests/client/awareness-decoration.test.ts, tests/client/heading-collapse.test.ts |
+| @tauri-apps/api/event | 4 | tests/client/annotation-context-menu-host.test.ts, tests/client/update-available.test.ts, tests/client/updater-channel-race.test.ts, tests/client/updater-channel-sync.test.ts |
+| @tauri-apps/api/core | 4 | tests/client/actions/show-in-file-explorer.test.ts, tests/client/titlebar-listener-leak.test.ts, tests/client/useTauriTheme.svelte.test.ts, tests/client/useTheme-native-push.svelte.test.ts |
+| ../../src/server/session/manager.js | 4 | tests/server/document-service.test.ts, tests/server/rename-document.test.ts, tests/server/sessions-routes.test.ts, tests/server/wire-annotation-store-internal-failure.test.ts |
+| ../../src/client/cowork/cowork-helpers | 4 | tests/client/integration-wizard-cowork.test.ts, tests/client/integration-wizard-models.test.ts, tests/client/integration-wizard-push-support.test.ts, tests/client/settings-claude-code-tab-cowork.test.ts |
+| ../../../src/client/sentry.js | 4 | tests/client/actions/builtin-funnel.test.ts, tests/client/actions/builtin-hardening.test.ts, tests/client/actions/executor.test.ts, tests/client/actions/registry-teardown.test.ts |
+| node:fs/promises | 3 | tests/cli/annotation-store-scan.test.ts, tests/cli/doctor-path-safety.test.ts, tests/server/annotations/cleanup-orphans.test.ts |
+| @tauri-apps/api/window | 3 | tests/client/titlebar-listener-leak.test.ts, tests/client/useTauriTheme.svelte.test.ts, tests/client/useTheme-native-push.svelte.test.ts |
+| ../../src/server/mcp/document-service.js | 3 | tests/server/rename-route.test.ts, tests/server/security-1121.test.ts, tests/server/store-reclaim-route.test.ts |
+| ../../src/server/file-watcher.js | 3 | tests/server/document-service.test.ts, tests/server/rename-document.test.ts, tests/server/wire-annotation-store-internal-failure.test.ts |
+| ../../src/client/utils/server-paths.js | 3 | tests/client/FileOpenDialog.test.ts, tests/client/browse-file.test.ts, tests/client/useTauriFileDrop.test.ts |
+| ../../src/client/utils/fileUpload.js | 3 | tests/client/FileOpenDialog.test.ts, tests/client/default-directory.test.ts, tests/client/useFileDrop.test.ts |
+| ../../src/client/positions | 3 | tests/client/annotation-decoration.test.ts, tests/client/authorship-decoration.test.ts, tests/client/authorship-stamp.test.ts |
+| node:child_process | 2 | tests/cli/doctor-path-safety.test.ts, tests/cli/doctor.test.ts |
+| @tauri-apps/plugin-dialog | 2 | tests/client/FileOpenDialog.test.ts, tests/client/browse-file.test.ts |
+| ../../src/server/yjs/provider.js | 2 | tests/server/event-queue-observer-split.test.ts, tests/server/event-queue.test.ts |
+| ../../src/server/positions.js | 2 | tests/server/event-queue-observer-split.test.ts, tests/server/event-queue.test.ts |
+| ../../src/server/integrations/apply.js | 2 | tests/cli/rotate-token.test.ts, tests/cli/run-setup-apply.test.ts |
+| ../../src/server/integrations/acl-win.js | 2 | tests/server/docx-size-gate-call-sites.test.ts, tests/server/restore-backup.test.ts |
+| ../../src/server/file-io/index.js | 2 | tests/server/chat-durable-clear.test.ts, tests/server/document-service.test.ts |
+| ../../src/server/file-io/doc-backup.js | 2 | tests/server/document-service.test.ts, tests/server/security-1121.test.ts |
+| ../../src/server/events/queue.js | 2 | tests/server/sse-cors-inheritance.test.ts, tests/server/sse-keepalive.test.ts |
+| ../../src/server/auth/middleware.js | 2 | tests/server/security-1121.test.ts, tests/server/sessions-routes.test.ts |
+| ../../src/server/annotations/sync.js | 2 | tests/server/store-reclaim-route.test.ts, tests/server/wire-annotation-store-internal-failure.test.ts |
+| ../../src/server/annotations/store.js | 2 | tests/server/sessions-routes.test.ts, tests/server/store-reclaim-route.test.ts |
+| ../../src/client/utils/default-directory.js | 2 | tests/client/FileOpenDialog.test.ts, tests/client/browse-file.test.ts |
+| ../../src/client/hooks/useReachabilityCheck.svelte | 2 | tests/client/integration-wizard-push-support.test.ts, tests/client/live-regions-wizard.test.ts |
+| ../../src/client/hooks/useModels.svelte | 2 | tests/client/first-run-model-picker.test.ts, tests/client/settings-models-tab.test.ts |
+| ../../../src/server/integrations/acl-win.js | 2 | tests/server/file-io/doc-backup.test.ts, tests/server/integrations/apply-acl.test.ts |
+| node:os | 1 | tests/cli/doctor-path-safety.test.ts |
+| node:crypto | 1 | tests/server/open-pipeline-transact-batching.test.ts |
+| fs/promises | 1 | tests/server/document-service.test.ts |
+| env-paths | 1 | tests/server/token-store.test.ts |
+| @tauri-apps/api/webview | 1 | tests/client/useTauriFileDrop.test.ts |
+| @tauri-apps/api/path | 1 | tests/client/default-directory.test.ts |
+| @client/cowork/cowork-helpers.js | 1 | tests/client/titlebar-listener-leak.test.ts |
+| @client/cowork/cowork-helpers | 1 | tests/client/titlebar-listener-leak.test.ts |
+| // vi.hoisted() ensures these are initialized before the hoisted vi.mock() calls. | 1 |  |
+| // NOTE: vi.mock() is hoisted to file scope by Vitest. These mocks affect ALL tests | 1 |  |
+| ../../src/shared/sanitize | 1 | tests/client/annotation-decoration.test.ts |
+| ../../src/shared/constants.js | 1 | tests/client/use-models-loading.test.ts |
+| ../../src/shared/constants | 1 | tests/client/integration-wizard-models.test.ts |
+| ../../src/shared/auth/token-file.js | 1 | tests/cli/rotate-token.test.ts |
+| ../../src/server/platform.js | 1 | tests/server/security-1121.test.ts |
+| ../../src/server/mcp/license-gate.js | 1 | tests/server/license-force-open-gate.test.ts |
+| ../../src/server/file-io/markdown | 1 | tests/server/open-pipeline-cleanup-on-failure.test.ts |
+| ../../src/server/file-io/docx.js | 1 | tests/server/format-adapter.test.ts |
+| ../../src/server/file-io/docx-comments | 1 | tests/server/open-pipeline-cleanup-on-failure.test.ts |
+| ../../src/server/file-io/docx-capture.js | 1 | tests/server/docx-verify.test.ts |
+| ../../src/server/events/file-sync-registry.js | 1 | tests/server/store-reclaim-route.test.ts |
+| ../../src/server/documents/reload-family.js | 1 | tests/server/security-1121.test.ts |
+| ../../src/server/documents/open.js | 1 | tests/server/scratchpad-route.test.ts |
+| ../../src/server/auth/token-store.js | 1 | tests/server/rotate-token-route.test.ts |
+| ../../src/server/annotations/migration-log.js | 1 | tests/server/annotation-edit-lifecycle.test.ts |
+| ../../src/client/hooks/useTandemSettings.js | 1 | tests/client/default-directory.test.ts |
+| ../../src/client/hooks/useLicense | 1 | tests/client/license-store.svelte.test.ts |
+| ../../src/client/hooks/useCoworkStatus.svelte.js | 1 | tests/client/use-tutorial-restart.svelte.test.ts |
+| ../../src/client/hooks/useAutostart.svelte.js | 1 | tests/client/network-settings-autostart.test.ts |
+| ../../src/client/hooks/useAppInfo.svelte.js | 1 | tests/client/network-settings-autostart.test.ts |
+| ../../src/client/editor/extensions/find-replace.js | 1 | tests/client/live-regions-find-replace.test.ts |
+| ../../../src/server/mcp/docx-apply.js | 1 | tests/server/routes/response-path-scrub.test.ts |
+| ../../../src/server/mcp/document-service.js | 1 | tests/server/routes/response-path-scrub.test.ts |
+| ../../../src/server/mcp/convert.js | 1 | tests/server/routes/response-path-scrub.test.ts |
+
+## Inventory 3: Unreferenced data-testid Attributes
+
+| src file:line | testid value |
+|---|---|
+| src/client/components/IntegrationTargetCard.svelte:103 | integration-wizard-card-{slug} |
+| src/client/components/IntegrationTargetCard.svelte:111 | integration-wizard-pick-{slug} |
+| src/client/components/IntegrationWizardModal.svelte:1047 | integration-wizard-apply-result-{result.id} |
+| src/client/components/IntegrationWizardModal.svelte:618 | integration-wizard-reachability-{id} |
+| src/client/components/IntegrationWizardModal.svelte:645 | integration-wizard-push-support-{id} |
+| src/client/components/IntegrationWizardModal.svelte:960 | integration-wizard-secret-input-{picked.id} |
+| src/client/components/IntegrationWizardModal.svelte:967 | integration-wizard-secret-submit-{picked.id} |
+| src/client/panels/AnnotationCard.svelte:242 | annotation-card-{annotation.id} |
+| src/client/panels/AnnotationCard.svelte:263 | claude-typing-indicator-{annotation.id} |
+| src/client/panels/AnnotationCardActions.svelte:108 | send-to-claude-btn-{annotationId} |
+| src/client/panels/AnnotationCardActions.svelte:122 | remove-btn-{annotationId} |
+| src/client/panels/AnnotationCardActions.svelte:69 | accept-btn-{annotationId} |
+| src/client/panels/AnnotationCardActions.svelte:81 | dismiss-btn-{annotationId} |
+| src/client/panels/AnnotationCardActions.svelte:96 | archive-btn-{annotationId} |
+| src/client/panels/AnnotationCardHeader.svelte:107 | annotation-held-pill-{annotation.id} |
+| src/client/panels/AnnotationCardHeader.svelte:125 | edit-btn-{annotation.id} |
+| src/client/panels/AnnotationCardHeader.svelte:143 | annotation-author-dot-{annotation.id} |
+| src/client/panels/AnnotationEditForm.svelte:51 | edit-newtext-{annotationId} |
+| src/client/panels/AnnotationEditForm.svelte:65 | edit-reason-{annotationId} |
+| src/client/panels/AnnotationEditForm.svelte:74 | edit-text-{annotationId} |
+| src/client/panels/AnnotationEditForm.svelte:83 | edit-save-btn-{annotationId} |
+| src/client/panels/AnnotationEditForm.svelte:93 | edit-cancel-btn-{annotationId} |
+| src/client/panels/AnnotationSnippet.svelte:14 | annotation-snippet-{annotationId} |
+| src/client/panels/ChatPanel.svelte:328 | chat-author-{msg.id} |
+| src/client/panels/ChatPanel.svelte:357 | chat-anchor-quote-{msg.id} |
+| src/client/panels/ChipGroup.svelte:152 | {groupTestId}-{opt.value} |
+| src/client/panels/CommentThread.svelte:26 | reply-{reply.id} |
+| src/client/panels/CommentThread.svelte:46 | reply-import-byline-{reply.id} |
+| src/client/panels/ImportedCard.svelte:35 | annotation-select-checkbox-{annotation.id} |
+| src/client/panels/ImportedCard.svelte:59 | annotation-import-byline-{annotation.id} |
+| src/client/panels/MarginColumn.svelte:411 | margin-leaders-{side} |
+| src/client/panels/MarginColumn.svelte:452 | margin-column-{side} |
+| src/client/panels/MarginColumn.svelte:484 | margin-bubble-{ann.id} |
+| src/client/panels/MarginColumn.svelte:518 | margin-pin-btn-{ann.id} |
+| src/client/panels/PeekStrip.svelte:107 | peek-dot-{a.id} |
+| src/client/panels/ReplyThread.svelte:103 | reply-toggle-{annotationId} |
+| src/client/panels/ReplyThread.svelte:133 | reply-input-{annotationId} |
+| src/client/panels/ReplyThread.svelte:142 | reply-send-btn-{annotationId} |
+| src/client/panels/ReplyThread.svelte:154 | reply-cancel-btn-{annotationId} |
+| src/client/panels/ReplyThread.svelte:168 | reply-btn-{annotationId} |
+| src/client/panels/SidePanel.svelte:356 | annotation-card-${activeAnnotationId} |
+| src/client/panels/SidePanel.svelte:383 | annotation-card-${aid} |
+| src/client/panels/SuggestionCard.svelte:52 | suggestion-diff-{annotation.id} |
+| src/client/panels/SuggestionCard.svelte:88 | suggestion-original-truncated-{annotation.id} |
+| src/client/shell/TitleBar.svelte:268 | brand-menu-theme-{opt.value} |
+| src/client/tabs/DocumentTabs.svelte:820 | tab-${activeTabId} |
+
+### Totals for Inventory 3
+- **defined**: 436
+- **referenced**: 390
+- **unreferenced**: 46
+
+STATUS: complete

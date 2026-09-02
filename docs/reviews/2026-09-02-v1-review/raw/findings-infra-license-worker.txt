@@ -1,0 +1,213 @@
+# Findings: infra/ license workers + app seams
+# Repo: <repo> @ claude/repo-review-v1-release-e48bsg (v0.24.1)
+# Reviewer: read-only agent. Evidence tags: [ran:]/[read:]/[inferred]
+STATUS: partial
+
+## Findings
+
+--- F1 [Medium] The update window still gates nobody AFTER the flag flip: the un-entitled branch falls back to the PUBLIC GitHub manifest
+file: src-tauri/src/lib.rs:2248-2252 (build_updater None arm) + src-tauri/tauri.conf.json:106-109
+[read: src-tauri/tauri.conf.json:107-109]
+`build_updater()` returns `app.updater()` whenever `entitled_license_id()` is None — and that includes
+`update_window_current == false`, i.e. a paying customer whose year is up. `app.updater()` uses
+tauri.conf.json's endpoint list, which is literally
+"https://github.com/bloknayrb/tandem/releases/latest/download/latest.json". So an out-of-window buyer is
+routed to the public, ungated manifest and is offered/installed the newest release anyway. This is NOT the
+already-ledgered "LICENSE_UPDATE_ENDPOINT is empty" item: it survives filling in the endpoint and flipping
+the gate, it needs a different fix (drop or neutralise the tauri.conf.json endpoint at the flip), and
+docs/licensing-operations.md §8's pre-launch checklist has no line for it. ADR-040 §3 states the update
+endpoint "serves new builds only while the license's update window is current" and §6 that "the only gated
+surface is the update endpoint"; the shipped wiring contradicts both.
+confidence: High
+
+--- F2 [Medium] Neither wrangler.toml enables Workers observability, so the `reason` enum — "the single detector" — is retained nowhere, and the update Worker has no alerting at all
+file: infra/license-update-worker/wrangler.toml:1-36, infra/license-issuance-worker/wrangler.toml:1-64
+[ran: grep -rn "observability|compatibility_flags|node_compat" infra/  → no matches]
+Both Workers log with `console.log`, but neither wrangler.toml carries an `[observability] enabled = true`
+block, so nothing persists those lines; the only reader is `wrangler tail`, which
+docs/licensing-operations.md §5c itself calls "a debugging tool, not an alert: no history, no thresholds,
+no notification". The update Worker's own header comment calls a rising `unknown-id` count "the only
+evidence that licenses are being issued without entitlements" (worker.ts:24-30) and the runbook §3b repeats
+it as the Detection step — but the update Worker has no ALERT_* wiring and no retained log, so the
+operator's stated detector for the system's worst failure mode does not exist as deployed.
+confidence: High
+
+--- F3 [Medium] `RESEND_FROM` gets no placeholder guard although `SUPPORT_EMAIL` does — and its failure lands AFTER the license is minted
+file: infra/license-issuance-worker/src/worker.ts:752 (`if (!env.RESEND_API_KEY || !env.RESEND_FROM)`) vs :992-999
+[read: infra/license-issuance-worker/src/worker.ts:748-752]
+`supportEmailProblem()` refuses to run at all on a `REPLACE_WITH_…`/`yourdomain` value (503 before anything
+durable is written), and its own doc comment (worker.ts:704-710) notes the deploy template's `RESEND_FROM`
+example is the other string an operator half-edits — yet `sendViaResend` checks `RESEND_FROM` for presence
+only. Deploying wrangler.toml with `RESEND_FROM = "REPLACE_WITH_VERIFIED_SENDER"` therefore mints the
+license, writes the entitlement and the ledger, then gets a Resend 422, returns a retryable 500 forever, and
+retries its way to Polar's endpoint auto-disable — the exact "dominant sale-loss mode" the issuance README
+names at :102-108. The same regex already in the file would catch it before any state is written.
+confidence: High
+
+--- F4 [Medium] A wrong `data.id` assumption in `revoke()` fails as a logged SUCCESS and is marked done, unlike the carefully-routed `refunded` uncertainty
+file: infra/license-issuance-worker/src/worker.ts:453-488 + :594-596
+[read: infra/license-issuance-worker/src/worker.ts:452-488]
+`revoke()` treats `data.id` as the ORDER id. If Polar's `order.refunded` payload `data` is a refund object
+(so the order id lives at `data.order_id`), `readOrder` misses, both rechecks miss, a junk tombstone is
+written under the refund id, the function returns `"revoked"`, and handleIssuance:594 marks the
+`evt:<mode>:<webhook-id>` key done — so the real order keeps its live entitlement and a Polar re-send
+short-circuits. The file and docs/licensing-operations.md §3.5a explicitly flag the `refunded` FIELD shape
+as unconfirmed and route it to `"dropped"` (alertable, uncommitted); the id shape is the second unverified
+assumption from the same payload and gets the opposite, silent treatment.
+confidence: Med
+
+--- F5 [Low] Both fail-closed config errors return a retryable 503 that is deliberately NOT alertable — the one path that drives Polar's endpoint auto-disable
+file: infra/license-issuance-worker/src/worker.ts:944 (`isAlertable`) vs :966-999
+[read: infra/license-issuance-worker/src/worker.ts:943-946]
+`isAlertable` fires only on `result === "dropped"` or `stage === "email"`. A bad/missing `TANDEM_PRIVATE_KEY`
+(`stage: "config"`) and a bad `SUPPORT_EMAIL` (`stage: "config-support-email"`) both 503 every single
+request with no alert — and 503 is a Polar delivery failure, so a misdeploy walks straight to endpoint
+auto-disable while the operator sees nothing. docs/licensing-operations.md §3.5b acknowledges half of this
+("the check is per-request, not a deploy-time gate: nothing alerts on it"); the signing-key half is
+undocumented, and both are one line in `isAlertable`.
+confidence: High
+
+--- F6 [Low] `infra/` is linted and formatted by nothing, and its `eslint-disable` directives are inert
+file: biome.json:19-28 (`files.includes` has no `infra/**`), tsconfig.json:24 (`"include": ["src"]`)
+[read: biome.json:19-28]
+Neither Worker is in biome's include set, and `tsconfig.json` includes only `src`, so `npm run typecheck`
+never sees them. They are typechecked only as a side effect of `tests/server/**` importing them under
+`tsconfig.tests.node.json:52-70` — meaning a future `infra/` file that no test imports is checked by
+nothing, and the orphan sweep in tests/scripts/typecheck-tests-wiring.test.ts only sweeps `tests/`. The
+nine `// eslint-disable-next-line @typescript-eslint/no-explicit-any` comments across worker.ts/crypto.ts
+name a linter this repo does not run and corroborate that nothing lints there.
+confidence: High
+
+--- F7 [Low] `revoke()`'s "pre-commit recheck" is two back-to-back KV reads with nothing between them
+file: infra/license-issuance-worker/src/worker.ts:457 and :468
+[read: infra/license-issuance-worker/src/worker.ts:457-469]
+In `issue()` the recheck is meaningful — the first read is separated from it by the async Ed25519 sign
+(:365) and the blob-size check, which is the window it shrinks. In `revoke()` the two `readOrder` calls are
+adjacent statements, so the second one narrows nothing beyond the first read's own latency while doubling
+KV reads on every refund. The README (:73-78) and the inline comment (:460-467) present the two rechecks as
+the same mitigation, which overstates the refund side.
+confidence: High
+
+--- F8 [Low] Nothing pins the `X-Tandem-License-Id` literal across the Rust/TS seam
+file: src-tauri/src/lib.rs:2241 vs infra/license-update-worker/src/worker.ts:64
+[ran: grep -rn "X-Tandem-License-Id" --include=*.ts --include=*.rs --include=*.md .]
+The two literals match today, and no test, doc-guard or wiring test references the header (the grep finds
+only source and prose). A rename of `LICENSE_HEADER` on the Worker side leaves lib.rs sending the old name,
+the Worker takes the `no-header` branch, and every entitled install is told "You're up to date" forever —
+the failure mode this whole subsystem is built around. This repo already uses the ADR-051 wiring-test
+pattern for exactly this class of cross-file literal.
+confidence: High
+
+--- F9 [Low] `wrangler deploy` from the repo alone is not reproducible: no package.json, no pinned wrangler, no tsconfig in either Worker dir
+file: infra/license-issuance-worker/, infra/license-update-worker/
+[ran: ls -a infra/license-issuance-worker infra/license-update-worker → README.md, src, wrangler.toml only]
+Both READMEs and docs/licensing-operations.md §9 say `cd infra/<worker> && npx wrangler deploy`, which
+resolves whatever wrangler version npm serves that day, against a `compatibility_date = "2024-09-23"` with
+no `compatibility_flags`. The `./crypto.js` specifier in worker.ts:49 also relies on esbuild's TS
+`.js`→`.ts` rewrite rather than anything declared in the repo. Nothing here is wrong today; it is simply
+un-pinned for a deploy step the runbook says happens once and then underpins every sale.
+confidence: Med
+
+## Unchecked leads
+
+- Does Cloudflare Workers accept `crypto.subtle.importKey("pkcs8", …, {name:"Ed25519"})` at
+  `compatibility_date = "2024-09-23"` with no compatibility_flags? Everything is proven under vitest/Node 22
+  only. docs/licensing-operations.md §8 already lists "the Worker's Ed25519 import works on real Cloudflare —
+  it never has" as an open pre-launch item, and a failure fails closed to 503 on EVERY webhook.
+  NEXT CHECK: deploy the issuance Worker to a throwaway account and POST one signed sandbox event; or
+  `wrangler dev --remote` and hit it once.
+- Does `tauri-plugin-updater` v2 actually treat HTTP 204 + empty body as `Ok(None)` rather than a parse
+  error? The entire no-update contract rests on it and no test in the repo exercises the Rust side.
+  NEXT CHECK: read the `check()` implementation in the vendored crate under
+  ~/.cargo/registry/src/*/tauri-plugin-updater-*/src/updater.rs for its status handling.
+- Does `UpdaterBuilder::endpoints()` reject a non-https `LICENSE_UPDATE_ENDPOINT`? If so, an http:// value
+  makes `build_updater` return Err, which `check_for_update` swallows on the auto path (lib.rs:2260-2268).
+  NEXT CHECK: same crate, `endpoints()` scheme validation.
+- Polar payload shapes for `order.paid` (`net_amount`/`total_amount`/`amount`) and `order.refunded`
+  (`refunded`, and `id` — see F4). NEXT CHECK: capture two real sandbox payloads and add them as fixtures,
+  which §8 already lists as a gate.
+
+## Doc drift
+
+- infra/license-update-worker/README.md:26-27: "The webhook side needs `TANDEM_CF_ACCOUNT_ID`,
+  `TANDEM_CF_KV_NAMESPACE_ID`, and a `TANDEM_CF_KV_API_TOKEN` (scoped *Workers KV Storage: Edit*) to
+  populate the namespace."
+  Contradicted by src/server/license/kv-store.ts:6-11: "The **paid** path writes its own entitlement inside
+  the Cloudflare issuance Worker …, using its native KV binding. This module is the **out-of-band** path:
+  `scripts/sign-license.ts`". The TANDEM_CF_* vars belong to the operator's local signing script, not to the
+  webhook.
+- infra/license-issuance-worker/README.md:87-88: `npx wrangler kv key get "order:live:<orderId>"
+  --namespace-id <LEDGER_KV id>` — missing `--remote`.
+  Contradicted by docs/licensing-operations.md:399-402: "**`--remote` is not optional.** Wrangler v4 flipped
+  the default for `kv key` commands to **local** storage. Without it these read an empty local store, return
+  'key not found'". Here the command is the refund-verification mitigation, so a local-store miss reads as
+  "the refund did not revoke".
+- infra/license-update-worker/README.md:16: "It logs only `{ result, ts }` — never the license id."
+  Contradicted by infra/license-update-worker/src/worker.ts:93 (`log?.({ result: "no-update", ts, reason })`)
+  — the entry carries `reason`. The file's own header (:15) and the runbook §3c both say `{ result, reason,
+  ts }`; only this README line is stale.
+- infra/license-issuance-worker/README.md:55-65 (Deploy block) never mentions `SUPPORT_EMAIL`, yet
+  infra/license-issuance-worker/src/worker.ts:992-999 returns 503 on EVERY request while it is unset. Only
+  docs/licensing-operations.md §3.5b carries it ("Also set in `[vars]`: `SUPPORT_EMAIL`"), so an operator
+  following the README alone deploys a Worker that rejects 100% of webhooks with no alert (see F5).
+
+## Verified fine
+
+- Canonicalization parity is real, not just asserted in prose: infra/license-issuance-worker/src/crypto.ts:54-67
+  and src/server/license/verifier.ts:10-36 are character-for-character the same algorithm (sorted keys,
+  null-prototype accumulator, plain JSON.stringify), and tests/server/license-issuance-worker.test.ts:182-247
+  asserts `canonicalizeWorker(obj) === canonicalizeServer(obj)` AND round-trips a Worker-signed blob through
+  the real `crypto.verify(null, …)` path. [ran: npx vitest run tests/server/license-update-worker.test.ts
+  tests/server/license-issuance-worker.test.ts → 2 files, 78 tests, all passed, 604ms]
+- Both worker suites live under `tests/server/`, so `npm test` runs them and CI's required `check` job gates
+  them. There is no infra-specific CI job and none is needed. [ran: grep -rn "infra/" .github/workflows/*.yml
+  → no matches]
+- `LICENSE_HEADER = "X-Tandem-License-Id"` (worker.ts:64) matches `.header("X-Tandem-License-Id", lid)`
+  (lib.rs:2241) byte for byte (see F8 for the missing guard).
+- The two wrangler.toml files carry the LITERALLY identical `LICENSE_KV` placeholder
+  `id = "REPLACE_WITH_LICENSE_KV_NAMESPACE_ID"` (issuance:50, update:31), with cross-referencing comments in
+  both. The bindings are also correctly asymmetric: only issuance binds `LEDGER_KV`, the PII store.
+- No-update byte-identity holds across all five reasons, including a THROWN upstream fetch (worker.ts:122-128)
+  — the 500-vs-204 entitlement oracle is explicitly closed, and pinned by two tests
+  ("byte-identical (no oracle)", "degrades to a byte-identical 204 when the upstream fetch THROWS").
+- The license id travels as a header only and never enters a URL, query string or log line; the Worker never
+  reads `request.url`, so Tauri's `{{target}}`/`{{arch}}`/`{{current_version}}` expansion cannot leak it or
+  break routing regardless of what path the compiled endpoint ends up carrying.
+- No downgrade risk from the Worker: it re-serves the upstream `latest.json` bytes unchanged and never
+  synthesises a version, so a client newer than latest.json is left to tauri-plugin-updater's own
+  newer-than-current comparison.
+- The manifest is proxied unchanged, so the minisign signatures inside it are still the ones
+  `tauri-apps/tauri-action` produced with `TAURI_SIGNING_PRIVATE_KEY` (.github/workflows/tauri-release.yml:320)
+  and are still verified against `plugins.updater.pubkey` in tauri.conf.json:110. The Worker gates access, it
+  does not re-sign — the README's claim is accurate.
+- PII segregation holds in code: `entitlementValue()` (worker.ts:263-269) emits only
+  `{updateWindowEnd, status, version}`, and the shape matches the canonical `LicenseEntitlement`
+  (src/server/license/license-types.ts:107-111), pinned by the "kv-store ↔ worker parity" test.
+- Standard-Webhooks verification is correct on the details that usually break: base64-DECODE of the post-
+  `whsec_` secret, strict integer timestamp parse rejecting `123abc`, ±300s window, multi-signature header
+  support, length-guarded constant-time compare that never feeds a wrong-length candidate to Cloudflare's
+  native `timingSafeEqual` (crypto.ts:128-176).
+- Signature verification runs BEFORE any parse or side effect, and the Content-Length pre-check
+  (worker.ts:527-530) means an unauthenticated caller cannot force a large body through HMAC + JSON.parse.
+- Grandfathered semantics agree end to end: issuance writes `updateWindowEnd: null` (worker.ts:351), the
+  update Worker treats null as never-expiring (worker.ts:111-113), and on-device
+  `updateWindowCurrent = meta.expiresAt === null || …` (src/server/license/license-state.ts:100-101).
+- Refund-before-paid is handled: `revoke()` writes a tombstone and `reDrive()`'s `if (existing.refunded)
+  return "duplicate"` (worker.ts:293) stops a late paid retry resurrecting it — no re-mint, no re-email.
+- The blob-size ceiling in the Worker (>= 4096 UTF-8 BYTES, worker.ts:371-372) is strictly tighter than the
+  verifier's (> 4096 decoded UTF-16 units, verifier.ts:106), so no blob it emails can fail on-device.
+- Every ledger key carries the test/live mode segment (`orderKeyOf`/`evtKeyOf`, worker.ts:188-192), and
+  docs/licensing-operations.md §3.5b correctly warns that entitlement keys do NOT, hence separate namespaces
+  for a production-mode sandbox.
+- `LedgerCorruptError` makes an unparsable ledger record a retryable 500 rather than "no record", so a
+  corrupt entry can never present as a fresh order and double-mint (worker.ts:194-228).
+- Every command, path and env var named in docs/licensing-operations.md §9's quick-reference exists:
+  scripts/generate-keys.ts, scripts/sign-license.ts (with `--name/--email/--type/--expires` and a non-zero
+  exit on a failed entitlement write, sign-license.ts:194-205), `infra/license-*-worker/` for the two
+  `wrangler deploy` lines, and the §5a step-4 curl works against a Worker that ignores the path.
+- There IS a usable "customer cannot update" runbook: §7's support template (ask for the ORDER number, never
+  the key or the license id) hands off to §5a steps 2-4, which reads the ledger, reads the entitlement, and
+  then proves the outcome with the header'd curl — that last step answers the question directly without
+  needing the `reason` enum, which is what makes F2's missing log retention survivable rather than fatal.
+
+STATUS: complete

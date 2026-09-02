@@ -1,0 +1,185 @@
+STATUS: partial
+
+# Server data layer review — documents / file-io / annotations / positions / yjs / sessions
+Reviewer: server-data. Base: master 3fb6408 (v0.24.1). Read-only; experiments ran under scratchpad/exp/ (node_modules symlinked to the repo; no repo files touched, no servers started).
+
+## Findings — high confidence
+
+### H-1  File watcher dies after the first rename-replace, including Tandem's own atomicWrite
+Severity: High
+Location: src/server/file-watcher.ts:64-69
+Evidence: [ran: node scratchpad/exp/watch-rename.mjs]
+Failure: `fs.watch(filePath)` watches the inode, so after any editor that saves by write-temp-then-rename (vim `backupcopy=no`, VS Code atomic saves, sed -i, and Tandem's own `atomicWrite` in file-io/index.ts:349) the watcher emits `change, rename, rename` and then nothing for every later edit — the experiment showed exactly that sequence on Linux, then silence for three subsequent writes. Because `if (watched.has(filePath)) return;` makes re-watch a no-op and the callback drops non-`change` events, external-edit detection ends at the user's first save: no conflict flag is raised, the mtime guard in document-service.ts:383 then blocks every later save with "modified externally" (no banner, because the watcher is the banner's only producer), close deletes the session, and the in-editor edits are gone. tests/server/file-watcher.test.ts:13 mocks `node:fs`, so the suite cannot see this.
+Confidence: high
+
+### H-2  Session filename is encodeURIComponent(path): non-ASCII paths hit ENAMETOOLONG and poison autosave for every open document
+Severity: High
+Location: src/server/session/manager.ts:29-31 (sessionKey), :105 (atomicWrite); src/server/documents/autosave.ts:26-34; src/server/mcp/document-service.ts:383,502,509
+Evidence: [ran: npx tsx scratchpad/exp/exp4.ts]
+Failure: A 75-character Cyrillic path encodes to a 295-byte filename and `atomicWrite` throws ENAMETOOLONG (48 CJK chars → 234 bytes still fits; the 255-byte limit is reached at roughly 85 non-ASCII characters of path). The autosave loop is `for (…) await saveSession(...)` with no per-document try/catch and `autoSaveAllToDisk()` after it, so one such document aborts autosave-to-disk for ALL documents on every tick; an explicit save writes the file (document-service.ts:~490) and then throws at `saveSession` (:502) before `Y_MAP_SAVED_AT_VERSION` is set (:509), so the baseline never advances and every later save reports "File modified externally" against a file Tandem itself just wrote.
+Confidence: high
+
+### H-3  Inline marks inside frontmatter / footnote-definition / raw-HTML paragraphs / code blocks serialize as literal `<bold>…</bold>` XML into the file
+Severity: High
+Location: src/server/file-io/mdast-ydoc.ts:886-893 (getElementPlainText uses child.toString()), :714-720 (codeBlock value += child.toString()), :651 (raw-attr paragraph → html node)
+Evidence: [ran: npx tsx scratchpad/exp/exp2.ts; npx tsx scratchpad/exp/exp8.ts]
+Failure: `Y.XmlText.toString()` renders formatted runs as XML, so a bold mark that lands inside a raw-carrier paragraph (frontmatter, `[^1]: …` definition, HTML block) or a code block is written to disk as `<bold>---\nt</bold>itle: X` / `[^1]: <italic>A footno</italic>te def` / `<bold>let</bold> x = 1;` — the frontmatter case also destroys the YAML fence on the next parse. Server-side this is reachable without the browser: a cross-block `tandem_edit` whose tail merges into a code block (`mergeInlineTail` copies marks) produced `` ```\nlet x X<bold> tail</bold> here\n``` `` in exp8.
+Confidence: high
+
+### H-4  validateRange / anchoredRange accept offsets inside a UTF-16 surrogate pair; edits then write U+FFFD
+Severity: High
+Location: src/server/positions.ts:110 (validateRange), :189 (anchoredRange); src/server/mcp/document-model.ts:721 (insertPlainTextAtOffset), :756 (replaceFlatRangeInElement)
+Evidence: [ran: npx tsx scratchpad/exp/exp2.ts]
+Failure: On `Hello 👋 world`, `validateRange(7,8)` and `anchoredRange(7,9)` both succeed (the only checks are `from > to` and the textSnapshot), and `Y.Text.insert` at 7 yields `Hello �X� world` while deleting [7,9) yields `Hello �world` — yjs's ContentString.splice substitutes U+FFFD on both halves of a split pair. An MCP client that counts code points (or that copies offsets from a `tandem_getTextContent` slice ending mid-emoji) silently corrupts the character on either side, and the corruption survives save. `docs/mcp-tools.md` never says offsets are UTF-16 code units (see Doc drift).
+Confidence: high
+
+### H-5  Obsidian wikilinks are escaped on every save
+Severity: High
+Location: src/server/file-io/markdown.ts:136-160 (custom `text` handler — `state.safe` then un-escape rules 1–5)
+Evidence: [ran: npx tsx scratchpad/exp/exp5.ts]
+Failure: `[[Other Note]]` round-trips as `\[[Other Note]]` and `![[image.png]]` as `!\[[image.png]]`, because the un-escape rules restore `\[` only in the patterns they enumerate and `[[` is not one of them. Opening a vault note and pressing save (or any autosave) breaks every wikilink and embed in the file; Obsidian then renders the literal backslash and loses the graph edge. The corpus run in rt.ts shows all other Obsidian syntax (`==hl==`, `#tag`, `%%…%%`, `> [!NOTE]`) survives, so this is the one construct users will hit.
+Confidence: high
+
+### H-6  docx flat-text contract (walker ≡ ydoc flat text) is broken by tabs, line breaks, symbols, footnote references and headings-in-tables — write-back throws or anchors comments to the wrong text
+Severity: High
+Location: src/server/file-io/docx-walker.ts:4 (contract comment), :168 (SINGLE_CHAR_ELEMENTS), :215 (heading prefix for every heading-styled w:p), :269 (`" "` placeholder for w:sym); src/server/file-io/docx-apply.ts:522 (`if (offsetMap.flatText !== options.ydocFlatText) throw`)
+Evidence: [ran: npx tsx scratchpad/exp/exp6.ts; npx tsx scratchpad/exp/exp7.ts]
+Failure: A body containing a `w:tab` or `w:br` makes `applyTrackedChanges` throw "Flat text mismatch" (fail-closed, so the user gets an error instead of tracked changes, on ordinary Word documents); a `w:sym` walks as `" "` while the ydoc holds `✓`; a footnote reference gives ydoc `Claim[1] …` vs walker `Claim …` so every later imported-comment anchor is shifted −3 (comment on "target" attaches to "en tar"); a Heading 2 inside a table cell gets `## ` from the walker but not the ydoc (cell headings flatten), shifting anchors +3. The first case is loud; the last three are silent mis-anchoring of imported Word comments.
+Confidence: high
+
+### H-7  Inline images in .docx bodies are dropped on import and never reported to the user
+Severity: High
+Location: src/server/file-io/docx-html.ts:325 (`case "p"` defers children inline), :573-633 (processInlineNodes has no `img` branch); src/server/file-io/docx-lost-features.ts:199 (counts header/footer drawings only); src/server/file-io/docx-export.ts:20-22
+Evidence: [ran: npx tsx scratchpad/exp/exp4.ts]
+Failure: `<p>Before <img/> after</p>` from mammoth becomes `Before  after`; the lost-features banner only counts drawings in headers/footers and mammoth emits no warning, so a document whose body images vanished shows no banner, and a later `tandem_save`/`tandem_applyChanges` export writes the image-less document over the original. tests/server/docx-roundtrip-fidelity.test.ts:253 already registers this as a known "breaks" case, i.e. it is known to the suite but not to the user — the export module's header comment claims images are preserved.
+Confidence: high
+
+### M-1  A paragraph with any inline image is split into three blocks (text / image / text); list items become loose
+Severity: Medium
+Location: src/server/file-io/mdast-ydoc.ts:219-221 (paragraph → splitParagraphImages)
+Evidence: [ran: npx tsx scratchpad/exp/rt.ts]
+Failure: `Click the ![i](i.png) button` saves back as three separate blocks, and `- ![i](i.png) caption` becomes a loose list item with the caption on its own line. Any document using inline icons/badges (READMEs) is silently restructured on the first save.
+Confidence: high
+
+### M-2  Backslash escapes the user wrote are stripped on save
+Severity: Medium
+Location: src/server/file-io/markdown.ts:136-160
+Evidence: [ran: npx tsx scratchpad/exp/exp5.ts; npx tsx scratchpad/exp/rt.ts]
+Failure: `\$5` → `$5`, `\(x\)` → `(x)`, `\.` → `.`, `\{` → `{` (also `\#` at line start survives only because remark re-escapes it). In MathJax/KaTeX-enabled renderers (Obsidian, Docusaurus, GitHub math) `$5 and $6` becomes an inline-math span after Tandem strips the escapes the author added specifically to prevent that.
+Confidence: high
+
+### M-3  Fenced-code `meta` string is dropped
+Severity: Medium
+Location: src/server/file-io/mdast-ydoc.ts:265-268 (only `node.lang` is stored)
+Evidence: [ran: npx tsx scratchpad/exp/rt.ts]
+Failure: ```` ```js title="app.js" {1,3} ```` is saved as ```` ```js ````; Docusaurus/Astro/MkDocs line-highlight, title and `showLineNumbers` directives vanish silently on the first save.
+Confidence: high
+
+### M-4  A corrupt session file is never quarantined; the document becomes unopenable by every path
+Severity: Medium
+Location: src/server/documents/open.ts:766-780 (maybeRestoreSession → restoreYDoc uncaught); src/server/session/manager.ts:110-135 (removes only on JSON SyntaxError); src/server/mcp/document-service.ts:1617-1640 (restoreOpenDocuments keeps session on non-ENOENT error)
+Evidence: [ran: npx tsx scratchpad/exp/exp3.ts]
+Failure: A 1-byte truncation, a half-written update, a single bit flip or a missing field in `ydocState` all make `Y.applyUpdate` throw; the throw propagates out of `openFromDisk`, so `tandem_open`, the tab restore at boot and the Tauri file-association open all fail for that path until the user finds and deletes `<encoded-path>.json` under the env-paths sessions dir. The loader's own log line says "corrupted session … removing" but that branch fires only for JSON-level corruption. Power loss mid-write is unlikely to produce this because saveSession uses atomicWrite, but a truncated copy/restore of the sessions dir does.
+Confidence: high
+
+### M-5  `tandem_open force:true` and the source-view commit delete the on-disk annotation envelope, not just the in-memory map
+Severity: Medium
+Location: src/server/documents/populate.ts:~330-345 (clearAndReload → clearFileSyncContext + store.clear())
+Evidence: [read: src/server/documents/populate.ts:320-350]
+Failure: `store.clear()` unlinks `<docHash>.json`, so the durable envelope — the thing rename-recovery and the tombstone ledger exist to protect — is gone with no backup; CLAUDE.md says force "clears annotations, awareness and content in one transaction", which reads as an in-memory reset. A Claude session that force-reopens to recover from a bad state destroys the user's notes on disk as well as in the doc.
+Confidence: medium
+
+### M-6  `file:` and `data:image/svg+xml` image sources are replaced by their alt text
+Severity: Medium
+Location: src/server/file-io/mdast-ydoc.ts:433-434 (imageToYxml → sanitizeImageSrc)
+Evidence: [ran: npx tsx scratchpad/exp/exp4.ts]
+Failure: `![diagram](file:///…/d.svg)` and `![](data:image/svg+xml;…)` are downgraded to a paragraph containing the alt text and saved that way; the image reference is lost from the file on the next save with no lost-features notice. Relative and http(s) sources survive.
+Confidence: high
+
+## Findings — remaining
+
+### L-1  atomicWrite leaks the temp sibling when writeFile fails, and preserves neither mode nor hard links
+Severity: Low
+Location: src/server/file-io/index.ts:349-364, :321 (unlink only on rename failure); src/server/file-io/reaper.ts:47; src/server/index.ts:389
+Evidence: [read: src/server/file-io/index.ts:300-370]
+Failure: ENOSPC/EACCES during `fs.writeFile(tempPath)` leaves `.<name>.tmp-…` next to the user's document and the reaper sweeps only the annotations and sessions dirs, so reaper.ts:47's "failed writes never orphan" holds only for those two dirs. The rename also replaces the inode, so a 0600 file becomes umask-default and a hard-linked file (Nix/Dropbox-style setups) is silently unlinked from its twin.
+Confidence: medium
+
+### L-2  tandem_edit inherits link / rawMarkdown marks at the insertion point
+Severity: Low
+Location: src/server/mcp/document-model.ts:721 (insertPlainTextAtOffset)
+Evidence: [ran: npx tsx scratchpad/exp/exp8.ts; npx tsx scratchpad/exp/exp4.ts]
+Failure: Appending ` (updated)` right after link text yields `[the docs (updated)](https://x)` — the new text becomes part of the link; inserting ` *emph* <b>x</b>` after a `[^1]` reference inherits the rawMarkdown mark and is written unescaped. Neither is data loss but both change meaning without the tool reporting it.
+Confidence: high
+
+### L-3  BOM is dropped on save
+Severity: Low
+Location: src/server/file-io/markdown.ts (parse path)
+Evidence: [ran: npx tsx scratchpad/exp/rt.ts]
+Failure: A UTF-8 BOM is consumed by the parser and never re-emitted, so a Windows-Notepad-authored file changes bytes on the first save; invisible except to diff tools and some Windows consumers.
+Confidence: high
+
+### L-4  Mtime baseline uses local Date.now(); a network share with clock skew makes every save "modified externally"
+Severity: Low
+Location: src/server/mcp/document-service.ts:383 (`stat.mtimeMs > lastSavedAt + 1000`), :509
+Evidence: [inferred]
+Failure: The guard compares the file's server-side mtime with the local clock at save time; on NFS/SMB with the server clock >1 s ahead, the just-written file already looks newer than the baseline and the next save is refused. Not run (no share available in the sandbox).
+Confidence: low
+
+### L-5  sessionKey is case-sensitive while NTFS/APFS paths are not
+Severity: Low
+Location: src/server/session/manager.ts:29-31
+Evidence: [inferred]
+Failure: Opening `C:\Docs\A.md` and later `c:\docs\a.md` (drag-drop vs. file dialog produce different casings on Windows) yields two session files for one document; the second open restores nothing and the first session is orphaned until the reaper's age gate. `resolveAndValidatePath` uses realpath, which normalizes on macOS but not always drive-letter case on Windows.
+Confidence: low
+
+### L-6  extends (already-reported) ".html reports saved:true": .html is also opened through the plaintext adapter, so tags become literal text
+Severity: Low
+Location: src/server/file-io/ adapter registry (plaintext fallback)
+Evidence: [read: src/server/file-io/index.ts adapter selection]
+Failure: Delta only — the other reviewer covered the false saved:true; the import half is that README.md:42,102 lists .html as supported while the file is populated as plain text with the `populateYDoc` heading heuristic, so `<h1>` markup is shown verbatim.
+Confidence: medium
+
+## Unchecked leads
+
+- UL-1 docx: `w:tab` inside a table cell and `w:br type="page"` — likely the same mismatch class as H-6 but not run.
+- UL-2 Source-view commit path in reload-family.ts: I read that it clears annotations via the same `clearAndReload`; did not confirm whether the browser shows a warning before the envelope is unlinked (M-5 delta).
+- UL-3 markdown: `remark-stringify` `tablePipeAlign:false` plus `| - |` minimal separators — confirmed cosmetic; did not check tables whose cells contain literal `|` escaped as `\|` (may hit the M-2 escape stripping and break the table).
+- UL-4 Session migration runner (v1→v2 dormant): read but not exercised with a v1 fixture.
+- UL-5 Hard breaks inside a heading (`# a\` + newline) — the offset model counts hardBreak as 1 char; did not test a heading containing one against `tandem_edit`'s heading-markup rejection.
+- UL-6 File watcher on macOS: Node docs state the rename-inode behaviour applies to Linux and macOS; only Linux was run (H-1).
+
+## Doc drift
+
+- docs/mcp-tools.md:5,65,255-256 and skills/tandem/SKILL.md:22 say "character offsets"; the coordinate system is UTF-16 code units and the tool never rejects a mid-surrogate offset (H-4).
+- CLAUDE.md "tandem_open with force:true clears annotations, awareness and content in one transaction" omits that the on-disk envelope is unlinked (M-5).
+- docs/gotchas.md:154 describes the two-layer self-write filter in NTFS-centric terms; the Linux/macOS inode loss (H-1) is not mentioned anywhere.
+- src/server/file-io/docx-walker.ts:4 states the walker's flat text equals the ydoc flat text; false for tab/br/sym/footnote-ref/heading-in-cell (H-6).
+- src/server/file-io/docx-export.ts:20-22 claims images are preserved through export; body images are dropped at import (H-7).
+- src/server/file-io/reaper.ts:47 "failed writes never orphan" — true only for the two swept dirs (L-1).
+- src/server/session/manager.ts:120 log "corrupted session … removing" fires only for JSON parse errors, not for corrupt ydocState (M-4).
+- docs/decisions.md ADR-042 invisible-normalization set omits: escape stripping (M-2), wikilink escaping (H-5), inline-image paragraph split (M-1), fence meta drop (M-3), BOM drop (L-3).
+- README.md:42,102 lists .html as a supported format (L-6).
+
+## Verified fine
+
+- Offset round-trip property: every real character resolves through flatOffsetToRelPos → relPosToFlatOffset exactly; the only deviations are heading-prefix offsets, block separators with assoc 0 (+1) and empty-element boundaries — 14 expected mismatches in exp2.ts, all explained. [ran: exp2.ts]
+- `collectBlocks` slices equal `extractText`; hardBreak annotation anchors resolve `ok`; line-ending detection/restoration (LF, CRLF, CR, frontmatter under CRLF) byte-exact. [ran: rt.ts, exp2.ts]
+- Round-trip corpus: 107 constructs, 55 byte-identical, 52 changed, all idempotent on the second pass. Invisible normalizations (setext→ATX, `## T ##`→`## T`, `~~~`/indented→fence, `*`/`+`→`-`, `3)`→`3.`, `_em_`→`*em*`, `~x~`→`~~x~~`, `***`→`---`, two-space break→`\`, entities decoded, bare URL→`<url>`, `|---|`→`| - |`, missing cells made explicit, blank-line runs collapsed, trailing newline added, `a\`→`a\\`, `~~**x**~~`→`**~~x~~**`, `[a](u_(b))`→`u_\(b\)`) are semantically neutral. Preserved: soft wraps, headings 1–6, nested/task/loose lists, aligned tables, footnotes, reference links, HTML blocks/comments/inline, emoji, `==hl==`, `#tag`, `%%…%%`, `> [!NOTE]`. [ran: rt.ts, exp5.ts]
+- `refreshRange` arms, textSnapshot relocation, annotation store merge/tombstones/pickWinner, quarantine of JSON-corrupt envelopes, store lock, rename recovery rails, doc-backup once-per-run and size gates, rename retry on EPERM, docx comment id/threading, `applyTrackedChanges` fail-closed guard, tutorial injection id-idempotent (re-inject is #1696), `clearAndReload`/`reloadFromDisk` conflict-guard identity comparisons, plaintext flatten byte-neutral, symlink handling via realpath. [read + ran where noted above]
+- Reaper: age gate + regex boundary confine it to annotations/sessions dirs; never user dirs. [read: src/server/file-io/reaper.ts; src/server/index.ts:389]
+
+Questions for Bryan: Are Obsidian vaults in scope (H-5, M-2)? Should `.html` open at all before v1.0 (L-6)? Is `tandem_applyChanges` still a v1.0 surface given H-6's fail-closed rate on ordinary Word files? Should force-open / source-view commit really unlink the annotation envelope (M-5)?
+
+## Addendum (post-resume verification, 3 non-write calls spent)
+
+- UL-3 resolved → Verified fine: `| x \| y | z |` round-trips byte-identical (remark re-escapes the pipe in cell context); outside a table `foo\|bar` → `foo|bar`, which is just another instance of M-2, not a table-breaking case. [ran: npx tsx scratchpad/exp/ul3.ts]
+- UL-1, UL-2, UL-4, UL-5, UL-6 remain unchecked.
+
+## Coverage against manifests/server-data.md
+
+Covered (read, and run where an experiment is cited above): src/server/documents/{open,populate,reload-family,autosave,conflict,dirty,watcher,annotation-wiring}.ts; src/server/file-io/{index,markdown,mdast-ydoc,hardbreak-normalize,line-endings,plaintext-flatten,doc-backup,reaper,docx,docx-html,docx-walker,docx-apply,docx-comments,docx-comment-export,docx-export,docx-lost-features,docx-verify,types}.ts; src/server/file-watcher.ts; src/server/positions.ts; src/shared/positions/{index,types,ydoc}.ts; src/shared/{offsets,snapshot,image-src-safety,constants}.ts; src/server/annotations/{store,sync,schema,doc-hash,lockfile,rename-recovery}.ts + migrations/; src/server/session/manager.ts; src/server/sessions/context.ts; src/server/yjs/{lifecycle,provider}.ts; src/server/mcp/{document-model,document-service,document-store,document,annotations,tutorial-annotations,docx-apply,routes/close}.ts; the relevant tests (file-watcher, roundtrip-corpus, markdown-fidelity, docx-roundtrip-fidelity) and docs (architecture, gotchas, decisions ADR-027/031/034/036/042, mcp-tools, SKILL.md).
+
+Not covered / thin: `src/server/annotations/migrations/` was read but no v1 fixture was pushed through the runner (UL-4); `src/server/yjs/provider.ts` was read only for the generationId/read-only paths, not the Hocuspocus onLoadDocument swap under concurrent open; `src/server/sessions/context.ts` was read only for the session-id AsyncLocalStorage shape; docx on macOS/Windows-authored files beyond the synthetic fixtures in exp6/exp7 was not exercised; the file watcher was run on Linux only (UL-6); no client-side `pmDocFlatText` parity run beyond reading `src/client/positions.ts`.
+
+STATUS: complete

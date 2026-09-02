@@ -1,0 +1,23 @@
+STATUS: partial
+
+[all 12 answers compiled below; see final chat response for full detail]
+
+1. NO - nothing invokes tests/hooks/test_workflow_state.sh (only self-reference in the file/git index).
+2. NO (not the same way) - remove-seam has only a bare occurrence-count pin (toHaveLength(2)); reply-seam additionally has two dedicated regex assertions for alias binding / aliased re-export.
+3. isEnabled = enabled.includes("linux-libxdo") where enabled = tauriFeatures() parsed from the `tauri = {...}` dependency line. TRUE for checked-in Cargo.toml (features = ["tray-icon","linux-libxdo"]). Since isEnabled=true, the two "declares X in depends" tests RUN, and the it.runIf(!isEnabled) "does not declare a dependency for a disabled feature" test is SKIPPED.
+4. NONE of the three specs assert Claude-created-annotation hold-then-release in Solo mode. keyboard-shortcuts.spec.ts:222 only toggles mode UI. mode-toggle-geometry.spec.ts is pure pixel-geometry. settings-and-filters.spec.ts:393 explicitly documents "Wave M: fade-not-hide" - annotation stays visible (faded) in solo, sb-held permanently absent, count stays 1 in both modes.
+5. Two additional true-positive zero-expect test bodies (beyond the known mcp-tool-integration.test.ts:307): file-watcher.test.ts:178 ("is a no-op for unwatched paths") and annotation-create-lifecycle.test.ts:264 ("type-level: the seam cannot mint a note...", relies only on @ts-expect-error compile-time checks). Several script-flagged candidates were false positives (helper wraps expect: expectWithinMs, expectSuffixRejection; brace-counting artifacts; comment text mismatched as title).
+6. NO literal duplicate key named "tandem" in one file - doctor.ts states plugin servers "load additively under `plugin_<plugin>_<server>`", so the wizard's `mcpServers.tandem` in ~/.claude.json and the plugin's registration are different keys, but functionally the user gets the tandem_* toolset twice. Plugin manifest's mcpServers key literally: {"tandem": {command:npx tandem-editor mcp-stdio}, "tandem-channel": {command:npx tandem-editor channel}}.
+7. YES - docs/decisions.md:378-380 states a reviewed, dated decision to KEEP the plugin's unconditional tandem-channel registration ("the removal gate was evaluated. Verdict: KEEP experimental.monitors, and keep the plugin's tandem-channel entry"), closed permanently 2026-08-09.
+8. YES - run_acceptance_tests.py checks `if collected == 0: return 1` and `if result.testsRun - skipped <= 0: return 1` (plus expected_failures and testsRun!=collected checks).
+9. trackedOrigins defaults to y-prosemirror's [ySyncPluginKey] (Tandem passes none - Collaboration.configure({document: ydoc}) only); captureTimeout defaults to Yjs's 500ms (unmodified). Remote changes ARE excluded from undo tracking - only local edits are transacted under ySyncPluginKey (sync-plugin.js: `pluginState.doc.transact((tr)=>{...}, ySyncPluginKey)`), so an editor's UndoManager, tracking only ySyncPluginKey, does not undo remote-origin updates.
+10. NO - no DOMPurify anywhere in repo (not a dependency, only its URL-scheme-allowlist logic was "derived" for href/src safety in url-safety.ts/image-src-safety.ts). transformPastedHTML in editor-props.ts only does whitespace normalization + hard-break splitting; sanitization of script/style/on* is implicit via ProseMirror's schema-constrained parser, not an explicit strip step.
+11. Four gates in tests/e2e:
+   - tests/e2e/agent-identity.spec.ts:44 test.skip(!BYO_MODELS_ENABLED, ...)
+   - tests/e2e/keyboard-a11y.spec.ts:271 test.skip(true, "tabbed rail layout is not active...")
+   - tests/e2e/settings-modal.spec.ts:155 test.skip("Ctrl+, opens the SettingsModal ... superseded", async () => {...})
+   - tests/e2e/settings-models.spec.ts:100 test.skip(!BYO_MODELS_ENABLED, ...)
+12. vi.mock file-watcher counts (1 each) in: docx-size-gate-call-sites.test.ts, snapshot-truncation-reload.test.ts, open-pipeline-lifecycle.test.ts, document-service.test.ts, reload-from-markdown.test.ts, open-pipeline-transact-batching.test.ts, reload-from-disk-persistence.test.ts, rename-document.test.ts, restore-backup.test.ts, docx-fidelity-report.test.ts, wire-annotation-store-internal-failure.test.ts, external-conflict.test.ts, session-readonly-restore.test.ts, open-pipeline-cleanup-on-failure.test.ts, adr-034-open-characterization.test.ts.
+   src/server/file-watcher.ts does NOT re-export from documents/watcher.ts - relationship is the reverse: documents/watcher.ts:44 `import { watchFile } from "../file-watcher.js";` file-watcher.ts is a standalone, full low-level fs.watch implementation.
+
+STATUS: complete

@@ -1,0 +1,293 @@
+STATUS: partial
+
+CLIENT UI REVIEW — <repo> @ master 3fb6408 (v0.24.1)
+Scope: src/client/** minus editor core, index.html, client CSS.
+
+================================================================
+FINDINGS — HIGH CONFIDENCE
+================================================================
+
+--- F1 [High] A pending "Accept All / Reject All" confirmation survives a document
+    switch and silently retargets the new document
+file: src/client/panels/SidePanel.svelte:186, 216-223, 501-503, 737-747
+evidence: [read: src/client/panels/SidePanel.svelte:180-230, 495-520, 735-750]
+A user clicks "Accept All (N)" in the annotations rail on document A; the row swaps to
+"Accept N annotations?" with a Confirm button. Before confirming they switch tabs —
+SidePanel is always mounted (PanelSlot display-toggle) and App.svelte does NOT wrap it in
+`{#key documentId}`, and the only reset for `bulkConfirm` is an $effect keyed on the three
+FILTER values, so the confirmation stays armed and `handleBulk` iterates
+`filteredData.reviewPending`, which is now document B's list. If B has >1 pending
+annotation the row is still on screen (BulkActions renders on `pendingCount > 1`) reading
+B's count, and the `$effect(() => { if (bulkConfirm) confirmBtnEl?.focus() })` re-focuses
+Confirm the moment the bar re-mounts — one Enter resolves every pending annotation in a
+document the user never asked about, with no undo.
+This is the identical hazard the batch-promote code documents having already been bitten by
+and fixed (SidePanel.svelte:505-518: "Relying on it alone was a bug — Clear left the flag
+set, and re-checking a single import re-mounted the bar straight into the confirm branch,
+warning text and stolen focus included, with nothing requested"). `promoteConfirmRequested`
+got four reset sites; `bulkConfirm` got one. Existing coverage is filter-only
+(tests/e2e/settings-and-filters.spec.ts:283, 330, 367) — no document-change case exists.
+confidence: high
+
+--- F2 [High] "Clear all" and the per-row "×" in the Open dialog destroy saved annotation
+    sessions with one unguarded click
+file: src/client/components/FileOpenDialog.svelte:64-82, 326-335, 369-376
+evidence: [read: src/client/components/FileOpenDialog.svelte:60-85, 320-380;
+           src/client/utils/sessions.ts:56-67]
+Each recent-session row renders "<relative time> · N annotations" and a "×" button one
+element to its right; `onclick={() => deleteSession(session.filePath)}` POSTs
+/api/sessions/delete immediately. Above the list a small underlined "Clear all" link calls
+`clearAllSessions()` for every document ever opened. Neither has a confirmation step, an
+undo, or a toast; the only feedback is the row vanishing. In a dialog whose primary action
+is a click on the adjacent row, a mis-click permanently discards the persisted annotation
+state for that document (or, one row higher, for all of them).
+confidence: high that both are unconfirmed and irreversible from the UI; medium on the exact
+blast radius (whether the deleted session file is the only home of those annotations).
+
+--- F3 [Medium] Four dialogs declare aria-modal="true" but never contain Tab
+file: src/client/components/CommandPalette.svelte:390-392;
+      src/client/components/FileOpenDialog.svelte:184-187;
+      src/client/components/ModelEditModal.svelte:140-143;
+      src/client/components/FirstRunModelPickerModal.svelte:157-165
+evidence: [read: those lines + src/client/utils/focus-trap.ts:1-71]
+`trapTab`/`focusablesWithin` exists precisely for this and is used by SettingsModal and
+LicenseWall, with three hand-rolled copies in HelpModal, IntegrationWizardModal and
+CoworkAdminDeclinedModal. These four dialogs have neither: grepping each file for `"Tab"`
+returns nothing except FirstRunModelPickerModal, which explicitly lets Tab out
+(`if (e.key !== "Tab") e.stopPropagation();`). A keyboard user who presses Tab past the last
+control lands on the editor/toolbar behind the scrim while assistive tech has been told the
+background is inert; the command palette is the worst case because it is reachable from
+every screen and its only focusable is the input.
+confidence: high
+
+--- F4 [Medium] 7 of 8 role="radiogroup" containers are themselves tab stops, doubling every
+    tab stop in Settings
+file: src/client/components/AppearanceSettings.svelte:74-78, 124-128, 162-166, ~215;
+      src/client/components/EditorSettings.svelte (3 groups)
+evidence: [read: src/client/components/AppearanceSettings.svelte:40-230;
+           src/client/panels/ChipGroup.svelte:126-131;
+           ran: grep -A2 'role="radiogroup"' → 7 of 8 carry tabindex="0"]
+Each Settings radiogroup is `<div role="radiogroup" tabindex="0" onkeydown=...>` whose
+children use the roving tabindex from `tabIndexFor` (0 on the checked radio). Tab therefore
+stops on the group container and then again on the checked radio — two stops per group, four
+groups in Appearance plus three in Editor. ChipGroup, the eighth radiogroup in the app, uses
+`tabindex="-1"` on the container, which is the WAI-ARIA APG-correct value, so the two
+patterns disagree inside one product. A screen-reader user tabbing through Appearance hears
+"Theme, radio group" with nothing selected, then Tab again to hear the selected radio.
+confidence: high
+
+--- F5 [Medium] The shipped radiogroup keyboard implementation has zero tests; the one with
+    tests is dead code
+file: src/client/hooks/useRadioGroup.ts (whole file) vs
+      src/client/hooks/useRadioGroup.svelte.ts:15-54
+evidence: [ran: grep -rn "createRadioGroup" tests → 0 hits;
+           grep for hooks/useRadioGroup.js → only tests/client/useRadioGroup.test.ts]
+Of 13 pure/rune hook pairs checked, 12 have the `.svelte.ts` import the pure `.ts`
+(useTabOrder, useTheme, useDensity, useTandemSettings, …). `useRadioGroup.svelte.ts` is the
+exception: it re-implements the logic, and only the shipped copy carries the
+`radios[values.indexOf(nextValue)]?.focus()` that actually moves DOM focus. Nothing in
+tests/ or tests/e2e touches `createRadioGroup` or `role="radio"`, so all Settings arrow-key
+navigation is covered only by a file (`tests/client/useRadioGroup.test.ts`) exercising a
+divergent module no component imports. Same class as #1616's `expectTypeOf` no-ops: a green
+suite that asserts nothing about shipped behaviour.
+confidence: high
+
+--- F6 [Medium] Settings radiogroups stay arrow-navigable while read-only and drop focus to
+    <body> — extends #1722
+file: src/client/components/AppearanceSettings.svelte:47-65 (constructors) and 82-86
+      (`disabled={readOnly}`); same shape in EditorSettings.svelte:67-140
+evidence: [read: src/client/components/AppearanceSettings.svelte:40-135;
+           src/client/hooks/useRadioGroup.svelte.ts:33, 46-53, 56-63]
+Delta over #1722 (which is about rail toggles): none of the seven Settings radiogroups pass
+an `isDisabled` predicate, while their radios take `disabled={readOnly}`. On a read-only
+settings blob, ArrowRight still calls `onUpdate` (a no-op), then calls `.focus()` on a
+`disabled` button — which does nothing, so focus is left where it was or dropped to `<body>`
+— and `tabIndexFor` still reports 0 for a radio that cannot take focus at all. The result is
+the same silent no-op-plus-lost-focus pattern #1722 describes, on a second surface.
+confidence: medium
+
+--- F7 [Low] Enter or click on a shortcut row in the command palette does nothing AND
+    discards the focus-restore target
+file: src/client/components/CommandPalette.svelte:300-330, 473-478
+evidence: [read: src/client/components/CommandPalette.svelte:290-345, 470-480]
+`runResult()` sets `opener = null` on its first line, then branches on `kind`; there is no
+`shortcut` branch ("shortcut items: display-only, no action on Enter"). A user in `?` mode
+who presses Enter on a highlighted row gets no feedback and the palette stays open, and the
+subsequent Escape can no longer restore focus to wherever they opened the palette from — the
+exact regression the `opener` mechanism was added to fix. The rows are `role="option"` with
+`aria-selected` and a pointer-driven `onmouseenter` selection, so nothing signals they are
+inert.
+confidence: high
+
+--- F8 [Low] The annotations filter toggle is a disclosure button with no aria-expanded
+file: src/client/panels/SidePanel.svelte:687-695
+evidence: [read: src/client/panels/SidePanel.svelte:685-712]
+`data-testid="filter-bar-toggle"` toggles `filterBarOpen`, which mounts/unmounts the
+FilterBar, but carries neither `aria-expanded` nor `aria-controls`; its "▾" caret is not
+`aria-hidden`, so it is also read out as part of the accessible name ("All 12 ▾ Filter").
+A screen-reader user cannot tell whether the filter panel is currently open.
+confidence: high
+
+================================================================
+FINDINGS — REMAINING
+================================================================
+
+--- R1 [Low] Annotation filters persist across document switches with no reset
+file: src/client/panels/SidePanel.svelte:183-186
+evidence: [read: src/client/panels/SidePanel.svelte:180-190; documentId is used only at
+          411-412 and 720, never in a reset effect]
+Filters set while reviewing document A remain applied when the user switches to document B,
+so B's rail can open showing a subset (or "No annotations match filters."). Partly mitigated:
+the collapsed toggle's label shows the active filter name and visible count. Whether this is
+a bug depends on intent; flagged because nothing in the code records a decision either way.
+confidence: high that it persists, medium that it is undesired.
+
+--- R2 [Low] Bulk tab closes fire one blocking native confirm() per dirty tab, and cancelling
+    one does not abort the rest
+file: src/client/hooks/useDocumentWorkspace.svelte.ts:323-381
+evidence: [read: src/client/hooks/useDocumentWorkspace.svelte.ts:295-381]
+"Close tabs to the right" over five unsaved scratchpads pops five sequential OS-modal
+confirms; declining the third still closes the fourth and fifth. `closeOtherTabs`/
+`closeTabsToLeft`/`closeTabsToRight` iterate a snapshot and each iteration re-enters the
+guard independently.
+confidence: high
+
+--- R3 [Low] Three independent Escape owners at window/document level; stopPropagation does
+    not stop same-target listeners
+file: src/client/components/CommandPalette.svelte:252-263;
+      src/client/editor/toolbar/Toolbar.svelte:~755-765;
+      src/client/components/SettingsModal.svelte:491-510
+evidence: [read: those regions + src/client/utils/escape-owner.ts:1-48]
+CommandPalette and Toolbar both register capture-phase keydown listeners on `window`.
+`stopPropagation()` does not suppress other listeners on the SAME target, so an Escape that
+dismisses the palette also runs Toolbar's handler in the same phase and can close the
+selection popup underneath it. `escape-owner.ts`'s subtree-claim mechanism only covers
+popovers nested inside the editor, not sibling window-level owners.
+confidence: medium
+
+--- R4 [Low] Chat read state is shared, not per-viewer
+file: src/client/hooks/useChatState.svelte.ts:45-49, 65-71
+evidence: [read: src/client/hooks/useChatState.svelte.ts:35-80]
+`seenIds` comes from `Y_MAP_CHAT_SEEN` in the ctrl room, so with two windows/tabs open on the
+same server, reading a Claude message in one clears the unread badge in the other. Likely
+intended for a single-user product but it is not stated anywhere near the derivation.
+confidence: high
+
+--- R5 [Low] focus-trap skips position:fixed descendants
+file: src/client/utils/focus-trap.ts:27-33
+evidence: [read: src/client/utils/focus-trap.ts:19-45]
+`el.offsetParent !== null` is documented as catching `display:none` and detached subtrees; it
+is also false for any `position: fixed` element, so a fixed-position control inside a trapped
+dialog would be silently excluded from Tab wrapping. No current instance found in
+SettingsModal/LicenseWall/HelpModal/IntegrationWizardModal — this is a latent trap for the
+next dialog that uses one.
+confidence: medium
+
+================================================================
+UNCHECKED LEADS
+================================================================
+- src/client/tabs/DocumentTabs.svelte (1683 lines): frozen-geometry drag-reorder, the
+  `dragDegraded` carve-out, uniform-width math (#1736 touches the same area). Only skimmed.
+- src/client/hooks/useNotifications.svelte.ts: localStorage-backed activity with a prune +
+  cap and a dedupKey identity — classic off-by-one/unbounded-growth territory, unopened.
+- src/client/status/StatusBar.svelte + word-count-cycle, src/client/components/ActivityTray
+  (mask/scroll + dedupe), OnboardingTutorial, HelpModal body, SettingsModal internals.
+- src/client/cowork/**, src/client/keychain/**, src/client/tauri/** — entirely unread.
+- src/client/panels/MarginColumn + marginCollision/marginPressure/marginLeaderGeometry
+  (collision geometry, a likely home for silent layout bugs).
+- ~40 of the ~55 hooks were never opened, including useYjsSync/yjsSync.svelte.ts,
+  useMarginPositions, useTabOrder.svelte.ts, useScratchpadPersistence.
+- Whether `createRadioGroup`'s `values.indexOf(nextValue)` -> `radios[domIdx]` index mapping
+  holds for every consumer (verified for AppearanceSettings; EditorSettings' per-row groups
+  were not checked, and a nested `[role="radio"]` inside a group would break it).
+
+================================================================
+DOC DRIFT
+================================================================
+- src/client/utils/escape-owner.ts:32-38 enumerates "the four popovers the persistent
+  formatting bar owns" as the complete claimant set and warns that "an enumerated subset is
+  exactly the thing that goes stale". There are five: src/client/status/CwdDriftPill.svelte:3
+  also imports and sets `ESCAPE_OWNER_ATTR`, and it is not a formatting-bar popover.
+  [ran: grep -rn "ESCAPE_OWNER_ATTR" src/client]
+- src/client/utils/focus-trap.ts:11-16 says "Three copies remain: IntegrationWizardModal,
+  CoworkAdminDeclinedModal, and HelpModal. New dialogs should use this." Four dialogs added
+  since use neither the util nor a copy (F3), so the file's own census of the problem is now
+  an undercount. [read]
+- src/client/hooks/useRadioGroup.ts:8 "No React dependency — retained for unit-test coverage."
+  The coverage it is retained for covers nothing that ships (F5). [read]
+
+================================================================
+VERIFIED FINE
+================================================================
+- localStorage: all 68 client sites are try/catch-guarded (spot-checked ReviewOnlyBanner,
+  useTutorial, useDragResize, SidePanel ×3, useUpdaterChannel, heading-collapse,
+  annotation.ts, authorship.ts, index.html's pre-mount seed). No repeat of the
+  storage-disabled tutorial crash class. [ran: grep -rn localStorage src/client + reads]
+- Unread-chat accounting: `chatVisible` (App.svelte:1868-1871) correctly ANDs the rail's
+  float/reveal terms, so messages arriving while the rail is collapsed are never
+  acknowledged, and `chat-unread-peek` renders exactly in the states where nothing
+  acknowledges. The asymmetry with `pendingAnnotationBadge` is documented at
+  layout/model.svelte.ts:139-158 and is correct as described. [read]
+- CSS prefix pipeline: hand-written `-webkit-`/standard pairs in bundled CSS (incl.
+  ScrollPill.svelte:204-206's `user-select` pair) are enumerated and probed in BOTH orders by
+  `handWrittenPairs()` in tests/design-system-impl/css-pipeline-contract.test.ts:384-414;
+  index.html's prefixes are correctly hand-written and unminified. [read]
+- Listener/timer hygiene: addEventListener/removeEventListener and setInterval/clearInterval
+  balance across components, panels, tabs and hooks — the five apparent mismatches are all
+  prose in comments. [ran: per-file grep -c comparison across src/client]
+- Tab close: `closeTabAndRecord` guards scratchpad-unsaved (#864) and source-view-dirty
+  (#1021) before closing, and all three bulk closes route through it rather than around it.
+  [read: useDocumentWorkspace.svelte.ts:295-381]
+- PanelSlot's `display: flex|none` wrapper keeps ChatPanel and SidePanel mounted (local state
+  survives rail-tab switches) while removing the hidden one from the tab order. [read]
+- layout/model.svelte.ts: every reactive value is a getter, `primaryTab` is read under
+  `untrack` so unrelated settings writes cannot yank the user out of Chat, and
+  `selectRailTab` writes intent before bookkeeping. [read: full file]
+- sentry.ts is opt-in, DSN-free in the bundle, and scrubs paths/secrets; not a v1.0 privacy
+  risk from the client side. [read: src/client/sentry.ts:1-50]
+
+================================================================
+PLAYWRIGHT CANDIDATES
+================================================================
+- F1: open doc A and doc B each with >=2 pending annotations; click `[data-testid=
+  'bulk-accept-btn']` on A, switch to B's tab, assert `[data-testid='bulk-confirm-btn']`
+  has count 0 (and that focus is not on it).
+- F3: with the command palette open, press Tab once and assert `document.activeElement` is
+  still inside `[data-testid='command-palette']`; repeat for FileOpenDialog,
+  ModelEditModal and FirstRunModelPickerModal.
+- F4: in Settings -> Appearance, Tab from the "Theme" heading and assert the first stop is a
+  `[role="radio"]`, not the `[role="radiogroup"]` container.
+- F6: with a read-only settings blob, focus the theme group, press ArrowRight, assert
+  `document.activeElement !== document.body`.
+- F7: type `?` in the palette, ArrowDown to a shortcut row, press Enter, assert the palette
+  either closes or shows feedback; then press Escape and assert focus returns to the opener.
+- F2: assert a confirmation step exists before `[data-testid='sessions-clear-all']` and
+  `[data-testid='session-delete']` mutate anything.
+
+================================================================
+COVERAGE
+================================================================
+READ: App.svelte (imports/state head, rail markup 2278-2500, banner stack 2160-2220 and
+2755-2815, chat wiring 1860-1900, palette wiring, layout-model wiring 220-240);
+PanelSlot.svelte (full); SidePanel.svelte (script 1-235, 470-545, template 655-775);
+BulkActions.svelte (full); CommandPalette.svelte (200-560); FileOpenDialog.svelte (session
+management + dialog shell); AppearanceSettings.svelte (40-230); ChipGroup radiogroup head;
+layout/model.svelte.ts (full); hooks/useDocumentWorkspace.svelte.ts (295-381);
+hooks/useChatState.svelte.ts (35-80); hooks/useRadioGroup.ts + .svelte.ts (both full);
+utils/focus-trap.ts, utils/keyboard-activate.ts, utils/escape-owner.ts, utils/sessions.ts
+(all full); actions/bannerStackHeight.svelte.ts (full); components/WakeStallBanner.svelte
+(head); client/sentry.ts (head); index.html (theme tokens, prefix policy, pre-mount script);
+tests/design-system-impl/css-pipeline-contract.test.ts (prefix sweep).
+GREPPED ACROSS ALL OF src/client: localStorage sites, state_unsafe_mutation/coalescing-tick
+sites, $effect+await pairs, addEventListener/removeEventListener and setInterval/
+clearInterval balance, role/aria-modal/focus-trap inventory across all nine modals,
+svelte-ignore inventory, -webkit- occurrences, confirm-state declarations, radiogroup
+inventory, pure-vs-rune hook pairing.
+NOT READ: DocumentTabs.svelte body, TabItem beyond its dirty logic, tabDragMotion/tab-floor,
+StatusBar, ActivityTray, OnboardingTutorial, HelpModal body, IntegrationWizardModal body,
+SettingsModal internals, six of the seven settings tabs, EditorSettings body,
+AccessibilitySettings, NetworkSettings, CoworkSettings and all of cowork/, keychain/, tauri/,
+MarginColumn and the margin geometry modules, most of utils/, and roughly 40 of the ~55
+hooks. Budget spent: ~55 non-write tool calls.
+
+STATUS: complete

@@ -1,0 +1,317 @@
+# Findings — UPGRADE / MIGRATION PATH (read-only review)
+# Repo: <repo> @ claude/repo-review-v1-release-e48bsg (v0.24.1)
+# Reviewer area: on-disk state migration, first-run-after-upgrade, #1118 banner,
+#   setup --apply refresh, Tauri updater, cross-version compat, rollback.
+STATUS: complete (see final line)
+
+--------------------------------------------------------------------
+F1. [Medium] An older `tandem setup --apply` silently downgrades a newer
+    installed skill (installSkill() has no version comparison)
+    src/server/integrations/apply.ts:2030-2035 (installSkill), called
+    unconditionally from src/cli/setup.ts:144 and
+    src/server/integrations/api-routes.ts:975
+    [read: src/server/integrations/apply.ts:2029-2035, src/cli/setup.ts:140-150]
+    `refreshExistingSkillIfStale` (apply.ts:2080-2141) is careful — it writes
+    only when `BUNDLED_SKILL_VERSION > onDiskVersion` — but the *consent-bearing*
+    installer it defers to, `installSkill()`, is a bare
+    `atomicWrite(SKILL_CONTENT, skillPath)` with no comparison at all. A user
+    who upgrades the desktop app to vNext (skill v13) but still has an older
+    npm global `tandem` and runs `tandem setup --apply` — which `tandem doctor`
+    actively prescribes for a malformed config, a missing entry or a stale Node
+    path (doctor.ts:1590+) — overwrites ~/.claude/skills/tandem/SKILL.md with
+    the OLD skill, and Claude Code then loads stale behavioural instructions
+    against the new server. It self-heals only on the next HTTP-mode start of
+    the *newer* server (index.ts:572 refreshExistingSkillIfStale); if the user
+    keeps starting the old npm server, it never heals.
+    Confidence: High
+    NEW ASPECT vs ledger: this is the install path, not the refresh path.
+
+F2. [Medium] The published plugin hard-pins `tandem-editor@0.24.1` in five
+    places, so a plugin user's stdio bridge/channel/monitor stay on the old
+    npm package after any desktop or global upgrade
+    .claude-plugin/plugin.json:12,18,29,35 (npx args + two monitor commands)
+    [read: .claude-plugin/plugin.json]
+    Every command the plugin declares is `npx -y tandem-editor@0.24.1 ...`.
+    Upgrading the desktop app (Tauri updater) or `npm i -g tandem-editor@latest`
+    does not move that pin — only re-installing/updating the plugin itself does
+    — so a plugin user runs an old bridge against a new server by construction
+    on every release. `doctor`'s `evaluateStaleGlobal` (doctor.ts:2739-2765)
+    compares the GLOBAL install to the bundled version but nothing compares the
+    INSTALLED PLUGIN's pinned version to the running server's.
+    Confidence: High
+
+F3. [Medium] After a downgrade, EVERY settings-backed control outside the
+    Settings modal goes silently inert — panel toggles, theme picker,
+    formatting bar, decoration toggles — with no explanation anywhere
+    src/client/hooks/useTandemSettings.svelte.ts:91 (`if (settings._readOnly) return;`)
+    [read: src/client/hooks/useTandemSettings.svelte.ts:89-101,
+     src/client/components/SettingsModal.svelte:800-804]
+    `loadSettings` stamps `_readOnly: true` when the stored `schemaVersion` is
+    newer than the build (useTandemSettings.ts:875-939), and `updateSettings`
+    then returns BEFORE mutating the `$state`, so the in-memory value does not
+    change either — the control snaps back. Only `SettingsModal` renders
+    `SettingsReadonlyBanner`; the theme picker (App.svelte:2145), the
+    left/right rail toggles (layout/model.svelte.ts:166-176), the formatting
+    bar's hide button (App.svelte:2258) and the decoration toggles
+    (App.svelte:2231,2252) all no-op with zero feedback. A user who rolls back
+    one version after a bad update finds the whole app's chrome frozen and is
+    given no reason unless they happen to open Settings.
+    Confidence: High
+
+F4. [Medium] Annotation-envelope forward-compat is all-or-nothing at the ARRAY
+    level: one record with a new enum value quarantines the WHOLE file
+    src/server/annotations/schema.ts:215-224 (`annotations: z.array(...)`),
+    src/shared/types.ts:17,19 (closed enums), quarantine at
+    src/server/annotations/store.ts:592-603
+    [ran: npx tsx probe.ts in scratchpad/exp-upgrade — results:
+     baseline => ok, 1 kept; good + additive field => ok, 2 kept;
+     good + future `type: "suggestion"` => FAIL error=corrupt;
+     good + future `status: "superseded"` => FAIL error=corrupt]
+    The module header (schema.ts:4-13) promises forward-compat via
+    `.passthrough()` — "Strict rejection would turn a harmless additive change
+    into a 'corrupt' error" — and that holds for new FIELDS, but a new value in
+    `AnnotationTypeSchema`/`AnnotationStatusSchema`/`AuthorSchema` is rejected
+    and `z.array` fails the entire envelope, not the one row. If vNext adds a
+    fourth annotation type or status without bumping `SCHEMA_VERSION` (which
+    the header explicitly discourages for additive changes), an older Tandem
+    reading that file — a downgrade after a bad update, or an old npm `tandem`
+    started against a doc a newer desktop app annotated — renames the whole
+    envelope to `<hash>.json.corrupt.<ts>`, shows "Annotation file was corrupt"
+    and loads zero annotations for that document.
+    Confidence: High (mechanism), Med (that a future release will widen an enum)
+
+F5. [Medium] The `.future` downgrade-park path is silent, and a SECOND
+    downgrade cycle deletes the parked copy
+    src/server/annotations/store.ts:605-622
+    [read: src/server/annotations/store.ts:592-622]
+    The `corrupt` branch calls `notifyFailure(...)` so the user gets a toast;
+    the `future` branch (a newer schemaVersion, i.e. exactly the
+    downgrade-after-a-bad-update case) parks the file as `<hash>.json.future`
+    and returns an empty doc with only a `console.error` — in the desktop app
+    that goes to a log file the user never sees, so every annotation on every
+    document simply vanishes with no explanation. Worse, the park does
+    `await fs.unlink(futurePath).catch(() => {})` before the rename "so we
+    always keep the most recent copy": upgrade → downgrade (real annotations
+    parked to `.future`, empty v_next file written on the next save) →
+    re-upgrade → downgrade again deletes the `.future` that held the only copy
+    of the user's annotations and replaces it with the empty one.
+    Confidence: High (code), Med (reachability — needs SCHEMA_VERSION > 1,
+    which is dormant-but-wired today: src/server/annotations/migrations/v1_to_v2.ts exists)
+
+F6. [Medium] On a downgrade, the integrations store's actionable
+    "newer schemaVersion — update Tandem or remove <path>" message is
+    swallowed and the setup wizard just 500s with "Internal server error"
+    src/server/integrations/storage.ts:101-106 (throw),
+    src/server/integrations/api-routes.ts:792-796 + :1152-1158 (sendInternal)
+    [read: src/server/integrations/storage.ts:99-108,
+     src/server/integrations/api-routes.ts:790-797, :1152-1158]
+    `readIntegrationsFile` throws a precisely-worded, fixable error when
+    `integrations.json` carries a schemaVersion above what this build supports
+    — the exact downgrade-after-a-bad-update case. Every route that reads it
+    (`GET /api/integrations`, the apply route) funnels the throw through
+    `sendInternal`, which logs to stderr and returns a bare
+    `{"error":"INTERNAL","message":"Internal server error"}`, so the wizard is
+    permanently broken with no on-screen hint; `tandem doctor` has no check for
+    `integrations.json` at all (only the annotation schemaVersion at
+    doctor.ts:2605), so the prescribed diagnostic does not surface it either.
+    Confidence: High
+
+F7. [Low] `checkVersionChange` treats a DOWNGRADE as an "upgrade" and stamps
+    the version file before the CHANGELOG open is attempted
+    src/server/version-check.ts:24-33, src/server/index.ts:597-606
+    [read: src/server/version-check.ts:1-36, src/server/index.ts:593-606]
+    Any stored-version mismatch — including rolling back to an older build —
+    returns "upgraded", so a user who downgrades is shown the (older)
+    CHANGELOG as if they had just updated. Separately, the current version is
+    written to `last-seen-version` INSIDE `checkVersionChange`, before
+    `openFromDisk(CHANGELOG.md)` runs, so if the CHANGELOG is missing from the
+    bundle or the open throws, the catch at index.ts:604 logs and the file is
+    already stamped — that release's changelog never opens, on this or any
+    later launch.
+    Confidence: High
+
+F8. [High] The desktop sidecar and the npm global `tandem` share ONE app-data
+    dir, so having both installed at different versions makes every
+    version-keyed on-disk artifact thrash
+    src/server/platform.ts:10-14 + :39-45; src-tauri/src/sidecar.rs:427 sets
+    only `TANDEM_DATA_DIR`, never `TANDEM_APP_DATA_DIR`
+    [read: src/server/platform.ts:10-14,39-45; src-tauri/src/sidecar.rs:369-427]
+    `resolveAppDataDir()` is `envPaths("tandem", {suffix: ""}).data` unless
+    `TANDEM_APP_DATA_DIR` is set, and the Tauri sidecar sets only
+    `TANDEM_DATA_DIR` (which index.ts:624 uses solely as the welcome.md base).
+    So `sessions/`, `last-seen-version`, `integrations.json`, the annotations
+    envelope dir and the broken-backups dir are the SAME files for a v0.25
+    desktop app and a v0.24.1 npm install. Concretely: alternating between the
+    two re-opens CHANGELOG.md read-only on EVERY launch of both (each stamps
+    its own `APP_VERSION` into the single `last-seen-version`, and
+    `checkVersionChange` reports any mismatch as "upgraded"); and it makes the
+    downgrade hazards in F4/F5/F6 reachable with NO downgrade at all — the
+    older install reads envelopes and `integrations.json` the newer one wrote,
+    every time it starts.
+    Confidence: High
+    (The npm install path is a documented, supported distribution — README
+    "npm global install opens the same editor in a browser" — so both-installed
+    is a normal state, not an exotic one.)
+
+F9. [Medium] `sample/welcome.md` is copied to the data dir only when absent, so
+    upgrades never refresh the tutorial and its `indexOf`-anchored annotations
+    silently stop appearing if the prose changes
+    src-tauri/src/lib.rs:1942 ("Copies each file only if the destination
+    doesn't already exist"), :1985 (`if !dest.exists()`);
+    src/server/mcp/tutorial-annotations.ts:64-68
+    [read: src-tauri/src/lib.rs:1941-1998, src/server/mcp/tutorial-annotations.ts:20-68]
+    Tutorial annotations anchor with `fullText.indexOf(def.targetText)` against
+    exact prose strings ("highlight text and your AI sees it",
+    "simplify onboarding", …). A release that edits `sample/welcome.md` or
+    those target strings ships a new bundled sample that `copy_sample_files`
+    refuses to write over the user's existing copy, so upgraded users open a
+    stale welcome.md whose targets no longer match: `idx === -1`, every
+    tutorial annotation is skipped with only a stderr line, and the onboarding
+    document is silently annotation-free. Fresh installs on the same release
+    see the full tutorial, so the breakage is invisible to anyone testing on a
+    clean machine.
+    Confidence: High (mechanism), Med (that a release will edit welcome.md)
+
+F10. [Low] The skill refresh runs only in HTTP transport mode, so a
+    Claude-Desktop-only (stdio) user's installed skill never updates
+    src/server/index.ts:562 (`if (transportMode === "http")`) wraps both
+    `refreshExistingSkillIfStale()` (:572-578) and the CHANGELOG/version check
+    [read: src/server/index.ts:560-606]
+    `refreshExistingSkillIfStale` is described as "intentionally outside every
+    launcher branch: hand-started Claude sessions are the population that needs
+    the current instructions" — but it sits inside the `transportMode === "http"`
+    block, so a user whose only Tandem server runs under `TANDEM_TRANSPORT=stdio`
+    gets neither the skill refresh nor the post-upgrade CHANGELOG, and
+    `last-seen-version` is never stamped from that path either.
+    Confidence: High
+
+## Unchecked leads
+- **Does the Tauri updater's silent Windows install reach `PageLeaveReinstall`,
+  and therefore append `/UPDATE` to the old uninstaller's command line?**
+  `src-tauri/windows/installer-hook.nsi` NSIS_HOOK_PREUNINSTALL skips the
+  uninstall scrub only when `$UpdateMode <> 1` is false, and `$UpdateMode` is
+  set by `un.onInit` parsing `/UPDATE`, which the comment says is appended by
+  the installer's `PageLeaveReinstall`. NSIS silent installs (`/S`, which is
+  what tauri-plugin-updater runs) skip page callbacks. If `/UPDATE` is not
+  appended on the auto-update path, EVERY Windows auto-update runs the full
+  scrub — wiping start-at-login, Cowork registrations and firewall rules —
+  which would be High and directly contradicts docs/data-locations.md:89-93
+  ("It is skipped during an *upgrade* … so your settings survive updates").
+  NEXT CHECK: read `tauri-plugin-updater`'s `install_inner` NSIS branch (the
+  `installer_args` it passes) and Tauri's bundled `installer.nsi`
+  `Section Install` silent branch; neither is vendored in this checkout, so
+  `cargo vendor` / crates.io source is needed. A cheap partial: run a Windows
+  auto-update and check whether `HKCU\...\Run\Tandem` survives.
+- Whether `stop_sidecar_gracefully`'s `POST /api/shutdown` reliably flushes
+  before the NSIS installer replaces `node-sidecar.exe`; the code tolerates
+  both "still locked" and "still responding" and proceeds anyway
+  (lib.rs:2372-2392). NEXT CHECK: instrument the two warning strings during a
+  real Windows update smoke run.
+- Whether a session file written by a build with a NEWER
+  `DOCUMENT_MODEL_REVISION` is safe to replay on an older build. The check is
+  one-directional (`(session.modelRevision ?? 0) < DOCUMENT_MODEL_REVISION`,
+  manager.ts:226), so an older build silently replays a newer parse. NEXT
+  CHECK: write a session fixture with `modelRevision: 99` into a temp
+  SESSION_DIR and confirm `sessionModelIsStale` returns false and the doc
+  restores.
+- Post-v1.0 gate bypass: `ensureTrialStarted`/`resolveLicenseState` are
+  no-ops while `GATE_ENABLED` is false, and the trial/license files live in the
+  SHARED app-data dir (F8). After the v1.0 flip, `npm i -g tandem-editor@0.24.1`
+  is a gate-free build reading the same documents. NEXT CHECK: confirm old
+  versions stay published on npm and decide whether that is accepted.
+
+## Doc drift
+- src/server/annotations/schema.ts:4-13 (module header) claims:
+  "All object schemas use `.passthrough()` … Strict rejection would turn a
+  harmless additive change into a 'corrupt' error and trip the `.json.future`
+  fallback path unnecessarily."
+  The code contradicts the scope of that promise: `annotations: z.array(
+  AnnotationRecordSchemaV1)` (schema.ts:221) plus the closed enums at
+  src/shared/types.ts:17,19,23 means a new *enum value* — the most likely
+  additive change to an annotation model — is rejected AND fails the whole
+  envelope, not the row. Measured, not argued: [ran: npx tsx probe.ts] a single
+  `type: "suggestion"` record turns a 2-annotation envelope into
+  `error: "corrupt"`. The header should either say "additive FIELDS only" or
+  the array should be per-row tolerant.
+
+- docs/data-locations.md:89-93: "the uninstaller runs the scrub automatically
+  — nothing to do. It is skipped during an *upgrade* … so your settings survive
+  updates."
+  This is verified for the *interactive installer-over-install* path (the
+  `$UpdateMode <> 1` guard in src-tauri/windows/installer-hook.nsi), but the
+  doc's flat "updates" also covers the Tauri auto-updater's silent NSIS run,
+  which is unverified here (see Unchecked leads). The sentence is broader than
+  what the code demonstrably guarantees.
+
+- CLAUDE.md:199: "Auto-open `sample/welcome.md` on first run; on upgrade
+  `CHANGELOG.md` opens instead, read-only … Both open **before**
+  Hocuspocus/MCP start."
+  Accurate for HTTP mode (src/server/index.ts:592-640), but both sit inside
+  `if (transportMode === "http")` at index.ts:562 and neither happens in stdio
+  mode — the rule reads as unconditional. (See F10.)
+
+- src-tauri/src/lib.rs:1942 doc comment: "Copies each file only if the
+  destination doesn't already exist (first-run)." Accurate, but nothing in
+  CLAUDE.md or the docs says the consequence: the tutorial document is never
+  refreshed by an upgrade, so tutorial-annotation target strings and the
+  shipped welcome.md can silently diverge (F9).
+
+## Verified fine
+- `IntegrationsFile` has a real versioned migration chain (v1→v2→v3) with Zod
+  validation of the v_n input, migrate-on-read, and an explicit refusal (rather
+  than silent coercion) for a future version. [read: src/server/integrations/migrations.ts]
+- Client settings carry a 20-step forward migration chain, a REMOVED_FIELDS
+  resurrection block, and a forward-compat `_readOnly` mode that stops a
+  downgraded client clobbering a newer client's Models registry.
+  [read: src/client/hooks/useTandemSettings.ts:400-520, :875-939]
+- The #1118 pending-update marker is careful: version-free stable reason code,
+  read-side plausibility guard, unconditional one-shot clear, and
+  `verdict_after_clear` deliberately SUPPRESSES the hint when the clear failed
+  so it can never become an un-dismissable every-boot nag. It cannot fire on a
+  fresh install (no marker ⇒ NoMarker) and the marker is written at
+  download-finish rather than before the download, so a quit during the
+  download does not produce a false positive.
+  [read: src-tauri/src/pending_update.rs:95-113, :300-345, lib.rs:2395-2440]
+- `record_pending_update`, `clear_pending_update` and
+  `evaluate_pending_update_marker` all resolve the same
+  `app.path().app_data_dir()`, so write and read cannot diverge.
+- The client's hint drain is take-once and chains the boot drain onto the
+  listener's resolution, so a hint landing between the two is not lost.
+  [read: src/client/utils/pending-update-hint.ts:88-130]
+- No `version_comparator` is set on the updater builder
+  (src-tauri/src/lib.rs:2233-2248), so tauri-plugin-updater's default
+  strictly-greater semver comparison applies — a `latest.json` naming an older
+  version cannot drive a downgrade.
+- `.github/workflows/tauri-release.yml:69-77` refuses to publish when the tag
+  and `tauri.conf.json` version disagree, and `verify-release-manifest`
+  (:755-843) asserts all 11 platform keys are present, every URL resolves to an
+  asset attached to THIS release, and every entry has a signature — the
+  "one platform is told it's up to date forever" failure mode is gated.
+- `tests/plugin/plugin-version-pin.test.ts` pins plugin.json's top-level
+  version, both npx pins, both monitor command pins and Cargo.toml to
+  package.json, so the five in-repo version surfaces cannot drift from each
+  other (they just cannot follow a user's installed app — see F2).
+- `perform_install` gracefully shuts the sidecar down first
+  (POST /api/shutdown flushes dirty docs and saves the session) and waits for
+  both port release and, on Windows, exe unlock before letting the installer
+  replace files. [read: src-tauri/src/lib.rs:2350-2392]
+- The NSIS `$UpdateMode <> 1` guard (installer-hook.nsi) does prevent the
+  uninstall scrub from running on an installer-driven in-place upgrade.
+- Deprecated MCP tool stubs push a user-visible warning notification naming the
+  replacement, so an old skill calling a removed tool degrades visibly rather
+  than silently. [read: src/server/mcp/annotations.ts:139-150]
+- `restoreOpenDocuments` deletes the session file on ENOENT, so a startup
+  document whose path moved (Linux AppImage's per-run mount dir) does not
+  accumulate phantom tabs. [read: src/server/mcp/document-service.ts:1617-1640]
+- `loadSession` overwrites the stored `filePath` with the caller's validated
+  path and `narrowConflict` re-validates the carried conflict, so a session file
+  written by any version cannot steer a later version at a hostile path.
+  [read: src/server/session/manager.ts:110-160]
+- `refreshExistingSkillIfStale` writes with `requireExistingDest: true`, so a
+  plugin-only user never gets a standalone skill installed behind their back.
+- A license file from a newer schema major fails closed (UNSUPPORTED_VERSION →
+  fall through to the trial clock → restricted read-only), with a distinct
+  reason code rather than a generic "trial ended".
+  [read: src/server/license/license-state.ts:96-125]
+
+STATUS: complete

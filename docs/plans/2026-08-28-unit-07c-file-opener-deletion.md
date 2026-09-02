@@ -2,7 +2,7 @@
 
 **Status:** reviewed (two adversarial passes), ready to implement
 **Depends on:** #1661 (Unit 7b) — merged 2026-08-28, `c4fd26b`
-**ADR:** [ADR-034](../decisions.md#adr-034-file-open-pipeline) · **Programme:**
+**ADR:** [ADR-034](../decisions.md#adr-034-file-open-pipeline-with-named-entry-points-and-shared-core) · **Programme:**
 [2026-08-24 maintainability remediation](2026-08-24-ai-assisted-maintainability-remediation.md), Unit 7c
 
 ## References

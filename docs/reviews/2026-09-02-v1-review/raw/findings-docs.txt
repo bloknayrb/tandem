@@ -1,0 +1,245 @@
+STATUS: partial
+# Documentation accuracy review — Tandem master 3fb6408, v0.24.1
+# Reviewer H (docs). Excludes every item on the coordinator's already-recorded list and the 108 open issues.
+
+## Findings — high confidence
+
+### H-1  High — Ctrl-room session file is documented under a name that does not exist on disk
+docs/troubleshooting.md:451,465 ; docs/configuration.md:109
+[read: src/server/session/manager.ts:245,361,422]
+The docs tell users to delete `sessions/CTRL_ROOM.json` to reset mode/awareness state, but the file is written as `${CTRL_ROOM}.json` where `CTRL_ROOM = "__tandem_ctrl__"` (src/shared/constants.ts), i.e. `__tandem_ctrl__.json`. A user following the recovery step finds no such file and concludes the fix does not apply; the constant name leaked into user-facing prose.
+confidence: high
+
+### H-2  High — README sends users to the wrong Settings tab to enable Cowork
+README.md:191
+[read: src/client/components/SettingsClaudeCodeTab.svelte:472-481; src/client/components/NetworkSettings.svelte]
+README says "toggle it on in Settings → Network"; CoworkSettings is mounted inside the AI Assistant tab (SettingsClaudeCodeTab), and NetworkSettings holds only autostart + Advanced retry. A user opens Network, sees no Cowork toggle, and assumes the feature is absent.
+confidence: high
+
+### H-3  Medium — Integration backup directory name is wrong
+docs/data-locations.md:29
+[read: src/server/integrations/backup.ts:10-30]
+Doc says pre-apply backups of `~/.claude.json` go to `tandem_backups/`; code uses `BACKUP_DIR_NAME = ".backups"` with prefix `claude-json-` and `MAX_BACKUPS = 3`. Someone recovering a clobbered `.claude.json` looks for a directory that does not exist (and the real one is dot-hidden).
+confidence: high
+
+### H-4  Medium — Tutorial step 2 claims chat completes it; only a user-authored annotation does
+docs/user-guide.md:24 ; src/client/components/OnboardingTutorial.svelte:37 (copy: "You can also use the Chat panel.")
+[read: src/client/hooks/useTutorial.svelte.ts:100-140]
+`useTutorial` advances step 2 only when a non-tutorial, user-authored annotation appears; there is no chat-message detection. A first-run user who types in Chat as instructed waits on a step that never advances.
+confidence: high
+
+### H-5  Medium — mcp-tools.md documents the permission relay as a working feature; architecture.md calls it a stub
+docs/mcp-tools.md:1334-1367 vs docs/architecture.md:483
+[read: src/server/mcp/channel-routes.ts (pendingPermissions, PERMISSION_TTL_MS=30_000, POST/GET /api/channel-permission)]
+The two docs contradict each other about whether a verdict is ever consumed; architecture.md says "tracked for correction" but no open issue tracks it. Whichever is right, one document is wrong and there is no tracker entry — a reader of mcp-tools.md would build on the relay.
+confidence: high (contradiction); medium (which side is right — see leads)
+
+### H-6  Medium — "auto-opens the editor / http://127.0.0.1:5173" is stale for the npm path
+docs/mcp-tools.md:90,125 ; docs/workflows.md:46 ; src/cli/index.ts help text ("Start Tandem server and open the editor")
+[read: src/cli/start.ts; src/cli/index.ts]
+`tandem start` prints the URL and does not launch a browser (no `open` dependency in package.json), and the served client is on :3479 not :5173 (5173 is Vite dev only). The help text and both docs promise a browser that never appears.
+confidence: high
+
+### H-7  Medium — LICENSE Additional Use Grant contradicts README "free during the public beta"
+LICENSE (Additional Use Grant: 30-day evaluation, paid license thereafter) ; README.md:177 ; docs/licensing-explained.md (gate ships dark)
+[read: LICENSE; README.md:177; tsup.config.ts LICENSE_GATE_ENABLED=false]
+README says use is free during beta while the BUSL grant text limits unpaid use to 30 days of evaluation; the gate is dark so nothing enforces either. A reader of LICENSE alone believes they are in breach after 30 days; a reader of README believes there is no limit. Also: the Licensed Work is named as the npm package only, though the same terms are presented for the desktop app.
+confidence: high (contradiction is textual)
+
+### H-8  Medium — ADR count and skill count stale in architecture.md
+docs/architecture.md:905 ("ADR-001–050"), :1084 ("six" skills)
+[ran: ls .claude/skills | wc -l ; grep -c '^### ADR-' docs/decisions.md]
+decisions.md holds ADR-051 (CLAUDE.md agrees: "ADR-001–051") and `.claude/skills/` holds seven. Low-impact individually, but architecture.md is the file CLAUDE.md points readers at for "the file map".
+confidence: high
+
+### H-9  Medium — architecture.md shows a raw `doc.transact(..., 'mcp')` as the canonical example
+docs/architecture.md:452
+[read: docs/architecture.md:452; src/shared/origins.ts]
+Critical Rule 2 forbids raw `doc.transact` anywhere in `src/`; the architecture doc's origin-tagging example uses exactly that form. A contributor copying the doc example writes the pattern the audit script flags.
+confidence: high
+
+### H-10  Medium — semantic-tokens.md gives hex values for accent-bg / info-bg that are no longer hex
+docs/semantic-tokens.md:41
+[read: index.html:121,145-146,193,653]
+`--tandem-accent-bg` is `oklch(0.95 0.03 var(--tandem-accent-h))` and info-bg is a `color-mix`; the doc lists `#eef2ff` / `#eff6ff`. A designer matching a mock against the doc gets a colour the app never renders.
+confidence: high
+
+### H-11  Medium — user-guide.md Accessibility section describes a control that is not there
+docs/user-guide.md:349
+[read: src/client/components/AccessibilitySettings.svelte]
+Doc says the Accessibility tab offers motion reduction; the tab has "High contrast" and "Use pattern fills for annotations" only (motion follows the OS `prefers-reduced-motion`). A user looking for the toggle cannot find it.
+confidence: high
+
+### H-12  Medium — user-guide.md marks HTML as "read support" only
+docs/user-guide.md:150
+[read: src/server/file-io/index.ts:67,289]
+`.html`/`.htm` route through `plaintextAdapter`, so they are opened, edited and saved as plaintext like `.txt`. "Read support" understates (and mis-describes) what happens on save: the file is rewritten as plain text.
+confidence: high
+
+### H-13  Medium — architecture.md tutorial description drifted (3 annotations, heading anchor, step names)
+docs/architecture.md:756-773
+[read: src/server/mcp/tutorial-annotations.ts; src/client/components/OnboardingTutorial.svelte]
+Code seeds four annotations (highlight, comment, comment+suggestedText, outbound note) and the steps are "Review an annotation / Ask a question / Make an edit / (Cowork detected) / You're ready!". The doc's counts and names no longer match; harmless for users, misleading for anyone editing the tutorial.
+confidence: high
+
+### H-14  Low — .env.example describes TANDEM_CLAUDE_CMD as a setup-detection override (delta to recorded ".env.example missing vars")
+.env.example:16
+[read: src/server/launcher/supervisor.ts:773]
+The variable is consumed by the auto-launcher spawn, not by setup's CLI detection (`detect-claude-cli.ts` does not read it). Extends the already-recorded .env.example item; the delta is that the one documented variable is documented for the wrong consumer.
+confidence: high
+
+### H-15  Low — troubleshooting.md supported-extension list omits `.markdown`; corrupt-store quarantine name wrong
+docs/troubleshooting.md:447,467 ; docs/configuration.md:110
+[read: src/shared/constants.ts SUPPORTED_EXTENSIONS; src/server/annotations/store.ts:594]
+`.markdown` is in `SUPPORTED_EXTENSIONS` but not the doc list; quarantine files are `${target}.corrupt.${Date.now()}`, not `.corrupt.json`. Both send a user hunting for the wrong filename.
+confidence: high
+
+### H-16  Low — AGENTS.md omits pieces CLAUDE.md treats as load-bearing
+AGENTS.md (whole)
+[read: AGENTS.md; CLAUDE.md]
+Missing: the `typecheck:tests` step (only thing that typechecks `tests/`), the ADR-027 write-side note guards (AGENTS.md states only the read filter — the exact failure CLAUDE.md warns about), `src/stdio-bridge/` in the layout, and several `tests/` subdirectories. Non-Claude agents follow AGENTS.md, so they get the pre-#1680 version of the notes rule.
+confidence: high
+
+### H-17  Low — user-guide.md says the context-menu item reads "Send to your AI"; it is hardcoded "Send to Claude"
+docs/user-guide.md:82
+[read: src-tauri/src/context_menu.rs]
+Menu label is a literal "Send to Claude" (alongside "Copy Link", "Show in File Manager"). Cosmetic, but contradicts the positioning doc's model-neutral wording.
+confidence: high
+
+### H-18  Low — mcp-tools.md loopback table still says nine one-layer routes and marks save/convert/apply-changes as bare
+docs/mcp-tools.md:1050
+[read: src/server/mcp/api-routes.ts (assertOriginAllowlisted call sites)]
+Extends the recorded CLAUDE.md "nine vs six" item: mcp-tools.md carries the same stale count AND still lists the three routes that gained the origin gate as one-layer. Delta: the table, not just the number.
+confidence: high
+
+## Findings — remaining
+
+### R-1  Medium — README Linux floor (glibc 2.31 / Ubuntu 20.04 / Debian 11 / Fedora 34) vs build target
+README.md:51
+[inferred]
+Release builds run on `ubuntu-22.04` with `libwebkit2gtk-4.1-dev` (.github/workflows/tauri-release.yml:148-175), which links against glibc 2.35 and webkit2gtk-4.1 — neither available on Ubuntu 20.04/Debian 11. The floor is probably Ubuntu 22.04 / Debian 12; not run on a 20.04 box, so inferred.
+confidence: medium
+
+### R-2  Medium — integrations.md "Claude Desktop via Cowork plugin bridge (Windows today)" vs wizard writing a plain stdio entry on macOS
+docs/integrations.md:21 vs docs/troubleshooting.md:299-348
+[read: src/server/integrations/apply.ts detectTargets (partial)]
+troubleshooting.md walks through a `claude_desktop_config.json` stdio entry on macOS while integrations.md says Desktop is Windows-only via Cowork. One of them is stale; not verified which path `detectTargets` takes on darwin.
+confidence: medium
+
+### R-3  Medium — cli.md "skill refreshed on every run" vs CLAUDE.md "only refreshes when bundled version is newer"
+docs/cli.md:19 vs CLAUDE.md (Tandem-Specific Skills)
+[inferred]
+Two project docs disagree on whether `setup --apply` overwrites `~/.claude/skills/tandem/SKILL.md` unconditionally. Matters because CLAUDE.md's rule "bump frontmatter version when you change it" is only necessary under the compare semantics.
+confidence: medium
+
+### R-4  Low — licensing-explained.md "double-click the file" for a `.license` file with no file association
+docs/licensing-explained.md:22-24
+[read: src-tauri/tauri.conf.json fileAssociations (md/markdown/txt/html/docx only)]
+No `.license` association is registered, so double-click opens whatever the OS picks. Dark feature, so no user impact today.
+confidence: high (association absent); low (whether an in-app open handler exists)
+
+### R-5  Low — architecture.md file map / paths drift
+docs/architecture.md:24 (file list), :279 and :951 (sessions path missing the `Data` segment on Windows), :1025 (Tab/Y/N/Z review keys — no matching handler found in useAppShortcuts.ts)
+[ran: grep -rn "Y\|N\|Z" src/client/hooks/useAppShortcuts.ts (no review-key branches)]
+Review-key chords Y/N/Z are not in DEFAULT_BINDINGS or the fixed matcher; the sessions path omits `Data`.
+confidence: medium
+
+### R-6  Low — user-guide.md:462 says checkInbox reports "document switches"; :308 Solo table lists only two of four push paths
+docs/user-guide.md:308,462
+[read: tools.json checkInbox outputSchema keys: summary,hasNew,mode,storeReadOnly,userActions,userResponses,userReplies,chatMessages,activity]
+No document-switch field is present in the schema; the Solo/Tandem table omits the ws watch and supervisor paths CLAUDE.md names as covered by the Solo gate.
+confidence: medium
+
+### R-7  Low — mcp-tools.md Error Codes table and route table incomplete
+docs/mcp-tools.md (Error Codes section; route table)
+[ran: grep -rn "INVALID_ARGUMENT" src/server/mcp | head]
+`INVALID_ARGUMENT` (and siblings) are returned but absent from the table; `/api/integrations/*` and `/api/models*` are absent from the route table.
+confidence: medium
+
+### R-8  Low — package.json scripts not in cli.md (delta to recorded "scripts table incomplete")
+docs/cli.md scripts table
+[read: package.json scripts]
+Specifically `typecheck:tests` and `test:coverage` — the first is the only typecheck of `tests/` (CLAUDE.md), so its absence from the contributor table is the notable delta.
+confidence: high
+
+## Unchecked leads
+- mcp-tools.md permission relay: does the POST /api/channel-permission verdict ever reach a waiting caller, or is `pendingPermissions` write-only? (decides H-5's direction)
+- integrations.md:21 vs troubleshooting.md:299: what does `detectTargets` emit for Claude Desktop on darwin? (decides R-2)
+- cli.md:19 vs CLAUDE.md: does `installSkill` in apply.ts compare frontmatter versions? (decides R-3)
+- welcome.md:43 "collapse whole sections" — no "collapse" in OutlinePanel grep; may be describing heading folding that does not exist.
+- welcome.md:44 "customize any shortcut" — find/accept/dismiss/pick-tab are fixed in useAppShortcuts.ts, so "any" overstates.
+- README.md:108 "paste a URL over a selection to link it" — Link extension config seen (autolink) but `linkOnPaste` not confirmed.
+- user-guide.md:100 keyboard-operable panel divider — useDragResize has no ArrowLeft handler in grep.
+- data-locations.md:46 `uninstall.log` path — no `uninstall.log` string in src/.
+- user-guide.md FormattingToolbar button list vs FormattingToolbar.svelte labels.
+- user-guide.md "10-second undo window" — no matching constant found (TOAST_DISMISS_MS is 8000/6000/4000).
+- troubleshooting.md:10 ".mcp.json valid (both entries)" — .mcp.json.example has how many entries?
+- LICENSE Licensed Work naming (npm only) vs desktop distribution — legal, not code.
+- docs/licensing-explained.md vs infra worker: `grandfathered` → `updateWindowEnd: null` matches; `expiresAt`-only update window matches; not checked: the "reason enum" list in the doc vs worker.ts.
+
+## Verified fine
+- Ports 3478/3479, TRIAL_DAYS 14, TYPING_DEBOUNCE 3000, DISCONNECT_DEBOUNCE 3000, PROLONGED_DISCONNECT 30s, toast timings, SELECTION_DWELL 1000, NOTIFICATION_BUFFER 50, CHANNEL_EVENT_BUFFER 200, CTRL_ROOM value — all match constants.ts.
+- Node floor: README/cli.md say Node 22+; package.json engines `>=22.12.0`, node-version.ts checks major 22 — consistent.
+- Tool count 33 (30 active + 3 deprecated stubs) reproduced live via SDK listTools and /api/info toolCount 33 [ran: node dump-tools.mjs on 3978/3979 with isolated TANDEM_APP_DATA_DIR].
+- Lessons-learned count 99, hooks 19 .sh + 1 .mjs, agents 11 — match CLAUDE.md.
+- CLAUDE.md "six" one-layer routes — matches api-routes.ts call sites.
+- gatedTool count 13 + two direct licenseGate() calls (document.ts:409, routes/open.ts:15) — matches licensing-explained.md's "audit the handler body" warning.
+- Default keybindings in user-guide.md shortcut table match DEFAULT_BINDINGS (save, save-as, focus-chat, source view, settings, palette, scratchpad, close-tab, open, toggle-mode, reopen tab, comment-on-selection, authorship, panel toggles, annotation next/prev, select-block, new-tab menu); fixed find/accept/dismiss chords match useAppShortcuts.ts:240-300.
+- Settings tabs (Appearance, Editor, Network, Accessibility, Collaboration, AI Assistant, Shortcuts, License, About; Models hidden while BYO_MODELS_ENABLED=false) match SettingsModal.svelte:120-177.
+- Editor width presets Narrow 58 / Comfortable 68 / Wide 82 / Full — match EditorSettings.svelte:130-135.
+- Slash-menu command list matches commands.ts.
+- Tray menu items, 8h update-check interval, window 1200×800 min 800×600 — match lib.rs / tauri.conf.json.
+- File associations md/markdown/txt/html/docx (no .htm) — doc list matches (noting .htm absence is consistent with docs).
+- Sidecar env (TANDEM_DATA_DIR, TANDEM_AUTH_TOKEN, TANDEM_DEFER_LAUNCHER, TANDEM_OPEN_FILE) — configuration.md matches sidecar.rs:426-467.
+- Keychain service names `tandem-integrations` / `tandem-models` — data-locations.md matches keychain.ts.
+- Auth token: 32 random bytes, SHA-256 compare, 60s previous-token grace — security.md matches token-store.ts / middleware.ts.
+- Licensing three-way: types personal|commercial|grandfathered, one-year update window, grandfathered null window, signature-only run gate — licensing-explained.md, licensing-terms.md and worker.ts agree.
+- CONTRIBUTING.md vs .husky/pre-push: beyond the already-recorded stale lines, the biome + vitest + cargo test description matches.
+- SKILL.md (v12) Monitor arming / TaskStop / `GET /api/events?filter=wake` fallback matches CLAUDE.md's four-push-path description; plugin.json has both monitor keys (`tandem:tandem`, `tandem`) as CLAUDE.md's measurement note requires.
+- check:links baseline: 1 broken (already recorded); no additional broken anchors found in the files I read.
+- docx comments import as `type: "note"`, private — data-locations.md / user-guide.md notes wording consistent.
+
+# ---- Completion append (3 verification calls spent of 6) ----
+
+## Findings — high confidence (additions / upgrades from verification)
+
+### H-5 (resolved direction)  Medium — mcp-tools.md documents a permission relay whose verdict is discarded
+docs/mcp-tools.md:1334-1367
+[read: src/server/mcp/channel-routes.ts:150-160]
+`POST /api/channel-permission` deletes the pending entry and only `console.error`s the verdict; the in-code comment reads "Store verdict for the channel shim to poll (or push via SSE in follow-up)" — nothing stores or forwards it. architecture.md:483 ("stub, tracked for correction") is the accurate side; mcp-tools.md presents request→verdict as a working loop, and no open issue tracks the stub.
+confidence: high
+
+### H-19 (was R-3)  Medium — cli.md says the skill is refreshed on every `setup --apply`; it is version-compared
+docs/cli.md:19
+[read: src/server/integrations/apply.ts:2040-2091]
+`installSkill` compares the bundled frontmatter `version:` against the on-disk copy and writes only when newer (`BUNDLED_SKILL_VERSION === 0` short-circuits). A user who hand-edits `~/.claude/skills/tandem/SKILL.md` and reads cli.md expects `setup --apply` to restore it; it will not until the bundled version bumps. CLAUDE.md's wording is the correct one.
+confidence: high
+
+### H-20 (was R-2, narrowed)  Low — integrations.md "(Windows today)" for Claude Desktop is about Cowork, but the wizard targets Desktop on macOS too
+docs/integrations.md:21 vs docs/troubleshooting.md:299-348
+[read: src/server/integrations/apply.ts:735-742; src/shared/integrations/client-config-paths.ts:95,113]
+`detectTargets` adds the `claude-desktop` target on any platform where `claude_desktop_config.json` already exists, and `claudeDesktopConfigTarget` has explicit win32 and darwin branches. "Windows today" is defensible for Cowork verification (#316 is open) but reads as "the wizard only writes Desktop config on Windows", which troubleshooting.md then contradicts. Downgraded to Low: a wording ambiguity, not a wrong fact.
+confidence: high
+
+## Unchecked leads (updated)
+- welcome.md:43 "collapse whole sections" — still no `collapse`/`fold` in OutlinePanel; unresolved.
+- welcome.md:44 "customize any shortcut" — fixed chords remain; unresolved (Low).
+- user-guide.md:100 keyboard-operable divider — unresolved (Low).
+- user-guide.md "10-second undo window" — no matching constant in src/client or src/shared; unresolved (Low).
+- user-guide.md FormattingToolbar button list — unresolved (Low).
+- licensing-explained.md `reason` enum vs worker.ts — unresolved (Low; dark feature).
+- LICENSE Licensed Work naming (npm only) — legal wording, not code-verifiable.
+- R-1 README Linux floor — remains [inferred]; needs a run on Ubuntu 20.04 / Debian 11 to decide.
+
+## Verified fine (additions)
+- README.md:108 paste-URL-over-selection: Link extension in editor-extensions.ts does not set `linkOnPaste`, and Tiptap's default is `true` — claim holds by default (medium confidence; not exercised).
+- troubleshooting.md:10 ".mcp.json valid (both entries)": `.mcp.json.example` carries exactly two `command` entries.
+- data-locations.md:46 `uninstall.log`: written by src/cli/uninstall-scrub.ts:149 (`path.join(logDir, "uninstall.log")`); directory not verified.
+- integrations.md Claude Desktop config path per platform matches client-config-paths.ts (win32 `%APPDATA%`, darwin branch present).
+
+## Coverage against manifest (scratchpad/manifests/docs.md — 204 repo paths touched, 89 commands, 8 probe outputs)
+Covered (read in full and checked against code): README.md, docs/user-guide.md, troubleshooting.md, configuration.md, cli.md, data-locations.md, integrations.md, licensing-explained.md, licensing-terms.md, positioning.md, workflows.md, mcp-tools.md, architecture.md, semantic-tokens.md, CLAUDE.md, AGENTS.md, CONTRIBUTING.md, CHANGELOG.md (Unreleased + 0.24.1), sample/welcome.md, .env.example, .mcp.json.example, LICENSE, `tandem --help` plus every subcommand `--help` (run via `npx tsx src/cli/index.ts`), skills/tandem/SKILL.md, .claude-plugin/plugin.json + marketplace.json, live tool list/`/api/info`/`/api/health` on isolated ports 3978/3979.
+Touched but not systematically verified: docs/security.md, docs/gotchas.md, docs/decisions.md, docs/lessons-learned.md, docs/licensing-operations.md, docs/roadmap.md, docs/release-smoke-checklist.md, docs/stacked-prs.md, docs/design-system-impl/testid-manifest.md, .claude/hooks/README.md — opened only for counts, anchors or cross-references (other reviewers own these).
+Not covered: CHANGELOG entries older than the top two; docs/screenshots and docs/assets (image currency); docs/spikes/*; README claims that need a real macOS/Windows/Linux-20.04 machine (R-1, Cowork platform matrix, code-signing/notarization statements); anything requiring a running dev server or the E2E suite (prohibited under the bounded brief). The already-recorded drift list from the coordinator was excluded rather than re-verified.
+
+STATUS: complete

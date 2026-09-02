@@ -54,6 +54,7 @@ These WILL break things if violated:
 | What shipped / what's left to v1.0 | [CHANGELOG.md](CHANGELOG.md), [docs/roadmap.md](docs/roadmap.md) |
 | Cutting a release | [.claude/skills/release/SKILL.md](.claude/skills/release/SKILL.md) |
 | Chaining dependent PRs | [docs/stacked-prs.md](docs/stacked-prs.md) — `gh stack`; hand-chaining `--base` silently closes children |
+| Planning a fix from the pre-v1.0 review | [docs/reviews/2026-09-02-v1-review/README.md](docs/reviews/2026-09-02-v1-review/README.md) — 84 issues (#1744–#1827, label `v1-review`), per-area ledgers keyed by file:line, fix tracks A–K, open decisions, repro scripts |
 
 ## Development Workflow
 

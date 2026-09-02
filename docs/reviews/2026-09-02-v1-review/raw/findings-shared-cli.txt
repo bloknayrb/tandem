@@ -1,0 +1,109 @@
+STATUS: partial
+# Review F — src/shared, src/cli, src/channel, src/monitor, src/stdio-bridge (+ docs/cli.md, docs/configuration.md)
+Repo: master 3fb6408, v0.24.1. Read-only review; nothing in the repository was changed. All `[ran:]` experiments used a scratch HOME under the scratchpad (fakehome, fakehome2/3/4) and never touched the real HOME or ports 3478/3479.
+
+## Findings — high confidence
+
+### F1. High — stdio bridge's fail-closed identity check refuses every Tandem version upgrade, leaving Claude Desktop's tools dead until Claude Desktop restarts
+- Where: src/cli/mcp-stdio.ts:269 (`describeServerInfo` renders `${name}@${version}`), :1095-1109 (throws `upstream identity changed across re-initialize (was …, now …)`), src/server/mcp/server.ts:242-245 (`new McpServer({ name: "tandem", version: APP_VERSION })`).
+- Evidence: [read: src/cli/mcp-stdio.ts:215-280, 741-760, 1085-1130; src/server/mcp/server.ts:242-245; src-tauri/src/lib.rs:2431]
+- Failure: The Tauri updater relaunches the sidecar (`app.restart()` at lib.rs:2431) with a new `APP_VERSION`, so the long-lived Claude Desktop bridge sees its next tool call answered with 404 `-32001`, reconnects, replays the captured `initialize` under a private id, and compares `tandem@0.24.1` against `tandem@0.25.0` — a mismatch that the code treats as a foreign upstream. The catch path clears the reconnect queue, escalates backoff and synthesizes `-32000 "Tandem HTTP upstream session lost"` for every subsequent request, forever, because the bridge never exits (by design, #1588) and the identity baseline is never refreshed; the user gets the exact "dead for the rest of the day" outage #1588 (CHANGELOG.md:84) claims to have fixed, now triggered by every release rather than by the idle reaper.
+- Why the test suite does not catch it: tests/cli/mcp-stdio.test.ts:1947 exercises `setServerInfo({ name: "not-tandem", version: "9.9.9" })` — name and version change together; a version-only change is never pinned. Compare `name` (and optionally `protocolVersion`) only, or re-capture the baseline when `name` matches.
+- Confidence: high.
+
+### F2. High — three docs instruct a channel-shim removal command that does not remove anything
+- Where: README.md:230, CHANGELOG.md:328, docs/architecture.md:577 (all: re-run `tandem setup --apply` without `--with-channel-shim` to remove the shim) vs src/cli/setup.ts:193-202 + src/server/integrations/apply.ts `resolveChannelShimIntent` (absent flag → preserve existing registration) + src/cli/index.ts:144 (`withChannelShim: args.includes("--with-channel-shim") || undefined`).
+- Evidence: [ran: HOME=<scratch>/fakehome TANDEM_APP_DATA_DIR=<scratch>/fakehome/data npx tsx src/cli/index.ts setup --apply --target=claude-code --with-channel-shim, then the same without the flag; ~/.claude.json still contains `mcpServers["tandem-channel"]`, rewritten with the current dist path, and the CLI prints "Registered for: Claude Code" with no mention of the shim]
+- Failure: A user following any of the three documents runs the no-flag command expecting the shim to go away; the shim entry is preserved and refreshed, so Claude Code keeps launching `dist/channel/index.js` on every session, and nothing in the output says the removal was skipped. The comment at setup.ts:~196 says there is "deliberately no `--no-channel-shim`", so there is no CLI path at all that removes the shim short of hand-editing `~/.claude.json` or `tandem uninstall`.
+- Confidence: high.
+
+### F3. Medium — monitor and channel shim give up after ~30 s of server downtime, and the monitor's printed remedy cannot work
+- Where: src/shared/sse-consumer.ts:167-223 (`CHANNEL_MAX_RETRIES=5`, delays 2/4/8/16/30 s → ~60 s worst case but only 5 attempts; `process.exit(1)` at :206/:223), src/monitor/run.ts:174-177 (`"Tandem monitor disconnected — restart Tandem to restore real-time events"`), :257-270 (comment: a monitor that exits is never respawned — spike F9), docs/architecture.md:530-534.
+- Evidence: [read: src/shared/sse-consumer.ts:160-230, 264-278; src/monitor/run.ts:130-185, 250-285; docs/spikes/plugin-monitor-tty-activation.md F9]
+- Failure: A Tauri auto-update, a `tandem start` restart, or a laptop sleep longer than the retry window exhausts the five retries; the monitor POSTs `/api/channel-error` and exits 1, and per the repo's own measurement Claude Code never respawns it. The wake line tells the user to "restart Tandem", but restarting Tandem does not bring the monitor back — only a new Claude Code session does — so the user follows the instruction, sees no wakes, and concludes push is broken; the channel shim has the same exit path with no user-visible remedy at all.
+- Confidence: high (code), medium that Claude Code never respawns (repo's own spike, not re-measured here).
+
+### F4. Medium — stdio bridge exits on startup preflight failure although nothing respawns a Claude Desktop child
+- Where: src/cli/mcp-stdio.ts:725 (`deferredShutdown`, PREFLIGHT_GRACE_MS 1500 → `shutdown(1, synth)`), :1233-1247 (preflight `/health` failure path), :1245 (synth message `"Tandem server not running. Start the Tauri app or run \`tandem start\`."`); own docblock :24-45, :999, :1199 state a Desktop child is never respawned; docs/troubleshooting.md:94.
+- Evidence: [read: src/cli/mcp-stdio.ts:20-50, 720-760, 990-1010, 1195-1260]
+- Failure: Claude Desktop launched before the Tauri app (the common cold-boot order, and exactly the case the message describes) gets one synthesized error and then a dead transport; when the user starts Tandem as instructed, the tools stay dead because the bridge process is gone and Claude Desktop will not relaunch it until the app is restarted. The message names the first step and not the second, and troubleshooting.md:94 ("pre-flights the server and returns a real error, so Claude can relay it") reads as if relaying were enough; the 404-reconnect path (never exit) is the right model for the preflight path too.
+- Confidence: high for the code; medium for Desktop's respawn behaviour (repo's own claim at :24-45).
+
+### F5. Medium — `tandem doctor` ignores TANDEM_PORT / TANDEM_MCP_PORT and reports a false "server not running"
+- Where: src/cli/doctor.ts:2948 (`report = await runDoctor();` — no port opts) vs :2819 `runDoctor(opts)` which accepts ports; docs/troubleshooting.md:145 tells users to `export TANDEM_MCP_PORT=4479`; tests/cli/doctor.test.ts:379-385 only ever call `runDoctor` with explicit ports.
+- Evidence: [ran: TANDEM_MCP_PORT=4479 TANDEM_PORT=4478 HOME=<scratch>/fakehome npx tsx src/cli/index.ts doctor → "Ports 3478 + 3479 not listening" / health / sse checks fail against 3479, with the remedy "run `tandem start`"]
+- Failure: A user who moved Tandem off the default ports per troubleshooting.md runs `doctor` and is told the server is down, with a remedy that would start a second instance on the wrong ports. The pure function honours the env; only the CLI wrapper drops it, so the unit tests pass.
+- Confidence: high.
+
+### F6. Medium — `tandem doctor` passes a user-level `~/.claude.json` entry it never validates (false green on wrong port/path)
+- Where: src/cli/doctor.ts:1167 (`r.pass("tandem registered in ~/.claude.json")` after only checking the key exists) vs :1017 (the project `.mcp.json` checker validates `type === "http"` and `url.includes("/mcp")`).
+- Evidence: [ran: HOME=<scratch>/fakehome4 with `mcpServers.tandem = {type:"http", url:"http://127.0.0.1:9999/nope"}` → doctor prints a green "tandem registered in ~/.claude.json"]
+- Failure: After a port change or a hand edit, `doctor` tells the user the registration is fine while Claude Code's `/mcp` fails to connect; the very check that exists for the project file is missing for the user file, so the two checkers disagree on what "registered" means. (Bare `localhost` in the URL is accepted by the SDK's `localhostHostValidation` on `/mcp` — server/express.js:36-38 — so the false green is about port/path, not host.)
+- Confidence: high.
+
+### F7. Medium — extends the already-reported "applyConfig replaces a malformed ~/.claude.json": the wizard apply route surfaces nothing about it
+- Where: src/server/integrations/api-routes.ts:~915-975 (apply loop: `await applyConfig(...)` at ~:939, pushes `{status:"applied"}`; errors only `console.error`; `ops.onBackup` is not set), src/server/integrations/apply.ts:1060 (SyntaxError branch) and :1134 (the warning goes to stderr only).
+- Evidence: [read: src/server/integrations/api-routes.ts:900-980; src/server/integrations/apply.ts:1050-1140]
+- Failure: A user with a JSONC or trailing-comma `~/.claude.json` clicks Apply in the desktop wizard; the file is replaced wholesale, the backup lands in `<app-data>/.broken-backups/`, and the wizard reports "applied" with no notice — the only trace is the sidecar's stderr, which desktop users never see. The CLI path at least prints the warning; the wizard is the primary distribution and prints nothing.
+- Confidence: high. (Delta only; the replacement itself is already reported.)
+
+## Findings — remaining
+
+### F8. Low — setup refuses a symlinked `~/.claude.json` with a misleading follow-up
+- Where: src/server/integrations/apply.ts `assertPathSafe` (symlink refusal) + src/cli/setup.ts error printing.
+- Evidence: [ran: HOME=<scratch>/fakehome3 with `.claude.json -> real/claude.json`; output: refusal message followed by "Check file permissions"]
+- Failure: The refusal is correct (symlink-following writes are the hazard), but the printed advice sends the user to `chmod` when the actual fix is to replace the symlink with a real file. Dotfile-managed homes (chezmoi/stow) hit this on first `setup --apply`.
+- Confidence: high.
+
+### F9. Low — `setup --apply` after `rotate-token` drops the token from the written configs
+- Where: src/cli/setup.ts:198 (`buildMcpEntries(CHANNEL_DIST, { withChannelShim, targetKind })` — no token), vs src/server/integrations/apply.ts:2300 `applyConfigWithToken` used elsewhere; tests/cli/setup.test.ts:539+ ("rotation preserves, it does not re-derive").
+- Evidence: [read: src/cli/setup.ts:180-210; src/server/integrations/apply.ts:2290-2330]
+- Failure: A user who rotated the token and then re-runs `setup --apply` gets entries without the header; harmless on loopback (loopback is auth-exempt) but the channel shim / monitor registered against a non-loopback `TANDEM_URL` lose auth silently. Low because the non-loopback deployment is unsupported by docs.
+- Confidence: medium.
+
+### F10. Low — `--help` output drifted from docs/cli.md
+- Where: src/cli/index.ts:52 (`tandem  Start Tandem server and open the editor`) vs docs/cli.md:11 (browser auto-open removed in v0.12.0); index.ts:58-59 labels `--with-channel-shim` "(legacy opt-in)" while docs/architecture.md still documents it as the fallback push path CLAUDE.md says copy must name; `start`, `-v`, `-h` are documented in cli.md but absent from `--help`.
+- Evidence: [ran: npx tsx src/cli/index.ts --help]
+- Failure: Users read `--help` first; it promises a browser open that no longer happens and calls the recommended fallback "legacy".
+- Confidence: high.
+
+## Unchecked leads
+- L1. `resolveChannelShimIntent` maps Claude Desktop → `false` (remove). If a user hand-registered a shim entry in Claude Desktop's config, `setup --apply --target=claude-desktop` would delete it. Not run against a desktop-shaped config; the code path is read at apply.ts (three-way branch), exercised only for claude-code in my runs.
+- L2. sse-consumer.ts `everConnected` latch (:264-278): if the very first connect fails, the monitor exits 1 with no stdout notice at all (gated on `everConnected`). Read but not run; plausibly correct by design (no false alarm when Tandem was never up), but it means an on-skill-invoke arm against a stopped server is fully silent.
+- L3. mcp-stdio.ts backoff after a failed identity check escalates to 30 s and `armReconnectRetry` keeps re-trying — each retry replays `initialize` and re-fails the same comparison, so the bridge also creates a new server-side session every 30 s until Claude Desktop restarts (session-table churn against the LRU). Inferred from :1109 catch path; not measured.
+- L4. `src/channel/run.ts:58-68` instructions list the event types the shim forwards but omit `annotation:edited`; whether the shim actually forwards it (it should — it consumes the shared union) was not traced past the instructions string.
+- L5. The Windows EXDEV fallback in `atomicWrite` (temp in same dir, rename) — not exercised; only the Linux happy path ran.
+
+## Doc drift
+- D1. README.md:230, CHANGELOG.md:328, docs/architecture.md:577 — shim removal instruction is wrong (F2).
+- D2. docs/cli.md:147 — says on a rejected rotate-token "configs were updated anyway"; src/cli/rotate-token.ts:105-147 restores the old token file and prints "No token was rotated and no config file was changed." on any non-2xx (server 409 when env-managed, src/server/mcp/routes/rotate-token.ts:45-58). Configs are updated only on ok/unreachable. [read]
+- D3. docs/cli.md:140-146 exit-code table lists 0/1 only; `doctor` returns 2 on crash (doctor.ts:2943-2970). [read]
+- D4. src/monitor/run.ts:279-282 docblock "Fail-closed to \"solo\" on any failure" — stale; cold-start default is `TANDEM_MODE_DEFAULT = "tandem"` (sse-consumer.ts `getCachedMode`). [read]
+- D5. docs/architecture.md:454-466 event payload table: `annotation:reply` listed as `text` (emitted as `replyText`/`replyAuthor`/`textSnippet`, observers/replies.ts:71); `annotation:edited` listed as `annotationId, content` (emitted with `textSnippet`/`editedAt`); `annotation:created` says "highlight/comment/question" but highlights are never emitted (observers/annotations.ts:117-174). [read]
+- D6. src/channel/run.ts:61-62 instructions omit `annotation:edited` from the forwarded-events list. [read]
+- D7. .env.example lacks `TANDEM_STDIO_BRIDGE_DIST`, `TANDEM_REAPER_PATH`, `TANDEM_AUTH_TOKEN`, all read in src/. [read]
+- D8. docs/configuration.md documents `TANDEM_URL`/`TANDEM_AUTH_TOKEN` but not that `CLAUDE_PLUGIN_OPTION_SERVER_URL` / `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` take precedence (src/shared/cli-runtime.ts:36-46, 66-78) — a plugin user who sets `TANDEM_URL` and wonders why it is ignored has no doc to find. [read]
+- D9. docs/troubleshooting.md:94 overclaims the Desktop bridge's failure handling (F4); :54 "Stale URL or port" remedy is `tandem doctor`, which cannot detect it (F6).
+- D10. src/cli/index.ts `--help` drift (F10).
+- D11. CHANGELOG.md:84 (#1588 "no longer breaks for the rest of the day") — true for the reaper, false across upgrades (F1).
+
+## Verified fine
+- stdout hygiene: bridge, channel shim, monitor write only wire frames / wake lines to stdout; `console.*` → stderr in index.ts; update-notifier writes via `console.error` and is skipped for `mcp-stdio`/`channel`/`monitor` (index.ts:96-100). [read]
+- Channel meta keys are all underscore (`formatEventMeta`, shared/events/types.ts). [read]
+- Backpressure: SDK 1.30.0 `StdioServerTransport.send` awaits `drain`; `ReadBuffer` caps at 10 MiB; partial frames buffered until newline. Bridge handles `EPIPE` on stdout and `end` on stdin without throwing. [read]
+- SSE framing: server sse.ts:137-140 writes `id:`/`data:`; shared parser matches; `Last-Event-ID` replay honoured; 1 MB frame cap in the consumer. [read]
+- `npm run audit:origins` clean (79 tagged sites / 528 files); `npm run audit:ymap-keys` clean. [ran]
+- shared/constants.ts version/protocol constants agree on both sides; `plugin.json` pins `tandem-editor@<APP_VERSION>`; SKILL.md reads `wakeUrl` from `tandem_status`. [read]
+- All 9 members of the event union are emitted somewhere and consumed by the shared formatter; `VALID_EVENT_TYPES` matches the union. [read]
+- setup --apply: unknown top-level keys and unrelated `mcpServers` entries survive; temp+rename in the same dir, 0600; backup to `.backups/claude-json-*` (max 3) when overwriting a non-default entry; idempotent second run produces a byte-identical file; symlink refused; read-only file fails with a clear EACCES; HOME unset fails closed with a message rather than writing to `/`. [ran, scratch HOME]
+- rotate-token: writes new token file first, rolls back on non-2xx; server 409 when env-managed; loopback auth-exempt. [read]
+- Tauri: keyring-first token store; `skills/`, `dist/server|channel|stdio-bridge|client` all in `bundle.resources`. [read]
+- uninstall scrub allowlist only removes keys tandem wrote; `--target` unknown value fails closed. [read]
+- doctor: no token or resolved absolute path leaks in `--json` output; `claude-cli-status`-style enums only. [ran]
+- `X-Claude-Session-Id` read only via `getCurrentSessionId()` in the areas reviewed; wake socket has Origin guard. [read]
+
+## Coverage against manifests/shared-cli.md
+Covered (read in full or in the relevant ranges, with the finding or "verified fine" line above): src/shared/{cli-runtime,sse-consumer,fetch-with-timeout,origins,constants,paths,api-paths,types,utils,diagnostics,redact-user-paths,scrub-text,cross-basename,windows-path-safety}.ts, src/shared/events/{types,wake-scope}.ts, src/shared/auth/token-file.ts, src/shared/integrations/{contract,client-config-paths,detect-claude-cli,path-lookup,node-binary-name,npx-entry-spec,app-translocation}.ts, src/shared/launcher/contract.ts; src/cli/{index,start,setup,doctor,rotate-token,mcp-stdio,channel,preflight,node-version,skill-content,uninstall-scrub,win-path-guard,annotation-store-scan,license}.ts; src/channel/{index,run,event-bridge}.ts; src/monitor/{index,run}.ts; src/stdio-bridge/index.ts; supporting server files src/server/integrations/{apply,api-routes,existing-config,backup,migrations,node-binary,schema,storage}.ts, src/server/events/{sse,queue,wake-socket}.ts + observers, src/server/mcp/{server,api-routes,channel-routes}.ts, src/server/mcp/routes/{health,mode,rotate-token}.ts, src/server/auth/{middleware,token-store}.ts; src-tauri token_store.rs / updater.rs / tauri.conf.json; docs/cli.md, docs/configuration.md, docs/architecture.md (push paths + event table), docs/troubleshooting.md, ADR-028/-045/-049, the TTY-activation spike, skills/tandem/SKILL.md; tests/cli/{doctor,mcp-stdio,monitor,rotate-token,run-setup-apply,setup}.test.ts, tests/monitor/{index,retry}.test.ts. Experiments: setup --apply (with/without shim flag, JSONC input, symlink, read-only, HOME unset, idempotency), doctor (default, TANDEM_MCP_PORT set, wrong user-level URL), --help, audit:origins, audit:ymap-keys — all under scratch HOMEs.
+Not covered: scripts/doctor.mjs (only listed, not read past its shim to src/cli/doctor.ts); tests/channel and tests/stdio-bridge directories (listed, not read — the bridge's re-init tests were read via tests/cli/mcp-stdio.test.ts instead); Windows-only branches (EXDEV rename fallback, ACL setting, win-path-guard) — read, never executed; the channel shim and monitor were never run against a live server (the dev server was gone and no scratch server was started), so F3's exit sequence is traced from code + the retry tests, not observed; Claude Desktop's actual respawn behaviour (F1/F4) rests on the repo's own claims.
+
+STATUS: complete

@@ -1,0 +1,12 @@
+STATUS: partial
+
+ITEM 1: CONFIRMED. Spec tests/e2e/zz-review-client.spec.ts "ITEM 1". Confirm still visible after doc switch=true; DOC A STATUSES pending,pending; DOC B STATUSES accepted,accepted. src/client/panels/SidePanel.svelte:186 (bulkConfirm $state), :497-502 (reset effect keyed only on filters), :737-745 (BulkActions props); handleBulk at :727 iterates filteredData.reviewPending of the CURRENT doc. NOTE: BulkActions renders only when pendingCount > 1 (BulkActions.svelte:42), so doc B needs 2+ pending for the bar to stay mounted.
+ITEM 3: CONFIRMED. Focus escapes both dialogs. PALETTE trail leaves to activity-pill/BODY/titlebar; FILE-OPEN trail leaves to heading-chevron/panel-resize-handle/annotations-tab then wraps to activity-pill.
+ITEM 4: CONFIRMED. range {from:34,to:34} after Enter, from===to; textSnapshot "paragraph" retained; side-panel card still shows anchored text "paragraph".
+ITEM 5: CONFIRMED. "alpha\nbeta gamma" -> "alpha\nbetaDELTAa" (replacement one char early across the hard break).
+ITEM 6: CONFIRMED. Slash menu listbox visible inside <pre><code>; full command list rendered.
+
+ITEM 2: CONFIRMED. testid `session-delete` (FileOpenDialog.svelte:371). SESSION ROWS BEFORE=1, AFTER=0, NATIVE CONFIRM DIALOG SEEN=false, INLINE CONFIRM-ISH TEXT COUNT=0. deleteSession at FileOpenDialog.svelte:64-72 calls deleteSessionByPath immediately.
+
+CLEANUP: spec deleted, test-results/playwright-report removed, git status --porcelain empty, ports 3478/3479/4573/4728/4729 all free.
+STATUS: complete

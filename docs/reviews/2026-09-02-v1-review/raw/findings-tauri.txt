@@ -1,0 +1,157 @@
+STATUS: partial
+
+# Tauri desktop shell review — Tandem v0.24.1 (master 3fb6408)
+
+Scope: src-tauri/src/**, tauri.conf.json, capabilities/**, build.rs, Cargo.toml, entitlements.plist,
+windows/**, src-tauri/tests/**, reaper/, scripts/download-node-sidecar.mjs, scripts/build-reaper.mjs,
+src/client/tauri/** (invoke-name/arg-shape match only). Read-only; no repo edits, no git writes.
+Excluded per coordinator (already reported by others): tray Quit hard-kill; keychain_get plaintext to
+WebView; TANDEM_AUTH_TOKEN in env / supervisor env forwarding; release-workflow floating tags and
+vacuous macOS signing gate; Node 22.17.0 pin; store-lock retry before freePort; stdio bridge refusing
+upgrades; Unix orphan reaper (#800).
+
+## Findings — high confidence
+
+### H1. (High) `keyring` has no platform backend enabled, so every desktop "keychain" write goes to an in-memory mock
+- src-tauri/Cargo.toml:~30 (`keyring = "3"`, no `features`); src-tauri/src/token_store.rs:72-101; src-tauri/src/keychain.rs:154-193
+- [read: ~/.cargo/registry/.../keyring-3.6.3/src/lib.rs:269-297 + Cargo.toml [features]; src-tauri/Cargo.lock keyring deps = log, zeroize only]
+- keyring 3.x ships with NO default features; the Windows/macOS/Secret Service backends are opt-in features (`windows-native`, `apple-native`, `sync-secret-service` etc.) and `Cargo.toml` enables none, so `keyring::default` resolves to `keyring::mock` on every target (confirmed: Cargo.lock shows keyring pulling in only `log` and `zeroize` — none of `windows-sys`/`security-framework`/`secret-service`). Mock `Entry::new` builds a fresh `MockCredential` per Entry with `CredentialPersistence::EntryOnly`, so `set_password` "succeeds" and is gone as soon as the `Entry` drops.
+- Concrete consequence A (auth token split-brain): `token_store::get_or_create_token()` calls `entry.get_password()` → Err(NoEntry) → mints a new random token → `entry.set_password()` Ok → returns it WITHOUT ever taking the `write_to_file` fallback (that branch only runs on keyring Err). The sidecar spawn (sidecar.rs:~377) therefore gets a fresh `TANDEM_AUTH_TOKEN` on every spawn, and Node's `loadOrCreateToken` (src/server/auth/token-store.ts:63-70) returns an env-supplied token without persisting it. Meanwhile `cowork_apply_token` / `cowork_install_into_workspace` (cowork_commands.rs:~470 → cowork_installer.rs:~704) call `get_or_create_token()` again and get a DIFFERENT token, which is what gets written into the Cowork workspace config as `TANDEM_AUTH_TOKEN`. The Cowork VM is non-loopback and the server requires Bearer on non-loopback, so a Cowork-provisioned workspace 401s against the running desktop server by construction — every time, not intermittently.
+- Concrete consequence B: `keychain_set` / `keychain_get` / `keychain_delete` commands are a write-only sink in the desktop build — the client stores a Sentry/BYO-model secret, it is "saved", and the next `keychain_get` (new `Entry`) returns NoEntry. docs/data-locations.md:54-55 claims Credential Manager / Keychain / Secret Service storage. `tests/client/keychain/keychain-backend.test.ts` expects keyring platform error strings the mock never produces. roadmap.md:~621 notes a real-keychain round-trip has never been run, and #1455 is open on that round-trip — this finding extends #1455 with the root cause: it cannot pass until a backend feature is turned on, and consequence A makes it a Cowork functional bug not just a persistence one.
+- Confidence: high (source-level; mechanical). Not hardware-verifiable-only, but a desktop smoke step is listed below.
+
+### H2. (High) `sidecar_exe_path()` computes a filename that tauri-build never produces, so the Windows updater's exe-unlock wait is dead code
+- src-tauri/src/sidecar.rs:877-890 (`sidecar_exe_path`), :894-924 (`wait_for_sidecar_unlock`)
+- [read: ~/.cargo/registry/.../tauri-build-2.6.3/src/lib.rs:56-81 `copy_binaries` does `.replace(&format!("-{target_triple}"), "")`; tauri-plugin-shell-2.3.5/src/process/mod.rs:120-132 `relative_command_path`]
+- `sidecar_exe_path` builds `node-sidecar-<TARGET_TRIPLE>.exe` next to the app exe, but tauri-build strips the `-<triple>` suffix when copying `externalBin`, and the runtime spawns via `.sidecar("node-sidecar")` — the bundled file is `node-sidecar.exe`. `wait_for_sidecar_unlock` therefore hits `!path.exists()` and returns `true` immediately with a warn ("packaging bug?"), so `perform_install` proceeds to NSIS while `node-sidecar.exe` may still be open.
+- docs/architecture.md:~860 documents this wait as the mechanism that prevents the "file in use" NSIS failure during in-app update; on a real machine it never waits. The NSIS `PREINSTALL` hook's `KillProcessCurrentUser node-sidecar.exe` (windows/installer-hook.nsi:27-31) is the only thing actually protecting the update, and that hook is gated on `$UpdateMode`. Plausibly related to the beta v0.21.1→v0.22.0 update failure report, but that link is [inferred].
+- Confidence: high on the dead-code claim; medium on user-visible impact (the NSIS kill likely masks it most of the time).
+
+### H3. (High) Deferred autostart launcher can never be released: `request_launcher_start` is rejected by the origin gate and nothing else ever calls the start route
+- src-tauri/src/lib.rs:673-712 (`request_launcher_start`), :734-764 (`note_user_presence`); src/server/launcher/api-routes.ts:530-567 (`makeStartHandler`); src/server/mcp/api-routes.ts:110-121 (`isLocalhostOrigin`)
+- [read: src/server/launcher/api-routes.ts:530-536 + src/server/integrations/api-routes.ts:340-357 `assertOriginAllowlisted` + src/client grep for API_LAUNCHER_START = no callers]
+- When the app is launched at login (`--tandem-autostart`), the sidecar is spawned with `TANDEM_DEFER_LAUNCHER=1` and `show_main_window` later POSTs `/api/launcher/start` from Rust via reqwest with no `Origin` header. `makeStartHandler` calls `assertOriginAllowlisted` first, which calls `isLocalhostOrigin(undefined)` → false → 403, so the release never lands; the Rust side logs and moves on, `note_user_presence` re-arms `LAUNCHER_DEFERRED`, and every subsequent sidecar respawn in that process sends `TANDEM_DEFER_LAUNCHER=1` again. The server comment at api-routes.ts:536 says "client fires this on every visibility change", but the client only calls `API_LAUNCHER_NONCE` (builtin.svelte.ts:~584) and `API_LAUNCHER_START_FRESH` (:~923) — there is no `/api/launcher/start` caller anywhere in src/client. `tests/server/launcher/api-routes.test.ts` covers start-fresh only.
+- Net effect: on any login-launched desktop session the auto-launcher never starts for the life of that process; `isTransientlyUnavailable` only recognises `"deferred-autostart"` so the UI shows the "deferred" state indefinitely. CLAUDE.md's "`show_main_window` is the single release point" is true of the Rust side but the release point is dead. The same class as the `open`/`rotate-token` note in CLAUDE.md Security (reqwest sends no Origin) — this is a third such route that WAS given the gate.
+- Confidence: high on the 403 (code path fully traced); the only unverified link is whether `TANDEM_DEFER_LAUNCHER` is honoured when the `--tandem-autostart` flag is absent (it is not sent then, so non-autostart launches are unaffected).
+
+### H4. (Medium) `perform_install` stops the sidecar before download and never restarts it on a failed download/install
+- src-tauri/src/lib.rs:~2350-2450
+- [read: src-tauri/src/lib.rs:2350-2450; tauri-plugin-updater-2.10.1/src/updater.rs:652 `download`, :718 `install`, :723 `download_and_install`, :787-865 Windows `install_inner` → `std::process::exit(0)`]
+- The install flow calls `stop_sidecar_gracefully` (POST /api/shutdown, then kill) and `wait_for_sidecar_unlock` BEFORE `update.download_and_install(...)`. If the download fails (offline, GitHub 5xx, signature mismatch, partial transfer) the `Err` branch reports to the WebView but does not respawn the sidecar; `SIDECAR_HEALTHY` is left true and `RESTART_IN_PROGRESS` was never taken, so the banner shows "server running" while every MCP/WS call fails until the user finds Settings → Network → Restart. The plugin exposes `download()` and `install()` separately, so the stop could be moved between them.
+- Confidence: high on the code path; medium on frequency (needs a failing download mid-update).
+
+### H5. (Medium) A post-boot sidecar crash is never restarted; MAX_RESTARTS applies to the boot window only
+- src-tauri/src/sidecar.rs:493-549 (`CommandEvent::Terminated` handler sets `dead_flag`), :~300-420 (`start_sidecar` restart loop bounded by `wait_for_health`)
+- [read: src-tauri/src/sidecar.rs:300-560]
+- `MAX_RESTARTS=3` is consumed inside `start_sidecar`'s health-wait loop; once `promote_healthy_and_drain` has run, the `Terminated` event only flips `dead_flag`, which nothing reads after health. Node's narrowed exception handler calls `process.exit(1)` on unknown errors (CLAUDE.md Gotchas), so any such error hours into a session leaves the desktop app serverless with a stale "Connected" until the user restarts from Settings. docs/architecture.md:~819 says "On crash, retries up to MAX_RESTARTS", which reads as steady-state supervision.
+- Confidence: high on mechanism (traced); no runtime reproduction (cargo not buildable here).
+
+## Findings — remaining
+
+### R1. (Medium) `refresh_registration` only runs on autostart launches, so its two stated purposes are unreachable
+- src-tauri/src/autostart.rs:138-151; src-tauri/src/lib.rs:~1444, :1483-1488
+- [read: src-tauri/src/lib.rs:1440-1490]
+- The comment says the refresh exists (a) to re-point the LaunchAgent/registry entry after the app is moved and (b) to upgrade a pre-flag registration to `--tandem-autostart`. It is called only inside `if autostart_launch {…}`, i.e. only when the existing registration already worked and already carried the flag. A user who enabled start-at-login, then moved Tandem.app or upgraded from a flagless build, is never refreshed: the app either never autostarts again or autostarts without the flag (so the launcher is not deferred and `LAUNCHER_DEFERRED` semantics silently differ).
+- Confidence: high on reachability; impact medium-low.
+
+### R2. (Low) Desktop sidecar inherits the user's shell env; `TANDEM_MCP_PORT`/`TANDEM_PORT`/`TANDEM_BIND_HOST` leak in while the shell hardcodes 3479
+- src-tauri/src/sidecar.rs:443 (comment "tauri-plugin-shell does NOT inherit the parent env" — false), :~370-400 (env set); HEALTH_URL / CSP `connect-src` in tauri.conf.json pin 127.0.0.1:3478/3479
+- [read: tauri-plugin-shell-2.3.5/src/process/mod.rs:162-180 — wraps `std::process::Command`, no `env_clear()`]
+- A user (or a dotfile from the npm install) with `TANDEM_MCP_PORT=4000` exported at login gets a sidecar bound to :4000 while `wait_for_health` polls :3479 for 30s ×3 → the "server failed to start" dialog after ~2 minutes with the server actually running. With `TANDEM_BIND_HOST=0.0.0.0` exported the desktop server silently binds LAN-wide, contradicting the loopback-default posture in docs/security.md.
+- Confidence: high that env is inherited; medium that anyone has these exported (CLI users are the population).
+
+### R3. (Low) Capability over-grants and unused registered commands
+- src-tauri/capabilities/default.json (`shell:default`, `fs:default`; comment "shell (sidecar)"); src-tauri/src/lib.rs `generate_handler!` block
+- [read: src-tauri/capabilities/default.json; package.json deps = @tauri-apps/api + plugin-dialog only; grep of `invoke(` across src/client]
+- `shell:default` (grants `shell:allow-open` to the WebView) and `fs:default` are not used by any client code — the Rust-side sidecar spawn needs no ACL, so the "shell (sidecar)" justification is wrong. Five registered commands have no client caller: `cowork_scan_workspaces`, `cowork_get_meta`, `cowork_apply_token`, `cowork_install_into_workspace`, `cowork_uninstall_from_workspace`. `cowork_apply_token` takes an arbitrary token string from the WebView and writes it into every Cowork workspace config; with CSP `script-src 'self'` the exposure is bounded, but it is a mutating command reachable from the WebView for no product reason.
+- Confidence: high.
+
+### R4. (Low) `show_in_file_manager` accepts any WebView-supplied path; only UNC is screened
+- src-tauri/src/lib.rs:1903-1937
+- [read: src-tauri/src/lib.rs:1903-1937]
+- The command is not confined to currently open documents; on Linux it `xdg-open`s `Path::parent()` of whatever string arrived, on Windows `explorer /select,`. Same bounded-by-CSP caveat as R3. macOS `open -R` with the given argument is [inferred] to behave (not run here).
+- Confidence: high on the lack of confinement; low on any real exploit.
+
+### R5. (Low) NSIS PREINSTALL kills `node-sidecar.exe` before Tauri's "app is running" prompt
+- windows/installer-hook.nsi:27-31
+- [read: windows/installer-hook.nsi]
+- The kill runs in the pre-install hook (only when `$UpdateMode` is set); if the user then cancels at Tauri's `CheckIfAppIsRunning` prompt, the running app has already lost its sidecar and (per H5) will not restart it. Low: manual reinstall while running is uncommon and `$UpdateMode` narrows it further.
+- Confidence: medium (ordering of hook vs. prompt read from the NSIS template, not run).
+
+### R6. (Low) `copy_sample_files` never refreshes `sample/welcome.md` on upgrade
+- src-tauri/src/lib.rs:1943-2000
+- [read: src-tauri/src/lib.rs:1943-2000]
+- Copies only when the destination is absent, so a user who ran v0.20 keeps that welcome.md forever; the tutorial matches by `indexOf(targetText)` and degrades gracefully, so this is content staleness only.
+- Confidence: high.
+
+### R7. (Nit) `firewall.rs` `host_to_network` prefix > 32 underflows a u8
+- src-tauri/src/firewall.rs:850-875
+- [read: src-tauri/src/firewall.rs:850-875]
+- `32 - prefix` on a u8 with prefix ≥ 33 panics in debug, wraps in release; unreachable via the PowerShell IPv4 parsing that feeds it, so nit only.
+- Confidence: high.
+
+### R8. (Nit) Non-test panic inventory (all boot-time or programmer-error paths)
+- lib.rs:1208 `.expect("Failed to build HTTP client")`; lib.rs:1367 `.expect("No window icon configured…")`; lib.rs:1610 `unwrap_or_else(|e| panic!(...))` in setup; open_candidate.rs:419 `debug_assert!`; build.rs `expect("TARGET not set")`; win_app_mode.rs:198/237/250 `transmute` (Win32 fn-pointer casts).
+- [read: listed lines]
+- None are reachable from user input after setup; listed for the inventory the original brief asked for.
+
+## Unchecked leads
+
+- `cargo check --tests` / `cargo test` not runnable here: fails at `gdk-3.0` pkg-config (EXIT 101, log at scratchpad/cargo-check.log). Per brief, GTK/libxdo not installed. Rust unit tests (file_association, keychain, prevent_default, cowork_heal_pass_tests, firewall parsing) are therefore unrun in this review.
+- `LAUNCHER_DEFERRED` re-arm interplay after the 90 s (3×30 s) health timeout: `note_user_presence` re-arms, but whether the retry spawn also re-sends the defer env was not fully traced.
+- macOS `open -R <arg>` behaviour when the argument is a directory rather than a file (R4).
+- Whether `fs:default` scope reaches `$APPLOG/tandem.log` (log plugin writes there; capability comment does not mention it).
+- Tauri NSIS "delete app data on uninstall" only removes `com.tandem.editor` dirs; the `env-paths` dirs Node uses (data-locations.md) and `uninstall_scrub` coverage were not cross-checked line by line.
+- H2's link to the beta v0.21.1→v0.22.0 update failure is plausible, not established.
+- Tray Quit delta (excluded finding): whether an explicit-save-only `.docx` with unsaved edits gets any prompt on Quit was not traced.
+- Coverage manifest `scratchpad/manifests/tauri.md` not yet read at the time of this append (see second append).
+
+## Doc drift
+
+- docs/data-locations.md:54-55 — claims OS credential store for tokens/secrets; actual store is keyring mock (H1).
+- docs/architecture.md:~860 — Windows exe-unlock wait is described as active; it is dead (H2).
+- docs/architecture.md:~819 — "On crash, retries up to MAX_RESTARTS" implies steady-state supervision; boot-only (H5).
+- src/server/launcher/api-routes.ts:536 comment — "client fires this on every visibility change"; no client caller exists (H3).
+- src-tauri/src/sidecar.rs:443 comment — "does NOT inherit the parent env"; it does (R2).
+- src-tauri/capabilities/default.json comment — "shell (sidecar)" justification is wrong (R3).
+- src-tauri/src/autostart.rs:138-151 comment — states two purposes that the single call site cannot serve (R1).
+- CLAUDE.md Desktop section — "`show_main_window` is the single release point" is accurate about the Rust side but the release never succeeds (H3); worth a one-line caveat once fixed.
+
+## Verified fine
+
+- Updater: HTTPS GitHub endpoint, Ed25519 pubkey present, `createUpdaterArtifacts: true`, `updaterJsonPreferNsis: true`, no `dangerousInsecureTransportProtocol`; signature verification is inside the plugin before install. Pending-update marker (`update-pending.json`) is one-shot. Release-check workflow `signCommand` handled.
+- CSP: `default-src 'self'; script-src 'self'` (no `unsafe-eval`), `connect-src` pinned to 127.0.0.1:3478/3479; `withGlobalTauri` absent; window `visible:false`/`decorations:false` consistent with decorum titlebar.
+- Plugin order: single-instance registered first; prevent-default RELOAD; window-state masks VISIBLE; log plugin Warn floor in release with 25 MB cap.
+- `validate_open_candidate` (open_candidate.rs): refuses UNC before any FS call, scans the resolved absolute path for an ADS colon, ext allowlist; `ScreenedOpenPath` newtype keeps the raw path out of logs; argv and `RunEvent::Opened` share it. Rejection delivery: reason buffered unconditionally, event is a payload-free nudge, `get_startup_rejection` drains. `has_argv_flag` skips argv0.
+- `strip_win_prefix` applied to server_js, app_data_dir, channel and stdio dists before sidecar spawn.
+- Windows job object (`sidecar_job.rs`) — kill-on-close containment of the sidecar tree.
+- firewall.rs: netsh/PowerShell invoked argv-form only (no shell string), `redact_and_truncate` redacts before truncating, `rename_all_fields`, no elevation path.
+- cowork: `with_locked_json` sibling lockfile + atomic rename; workspace scan five-step guard with UNC string test before any FS call; handle tokens (#433); `system_paths` anchored to `GetSystemDirectoryW`; `uninstall_scrub` uses anchored `reg.exe`.
+- context_menu (enum in / id out), native_theme, bounded_command, single_flight — no injection surface.
+- All 21 client `invoke()` names match `generate_handler!` entries and argument shapes; client `listen()` event names match Rust `emit` sites; `TAURI_HOSTNAME` / Linux `tauri://localhost` constants used on the server side.
+- entitlements.plist: `allow-jit` only, consistent with docs/428-macos-notarization-runbook.md.
+- reaper/: Windows job-object suspended spawn, Linux PDEATHSIG + ppid recheck, macOS kqueue — logic sound (build/smoke not run).
+- NSIS hook: `$UpdateMode` guard and `${MAINBINARYNAME}` usage correct; per-user install.
+- scripts/download-node-sidecar.mjs / build-reaper.mjs: checksum and target-triple naming consistent with `externalBin`.
+
+## Smoke-checklist candidates
+
+- [H1] Desktop: enable Sentry (or any keychain-backed setting), fully quit, relaunch, confirm it is still set; and provision a Cowork workspace, then confirm the VM can reach the server without 401.
+- [H2] Windows: start an in-app update with a document open, check `tandem.log` for the "packaging bug?" warn from `wait_for_sidecar_unlock`.
+- [H3] macOS/Windows: enable start-at-login, log out/in, open the window, confirm Claude Code auto-launches (Settings → Integrations shows "running", not "deferred").
+- [H4] Any desktop: pull the network cable after clicking "Install update", confirm the app still has a server afterwards.
+- [H5] Any desktop: kill `node-sidecar` from the OS task manager mid-session, confirm the app notices and recovers.
+- [R1] macOS: enable start-at-login, move Tandem.app to another folder, log out/in, confirm it still launches.
+- [R2] Any desktop: export `TANDEM_MCP_PORT=4000` in the login shell env, launch the desktop app, confirm it does not show the 2-minute failure dialog.
+
+## Correction to R5 (after reading the coverage manifest)
+
+- R5's ordering claim (NSIS PREINSTALL hook runs before Tauri's `CheckIfAppIsRunning` prompt) rests on my recollection of Tauri 2's bundled `installer.nsi` template; the manifest shows the grep for the tauri-bundler source in `~/.cargo/registry` FAILED (crate not present), so the template was not actually read in this session. Downgrade R5 to an Unchecked lead: "confirm in tauri-bundler's `installer.nsi` that `NSIS_HOOK_PREINSTALL` is inserted before `CheckIfAppIsRunning` in `Section Install`". The hook contents (`$UpdateMode` guard, `KillProcessCurrentUser node-sidecar.exe`) were read directly and are as stated.
+
+## Coverage against manifest (scratchpad/manifests/tauri.md)
+
+Covered (read in full or in the relevant ranges): src-tauri/Cargo.toml, Cargo.lock (keyring/reqwest entries), build.rs, tauri.conf.json, capabilities/default.json + desktop.json, entitlements.plist, windows/installer-hook.nsi; every module under src-tauri/src/ listed in the manifest (autostart, bounded_command 1-320, context_menu, cowork_atomic_json, cowork_commands, cowork_installer, cowork_meta, cowork_workspace_scan, firewall, integrations_probe header, keychain, lib.rs full, native_theme, open_candidate, pending_update, sentry_reporting, sidecar full, sidecar_job, single_flight 1-140, startup_rejection, system_paths, token_store, uninstall_scrub, win_app_mode 1-200); src-tauri/tests/{file_association,keychain,prevent_default}.rs; reaper/ (Cargo.toml, main/common/windows/macos/linux.rs, smoke-test.ps1); scripts/download-node-sidecar.mjs, scripts/build-reaper.mjs; src/client/tauri/{autostart-invoke,ui-inspector}.ts, keychain-backend.ts, useUpdaterBanner (60-120), useTauriFileDrop, pending-update-hint, startup-rejection; server cross-checks in token-store.ts, launcher/api-routes.ts, integrations/api-routes.ts, mcp/api-routes.ts, index.ts, mcp/server.ts, session/manager.ts, document-service.ts, shared/api-paths.ts, shared/launcher/contract.ts; upstream sources tauri-build (copy_binaries), tauri-plugin-shell (process/mod.rs), tauri-plugin-updater (updater.rs), keyring 3.6.3 (lib.rs, mock.rs, Cargo.toml), auto-launch 0.5.0, tauri app.rs restart; .github/workflows/tauri-release.yml (317-375 + grep); docs as briefed.
+
+Not covered / partial: `cargo check --tests` failed on gdk-3.0 (no GTK here; not installed per brief), so no Rust test or clippy results; tauri-bundler NSIS template not available in the registry (R5 correction above; "delete app data on uninstall" behaviour therefore unverified); bounded_command.rs beyond line 320, single_flight.rs beyond 140, win_app_mode.rs beyond 200 read only via grep for panics; src-tauri/tests/file_association.rs body read as header + test names only; integrations_probe.rs is test-only and was skimmed; `src/client/tauri/**` beyond the two files was covered by the invoke-name grep, not by reading; reaper crate not built or smoke-run. `src/server/documents/autosave.ts` and `src/server/yjs/provider.ts` appear in the manifest from a grep hit, not a read.
+
+STATUS: complete
