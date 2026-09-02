@@ -1048,12 +1048,11 @@ export const AuthorshipExtension = Extension.create<AuthorshipOptions, Authorshi
               };
             }
 
-            // #1669, same defect as `annotation.ts` and with NO recovery path
-            // here at all: this branch only ever `.map()`s, and mapping is what
-            // loses the marks. y-prosemirror's `_typeChanged` REPLACES the doc
-            // with one ReplaceStep spanning all of it, and `InlineType.map`
-            // maps `from` with assoc +1 and `to` with assoc -1, so every inline
-            // decoration collapses to `from >= to` and is dropped.
+            // #1669, the same defect as `annotation.ts` and with NO recovery path
+            // here at all: the branch above only ever `.map()`s, and mapping is
+            // what loses the marks. The mechanism is in docs/gotchas.md, "A
+            // remote sync REPLACES the doc" — deliberately not re-derived here,
+            // because the two in-code copies had already drifted apart once.
             //
             // The overlay survives today only by coincidence: every MCP content
             // write also stamps `Y_MAP_AUTHORSHIP`, so this plugin's own Y.Map

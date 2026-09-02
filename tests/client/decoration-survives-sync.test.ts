@@ -90,13 +90,6 @@ function rangeOf(editor: Editor, needle: string): { from: FlatOffset; to: FlatOf
   return { from: toFlatOffset(at), to: toFlatOffset(at + needle.length) };
 }
 
-function annotationDecorationCount(editor: Editor): number {
-  const set = annotationPluginKey.getState(editor.state) as {
-    find?: () => unknown[];
-  } | null;
-  return set?.find?.().length ?? 0;
-}
-
 function authorshipDecorationCount(editor: Editor): number {
   const state = authorshipPluginKey.getState(editor.state) as {
     decorations?: { find?: () => unknown[] };
@@ -155,15 +148,17 @@ describe("#1669 decorations survive an MCP content write", () => {
     // rebuild the way the plugin's own observer does rather than waiting on a
     // frame: this spec is about what happens to an ALREADY-PAINTED set.
     editor.view.dispatch(editor.state.tr.setMeta(annotationPluginKey, true));
-    expect(annotationDecorationCount(editor), "precondition: it was painted").toBeGreaterThan(0);
+    expect(annotationDecorationTexts(editor), "precondition: it was painted").toEqual([
+      "Annotated sentence",
+    ]);
 
     mcpWriteToSibling(ydoc, " Appended by Claude.");
 
     // No further input, no timer: the decoration must be there on the very
-    // transaction that replaced the document. Before the fix this was 0, and
-    // the identity-keyed recovery gate could not fire until two transactions
-    // later — which for `tandem_edit` means the user typing twice.
-    expect(annotationDecorationCount(editor)).toBeGreaterThan(0);
+    // transaction that replaced the document. Before the fix this came back
+    // empty, and the identity-keyed recovery gate could not fire until two
+    // transactions later — which for `tandem_edit` means the user typing twice.
+    expect(annotationDecorationTexts(editor)).toEqual(["Annotated sentence"]);
   });
 
   it("re-anchors a relRange annotation through a write EARLIER in the document", () => {

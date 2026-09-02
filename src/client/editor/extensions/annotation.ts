@@ -299,38 +299,30 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
             // `to` with assoc -1, so every inline decoration collapses to
             // `from >= to` and is dropped.
             //
-            // This has to be its own branch rather than a widened recovery gate,
-            // because that gate is keyed on OBJECT IDENTITY
-            // (`decorationSet === DecorationSet.empty`) and the wiped set is not
-            // the singleton: `mapChildren` always returns a fresh `DecorationSet`
-            // once there are children to map, so the first mapped result cannot
-            // be `empty` however empty it is. Sync N wipes; at N+1 the set has no
-            // children left, `mapInner` finally yields the singleton, and only at
-            // N+2 can the gate fire. `tandem_edit` never touches the annotations
-            // map, so the Y.Map observer does not re-arm it either — and the user
-            // has to type twice to get their own highlights back.
+            // #1669 — a remote sync replaces the doc and every inline decoration
+            // maps to nothing. Why that is, why the identity-keyed recovery gate
+            // below cannot catch it, and which transactions carry this meta:
+            // docs/gotchas.md, "A remote sync REPLACES the doc". Kept in one
+            // place because `authorship.ts` needs the same facts and two copies
+            // have already drifted once.
+            //
+            // What is specific to THIS plugin:
             //
             // The #610 perf gate is the `hasVisibleAnnotations` return directly
-            // above, not a conjunct here: a document with nothing to draw pays no
-            // walk on a remote transaction. What actually fires this is every
-            // remote character a collaborator types, every MCP write, every
-            // watcher reload and every undo replay — NOT, as an earlier draft of
-            // this comment said, a held-down undo as the upper bound. That is
-            // affordable only because `_typeChanged` is already re-serializing
-            // the whole fragment on the same transaction, so the walk is O(doc)
-            // alongside work that is already O(doc). It is also why nothing
-            // expensive belongs in this branch: a `readAgentFamilyLabel()` call
-            // was here and was removed, because it reaches `loadSettings()` —
-            // a synchronous `localStorage` read, a `JSON.parse` and the whole
-            // migration chain — per remote keystroke, to recover a label that
-            // only changes when the user picks a different model. The cached
-            // `agentFamily` is refreshed by the meta branch, the toggle branch
-            // and the Y.Map observer, which are the moments it can change.
+            // above, not a conjunct here — a document with nothing to draw pays
+            // no walk on a remote transaction. Nothing expensive belongs inside
+            // the branch either: a `readAgentFamilyLabel()` call was here and was
+            // removed, because it reaches `loadSettings()` — a synchronous
+            // `localStorage` read, a `JSON.parse` and the whole migration chain —
+            // per remote keystroke, to recover a label that only changes when the
+            // user picks a different model. The cached `agentFamily` is refreshed
+            // by the meta branch, the toggle branch and the Y.Map observer, which
+            // are the moments it can actually change.
             //
-            // Local PM->Y edits carry no ySync meta (y-prosemirror's own `mux`
-            // mutex suppresses the re-entrant fire) and no awareness- or
-            // cursor-only transaction is tagged. Verified against the pinned
-            // y-prosemirror 1.3.7, not assumed.
+            // `tandem_edit` never touches the annotations map, so the Y.Map
+            // observer does not re-arm recovery either — which is why, before
+            // this branch, the user had to type twice to get their own
+            // highlights back.
             //
             // One honest limit on what the rebuild buys: for an annotation with
             // no live `relRange`, `annotationToPmRange` falls back to the stored
