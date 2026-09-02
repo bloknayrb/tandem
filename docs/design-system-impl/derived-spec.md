@@ -179,6 +179,13 @@ Each row:
   left, scrolling content panel on the right. `.settings-nav-btn`
   (`app.css:750`) for sidebar items, `.settings-mode-btn` (`app.css:784`)
   for segmented controls inside tabs.
+  > **No production surface consumes the segmented-control recipe as of
+  > #1623.** Its only consumer was the Collaboration tab's Default Mode
+  > radiogroup, which was deleted along with the setting — the mode toggle
+  > already persists the user's last choice, so a second source for the same
+  > preference could only disagree with it. The production
+  > `.settings-mode-btn` rules went with it. The bundle reference stands; the
+  > next tab that wants a segmented control re-adds the rules from it.
 - **Tokens.** Tab labels = `--tandem-ui-*` (token family added in audit).
   Section dividers = `1px solid var(--tandem-border)` with 16px vertical
   rhythm. Footer link rows (used in About) = `.settings-close-btn` style

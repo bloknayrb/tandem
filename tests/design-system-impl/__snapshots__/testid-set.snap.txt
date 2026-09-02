@@ -391,8 +391,6 @@ settings-modal-connect-ai-callout
 settings-modal-content
 settings-modal-copy-diagnostics-btn
 settings-modal-cowork-suspense-fallback
-settings-modal-default-mode-solo-btn
-settings-modal-default-mode-tandem-btn
 settings-modal-display-name
 settings-modal-dwell-time-slider
 settings-modal-margin-view-hint

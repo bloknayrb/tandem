@@ -321,7 +321,6 @@ describe("useTandemSettings — updateSettings write path", () => {
     fontByExtension: {},
     defaultSaveDirectory: null,
     density: "cozy",
-    defaultMode: "tandem",
     highContrast: false,
     annotationPatterns: false,
     selectionToolbar: true,
@@ -553,16 +552,6 @@ describe("loadSettings — new fields (PR 2: Schema Foundations)", () => {
   it("falls back to 'cozy' for unknown density", () => {
     writeRawSettings({ density: "ultra-tight" });
     expect(loadSettings().density).toBe("cozy");
-  });
-
-  it.each(["solo", "tandem"] as const)("accepts defaultMode '%s'", (mode) => {
-    writeRawSettings({ defaultMode: mode });
-    expect(loadSettings().defaultMode).toBe(mode);
-  });
-
-  it("falls back to 'tandem' for unknown defaultMode", () => {
-    writeRawSettings({ defaultMode: "pair" });
-    expect(loadSettings().defaultMode).toBe("tandem");
   });
 
   it("accepts highContrast: true", () => {
