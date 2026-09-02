@@ -31,6 +31,13 @@ import FormattingToolbar from "../../src/client/editor/toolbar/FormattingToolbar
 
 const mounted: Array<{ editor: Editor; container: HTMLElement }> = [];
 
+/**
+ * Bare `StarterKit`, which is NOT the production schema — see
+ * `buildSchemaExtensions()`. Fine here: every spec in this file is about focus
+ * restoration around the heading menu and none inspects document structure. Do
+ * not copy this harness into a suite that asserts on `getHTML()`; #1720 is what
+ * that costs.
+ */
 function makeEditor(): Editor {
   const host = document.createElement("div");
   document.body.appendChild(host);
