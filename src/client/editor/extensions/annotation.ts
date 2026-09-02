@@ -292,13 +292,6 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                 : DecorationSet.empty;
             }
             if (!hasVisibleAnnotations) return DecorationSet.empty;
-            // #1669: a remote/MCP sync REPLACES the doc rather than patching it,
-            // so mapping is not an option here — it is what loses the marks.
-            // y-prosemirror's `_typeChanged` emits one ReplaceStep spanning the
-            // whole document, and `InlineType.map` maps `from` with assoc +1 and
-            // `to` with assoc -1, so every inline decoration collapses to
-            // `from >= to` and is dropped.
-            //
             // #1669 — a remote sync replaces the doc and every inline decoration
             // maps to nothing. Why that is, why the identity-keyed recovery gate
             // below cannot catch it, and which transactions carry this meta:
@@ -310,14 +303,36 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
             //
             // The #610 perf gate is the `hasVisibleAnnotations` return directly
             // above, not a conjunct here — a document with nothing to draw pays
-            // no walk on a remote transaction. Nothing expensive belongs inside
-            // the branch either: a `readAgentFamilyLabel()` call was here and was
-            // removed, because it reaches `loadSettings()` — a synchronous
-            // `localStorage` read, a `JSON.parse` and the whole migration chain —
-            // per remote keystroke, to recover a label that only changes when the
-            // user picks a different model. The cached `agentFamily` is refreshed
-            // by the meta branch, the toggle branch and the Y.Map observer, which
-            // are the moments it can actually change.
+            // no walk on a remote transaction. It bounds the zero case only, NOT
+            // the annotation count, so what the rebuild costs is a measurement
+            // rather than an argument. Measured on a 200-paragraph document,
+            // ms per remote transaction, master's `.map()` versus this rebuild:
+            // 0 annotations 0.75 -> 0.82, 50 annotations 1.03 -> 1.20, 150
+            // annotations 1.85 -> 4.55. Under a frame at the top of that range,
+            // and remote transactions arrive at a peer's typing rate, so it is
+            // affordable — but the reason is the measurement, NOT the earlier
+            // draft's claim that `_typeChanged` "is already re-serializing the
+            // whole fragment on the same transaction". That claim is FALSE:
+            // `createNodeIfNotExists` returns the CACHED ProseMirror node for
+            // every top-level child whose Y type was not in
+            // `transaction.changed`, so the baseline is the changed subtree plus
+            // the whole-document ReplaceStep, and the rebuild is genuinely
+            // additional work. `tests/client/decoration-rebuild-cost.bench.test.ts`
+            // re-derives the table; run it before assuming the numbers still hold.
+            //
+            // Deferring the rebuild through the plugin's own rAF coalescer was
+            // considered and rejected: it would leave the marks unpainted for a
+            // frame on EVERY remote keystroke, trading a 2.7ms cost for a visible
+            // flicker.
+            //
+            // Nothing expensive belongs inside the branch either: a
+            // `readAgentFamilyLabel()` call was here and was removed, because it
+            // reaches `loadSettings()` — a synchronous `localStorage` read, a
+            // `JSON.parse` and the whole migration chain — per remote keystroke,
+            // to recover a label that only changes when the user picks a
+            // different model. The cached `agentFamily` is refreshed by the meta
+            // branch, the toggle branch and the Y.Map observer, which are the
+            // moments it can actually change.
             //
             // `tandem_edit` never touches the annotations map, so the Y.Map
             // observer does not re-arm recovery either — which is why, before
@@ -337,11 +352,20 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                 visible,
                 agentFamily,
               );
-              // Latch on SUCCESS only, matching the recovery branch below: a
-              // successful rebuild means "recovered, do not re-run O(n) until
-              // the annotations map changes", and only the Y.Map observer
-              // clears it. Clearing it here instead would unlatch after a
-              // PARTIAL rebuild and reopen the #610 per-keystroke storm.
+              // Latch on SUCCESS only, matching the recovery branch below.
+              // Two things clear the flag, not one: the Y.Map observer and the
+              // `toggle-decorations` meta branch above (a toggle that newly
+              // reveals a type gets one rebuild attempt). Clearing it HERE
+              // instead would unlatch after a PARTIAL rebuild — non-empty
+              // because one annotation resolved while others stay permanently
+              // unresolvable — and reopen the #610 per-keystroke storm.
+              //
+              // Setting it here is close to inert, and that is worth knowing
+              // rather than trusting: the recovery gate below also requires
+              // `decorationSet === DecorationSet.empty`, and a set this branch
+              // just built cannot map back to that singleton in one step. The
+              // line is here for the counterfactual, not because a path to
+              // reading it has been demonstrated.
               if (rebuilt !== DecorationSet.empty) recoveryAttempted = true;
               return rebuilt;
             }

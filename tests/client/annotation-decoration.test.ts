@@ -172,6 +172,11 @@ beforeEach(() => {
 });
 
 describe("annotation plugin apply() recovery branch", () => {
+  // Not a trailing `clearVisibility()` in each body: a failed `expect` skips the
+  // rest of the body, so a leaked `{note:false}` would turn one red into
+  // several across the specs that follow.
+  afterEach(clearVisibility);
+
   it("rebuilds when docChanged + empty decorations + annotations exist", () => {
     const ydoc = new Y.Doc();
     addAnnotation(ydoc);
@@ -313,13 +318,17 @@ describe("annotation plugin apply() recovery branch", () => {
     // underlines and suggestion squiggles vanish on any MCP content write.
     //
     // The existing recovery branch cannot catch it, because it is keyed on
-    // OBJECT IDENTITY: `decorationSet === DecorationSet.empty`.
-    // `DecorationSet.mapInner` returns the `empty` singleton only when both
-    // `local` and the mapped `children` are empty, and after one map the
-    // children array survives non-empty — so sync N wipes, the gate fails on
-    // N+1, and it can only fire on N+2, after which `recoveryAttempted` latches.
-    // `tandem_edit` does not touch the annotations map, so the Y.Map observer
-    // never re-arms it and the user has to type twice to get their marks back.
+    // OBJECT IDENTITY: `decorationSet === DecorationSet.empty`. The reason it
+    // misses is NOT that the children array survives non-empty — an earlier
+    // draft of this comment said that, and it would predict the gate never
+    // firing at all. `mapInner` returns the singleton when `children.length ==
+    // 0` and `newLocal` is falsy, and a whole-doc replace DOES splice the
+    // children empty; what stops the singleton coming back is `mapChildren`,
+    // which unconditionally returns a fresh `DecorationSet`. So sync N wipes
+    // and returns a fresh-but-empty set, N+1 finally yields the singleton, and
+    // only N+2 can fire the gate. `tandem_edit` does not touch the annotations
+    // map, so the Y.Map observer never re-arms it and the user has to type
+    // twice to get their marks back.
     //
     // The decoration set handed in here is deliberately NON-EMPTY. Passing
     // `DecorationSet.empty` would exercise the pre-existing recovery branch and
@@ -372,7 +381,6 @@ describe("annotation plugin apply() recovery branch", () => {
 
     expect(result).toBe(EMPTY_SENTINEL);
     expect(walkCalls, "the gate must short-circuit before any walk").toBe(0);
-    clearVisibility();
   });
 
   it("honours the per-type visibility toggle on a y-sync rebuild", () => {
@@ -401,13 +409,13 @@ describe("annotation plugin apply() recovery branch", () => {
     const types = (result.decorations ?? []).map((d) => d.attrs["data-annotation-type"]);
     expect(types).toContain("comment");
     expect(types).not.toContain("note");
-    clearVisibility();
   });
 
   it("latches after a successful y-sync rebuild so the next empty edit does not retry", () => {
     // The latch is the #610 protection and it is easy to get backwards. A
     // successful rebuild means "recovered — do not re-run O(n) until the
-    // annotations map itself changes"; only the Y.Map observer clears it.
+    // annotations map itself changes"; the Y.Map observer and the
+    // `toggle-decorations` meta branch are what clear it.
     // Setting it FALSE here instead would unlatch after a PARTIAL rebuild (one
     // annotation resolves, others stay permanently unresolvable), so the next
     // local edit that maps the set to empty retries, fails, does not latch on
@@ -435,6 +443,43 @@ describe("annotation plugin apply() recovery branch", () => {
       fakeState,
     );
     expect(after).toBe(EMPTY_SENTINEL);
+  });
+
+  it("rebuilds on the SECOND consecutive y-sync transaction too", () => {
+    // The gap every other spec in this file leaves open: each drives exactly one
+    // y-sync transaction, so the branch's interaction with its own latch is
+    // untested — and adding `&& !recoveryAttempted` to the guard survives all of
+    // them. Under that mutation MCP write #1 repaints and every write after it
+    // falls through to `.map()`, so #1669 returns permanently after the first
+    // one. Nothing re-arms it either: the branch sets the latch on success, and
+    // `tandem_edit` never touches the annotations Y.Map, which is the entire
+    // premise of this fix.
+    //
+    // It is also the property the bug report is about. "The user had to type
+    // twice" is a statement about the SECOND event, not the first.
+    const ydoc = new Y.Doc();
+    addAnnotation(ydoc);
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const first = plugin.spec.state.apply(
+      makeTr({ docChanged: true, ySync: true }),
+      { map: () => "mapped-forward" },
+      fakeState,
+      fakeState,
+    );
+    expect(first).not.toBe(EMPTY_SENTINEL);
+    expect(first).not.toBe("mapped-forward");
+
+    const second = plugin.spec.state.apply(
+      makeTr({ docChanged: true, ySync: true }),
+      // The set the first rebuild produced, standing in as the incoming state.
+      first as { map: () => unknown },
+      fakeState,
+      fakeState,
+    );
+    expect(second).not.toBe(EMPTY_SENTINEL);
+    expect(second, "the second remote write must rebuild, not map").not.toBe("mapped-forward");
   });
 
   it("leaves the latch alone when the y-sync rebuild comes back empty", () => {
