@@ -318,12 +318,19 @@ mod tests {
         }
         drop(tx);
 
-        for i in 0..3 {
-            let got = rx
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap_or_else(|e| panic!("follower {i} never returned: {e}"));
-            assert_eq!(got, None, "an abandoned flight must not hand back a value");
-        }
+        // Join the leader BEFORE timing the followers. The 5s window below is
+        // meant to measure one thing — followers waking once the leader has
+        // unwound — but placed first it also covered the leader's whole path
+        // to that point: thread start-up, the barrier, `wait_for_followers`,
+        // and the panic hook symbolising a backtrace out of the debug test
+        // binary, which `RUST_BACKTRACE=1` switches on and which alone costs
+        // 0.3–0.5s on an idle 4-core runner (0.7s under CPU stress). A loaded
+        // pre-push run overran the window that way on 2026-09-02: the leader's
+        // deliberate panic sat in the captured output directly above "follower
+        // 0 never returned", so the followers were answered — just not within
+        // 5s of the spawn. The join is unbounded, but every wait on the
+        // leader's path is not: `wait_for_followers` panics after 5s.
+        //
         // Assert on the payload, not merely that *a* panic happened: a
         // `wait_for_followers` timeout also unwinds this thread, and a bare
         // `is_err()` would read that failure as the deliberate panic and pass.
@@ -333,6 +340,15 @@ mod tests {
             Some("deliberate leader panic"),
             "the leader unwound for some other reason"
         );
+
+        // With the leader provably unwound, `LeaderGuard::drop` has run, so
+        // the followers must be answered promptly — or Drop stopped publishing.
+        for i in 0..3 {
+            let got = rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap_or_else(|e| panic!("follower {i} never returned: {e}"));
+            assert_eq!(got, None, "an abandoned flight must not hand back a value");
+        }
 
         // And the flight is usable again afterwards.
         let runs = AtomicUsize::new(0);
