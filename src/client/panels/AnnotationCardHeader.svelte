@@ -6,6 +6,7 @@ import { agentColor } from "../utils/agent-color";
 import {
   formatRelativeTime,
   getAuthorLabel,
+  getDisplayAuthor,
   getDisplayType,
   getHighlightSwatchColor,
 } from "./annotation-card-helpers";
@@ -27,8 +28,10 @@ let { annotation, isPending, isReviewTarget, isEditing, canEdit, onEnterEdit, ex
 
 const agentLabel = createAgentLabel();
 const displayType = $derived(getDisplayType(annotation));
+// The DISPLAY author, not the stored one. A promoted import reads "user" here
+// and would say "You" over a colleague's unedited words (#1714).
 const authorLabel = $derived(
-  getAuthorLabel(annotation.author, agentLabel.family, annotation.agentIdentity),
+  getAuthorLabel(getDisplayAuthor(annotation), agentLabel.family, annotation.agentIdentity),
 );
 // 6px authorship dot before the author label. `user` carries the fixed user
 // token; `claude` carries the per-agent color (#1123 M4) — `agentColor` falls
@@ -137,7 +140,11 @@ const glyphFill = $derived(glyph.filled ? getHighlightSwatchColor(annotation) : 
     {#if annotation.editedAt}
       <span class="ach-edited">(edited)</span>
     {/if}
-    {#if annotation.author !== "import"}
+    <!-- The actual "You" dot gate, and the site the first draft of this fix
+         missed: this header is shared by EVERY card variant, so re-keying only
+         the card dispatch would have left the dot painted inside whichever
+         variant the record landed in. -->
+    {#if getDisplayAuthor(annotation) !== "import"}
       <span
         class="ach-dot"
         data-testid="annotation-author-dot-{annotation.id}"
@@ -151,6 +158,25 @@ const glyphFill = $derived(glyph.filled ? getHighlightSwatchColor(annotation) : 
     </span>
   </span>
 </div>
+
+<!-- Reviewer attribution byline. Imports carry the original Word commenter's
+     name; surfacing it lets the user decide which reviewer's comments to
+     promote without opening the source file.
+
+     It lives in the shared header rather than in `ImportedCard` because of
+     #1714: a PROMOTED import still carries the reviewer's name but renders as
+     `CommentCard` or `SuggestionCard`, and a byline only `ImportedCard` could
+     draw would have been the one attribution surface the fix still missed.
+     Gated on the name itself, not on `presentsAsImport` — a provenance record
+     that names nobody has no byline to draw. -->
+{#if annotation.importSource?.author}
+  <div
+    data-testid="annotation-import-byline-{annotation.id}"
+    style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-bottom: 4px;"
+  >
+    From: <span style="font-weight: 500;">{annotation.importSource.author}</span>
+  </div>
+{/if}
 
 <style>
   /* Card header — type badge + (optional pill) + (optional status) +

@@ -147,11 +147,99 @@ Each row:
   `translateY(8px)` → `translateY(0)` over 240ms ease-out. Sticky bar
   stays mounted until selection clears; selection-clear = reverse of
   enter, 200ms.
+- **Where "the manifest" means, throughout this section.** `HANDOFF-MANIFEST.md`
+  in the Claude Design project **Tandem Design System** — *not* a file in this
+  repo. Grepping for it here finds nothing, which is exactly why the claims it
+  carries went unchecked for months. Quote it, then verify against source.
+
+- **Hold state uses the ACCENT family — decided 2026-08-31, and it is a
+  FORWARD decision.** The manifest specified the warning family and the
+  2026-07-21 divergence pass reported that production had shipped accent
+  instead. **Checked 2026-09-01: neither ships, because the hold state does not
+  exist yet.** `BatchPromoteBar.svelte` contains no accent tokens and no warning
+  tokens — its only `warning`-shaped string is a code comment about the confirm
+  gate's warning *sentence*. Its palette is `--tandem-border-strong`,
+  `--tandem-surface`, `--tandem-surface-muted`, `--tandem-fg`,
+  `--tandem-fg-subtle`, `--tandem-border`, `--tandem-shadow-1`,
+  `--tandem-author-claude`, `--tandem-z-base`. `ImportedCard`'s selection is a
+  plain checkbox. The hold LED is `motion.md` **A24**, still marked **ADD**.
+
+  So the decision is *when A24's hold state is built, it uses accent* — not a
+  reconciliation of two shipped things. Accent because a batch of imported
+  notes waiting to be promoted is a **neutral pending state, not a problem**;
+  warning tokens would make an ordinary step of the import flow read as broken.
+  That semantic argument is the whole rationale and needs no procedural
+  backstop: an earlier draft here cited Conflict #6 as pointing the same way and
+  as imposing a WCAG re-audit on switching, and **both were wrong** — #6
+  governs production-vs-*bundle* tokens, and `--tandem-accent-*` and
+  `--tandem-warning-*` are both production families (`index.html` `:root` and
+  the dark block), so #6 neither adjudicates between them nor triggers its
+  re-audit clause.
+
+- **C7 and C8 STACK. They are not mutually exclusive, and nothing may make
+  them so.** The manifest's exclusivity rule was false and is retired
+  (decided 2026-08-31). `SidePanel.svelte` renders `BatchPromoteBar` and
+  `BulkActions` as unconditional siblings on **independent gates** — one
+  fires on checked imported notes (`selectedCount`), the other on pending
+  review items (`pendingCount > 1`) — so both can be live at once. The
+  gates are independent because the *states* are independent. Adding a
+  priority rule so only one renders would silently hide a real affordance
+  in order to make a layout problem go away, which is why it was rejected
+  rather than adopted as the cheap fix.
+
+- **Where they actually sit, measured 2026-09-01.** The manifest's standing
+  anti-pattern on both rows reads *"position absolute at rail bottom — never
+  floats above the rail's `overflow: hidden` track."* **Half of that is true,
+  and an earlier draft of this section wrongly called all of it fiction** — the
+  overcorrection is recorded here because it is the same class of error it was
+  correcting.
+
+  **True:** there IS an `overflow: hidden` track, and it IS absolutely
+  positioned — `.rail-full` in `App.svelte` is `position: absolute;
+  inset-block: 0; display: flex; flex-direction: column; overflow: hidden`. The
+  SidePanel is a descendant of it, via `PanelSlot`.
+
+  **False, and this is the part a canvas would get wrong:**
+
+  - The **bars** are not absolutely positioned and are not at the bottom. Both
+    are in normal flow near the **top** of the panel, between
+    `FilterBar`/`ApplyChangesButton` and the `role="list"` container.
+  - The panel the bars live in is its own scroller — its root is
+    `display: flex; flex-direction: column; overflow-y: auto` — so the bars do
+    not float over anything; they scroll with, or stick within, that panel.
+  - The list is `flex: 1`, so the bars take height off the top of it. There is
+    **no height budget to reserve**; flow already does it.
+  - That root also carries `class="tandem-scroll-fade-y"` and
+    `use:scrollFade={"y"}`, so when content is scrolled above it, a
+    `mask-image` fades the top `--tandem-fade-edge` of the scrollport to
+    transparent. **The mask is anchored to the container's border box, not to
+    the scrolled content** — so it sits over anything pinned there.
+  - And the two bars are **positioned inconsistently with each other**:
+    `BatchPromoteBar` is `position: sticky; top: 0` with an opaque
+    `background: var(--tandem-surface)` and `z-index: var(--tandem-z-base)`;
+    `BulkActions` sets no `position` at all and is transparent. So when both
+    are live the promote bar pins and paints over the bulk bar as it scrolls
+    up underneath — and the pinned bar is itself sitting under the scroll-fade
+    band, in precisely the state that engages it.
+
+  That inconsistency, plus the fade landing on whatever pins, is the real open
+  question 3.4 owes an answer to. What the canvas owes: a **fixed order**
+  (promote-above-bulk is what markup order gives today), a decision on **which
+  bars stick** — both, neither, or the current split — applied to both
+  components rather than left as an accident, and a rule for **how a pinned bar
+  reads under the fade mask**. Note also that `motion.md` A24 specifies the
+  promote bar *"rises from rail bottom … slides down on clear/send"*, which is
+  a bottom-anchored motion for a top-pinned element; A24 is still **ADD**, so
+  the canvas is the place to settle which one is right.
+
 - **Anti-patterns.** Do NOT show count = 0 (hide instead). Do NOT add a
   third action button — the primary CTA is "Send N to Claude" (C7) or
   "Accept N" / "Dismiss N" (C8); a third action invites accidental
   destructive use. Do NOT block scroll under the bar — the bar sits over
-  the editor, the editor must still scroll behind it.
+  the editor, the editor must still scroll behind it. Do NOT make one bar
+  suppress the other (see above) — that reads as a simplification and is a
+  regression. Do NOT take the manifest's "absolute at rail bottom" phrasing as
+  describing the BARS — it describes the rail, and the bars are neither.
 
 ### 3.5 Margin column (risky) — C4 MarginColumn
 

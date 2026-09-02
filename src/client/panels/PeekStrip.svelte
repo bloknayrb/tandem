@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Annotation } from "../../shared/types.js";
 import { agentTintColor } from "../utils/agent-color.js";
+import { getDisplayAuthor } from "./annotation-card-helpers";
 
 interface Props {
   side: "left" | "right";
@@ -54,8 +55,13 @@ const label = $derived(side === "left" ? "Outline" : "Annotations");
 function dotClass(a: Annotation): string {
   if (a.type === "highlight") return "hl";
   if (a.type === "comment" && a.suggestedText != null) return "suggest";
-  if (a.author === "claude") return "claude";
-  if (a.author === "import") return "import";
+  // The DISPLAY author (#1714): a promoted import keeps the import dot, so the
+  // sliver agrees with the card it is previewing rather than contradicting it.
+  // The sliver previews the rail it is hiding, so its dot must agree with the
+  // card behind it — a promoted import keeps the import dot (#1714).
+  const author = getDisplayAuthor(a);
+  if (author === "claude") return "claude";
+  if (author === "import") return "import";
   return "user";
 }
 </script>

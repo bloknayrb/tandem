@@ -20,6 +20,21 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+/**
+ * A DELIBERATELY partial extension set — `StarterKit` minus its `listItem`,
+ * plus ours — because these specs are about `ListItemCheckbox` itself and want
+ * nothing else in the way.
+ *
+ * Stated because it is not the production schema (no `SoftWrapParagraph`, no
+ * tables, no `ListSpreadExtension`), and a suite that measures a schema
+ * production does not use has already cost one wrong bug report: #1720 was
+ * diagnosed as slash-command corruption when it was stock StarterKit's
+ * `paragraph block*` listItem repairing an illegal shape at parse time. That is
+ * safe here only because nothing in this file drives a block-type conversion —
+ * `setNode`/`clearNodes` never run. Anything added here that DOES should pass
+ * `buildSchemaExtensions()` via `opts.extensions`, as the Enter-key block near
+ * the bottom of this file already does.
+ */
 function makeEditor(opts: { extensions?: AnyExtension[]; content?: Content } = {}): Editor {
   const container = document.createElement("div");
   document.body.appendChild(container);

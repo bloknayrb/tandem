@@ -4,6 +4,7 @@ import { TextSelection } from "prosemirror-state";
 import { untrack } from "svelte";
 import type { Annotation } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
+import { getDisplayAuthor } from "../panels/annotation-card-helpers";
 import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import type { HeadingEntry } from "../utils/headings";
@@ -142,7 +143,13 @@ const headingAnnotationCounts = $derived.by(() => {
         if (!ann.suggestedText) continue;
       } else if (ann.type !== activeFilterType) continue;
     }
-    if (activeFilterAuthor !== "all" && ann.author !== activeFilterAuthor) continue;
+    // Mirrors `SidePanel`'s author filter (#1714) so the two agree if the
+    // outline is ever driven by the same chip. Today it is not: App.svelte's
+    // outline PanelSlot passes neither `annotations` nor `activeFilter*`, and
+    // `onFilterChange` has no supplier, so this branch is inert. Kept in step
+    // deliberately — a filter that disagrees with the rail once it IS wired is
+    // a bug nobody would think to look for here.
+    if (activeFilterAuthor !== "all" && getDisplayAuthor(ann) !== activeFilterAuthor) continue;
     if (activeFilterStatus !== "all" && ann.status !== activeFilterStatus) continue;
     try {
       annPositions.push(flatOffsetToPmPos(ed.state.doc, ann.range.from));
