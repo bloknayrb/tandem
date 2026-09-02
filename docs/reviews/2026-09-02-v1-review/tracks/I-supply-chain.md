@@ -47,4 +47,51 @@ pre-push biome scope, `infra/` in tsconfig and biome, the dependency diet.
 
 ## Status
 
-_(empty)_
+**#1744–#1747 addressed in [#1833](https://github.com/bloknayrb/tandem/pull/1833). #1748 untouched.**
+
+Three of the five "Done when" criteria are met, one is met differently from how it is written
+here, and one **cannot be met as written** — that last one is the reason this section is worth
+reading rather than a formality.
+
+- **Every `uses:` is a 40-char SHA with a version comment** — met, and wider than the issue asked.
+  #1745 named three workflows; this covers **all five** (34 references), so the guard can assert
+  "no unpinned action anywhere", which an allowlist over three files cannot express. The
+  secret-bearing set is also **three, not two**: `publish.yml` holds `NPM_TOKEN` *and*
+  `id-token: write`, so a moved `setup-node` tag there mints a provenance-attested malicious npm
+  package.
+- **The sidecar says 22.23.2 and the drift check is green** — met, plus two things #1747 did not
+  ask for. The expected archive hashes are now committed (the fetched `SHASUMS256.txt` comes from
+  the same host and CDN as the tarball, so it detects transport corruption and nothing else), and
+  the existence check is version-aware: it used to exit 0 on any binary over a size floor *before
+  the version was read*, so a bump was a silent no-op in any tree that already had a sidecar. The
+  live specimen was a **v24.14.0** binary sitting where the pin said 22.
+- **Dependabot is filled in — but `github-actions` is deliberately NOT grouped**, which diverges
+  from the instruction in the Issues table above. Grouping turns a week of action bumps into one
+  PR mutating a dozen 40-hex strings, and that is precisely the artifact in which one wrong SHA is
+  invisible. `npm` and `cargo` are grouped as written. **"A Dependabot PR has opened and merged"
+  is not yet true** and cannot be until the config is on master.
+- **"A dry run of `tauri-release.yml` with `APPLE_*` unset fails the macOS leg" cannot be run.**
+  The workflow triggers on `push: tags: ["v*"]` and nothing else — no `workflow_dispatch`, no
+  `pull_request` — so there is no dry run to perform, and there is no macOS hardware on this
+  project. The gate is written and its shape is pinned by a test inside `check`, but it has never
+  executed. That is registered in [`docs/security.md`](../../../security.md) as **fixed but
+  unverified** with a dated issue ([#1829](https://github.com/bloknayrb/tandem/issues/1829),
+  deadline 2026-12-01) and a one-release checkbox in the smoke checklist. Do not read a green
+  `check` on #1833 as evidence this criterion passed.
+
+**The "Rules that bite here" list needs one addition**, learned the expensive way: those wiring
+tests pin workflow steps *by content*, and content pinning that reads for a **substring** cannot
+see whether the matched text is still **reachable**. Adversarial review defeated three assertions
+in this PR's own new guard with `if false && [ … ]`, `|| true` and `-and $false`, each leaving
+every scanned literal in place while shipping an unsigned artifact. Pin the **executable lines**
+of a `run:` body — everything that is not blank, a comment, or a message — rather than fragments
+of it.
+
+Three exposures SHA-pinning does not touch were found and filed rather than folded in:
+[#1830](https://github.com/bloknayrb/tandem/issues/1830) (nothing verifies the updater `.sig`
+against `tauri.conf.json`'s pubkey — the artifact this track is nominally protecting),
+[#1831](https://github.com/bloknayrb/tandem/issues/1831) (`claude-code-review.yml` has been dead
+since 2026-05-27 and would skip every Dependabot PR anyway, so it does not cover the human SHA
+check this track relies on) and [#1832](https://github.com/bloknayrb/tandem/issues/1832)
+(`npm ci` runs lifecycle scripts in the same job as the signing secrets — a cheaper path to the
+same outcome than moving an action tag).
