@@ -233,8 +233,15 @@ export function registerAnnotationTools(server: McpServer): void {
     {
       // All params optional: a deprecated stub must surface DEPRECATED for any
       // call shape, including ones missing the legacy required params.
-      from: z.number().optional(),
-      to: z.number().optional(),
+      //
+      // `.int()` matches the three LIVE range-taking tools (#1752). It narrows
+      // "any call shape" by exactly one case — a fractional offset now answers a
+      // schema error instead of DEPRECATED — and that is the intended trade: the
+      // rule about offsets should not have a hole in it just because the tool
+      // behind it is a stub, and no legacy caller passed a fraction. Optionality,
+      // which is what the invariant is actually about, is untouched.
+      from: z.number().int().optional(),
+      to: z.number().int().optional(),
       color: HighlightColorSchema.optional(),
       note: z.string().optional(),
       documentId: z.string().optional(),
@@ -333,8 +340,15 @@ export function registerAnnotationTools(server: McpServer): void {
     {
       // All params optional: a deprecated stub must surface DEPRECATED for any
       // call shape, including ones missing the legacy required params.
-      from: z.number().optional(),
-      to: z.number().optional(),
+      //
+      // `.int()` matches the three LIVE range-taking tools (#1752). It narrows
+      // "any call shape" by exactly one case — a fractional offset now answers a
+      // schema error instead of DEPRECATED — and that is the intended trade: the
+      // rule about offsets should not have a hole in it just because the tool
+      // behind it is a stub, and no legacy caller passed a fraction. Optionality,
+      // which is what the invariant is actually about, is untouched.
+      from: z.number().int().optional(),
+      to: z.number().int().optional(),
       newText: z.string().optional(),
       reason: z.string().optional(),
       documentId: z.string().optional(),
@@ -355,8 +369,15 @@ export function registerAnnotationTools(server: McpServer): void {
     {
       // All params optional: a deprecated stub must surface DEPRECATED for any
       // call shape, including ones missing the legacy required params.
-      from: z.number().optional(),
-      to: z.number().optional(),
+      //
+      // `.int()` matches the three LIVE range-taking tools (#1752). It narrows
+      // "any call shape" by exactly one case — a fractional offset now answers a
+      // schema error instead of DEPRECATED — and that is the intended trade: the
+      // rule about offsets should not have a hole in it just because the tool
+      // behind it is a stub, and no legacy caller passed a fraction. Optionality,
+      // which is what the invariant is actually about, is untouched.
+      from: z.number().int().optional(),
+      to: z.number().int().optional(),
       note: z.string().optional(),
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),

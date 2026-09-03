@@ -325,6 +325,14 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void 
       // text ends mid-pair). `out-of-bounds` or `non-integer` here would mean
       // this loop's own offset arithmetic disagrees with `extractText`, which is
       // a coordinate-system bug and has no business being invisible (#1752).
+      //
+      // NOT pinned by a spec, deliberately: this arm has no constructible input.
+      // `from` starts after a heading prefix and `to` ends at the element's text
+      // end, so both land on a block boundary — a newline separator or the
+      // document edge — where `splitsSurrogatePair` cannot fire, and both offsets come
+      // from the same walk `extractText` does, so `out-of-bounds` and
+      // `non-integer` cannot either. The log exists for the day one of those
+      // stops being true, which is exactly when no spec would have covered it.
       console.error(
         `[document] Authorship stamp skipped for block ${i}: range [${from}, ${to}] — ` +
           describeRangeFailure(anchored),
@@ -681,6 +689,27 @@ export function registerDocumentTools(server: McpServer): void {
               `Invalid range: [${from}, ${to}) is empty and newText is empty — nothing to do. ` +
                 "Pass a non-empty newText to insert at this position, or a non-empty range to replace.",
               { reason: "empty" },
+            );
+          }
+
+          // A point insertion collides with the standing "always pass
+          // textSnapshot" advice, and the collision is DESTRUCTIVE, so it is
+          // refused rather than papered over. A point range slices to `""`, which
+          // never equals a non-empty snapshot, so staleness fires and relocation
+          // answers RANGE_MOVED naming the span of the snapshot TEXT — and the
+          // documented retry ("use resolvedFrom/resolvedTo") then replaces those
+          // characters with `newText`. The agent asked to insert and got a
+          // deletion, having followed both documented rules.
+          //
+          // There is no coherent snapshot for a zero-length range to verify, so
+          // the fix is to omit it, and the message says so.
+          if (from === to && textSnapshot) {
+            return mcpError(
+              "INVALID_ARGUMENT",
+              `A point insertion at ${from} cannot carry a textSnapshot: a zero-length range ` +
+                "matches no text, so the snapshot would always look stale and the RANGE_MOVED " +
+                "retry would turn your insert into a replacement. Omit textSnapshot for a point " +
+                "insertion, or pass the range you mean to replace.",
             );
           }
 

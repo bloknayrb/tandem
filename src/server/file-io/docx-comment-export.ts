@@ -344,29 +344,36 @@ export function prepareExportComments(
     // with `s.slice(0, take)` — one TextRun ends on a lone high surrogate, the
     // next starts on a lone low one, and the zip's UTF-8 encode turns both into
     // U+FFFD. The emoji is destroyed in the saved .docx, caused by a comment,
-    // on a save that changed nothing else (#1448 class). So SNAP outward first,
-    // then validate with the default `surrogates: "reject"` — a residual
-    // mid-pair offset becomes a loud skip rather than a corrupt file (#1752).
+    // on a save that changed nothing else (#1448 class). So SNAP outward (#1752).
     //
     // The predicate is the PAIRED one, the same `splitsSurrogatePair` the
-    // validator uses. A one-sided `isLowSurrogate(charCodeAt(i))` also fires on
-    // the legal boundary BETWEEN two adjacent astral characters — where the unit
-    // at `i` is a low surrogate but the unit at `i - 1` is too — and would snap a
-    // perfectly good offset outward, widening the exported comment by a
-    // character. It also fired at offset 0 on a text starting with a lone low
-    // surrogate, where `from--` produced -1 and the range was then rejected as
-    // `out-of-bounds` instead of exported.
-    const snappedFrom = from;
-    const snappedTo = to;
+    // validator uses. The one-sided `isLowSurrogate(charCodeAt(i))` it replaced
+    // asks what is AT `i` without asking what precedes it, so it fires on ANY
+    // lone low surrogate — one at offset 0, or one following a non-high unit —
+    // where nothing is split and there is nothing to snap off. At offset 0 that
+    // produced `from = -1` and the comment was then dropped as `out-of-bounds`;
+    // elsewhere it silently widened the exported comment by a character.
+    //
+    // A SINGLE outward step is total: an offset splits a pair only when the unit
+    // before is high and the unit at is low, and stepping either way lands
+    // outside that one boundary, so the snapped range can never still split one.
+    // (Verified by exhaustive sweep over 4-unit strings × every `(from, to)`.)
+    // The `invalid-range` arm below is therefore unreachable via `surrogate`; it
+    // is kept because `out-of-bounds`, `inverted` and `non-integer` are not, and
+    // because an arm removed on an unreachability argument is how the next
+    // change to the snap becomes a corrupt file. It is not a second LAYER, and
+    // must not be described as one.
+    const origFrom = from;
+    const origTo = to;
     if (splitsSurrogatePair(fullText, from)) from--;
     if (splitsSurrogatePair(fullText, to)) to++;
-    if (from !== snappedFrom || to !== snappedTo) {
+    if (from !== origFrom || to !== origTo) {
       // `warn`, so this is quiet on the counting call and printed once on the
       // real export pass — the snap changes the bytes written to the user's file,
       // so it belongs in the log the export owns, not in the count.
       warn(
         `[docx-comment-export] Snapped comment ${ann.id} off a surrogate pair: ` +
-          `[${snappedFrom}, ${snappedTo}] → [${from}, ${to}]`,
+          `[${origFrom}, ${origTo}] → [${from}, ${to}]`,
       );
     }
 

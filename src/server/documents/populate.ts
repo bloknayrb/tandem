@@ -137,11 +137,17 @@ function notifyIssue(issue: LoadIssue, ctx: PopulateContext): void {
         id: generateNotificationId(),
         type: "annotation-error",
         severity: "warning",
+        // "moved to the end" would be wrong for half the cases: the clamp is a
+        // `Math.min` per END independently, so `(2, len + 5)` becomes `(2, len)`
+        // — a comment STRETCHED to the end of the document, not moved there.
+        // Only a comment whose `from` also overshoots collapses to a point at
+        // the end. One sentence has to cover both shapes.
         message:
           `${issue.count === 1 ? "1 Word comment" : `${issue.count} Word comments`} from ` +
-          `${ctx.displayName} could not be placed where Word had ${issue.count === 1 ? "it" : "them"} ` +
-          `and ${issue.count === 1 ? "was" : "were"} moved to the end of the document ` +
-          `(largest move: ${issue.maxClamp} characters).`,
+          `${ctx.displayName} could not be placed exactly where Word had ` +
+          `${issue.count === 1 ? "it" : "them"} and ` +
+          `${issue.count === 1 ? "was" : "were"} shortened or moved to the end of the document ` +
+          `(largest adjustment: ${issue.maxClamp} characters).`,
         dedupKey: `docx-comments-clamped:${ctx.dedupSource}`,
         timestamp: Date.now(),
       });
@@ -156,6 +162,16 @@ function notifyIssue(issue: LoadIssue, ctx: PopulateContext): void {
         timestamp: Date.now(),
       });
       return;
+    default: {
+      // Exhaustiveness, not defensive coding. Without it, DELETING an arm above
+      // compiles and stays green — the switch simply returns undefined and the
+      // user silently stops being told their document lost something. Every arm
+      // here is the only user-facing half of a `LoadIssue`, so a missing one is
+      // invisible by construction.
+      const _never: never = issue;
+      void _never;
+      return;
+    }
   }
 }
 
@@ -302,7 +318,15 @@ function clearDocMaps(doc: Y.Doc): void {
   for (const m of maps) m.forEach((_, k) => m.delete(k));
 }
 
-export { evictPartialDocState as __testEvictPartialDocState };
+/**
+ * `notifyIssue` is the ONLY user-facing half of a `LoadIssue` — an arm that
+ * pushes no notification means the user is never told their document lost
+ * something, and nothing else in the system would notice. Exported under this
+ * file's existing `__test` convention so each arm can be pinned directly,
+ * rather than only through a full parse+apply of a synthetic `.docx` that can
+ * reach one arm at a time.
+ */
+export { evictPartialDocState as __testEvictPartialDocState, notifyIssue as __testNotifyIssue };
 
 /**
  * Clear all document state in-place and repopulate from a pre-read buffer.

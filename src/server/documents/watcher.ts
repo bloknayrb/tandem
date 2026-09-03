@@ -261,8 +261,21 @@ export async function reloadFromDisk(
           // INVALID_RANGE, which has no handler here. The guard that keeps a
           // point comment out of this loop is the `!ann.textSnapshot` check
           // above (its snapshot is ""), not `probe.length === 0`.
+          //
+          // `surrogates: "ignore"` for the same reason the relocation anchor
+          // below carries it, and this call needs it MORE: `probeTo` is
+          // `from + probe.length`, and `captureSnapshot` caps a snapshot at 200
+          // code units (`annotations.ts`), so a cap landing between the halves
+          // of a pair puts `probeTo` mid-pair. On a reload that does NOT move
+          // the annotation, staleness then passes and the surrogate check fires
+          // `INVALID_RANGE` — which is not `RANGE_MOVED`, so a perfectly healthy
+          // annotation takes the `else` arm below and is reported as durably
+          // mispinned, on every reload, forever. These are DERIVED offsets and
+          // nothing here is written to a file.
+          const surrogates = "ignore" as const;
           const vr = validateRange(doc, ann.range.from, probeTo, {
             textSnapshot: probe,
+            surrogates,
             text,
             textTag: "watcher/relocation-probe",
           });
@@ -287,16 +300,15 @@ export async function reloadFromDisk(
             // `allowEmpty` because `span` can be 0: `refreshRange` may resolve a
             // relRange to newFrom === newTo (#1764) while the annotation keeps
             // its older non-empty snapshot, so it passes both guards above and
-            // arrives here collapsed. `surrogates: "ignore"` because
-            // `resolvedFrom` is `indexOf(probe)` on a character-count-capped
-            // prefix (#1486), which can be cut between the halves of a pair —
-            // and the clamped `to` can land mid-pair too. Both are DERIVED
-            // offsets and nothing here is serialized to a file.
+            // arrives here collapsed. `surrogates` is the SAME policy the probe
+            // uses, shared from one binding rather than written twice — the
+            // capped-probe rationale is identical at both ends and they went out
+            // of sync once already.
             const relocOpts = {
               allowEmpty: true,
-              surrogates: "ignore" as const,
+              surrogates,
               text,
-              textTag: "watcher/relocation-anchor",
+              textTag: "watcher/relocation-anchor" as const,
             };
             const relocated = truncated
               ? anchoredRange(doc, vr.resolvedFrom, resolvedTo, undefined, relocOpts)
