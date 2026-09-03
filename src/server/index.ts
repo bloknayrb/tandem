@@ -42,6 +42,7 @@ import {
   docCount,
   getOpenDocs,
 } from "./mcp/document-service.js";
+import { shutdownSearchWorker } from "./mcp/search-worker.js";
 import {
   APP_VERSION,
   closeMcpSession,
@@ -225,6 +226,34 @@ async function shutdown(signal: string) {
     await closeMcpSession();
   } catch (err) {
     console.error("[Tandem] MCP session close on shutdown failed:", err);
+  }
+  // MCP is the only producer of search work, so the worker goes right after it.
+  // Its OWN try/catch, and not inside the first one: a rejection swallowed up
+  // there would be misreported as a failed session save AND would skip
+  // autoSaveAllToDisk/saveCurrentSession, while a bare await here would escape
+  // into the .catch-less SIGTERM handler and exit(1) past launcherSupervisor,
+  // releaseStoreLock and httpServer.close().
+  //
+  // Raced, for the same reason the disk flush above is. `process.exit(0)` at the
+  // bottom is unconditional in SOURCE POSITION, not in reachability: everything
+  // after this await — launcherSupervisor.stop(), releaseStoreLock(),
+  // httpServer.close() — runs only if the await settles, so a terminate that
+  // never settled would strand the store lockfile. Terminating a worker mid-exec
+  // was measured at 4.7-9.8 ms, and the whole shutdown at 5 ms against a live
+  // `(a+)+$` with the hard timer disabled, so the ceiling should never be
+  // reached; it exists so that a wedged terminate costs a leaked handle at exit
+  // instead of a lockfile the next launch has to reclaim.
+  try {
+    let settleTimer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      shutdownSearchWorker(),
+      new Promise<void>((resolve) => {
+        settleTimer = setTimeout(resolve, 2000);
+      }),
+    ]);
+    if (settleTimer) clearTimeout(settleTimer);
+  } catch (err) {
+    console.error("[Tandem] search worker shutdown failed:", err);
   }
   // Stop the launcher BEFORE we tear down everything else — supervisor.stop()
   // sends SIGTERM to the reaper which gracefully reaps Claude. If we skip this

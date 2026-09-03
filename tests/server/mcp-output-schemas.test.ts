@@ -31,7 +31,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { type ZodRawShape, z } from "zod";
 import type { DoctorReport } from "../../src/cli/doctor.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
@@ -51,6 +51,7 @@ import {
   statusOutputShape,
 } from "../../src/server/mcp/output-schemas.js";
 import { makeDiagnosticsHandler } from "../../src/server/mcp/routes/diagnostics.js";
+import { shutdownSearchWorker } from "../../src/server/mcp/search-worker.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
@@ -148,6 +149,11 @@ beforeEach(async () => {
   setActiveDocId(null);
   client = await setupMcpClient();
 });
+
+// The `regex: true` cases below spawn the #1795 search worker. Hygiene: the
+// forks pool would kill it anyway, but a bare `node` process (which is what the
+// production server is) stays alive on the leaked MessagePort.
+afterAll(() => shutdownSearchWorker());
 
 describe("tools/list advertises outputSchema", () => {
   it("exactly the data-returning tools declare an outputSchema", async () => {
@@ -507,6 +513,35 @@ describe("tandem_search structured output", () => {
     expect(sc.count).toBe(0);
     expect(sc.matches).toEqual([]);
   });
+
+  // #1795 — a cap is a PARTIAL result, not a FORMAT_ERROR. Asserted on BOTH
+  // paths: the literal search still runs on the main thread and the regex one
+  // goes to the worker, so they have to agree on the envelope.
+  it("reports a capped LITERAL search as truncated, not as an error", async () => {
+    setupDoc("schema-search-cap-literal", "a".repeat(10_001));
+    const result = (await client.callTool({
+      name: "tandem_search",
+      arguments: { query: "a" },
+    })) as ToolResult;
+    const sc = expectStructuredMatch(result, searchOutputShape);
+    expect(result.isError).toBeFalsy();
+    expect(sc.truncated).toBe(true);
+    expect(sc.reason).toBe("cap");
+    expect(sc.count).toBe(10_000);
+  }, 15_000);
+
+  it("reports a capped REGEX search as truncated, not as an error", async () => {
+    setupDoc("schema-search-cap-regex", "a".repeat(10_001));
+    const result = (await client.callTool({
+      name: "tandem_search",
+      arguments: { query: "a", regex: true },
+    })) as ToolResult;
+    const sc = expectStructuredMatch(result, searchOutputShape);
+    expect(result.isError).toBeFalsy();
+    expect(sc.truncated).toBe(true);
+    expect(sc.reason).toBe("cap");
+    expect(sc.count).toBe(10_000);
+  }, 15_000);
 });
 
 describe("error envelopes from outputSchema'd tools", () => {

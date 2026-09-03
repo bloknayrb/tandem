@@ -38,12 +38,8 @@ describe("searchText", () => {
     expect(result.matches).toHaveLength(3);
   });
 
-  it("supports regex mode", () => {
-    const result = searchText("Hello 123 World 456", "\\d+", true);
-    expect(result.matches).toHaveLength(2);
-    expect(result.matches[0].text).toBe("123");
-    expect(result.matches[1].text).toBe("456");
-  });
+  // Regex mode is no longer a `searchText` parameter (#1795): it runs on a
+  // worker thread, so its cases live in tests/server/search-worker.test.ts.
 
   it("returns empty array for no matches", () => {
     const result = searchText("Hello world", "xyz");
@@ -55,12 +51,6 @@ describe("searchText", () => {
     const result = searchText("price is $9.99 (USD)", "$9.99");
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0].text).toBe("$9.99");
-  });
-
-  it("returns error for invalid regex", () => {
-    const result = searchText("Hello", "[invalid", true);
-    expect(result.error).toBeDefined();
-    expect(result.matches).toHaveLength(0);
   });
 });
 

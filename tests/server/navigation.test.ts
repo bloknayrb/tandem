@@ -180,27 +180,69 @@ describe("search on Y.Doc extracted text", () => {
 });
 
 describe("searchText — ReDoS protections", () => {
-  it("caps results at 10,000 matches and returns an error", () => {
+  it("caps results at 10,000 matches and flags the truncation", () => {
     // 10,001 single-char matches — each "a" matches once
     const text = "a".repeat(10_001);
     const result = searchText(text, "a");
     expect(result.matches).toHaveLength(10_000);
-    expect(result.error).toMatch(/capped at 10000/i);
+    // A cap is a PARTIAL result, not an error (#1795). It is reported
+    // structurally so the handler never string-matches a message to classify it.
+    expect(result.truncated).toBe("cap");
+    expect(result.error).toBeUndefined();
   });
 
-  it("zero-length regex match does not infinite loop", () => {
-    // "a*" matches empty string at every position in "bbb"
-    const result = searchText("bbb", "a*", true);
+  it("zero-length literal match does not infinite loop", () => {
+    // Literal-path smoke only: "a*" is escaped, so this looks for the two
+    // characters "a*". The regex zero-length guard now lives in the worker and
+    // is pinned in tests/server/search-worker.test.ts.
+    const result = searchText("bbb", "a*");
     // Should complete quickly and return a defined result
     expect(result.matches).toBeDefined();
     expect(result.error).toBeUndefined();
   });
 
-  it("returns matches alongside error when cap is hit", () => {
+  it("returns matches alongside the cap flag when the cap is hit", () => {
     const text = "x".repeat(10_001);
     const result = searchText(text, "x");
     // Matches are returned even though the cap was hit
     expect(result.matches.length).toBeGreaterThan(0);
-    expect(result.error).toBeTruthy();
+    expect(result.truncated).toBe("cap");
+  });
+
+  it("reports an oversized LITERAL query as an error rather than throwing", () => {
+    // `escapeRegex` stops catastrophic backtracking; it does not make the
+    // compile infallible. V8 caps a compiled pattern's source at 32,768
+    // characters and escaping only lengthens it, so a long enough literal
+    // raises "Regular expression too large" — measured on Node v24.14.1 with a
+    // 33,062-character message that quotes the whole query back. Uncaught it
+    // reaches `withErrorBoundary` and the caller is told INTERNAL_ERROR: the
+    // server blamed for a bad input, with the query echoed into the envelope
+    // and into console.error.
+    //
+    // A SWEEP, not a boundary. V8 compiles lazily, so the throw comes from the
+    // first `exec` and never from `new RegExp` — measured at 33,000 and 40,000
+    // in several orders — which is why the guard in `searchText` has to wrap
+    // the loop and why one around construction alone would catch nothing.
+    // Asserting where the boundary sits would instead pin an engine-internal
+    // budget that moves; asserting that no length throws does not.
+    const lengths = [16_000, 32_000, 33_000, 40_000];
+    const results = lengths.map((n) => {
+      let result: ReturnType<typeof searchText> | undefined;
+      expect(() => {
+        result = searchText("hello world", "a".repeat(n));
+      }, `query of ${n} characters threw instead of reporting`).not.toThrow();
+      return result;
+    });
+
+    for (const result of results) {
+      expect(result?.matches).toHaveLength(0);
+      expect(result?.truncated).toBeUndefined();
+    }
+    // Guards the sweep against becoming vacuous: if the engine ever compiles
+    // every length above, this test proves nothing and should say so.
+    expect(
+      results.filter((r) => r?.error !== undefined).length,
+      "no length in the sweep exceeded the compile budget — widen it",
+    ).toBeGreaterThan(0);
   });
 });
