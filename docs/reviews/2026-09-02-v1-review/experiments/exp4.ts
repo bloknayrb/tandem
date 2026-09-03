@@ -1,7 +1,7 @@
 import * as Y from "yjs";
 import { htmlToYDoc } from "../../../../src/server/file-io/docx-html.ts";
 import { extractText } from "../../../../src/server/mcp/document-model.ts";
-import { sessionKey } from "../../../../src/server/session/manager.ts";
+import { legacySessionKey, sessionKey } from "../../../../src/server/session/manager.ts";
 import { loadMarkdown, saveMarkdown } from "../../../../src/server/file-io/markdown.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -18,17 +18,34 @@ import os from "node:os";
   console.log(JSON.stringify(extractText(doc)));
 }
 
-// B. Session filename length for a CJK path
+// B. Session filename length for a CJK path.
+// #1750: `sessionKey` now hashes DISK paths (`docHash`, fixed 64 hex) and keeps
+// the old `encodeURIComponent` form only for `upload://` paths. `legacySessionKey`
+// is the pre-fix spelling, printed alongside so the before/after is one run.
 {
-  const p = "/Users/张伟/Documents/项目资料/2026年度产品路线图与市场分析报告草稿.md";
-  const key = sessionKey(p);
-  console.log("=== sessionKey ===", "path chars:", p.length, "key bytes:", Buffer.byteLength(key), key.slice(0, 60) + "...");
+  const paths = [
+    "/Users/张伟/Documents/项目资料/2026年度产品路线图与市场分析报告草稿.md",
+    "/home/bryan/Documents/Клиенты/Отчёт по маркетинговой стратегии 2026 года.md",
+  ];
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-review-sess-"));
-  try { fs.writeFileSync(path.join(dir, `${key}.json`), "{}"); console.log("write OK"); } catch (e: any) { console.log("write FAILS:", e.code); }
-  const p2 = "/home/bryan/Documents/Клиенты/Отчёт по маркетинговой стратегии 2026 года.md";
-  const key2 = sessionKey(p2);
-  console.log("cyrillic path chars:", p2.length, "key bytes:", Buffer.byteLength(key2));
-  try { fs.writeFileSync(path.join(dir, `${key2}.json`), "{}"); console.log("write OK"); } catch (e: any) { console.log("write FAILS:", e.code); }
+  console.log("=== sessionKey ===");
+  for (const p of paths) {
+    const oldKey = legacySessionKey(p);
+    const newKey = sessionKey(p);
+    console.log(
+      "path chars:", p.length,
+      "| OLD key bytes:", Buffer.byteLength(oldKey),
+      "| NEW key bytes:", Buffer.byteLength(newKey),
+      "|", newKey.slice(0, 16) + "...",
+    );
+    try { fs.writeFileSync(path.join(dir, `${oldKey}.json`), "{}"); console.log("  OLD write OK"); } catch (e: any) { console.log("  OLD write FAILS:", e.code); }
+    try { fs.writeFileSync(path.join(dir, `${newKey}.json`), "{}"); console.log("  NEW write OK"); } catch (e: any) { console.log("  NEW write FAILS:", e.code); }
+  }
+  // Uploads deliberately keep the legacy key: `docHash` collapses every
+  // scratchpad to `upload_scratchpad`, so two open scratchpads would clobber
+  // one session file every 60s.
+  const scratch = "upload://scratchpad/11111111-1111-1111-1111-111111111111/Scratchpad.md";
+  console.log("scratchpad key is legacy:", sessionKey(scratch) === legacySessionKey(scratch));
 }
 
 // C. Image with unsupported scheme in markdown -> replaced by alt text on save

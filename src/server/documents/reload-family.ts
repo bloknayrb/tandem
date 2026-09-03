@@ -48,7 +48,7 @@ import { generateNotificationId } from "../../shared/utils.js";
 import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
 import { atomicWrite, atomicWriteBuffer } from "../file-io/index.js";
-import { recordSelfWrite, suppressNextChange } from "../file-watcher.js";
+import { rearmWatch, recordSelfWrite, suppressNextChange } from "../file-watcher.js";
 import { canSaveToDisk, saveDocumentToDisk } from "../mcp/document-service.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
@@ -294,19 +294,31 @@ export async function restoreDocumentFromBackup(
     await assertDocxWithinSizeLimits(content as Buffer);
   }
 
-  suppressNextChange(existing.filePath);
-  if (isDocx) {
-    // atomicWriteBuffer preserves the ZIP byte-for-byte; reloadFromDisk below
-    // re-parses it and re-injects Word comments idempotently via adapter.apply.
-    await atomicWriteBuffer(existing.filePath, content as Buffer);
-  } else {
-    await atomicWrite(existing.filePath, content as string);
+  // Inner try/finally wrapping exactly the suppress/write/record triple
+  // (#1749). On POSIX this write is a tmp+rename that replaces the inode, so
+  // without the re-arm the restore would kill this document's own watcher; and
+  // without the `finally` a throw from the write would leave the arrival
+  // counter armed for 2 s on a live watcher, swallowing the next external
+  // atomic save. The two arms are one triple, so one `try` covers both.
+  try {
+    suppressNextChange(existing.filePath);
+    if (isDocx) {
+      // atomicWriteBuffer preserves the ZIP byte-for-byte; reloadFromDisk below
+      // re-parses it and re-injects Word comments idempotently via adapter.apply.
+      await atomicWriteBuffer(existing.filePath, content as Buffer);
+    } else {
+      await atomicWrite(existing.filePath, content as string);
+    }
+    // Content backstop for the watcher: the restore write's own `change`-event
+    // echo can leak past the single suppressNextChange (NTFS fires ~2 events).
+    // The direct reloadFromDisk below does the intended re-anchor; this stops the
+    // leaked echo from triggering a SECOND, spurious reload + "file changed" toast.
+    // It MUST stay ahead of `rearmWatch`: the re-arm clears the suppression
+    // counter, so this fingerprint is the only layer left.
+    recordSelfWrite(existing.filePath, content);
+  } finally {
+    rearmWatch(existing.filePath);
   }
-  // Content backstop for the watcher: the restore write's own `change`-event
-  // echo can leak past the single suppressNextChange (NTFS fires ~2 events).
-  // The direct reloadFromDisk below does the intended re-anchor; this stops the
-  // leaked echo from triggering a SECOND, spurious reload + "file changed" toast.
-  recordSelfWrite(existing.filePath, content);
   // The early reloadInProgress check above closes the common case, but a
   // watcher reload can still start during the awaits since that check. A
   // silent skip here would report success while the Y.Doc still holds

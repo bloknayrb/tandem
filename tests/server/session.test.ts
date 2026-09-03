@@ -21,9 +21,28 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   };
 });
 
+// `manager.ts` imports `atomicWrite` as a NAMED ESM binding, so `vi.spyOn` on
+// the namespace never reaches it. A hoisted PARTIAL mock whose default
+// implementation passes through to the real one is what lets a single case make
+// one save throw while the ~30 real-disk round-trips in this file keep working.
+const atomicWriteMock = vi.hoisted(() => ({ impl: null as null | (() => Promise<void>) }));
+vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/file-io/index.js")>();
+  return {
+    ...actual,
+    atomicWrite: vi.fn(async (...args: Parameters<typeof actual.atomicWrite>) => {
+      if (atomicWriteMock.impl) return atomicWriteMock.impl();
+      return actual.atomicWrite(...args);
+    }),
+  };
+});
+
+import { docHash } from "../../src/server/annotations/doc-hash";
 import { SESSION_DIR } from "../../src/server/platform";
 import {
   deleteSession,
+  legacySessionKey,
+  listSessionFilePaths,
   loadCtrlSession,
   loadSession,
   restoreCtrlDoc,
@@ -67,16 +86,231 @@ describe("Session persistence", () => {
     return doc;
   }
 
-  describe("sessionKey", () => {
-    it("encodes file paths consistently", () => {
-      const key = sessionKey("C:\\Users\\test\\doc.md");
-      expect(key).toBe(encodeURIComponent("C:/Users/test/doc.md"));
+  describe("sessionKey (#1750)", () => {
+    afterEach(() => {
+      atomicWriteMock.impl = null;
     });
 
-    it("normalizes backslashes to forward slashes", () => {
+    it("hashes disk paths to a fixed 64 hex characters", () => {
+      // `encodeURIComponent` turned every `/` into a 3-byte `%2F`, so a
+      // 90-character path became a 200+-byte filename and ext4/NTFS refused it
+      // at 255. This is the whole of #1750's first fault.
+      const key = sessionKey(path.resolve("C:/Users/test/doc.md"));
+      expect(key).toMatch(/^[0-9a-f]{64}$/);
+      expect(Buffer.byteLength(`${key}.json`)).toBe(69);
+    });
+
+    it("is deterministic and separator-invariant", () => {
       const key1 = sessionKey("C:\\Users\\test\\doc.md");
       const key2 = sessionKey("C:/Users/test/doc.md");
       expect(key1).toBe(key2);
+      expect(key1).toBe(docHash("C:/Users/test/doc.md"));
+    });
+
+    it.skipIf(process.platform !== "win32")(
+      "gives case-variant spellings ONE key on win32 (they already share one Hocuspocus room)",
+      () => {
+        // Skipped off win32 because `docHash` deliberately preserves case on
+        // POSIX, where paths are case-sensitive: two spellings there still get
+        // two session files and one room, which is pre-existing and not fixed
+        // here.
+        expect(sessionKey("C:\\Docs\\A.md")).toBe(sessionKey("c:/docs/a.md"));
+      },
+    );
+
+    it("keeps the legacy encoded key for upload paths", () => {
+      // `docHash` collapses EVERY scratchpad to `upload_scratchpad`, and
+      // sessions are written for scratchpads on every 60 s tick — two open
+      // scratchpads would clobber one file. Upload paths are ~60 synthetic
+      // characters and were never in #1750's scope.
+      const p = "upload://abc123/notes.md";
+      expect(sessionKey(p)).toBe(legacySessionKey(p));
+    });
+
+    it("gives two concurrently open scratchpads two distinct session files", () => {
+      const a = "upload://scratchpad/11111111-1111-1111-1111-111111111111/Scratchpad.md";
+      const b = "upload://scratchpad/22222222-2222-2222-2222-222222222222/Scratchpad.md";
+      expect(sessionKey(a)).not.toBe(sessionKey(b));
+      // …and this is exactly what hashing them would have broken.
+      expect(docHash(a)).toBe(docHash(b));
+    });
+
+    it("cannot collide with a legacy name in either direction", () => {
+      // An `encodeURIComponent` name of an absolute path always contains
+      // `%2F`, so it can never look like 64 hex.
+      expect(legacySessionKey(path.resolve("/tmp/x.md"))).toContain("%2F");
+    });
+
+    it("saves and loads a path whose legacy key would have been ENAMETOOLONG", async () => {
+      const deep = path.join(
+        SESSION_DIR,
+        "..",
+        `${"d".repeat(60)}`,
+        `${"e".repeat(60)}`,
+        `${"f".repeat(60)}`,
+        `${"g".repeat(60)}`,
+        "doc.md",
+      );
+      expect(Buffer.byteLength(`${legacySessionKey(deep)}.json`)).toBeGreaterThan(255);
+      const doc = createTestDoc();
+      await saveSession(deep, "md", doc);
+      const loaded = await loadSession(deep);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.filePath).toBe(deep);
+      await deleteSession(deep);
+    });
+  });
+
+  describe("session key migration (#1750)", () => {
+    const migPath = path.resolve("tests/fixtures/session-migration.md");
+    const newFile = () => path.join(SESSION_DIR, `${sessionKey(migPath)}.json`);
+    const oldFile = () => path.join(SESSION_DIR, `${legacySessionKey(migPath)}.json`);
+
+    async function writeRecord(target: string, over: Record<string, unknown> = {}): Promise<void> {
+      const doc = createTestDoc();
+      await fs.mkdir(SESSION_DIR, { recursive: true });
+      await fs.writeFile(
+        target,
+        JSON.stringify({
+          filePath: migPath,
+          format: "md",
+          ydocState: Buffer.from(Y.encodeStateAsUpdate(doc)).toString("base64"),
+          sourceFileMtime: 0,
+          lastAccessed: Date.now(),
+          modelRevision: 99,
+          ...over,
+        }),
+        "utf-8",
+      );
+    }
+
+    beforeEach(async () => {
+      await fs.mkdir(path.dirname(migPath), { recursive: true });
+      await fs.writeFile(migPath, "# migration\n", "utf-8");
+      await fs.rm(newFile(), { force: true });
+      await fs.rm(oldFile(), { force: true });
+    });
+
+    afterEach(async () => {
+      atomicWriteMock.impl = null;
+      await deleteSession(migPath);
+      await fs.rm(migPath, { force: true });
+    });
+
+    it("loads a session written under the OLD name", async () => {
+      await writeRecord(oldFile());
+      const loaded = await loadSession(migPath);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.filePath).toBe(migPath);
+    });
+
+    it("the NEWER mtime wins when both names exist, and the loser survives the load", async () => {
+      // "Successful load" is only a successful `JSON.parse` — a record whose
+      // `ydocState` is corrupt parses fine and throws later in `restoreYDoc`.
+      // A load-time delete of the healthy older sibling, followed by a
+      // quarantine of the corrupt newer one, destroys BOTH records.
+      await writeRecord(newFile(), { format: "new-name" });
+      await new Promise((r) => setTimeout(r, 20));
+      await writeRecord(oldFile(), { format: "old-name" });
+
+      const loaded = await loadSession(migPath);
+      expect(loaded!.format).toBe("old-name");
+      await expect(fs.stat(newFile())).resolves.toBeDefined();
+    });
+
+    it("the first successful saveSession removes the old name", async () => {
+      await writeRecord(oldFile());
+      await saveSession(migPath, "md", createTestDoc());
+      await expect(fs.stat(newFile())).resolves.toBeDefined();
+      await expect(fs.stat(oldFile())).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("a FAILED save leaves the old name intact (the unlink is ordered after the write)", async () => {
+      // Inverted, this destroys the only record on ENOSPC.
+      await writeRecord(oldFile());
+      atomicWriteMock.impl = async () => {
+        throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+      };
+      await expect(saveSession(migPath, "md", createTestDoc())).rejects.toThrow("ENOSPC");
+      atomicWriteMock.impl = null;
+      await expect(fs.stat(oldFile())).resolves.toBeDefined();
+    });
+
+    it("deleteSession removes BOTH names", async () => {
+      // A first-found return leaves an old-name orphan that
+      // `listSessionFilePaths` still enumerates, so "Clear all" appears to work
+      // and the document is back on the next restart.
+      await writeRecord(oldFile());
+      await writeRecord(newFile());
+      await deleteSession(migPath);
+      await expect(fs.stat(oldFile())).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(newFile())).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("listSessionFilePaths yields the path ONCE, with the newer-mtime record's readOnly", async () => {
+      // Two rules that could pick different records would restore with the
+      // loser's `readOnly` — #1591's class.
+      await writeRecord(newFile(), { readOnly: true });
+      await new Promise((r) => setTimeout(r, 20));
+      await writeRecord(oldFile(), { readOnly: false });
+
+      const entries = (await listSessionFilePaths()).filter((e) => e.filePath === migPath);
+      expect(entries).toHaveLength(1);
+      expect(entries[0].readOnly).toBe(false);
+    });
+
+    it("listSessionFilePaths still SORTS by lastAccessed, not by mtime", async () => {
+      // The dedupe uses file mtime; the sort keeps `lastAccessed`. The two
+      // clocks answer different questions, and a fixture where they DISAGREE is
+      // what stops a later simplification from unifying them.
+      const older = path.resolve("tests/fixtures/session-sort-a.md");
+      const newer = path.resolve("tests/fixtures/session-sort-b.md");
+      const aFile = path.join(SESSION_DIR, `${sessionKey(older)}.json`);
+      const bFile = path.join(SESSION_DIR, `${sessionKey(newer)}.json`);
+      try {
+        // `older` gets the HIGHER lastAccessed but is written FIRST (lower mtime).
+        await fs.writeFile(
+          aFile,
+          JSON.stringify({
+            filePath: older,
+            format: "md",
+            ydocState: "",
+            sourceFileMtime: 0,
+            lastAccessed: 9_000,
+          }),
+          "utf-8",
+        );
+        await new Promise((r) => setTimeout(r, 20));
+        await fs.writeFile(
+          bFile,
+          JSON.stringify({
+            filePath: newer,
+            format: "md",
+            ydocState: "",
+            sourceFileMtime: 0,
+            lastAccessed: 1_000,
+          }),
+          "utf-8",
+        );
+        const entries = (await listSessionFilePaths()).filter(
+          (e) => e.filePath === older || e.filePath === newer,
+        );
+        expect(entries.map((e) => e.filePath)).toEqual([older, newer]);
+      } finally {
+        await fs.rm(aFile, { force: true });
+        await fs.rm(bFile, { force: true });
+      }
+    });
+
+    it("the CTRL session keeps its literal name and is still skipped by the restore list", async () => {
+      const ctrlDoc = new Y.Doc();
+      ctrlDoc.getMap(Y_MAP_CHAT).set("m1", { role: "user", content: "hi" });
+      await saveCtrlSession(ctrlDoc);
+      const ctrlFile = path.join(SESSION_DIR, `${encodeURIComponent("__tandem_ctrl__")}.json`);
+      await expect(fs.stat(ctrlFile)).resolves.toBeDefined();
+      const entries = await listSessionFilePaths();
+      expect(entries.some((e) => e.filePath === "__tandem_ctrl__")).toBe(false);
+      expect(await loadCtrlSession()).not.toBeNull();
     });
   });
 

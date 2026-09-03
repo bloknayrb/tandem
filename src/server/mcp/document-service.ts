@@ -52,7 +52,7 @@ import {
 import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
 import { flattenPlaintextBreaks } from "../file-io/plaintext-flatten.js";
-import { recordSelfWrite, suppressNextChange, unwatchFile } from "../file-watcher.js";
+import { rearmWatch, recordSelfWrite, suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
@@ -466,9 +466,21 @@ export async function saveDocumentToDisk(
       if (verdict.kind === "blocked") {
         throw new SaveVerificationError(blockReasonMessage(verdict.reason), verdict.reason);
       }
-      suppressNextChange(docState.filePath);
-      await atomicWriteBuffer(docState.filePath, buffer);
-      recordSelfWrite(docState.filePath, buffer);
+      // The inner try/finally is what makes the re-arm unconditional (#1749).
+      // Without it a throw from `atomicWriteBuffer` skips both
+      // `recordSelfWrite` and `rearmWatch`, leaving the arrival counter armed
+      // for 2 s on a live POSIX watcher — and the next EXTERNAL atomic save,
+      // which on POSIX arrives as `rename`, is swallowed at arrival. It is
+      // deliberately NOT the function-level `finally` that releases
+      // `savingDocs`: that one runs after `saveSession` and also covers the
+      // conflict skip-return and the mtime guard, paths with no write at all.
+      try {
+        suppressNextChange(docState.filePath);
+        await atomicWriteBuffer(docState.filePath, buffer);
+        recordSelfWrite(docState.filePath, buffer);
+      } finally {
+        rearmWatch(docState.filePath);
+      }
       // `fidelityWarnings` drives the save toast; `exportDowngrades` is the
       // persistent notice. They differ by exactly the flattened-reply line,
       // which is deliberately persistent-only: imported Word reply threads
@@ -487,22 +499,17 @@ export async function saveDocumentToDisk(
         appDataDir: resolveAppDataDir(),
         documentId: docId,
       });
-      suppressNextChange(docState.filePath);
-      await atomicWrite(docState.filePath, output);
-      recordSelfWrite(docState.filePath, output);
+      // Inner try/finally per branch — see the binary arm above for why. One
+      // `try` around the whole `if` would not do: the re-arm has to sit
+      // immediately after the write it belongs to.
+      try {
+        suppressNextChange(docState.filePath);
+        await atomicWrite(docState.filePath, output);
+        recordSelfWrite(docState.filePath, output);
+      } finally {
+        rearmWatch(docState.filePath);
+      }
     }
-    // `dirty` records whether a body edit landed DURING the async write (the
-    // saved bytes already match the session state otherwise) — consumed by the
-    // restore-vs-reload prompt on reopen (#1069, every format since #1238).
-    //
-    // No `conflict`: this runs BEFORE the flag delete below, and the save just
-    // resolved whatever was pending. Reading it here would persist a conflict
-    // on a clean, in-sync document, so a crash in the window between the two
-    // would re-raise the banner with nothing left to decide.
-    await saveSession(docState.filePath, docState.format, doc, {
-      dirty: snapshotDirtyVersion(docId) !== dirtySnapshot,
-    });
-
     // Mark document clean
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
     withMcp(doc, () => {
@@ -538,6 +545,38 @@ export async function saveDocumentToDisk(
       }
     });
     markCleanIfUnchanged(docId, dirtySnapshot);
+
+    // Session write LAST, and in its own try/catch (#1750). The
+    // `SAVED_AT_VERSION` stamp above is a claim about the disk, and the disk
+    // write has already succeeded — so a `saveSession` throw (an
+    // ENAMETOOLONG-length key was the reported instance) must not leave the
+    // stamp unset and the document dirty, with the bytes on disk, the UI saying
+    // unsaved, autosave retrying forever and the suppression counter already
+    // consumed by a write whose stamp never landed.
+    //
+    // `dirty` is unchanged by the move: its argument is a snapshot comparison,
+    // and `markCleanIfUnchanged` writes only `savedVersion`. `conflict` is
+    // NEWLY passed, and the reorder is exactly what makes it correct — this now
+    // runs AFTER the guarded flag delete above, so it can no longer persist a
+    // conflict the save just resolved. What it DOES persist is a conflict that
+    // landed mid-write (the guarded delete did not fire), which was previously
+    // dropped across a restart.
+    try {
+      await saveSession(docState.filePath, docState.format, doc, {
+        dirty: snapshotDirtyVersion(docId) !== dirtySnapshot,
+        conflict: readPendingConflict(doc),
+      });
+    } catch (err) {
+      console.error("[Save] saveSession failed for", docState.filePath, err);
+      // Best-effort delete: a stale record can be `dirty: true` from the last
+      // 60 s tick, and `maybeRestoreSession` restores a dirty session
+      // regardless of `sourceFileChanged` — so leaving it would restore stale
+      // content over correctly-saved disk bytes and raise a keep-vs-reload
+      // banner on a file already in sync.
+      await deleteSession(docState.filePath).catch((delErr) => {
+        console.error("[Save] deleteSession after failed saveSession:", delErr);
+      });
+    }
 
     return { status: "saved", fidelityWarnings, integrityWarnings, unpreservedImports };
   } catch (err) {
@@ -629,10 +668,12 @@ export interface SaveAsResult {
  *  - upload-only short-circuit (the whole point is to write an upload doc out)
  *  - external-mtime check (the target file does not exist yet)
  *
- * Does NOT wire a file watcher for the new path; that's an intentional v1
- * limitation since scratchpads are typically saved to fresh locations and
- * the existing file-watch attach point (`finalizeDocOpen`) is in
- * `documents/open.ts`. Auto-save still picks the promoted doc up.
+ * Wires a file watcher for the new path AFTER the write (#1749). It used to
+ * skip that as "an intentional v1 limitation", which meant an external edit to
+ * a just-saved-as document was invisible until the next reopen. It has to come
+ * after the write because `fs.watch` on a path that does not exist yet throws
+ * ENOENT — and both `watchFile` and `wireFileWatcher` swallow it, so getting
+ * the order wrong fails silently.
  */
 export async function saveDocumentAsToDisk(
   docId: string,
@@ -748,9 +789,26 @@ export async function saveDocumentAsToDisk(
       appDataDir: resolveAppDataDir(),
       documentId: docId,
     });
-    suppressNextChange(resolved);
-    await atomicWrite(resolved, output);
-    recordSelfWrite(resolved, output);
+    // Inner try/finally, same shape and same reason as `saveDocumentToDisk`
+    // (#1749) — never the function-level `savingDocs` release below.
+    // `rearmWatch(resolved)` is DEFINITIONALLY a no-op today: nothing watches
+    // the new path when the write runs. It is here for symmetry with the site
+    // pin, and because `wireFileWatcher` below is what actually fixes save-as.
+    try {
+      suppressNextChange(resolved);
+      await atomicWrite(resolved, output);
+      recordSelfWrite(resolved, output);
+    } finally {
+      rearmWatch(resolved);
+    }
+
+    // Save-As has never wired a watcher for the new path (#1749): an external
+    // edit to a just-saved-as document was invisible until the next reopen.
+    // Placed AFTER the write — `fs.watch` on a not-yet-existing path throws
+    // ENOENT, which `watchFile` and `wireFileWatcher` would both swallow — and
+    // still inside the outer try, so the `finally` above keeps its no-op
+    // property.
+    wireFileWatcher(docId, resolved, format);
 
     // #1460: this promotion can hand a document a format it cannot represent.
     //
@@ -1518,6 +1576,12 @@ export async function closeDocumentById(
 
 /** Save all open sessions (for shutdown handler). */
 export async function saveCurrentSession(): Promise<void> {
+  // Per-document try/catch (#1750), the shape `autoSaveAllToDisk` already uses.
+  // Without it one failing document aborted the loop, every document after it
+  // in iteration order silently never got a session write, AND
+  // `saveCtrlSession` below — the shutdown write of the CTRL_ROOM chat history
+  // — never ran at all.
+  let failures = 0;
   for (const [id, state] of openDocs) {
     const doc = getOrCreateDocument(id);
     // `dirty` matters most here (#1069): shutdown's autoSaveAllToDisk flush
@@ -1527,9 +1591,27 @@ export async function saveCurrentSession(): Promise<void> {
     // unresolved keep-vs-reload choice across the restart, which cannot be
     // re-derived on reopen (saveSession's mtime baseline already reflects the
     // external write, so the file reads as unchanged).
-    await saveSession(state.filePath, state.format, doc, {
-      dirty: isDirty(id),
-      conflict: readPendingConflict(doc),
+    try {
+      await saveSession(state.filePath, state.format, doc, {
+        dirty: isDirty(id),
+        conflict: readPendingConflict(doc),
+      });
+    } catch (err) {
+      failures++;
+      console.error("[Shutdown] saveSession failed for %s:", state.filePath, err);
+    }
+  }
+  if (failures > 0) {
+    // This reaches nobody: `saveCurrentSession` runs inside the shutdown
+    // sequence that ends in `process.exit(0)`, so the `console.error` above is
+    // the only surviving signal. Pushed anyway so the two loops keep one shape.
+    pushNotification({
+      id: generateNotificationId(),
+      type: "general-error",
+      severity: "warning",
+      message: `Could not save ${failures} document session${failures === 1 ? "" : "s"} at shutdown.`,
+      dedupKey: "session-save-failed",
+      timestamp: Date.now(),
     });
   }
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
