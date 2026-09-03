@@ -1434,15 +1434,32 @@ export function registerDocumentTools(server: McpServer): void {
         });
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
-        if (e.code === "FILE_NOT_FOUND") return noDocumentError();
-        if (
-          e.code === "UNSUPPORTED_FORMAT" ||
-          e.code === "INVALID_PATH" ||
-          e.code === "EMPTY_CONVERSION" ||
-          e.code === "OPEN_FAILED"
-        ) {
-          return mcpError("FORMAT_ERROR", e.message);
+        if (e.code === "NO_DOCUMENT") {
+          // `safeDocId` is what `convertToMarkdown` actually received. A
+          // named-but-closed id gets a message echoing the (possibly
+          // basename-rewritten) id itself, like `tandem_switchDocument` above —
+          // `convertToMarkdown`'s own thrown message is the generic "No
+          // document is open, or..." sentence, which never names the id that
+          // was actually looked up.
+          //
+          // TRUTHINESS, not `!== undefined`: `getCurrentDoc` (registry.ts)
+          // resolves `"" ?? activeDocId` to `""`, then returns null from its
+          // `if (!id)` guard WITHOUT consulting the open-document map — so an
+          // empty id genuinely took the no-document-at-all path and belongs on
+          // the shared text. Treating it as "named" printed
+          // `"Document  is not open."`: a sentence with a hole and a double
+          // space, naming an id the server never looked up.
+          return safeDocId
+            ? mcpError("NO_DOCUMENT", `Document ${safeDocId} is not open.`)
+            : noDocumentError();
         }
+        if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
+        if (e.code === "INVALID_PATH") return mcpError("INVALID_PATH", e.message);
+        if (e.code === "PERMISSION_DENIED") return mcpError("PERMISSION_DENIED", e.message);
+        if (e.code === "EMPTY_CONVERSION") return mcpError("EMPTY_CONVERSION", e.message);
+        if (e.code === "CONFLICT") return mcpError("CONFLICT", e.message);
+        if (e.code === "OPEN_FAILED") return mcpError("OPEN_FAILED", e.message);
+        if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
         throw err; // Let withErrorBoundary handle unexpected errors
       }
     }),

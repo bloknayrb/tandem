@@ -7,10 +7,13 @@
  * renamed out from under the test — which is how a scrub test silently stops
  * testing the scrub.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { Response } from "express";
 import { describe, expect, it, vi } from "vitest";
 import {
   ERROR_LABELS,
+  errorCodeToHttpStatus,
   errorCodeToLabel,
   GENERIC_ERROR_MESSAGE,
   isLoopbackRequest,
@@ -20,6 +23,10 @@ import {
   scrubUrlForCaller,
   sendApiError,
 } from "../../../src/server/mcp/routes/_shared.js";
+
+const SHARED_TS_PATH = fileURLToPath(
+  new URL("../../../src/server/mcp/routes/_shared.ts", import.meta.url),
+);
 
 const LOCAL = { socket: { remoteAddress: "127.0.0.1" } };
 const LAN = { socket: { remoteAddress: "192.168.1.50" } };
@@ -204,11 +211,95 @@ describe("GENERIC_ERROR_MESSAGE is keyed on labels, exhaustively", () => {
       "EPERM",
       "EACCES",
       "BACKUP_FAILED",
+      "PERMISSION_DENIED",
+      "CONFLICT",
+      "EMPTY_CONVERSION",
+      "OPEN_FAILED",
       "SOMETHING_UNMAPPED",
       "",
     ];
     for (const code of codes) {
       expect(ERROR_LABELS).toContain(errorCodeToLabel(code));
+    }
+  });
+});
+
+describe("errorCodeToHttpStatus / errorCodeToLabel — POST /api/convert's codes (#1796)", () => {
+  // Each of these codes reaches `sendApiError` unmapped as of this PR's fix:
+  // the route half of the mapping (`POST /api/convert` -> `handleConvert` ->
+  // `sendApiError`) previously fell through to the 500 default arm and the
+  // catch-all INTERNAL label for every one of them. Pinning status AND label
+  // per code so a deleted case goes red rather than silently degrading.
+  it("EMPTY_CONVERSION is a 422 with its own label, not the 500 default arm", () => {
+    expect(errorCodeToHttpStatus("EMPTY_CONVERSION")).toBe(422);
+    expect(errorCodeToLabel("EMPTY_CONVERSION")).toBe("EMPTY_CONVERSION");
+  });
+
+  it("CONFLICT is a 409, not the 500 default arm", () => {
+    expect(errorCodeToHttpStatus("CONFLICT")).toBe(409);
+    expect(errorCodeToLabel("CONFLICT")).toBe("CONFLICT");
+  });
+
+  it("OPEN_FAILED is a 500 with its own label, not the bare INTERNAL catch-all", () => {
+    // The status half of this pin (`toBe(500)`) is unkillable on its own --
+    // the unmapped default arm is ALSO 500, so deleting OPEN_FAILED's case
+    // from `errorCodeToHttpStatus` entirely would still pass it. The label
+    // assertion below IS killable (the default arm returns "INTERNAL"), and
+    // the source check after this `it` pins the status arm structurally.
+    expect(errorCodeToHttpStatus("OPEN_FAILED")).toBe(500);
+    expect(errorCodeToLabel("OPEN_FAILED")).toBe("OPEN_FAILED");
+  });
+
+  it('errorCodeToHttpStatus has its own `case "OPEN_FAILED":` arm with its own return, not merged into `default`', () => {
+    const source = readFileSync(SHARED_TS_PATH, "utf8");
+    const fnStart = source.indexOf("export function errorCodeToHttpStatus");
+    expect(fnStart, "errorCodeToHttpStatus not found in _shared.ts").toBeGreaterThan(-1);
+    const fnEnd = source.indexOf("\n}", fnStart);
+    // A plain `indexOf` miss returns -1, and `slice(fnStart, -1)` would
+    // silently widen to "everything but the last character of the file" --
+    // which still contains `errorCodeToLabel`'s identical `case
+    // "OPEN_FAILED":` text, so a bare `toContain` on that slice would pass
+    // even if this function's own arm were deleted entirely.
+    expect(fnEnd, "closing brace of errorCodeToHttpStatus not found").toBeGreaterThan(fnStart);
+    const fnBody = source.slice(fnStart, fnEnd);
+    // Not just `toContain('case "OPEN_FAILED":')`: that text alone survives
+    // a "consolidation" that stacks `case "OPEN_FAILED":` directly onto
+    // `default:` (falling through to the same 500 with no return of its
+    // own), or one that deletes the arm and leaves the string in a comment.
+    // Requiring the case to be immediately followed by its own `return 500;`
+    // rules out both.
+    expect(fnBody).toMatch(/case "OPEN_FAILED":\s*\n\s*return 500;/);
+  });
+
+  it("PERMISSION_DENIED (convert's permission classification) is a 403 with its own label", () => {
+    // Distinct from the raw `EACCES` errno case, which already mapped to the
+    // same status/label pair — this pins the second producer independently.
+    expect(errorCodeToHttpStatus("PERMISSION_DENIED")).toBe(403);
+    expect(errorCodeToLabel("PERMISSION_DENIED")).toBe("PERMISSION_DENIED");
+  });
+
+  // The issue's headline fold, on the `/api` half. Both are 404, so a
+  // status-only assertion cannot see the difference — the LABEL is the whole
+  // pin, and the generic-message assertions are what make it matter for the
+  // non-loopback caller who only ever sees that string.
+  it("NO_DOCUMENT and FILE_NOT_FOUND are two 404s with DIFFERENT labels and bodies", () => {
+    expect(errorCodeToHttpStatus("NO_DOCUMENT")).toBe(404);
+    expect(errorCodeToHttpStatus("FILE_NOT_FOUND")).toBe(404);
+
+    expect(errorCodeToLabel("NO_DOCUMENT")).toBe("NO_DOCUMENT");
+    expect(errorCodeToLabel("FILE_NOT_FOUND")).toBe("NOT_FOUND");
+    // Stated as an inequality too: re-folding NO_DOCUMENT back onto NOT_FOUND
+    // is the regression, and it makes the two equal rather than making either
+    // one wrong on its own.
+    expect(errorCodeToLabel("NO_DOCUMENT")).not.toBe(errorCodeToLabel("FILE_NOT_FOUND"));
+    expect(GENERIC_ERROR_MESSAGE.NO_DOCUMENT).not.toBe(GENERIC_ERROR_MESSAGE.NOT_FOUND);
+  });
+
+  it("keeps ENOENT / NOT_FOUND / SOURCE_MISSING folded onto NOT_FOUND", () => {
+    // The negative half: only NO_DOCUMENT left the fold. Splitting it is not a
+    // licence to mint a label per code, and this is what would catch that.
+    for (const code of ["ENOENT", "NOT_FOUND", "SOURCE_MISSING", "FILE_NOT_FOUND"]) {
+      expect(errorCodeToLabel(code), `${code} should still fold onto NOT_FOUND`).toBe("NOT_FOUND");
     }
   });
 });
