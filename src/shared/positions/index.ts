@@ -3,6 +3,7 @@ export type {
   DocumentRange,
   ElementPosition,
   FlatOffset,
+  FlatRangeValidation,
   PmPos,
   PmRangeResult,
   RangeInvalidReason,

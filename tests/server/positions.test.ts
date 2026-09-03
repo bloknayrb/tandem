@@ -316,6 +316,57 @@ describe("validateRange — bounds, integrality, emptiness and surrogates", () =
         spy.mockRestore();
       }
     });
+
+    it("catches a SAME-LENGTH wrong-content text with process.env.VITEST unset", () => {
+      // The anti-tautology, and the whole point of #1752's round-1 fix. The
+      // content compare used to run only under `process.env.VITEST === "true"`,
+      // so in production a same-length wrong string — a sibling document of
+      // equal length, or a same-length edit under the hoist — passed the
+      // length-only guard and then decided the staleness and surrogate verdicts
+      // against text that is not this document's. No test could ever be red for
+      // that, because the guard repaired the string before it could change an
+      // outcome.
+      //
+      // Unsetting VITEST is what makes this spec discriminating: with the old
+      // two-guard code it goes green under vitest and red here.
+      const saved = process.env.VITEST;
+      delete process.env.VITEST;
+      doc = makeDoc("a\u{1F600}b"); // 4 UTF-16 units; offset 2 splits the pair
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        // "abcd" is the same LENGTH and has no surrogates at all, so a validator
+        // running on it would accept (0, 2). Against the real document, (0, 2)
+        // splits the emoji.
+        const result = validateRange(doc, off(0), off(2), { text: "abcd" });
+        expect(failure(result)).toBe("surrogate");
+        expect(spy).toHaveBeenCalled();
+        expect(spy.mock.calls.flat().join(" ")).toContain("WRONG CONTENT");
+      } finally {
+        spy.mockRestore();
+        if (saved === undefined) delete process.env.VITEST;
+        else process.env.VITEST = saved;
+      }
+    });
+
+    it("throttles the mismatch report instead of printing once per loop iteration", () => {
+      doc = makeDoc("hello world");
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        // Nine calls with the same bad hoist under one tag. A per-occurrence log
+        // would print nine lines; the throttle prints the 1st only (the next is
+        // the 10th).
+        // A tag unique to this run: the counter map is module-level and never
+        // cleared (deliberately — see `hoistMismatchCounts`), so a shared literal
+        // would make this spec order-dependent.
+        const tag = `throttle-spec-${Date.now()}-${Math.random()}`;
+        for (let i = 0; i < 9; i++) {
+          validateRange(doc, off(0), off(5), { text: "hello worlds", textTag: tag });
+        }
+        expect(spy).toHaveBeenCalledTimes(1);
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 
   describe("anchoredRange passes every new opt through", () => {

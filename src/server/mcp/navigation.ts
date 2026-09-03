@@ -200,8 +200,15 @@ export function registerNavigationTools(server: McpServer): void {
         // `Y.Doc`, so the pure validator runs on the text the store already
         // handed over. `allowEmpty` because reading context around a cursor
         // position is a legitimate zero-length query.
+        //
+        // `!validation.ok` alone, with no `&& code === "INVALID_RANGE"`. That
+        // second conjunct was dead — `validateFlatRange` has no other failure
+        // code — and dead in the direction that hurts: had it ever grown one,
+        // the rejected range would have fallen straight through to
+        // `extractContext`. `FlatRangeValidation` now says so in the type, so the
+        // compiler owns it rather than this comment.
         const validation = validateFlatRange(fullText, from, to, { allowEmpty: true });
-        if (!validation.ok && validation.code === "INVALID_RANGE") {
+        if (!validation.ok) {
           return mcpError("INVALID_RANGE", validation.message, { reason: validation.reason });
         }
         return mcpSuccess(extractContext(fullText, from, to, windowSize));

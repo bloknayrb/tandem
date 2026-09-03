@@ -22,6 +22,7 @@ import type {
   AnchoredRangeResult,
   DocumentRange,
   FlatOffset,
+  FlatRangeValidation,
   RangeInvalidReason,
   RangeValidation,
   RefreshResult,
@@ -37,7 +38,7 @@ import {
   resolveToElement,
 } from "../shared/positions/ydoc.js";
 import type { Annotation } from "../shared/types.js";
-import { collectXmlTexts, extractText, flatDocLength } from "./mcp/document-model.js";
+import { collectXmlTexts, extractText } from "./mcp/document-model.js";
 
 // Moved to `src/shared/positions/ydoc.ts` — see that file's header for why the
 // move is a leaf extraction rather than a file move. Re-exported so existing
@@ -123,19 +124,26 @@ export interface RangeValidationOpts extends FlatRangeOpts {
   textSnapshot?: string;
   rejectHeadingOverlap?: boolean;
   /**
-   * A pre-computed `extractText(ydoc)` for THIS call, so a loop over an
-   * unchanging document builds the string once instead of per iteration.
+   * **Must be `extractText(ydoc)` of THIS ydoc, as of this call.** Not a
+   * same-shaped string, not a sibling document's text of equal length, not the
+   * PRE-edit text of a document this caller has since written to.
    *
-   * Two guards below, one of them in production — and the production one is a
-   * SMOKE ALARM, not a contract: it catches only a length-CHANGING mutation. A
-   * same-length edit, or a sibling document of equal length, passes it and
-   * silently changes the staleness and surrogate verdicts. Pass it only from a
-   * genuine loop over a document that does not change across the loop.
+   * It is verified in full on every call (see `resolveDocText`), and a mismatch
+   * is reported and recomputed rather than trusted — so passing the wrong string
+   * cannot change a verdict, it only makes noise. The corollary is that this is
+   * a CORRECTNESS hint, not a performance one: verifying it costs exactly the
+   * materialization a hoist was once supposed to avoid.
    */
   text?: string;
+  /**
+   * Names the call site for the hoist-mismatch log, so a loop over hundreds of
+   * annotations reports "the watcher's relocation pass, occurrence 100" rather
+   * than hundreds of identical anonymous lines. Only meaningful with `text`.
+   */
+  textTag?: string;
 }
 
-function invalid(reason: RangeInvalidReason, message: string): RangeValidation & { ok: false } {
+function invalid(reason: RangeInvalidReason, message: string): FlatRangeValidation & { ok: false } {
   return { ok: false, code: "INVALID_RANGE", message, reason };
 }
 
@@ -146,10 +154,13 @@ function isHighSurrogate(unit: number): boolean {
 /**
  * Is this UTF-16 code unit the TRAILING half of a surrogate pair?
  *
- * Exported for the one caller that must SNAP rather than reject: the .docx
- * comment export resolver, which carries stored offsets and writes a file.
+ * Deliberately NOT exported. It was, for the .docx comment export resolver's
+ * outward snap, and that was the bug: on its own it also answers `true` at the
+ * legal boundary between two adjacent astral characters, and at offset 0 of a
+ * text beginning with a lone low surrogate (where the snap produced -1). Every
+ * caller wants {@link splitsSurrogatePair}, which is the paired form.
  */
-export function isLowSurrogate(unit: number): boolean {
+function isLowSurrogate(unit: number): boolean {
   return unit >= 0xdc00 && unit <= 0xdfff;
 }
 
@@ -168,6 +179,25 @@ export function splitsSurrogatePair(text: string, i: number): boolean {
 }
 
 /**
+ * One-line description of a rejected range, for a log line.
+ *
+ * Every caller that logs a `validateRange`/`anchoredRange` failure used to print
+ * `result.code` alone, which collapses all six `INVALID_RANGE` reasons — and the
+ * `message` that names the actual offsets — into one indistinguishable string.
+ * Whoever reads the log is trying to tell "the caller's arithmetic is wrong"
+ * from "the document moved under it", and the code alone cannot say.
+ */
+export function describeRangeFailure(result: RangeValidation & { ok: false }): string {
+  if (result.code === "INVALID_RANGE") {
+    return `${result.code} (${result.reason}): ${result.message}`;
+  }
+  if (result.code === "RANGE_MOVED") {
+    return `${result.code}: relocated to [${result.resolvedFrom}, ${result.resolvedTo}]`;
+  }
+  return result.code;
+}
+
+/**
  * The checks that need no document text: integrality, ordering, lower bound.
  *
  * Split out because `validateRange` must run these BEFORE the staleness gate
@@ -176,7 +206,7 @@ export function splitsSurrogatePair(text: string, i: number): boolean {
  * coincidentally matching snapshot would pass staleness, and a non-matching one
  * would be answered with a relocation instead of `out-of-bounds`.
  */
-function checkOffsetShape(from: number, to: number): (RangeValidation & { ok: false }) | null {
+function checkOffsetShape(from: number, to: number): (FlatRangeValidation & { ok: false }) | null {
   if (!Number.isInteger(from) || !Number.isInteger(to)) {
     return invalid(
       "non-integer",
@@ -198,7 +228,7 @@ function checkAgainstText(
   from: number,
   to: number,
   opts: FlatRangeOpts | undefined,
-): (RangeValidation & { ok: false }) | null {
+): (FlatRangeValidation & { ok: false }) | null {
   if (to > text.length) {
     return invalid(
       "out-of-bounds",
@@ -228,13 +258,20 @@ function checkAgainstText(
  * resolver, which resolves through `refreshRange`).
  *
  * Order: integer, ordering, lower bound, upper bound, emptiness, surrogate.
+ *
+ * The return type is {@link FlatRangeValidation}, NOT the wider
+ * `RangeValidation`: with no Y.Doc there is no staleness gate and no heading
+ * fragment, so the three other failure codes are structurally unreachable.
+ * Saying that in the type is what lets a caller branch on `!ok` alone and still
+ * reach `.reason` — see the type's own docstring for the dead conjunct this
+ * replaced.
  */
 export function validateFlatRange(
   text: string,
   from: number,
   to: number,
   opts?: FlatRangeOpts,
-): RangeValidation {
+): FlatRangeValidation {
   const shape = checkOffsetShape(from, to);
   if (shape) return shape;
   const against = checkAgainstText(text, from, to, opts);
@@ -243,39 +280,81 @@ export function validateFlatRange(
 }
 
 /**
- * The flat text for this call, honouring a hoisted `opts.text` when it is safe.
+ * How many times each hoist-mismatch site has fired, so a 500-annotation loop
+ * over a stale `opts.text` prints a handful of lines instead of 500 identical
+ * ones. Keyed by the caller's own `textTag`; see {@link RangeValidationOpts}.
  *
- * Guard (a) runs ALWAYS and costs no materialization: `flatDocLength` walks the
- * tree reading `child.length` and builds no string. It is still a walk per
- * call — the hoist buys one string build per loop, not one walk.
+ * Never cleared. That is deliberate: the throttle below logs on every power of
+ * ten, so a tag that keeps misbehaving keeps reporting — with a running total
+ * that a per-occurrence line could never give — rather than going quiet forever
+ * the way a plain "log once" Set would.
+ */
+const hoistMismatchCounts = new Map<string, number>();
+
+/**
+ * First occurrence, then the 10th, 100th, 1000th … Everything else is counted
+ * only.
  *
- * Guard (b) runs under `process.env.VITEST === "true"` — deliberately not
- * `NODE_ENV` (a tsup-built server started without one evaluates
- * `!== "production"` as true; precedent: `integrations/api-routes.ts`).
+ * **Only a TAGGED caller is throttled.** The throttle exists for a loop; an
+ * untagged call is a one-off, and silencing one because some unrelated one-off
+ * fired earlier would be the same "goes quiet forever" failure the Map's
+ * docstring rejects.
+ */
+function reportHoistMismatch(tag: string | undefined, detail: string): void {
+  const where = tag ?? "an untagged call site";
+  let n = 1;
+  if (tag !== undefined) {
+    n = (hoistMismatchCounts.get(tag) ?? 0) + 1;
+    hoistMismatchCounts.set(tag, n);
+    if (!/^10*$/.test(String(n))) return;
+  }
+  console.error(
+    `[positions] validateRange: hoisted text rejected at ${tag === undefined ? where : `'${where}' (occurrence ${n})`} — ` +
+      `${detail} Recomputing from the Y.Doc.`,
+  );
+}
+
+/**
+ * The flat text for this call, honouring a hoisted `opts.text` only when it is
+ * actually this document's text.
  *
- * Both recover by recomputing rather than throwing: this runs inside MCP tool
+ * **The check is a full content compare, and it is NOT test-gated.** It used to
+ * be two guards: an always-on `provided.length !== flatDocLength(ydoc)` plus a
+ * `process.env.VITEST === "true"` content compare. That split shipped the weak
+ * half. In production only the lengths were compared, so a same-length wrong
+ * string — a same-length edit under the hoist, or a sibling document of equal
+ * length — passed the staleness gate AND the surrogate check on the WRONG text
+ * and then anchored into the real ydoc. And because the strong half ran only
+ * under vitest, no test could ever be red for the production behaviour: the
+ * guard repaired the string before it could change an outcome. A guard that
+ * exists only under tests is a test that self-heals.
+ *
+ * The honest price is that `opts.text` no longer avoids a materialization —
+ * verifying it costs the `extractText` the hoist was meant to skip. What it now
+ * buys is that a caller's own string is what the checks run on when it is
+ * correct, and a loud, throttled report plus a correct answer when it is not.
+ * **`opts.text` is therefore a correctness hint, not a performance one**; treat
+ * a new `text:` call site as documentation of intent rather than a speed-up, and
+ * do not re-derive a cost argument from it.
+ *
+ * Recovers by recomputing rather than throwing: this runs inside MCP tool
  * handlers, where a throw is a worse outcome than a slow correct answer.
  */
-function resolveDocText(ydoc: Y.Doc, provided: string | undefined): string {
+function resolveDocText(
+  ydoc: Y.Doc,
+  provided: string | undefined,
+  tag: string | undefined,
+): string {
   if (provided === undefined) return extractText(ydoc);
-  const trueLength = flatDocLength(ydoc);
-  if (provided.length !== trueLength) {
-    console.error(
-      `[positions] validateRange: hoisted text length ${provided.length} != document length ` +
-        `${trueLength} — recomputing. The caller's document changed under the hoist.`,
-    );
-    return extractText(ydoc);
-  }
-  if (process.env.VITEST === "true") {
-    const actual = extractText(ydoc);
-    if (provided !== actual) {
-      console.error(
-        "[positions] validateRange: hoisted text has the right LENGTH but the wrong content — recomputing.",
-      );
-      return actual;
-    }
-  }
-  return provided;
+  const actual = extractText(ydoc);
+  if (provided === actual) return provided;
+  reportHoistMismatch(
+    tag,
+    provided.length !== actual.length
+      ? `length ${provided.length} != document length ${actual.length} — the document changed under the hoist.`
+      : `right LENGTH (${actual.length}) but the WRONG CONTENT — this is the dangerous shape: it would have passed a length-only guard and changed the staleness and surrogate verdicts.`,
+  );
+  return actual;
 }
 
 /**
@@ -301,6 +380,12 @@ function resolveDocText(ydoc: Y.Doc, provided: string | undefined): string {
  * is truthiness-checked, so an empty `textSnapshot` skips it (do not change to
  * `!== undefined`); and with a snapshot `from === to` never reaches `"empty"`,
  * because the slice is `""` and staleness fires first.
+ *
+ * **`empty` also wins over the heading check** for a caller without
+ * `allowEmpty`: an empty range inside a heading prefix answers `empty`, not
+ * `HEADING_OVERLAP`, because emptiness is checked with the other text-side
+ * rules and the heading fragment walk comes last. Pass `allowEmpty` — as
+ * `tandem_edit` does — and the same range answers `HEADING_OVERLAP`.
  */
 export function validateRange(
   ydoc: Y.Doc,
@@ -316,8 +401,9 @@ export function validateRange(
   // ONE materialization, shared by staleness, bounds and the surrogate check.
   // Previously computed only when a snapshot was given; making it unconditional
   // adds a full-document walk to every `anchoredRange` caller (~3.5 ms at
-  // 460 KB per `flatDocLength`'s own docstring). Accepted.
-  const fullText = resolveDocText(ydoc, opts?.text);
+  // 460 KB). Accepted — and note that `opts.text` does NOT buy it back, because
+  // verifying a hoisted string costs the same walk. See `resolveDocText`.
+  const fullText = resolveDocText(ydoc, opts?.text, opts?.textTag);
 
   // Staleness check
   if (opts?.textSnapshot) {
