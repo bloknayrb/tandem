@@ -1574,7 +1574,12 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // is the common case (user has selected text in the editor).
     e.preventDefault();
     const hasSelection = !!editor && editor.state.selection.from !== editor.state.selection.to;
-    const reviewOnly = isReadOnly;
+    // Deliberately NOT gated on `isReadOnly`. This shortcut opens the COMMENT
+    // composer, and a read-only document is the one you comment on: the
+    // changelog, an upload, and since #1798 every `.html`, which opens
+    // read-only precisely so it can be read and annotated (decision 2). The
+    // refusal here used to be a "Document is read-only" toast — a local named
+    // `reviewOnly`, blocking the review action.
     const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen;
     if (popupSuppressed) {
       // Palette/find UI is the active context; user understands why.
@@ -1587,17 +1592,6 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
         severity: "info",
         message: "Select text to comment",
         dedupKey: "comment-shortcut-no-selection",
-        timestamp: Date.now(),
-      });
-      return;
-    }
-    if (reviewOnly) {
-      notifications.push({
-        id: `comment-shortcut-readonly-${Date.now()}`,
-        type: "general-error",
-        severity: "info",
-        message: "Document is read-only",
-        dedupKey: "comment-shortcut-readonly",
         timestamp: Date.now(),
       });
       return;
