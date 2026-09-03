@@ -271,11 +271,36 @@ describe("errorCodeToHttpStatus / errorCodeToLabel — POST /api/convert's codes
     expect(fnBody).toMatch(/case "OPEN_FAILED":\s*\n\s*return 500;/);
   });
 
-  it("PERMISSION_DENIED (convert's realpath classification) is a 403 with its own label", () => {
+  it("PERMISSION_DENIED (convert's permission classification) is a 403 with its own label", () => {
     // Distinct from the raw `EACCES` errno case, which already mapped to the
     // same status/label pair — this pins the second producer independently.
     expect(errorCodeToHttpStatus("PERMISSION_DENIED")).toBe(403);
     expect(errorCodeToLabel("PERMISSION_DENIED")).toBe("PERMISSION_DENIED");
+  });
+
+  // The issue's headline fold, on the `/api` half. Both are 404, so a
+  // status-only assertion cannot see the difference — the LABEL is the whole
+  // pin, and the generic-message assertions are what make it matter for the
+  // non-loopback caller who only ever sees that string.
+  it("NO_DOCUMENT and FILE_NOT_FOUND are two 404s with DIFFERENT labels and bodies", () => {
+    expect(errorCodeToHttpStatus("NO_DOCUMENT")).toBe(404);
+    expect(errorCodeToHttpStatus("FILE_NOT_FOUND")).toBe(404);
+
+    expect(errorCodeToLabel("NO_DOCUMENT")).toBe("NO_DOCUMENT");
+    expect(errorCodeToLabel("FILE_NOT_FOUND")).toBe("NOT_FOUND");
+    // Stated as an inequality too: re-folding NO_DOCUMENT back onto NOT_FOUND
+    // is the regression, and it makes the two equal rather than making either
+    // one wrong on its own.
+    expect(errorCodeToLabel("NO_DOCUMENT")).not.toBe(errorCodeToLabel("FILE_NOT_FOUND"));
+    expect(GENERIC_ERROR_MESSAGE.NO_DOCUMENT).not.toBe(GENERIC_ERROR_MESSAGE.NOT_FOUND);
+  });
+
+  it("keeps ENOENT / NOT_FOUND / SOURCE_MISSING folded onto NOT_FOUND", () => {
+    // The negative half: only NO_DOCUMENT left the fold. Splitting it is not a
+    // licence to mint a label per code, and this is what would catch that.
+    for (const code of ["ENOENT", "NOT_FOUND", "SOURCE_MISSING", "FILE_NOT_FOUND"]) {
+      expect(errorCodeToLabel(code), `${code} should still fold onto NOT_FOUND`).toBe("NOT_FOUND");
+    }
   });
 });
 

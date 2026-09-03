@@ -69,6 +69,15 @@ export const WINDOWS_ACL_PROOF_SPECS = [
     spec: "tests/server/integrations/acl-win.test.ts",
     suite: "acl-win — Windows DACL hardening",
   },
+  {
+    // #1796. Unlike its two siblings this one is not about #1299's poisoned
+    // install: it denies write on a convert output directory and pins that the
+    // failure is reported as PERMISSION_DENIED whichever syscall trips on it.
+    // Windows-only because the errno differs — `EPERM` here, `EACCES` on POSIX
+    // — so the `EPERM` arm in `convert.ts` has no other proof anywhere.
+    spec: "tests/server/convert-output-acl-win.test.ts",
+    suite: "convert output permissions — Windows ACL proof (#1796)",
+  },
 ];
 
 /** Normalize for comparison: the JSON reporter emits native separators. */

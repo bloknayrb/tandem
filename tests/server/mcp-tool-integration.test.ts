@@ -246,6 +246,14 @@ describe("MCP tool integration — tandem_convertToMarkdown error mapping (#1796
     const parsed = parseResult(result);
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("NO_DOCUMENT");
+    // The MESSAGE half, which the code assertion above cannot see. A
+    // `safeDocId !== undefined` branch treats "" as a NAMED id and emits
+    // `"Document  is not open."` — a sentence with a hole in it and a double
+    // space, naming an id `getCurrentDoc` never looked up (it returns null
+    // from `if (!id)` before touching the open-document map). "" belongs on
+    // the shared no-document text.
+    expect(parsed.message).toBe("No document is open. Call tandem_open first.");
+    expect(parsed.message, "a hole where the id should be").not.toMatch(/ {2}/);
   });
 
   it("a .md document open: FORMAT_ERROR, not the NO_DOCUMENT text (over-fold negative)", async () => {

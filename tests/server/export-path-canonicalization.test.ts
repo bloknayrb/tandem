@@ -302,17 +302,24 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
     // ELOOP, ENAMETOOLONG and EACCES/EPERM from that same call all fell
     // through to the bare `throw err` and surfaced as an uncoded 500.
     // `runIf(POSIX)`: on Windows `fs.realpath` reports ENOENT, not any of
-    // these, for the equivalent path shapes, so they are not constructible
-    // there — see #1529 on why a Windows-gated real-fs case would be worse
-    // than no case at all. `tests/server/convert-error-mapping.test.ts`
-    // mocks `convert.js` wholesale, so it never executes this realpath
-    // classification at all -- these four specs are its only coverage.
-    // EPERM is not among them: unlike EACCES it isn't reliably
-    // constructible from an unprivileged test (it isn't `realpath`'s
-    // permission-check errno on Linux, and provoking it needs a condition
-    // -- e.g. an immutable-flag or NFS/quota edge -- this suite can't set
-    // up); `convert.ts`'s EACCES/EPERM arm rests on it being the same
-    // "caller can't get here" errno EACCES is, unverified beyond that.
+    // the ENOTDIR/ELOOP/ENAMETOOLONG shapes, so those are not constructible
+    // there — the consequence for a Windows caller is recorded as a known
+    // gap in `docs/gotchas.md` (MCP / Server).
+    // `tests/server/convert-error-mapping.test.ts` mocks `convert.js`
+    // wholesale, so it never executes this realpath classification at all --
+    // these four specs are its only coverage HERE.
+    //
+    // EPERM is deliberately not among them, and NOT because it is a
+    // speculative extra. It is `realpath`'s permission errno on WINDOWS
+    // (measured unprivileged: `icacls <dir> /deny <sid>:(W)`), which is
+    // precisely why it cannot be provoked from this POSIX-gated block --
+    // Linux answers EACCES for the same condition. So the EACCES/EPERM arm in
+    // `convert.ts` is not one errno plus a hopeful alias; it is one arm per
+    // platform, and deleting the EPERM half as dead code would break
+    // permission reporting on Windows alone. Its proof is
+    // `tests/server/convert-output-acl-win.test.ts`, registered with the
+    // `windows-acl-proof` CI job so it is a real gate rather than a
+    // Windows-gated describe nothing runs (#1529).
     it.runIf(POSIX)(
       "outputPath walking through a non-directory: INVALID_PATH naming the CALLER's path",
       async () => {
@@ -384,6 +391,49 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
           });
         } finally {
           await fsp.chmod(restricted, 0o755);
+        }
+      },
+    );
+
+    // #1796 round 2: the WRITE-path half of the same funnel, and the shape
+    // that classifying `realpath` alone cannot reach. `0o555` is the ordinary
+    // read-but-not-write directory: `realpath` resolves, `fs.stat` says
+    // directory, `findAvailablePath`'s `fs.access` says ENOENT (so the path
+    // reads as free), and the failure lands on `atomicWrite`. Unclassified it
+    // was `INTERNAL_ERROR` over MCP and — worse — a 423 over `/api`, whose
+    // body `sendApiError` overrides with "File is locked by another program."
+    //
+    // The Windows twin of this spec (`icacls /deny (WD,AD)`, errno EPERM) is
+    // in `convert-output-acl-win.test.ts`. This one exists so the write-path
+    // arm is also pinned by ubuntu `check`, which is the required status
+    // check; `windows-acl-proof` is a separate job and a separate errno.
+    it.runIf(POSIX && process.getuid?.() !== 0)(
+      "outputPath readable but not writable: PERMISSION_DENIED from the WRITE, not FILE_LOCKED",
+      async () => {
+        const base = await makeDir();
+        const id = openDocxDoc(base);
+        const readOnlyDir = path.join(base, "read-only");
+        await fsp.mkdir(readOnlyDir);
+        // Traversable and readable, but nothing may be created inside it.
+        await fsp.chmod(readOnlyDir, 0o555);
+        try {
+          // Preconditions, not decoration: they are what distinguishes this
+          // from the `0o000` spec above. If any of them started failing, the
+          // assertion below would be re-proving the realpath arm instead.
+          await expect(fsp.realpath(readOnlyDir)).resolves.toBeTypeOf("string");
+          await expect(fsp.stat(readOnlyDir).then((s) => s.isDirectory())).resolves.toBe(true);
+          await expect(fsp.access(path.join(readOnlyDir, `${id}.md`))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+
+          await expect(convertToMarkdown(id, readOnlyDir)).rejects.toMatchObject({
+            code: "PERMISSION_DENIED",
+            // Names the write, so this cannot pass on a build where only the
+            // resolver is classified.
+            message: expect.stringContaining("writing to output directory"),
+          });
+        } finally {
+          await fsp.chmod(readOnlyDir, 0o755);
         }
       },
     );

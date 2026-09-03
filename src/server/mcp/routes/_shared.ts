@@ -199,15 +199,23 @@ export function errorCodeToLabel(code: string): string {
   switch (code) {
     case "ENOENT":
     case "FILE_NOT_FOUND":
-    case "NO_DOCUMENT":
     case "NOT_FOUND":
     case "SOURCE_MISSING":
       return "NOT_FOUND";
+    // Split OUT of NOT_FOUND (#1796). Both are 404, but they are different
+    // conditions with different recoveries — "open a document first" versus
+    // "that path is not on disk" — and folded together `POST /api/convert` with
+    // no document open and with an `outputPath` naming a missing directory
+    // returned byte-identical bodies to a non-loopback caller. That is the same
+    // fold the MCP half of this PR unpicked. Also reached by `reload-family.ts`
+    // and `docx-apply.ts`, which get the sharper label for free.
+    case "NO_DOCUMENT":
+      return "NO_DOCUMENT";
     case "INVALID_PATH":
     case "BACKUP_SYMLINK":
       return "INVALID_PATH";
-    // Convert's realpath classification (#1796): EACCES/EPERM resolving the
-    // output directory itself, as opposed to the raw errno case below.
+    // Convert's permission classification (#1796): EACCES/EPERM from `realpath`,
+    // the `fs.access` probe or the write, as opposed to the raw errno case below.
     case "PERMISSION_DENIED":
       return "PERMISSION_DENIED";
     case "UNSUPPORTED_FORMAT":
@@ -262,11 +270,17 @@ export function errorCodeToLabel(code: string): string {
       return "PERMISSION_DENIED";
     case "BACKUP_FAILED":
       return "INTERNAL";
-    // `tandem_convertToMarkdown`'s .md write succeeded and reopening it
-    // failed. Its own label so `sendApiError`'s Copy-Diagnostics-visible log
-    // line, and the response body, distinguish "we wrote your file but
-    // couldn't open it" from an undifferentiated internal failure — it is
-    // still a 500 (errorCodeToHttpStatus above), but not the default arm.
+    // `tandem_convertToMarkdown`'s .md write succeeded and reopening it failed.
+    // Its own label so the RESPONSE BODY distinguishes "we wrote your file but
+    // couldn't open it" from an undifferentiated internal failure — for a
+    // non-loopback caller that is the whole difference between
+    // `GENERIC_ERROR_MESSAGE`'s "The file was written but could not be
+    // reopened." and "The operation failed."
+    //
+    // It changes nothing in the LOG: `sendApiError` logs `err` for a 500 and
+    // never the label, so the stderr line is byte-identical to an unmapped
+    // code's. Making it differ there would need a label-aware log branch, which
+    // is deliberately not part of this change.
     case "OPEN_FAILED":
       return "OPEN_FAILED";
     default:
@@ -313,13 +327,14 @@ export function sendApiError(res: Response, err: unknown): void {
  *
  * The distinction is load-bearing and was got wrong once: the original entry was
  * keyed `FILE_NOT_FOUND`, which `errorCodeToLabel` never emits (it folds ENOENT
- * / FILE_NOT_FOUND / NO_DOCUMENT / NOT_FOUND into `NOT_FOUND`), so the most
+ * / FILE_NOT_FOUND / NOT_FOUND / SOURCE_MISSING into `NOT_FOUND`), so the most
  * common 404 fell through to the catch-all. Every label the mapper can return
  * needs an entry here or it silently degrades to "The operation failed.";
  * `path-scrub.test.ts` asserts that exhaustively.
  */
 export const GENERIC_ERROR_MESSAGE: Record<string, string> = {
   NOT_FOUND: "The requested file was not found.",
+  NO_DOCUMENT: "No document is open.",
   INVALID_PATH: "The path is not valid.",
   BAD_REQUEST: "The request was not valid.",
   READ_ONLY: "The document is read-only.",
@@ -338,6 +353,7 @@ export const GENERIC_ERROR_MESSAGE: Record<string, string> = {
 /** Labels {@link errorCodeToLabel} can return. Exported for the exhaustiveness test. */
 export const ERROR_LABELS = [
   "NOT_FOUND",
+  "NO_DOCUMENT",
   "INVALID_PATH",
   "BAD_REQUEST",
   "ANNOTATION_RESOLVED",

@@ -16,6 +16,45 @@ export interface ConvertResult {
 }
 
 /**
+ * Classify a "no permission on the output directory" failure, whichever syscall
+ * happened to trip on it.
+ *
+ * `fs.realpath`, `findAvailablePath`'s `fs.access` probe and `atomicWrite`'s
+ * write are three mouths of ONE funnel: the caller cannot write where it asked
+ * us to write. Which of them fails first is ACL-shape- and platform-dependent,
+ * so classifying only one leaves the others reporting the same user-visible
+ * cause as something else. Measured on Windows 11 (26200), unprivileged, with
+ * `icacls <dir> /deny <sid>:…`:
+ *
+ *   /deny (W)      → `fs.realpath` itself fails EPERM.
+ *   /deny (WD,AD)  → realpath OK, `fs.stat` OK, `fs.access` ENOENT, and the
+ *                    failure lands on `atomicWrite`'s writeFile as EPERM.
+ *
+ * The second shape is the ORDINARY read-but-not-write directory, and it is the
+ * one that was reported WRONGLY rather than merely vaguely: unclassified, an
+ * MCP caller saw `INTERNAL_ERROR`, and an `/api` caller fell into `_shared.ts`'s
+ * shared `EBUSY`/`EPERM` → 423 arm, whose detail `sendApiError` OVERRIDES with
+ * "File is locked by another program." Nothing is locked, so the user closes
+ * Word, retries, and fails forever.
+ *
+ * Fixed at the throw site rather than in `_shared.ts`: that 423 arm is right for
+ * its other producers, where `EPERM` really does mean a Windows sharing
+ * violation on an open `.docx`. POSIX reports `EACCES` for these same
+ * conditions and already mapped correctly (403); this makes Windows agree
+ * rather than changing POSIX.
+ *
+ * Returns the error to THROW: anything that is not a permission errno comes back
+ * untouched, so the caller's `throw` re-raises the original unchanged.
+ */
+function asOutputPermissionError(err: unknown, outputDir: string): unknown {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code !== "EACCES" && code !== "EPERM") return err;
+  return Object.assign(new Error(`Permission denied writing to output directory: ${outputDir}`), {
+    code: "PERMISSION_DENIED",
+  });
+}
+
+/**
  * Find an available output path, appending `-1`, `-2`, etc. if the base already exists.
  */
 async function findAvailablePath(basePath: string): Promise<string> {
@@ -44,7 +83,11 @@ async function findAvailablePath(basePath: string): Promise<string> {
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") return candidate;
-      throw err; // Permission errors should propagate
+      // Second mouth of the funnel (see `asOutputPermissionError`). "Permission
+      // errors should propagate" was right that this must not be swallowed —
+      // but propagating it UNCLASSIFIED is what produced the wrong `/api`
+      // answer, so classify on the way out. Everything else re-raises as-is.
+      throw asOutputPermissionError(err, dir);
     }
   }
   throw Object.assign(new Error("Could not find an available filename after 1000 attempts."), {
@@ -168,12 +211,17 @@ export async function convertToMarkdown(
         );
       }
       // EACCES/EPERM here mean the caller lacks permission to resolve the
-      // output directory itself — distinct from `atomicWrite`'s write-path
-      // errnos below, which are a different producer and stay unclassified.
-      // EACCES has a real-fs non-root POSIX test (export-path-canonicalization.test.ts);
-      // EPERM does not — it is grouped on the assumption it is the same class
-      // of "caller can't get here" errno, but nothing here provokes it from
-      // an unprivileged test to confirm that assumption holds for `realpath`.
+      // output directory itself. Both arms are load-bearing, on different
+      // platforms, and NEITHER is speculative: POSIX answers EACCES (real-fs
+      // non-root spec in export-path-canonicalization.test.ts) and Windows
+      // answers EPERM (real-`icacls` spec in convert-output-acl-win.test.ts,
+      // run by the `windows-acl-proof` job). Deleting the EPERM half as
+      // redundant would break Windows permission reporting only — the one
+      // platform ubuntu `check` cannot catch.
+      //
+      // `realpath` is only the FIRST of three syscalls this same cause can trip;
+      // see `asOutputPermissionError` for the other two and for why all three
+      // are classified here rather than in `_shared.ts`.
       if (code === "EACCES" || code === "EPERM") {
         throw Object.assign(
           new Error(`Permission denied resolving output directory: ${resolvedOutput}`),
@@ -208,8 +256,17 @@ export async function convertToMarkdown(
   // findAvailablePath is best-effort TOCTOU — a file created between its check
   // and this write would be clobbered. The snapshot no-ops when the path is
   // (still) free, so this only costs anything in exactly the racy case.
-  await snapshotBeforeFirstWrite(resolvedOutput, { appDataDir: resolveAppDataDir() });
-  await atomicWrite(resolvedOutput, markdown);
+  try {
+    await snapshotBeforeFirstWrite(resolvedOutput, { appDataDir: resolveAppDataDir() });
+    await atomicWrite(resolvedOutput, markdown);
+  } catch (err: unknown) {
+    // Third mouth of the funnel, and the most reachable one: an output
+    // directory the caller can read but not write reaches the write with
+    // `realpath`, `stat` and `access` all having succeeded. See
+    // `asOutputPermissionError`. Non-permission write failures (ENOSPC, EROFS,
+    // …) re-raise unchanged and stay INTERNAL_ERROR / 500, which is right.
+    throw asOutputPermissionError(err, path.dirname(resolvedOutput));
+  }
 
   // Open the new file in Tandem — include outputPath in error if this fails
   try {
