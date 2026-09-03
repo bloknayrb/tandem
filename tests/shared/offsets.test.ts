@@ -23,6 +23,25 @@ describe("headingPrefix", () => {
     expect(headingPrefix(2)).toBe("## ");
     expect(headingPrefix(3)).toBe("### ");
   });
+
+  /**
+   * #1752: the two functions must agree for EVERY input, because `flatDocLength`
+   * is built from the length and `extractText` from the string, and their
+   * difference now decides whether a bounds check accepts a range. These four
+   * inputs are unreachable from today's Y.Doc writers, so nothing else can see
+   * them: the equality check inside `validateRange` compares `extractText` to
+   * itself.
+   */
+  it.each([
+    ["level 0", 0],
+    ["a negative level", -1],
+    ["a fractional level", 1.5],
+    ["NaN, as a non-numeric attribute reads", Number.NaN],
+  ])("agrees with headingPrefixLength for %s", (_label, level) => {
+    // `"#".repeat(-1)` used to THROW here, and level 0 used to produce `" "`
+    // against a reported length of 0.
+    expect(headingPrefix(level)).toHaveLength(headingPrefixLength(level));
+  });
 });
 
 describe("FLAT_SEPARATOR", () => {
