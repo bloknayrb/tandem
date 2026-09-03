@@ -103,24 +103,23 @@ pub fn init() -> Option<SentryGuard> {
     // enabled, not the value.
     log::info!("[sentry] crash reporting enabled (DSN configured via {SENTRY_DSN_ENV})");
 
-    let client = sentry::init((
-        dsn,
-        sentry::ClientOptions {
-            release: sentry::release_name!(),
-            // Crash events only — no session/usage telemetry. Even though the
-            // operator opted in by setting a DSN, the privacy-minimal posture is
-            // to ship faults, not session pings (#921).
-            auto_session_tracking: false,
-            // Scrub PII before any event leaves the process.
-            before_send: Some(Arc::new(|mut event| {
-                scrub_event(&mut event);
-                Some(event)
-            })),
-            // Belt-and-braces: ask the SDK not to attach IP / identifying data.
-            send_default_pii: false,
-            ..Default::default()
-        },
-    ));
+    // sentry 0.49 marks `ClientOptions` `#[non_exhaustive]`, so the struct
+    // literal no longer compiles from outside the crate — build via
+    // `Default` and assign the same four fields as before.
+    let mut options = sentry::ClientOptions::default();
+    options.release = sentry::release_name!();
+    // Crash events only — no session/usage telemetry. Even though the
+    // operator opted in by setting a DSN, the privacy-minimal posture is
+    // to ship faults, not session pings (#921).
+    options.auto_session_tracking = false;
+    // Scrub PII before any event leaves the process.
+    options.before_send = Some(Arc::new(|mut event| {
+        scrub_event(&mut event);
+        Some(event)
+    }));
+    // Belt-and-braces: ask the SDK not to attach IP / identifying data.
+    options.send_default_pii = false;
+    let client = sentry::init((dsn, options));
 
     // Out-of-process native crash handler (minidumps). Re-exported by the
     // plugin so no separate `sentry-rust-minidump` dependency is required.
