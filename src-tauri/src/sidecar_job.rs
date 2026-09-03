@@ -3,10 +3,10 @@
 //!
 //! ## Why (issue #987)
 //!
-//! `RunEvent::Exit => kill_sidecar(app)` only fires on a *graceful* shutdown.
-//! When the shell is force-quit (`taskkill /F`, a crash, or a dev-runner
-//! rebuild that SIGKILLs the parent), `RunEvent::Exit` never runs and the
-//! spawned `node-sidecar` is orphaned — it keeps listening on 3478/3479. The
+//! `RunEvent::Exit => shutdown_sidecar_on_exit(app)` only fires on a *graceful*
+//! shutdown. When the shell is force-quit (`taskkill /F`, a crash, or a
+//! dev-runner rebuild that SIGKILLs the parent), `RunEvent::Exit` never runs
+//! and the spawned `node-sidecar` is orphaned — it keeps listening on 3478/3479. The
 //! next launch then *reuses* that already-healthy orphan (the debug-build
 //! reuse path in `start_sidecar`), so server-code changes silently don't take
 //! effect on "restart". This caused ~an hour of false-negative confusion while
@@ -30,10 +30,10 @@
 //! ## Non-Windows
 //!
 //! This module is Windows-only. On macOS/Linux the graceful
-//! `RunEvent::Exit => kill_sidecar` path remains the primary mechanism; a
-//! native parent-death reaper for those platforms (Linux `PR_SET_PDEATHSIG` on
-//! a single-threaded reaper binary, macOS kqueue + `getppid` recheck) was the
-//! separate #800 spike that never landed and is tracked there. The Windows job
+//! `RunEvent::Exit => shutdown_sidecar_on_exit` path remains the primary
+//! mechanism; a native parent-death reaper for those platforms (Linux
+//! `PR_SET_PDEATHSIG` on a single-threaded reaper binary, macOS kqueue +
+//! `getppid` recheck) was the separate #800 spike that never landed and is tracked there. The Windows job
 //! object is the highest-value, lowest-risk slice and ships here.
 
 #![cfg(target_os = "windows")]
