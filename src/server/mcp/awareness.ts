@@ -238,7 +238,11 @@ export function finalizeClaudeChatMessage(id: string): void {
 export function registerAwarenessTools(server: McpServer): void {
   server.tool(
     "tandem_getActivity",
-    "Check if the user is actively editing and where their cursor is",
+    "Report whether the user is currently typing (`isTyping`), where their cursor and selection " +
+      "are, and which document they are in. Call it before annotating or editing near the " +
+      "user's cursor — annotating text someone is mid-sentence on is disruptive, and the range " +
+      "is likely to move under you. Returns presence only; it does not return document content " +
+      "or pending user messages (use tandem_checkInbox for those).",
     {
       documentId: z
         .string()
@@ -276,7 +280,7 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        "Check for user actions you haven't seen yet — new comments, chat messages, and responses to your annotations. You cannot tell whether real-time push is reaching you, so poll at a steady cadence: every 2-3 tool calls, after completing any task, between steps, and whenever you pause. Items already returned by a previous poll are de-duplicated, so frequent calls are cheap. An item flagged `alreadyPushed` was also emitted as a real-time event — if you recognize it and already responded, don't respond twice. Low token cost — when in doubt, call it.",
+        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), which are private per ADR-027.',
       inputSchema: {
         documentId: z
           .string()

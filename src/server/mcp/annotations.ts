@@ -440,7 +440,11 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_resolveAnnotation",
-    "Accept or dismiss an annotation",
+    "Move a pending annotation to accepted or dismissed. Accepting one that carries " +
+      "suggestedText applies that text to the document; dismissing leaves the document " +
+      "unchanged. Only pending annotations can transition, and user notes cannot be " +
+      "transitioned at all (ADR-027). The record is kept either way — use " +
+      "tandem_removeAnnotation to delete it.",
     {
       id: z.string().describe("Annotation ID"),
       action: AnnotationActionSchema.describe("Action to take"),
@@ -482,7 +486,10 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_removeAnnotation",
-    "Remove an annotation entirely",
+    "Delete an annotation and its whole reply thread permanently. Not the same as " +
+      "tandem_resolveAnnotation, which keeps the record and moves it to accepted/dismissed — " +
+      "prefer resolve unless the annotation should leave no trace. Refuses to remove user notes " +
+      '(type: "note"), which are private per ADR-027. There is no undo.',
     {
       id: z.string().describe("Annotation ID"),
       documentId: z

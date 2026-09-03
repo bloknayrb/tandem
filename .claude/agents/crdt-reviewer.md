@@ -21,7 +21,7 @@ Read these before reviewing changes:
 - `src/server/mcp/annotations.ts` — annotation CRUD, captureSnapshot, range validation on write
 - `src/server/file-io/docx-comments.ts` — Word comment import (heading prefix + separator math)
 - `src/client/editor/extensions/annotation.ts` — decoration rendering, buildDecorations fallback logic
-- `docs/architecture.md` (lines 310-389) — coordinate system documentation
+- `docs/architecture.md` → **Coordinate Systems** section — coordinate system documentation
 
 ## Focus Areas
 
@@ -43,7 +43,7 @@ Read these before reviewing changes:
 ### 4. Client-Server Contract
 - **Inverted range detection:** After resolving `relRange`, `from > to` means concurrent edits moved the anchors past each other. This must be detected and logged in both `refreshRange()` (server) and `annotationToPmRange()` (client). Neither should silently accept inverted ranges.
 - **Client fallback path:** `annotationToPmRange()` must prefer `relRange` resolution. When `relRange` fails, fall back to `flatOffsetToPmPos()` and emit `console.warn` so CRDT degradation is visible in browser devtools. Verify the `method` field in the result is set to `'rel'` or `'flat'` correctly.
-- **Transaction origin tagging (ADR-031):** Every Y.Doc write goes through one of `withMcp` / `withFileSync` / `withInternal` / `withReload` / `withBrowser` from `src/shared/origins.ts`. Raw `doc.transact(...)` is forbidden outside the helpers file. MCP tools use `withMcp`; the file-watcher reload path uses `withReload`; server-internal setup writes (file population, tutorial seeding, metadata broadcasts, cleanup-after-failure) use `withInternal`; durable-annotation file-writer echoes use `withFileSync`; browser edits use `withBrowser`. Channel observers skip mcp / file-sync / internal / reload (only browser emits). Picking the wrong helper is a silent bug — see the skip-set matrix in ADR-031.
+- **Transaction origin tagging (ADR-031):** Every Y.Doc write goes through one of `withMcp` / `withFileSync` / `withInternal` / `withReload` / `withBrowser` / `withModeRelease` from `src/shared/origins.ts`. Raw `doc.transact(...)` is forbidden outside the helpers file. MCP tools use `withMcp`; the file-watcher reload path uses `withReload`; server-internal setup writes (file population, tutorial seeding, metadata broadcasts, cleanup-after-failure) use `withInternal`; durable-annotation file-writer echoes use `withFileSync`; browser edits use `withBrowser`. Channel observers skip mcp / file-sync / internal / reload (only browser emits). Picking the wrong helper is a silent bug — see the skip-set matrix in ADR-031.
 
 ## Output Format
 For each finding:
@@ -54,4 +54,4 @@ For each finding:
 - **Proof**: Concrete scenario that triggers the bug (e.g., "Insert text at annotation start boundary, annotation shrinks instead of growing")
 - **Recommendation**: Specific fix
 
-Start by reading `docs/architecture.md` (lines 310-389) and `src/shared/offsets.ts`, then work through each focus area systematically.
+Start by reading the **Coordinate Systems** section of `docs/architecture.md` and `src/shared/offsets.ts`, then work through each focus area systematically.
