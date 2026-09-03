@@ -57,6 +57,8 @@ describe("tandem_convertToMarkdown error mapping — shape test (#1796)", () => 
     ["INVALID_PATH", "INVALID_PATH"],
     ["EMPTY_CONVERSION", "EMPTY_CONVERSION"],
     ["OPEN_FAILED", "OPEN_FAILED"],
+    ["CONFLICT", "CONFLICT"],
+    ["PERMISSION_DENIED", "PERMISSION_DENIED"],
   ])("thrown %s maps 1:1 to code %s, with the message echoed", async (thrownCode, expectedCode) => {
     throwing(thrownCode);
 

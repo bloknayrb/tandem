@@ -297,5 +297,68 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
         code: "NO_DOCUMENT",
       });
     });
+
+    // #1796: convert.ts's realpath catch classified only ENOENT. ENOTDIR,
+    // ELOOP and EACCES/EPERM from that same call all fell through to the
+    // bare `throw err` and surfaced as an uncoded 500. `runIf(POSIX)`: on
+    // Windows `fs.realpath` reports ENOENT, not ENOTDIR, for a path that
+    // walks through a non-directory component, so this is not constructible
+    // there — see #1529 on why a Windows-gated real-fs case would be worse
+    // than no case at all.
+    it.runIf(POSIX)(
+      "outputPath walking through a non-directory: INVALID_PATH naming the CALLER's path",
+      async () => {
+        const base = await makeDir();
+        const id = openDocxDoc(base);
+        const notADir = path.join(base, "not-a-dir.txt");
+        await fsp.writeFile(notADir, "x");
+        const badOutputPath = path.join(notADir, "sub");
+
+        // Naming the pre-realpath path the caller supplied, never anything
+        // realpath expanded -- there is nothing further to expand here, but
+        // this pins that convert.ts didn't switch to `realDir` by mistake.
+        await expect(convertToMarkdown(id, badOutputPath)).rejects.toMatchObject({
+          code: "INVALID_PATH",
+          message: expect.stringContaining(badOutputPath),
+        });
+      },
+    );
+
+    it.runIf(POSIX)(
+      "outputPath through a symlink loop: INVALID_PATH, not an uncoded 500 (ELOOP)",
+      async () => {
+        const base = await makeDir();
+        const id = openDocxDoc(base);
+        const loopDir = path.join(base, "loop");
+        await fsp.symlink(loopDir, loopDir);
+
+        await expect(convertToMarkdown(id, loopDir)).rejects.toMatchObject({
+          code: "INVALID_PATH",
+        });
+      },
+    );
+
+    it.runIf(POSIX)(
+      "outputPath in an unsearchable directory: PERMISSION_DENIED, not an uncoded 500 (EACCES)",
+      async () => {
+        const base = await makeDir();
+        const id = openDocxDoc(base);
+        const restricted = path.join(base, "restricted");
+        await fsp.mkdir(restricted);
+        const target = path.join(restricted, "sub");
+        // Strip the execute bit so `realpath` can't traverse into it. Running
+        // as root defeats this (root ignores directory permissions), so the
+        // assertion is skipped rather than false-failing under CI's `check`
+        // if that ever changes -- current `check` runs unprivileged.
+        await fsp.chmod(restricted, 0o000);
+        try {
+          await expect(convertToMarkdown(id, target)).rejects.toMatchObject({
+            code: "PERMISSION_DENIED",
+          });
+        } finally {
+          await fsp.chmod(restricted, 0o755);
+        }
+      },
+    );
   });
 });

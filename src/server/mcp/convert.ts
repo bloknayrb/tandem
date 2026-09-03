@@ -35,7 +35,7 @@ async function findAvailablePath(basePath: string): Promise<string> {
   let candidate = basePath;
   let counter = 0;
 
-  while (counter <= MAX_ATTEMPTS) {
+  while (counter < MAX_ATTEMPTS) {
     try {
       await fs.access(candidate);
       // File exists, try next
@@ -147,13 +147,36 @@ export async function convertToMarkdown(
     try {
       realDir = await fs.realpath(resolvedOutput);
     } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-      // A caller-fixable path mistake, not a server fault. FILE_NOT_FOUND
-      // rather than INVALID_PATH so an AI caller creates the directory instead
-      // of reformatting a path that was never malformed.
-      throw Object.assign(new Error(`Output directory does not exist: ${resolvedOutput}`), {
-        code: "FILE_NOT_FOUND",
-      });
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        // A caller-fixable path mistake, not a server fault. FILE_NOT_FOUND
+        // rather than INVALID_PATH so an AI caller creates the directory instead
+        // of reformatting a path that was never malformed.
+        throw Object.assign(new Error(`Output directory does not exist: ${resolvedOutput}`), {
+          code: "FILE_NOT_FOUND",
+        });
+      }
+      // Same realpath call, same caller-fixable family as ENOENT above.
+      // ENOTDIR (a path component isn't a directory), ELOOP (symlink cycle)
+      // and ENAMETOOLONG are all malformed `outputPath` values, not server
+      // faults — INVALID_PATH, naming the path the CALLER supplied
+      // (`resolvedOutput`, pre-realpath), never anything realpath expanded.
+      if (code === "ENOTDIR" || code === "ELOOP" || code === "ENAMETOOLONG") {
+        throw Object.assign(
+          new Error(`Output directory is not a valid path (${code}): ${resolvedOutput}`),
+          { code: "INVALID_PATH" },
+        );
+      }
+      // EACCES/EPERM here mean the caller lacks permission to resolve the
+      // output directory itself — distinct from `atomicWrite`'s write-path
+      // errnos below, which are a different producer and stay unclassified.
+      if (code === "EACCES" || code === "EPERM") {
+        throw Object.assign(
+          new Error(`Permission denied resolving output directory: ${resolvedOutput}`),
+          { code: "PERMISSION_DENIED" },
+        );
+      }
+      throw err;
     }
     const realReason = rejectUnsafeWindowsPrefix(realDir);
     if (realReason) {
