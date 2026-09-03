@@ -23,7 +23,7 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
-use rand::RngCore;
+use rand::Rng;
 use serde::Serialize;
 
 /// Maximum number of workspaces processed in a single walk.
@@ -81,7 +81,8 @@ static SNAPSHOT: Mutex<Option<HashMap<String, PathBuf>>> = Mutex::new(None);
 /// Generate a 256-bit random, hex-encoded handle token.
 fn new_token() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    // rand 0.9+: `thread_rng` is `rng`; `fill_bytes` lives on the `Rng` trait.
+    rand::rng().fill_bytes(&mut bytes);
     let mut s = String::with_capacity(64);
     for b in bytes {
         // Infallible: writing to a String never errors.

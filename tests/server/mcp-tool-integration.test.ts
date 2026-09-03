@@ -170,6 +170,165 @@ describe("MCP tool integration — document tools", () => {
   });
 });
 
+// #1796: tandem_convertToMarkdown's handler catch mapped every FILE_NOT_FOUND
+// (both "no document" and "missing output directory") onto noDocumentError(),
+// and flattened INVALID_PATH/EMPTY_CONVERSION/OPEN_FAILED to FORMAT_ERROR.
+// These pin the fixed 1:1 code mapping, and the over-fold negatives below
+// pin that UNSUPPORTED_FORMAT and upload INVALID_PATH did NOT get swept onto
+// NO_DOCUMENT by too-broad a fix.
+describe("MCP tool integration — tandem_convertToMarkdown error mapping (#1796)", () => {
+  const convertTempDirs: string[] = [];
+
+  afterEach(async () => {
+    for (const dir of convertTempDirs.splice(0)) {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  /** Register a .docx doc at an explicit filePath (the docx twin of setupDocAtPath). */
+  function setupDocxDoc(id: string, filePath: string, source: "file" | "upload" = "file") {
+    const ydoc = getOrCreateDocument(id);
+    populateYDoc(ydoc, "Hello world");
+    addDoc(id, { id, filePath, format: "docx", readOnly: false, source });
+    setActiveDocId(id);
+  }
+
+  it("missing outputPath directory: code FILE_NOT_FOUND, message names the directory, not the NO_DOCUMENT text", async () => {
+    const base = await fs.mkdtemp(join(tmpdir(), "tandem-convert-"));
+    convertTempDirs.push(base);
+    setupDocxDoc("convert-missing-dir", join(base, "convert-missing-dir.docx"));
+    const missingDir = join(base, "does-not-exist");
+
+    const result = await client.callTool({
+      name: "tandem_convertToMarkdown",
+      arguments: { outputPath: missingDir },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("FILE_NOT_FOUND");
+    expect(parsed.message).toContain(missingDir);
+    expect(parsed.message).not.toContain("No document is open");
+  });
+
+  it("no document open: the shared noDocumentError() text", async () => {
+    const result = await client.callTool({ name: "tandem_convertToMarkdown", arguments: {} });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NO_DOCUMENT");
+    expect(parsed.message).toBe("No document is open. Call tandem_open first.");
+  });
+
+  it("documentId naming a closed document: code NO_DOCUMENT, message names the id itself", async () => {
+    const result = await client.callTool({
+      name: "tandem_convertToMarkdown",
+      arguments: { documentId: "not-open-anywhere" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NO_DOCUMENT");
+    // Tightened from a bare `toContain("documentId")`: that passed against the
+    // fixed generic sentence ("...or documentId names a document that is not
+    // open"), which never echoes the id that was actually looked up. Require
+    // the id itself, the way tandem_switchDocument's equivalent message does.
+    expect(parsed.message).toContain("not-open-anywhere");
+    expect(parsed.message).not.toContain("or documentId names");
+  });
+
+  // Pins the `??` (not `||`) reason in getCurrentDoc: a defined-but-empty
+  // documentId must NOT fall back to the active document.
+  it('documentId: "" does not fall back to the active document', async () => {
+    setupDoc("convert-active-fallback-check", "some content");
+
+    const result = await client.callTool({
+      name: "tandem_convertToMarkdown",
+      arguments: { documentId: "" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NO_DOCUMENT");
+    // The MESSAGE half, which the code assertion above cannot see. A
+    // `safeDocId !== undefined` branch treats "" as a NAMED id and emits
+    // `"Document  is not open."` — a sentence with a hole in it and a double
+    // space, naming an id `getCurrentDoc` never looked up (it returns null
+    // from `if (!id)` before touching the open-document map). "" belongs on
+    // the shared no-document text.
+    expect(parsed.message).toBe("No document is open. Call tandem_open first.");
+    expect(parsed.message, "a hole where the id should be").not.toMatch(/ {2}/);
+  });
+
+  it("a .md document open: FORMAT_ERROR, not the NO_DOCUMENT text (over-fold negative)", async () => {
+    setupDoc("convert-md-doc", "Just markdown");
+
+    const result = await client.callTool({ name: "tandem_convertToMarkdown", arguments: {} });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("FORMAT_ERROR");
+    expect(parsed.message).toContain("Only .docx");
+    expect(parsed.message).not.toContain("No document is open");
+  });
+
+  it("an uploaded .docx: INVALID_PATH (over-fold negative)", async () => {
+    setupDocxDoc("convert-upload-docx", "upload://convert-upload-docx.docx", "upload");
+
+    const result = await client.callTool({ name: "tandem_convertToMarkdown", arguments: {} });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_PATH");
+    expect(parsed.message).toContain("Uploaded");
+  });
+
+  it("outputPath naming an existing file: INVALID_PATH (over-fold negative)", async () => {
+    const base = await fs.mkdtemp(join(tmpdir(), "tandem-convert-"));
+    convertTempDirs.push(base);
+    setupDocxDoc("convert-existing-file", join(base, "convert-existing-file.docx"));
+    const decoy = join(base, "decoy.md");
+    await fs.writeFile(decoy, "x");
+
+    const result = await client.callTool({
+      name: "tandem_convertToMarkdown",
+      arguments: { outputPath: decoy },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_PATH");
+  });
+
+  // The ENOTDIR/ELOOP/EACCES real-fs cases for convert.ts's realpath errno
+  // classification live in export-path-canonicalization.test.ts, POSIX-gated
+  // (`fs.realpath` reports plain ENOENT rather than ENOTDIR for a
+  // non-directory path component on Windows, so a Windows real-fs case here
+  // would assert a code the platform cannot produce).
+
+  // Real-fs case for the CONFLICT arm and its now-correct budget: this pins
+  // that MAX_ATTEMPTS candidates are actually exhausted (findAvailablePath's
+  // loop bound was off by one from its own error message before this PR).
+  it("findAvailablePath exhausted: CONFLICT, not the default NO_DOCUMENT/INTERNAL fold", async () => {
+    const base = await fs.mkdtemp(join(tmpdir(), "tandem-convert-"));
+    convertTempDirs.push(base);
+    const docPath = join(base, "convert-conflict.docx");
+    setupDocxDoc("convert-conflict", docPath);
+    // Pre-create base + every numbered candidate findAvailablePath will try
+    // (1000 total, matching MAX_ATTEMPTS), so it exhausts its budget.
+    // Batched rather than one Promise.all(1000) (risks EMFILE) or a
+    // sequential loop (timed out well past 60s on this box).
+    const names = [
+      "convert-conflict.md",
+      ...Array.from({ length: 999 }, (_, i) => `convert-conflict-${i + 1}.md`),
+    ];
+    const BATCH = 50;
+    for (let i = 0; i < names.length; i += BATCH) {
+      await Promise.all(
+        names.slice(i, i + BATCH).map((name) => fs.writeFile(join(base, name), "x")),
+      );
+    }
+
+    const result = await client.callTool({ name: "tandem_convertToMarkdown", arguments: {} });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("CONFLICT");
+  }, 120_000);
+});
+
 describe("MCP tool integration — annotation tools", () => {
   it("tandem_comment creates an annotation", async () => {
     setupDoc("mcp-ann-1", "Hello world test content");

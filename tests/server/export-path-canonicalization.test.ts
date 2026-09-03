@@ -287,5 +287,167 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
         code: "FILE_NOT_FOUND",
       });
     });
+
+    // #1796: this discriminating twin stays green (FILE_NOT_FOUND, above) while
+    // the no-document condition below gets its own code — a message-sniffing
+    // handler "fix" that leaves this throw site on FILE_NOT_FOUND would still
+    // pass the spec above and only be caught here.
+    it("reports no open document as NO_DOCUMENT, not FILE_NOT_FOUND (#1796)", async () => {
+      await expect(convertToMarkdown("no-such-doc-id")).rejects.toMatchObject({
+        code: "NO_DOCUMENT",
+      });
+    });
+
+    // #1796: convert.ts's realpath catch classified only ENOENT. ENOTDIR,
+    // ELOOP, ENAMETOOLONG and EACCES/EPERM from that same call all fell
+    // through to the bare `throw err` and surfaced as an uncoded 500.
+    // `runIf(POSIX)`: on Windows `fs.realpath` reports ENOENT, not any of
+    // the ENOTDIR/ELOOP/ENAMETOOLONG shapes, so those are not constructible
+    // there — the consequence for a Windows caller is recorded as a known
+    // gap in `docs/gotchas.md` (MCP / Server).
+    // `tests/server/convert-error-mapping.test.ts` mocks `convert.js`
+    // wholesale, so it never executes this realpath classification at all --
+    // these four specs are its only coverage HERE.
+    //
+    // EPERM is deliberately not among them, and NOT because it is a
+    // speculative extra. It is `realpath`'s permission errno on WINDOWS
+    // (measured unprivileged: `icacls <dir> /deny <sid>:(W)`), which is
+    // precisely why it cannot be provoked from this POSIX-gated block --
+    // Linux answers EACCES for the same condition. So the EACCES/EPERM arm in
+    // `convert.ts` is not one errno plus a hopeful alias; it is one arm per
+    // platform, and deleting the EPERM half as dead code would break
+    // permission reporting on Windows alone. Its proof is
+    // `tests/server/convert-output-acl-win.test.ts`, registered with the
+    // `windows-acl-proof` CI job so it is a real gate rather than a
+    // Windows-gated describe nothing runs (#1529).
+    it.runIf(POSIX)(
+      "outputPath walking through a non-directory: INVALID_PATH naming the CALLER's path",
+      async () => {
+        const base = await makeDir();
+        const id = openDocxDoc(base);
+        const notADir = path.join(base, "not-a-dir.txt");
+        await fsp.writeFile(notADir, "x");
+        const badOutputPath = path.join(notADir, "sub");
+
+        // Naming the pre-realpath path the caller supplied, never anything
+        // realpath expanded -- there is nothing further to expand here, but
+        // this pins that convert.ts didn't switch to `realDir` by mistake.
+        await expect(convertToMarkdown(id, badOutputPath)).rejects.toMatchObject({
+          code: "INVALID_PATH",
+          message: expect.stringContaining(badOutputPath),
+        });
+      },
+    );
+
+    it.runIf(POSIX)(
+      "outputPath through a symlink loop: INVALID_PATH, not an uncoded 500 (ELOOP)",
+      async () => {
+        const base = await makeDir();
+        const id = openDocxDoc(base);
+        const loopDir = path.join(base, "loop");
+        await fsp.symlink(loopDir, loopDir);
+
+        await expect(convertToMarkdown(id, loopDir)).rejects.toMatchObject({
+          code: "INVALID_PATH",
+        });
+      },
+    );
+
+    it.runIf(POSIX)(
+      "outputPath component too long: INVALID_PATH, not an uncoded 500 (ENAMETOOLONG)",
+      async () => {
+        // Confirmed with the reviewer: Linux's realpath answers ENAMETOOLONG
+        // for a single path component over NAME_MAX (255); Windows answers
+        // ENOENT for the same shape, so this stays POSIX-only rather than
+        // becoming a third Windows-gated case nothing runs (#1529).
+        const base = await makeDir();
+        const id = openDocxDoc(base);
+        const tooLong = path.join(base, "x".repeat(300));
+
+        await expect(convertToMarkdown(id, tooLong)).rejects.toMatchObject({
+          code: "INVALID_PATH",
+        });
+      },
+    );
+
+    // Running as root defeats the chmod below (root ignores directory
+    // permissions: `realpath` would answer ENOENT on the missing leaf
+    // instead of EACCES, and this would go hard red rather than skip) --
+    // `getuid` is POSIX-only, hence the optional call. Current `check` runs
+    // unprivileged, so this is a genuine skip guard, not dead code.
+    it.runIf(POSIX && process.getuid?.() !== 0)(
+      "outputPath in an unsearchable directory: PERMISSION_DENIED, not an uncoded 500 (EACCES)",
+      async () => {
+        const base = await makeDir();
+        const id = openDocxDoc(base);
+        const restricted = path.join(base, "restricted");
+        await fsp.mkdir(restricted);
+        const target = path.join(restricted, "sub");
+        // Strip the execute bit so `realpath` can't traverse into it.
+        await fsp.chmod(restricted, 0o000);
+        try {
+          await expect(convertToMarkdown(id, target)).rejects.toMatchObject({
+            code: "PERMISSION_DENIED",
+          });
+        } finally {
+          await fsp.chmod(restricted, 0o755);
+        }
+      },
+    );
+
+    // #1796 round 2: the WRITE-path half of the same funnel, and the shape
+    // that classifying `realpath` alone cannot reach. `0o555` is the ordinary
+    // read-but-not-write directory: `realpath` resolves, `fs.stat` says
+    // directory, `findAvailablePath`'s `fs.access` says ENOENT (so the path
+    // reads as free), and the failure lands on `atomicWrite`. Unclassified it
+    // was `INTERNAL_ERROR` over MCP and — worse — a 423 over `/api`, whose
+    // body `sendApiError` overrides with "File is locked by another program."
+    //
+    // The Windows twin of this spec (`icacls /deny (WD,AD)`, errno EPERM) is
+    // in `convert-output-acl-win.test.ts`. This one exists so the write-path
+    // arm is also pinned by ubuntu `check`, which is the required status
+    // check; `windows-acl-proof` is a separate job and a separate errno.
+    it.runIf(POSIX && process.getuid?.() !== 0)(
+      "outputPath readable but not writable: PERMISSION_DENIED from the WRITE, not FILE_LOCKED",
+      async () => {
+        const base = await makeDir();
+        const id = openDocxDoc(base);
+        const readOnlyDir = path.join(base, "read-only");
+        await fsp.mkdir(readOnlyDir);
+        // The form the write-path message names: `convert.ts` rebuilds its
+        // output path on top of `realpath`'s answer before writing. Asserting
+        // the RAW path instead would pass here and fail wherever the temp base
+        // is not already canonical — macOS, where `/var/folders` is a symlink
+        // (see this file's header), and Windows CI, where `realpath` expands
+        // the 8.3 alias `C:\Users\RUNNER~1\…`. That mismatch is what turned the
+        // Windows twin of this spec red on its first CI run.
+        const canonicalDir = await fsp.realpath(readOnlyDir);
+        // Traversable and readable, but nothing may be created inside it.
+        await fsp.chmod(readOnlyDir, 0o555);
+        try {
+          // Preconditions, not decoration: they are what distinguishes this
+          // from the `0o000` spec above. If any of them started failing, the
+          // assertion below would be re-proving the realpath arm instead.
+          await expect(fsp.realpath(readOnlyDir)).resolves.toBeTypeOf("string");
+          await expect(fsp.stat(readOnlyDir).then((s) => s.isDirectory())).resolves.toBe(true);
+          await expect(fsp.access(path.join(readOnlyDir, `${id}.md`))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+
+          await expect(convertToMarkdown(id, readOnlyDir)).rejects.toMatchObject({
+            code: "PERMISSION_DENIED",
+            // Names the write, so this cannot pass on a build where only the
+            // resolver is classified.
+            message: expect.stringContaining("writing to output directory"),
+          });
+          // ...and names the directory, which is the user-facing half.
+          await expect(convertToMarkdown(id, readOnlyDir)).rejects.toMatchObject({
+            message: expect.stringContaining(canonicalDir),
+          });
+        } finally {
+          await fsp.chmod(readOnlyDir, 0o755);
+        }
+      },
+    );
   });
 });

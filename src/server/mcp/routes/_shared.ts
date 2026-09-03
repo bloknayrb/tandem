@@ -148,6 +148,10 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
       return 400;
     case "READ_ONLY":
       return 403;
+    // Convert's realpath classification (#1796) — a distinct producer from
+    // the raw `EACCES` errno case below, but the same actionable meaning.
+    case "PERMISSION_DENIED":
+      return 403;
     case "ANNOTATION_RESOLVED":
     case "NOT_RENAMABLE":
     case "ALREADY_EXISTS":
@@ -155,7 +159,16 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "RELOAD_IN_PROGRESS":
     case "EXTERNAL_CONFLICT":
     case "FILE_MODIFIED":
+    // `findAvailablePath` (convert.ts) exhausted its numbered-suffix budget —
+    // a naming collision the caller can resolve (move/rename), same class of
+    // "conflicting state" as the rename/reload codes above it.
+    case "CONFLICT":
       return 409;
+    // `tandem_convertToMarkdown`'s empty-output guard (#1796) — a content
+    // condition on the source `.docx`, not a server fault, so this must not
+    // fall through to the 500 default arm (see DOCX_TOO_LARGE's note below).
+    case "EMPTY_CONVERSION":
+      return 422;
     // DOCX_TOO_LARGE (#1310) is the decompressed-size sibling of FILE_TOO_LARGE's compressed cap.
     // Without this case it falls through to 500, which makes sendApiError log
     // "[Tandem] Unhandled API error:" with a stack — reporting a policy refusal of hostile input as
@@ -170,6 +183,12 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
       return 403;
     case "BACKUP_FAILED":
       return 500;
+    // `tandem_convertToMarkdown`'s .md write succeeded and the file could not
+    // be reopened as a tab — genuinely a server fault (500), but given its
+    // own case rather than falling into the default arm, so it gets a label
+    // that isn't the bare INTERNAL catch-all (see errorCodeToLabel below).
+    case "OPEN_FAILED":
+      return 500;
     default:
       return 500;
   }
@@ -180,13 +199,25 @@ export function errorCodeToLabel(code: string): string {
   switch (code) {
     case "ENOENT":
     case "FILE_NOT_FOUND":
-    case "NO_DOCUMENT":
     case "NOT_FOUND":
     case "SOURCE_MISSING":
       return "NOT_FOUND";
+    // Split OUT of NOT_FOUND (#1796). Both are 404, but they are different
+    // conditions with different recoveries — "open a document first" versus
+    // "that path is not on disk" — and folded together `POST /api/convert` with
+    // no document open and with an `outputPath` naming a missing directory
+    // returned byte-identical bodies to a non-loopback caller. That is the same
+    // fold the MCP half of this PR unpicked. Also reached by `reload-family.ts`
+    // and `docx-apply.ts`, which get the sharper label for free.
+    case "NO_DOCUMENT":
+      return "NO_DOCUMENT";
     case "INVALID_PATH":
     case "BACKUP_SYMLINK":
       return "INVALID_PATH";
+    // Convert's permission classification (#1796): EACCES/EPERM from `realpath`,
+    // the `fs.access` probe or the write, as opposed to the raw errno case below.
+    case "PERMISSION_DENIED":
+      return "PERMISSION_DENIED";
     case "UNSUPPORTED_FORMAT":
     case "NO_SUGGESTIONS":
     case "INVALID_ARGUMENT":
@@ -213,6 +244,18 @@ export function errorCodeToLabel(code: string): string {
     case "EXTERNAL_CONFLICT":
     case "FILE_MODIFIED":
       return "EXTERNAL_CONFLICT";
+    // `findAvailablePath` (convert.ts) exhausted its numbered-suffix budget.
+    // Its own label, not folded onto EXTERNAL_CONFLICT: the two are different
+    // conditions ("the file changed under us" vs. "every candidate name was
+    // already taken") and a caller can only act on CONFLICT by renaming, not
+    // by reloading.
+    case "CONFLICT":
+      return "CONFLICT";
+    // `tandem_convertToMarkdown`'s empty-output guard (#1796) — a content
+    // condition, not "the operation failed" (see errorCodeToHttpStatus above:
+    // must not fall through to the 500 default arm's INTERNAL label either).
+    case "EMPTY_CONVERSION":
+      return "EMPTY_CONVERSION";
     // Deliberately the SAME label as the compressed-size cap rather than a new one: both are
     // "this file is too big to open", the distinction between them is in `message`, and a novel
     // label would be an unrecognized string to every existing client while changing nothing a
@@ -227,6 +270,19 @@ export function errorCodeToLabel(code: string): string {
       return "PERMISSION_DENIED";
     case "BACKUP_FAILED":
       return "INTERNAL";
+    // `tandem_convertToMarkdown`'s .md write succeeded and reopening it failed.
+    // Its own label so the RESPONSE BODY distinguishes "we wrote your file but
+    // couldn't open it" from an undifferentiated internal failure — for a
+    // non-loopback caller that is the whole difference between
+    // `GENERIC_ERROR_MESSAGE`'s "The file was written but could not be
+    // reopened." and "The operation failed."
+    //
+    // It changes nothing in the LOG: `sendApiError` logs `err` for a 500 and
+    // never the label, so the stderr line is byte-identical to an unmapped
+    // code's. Making it differ there would need a label-aware log branch, which
+    // is deliberately not part of this change.
+    case "OPEN_FAILED":
+      return "OPEN_FAILED";
     default:
       return "INTERNAL";
   }
@@ -271,13 +327,14 @@ export function sendApiError(res: Response, err: unknown): void {
  *
  * The distinction is load-bearing and was got wrong once: the original entry was
  * keyed `FILE_NOT_FOUND`, which `errorCodeToLabel` never emits (it folds ENOENT
- * / FILE_NOT_FOUND / NO_DOCUMENT / NOT_FOUND into `NOT_FOUND`), so the most
+ * / FILE_NOT_FOUND / NOT_FOUND / SOURCE_MISSING into `NOT_FOUND`), so the most
  * common 404 fell through to the catch-all. Every label the mapper can return
  * needs an entry here or it silently degrades to "The operation failed.";
  * `path-scrub.test.ts` asserts that exhaustively.
  */
 export const GENERIC_ERROR_MESSAGE: Record<string, string> = {
   NOT_FOUND: "The requested file was not found.",
+  NO_DOCUMENT: "No document is open.",
   INVALID_PATH: "The path is not valid.",
   BAD_REQUEST: "The request was not valid.",
   READ_ONLY: "The document is read-only.",
@@ -287,12 +344,16 @@ export const GENERIC_ERROR_MESSAGE: Record<string, string> = {
   FILE_TOO_LARGE: "The file is too large.",
   FILE_LOCKED: "File is locked by another program.",
   PERMISSION_DENIED: "Permission denied.",
+  CONFLICT: "Could not find an available filename.",
+  EMPTY_CONVERSION: "Conversion produced no extractable text.",
+  OPEN_FAILED: "The file was written but could not be reopened.",
   INTERNAL: "The operation failed.",
 };
 
 /** Labels {@link errorCodeToLabel} can return. Exported for the exhaustiveness test. */
 export const ERROR_LABELS = [
   "NOT_FOUND",
+  "NO_DOCUMENT",
   "INVALID_PATH",
   "BAD_REQUEST",
   "ANNOTATION_RESOLVED",
@@ -302,5 +363,8 @@ export const ERROR_LABELS = [
   "FILE_TOO_LARGE",
   "FILE_LOCKED",
   "PERMISSION_DENIED",
+  "CONFLICT",
+  "EMPTY_CONVERSION",
+  "OPEN_FAILED",
   "INTERNAL",
 ] as const;
