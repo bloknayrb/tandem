@@ -138,10 +138,10 @@ use tauri_plugin_updater::UpdaterExt;
 use tauri_plugin_window_state::StateFlags;
 
 use crate::sidecar::{
-    build_http_client, kill_sidecar, port_holder_for_dialog, start_sidecar,
+    build_http_client, port_holder_for_dialog, shutdown_sidecar_on_exit, start_sidecar,
     stop_sidecar_gracefully, wait_for_port_release, PortHolder, GRACEFUL_SHUTDOWN_DEADLINE_SECS,
     HTTP_CLIENT_TIMEOUT, MCP_PORT, POST_KILL_PORT_RELEASE_SECS, RESTART_IN_PROGRESS,
-    SidecarState, WS_PORT,
+    SidecarState, SIDECAR_SHUTTING_DOWN, WS_PORT,
 };
 #[cfg(target_os = "windows")]
 use crate::sidecar::{wait_for_sidecar_unlock, SIDECAR_UNLOCK_DEADLINE_SECS};
@@ -1610,7 +1610,11 @@ pub fn run() {
         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))
         .run(|_app, _event| {
             match _event {
-                tauri::RunEvent::Exit => kill_sidecar(_app),
+                // Graceful stop, then the hard kill as fallback (#1756). Every
+                // quit gesture reaches Exit — tray Quit, macOS ⌘Q/Dock Quit
+                // (which never raise ExitRequested), the Linux no-tray window
+                // close, and the updater's restart.
+                tauri::RunEvent::Exit => shutdown_sidecar_on_exit(_app),
                 // macOS: file paths from "Open With" arrive here, not on argv.
                 // The single-instance callback's args are empty for these events.
                 // RunEvent::Opened does not exist on Windows/Linux — gate with
@@ -2358,6 +2362,15 @@ async fn perform_install(
     // Graceful first (#1088): POST /api/shutdown flushes dirty docs + saves
     // the session before the app restarts into the new version; hard kill is
     // the fallback on POST failure or timeout.
+    //
+    // Hold `SIDECAR_SHUTTING_DOWN` across the stop so the three spawn producers
+    // (Settings -> Restart server, start_sidecar's retry loop, the Retry Server
+    // Start dialog) decline instead of racing a fresh child into the slot we are
+    // about to overwrite on disk. Cleared on the failure arm below, where the app
+    // keeps running; on the success arm the process exits — on Windows inside
+    // `download_and_install`'s own `std::process::exit(0)`, which never reaches
+    // RunEvent::Exit, so this pre-install stop is the only flush there. #1756.
+    SIDECAR_SHUTTING_DOWN.store(true, Ordering::Release);
     let client = app.state::<reqwest::Client>().inner().clone();
     stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS).await;
 
@@ -2432,6 +2445,16 @@ async fn perform_install(
         }
         Err(e) => {
             log::error!("Update install failed: {e}");
+            // The app keeps running, so re-permit spawns — but only the flag we
+            // set. `compare_exchange` rather than a bare store: if an exit began
+            // while the install ran, `EXITING` is already latched and
+            // `spawn_allowed()` stays false regardless. #1756.
+            let _ = SIDECAR_SHUTTING_DOWN.compare_exchange(
+                true,
+                false,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
             // We observed the failure in-process and are about to show a native
             // dialog about it, so a surviving marker would nag next boot about
             // something the user was just told.

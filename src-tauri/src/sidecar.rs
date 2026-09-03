@@ -141,6 +141,50 @@ const MAX_RESTARTS: u32 = 3;
 pub(crate) const WS_PORT: u16 = 3478;
 pub(crate) const MCP_PORT: u16 = 3479;
 
+/// Total wall-clock budget for the graceful stop attempted from
+/// `RunEvent::Exit` (#1756), in seconds.
+///
+/// **The arithmetic is not `deadline + 1`.** `wait_for_port_release` checks its
+/// own deadline only at the top of the loop, and the `check_health` inside the
+/// last iteration can itself block for the full `HTTP_CLIENT_TIMEOUT`; the POST
+/// to `/api/shutdown` that precedes it can also take the full client timeout
+/// (that is exactly what happens when `TANDEM_MCP_PORT` is non-default and the
+/// hardcoded `SHUTDOWN_URL` misses — #1825). So the true worst case of
+/// `stop_sidecar_gracefully` is `deadline + 2 x HTTP_CLIENT_TIMEOUT`, and the
+/// outer timeout has to sit above that or it becomes the binding constraint and
+/// truncates a flush that was still making progress. The `+ 1` is slack.
+///
+/// Pinned to the literal 17 by `shutdown_guard_tests` — a bare restatement of
+/// this expression would be a tautology.
+pub(crate) const EXIT_GRACEFUL_BUDGET_SECS: u64 =
+    GRACEFUL_SHUTDOWN_DEADLINE_SECS + 2 * HTTP_CLIENT_TIMEOUT.as_secs() + 1;
+pub(crate) const EXIT_GRACEFUL_BUDGET: Duration = Duration::from_secs(EXIT_GRACEFUL_BUDGET_SECS);
+
+/// Set once, on the way out, by `shutdown_sidecar_on_exit`. **One-way: nothing
+/// ever clears it.** Read by `spawn_allowed`, so a spawn producer that wakes up
+/// during the exit budget declines instead of orphaning a child.
+///
+/// Deliberately separate from `SIDECAR_SHUTTING_DOWN`: the updater clears that
+/// one on its failure arm (the app keeps running), and an update that fails
+/// *during* an exit must not re-permit spawns.
+static EXITING: AtomicBool = AtomicBool::new(false);
+
+/// Set by `perform_install` around its pre-install graceful stop and cleared on
+/// the failure arm, where the app keeps running. Unlike `EXITING` this one has a
+/// bounded lifetime.
+pub(crate) static SIDECAR_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// May a sidecar child be spawned right now?
+///
+/// Three producers can reach a spawn while the app is stopping the sidecar:
+/// `restart_sidecar` (Settings -> Network -> Restart server), `start_sidecar`'s
+/// own retry loop, and the "Retry Server Start" dialog. A child that lands after
+/// the exit-path kill is orphaned on macOS/Linux (on Windows the job object at
+/// the spawn site still reaps it).
+pub(crate) fn spawn_allowed() -> bool {
+    !EXITING.load(Ordering::Acquire) && !SIDECAR_SHUTTING_DOWN.load(Ordering::Acquire)
+}
+
 /// Tracks the sidecar child process so we can kill it on shutdown.
 pub(crate) struct SidecarState(pub(crate) Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 
@@ -179,6 +223,15 @@ pub(crate) fn restart_sidecar(app: tauri::AppHandle) {
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        // The shutdown check belongs HERE, not in the command body above: the
+        // command returns immediately and the WebView's click can land long
+        // before this task is polled, so a check up there is stale by the time
+        // it matters. #1756.
+        if !spawn_allowed() {
+            log::warn!("restart_sidecar ignored — the sidecar is shutting down");
+            RESTART_IN_PROGRESS.store(false, Ordering::Release);
+            return;
+        }
         // Graceful stop before the hard kill (#1088): POST /api/shutdown so
         // the Node shutdown sequence flushes up to ~60s of unsaved edits and
         // persists the session, then wait up to 6s for exit. A bare kill()
@@ -275,6 +328,21 @@ pub(crate) async fn stop_sidecar_gracefully(
         Ok(guard) => guard.is_some(),
         Err(poisoned) => poisoned.into_inner().is_some(),
     };
+    // Log the gate both ways with its target: after #1756 this decides whether a
+    // Quit flushes the user's edits or silently skips the flush, and
+    // `owns_child` is now pid-keyed (see `on_child_terminated_in`) so a crashed
+    // sidecar reads as "not owned" rather than as a live handle.
+    if owns_child {
+        log::info!("Graceful stop: we own the sidecar child — POSTing {SHUTDOWN_URL}");
+    } else {
+        log::info!("Graceful stop: no owned sidecar child — skipping POST to {SHUTDOWN_URL}");
+    }
+    // NB: `SHUTDOWN_URL` (and `HEALTH_URL`, which `wait_for_port_release` polls)
+    // hardcode :3479. With a non-default `TANDEM_MCP_PORT` the POST misses,
+    // costs its own 5s client timeout, `posted` stays false, the port wait is
+    // skipped and the hard kill follows — bounded, but not immediate. #1825.
+    // `wait_for_port_release` also polls `/health` with no identity check
+    // (#1812). Both are out of scope here.
     if owns_child {
         let posted = match client.post(SHUTDOWN_URL).send().await {
             Ok(resp) if resp.status().is_success() => true,
@@ -300,11 +368,17 @@ pub(crate) async fn stop_sidecar_gracefully(
             }
         }
     }
-    kill_sidecar(handle);
+    kill_sidecar_inner(handle);
 }
 
 /// Kill the sidecar process if one is running.
-pub(crate) fn kill_sidecar(handle: &tauri::AppHandle) {
+///
+/// Private on purpose. The two callers inside this module (`stop_sidecar_gracefully`
+/// and `start_sidecar`'s health-failure arm) have already done their own graceful
+/// work or are killing a child that never became healthy. Everything on the
+/// application's exit path must go through `kill_sidecar_on_exit`, which cannot be
+/// called without a `graceful::GracefulAttempted` token. See #1756.
+fn kill_sidecar_inner(handle: &tauri::AppHandle) {
     let state: tauri::State<'_, SidecarState> = handle.state();
     let mut guard = match state.0.lock() {
         Ok(g) => g,
@@ -321,6 +395,230 @@ pub(crate) fn kill_sidecar(handle: &tauri::AppHandle) {
     }
 }
 
+/// The hard kill, as the exit path's fallback. Takes a token that only
+/// `graceful::attempt` can mint, so an edit that drops the graceful stop from
+/// `shutdown_sidecar_on_exit` fails to compile rather than silently reinstating
+/// #1756.
+///
+/// **State the limit plainly.** The token proves `attempt` was *called*. It does
+/// not prove the call was meaningful: `attempt` invoked with a zero budget still
+/// hands back a token, and nothing in `cargo test` can tell a real flush from a
+/// neutered one. The detector for that is the smoke checklist's
+/// `Sidecar exited gracefully after /api/shutdown` grep, and it exists only if
+/// the smoke run happens. `#[must_use]` would be inert here — the token is
+/// consumed as an argument — so it is deliberately absent.
+fn kill_sidecar_on_exit(handle: &tauri::AppHandle, _proof: graceful::GracefulAttempted) {
+    kill_sidecar_inner(handle);
+}
+
+/// Decide whether a `Terminated` event for `terminated_pid` should clear a
+/// `SidecarState` slot currently holding `slot_pid`.
+///
+/// Extracted so it is testable: `CommandChild` has no public constructor, so a
+/// populated slot cannot be built in a unit test.
+///
+/// **A bare `take()` here would be a bug with teeth.** Drain tasks are per spawn
+/// attempt and are never cancelled, and `Terminated` is delivered over a
+/// `channel(1)` behind `child.wait()` plus a write lock
+/// (`tauri-plugin-shell` `process/mod.rs`), so child A's `Terminated` can land
+/// *after* child B has been stored. Clearing the slot then would orphan B and
+/// make the next Quit skip the flush — #1756 reintroduced by its own fix.
+fn terminated_clears_slot(slot_pid: Option<u32>, terminated_pid: u32) -> bool {
+    slot_pid == Some(terminated_pid)
+}
+
+/// Clear the owned-child slot when the child we stored has died.
+///
+/// Nothing else does this: before #1756 the drain task's `Terminated` arm set a
+/// local flag only, so after a sidecar crash the slot kept a dead handle and
+/// `owns_child` stayed true. That mattered once Quit started POSTing:
+/// `SHUTDOWN_URL` is hardcoded :3479, so we would have shut down whatever now
+/// listens there (a `tandem start`, a second app-data instance).
+///
+/// Deliberately does NOT kill anything — the child is already gone, and a kill
+/// attached to this aliasing window is the bug above with a weapon.
+fn on_child_terminated_in(state: &SidecarState, pid: u32) {
+    let mut guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let slot_pid = guard
+        .as_ref()
+        .map(tauri_plugin_shell::process::CommandChild::pid);
+    if terminated_clears_slot(slot_pid, pid) {
+        guard.take();
+        log::info!("Sidecar pid {pid} terminated — cleared the owned-child slot");
+    } else {
+        log::info!(
+            "Sidecar pid {pid} terminated — slot holds {slot_pid:?}, leaving it (newer child)"
+        );
+    }
+}
+
+/// `AppHandle` wrapper for `on_child_terminated_in`. The drain task is
+/// `'static`, so it cannot hold a `State<'_, SidecarState>`; it holds a cloned
+/// handle and resolves the state here.
+fn on_child_terminated(handle: &tauri::AppHandle, pid: u32) {
+    match handle.try_state::<SidecarState>() {
+        Some(state) => on_child_terminated_in(state.inner(), pid),
+        None => log::warn!("Sidecar pid {pid} terminated — SidecarState unmanaged, nothing to clear"),
+    }
+}
+
+/// The graceful stop attempted from `RunEvent::Exit`, and the token that proves
+/// it was attempted.
+///
+/// A private submodule, not a bare struct in `sidecar.rs`: a witness defined in
+/// the parent module is constructible by the parent, which is exactly the code
+/// it is supposed to constrain. Privacy runs downward, so `GracefulAttempted`'s
+/// private field is unreachable from `shutdown_sidecar_on_exit`.
+mod graceful {
+    use super::{
+        build_http_client, stop_sidecar_gracefully, SidecarState, EXIT_GRACEFUL_BUDGET_SECS,
+        HTTP_CLIENT_TIMEOUT,
+    };
+    use std::panic::AssertUnwindSafe;
+    use std::time::Duration;
+    use tauri::Manager;
+
+    /// Unconstructible outside this module: the field is private and there is no
+    /// public constructor.
+    pub(super) struct GracefulAttempted(());
+
+    /// What the attempt actually did — logged verbatim so "0 ms, timed_out=false,
+    /// owned_child=false" is distinguishable from a real flush. A smoke check
+    /// that greps two static strings is defeated by any edit that keeps the
+    /// strings (#1746).
+    pub(super) struct Outcome {
+        pub(super) attempted: bool,
+        pub(super) timed_out: bool,
+        pub(super) owned_child: bool,
+        pub(super) panicked: bool,
+    }
+
+    /// Run the bounded graceful stop on the calling (main) thread.
+    ///
+    /// `block_on` is safe here: `tauri::async_runtime` is a never-dropped
+    /// multi-thread tokio runtime and `main` is a plain `fn main` with no
+    /// runtime `enter()` guard, so there is no "cannot block the current thread
+    /// from within a runtime" panic and nothing in the awaited path touches the
+    /// event loop (every await is tokio IO/time; no lock is held across one;
+    /// `CommandChild::kill` is a direct syscall).
+    ///
+    /// The `catch_unwind` is not defensive tidiness. On macOS this runs inside
+    /// tao's `applicationWillTerminate:`, i.e. inside an ObjC frame, where an
+    /// unwind is abort/UB rather than "skips the rest". `stop_sidecar_gracefully`
+    /// calls `handle.state::<SidecarState>()`, which panics when unmanaged, so
+    /// `try_state` on the HTTP client alone does not cover it.
+    pub(super) fn attempt(
+        handle: &tauri::AppHandle,
+        budget: Duration,
+        deadline_secs: u64,
+    ) -> (Outcome, GracefulAttempted) {
+        let mut outcome = Outcome {
+            attempted: false,
+            timed_out: false,
+            owned_child: false,
+            panicked: false,
+        };
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            // Hide every window BEFORE blocking. `cleanup_before_exit` — which
+            // is what hides windows on Windows — runs AFTER this callback
+            // returns (`tauri` `app.rs`, the `RuntimeRunEvent::Exit` arm), so
+            // without this a tray Quit leaves a live, unresponsive window on
+            // screen for the whole budget and Windows paints "Not Responding"
+            // past HungAppTimeout. `hide()` from the main thread is handled
+            // inline, so it still works with the loop being destroyed.
+            for window in handle.webview_windows().values() {
+                if let Err(e) = window.hide() {
+                    log::debug!("Exit: could not hide window before shutdown: {e}");
+                }
+            }
+
+            let owned_child = handle
+                .try_state::<SidecarState>()
+                .map(|state| match state.0.lock() {
+                    Ok(guard) => guard.is_some(),
+                    Err(poisoned) => poisoned.into_inner().is_some(),
+                })
+                .unwrap_or(false);
+
+            // Reuse the managed client so the exit path inherits the same 5s
+            // timeout the budget arithmetic assumes. Never `unwrap()` the
+            // fallback build: a failure there must skip to the kill, not abort
+            // inside an ObjC frame.
+            let client = match handle.try_state::<reqwest::Client>() {
+                Some(client) => client.inner().clone(),
+                None => match build_http_client(HTTP_CLIENT_TIMEOUT) {
+                    Ok(client) => client,
+                    Err(e) => {
+                        log::warn!("Exit: no HTTP client ({e}) — skipping the graceful stop");
+                        return (false, false, owned_child);
+                    }
+                },
+            };
+
+            log::info!("Exit: stopping sidecar gracefully (budget {EXIT_GRACEFUL_BUDGET_SECS}s)");
+            let timed_out = tauri::async_runtime::block_on(tokio::time::timeout(
+                budget,
+                stop_sidecar_gracefully(handle, &client, deadline_secs),
+            ))
+            .is_err();
+            if timed_out {
+                log::warn!(
+                    "Exit: graceful sidecar stop exceeded its {EXIT_GRACEFUL_BUDGET_SECS}s budget — hard kill follows"
+                );
+            }
+            (true, timed_out, owned_child)
+        }));
+        match result {
+            Ok((attempted, timed_out, owned_child)) => {
+                outcome.attempted = attempted;
+                outcome.timed_out = timed_out;
+                outcome.owned_child = owned_child;
+            }
+            Err(_) => {
+                outcome.panicked = true;
+                log::error!("Exit: graceful sidecar stop panicked — falling back to the hard kill");
+            }
+        }
+        (outcome, GracefulAttempted(()))
+    }
+}
+
+/// `RunEvent::Exit` handler (#1756).
+///
+/// `RunEvent::Exit` rather than `ExitRequested` because it is the one event
+/// every quit gesture reaches: macOS ⌘Q / Dock Quit go through
+/// `applicationWillTerminate:` -> `LoopDestroyed` and never raise
+/// `ExitRequested`, the Linux no-tray window close raises `ExitRequested`
+/// twice, and `prevent_exit()` is a no-op for a restart-coded exit.
+///
+/// Before this, Quit was a bare `kill_sidecar`, discarding up to ~60s of
+/// unsaved edits, the tab set, and leaving the store lock behind.
+pub(crate) fn shutdown_sidecar_on_exit(app: &tauri::AppHandle) {
+    // One-way, and set before the kill that takes the SidecarState lock. That
+    // ordering is what closes the respawn race: either the store site sees the
+    // flag under the lock and kills its fresh child, or the kill sees the stored
+    // child. The residual is a child between `cmd.spawn()` and the lock at the
+    // instant the process exits — unavoidable, and covered by the job object on
+    // Windows.
+    EXITING.store(true, Ordering::Release);
+    let started = std::time::Instant::now();
+    let (outcome, proof) = graceful::attempt(app, EXIT_GRACEFUL_BUDGET, GRACEFUL_SHUTDOWN_DEADLINE_SECS);
+    // Unconditional, and outside the `catch_unwind` above, so a panicked
+    // graceful stop still ends with the child dead.
+    kill_sidecar_on_exit(app, proof);
+    log::info!(
+        "Exit: sidecar shutdown complete (elapsed {}ms, attempted={}, timed_out={}, owned_child={}, panicked={})",
+        started.elapsed().as_millis(),
+        outcome.attempted,
+        outcome.timed_out,
+        outcome.owned_child,
+        outcome.panicked
+    );
+}
+
 pub(crate) fn build_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(timeout)
@@ -330,6 +628,13 @@ pub(crate) fn build_http_client(timeout: Duration) -> Result<reqwest::Client, St
 
 /// Spawn the Node.js sidecar and wait for the health endpoint.
 /// Retries up to MAX_RESTARTS times with exponential backoff on crash.
+///
+/// **Returns `Ok(())` without a sidecar when the app is shutting down** (#1756).
+/// That is not sloppiness: the terminal `Err` after the retry loop reaches
+/// `restart_sidecar`'s failure arm (`report_pending_opens_with(.., true, ..)`
+/// plus an emitted `sidecar-restart-failed`) and the "Retry Server Start"
+/// dialog, i.e. a user-facing rejection raised while the app is quitting.
+/// Declining to spawn is a success, and the log line is the trace.
 pub(crate) async fn start_sidecar(
     handle: &tauri::AppHandle,
     client: &reqwest::Client,
@@ -410,6 +715,14 @@ pub(crate) async fn start_sidecar(
     }
 
     for attempt in 0..=MAX_RESTARTS {
+        // Cheap early-out. This is the courtesy check, NOT the one that closes
+        // the race — that one is under the SidecarState lock at the store site
+        // below, because the flag can be set at any point between here and
+        // there. #1756.
+        if !spawn_allowed() {
+            log::info!("start_sidecar: shutdown in progress — not spawning");
+            return Ok(());
+        }
         if attempt > 0 {
             let backoff = Duration::from_secs(2u64.pow(attempt - 1));
             log::warn!(
@@ -489,6 +802,13 @@ pub(crate) async fn start_sidecar(
         let sidecar_dead = Arc::new(AtomicBool::new(false));
         let dead_flag = sidecar_dead.clone();
 
+        // Captured BEFORE `child` is moved into `SidecarState` below, and keyed
+        // per spawn attempt: the drain task uses it to clear the slot only when
+        // the child that died is the child the slot holds (#1756).
+        let child_pid = child.pid();
+        // The task is `'static`, so it cannot borrow a `State<'_, SidecarState>`.
+        let terminated_handle = handle.clone();
+
         // Forward sidecar output to Tauri log system for diagnostics
         tauri::async_runtime::spawn(async move {
             use tauri_plugin_shell::process::CommandEvent;
@@ -507,6 +827,10 @@ pub(crate) async fn start_sidecar(
                     CommandEvent::Terminated(status) => {
                         log::warn!("[sidecar] terminated: {status:?}");
                         dead_flag.store(true, Ordering::Release);
+                        // Clear the owned-child slot so a crashed sidecar stops
+                        // reading as "we own :3479". Pid-keyed, and no kill —
+                        // see `on_child_terminated_in`. #1756.
+                        on_child_terminated(&terminated_handle, child_pid);
                         break;
                     }
                     other => {
@@ -519,6 +843,21 @@ pub(crate) async fn start_sidecar(
         {
             let state = handle.state::<SidecarState>();
             let mut guard = state.0.lock().map_err(|e| format!("Lock poisoned: {e}"))?;
+            // The load-bearing half of the respawn guard (#1756), re-read under
+            // the very lock the exit path's kill takes. `EXITING` is set before
+            // that kill, so either we see the flag here or the kill sees the
+            // child we just stored — the window between them cannot swallow a
+            // spawn. `child.kill()` directly rather than `kill_sidecar_inner`,
+            // which would re-take this lock; the child is not in the slot yet.
+            if !spawn_allowed() {
+                log::warn!(
+                    "start_sidecar: shutdown began while spawning — killing the fresh child (pid {child_pid})"
+                );
+                if let Err(e) = child.kill() {
+                    log::error!("Failed to kill sidecar spawned during shutdown: {e}");
+                }
+                return Ok(());
+            }
             *guard = Some(child);
         }
 
@@ -541,7 +880,7 @@ pub(crate) async fn start_sidecar(
             }
             Err(e) => {
                 log::error!("Health check failed: {e}");
-                kill_sidecar(handle);
+                kill_sidecar_inner(handle);
                 if !wait_for_port_release(client, 1).await {
                     log::warn!("Port still held 1s after kill — backoff will provide additional buffer");
                 }
@@ -1149,5 +1488,95 @@ Active Connections
         assert_eq!(parse_tasklist_image_name("\"\",\"4\""), None);
         // Unterminated quote — never a real row.
         assert_eq!(parse_tasklist_image_name("\"node.exe"), None);
+    }
+}
+
+/// Guards and arithmetic for the graceful-quit path (#1756).
+///
+/// A separate module from `port_holder_tests`, which is the netstat parser's.
+///
+/// **What these tests cannot see, stated plainly.** The `RunEvent::Exit`
+/// handler cannot be driven without `tauri = { features = ["test"] }` and making
+/// `shutdown_sidecar_on_exit` / `graceful::attempt` / `kill_sidecar_on_exit`
+/// generic over `R: Runtime`; that is deliberately not done here. The
+/// `GracefulAttempted` witness turns "skipped the graceful stop entirely" into a
+/// compile error, but it does NOT catch a neutered attempt (a zero budget, a
+/// `timeout(1ms)`), and no unit test can. The sole detector of a real flush is
+/// the smoke checklist's `Sidecar exited gracefully after /api/shutdown` grep.
+#[cfg(test)]
+mod shutdown_guard_tests {
+    use super::*;
+
+    /// `EXITING` and `SIDECAR_SHUTTING_DOWN` are process-wide statics; serialize
+    /// the tests that write them.
+    static FLAG_LOCK: Mutex<()> = Mutex::new(());
+
+    fn set_flags(exiting: bool, shutting_down: bool) {
+        EXITING.store(exiting, Ordering::Release);
+        SIDECAR_SHUTTING_DOWN.store(shutting_down, Ordering::Release);
+    }
+
+    #[test]
+    fn spawn_allowed_over_all_four_flag_combinations() {
+        let _guard = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        set_flags(false, false);
+        assert!(spawn_allowed(), "neither flag set — spawning is permitted");
+        set_flags(true, false);
+        assert!(!spawn_allowed(), "EXITING alone must block a spawn");
+        set_flags(false, true);
+        assert!(
+            !spawn_allowed(),
+            "SIDECAR_SHUTTING_DOWN alone must block a spawn"
+        );
+        set_flags(true, true);
+        assert!(!spawn_allowed(), "both flags set must block a spawn");
+        // An update that fails DURING an exit clears only its own flag; the
+        // one-way EXITING must still hold the door shut.
+        SIDECAR_SHUTTING_DOWN.store(false, Ordering::Release);
+        assert!(
+            !spawn_allowed(),
+            "clearing the updater's flag must not re-permit spawns during an exit"
+        );
+        set_flags(false, false);
+    }
+
+    #[test]
+    fn terminated_clears_only_the_slot_holding_that_pid() {
+        assert!(
+            terminated_clears_slot(Some(4242), 4242),
+            "the slot holds the child that died — clear it"
+        );
+        assert!(
+            !terminated_clears_slot(Some(4243), 4242),
+            "a newer child is stored — clearing it would orphan the live sidecar"
+        );
+        assert!(
+            !terminated_clears_slot(None, 4242),
+            "an empty slot has nothing to clear"
+        );
+    }
+
+    #[test]
+    fn on_child_terminated_in_leaves_an_empty_slot_empty() {
+        // `CommandChild` has no public constructor, so a POPULATED slot cannot
+        // be built here — `terminated_clears_slot` above is where both halves of
+        // the decision are pinned. This covers the wrapper's lock handling.
+        let state = SidecarState(Mutex::new(None));
+        on_child_terminated_in(&state, 4242);
+        assert!(state.0.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn exit_budget_covers_the_deadline_plus_two_client_timeouts() {
+        assert_eq!(
+            EXIT_GRACEFUL_BUDGET_SECS,
+            GRACEFUL_SHUTDOWN_DEADLINE_SECS + 2 * HTTP_CLIENT_TIMEOUT.as_secs() + 1
+        );
+        // The literal is the load-bearing half: restating the definition alone
+        // would be a tautology that survives any change to the inputs.
+        assert_eq!(GRACEFUL_SHUTDOWN_DEADLINE_SECS, 6);
+        assert_eq!(HTTP_CLIENT_TIMEOUT.as_secs(), 5);
+        assert_eq!(EXIT_GRACEFUL_BUDGET_SECS, 17);
+        assert_eq!(EXIT_GRACEFUL_BUDGET, Duration::from_secs(17));
     }
 }

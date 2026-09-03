@@ -840,9 +840,31 @@ The window hides (rather than closes) when the user clicks the OS close button �
 | Setup AI Assistant | Re-run MCP config (with result dialog) |
 | Check for Updates | Manual update check |
 | About Tandem | Version dialog |
-| Quit | Kill sidecar, then exit |
+| Quit | Graceful sidecar stop, then hard kill (see Shutdown below) |
 
 Left-clicking the tray icon shows the main window. On Linux, `libappindicator3-dev` is required; if unavailable the app continues without a tray icon (not a hard failure).
+
+### Shutdown
+
+On `RunEvent::Exit` the shell hides every window, then runs a bounded graceful
+sidecar stop (POST `/api/shutdown`, wait for the port to release, ≈17 s ceiling),
+then the hard kill as the fallback. Windows are hidden first because Tauri's own
+`cleanup_before_exit` — which hides them on Windows — runs *after* this callback,
+so otherwise a live unresponsive window sits on screen for the whole budget.
+
+`RunEvent::Exit` rather than `ExitRequested` because it is the one event every
+quit gesture reaches: tray Quit, macOS ⌘Q / Dock Quit (which go through
+`applicationWillTerminate:` and never raise `ExitRequested`), and the window
+close on a Linux desktop with no tray.
+
+What it does **not** cover:
+
+- **macOS logout / restart / shutdown.** The system's own quit timeout can
+  force-terminate the app before the flush finishes.
+- **Windows logoff / shutdown.** `WM_ENDSESSION` is handled inside the wndproc,
+  so the flush is best-effort and likely truncated near `HungAppTimeout` (≈5 s).
+- **Forced termination** — Task Manager "End task", `kill -9`, power loss. On
+  Windows the job object (#987) still reaps the sidecar; there is no flush.
 
 ### Auto-Updater
 
