@@ -34,9 +34,9 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // bump ships to nobody. Pinning the current number forces a deliberate look here whenever
   // the version moves — including for an unrelated edit, which is the cost of the guard, not
   // a bug in it. When you land here: confirm the assertions below still describe the shipped
-  // wake instructions, then move the number. Last moved to 12 for the absent-tools rule
-  // (#1463), which does not touch this section.
-  expect(skill).toMatch(/^version:\s*12$/m);
+  // wake instructions, then move the number. Last moved to 13 for the widened INVALID_RANGE
+  // recovery text (#1752), which does not touch this section.
+  expect(skill).toMatch(/^version:\s*13$/m);
   expect(wake).toMatch(/hand-started session/i);
   expect(wake).toMatch(/first successful read-mode `tandem_status`/i);
   expect(wake).toMatch(/read `wakeUrl`/i);

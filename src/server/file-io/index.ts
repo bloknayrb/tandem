@@ -266,7 +266,19 @@ const docxAdapter: FormatAdapter = {
       const annotMap = doc.getMap(Y_MAP_ANNOTATIONS);
       const before = new Set(annotMap.keys());
       try {
-        injectCommentsAsAnnotations(doc, prepared.comments, ctx?.fileName);
+        // The `onClamp` callback fires at most once, and only when a comment's
+        // range had to be clamped to the document end. One aggregate LoadIssue,
+        // not one per comment: the per-comment detail is already on stderr, and
+        // what the user needs to know is "some of your Word comments did not
+        // land where Word put them", once (#1752).
+        injectCommentsAsAnnotations(
+          doc,
+          prepared.comments,
+          ctx?.fileName,
+          ({ count, maxClamp }) => {
+            out.push({ kind: "comments-clamped", count, maxClamp });
+          },
+        );
       } catch (err) {
         for (const k of annotMap.keys()) {
           if (!before.has(k)) annotMap.delete(k);
