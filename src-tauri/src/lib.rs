@@ -2230,6 +2230,30 @@ fn show_up_to_date_dialog(app: &tauri::AppHandle) {
     builder.show(|_| {});
 }
 
+/// Tell the user their install click landed on an install that is already
+/// running.
+///
+/// A dialog rather than a bare log or an `Err`, for the reason
+/// `RestartGate::try_acquire`'s decline states: the user's explicit click — the
+/// banner CTA, or OK on the tray's "install this update" prompt — would
+/// otherwise produce nothing at all on screen. Returning `Err` from
+/// `install_update` is not a substitute: `useUpdaterBanner.svelte.ts`'s `catch`
+/// only `console.warn`s, so the WebView half has no user-visible surface either.
+fn show_update_in_progress_dialog(app: &tauri::AppHandle) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    let mut builder = app
+        .dialog()
+        .message(
+            "An update is already being installed.\n\n\
+             Wait for it to finish — Tandem restarts on its own when it is done.",
+        )
+        .title("Update In Progress")
+        .kind(MessageDialogKind::Info);
+    builder = attach_main_window_or_warn(app, builder, "show_update_in_progress_dialog");
+    builder.show(|_| {});
+}
+
 /// Show an error dialog for failed update checks (manual check feedback only).
 fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
@@ -2441,7 +2465,13 @@ async fn perform_install(
     // latch out from under the second — which is still downloading over the
     // binary — and re-permit a spawn into that slot. See `ShuttingDownGuard`.
     let Some(_shutting_down) = SidecarShuttingDownGuard::try_acquire() else {
+        // Do not just log. The modal is already dismissed (tray path) or the
+        // banner CTA is about to re-arm (`INSTALL_WATCHDOG_MS` = 30s, and a
+        // download longer than 30s is ordinary), so a bare return means the
+        // user's explicit click produced nothing at all on screen — the same
+        // decision already made for `RestartGate::try_acquire` above.
         log::warn!("Update install to v{version} ignored — an install is already in flight");
+        show_update_in_progress_dialog(app);
         return;
     };
     let client = app.state::<reqwest::Client>().inner().clone();
@@ -2457,12 +2487,26 @@ async fn perform_install(
     // never fires and `shutdown_sidecar_on_exit` never runs. A dropped verdict
     // here is an update that proceeds having discarded unsaved edits while every
     // dialog says it worked — which is why `StopReport` is `#[must_use]`.
-    if let Some(msg) = stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS)
+    //
+    // BOTH outcomes are logged at `warn`, and the success half is not
+    // decoration. `smoke-lines.md` row 3 asks the tester to confirm "`tandem.log`
+    // shows a graceful sidecar shutdown" for an update run with unsaved edits —
+    // and on Windows there is no verdict line to read, because
+    // `RunEvent::Exit` never fires. Every other line on this path is `info!`,
+    // below the release floor, so without this the row's positive half could not
+    // be satisfied at all and a silent log was indistinguishable from a stop
+    // that never ran.
+    match stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS)
         .await
         .unflushed_warning("Pre-install")
     {
-        log::warn!("{msg}");
-        pre_install_warnings.push(msg);
+        Some(msg) => {
+            log::warn!("{msg}");
+            pre_install_warnings.push(msg);
+        }
+        None => log::warn!(
+            "Pre-install: graceful sidecar shutdown complete — unsaved edits were flushed before the update"
+        ),
     }
 
     // Wait for port release and (on Windows) file-lock release concurrently.

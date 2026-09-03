@@ -855,25 +855,34 @@ so otherwise a live unresponsive window sits on screen for the whole budget.
 One line records the result, at `warn` so it survives the release log floor:
 `Exit: sidecar shutdown complete (elapsed=…ms, verdict=…, attempted=…,
 timed_out=…, owned_child=…, already_in_progress=…, panicked=…)`. `verdict` is one
-of `Flushed`, `PostTimedOut`, `TimedOut`, `PostFailed`, `Skipped`, or `none` when
-no verdict came back (the budget fired, the body panicked, or there was no HTTP
-client). `already_in_progress` has a third value, `unknown`, for the cases where
-no 202 body was ever read — otherwise "the server said no" and "we never found
-out" printed identically, and `panicked` now covers a panic in the *prepare* half
+of `Flushed`, `PostUnconfirmed`, `TimedOut`, `PostFailed`, `Skipped`, or `none`
+when no verdict came back (the budget fired, the body panicked, or there was no
+HTTP client). `already_in_progress` has a third value, `unknown`, and it is the
+*normal* one: the field reports what the 202 body said, so every path that read
+no 202 prints `unknown` — otherwise "the server said no" and "we never found out"
+printed identically, and `panicked` now covers a panic in the *prepare* half
 too, which used to degrade to a clientless attempt reporting `panicked=false`.
 The line is emitted **before** the hard kill, not after: the kill carries no
 `catch_unwind` of its own and on macOS this runs inside an ObjC frame where an
 unwind aborts, so a line logged afterwards would be lost on the run that most
 needs it. It is what `docs/release-smoke-checklist.md` greps.
 
-**`PostTimedOut` exists so the fix cannot eat its own flush.** A POST that does
-not answer inside the 5 s client timeout is not proof the shutdown never started:
-`src/server/mcp/routes/shutdown.ts` registers
-`res.once("close", () => requestShutdown(...))`, which fires when the connection
-terminates prematurely, so the server may already be running `autoSaveAllToDisk`.
-Collapsing that into `PostFailed` skipped the port wait and hard-killed the
-sidecar mid-write. A non-2xx is genuinely different — the route answers 403
-*before* registering that handler — and stays `PostFailed`.
+**`PostUnconfirmed` exists so the fix cannot eat its own flush, and `PostFailed`
+is an allowlist rather than a catch-all.** `src/server/mcp/routes/shutdown.ts:74`
+registers `res.once("close", () => requestShutdown(...))`, and its own comment
+notes that close fires "also when the connection terminates prematurely" — so
+*any* failure after the request was delivered leaves `autoSaveAllToDisk` running:
+a client timeout, a connection reset, an incomplete message, a protocol error, an
+idle keep-alive socket the server closed as the POST landed. All of those are
+`PostUnconfirmed`, and the port wait runs before the hard kill.
+
+Exactly two things prove the sequence never started, and only they are
+`PostFailed`: a connect-level failure (reqwest's `is_connect()` — nothing was
+delivered), and a non-2xx, because both 403 returns (`shutdown.ts:44,62`) precede
+the registration at :74. Note that `is_timeout()` is *not* the discriminator —
+it is true for a connect-phase stall and false for every post-delivery break, so
+keying the safe arm on it reproduced the original defect one error class over,
+skipping the wait and killing the flush for a reset or a protocol error.
 
 **The hidden-window limbo is the cost.** For up to 17 s the app has no visible
 window but still holds the single-instance lock, so a relaunch in that window is
@@ -930,11 +939,18 @@ Install flow:
 ```
 Auto-check → tandem://update-available banner → "Restart to install"
   (manual/tray check instead shows a native Ok/Cancel dialog)
+    → ShuttingDownGuard::try_acquire() — a second concurrent install is refused
+      with a native "Update In Progress" dialog, never a bare return: the
+      banner's 30s watchdog re-arms the CTA, and useUpdaterBanner's catch only
+      console.warns, so a silent Err has no user-visible surface either
     → stop_sidecar_gracefully() — POST /api/shutdown, hard kill on timeout
-      (its verdict is NOT dropped: anything but Flushed joins pre_install_warnings
-       and reaches the failure dialog. On Windows this is the ONLY flush on the
-       update path, because install_inner ends in std::process::exit(0) and
-       RunEvent::Exit never fires)
+      (its verdict is NOT dropped, and BOTH outcomes log at warn: anything but
+       Flushed joins pre_install_warnings and reaches the failure dialog, and
+       Flushed logs "Pre-install: graceful sidecar shutdown complete" so
+       smoke-lines.md row 3 has something to read. On Windows this is the ONLY
+       flush on the update path, because install_inner ends in
+       std::process::exit(0) and RunEvent::Exit never fires — so there is no
+       verdict line here at all)
     → Poll /health until server stops responding (POST_KILL_PORT_RELEASE_SECS = 15s)
       + on Windows, concurrently poll until the sidecar exe unlocks (15s)
     → download_and_install()
