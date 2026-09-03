@@ -57,9 +57,10 @@ fn write_to_file(token: &str) -> Result<(), String> {
 
 fn generate_token() -> String {
     // 32 bytes of OS randomness encoded as base64url without padding = 43 chars.
-    use rand::RngCore;
+    // rand 0.9+: `thread_rng` is `rng`, and the `Rng` trait carries `fill_bytes`.
+    use rand::Rng;
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
