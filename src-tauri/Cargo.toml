@@ -28,8 +28,8 @@ log = "0.4"
 # feature — both of which own the global subscriber. The minidump handler is
 # re-exported by the plugin (`tauri_plugin_sentry::minidump`); no separate
 # `sentry-rust-minidump` dependency is needed.
-sentry = "0.42"
-tauri-plugin-sentry = "0.5"
+sentry = "0.49"
+tauri-plugin-sentry = "0.6"
 # linux-libxdo: makes native Cut/Copy/Paste/Select All PredefinedMenuItems work
 # on Linux (muda uses libxdo to synthesize them); off by default. Required by
 # the editor context menu (#923).
@@ -44,10 +44,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-process = "2"
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
 tokio = { version = "1", features = ["time", "macros"] }
-keyring = "3"
-base64 = "0.22"
+keyring = "4"
+base64 = "0.23"
 dirs = "6"
-rand = "0.8"
+rand = "0.10"
 fs2 = "0.4"
 # CrabNebula DevTools (IPC/event/log inspector). Optional + behind the
 # `devtools` feature so release builds exclude it from the dependency graph
@@ -92,7 +92,7 @@ tauri-plugin-decorum = "1"
 # (`win_app_mode.rs`) and read the High Contrast accessibility flag that
 # gates them.
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Security",

@@ -45,8 +45,11 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `FILE_LOCKED` | File is open in another program (e.g., Word). Close it first. |
 | `FORMAT_ERROR` | Unsupported format, read-only / non-markdown document, file too large (>50MB), or invalid regex. |
 | `FILE_TOO_LARGE` | Inline content exceeds the tool's size cap (e.g. `tandem_appendContent`). |
-| `INVALID_RANGE` | Offset out of bounds, text not found, or range overlaps heading markup. |
+| `INVALID_RANGE` | Offset out of bounds, non-integer, inverted, zero-length, splitting a surrogate pair, text not found, or a range overlapping heading markup. **Usually — not always — carries `details.reason`** (see `tandem_edit`): the two rejections that come from somewhere other than the range validator carry none, namely `tandem_resolveRange`'s "pattern not found" and `tandem_edit`'s heading-markup overlap. Treat `details.reason` as optional. |
 | `EMPTY_DOCUMENT` | `tandem_edit` called on an empty document — seed content with `tandem_appendContent` / `tandem_scratchpad({ content })` first. |
+| `EMPTY_CONVERSION` | `tandem_convertToMarkdown` produced no extractable text from the source `.docx`. |
+| `OPEN_FAILED` | `tandem_convertToMarkdown`'s converted file could not be reopened as a new tab. |
+| `CONFLICT` | `tandem_convertToMarkdown` could not find a free output filename after exhausting its numbered-suffix attempts. |
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
 | `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied, e.g., `EACCES`). |
@@ -263,7 +266,20 @@ Replace text at a specific range. Single-paragraph replacements only.
 { "edited": true, "from": 42, "to": 67, "newTextLength": 31 }
 ```
 
-**Errors:** `INVALID_RANGE` (offsets out of bounds, overlaps heading markup), `FORMAT_ERROR` (read-only document), `INVALID_ARGUMENT` (`newText` contains a line break in a plaintext document — see below), and — only when `textSnapshot` is supplied — `RANGE_MOVED` (the text shifted; the error carries the relocated `resolvedFrom` / `resolvedTo`) or `RANGE_GONE` (the text was deleted)
+**Errors:** `INVALID_RANGE`, `FORMAT_ERROR` (read-only document), `INVALID_ARGUMENT` (`newText` contains a line break in a plaintext document — see below, or a `textSnapshot` on a point insertion), and — only when `textSnapshot` is supplied — `RANGE_MOVED` (the text shifted; the error carries the relocated `resolvedFrom` / `resolvedTo`) or `RANGE_GONE` (the text was deleted)
+
+An `INVALID_RANGE` carries `details.reason`, a closed enum you can branch on rather than parse:
+
+| `details.reason` | Meaning |
+|---|---|
+| `non-integer` | `from` or `to` is not an integer. (The schema also rejects this, so you normally see a protocol error first.) |
+| `inverted` | `from > to`. |
+| `out-of-bounds` | `from < 0`, or `to` past the end of the document. `to === length` is valid. |
+| `empty` | For `tandem_edit`, `from === to` **and** an empty `newText` — the one genuine no-op. **Point insertion is supported:** `tandem_edit({ from: n, to: n, newText: "X" })` inserts at `n`, and it is the only mid-document insert path. Two things to know about it: **omit `textSnapshot`** (a zero-length range matches no text, so a snapshot always looks stale — the call is refused with `INVALID_ARGUMENT` rather than letting the `RANGE_MOVED` retry turn your insert into a replacement), and `from: 0` on a document that opens with a heading is `HEADING_OVERLAP`, since offset 0 sits inside the `# ` prefix — insert after the prefix, or at the start of the first body block. For `tandem_comment` / `tandem_suggest` / `tandem_flag`, `from === to` alone, since an annotation needs a span to anchor to. |
+| `surrogate` | An offset falls between the two halves of a surrogate pair (inside an emoji or other astral character). Move it to either side of the character. |
+| `unresolvable` | The offsets could not be resolved against the document structure. Only `tandem_edit` can reach it, only at `(0, 0)`, and only on a document whose top-level children are not block elements — a shape no writer in Tandem produces. An actually-empty document answers `EMPTY_DOCUMENT` instead. |
+
+**With a mismatched `textSnapshot`, a staleness outcome wins over `out-of-bounds`.** The staleness check runs first by design — after an external edit shortens the file, stale offsets past the new end must relocate rather than be refused — so the `reason` set above is exhaustive only for a call that supplies no `textSnapshot`.
 
 **Example:**
 ```
@@ -549,7 +565,7 @@ Convert a `.docx` document to an editable Markdown file. Writes the `.md` file t
 
 **Notes:** The source document must be a `.docx` file. The converted Markdown file opens as a new editable tab alongside the original `.docx`.
 
-**Errors:** `NO_DOCUMENT` (no active document or `documentId` not found), `FORMAT_ERROR` (source is not `.docx`, invalid output path, or conversion produced empty result)
+**Errors:** `NO_DOCUMENT` (no active document, or `documentId` names a document that is not open; message names the id), `FILE_NOT_FOUND` (the `outputPath` directory does not exist; message names the resolved directory), `INVALID_PATH` (relative path, UNC path, an upload with no disk location, `outputPath` naming an existing file, or the resolved output directory failing `realpath` with `ENOTDIR`/`ELOOP`/`ENAMETOOLONG`), `PERMISSION_DENIED` (`EACCES`/`EPERM` on the output directory, from whichever syscall trips first — `realpath`, `findAvailablePath`'s existence probe, or the write itself. A directory the caller can read but not write gets all the way to the *write*, which is the ordinary Windows shape), `FORMAT_ERROR` (source is not `.docx`), `EMPTY_CONVERSION` (conversion produced no extractable text), `CONFLICT` (`findAvailablePath` could not find a free filename after 1000 attempts), `OPEN_FAILED` (converted file could not be reopened as a new tab), `INTERNAL_ERROR` (write-path filesystem failures that are not permission errnos, e.g. `ENOSPC`/`EROFS`)
 
 ---
 
@@ -920,6 +936,8 @@ Read content around a range without pulling the full document.
   "selectionRange": { "from": 42, "to": 55 }
 }
 ```
+
+**Errors:** `INVALID_RANGE` — the range is validated against the document rather than clamped (`details.reason` as for `tandem_edit`). A zero-length range is accepted here: reading context around a cursor position is a legitimate query.
 
 ---
 

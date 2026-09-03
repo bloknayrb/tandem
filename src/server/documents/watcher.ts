@@ -43,12 +43,20 @@ import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { attachObservers } from "../events/queue.js";
 import { getAdapter } from "../file-io/index.js";
 import { watchFile } from "../file-watcher.js";
-// The one edge in this module pointing back at `mcp/` (ADR-034 residue, and
+// The two edges in this module pointing back at `mcp/` (ADR-034 residue, and
 // recorded as such in the boundary inventory): annotation sanitization has not
-// been split out of the MCP layer yet.
+// been split out of the MCP layer yet, and `extractText` — the flat projection
+// `positions.ts` itself reads from the same module — is hoisted here so the
+// per-annotation relocation loop below builds the string once (#1752).
 import { sanitizeAnnotation } from "../mcp/annotations.js";
+import { extractText } from "../mcp/document-model.js";
 import { pushNotification } from "../notifications.js";
-import { anchoredRange, refreshAllRanges, validateRange } from "../positions.js";
+import {
+  anchoredRange,
+  describeRangeFailure,
+  refreshAllRanges,
+  validateRange,
+} from "../positions.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { flagExternalConflict, readPendingConflict } from "./conflict.js";
 import { isDirty, markClean } from "./dirty.js";
@@ -213,6 +221,10 @@ export async function reloadFromDisk(
         }).map((r) => r.annotation);
 
         // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges.
+        // Hoisted: this loop runs per annotation over a document that does not
+        // change across it, so one materialization serves every `validateRange`
+        // and `anchoredRange` call below (#1752).
+        const text = extractText(doc);
         for (const ann of refreshed) {
           if (!ann.textSnapshot) continue;
 
@@ -243,18 +255,65 @@ export async function reloadFromDisk(
           // still at `from`?", so the range handed to `validateRange` is the
           // prefix's own, not the annotation's.
           const probeTo = truncated ? toFlatOffset(ann.range.from + probe.length) : ann.range.to;
-          const vr = validateRange(doc, ann.range.from, probeTo, { textSnapshot: probe });
+          // This call is safe under #1752's new bounds ONLY because staleness
+          // runs BEFORE the upper bound. An out-of-bounds or collapsed stale
+          // range slices to "" — which never equals the non-empty probe — so it
+          // comes back RANGE_MOVED / RANGE_GONE and gets relocated, rather than
+          // INVALID_RANGE, which has no handler here. The guard that keeps a
+          // point comment out of this loop is the `!ann.textSnapshot` check
+          // above (its snapshot is ""), not `probe.length === 0`.
+          //
+          // `surrogates: "ignore"` for the same reason the relocation anchor
+          // below carries it, and this call needs it MORE: `probeTo` is
+          // `from + probe.length`, and `captureSnapshot` caps a snapshot at 200
+          // code units (`annotations.ts`), so a cap landing between the halves
+          // of a pair puts `probeTo` mid-pair. On a reload that does NOT move
+          // the annotation, staleness then passes and the surrogate check fires
+          // `INVALID_RANGE` — which is not `RANGE_MOVED`, so a perfectly healthy
+          // annotation takes the `else` arm below and is reported as durably
+          // mispinned, on every reload, forever. These are DERIVED offsets and
+          // nothing here is written to a file.
+          const surrogates = "ignore" as const;
+          const vr = validateRange(doc, ann.range.from, probeTo, {
+            textSnapshot: probe,
+            surrogates,
+            text,
+            textTag: "watcher/relocation-probe",
+          });
 
           if (vr.ok) continue; // Range is still valid
 
           if (vr.code === "RANGE_MOVED") {
-            const resolvedTo = truncated ? toFlatOffset(vr.resolvedFrom + span) : vr.resolvedTo;
+            // CLAMP the carried span (#1752). `resolvedFrom + span` uses the
+            // ORIGINAL span, so if the external edit deleted text INSIDE the
+            // annotated region it now exceeds the new length. `resolveToElement`
+            // used to clamp that away; with a real upper bound the call returns
+            // INVALID_RANGE, and `refreshAllRanges` above has already minted a
+            // fresh `relRange` from the STALE flat offsets — the durable mispin
+            // the block comment above calls the first draft's bug.
+            const resolvedTo = truncated
+              ? toFlatOffset(Math.min(vr.resolvedFrom + span, text.length))
+              : vr.resolvedTo;
             // No snapshot argument on the truncated branch: `anchoredRange`
             // would re-validate the prefix against the FULL relocated range
             // and reject the very placement just computed.
+            //
+            // `allowEmpty` because `span` can be 0: `refreshRange` may resolve a
+            // relRange to newFrom === newTo (#1764) while the annotation keeps
+            // its older non-empty snapshot, so it passes both guards above and
+            // arrives here collapsed. `surrogates` is the SAME policy the probe
+            // uses, shared from one binding rather than written twice — the
+            // capped-probe rationale is identical at both ends and they went out
+            // of sync once already.
+            const relocOpts = {
+              allowEmpty: true,
+              surrogates,
+              text,
+              textTag: "watcher/relocation-anchor" as const,
+            };
             const relocated = truncated
-              ? anchoredRange(doc, vr.resolvedFrom, resolvedTo)
-              : anchoredRange(doc, vr.resolvedFrom, resolvedTo, ann.textSnapshot);
+              ? anchoredRange(doc, vr.resolvedFrom, resolvedTo, undefined, relocOpts)
+              : anchoredRange(doc, vr.resolvedFrom, resolvedTo, ann.textSnapshot, relocOpts);
             if (relocated.ok) {
               const updated: Annotation = {
                 ...ann,
@@ -262,9 +321,35 @@ export async function reloadFromDisk(
                 relRange: relocated.fullyAnchored ? relocated.relRange : undefined,
               };
               annotationMap.set(ann.id, updated);
+            } else {
+              // Previously there was no `else` at all, so a rejected relocation
+              // left the annotation durably pinned to stale offsets in silence.
+              //
+              // "Left at its previous offsets" would understate it: the
+              // `refreshAllRanges` pass above has ALREADY minted a fresh
+              // `relRange` from those stale flat offsets, so the record is now
+              // durably pinned to coordinates that describe different text, every
+              // later reload resolves that relRange cleanly, and nothing revisits
+              // it. Same consequence as the RANGE_GONE arm below.
+              console.error(
+                `[watcher] Relocation rejected for annotation ${ann.id}: ` +
+                  `[${vr.resolvedFrom}, ${resolvedTo}] — ${describeRangeFailure(relocated)}. ` +
+                  "The annotation stays pinned to its stale coordinates and will not be revisited.",
+              );
             }
+          } else {
+            // Everything that is not RANGE_MOVED — in practice RANGE_GONE, the
+            // annotated text being nowhere in the new file. This arm was SILENT
+            // while its RANGE_MOVED twin above logs, and the consequence is
+            // identical: `refreshAllRanges` has already re-anchored a fresh
+            // `relRange` onto the stale flat offsets, so the record is durably
+            // mispinned rather than benignly "left as-is".
+            console.error(
+              `[watcher] Snapshot relocation failed for annotation ${ann.id}: ` +
+                `[${ann.range.from}, ${probeTo}] — ${describeRangeFailure(vr)}. ` +
+                "The annotation stays pinned to its stale coordinates and will not be revisited.",
+            );
           }
-          // RANGE_GONE: annotation text was deleted entirely — leave as-is
         }
       });
     }

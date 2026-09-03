@@ -22,6 +22,25 @@ export type LoadIssue =
       error: unknown;
     }
   | {
+      /**
+       * `apply` step: one or more imported Word comments had to have their range
+       * CLAMPED to the end of the document, because the OOXML character
+       * accounting in `calculateCommentRanges` diverged from the mdast the Y.Doc
+       * was built from.
+       *
+       * The clamp is deliberate — it lands the comment at the document end
+       * rather than dropping it, and a dropped comment is invisible to the #1448
+       * scoreboard. But it does mean the user's comment is not where Word put
+       * it, and that had no aggregate signal at all: only a per-comment stderr
+       * line nobody reads. This is that signal.
+       */
+      kind: "comments-clamped";
+      /** How many comments were clamped. */
+      count: number;
+      /** The largest single-end clamp, in flat characters. */
+      maxClamp: number;
+    }
+  | {
       // Reserved for future partial-load categories (e.g. mammoth.js
       // unsupported-style warnings, tracked-changes drops). New variants
       // are deliberately a sum-type extension so the existing handler

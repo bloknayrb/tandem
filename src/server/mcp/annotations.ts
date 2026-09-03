@@ -108,7 +108,9 @@ function rangeFailureToError(result: Extract<RangeValidation, { ok: false }>) {
     });
   }
   if (result.code === "INVALID_RANGE") {
-    return mcpError("INVALID_RANGE", result.message);
+    // `reason` rides on `details`, not a `data` key — there is no `data` on the
+    // wire; precedent is the RANGE_MOVED arm above (#1752).
+    return mcpError("INVALID_RANGE", result.message, { reason: result.reason });
   }
   // HEADING_OVERLAP
   return mcpError(
@@ -230,7 +232,11 @@ export function registerAnnotationTools(server: McpServer): void {
     "DEPRECATED. Highlights are user-only. Use tandem_comment for text annotations.",
     {
       // All params optional: a deprecated stub must surface DEPRECATED for any
-      // call shape, including ones missing the legacy required params.
+      // call shape, including ones missing the legacy required params. That is
+      // why the LIVE tools' `.int()` is deliberately NOT mirrored here (#1752):
+      // a stub never validates a range, so `.int()` would close no drift and
+      // would answer a Zod protocol error where docs/mcp-tools.md promises
+      // "Always returns a DEPRECATED error".
       from: z.number().optional(),
       to: z.number().optional(),
       color: HighlightColorSchema.optional(),
@@ -251,8 +257,8 @@ export function registerAnnotationTools(server: McpServer): void {
     "tandem_comment",
     "Add a comment to a text range. Optionally include suggestedText for a replacement proposal.",
     {
-      from: z.number().describe("Start position"),
-      to: z.number().describe("End position"),
+      from: z.number().int().describe("Start position"),
+      to: z.number().int().describe("End position"),
       text: z.string().describe("Comment text"),
       suggestedText: z
         .string()
@@ -330,7 +336,11 @@ export function registerAnnotationTools(server: McpServer): void {
     "DEPRECATED — use tandem_comment with suggestedText instead. Always returns an error.",
     {
       // All params optional: a deprecated stub must surface DEPRECATED for any
-      // call shape, including ones missing the legacy required params.
+      // call shape, including ones missing the legacy required params. That is
+      // why the LIVE tools' `.int()` is deliberately NOT mirrored here (#1752):
+      // a stub never validates a range, so `.int()` would close no drift and
+      // would answer a Zod protocol error where docs/mcp-tools.md promises
+      // "Always returns a DEPRECATED error".
       from: z.number().optional(),
       to: z.number().optional(),
       newText: z.string().optional(),
@@ -352,7 +362,11 @@ export function registerAnnotationTools(server: McpServer): void {
     "DEPRECATED. Use tandem_comment instead.",
     {
       // All params optional: a deprecated stub must surface DEPRECATED for any
-      // call shape, including ones missing the legacy required params.
+      // call shape, including ones missing the legacy required params. That is
+      // why the LIVE tools' `.int()` is deliberately NOT mirrored here (#1752):
+      // a stub never validates a range, so `.int()` would close no drift and
+      // would answer a Zod protocol error where docs/mcp-tools.md promises
+      // "Always returns a DEPRECATED error".
       from: z.number().optional(),
       to: z.number().optional(),
       note: z.string().optional(),

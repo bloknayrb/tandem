@@ -4,7 +4,7 @@ import * as Y from "yjs";
 import { Y_MAP_CHAT } from "../../../shared/constants.js";
 import { shouldSkipChannel } from "../../../shared/origins.js";
 import type { ChatMessage, FlatOffset } from "../../../shared/types.js";
-import { validateRange } from "../../positions.js";
+import { describeRangeFailure, validateRange } from "../../positions.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
 import type { BufferedSelection, TandemEvent } from "../types.js";
 import { generateEventId } from "../types.js";
@@ -34,9 +34,23 @@ export function makeCtrlChatObserver(deps: {
         const buffered = selectionBuffer.get(msg.documentId);
         if (buffered) {
           selectionBuffer.delete(msg.documentId);
-          // Validate range is still valid before attaching offsets
+          // Validate range is still valid before attaching offsets.
+          //
+          // The `try` wraps `getOrCreateDocument` ONLY. `validateRange` does not
+          // throw, and leaving it inside the catch meant a validator bug would
+          // be indistinguishable from "that document isn't loaded" — the same
+          // degraded, text-only event either way, with a message that names
+          // neither. Narrow catch, explicit rejection log.
+          let doc: Y.Doc | undefined;
           try {
-            const doc = getOrCreateDocument(msg.documentId);
+            doc = getOrCreateDocument(msg.documentId);
+          } catch (err) {
+            console.warn(
+              `[EventQueue] Failed to load document for buffered selection doc=${msg.documentId}:`,
+              err,
+            );
+          }
+          if (doc) {
             const validation = validateRange(
               doc,
               buffered.from as FlatOffset,
@@ -45,14 +59,18 @@ export function makeCtrlChatObserver(deps: {
             if (validation.ok) {
               selection = buffered;
             } else {
-              // Range went stale — attach text only (no offsets)
+              // Range went stale or out of bounds — degrade to text only (no
+              // offsets). Logged rather than left to be inferred from an event
+              // that quietly lost its `from`/`to`: this one runs with a human
+              // waiting on the reply, and it passes no hoisted `text`, so it pays
+              // a full `extractText` per chat message to answer it.
+              console.warn(
+                `[EventQueue] Buffered selection dropped its offsets for doc=${msg.documentId}: ` +
+                  `[${buffered.from}, ${buffered.to}] — ${describeRangeFailure(validation)}`,
+              );
               selection = { selectedText: buffered.selectedText };
             }
-          } catch (err) {
-            console.warn(
-              `[EventQueue] Failed to validate buffered selection for doc=${msg.documentId}:`,
-              err,
-            );
+          } else {
             selection = { selectedText: buffered.selectedText };
           }
         }
