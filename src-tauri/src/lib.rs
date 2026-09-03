@@ -2434,18 +2434,40 @@ async fn perform_install(
     // Windows inside `download_and_install`'s own `std::process::exit(0)`, on
     // other platforms inside `app.restart()` (which returns `!`) — so the guard
     // never releases there, which is what we want. #1756.
-    let _shutting_down = SidecarShuttingDownGuard::acquire();
+    //
+    // `try_acquire`, not a bare acquire: `install_update` is a plain command
+    // with no re-entrancy gate, so two clicks on "Restart to install" run two of
+    // these futures. Under a bare store, the first to finish would release the
+    // latch out from under the second — which is still downloading over the
+    // binary — and re-permit a spawn into that slot. See `ShuttingDownGuard`.
+    let Some(_shutting_down) = SidecarShuttingDownGuard::try_acquire() else {
+        log::warn!("Update install to v{version} ignored — an install is already in flight");
+        return;
+    };
     let client = app.state::<reqwest::Client>().inner().clone();
-    stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS).await;
+
+    // Collect human-readable warnings so we can thread them into the failure
+    // dialog if download_and_install later fails. Declared before the graceful
+    // stop because that stop's verdict is the first thing that can go into it,
+    // and the cfg blocks below both contribute too.
+    let mut pre_install_warnings: Vec<String> = Vec::new();
+
+    // On Windows this is the ONLY flush on the update path: `download_and_install`
+    // ends in the updater plugin's own `std::process::exit(0)`, so `RunEvent::Exit`
+    // never fires and `shutdown_sidecar_on_exit` never runs. A dropped verdict
+    // here is an update that proceeds having discarded unsaved edits while every
+    // dialog says it worked — which is why `StopReport` is `#[must_use]`.
+    if let Some(msg) = stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS)
+        .await
+        .unflushed_warning("Pre-install")
+    {
+        log::warn!("{msg}");
+        pre_install_warnings.push(msg);
+    }
 
     // Wait for port release and (on Windows) file-lock release concurrently.
     // Port-down alone isn't sufficient on Windows: TerminateProcess returns
     // before the OS releases the exe file handle.
-    //
-    // Collect human-readable warnings so we can thread them into the failure
-    // dialog if download_and_install later fails. Declared outside the cfg
-    // block so the non-Windows branch contributes too.
-    let mut pre_install_warnings: Vec<String> = Vec::new();
 
     #[cfg(target_os = "windows")]
     {

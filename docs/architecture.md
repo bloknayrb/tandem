@@ -855,9 +855,25 @@ so otherwise a live unresponsive window sits on screen for the whole budget.
 One line records the result, at `warn` so it survives the release log floor:
 `Exit: sidecar shutdown complete (elapsed=…ms, verdict=…, attempted=…,
 timed_out=…, owned_child=…, already_in_progress=…, panicked=…)`. `verdict` is one
-of `Flushed`, `TimedOut`, `PostFailed`, `Skipped`, or `none` when no verdict came
-back (the budget fired, the body panicked, or there was no HTTP client). It is
-what `docs/release-smoke-checklist.md` greps.
+of `Flushed`, `PostTimedOut`, `TimedOut`, `PostFailed`, `Skipped`, or `none` when
+no verdict came back (the budget fired, the body panicked, or there was no HTTP
+client). `already_in_progress` has a third value, `unknown`, for the cases where
+no 202 body was ever read — otherwise "the server said no" and "we never found
+out" printed identically, and `panicked` now covers a panic in the *prepare* half
+too, which used to degrade to a clientless attempt reporting `panicked=false`.
+The line is emitted **before** the hard kill, not after: the kill carries no
+`catch_unwind` of its own and on macOS this runs inside an ObjC frame where an
+unwind aborts, so a line logged afterwards would be lost on the run that most
+needs it. It is what `docs/release-smoke-checklist.md` greps.
+
+**`PostTimedOut` exists so the fix cannot eat its own flush.** A POST that does
+not answer inside the 5 s client timeout is not proof the shutdown never started:
+`src/server/mcp/routes/shutdown.ts` registers
+`res.once("close", () => requestShutdown(...))`, which fires when the connection
+terminates prematurely, so the server may already be running `autoSaveAllToDisk`.
+Collapsing that into `PostFailed` skipped the port wait and hard-killed the
+sidecar mid-write. A non-2xx is genuinely different — the route answers 403
+*before* registering that handler — and stays `PostFailed`.
 
 **The hidden-window limbo is the cost.** For up to 17 s the app has no visible
 window but still holds the single-instance lock, so a relaunch in that window is
@@ -873,7 +889,11 @@ second app-data instance) receives the shutdown, flushes and exits, while the lo
 still says the stop was graceful — though `on_child_terminated_in` clears the
 stored handle pid-keyed, so a sidecar that already died reads as `owns_child =
 false` and skips the POST altogether, which is what makes this case rare rather
-than routine. This is not new, but it used to be reachable
+than routine. **One window needs no misconfiguration at all:** `start_sidecar`
+stores the child into `SidecarState` *before* `wait_for_health` (up to 30 s), so
+for that whole window `owns_child` is true while a different process may still be
+the one answering :3479 — a Quit there POSTs at, waits on and reports a flush of
+someone else's server. This is not new, but it used to be reachable
 only from two explicit user actions — Settings → Network → Restart server, and
 Install update — and #1756 widened it to **every Quit**. The spawn site now pins
 `TANDEM_PORT` / `TANDEM_MCP_PORT` / `TANDEM_BIND_HOST` on the child (the shell
@@ -911,6 +931,10 @@ Install flow:
 Auto-check → tandem://update-available banner → "Restart to install"
   (manual/tray check instead shows a native Ok/Cancel dialog)
     → stop_sidecar_gracefully() — POST /api/shutdown, hard kill on timeout
+      (its verdict is NOT dropped: anything but Flushed joins pre_install_warnings
+       and reaches the failure dialog. On Windows this is the ONLY flush on the
+       update path, because install_inner ends in std::process::exit(0) and
+       RunEvent::Exit never fires)
     → Poll /health until server stops responding (POST_KILL_PORT_RELEASE_SECS = 15s)
       + on Windows, concurrently poll until the sidecar exe unlocks (15s)
     → download_and_install()
