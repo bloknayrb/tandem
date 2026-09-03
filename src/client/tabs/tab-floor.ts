@@ -31,10 +31,13 @@ export function measureTabFloor(wrapper: HTMLElement): number {
   if (!pill || !name) return TAB_FLOOR_PX;
 
   // Chrome is NOT a constant and must not be derived as `pill − name`: a
-  // floored tab carries slack that flex-start parks after the last child,
-  // which that subtraction would count as chrome. Sum the real boxes — this
-  // also self-corrects for the read-only badge (~29px, `flex-shrink: 0`) and
-  // for the 2px border delta between an active and an inactive pill.
+  // floored tab carries slack, which that subtraction would count as chrome.
+  // (Until #1736 that slack sat after the last child, parked there by
+  // `flex-start`; it now lands in the close button's auto margin instead. The
+  // conclusion is unchanged — the slack is still not chrome.) Sum the real
+  // boxes — this also self-corrects for the read-only badge and its gap
+  // (~29px together; the badge alone is ~23px and `flex-shrink: 0`) and for
+  // the 2px border delta between an active and an inactive pill.
   const cs = getComputedStyle(pill);
   const kids = Array.from(pill.children).filter((k): k is HTMLElement => k instanceof HTMLElement);
   let chrome =
@@ -50,6 +53,26 @@ export function measureTabFloor(wrapper: HTMLElement): number {
   // `scrollWidth` is integer-rounded, so a name that exactly fits can still
   // pick up an ellipsis; +1 buys that back. Read the cap off the span itself
   // rather than restating TabItem's 240px literal here.
+  //
+  // THIS READ IS THE WHOLE REASON THE NAME SPAN MAY NOT GROW (#1736), and it
+  // is the canonical statement of that rule — TabItem points here rather than
+  // restating it. `scrollWidth` is `max(scrolling area, padding box)`, so it
+  // means "the filename's width" only while the span is shrink-wrapped.
+  //
+  // Grow the span and it reports the BOX instead, which makes this function
+  // measure its own input. On the first pass every wrapper still carries only
+  // the base `.tab-flip { min-width: TAB_FLOOR_PX }`, so a grown span reports
+  // whatever is left of that wrapper (~80px on a short name, not the floor
+  // itself) — and `chrome` above is BY CONSTRUCTION everything in the pill
+  // except the name, so `chrome + nameNatural` just reconstructs the wrapper's
+  // own width and the `Math.min` below clamps it to TAB_FLOOR_PX. That is
+  // written back as the tab's inline floor, and the next pass reconstructs it
+  // again. Adaptive mode silently becomes uniform mode — no flicker, no error,
+  // every tab simply the same width.
+  //
+  // Whatever absorbs slack inside the pill therefore must not be this span;
+  // TabItem uses an auto margin on the close button, which resolves after flex
+  // layout and is invisible to this measurement.
   const cap = parseFloat(getComputedStyle(name).maxWidth) || Number.POSITIVE_INFINITY;
   const nameNatural = Math.min(name.scrollWidth + 1, cap);
   const floor = Math.min(chrome + nameNatural, TAB_FLOOR_PX);
