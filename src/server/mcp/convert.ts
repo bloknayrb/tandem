@@ -170,7 +170,7 @@ export async function convertToMarkdown(
       // EACCES/EPERM here mean the caller lacks permission to resolve the
       // output directory itself — distinct from `atomicWrite`'s write-path
       // errnos below, which are a different producer and stay unclassified.
-      // EACCES has a real-fs POSIX test (export-path-canonicalization.test.ts);
+      // EACCES has a real-fs non-root POSIX test (export-path-canonicalization.test.ts);
       // EPERM does not — it is grouped on the assumption it is the same class
       // of "caller can't get here" errno, but nothing here provokes it from
       // an unprivileged test to confirm that assumption holds for `realpath`.

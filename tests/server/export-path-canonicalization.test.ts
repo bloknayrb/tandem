@@ -311,7 +311,7 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
     // constructible from an unprivileged test (it isn't `realpath`'s
     // permission-check errno on Linux, and provoking it needs a condition
     // -- e.g. an immutable-flag or NFS/quota edge -- this suite can't set
-    // up); `convert.ts:173`'s EPERM arm rests on it being the same
+    // up); `convert.ts`'s EACCES/EPERM arm rests on it being the same
     // "caller can't get here" errno EACCES is, unverified beyond that.
     it.runIf(POSIX)(
       "outputPath walking through a non-directory: INVALID_PATH naming the CALLER's path",

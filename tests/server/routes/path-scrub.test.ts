@@ -250,13 +250,25 @@ describe("errorCodeToHttpStatus / errorCodeToLabel — POST /api/convert's codes
     expect(errorCodeToLabel("OPEN_FAILED")).toBe("OPEN_FAILED");
   });
 
-  it('errorCodeToHttpStatus has its own `case "OPEN_FAILED":` arm, not just a status equal to the default', () => {
+  it('errorCodeToHttpStatus has its own `case "OPEN_FAILED":` arm with its own return, not merged into `default`', () => {
     const source = readFileSync(SHARED_TS_PATH, "utf8");
     const fnStart = source.indexOf("export function errorCodeToHttpStatus");
     expect(fnStart, "errorCodeToHttpStatus not found in _shared.ts").toBeGreaterThan(-1);
     const fnEnd = source.indexOf("\n}", fnStart);
+    // A plain `indexOf` miss returns -1, and `slice(fnStart, -1)` would
+    // silently widen to "everything but the last character of the file" --
+    // which still contains `errorCodeToLabel`'s identical `case
+    // "OPEN_FAILED":` text, so a bare `toContain` on that slice would pass
+    // even if this function's own arm were deleted entirely.
+    expect(fnEnd, "closing brace of errorCodeToHttpStatus not found").toBeGreaterThan(fnStart);
     const fnBody = source.slice(fnStart, fnEnd);
-    expect(fnBody).toContain('case "OPEN_FAILED":');
+    // Not just `toContain('case "OPEN_FAILED":')`: that text alone survives
+    // a "consolidation" that stacks `case "OPEN_FAILED":` directly onto
+    // `default:` (falling through to the same 500 with no return of its
+    // own), or one that deletes the arm and leaves the string in a comment.
+    // Requiring the case to be immediately followed by its own `return 500;`
+    // rules out both.
+    expect(fnBody).toMatch(/case "OPEN_FAILED":\s*\n\s*return 500;/);
   });
 
   it("PERMISSION_DENIED (convert's realpath classification) is a 403 with its own label", () => {
