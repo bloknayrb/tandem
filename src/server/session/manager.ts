@@ -66,14 +66,28 @@ export function legacySessionKey(filePath: string): string {
   return encodeURIComponent(filePath.replace(/\\/g, "/"));
 }
 
+/** The session file for `filePath` under the current (`sessionKey`) name. */
+function sessionPathFor(filePath: string): string {
+  return path.join(SESSION_DIR, `${sessionKey(filePath)}.json`);
+}
+
 /**
  * The old-name session path for a disk path, or null when there is no distinct
  * old name (uploads, whose key never changed, and the ctrl session, which has
  * its own literal name).
+ *
+ * "Distinct" is decided HERE, not at each of the three call sites: all of them
+ * want the same question answered — is there a SECOND file to migrate, prefer
+ * or unlink — and each used to re-derive it as
+ * `legacyPath !== null && legacyPath !== sessionPath`. Folding it in also keeps
+ * the equality next to its rationale: an `encodeURIComponent` name of an
+ * absolute path always contains `%2F`, so it can never equal 64 hex characters,
+ * which makes the check belt-and-braces rather than a live case.
  */
 function legacySessionPath(filePath: string): string | null {
   if (isUploadPath(filePath)) return null;
-  return path.join(SESSION_DIR, `${legacySessionKey(filePath)}.json`);
+  const legacyPath = path.join(SESSION_DIR, `${legacySessionKey(filePath)}.json`);
+  return legacyPath === sessionPathFor(filePath) ? null : legacyPath;
 }
 
 /**
@@ -112,7 +126,6 @@ export async function saveSession(
   doc: Y.Doc,
   opts?: { dirty?: boolean; conflict?: ExternalConflictState },
 ): Promise<void> {
-  const key = sessionKey(filePath);
   let sourceFileMtime = 0;
   // Upload paths have no disk file — skip stat
   if (!isUploadPath(filePath)) {
@@ -147,8 +160,7 @@ export async function saveSession(
     await fs.mkdir(SESSION_DIR, { recursive: true });
     sessionDirReady = true;
   }
-  const sessionPath = path.join(SESSION_DIR, `${key}.json`);
-  await atomicWrite(sessionPath, JSON.stringify(data));
+  await atomicWrite(sessionPathFor(filePath), JSON.stringify(data));
 
   // One-shot #1750 migration, ORDERED AFTER the successful write: a failed
   // new-key save must leave the old file intact, or an ENOSPC destroys the only
@@ -156,7 +168,7 @@ export async function saveSession(
   // a "successful load" is only a successful `JSON.parse`, and a record whose
   // `ydocState` is corrupt parses fine and throws later in `restoreYDoc`.
   const legacyPath = legacySessionPath(filePath);
-  if (legacyPath !== null && legacyPath !== sessionPath) {
+  if (legacyPath !== null) {
     await fs.unlink(legacyPath).catch((err: NodeJS.ErrnoException) => {
       if (err.code !== "ENOENT") {
         console.error("[Tandem] Failed to remove migrated session", legacyPath, err);
@@ -175,10 +187,9 @@ export async function saveSession(
  * one extra `stat`, which is fine for a one-shot window.
  */
 export async function loadSession(filePath: string): Promise<SessionData | null> {
-  const key = sessionKey(filePath);
-  let sessionPath = path.join(SESSION_DIR, `${key}.json`);
+  let sessionPath = sessionPathFor(filePath);
   const legacyPath = legacySessionPath(filePath);
-  if (legacyPath !== null && legacyPath !== sessionPath) {
+  if (legacyPath !== null) {
     const [current, legacy] = await Promise.all([mtimeOf(sessionPath), mtimeOf(legacyPath)]);
     if (legacy !== null && (current === null || legacy > current)) {
       sessionPath = legacyPath;
@@ -322,12 +333,8 @@ async function mtimeOf(p: string): Promise<number | null> {
  * unlinked — uploads keep the legacy key, so the two names are the same file.
  */
 export async function deleteSession(filePath: string): Promise<void> {
-  const key = sessionKey(filePath);
-  const sessionPath = path.join(SESSION_DIR, `${key}.json`);
-  const legacyPath = legacySessionPath(filePath);
-  const targets =
-    legacyPath !== null && legacyPath !== sessionPath ? [sessionPath, legacyPath] : [sessionPath];
-  for (const target of targets) {
+  for (const target of [sessionPathFor(filePath), legacySessionPath(filePath)]) {
+    if (target === null) continue;
     try {
       await fs.unlink(target);
     } catch (err: unknown) {

@@ -184,10 +184,10 @@ function notifyWatchLost(filePath: string, err: unknown): void {
  * `close()`-adjacent error on `old` fail `attachWatcher`'s identity check.
  *
  * Returns false when the attach threw; the caller has already been notified
- * and the entry unwatched. Never throws: the two call sites are a `setTimeout`
- * body (whose rejection is an `unhandledRejection` → `process.exit(1)`) and a
- * `finally` inside `document-service`'s save (whose throw would return
- * `{status:"error"}` with the bytes already on disk).
+ * and the entry unwatched. Never throws: the two call sites are `deliverChange`
+ * (a `setTimeout` body, whose rejection is an `unhandledRejection` →
+ * `process.exit(1)`) and a `finally` inside `document-service`'s save (whose
+ * throw would return `{status:"error"}` with the bytes already on disk).
  *
  * The `close()` guard is defence for a premise nobody has demonstrated —
  * Node 24 on win32 would not throw from double-close, close-after-unlink or
@@ -210,6 +210,103 @@ function swapHandle(filePath: string, entry: WatchEntry): boolean {
     console.error("[FileWatcher] watcher.close() failed for %s:", filePath, err);
   }
   return true;
+}
+
+/**
+ * The debounce timer's body: re-arm the handle if the events since the last
+ * delivery could have replaced the inode, then decide whether to report the
+ * change. Scheduled by the `fs.watch` listener and reached no other way.
+ *
+ * `entry` is PASSED, never re-fetched from `watched`, because the identity
+ * re-check below has to compare the map against the object this delivery was
+ * scheduled for — re-fetching would make that check vacuous.
+ */
+async function deliverChange(
+  filePath: string,
+  entry: WatchEntry,
+  onChanged: (filePath: string) => Promise<void>,
+): Promise<void> {
+  entry.timer = null;
+
+  // The handle this delivery was scheduled against. Two deliveries are in
+  // flight for one entry whenever a `stat` outlives the 500 ms debounce
+  // (the line above nulls `timer`, so a new event schedules a fresh timer
+  // while this continuation is pending), and a re-arm mutates
+  // `entry.watcher` IN PLACE — it never replaces the entry. So the entry
+  // re-check below cannot see a second kind of staleness, and the two
+  // guards answer two different questions: the entry check asks "was the
+  // entry replaced or removed", `armedAt` asks "did a newer delivery
+  // already resolve this path".
+  const armedAt = entry.watcher;
+
+  let present: boolean;
+  try {
+    // ASYNC, explicitly. `existsSync`/`statSync` is a legal reading of
+    // "stat the path" and makes every ordering guarantee below
+    // unbuildable, because a synchronous call cannot be parked.
+    await fs.promises.stat(filePath);
+    present = true;
+  } catch {
+    present = false;
+  }
+
+  // Re-check identity after the await, on BOTH branches and before the
+  // missing branch's notify as well as before any attach. `unwatchFile`
+  // (tab close, rename) can delete the map entry mid-body; the
+  // continuation would then attach a handle onto an orphaned closure
+  // `entry` — reachable by nothing, alive for the process, and firing `cb`
+  // on every later write next to whatever `watchFile` mints on reopen.
+  // Everything from here to the content path is synchronous, so this one
+  // check covers every branch.
+  if (watched.get(filePath) !== entry) return;
+
+  if (present) {
+    if (!isWin32() && entry.sawRename) {
+      if (!swapHandle(filePath, entry)) return;
+    }
+    entry.sawRename = false;
+  } else if (isWin32()) {
+    // The handle survived by construction; a recreate delivers
+    // `rename, change` and the next delivery reads the new bytes. A
+    // deletion here is not a lost watch, so: no notification, no unwatch,
+    // and today's delete+recreate behaviour is preserved.
+    entry.sawRename = false;
+    console.error("[FileWatcher] %s is missing; handle retained (win32)", filePath);
+    return;
+  } else {
+    // A re-arm since this delivery began means a LATER delivery already
+    // found the file present, so this ENOENT verdict is stale — discard it
+    // silently rather than firing a false "lost its watch" toast and
+    // `unwatchFile`ing a live handle.
+    //
+    // The mirror ordering is the stated residual: a stale PRESENT verdict
+    // re-arming while a later genuine ENOENT delivery has already captured
+    // `armedAt` discards the real one. `swapHandle`'s total catch narrows
+    // it — on a deleted file the stale-present attach throws and takes this
+    // arm itself — so what is left is "deleted AGAIN after a successful
+    // re-arm", which inotify re-delivers and the kqueue fallback may not.
+    if (entry.watcher !== armedAt) return;
+    // The file may have landed between the stat and this attach. If it
+    // did, that successful handle IS the re-arm — never attach a second,
+    // unstored probe handle, which `unwatchFile` could not reach.
+    if (!swapHandle(filePath, entry)) return;
+    entry.sawRename = false;
+  }
+
+  // Delivery-time content backstop: a write Tandem just made can leak a
+  // `change` event past the arrival-time counter (NTFS fires ~2 events
+  // per atomic rename; callers arm count=1). If the bytes on disk are
+  // exactly what we wrote, skip the redundant reload + toast. Falls
+  // through to reload on any mismatch — never swallows a real edit.
+  //
+  // `isSelfWriteEcho` is the body's other `await` and needs no identity
+  // re-check of its own: it re-fetches `watched.get(filePath)` itself and
+  // nothing after it touches `entry`. An edit that changes that needs a
+  // third check.
+  if (await isSelfWriteEcho(filePath)) return;
+  onChanged(filePath).catch((err) => {
+    console.error("[FileWatcher] onChanged callback failed for %s:", filePath, err);
+  });
 }
 
 /**
@@ -250,89 +347,7 @@ export function watchFile(filePath: string, onChanged: (filePath: string) => Pro
     if (entry.timer !== null) {
       clearTimeout(entry.timer);
     }
-    entry.timer = setTimeout(async () => {
-      entry.timer = null;
-
-      // The handle this delivery was scheduled against. Two deliveries are in
-      // flight for one entry whenever a `stat` outlives the 500 ms debounce
-      // (the line above nulls `timer`, so a new event schedules a fresh timer
-      // while this continuation is pending), and a re-arm mutates
-      // `entry.watcher` IN PLACE — it never replaces the entry. So the entry
-      // re-check below cannot see a second kind of staleness, and the two
-      // guards answer two different questions: the entry check asks "was the
-      // entry replaced or removed", `armedAt` asks "did a newer delivery
-      // already resolve this path".
-      const armedAt = entry.watcher;
-
-      let present: boolean;
-      try {
-        // ASYNC, explicitly. `existsSync`/`statSync` is a legal reading of
-        // "stat the path" and makes every ordering guarantee below
-        // unbuildable, because a synchronous call cannot be parked.
-        await fs.promises.stat(filePath);
-        present = true;
-      } catch {
-        present = false;
-      }
-
-      // Re-check identity after the await, on BOTH branches and before the
-      // missing branch's notify as well as before any attach. `unwatchFile`
-      // (tab close, rename) can delete the map entry mid-body; the
-      // continuation would then attach a handle onto an orphaned closure
-      // `entry` — reachable by nothing, alive for the process, and firing `cb`
-      // on every later write next to whatever `watchFile` mints on reopen.
-      // Everything from here to the content path is synchronous, so this one
-      // check covers every branch.
-      if (watched.get(filePath) !== entry) return;
-
-      if (present) {
-        if (!isWin32() && entry.sawRename) {
-          if (!swapHandle(filePath, entry)) return;
-        }
-        entry.sawRename = false;
-      } else if (isWin32()) {
-        // The handle survived by construction; a recreate delivers
-        // `rename, change` and the next delivery reads the new bytes. A
-        // deletion here is not a lost watch, so: no notification, no unwatch,
-        // and today's delete+recreate behaviour is preserved.
-        entry.sawRename = false;
-        console.error("[FileWatcher] %s is missing; handle retained (win32)", filePath);
-        return;
-      } else {
-        // A re-arm since this delivery began means a LATER delivery already
-        // found the file present, so this ENOENT verdict is stale — discard it
-        // silently rather than firing a false "lost its watch" toast and
-        // `unwatchFile`ing a live handle.
-        //
-        // The mirror ordering is the stated residual: a stale PRESENT verdict
-        // re-arming while a later genuine ENOENT delivery has already captured
-        // `armedAt` discards the real one. `swapHandle`'s total catch narrows
-        // it — on a deleted file the stale-present attach throws and takes this
-        // arm itself — so what is left is "deleted AGAIN after a successful
-        // re-arm", which inotify re-delivers and the kqueue fallback may not.
-        if (entry.watcher !== armedAt) return;
-        // The file may have landed between the stat and this attach. If it
-        // did, that successful handle IS the re-arm — never attach a second,
-        // unstored probe handle, which `unwatchFile` could not reach.
-        if (!swapHandle(filePath, entry)) return;
-        entry.sawRename = false;
-      }
-
-      // Delivery-time content backstop: a write Tandem just made can leak a
-      // `change` event past the arrival-time counter (NTFS fires ~2 events
-      // per atomic rename; callers arm count=1). If the bytes on disk are
-      // exactly what we wrote, skip the redundant reload + toast. Falls
-      // through to reload on any mismatch — never swallows a real edit.
-      //
-      // `isSelfWriteEcho` is the body's other `await` and needs no identity
-      // re-check of its own: it re-fetches `watched.get(filePath)` itself and
-      // nothing after it touches `entry`. An edit that changes that needs a
-      // third check.
-      if (await isSelfWriteEcho(filePath)) return;
-      onChanged(filePath).catch((err) => {
-        console.error("[FileWatcher] onChanged callback failed for %s:", filePath, err);
-      });
-    }, 500);
+    entry.timer = setTimeout(() => deliverChange(filePath, entry, onChanged), 500);
   };
 
   let watcher: fs.FSWatcher;
