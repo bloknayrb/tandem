@@ -336,17 +336,18 @@ function handleMouseLeaveClose() {
   {/if}
 
   <!-- `margin-left: auto` pins this button to the pill's right padding (#1736).
-       Under `uniformTabWidth` the wrapper is pinned to 142px and the pill fills
-       it, so a short name leaves slack inside the pill; with every child at
+       Under `uniformTabWidth` the wrapper is pinned to `TAB_FLOOR_PX` (142px)
+       and the pill fills it, so a short name leaves slack inside the pill; with every child at
        `flex-grow: 0` and `justify-content` at its default `flex-start`, that
        slack parked after the LAST child — this button — leaving ~38px of void
        between the × and the tab's right edge.
 
        An auto margin rather than growing the name span, because it is the only
        sink `measureTabFloor` cannot see: auto margins resolve AFTER flex
-       grow/shrink, so at the adaptive floor the free space is 0 and this
-       collapses to 0, and they count as 0 for intrinsic sizing. See the name
-       span's comment above, and `tab-floor.ts` for what growing it would break.
+       grow/shrink, so at the adaptive floor the free space is at most that
+       function's deliberate 1px rounding allowance and this collapses to ~0,
+       and they count as 0 for intrinsic sizing. See the name span's comment
+       above, and `tab-floor.ts` for what growing it would break.
 
        This RELOCATES the whitespace rather than removing it: the gap now sits
        between the filename (or the RO badge) and the ×, which is the
