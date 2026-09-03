@@ -6,7 +6,7 @@ import Paragraph from "@tiptap/extension-paragraph";
 import Placeholder from "@tiptap/extension-placeholder";
 import Subscript from "@tiptap/extension-subscript";
 import Superscript from "@tiptap/extension-superscript";
-import Table from "@tiptap/extension-table";
+import { Table } from "@tiptap/extension-table";
 import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
@@ -263,9 +263,9 @@ export function buildSchemaExtensions(): AnyExtension[] {
     // `listItem:false` disables StarterKit's stock ListItem so our
     // ListItemCheckbox (same node name "listItem", + a `checked` tri-state
     // attribute for GFM task lists, #982) owns the schema. `paragraph:false`
-    // hands the paragraph node to SoftWrapParagraph below. history:false — Yjs
-    // handles undo/redo.
-    StarterKit.configure({ history: false, listItem: false, paragraph: false }),
+    // hands the paragraph node to SoftWrapParagraph below. undoRedo:false —
+    // Yjs handles undo/redo (v3 renamed StarterKit's `history` option).
+    StarterKit.configure({ undoRedo: false, listItem: false, paragraph: false }),
     SoftWrapParagraph,
     ListItemCheckbox,
     ListSpreadExtension,
