@@ -60,9 +60,10 @@ export function makeCtrlChatObserver(deps: {
               selection = buffered;
             } else {
               // Range went stale or out of bounds — degrade to text only (no
-              // offsets). This is the one `validateRange` hoist site with a human
-              // waiting on the answer, so the degradation is logged rather than
-              // inferred from an event that quietly lost its `from`/`to`.
+              // offsets). Logged rather than left to be inferred from an event
+              // that quietly lost its `from`/`to`: this one runs with a human
+              // waiting on the reply, and it passes no hoisted `text`, so it pays
+              // a full `extractText` per chat message to answer it.
               console.warn(
                 `[EventQueue] Buffered selection dropped its offsets for doc=${msg.documentId}: ` +
                   `[${buffered.from}, ${buffered.to}] — ${describeRangeFailure(validation)}`,

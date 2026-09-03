@@ -38,7 +38,7 @@ import {
   resolveToElement,
 } from "../shared/positions/ydoc.js";
 import type { Annotation } from "../shared/types.js";
-import { collectXmlTexts, extractText } from "./mcp/document-model.js";
+import { collectXmlTexts, extractText, flatDocLength } from "./mcp/document-model.js";
 
 // Moved to `src/shared/positions/ydoc.ts` — see that file's header for why the
 // move is a leaf extraction rather than a file move. Re-exported so existing
@@ -119,20 +119,37 @@ export interface FlatRangeOpts {
   surrogates?: SurrogatePolicy;
 }
 
+/**
+ * The five call sites that hoist an `extractText` across a loop.
+ *
+ * A closed union rather than `string`, because these tags key
+ * `hoistMismatchCounts`, which is module-global and never cleared: a tag built
+ * from a document id or an annotation id would grow it without bound. Adding an
+ * arm is the moment to re-read `resolveDocText`'s scoped argument for why a
+ * length comparison is a sufficient guard — it is a claim about what these five
+ * callers write, not a general one.
+ */
+export type HoistTag =
+  | "document/stamp-whole-doc"
+  | "docx-capture/score"
+  | "docx-comments/inject"
+  | "watcher/relocation-anchor"
+  | "watcher/relocation-probe";
+
 /** Options shared by `validateRange` and `anchoredRange`. */
 export interface RangeValidationOpts extends FlatRangeOpts {
   textSnapshot?: string;
   rejectHeadingOverlap?: boolean;
   /**
    * **Must be `extractText(ydoc)` of THIS ydoc, as of this call.** Not a
-   * same-shaped string, not a sibling document's text of equal length, not the
-   * PRE-edit text of a document this caller has since written to.
+   * same-shaped string, not the PRE-edit text of a document this caller has
+   * since written to.
    *
-   * It is verified in full on every call (see `resolveDocText`), and a mismatch
-   * is reported and recomputed rather than trusted — so passing the wrong string
-   * cannot change a verdict, it only makes noise. The corollary is that this is
-   * a CORRECTNESS hint, not a performance one: verifying it costs exactly the
-   * materialization a hoist was once supposed to avoid.
+   * Guarded by a flat-length comparison on every call — cheap (a tree walk, no
+   * string build), and sufficient for the five callers that pass it because none
+   * of them writes document text inside its loop. It is NOT a full content
+   * check: read `resolveDocText` before adding a call site, because the argument
+   * is scoped to what those callers do, not to the option.
    */
   text?: string;
   /**
@@ -140,7 +157,7 @@ export interface RangeValidationOpts extends FlatRangeOpts {
    * annotations reports "the watcher's relocation pass, occurrence 100" rather
    * than hundreds of identical anonymous lines. Only meaningful with `text`.
    */
-  textTag?: string;
+  textTag?: HoistTag;
 }
 
 function invalid(reason: RangeInvalidReason, message: string): FlatRangeValidation & { ok: false } {
@@ -155,10 +172,11 @@ function isHighSurrogate(unit: number): boolean {
  * Is this UTF-16 code unit the TRAILING half of a surrogate pair?
  *
  * Deliberately NOT exported. It was, for the .docx comment export resolver's
- * outward snap, and that was the bug: on its own it also answers `true` at the
- * legal boundary between two adjacent astral characters, and at offset 0 of a
- * text beginning with a lone low surrogate (where the snap produced -1). Every
- * caller wants {@link splitsSurrogatePair}, which is the paired form.
+ * outward snap, and on its own it is the wrong question: it asks what is AT `i`
+ * without asking what precedes it, so it fires on any lone low surrogate — one
+ * at offset 0, or one following a non-high unit — where nothing is split and the
+ * snap corrupts a valid offset (at offset 0 it produced -1). Every caller wants
+ * {@link splitsSurrogatePair}, the paired form.
  */
 function isLowSurrogate(unit: number): boolean {
   return unit >= 0xdc00 && unit <= 0xdfff;
@@ -170,8 +188,11 @@ function isLowSurrogate(unit: number): boolean {
  * The paired form is the whole point. A one-sided "the unit at `i` is any
  * surrogate" check passes every `"a<emoji>b"` case and then rejects offset 2 of
  * `"<emoji><emoji>"` — the legal boundary between two adjacent astral
- * characters, which has no alternative offset. At `i === text.length`
- * `charCodeAt` is NaN, which is neither, so the document end is always legal.
+ * characters, where the unit at `i` is a HIGH surrogate and nothing is split.
+ * That offset has no alternative, so rejecting it is a dead end. At
+ * `i === text.length` `charCodeAt` is NaN, which is neither half, so the
+ * document end is always legal; and `i <= 0` returns false, so the document
+ * start is too.
  */
 export function splitsSurrogatePair(text: string, i: number): boolean {
   if (i <= 0) return false;
@@ -289,7 +310,7 @@ export function validateFlatRange(
  * that a per-occurrence line could never give — rather than going quiet forever
  * the way a plain "log once" Set would.
  */
-const hoistMismatchCounts = new Map<string, number>();
+const hoistMismatchCounts = new Map<HoistTag, number>();
 
 /**
  * First occurrence, then the 10th, 100th, 1000th … Everything else is counted
@@ -300,7 +321,7 @@ const hoistMismatchCounts = new Map<string, number>();
  * fired earlier would be the same "goes quiet forever" failure the Map's
  * docstring rejects.
  */
-function reportHoistMismatch(tag: string | undefined, detail: string): void {
+function reportHoistMismatch(tag: HoistTag | undefined, detail: string): void {
   const where = tag ?? "an untagged call site";
   let n = 1;
   if (tag !== undefined) {
@@ -315,27 +336,49 @@ function reportHoistMismatch(tag: string | undefined, detail: string): void {
 }
 
 /**
- * The flat text for this call, honouring a hoisted `opts.text` only when it is
- * actually this document's text.
+ * The flat text for this call, honouring a hoisted `opts.text` when the document
+ * still has the shape the caller hoisted against.
  *
- * **The check is a full content compare, and it is NOT test-gated.** It used to
- * be two guards: an always-on `provided.length !== flatDocLength(ydoc)` plus a
- * `process.env.VITEST === "true"` content compare. That split shipped the weak
- * half. In production only the lengths were compared, so a same-length wrong
- * string — a same-length edit under the hoist, or a sibling document of equal
- * length — passed the staleness gate AND the surrogate check on the WRONG text
- * and then anchored into the real ydoc. And because the strong half ran only
- * under vitest, no test could ever be red for the production behaviour: the
- * guard repaired the string before it could change an outcome. A guard that
- * exists only under tests is a test that self-heals.
+ * **The guard is `flatDocLength(ydoc) === provided.length`, it runs always, and
+ * it is NOT test-gated.** `flatDocLength` walks the tree reading `child.length`
+ * and builds no string, so a matching hoist costs one walk and zero allocation.
+ * That is the whole point of the option.
  *
- * The honest price is that `opts.text` no longer avoids a materialization —
- * verifying it costs the `extractText` the hoist was meant to skip. What it now
- * buys is that a caller's own string is what the checks run on when it is
- * correct, and a loud, throttled report plus a correct answer when it is not.
- * **`opts.text` is therefore a correctness hint, not a performance one**; treat
- * a new `text:` call site as documentation of intent rather than a speed-up, and
- * do not re-derive a cost argument from it.
+ * **Why a length is enough HERE — a scoped claim, not a complete one.** Every
+ * caller that passes `text` hoists it and then loops writing only
+ * `Y_MAP_AUTHORSHIP` or `Y_MAP_ANNOTATIONS`, never the `default` fragment. So
+ * the only staleness this guard can actually meet is a structural change to the
+ * fragment, and a structural change moves the flat length. A same-length,
+ * in-place TEXT edit landing mid-loop would slip past — this does not pretend
+ * otherwise. It is simply not a shape any hoist caller produces, because none of
+ * them writes document text at all. **A new `text:` call site that writes to the
+ * fragment inside its own loop invalidates this argument, not merely this
+ * guard.**
+ *
+ * Two earlier forms, recorded so neither comes back:
+ *
+ *  - Length check plus a `process.env.VITEST === "true"` content compare. That
+ *    shipped the weak half: production compared lengths only, and no test could
+ *    ever be red for the production behaviour, because under vitest the strong
+ *    half repaired the string before it could change an outcome. A guard that
+ *    exists only under tests is a test that self-heals.
+ *  - An UNCONDITIONAL `extractText` content compare, which replaced it and is
+ *    what this replaces. It was correct, and it inverted the option's whole
+ *    purpose: a caller passing `text` then cost strictly MORE than one omitting
+ *    it, because verifying the hoist rebuilt the full projection once per loop
+ *    iteration.
+ *
+ * **Measured, because the size of the win is smaller than it looks and the next
+ * reader should not re-derive an inflated one.** On a 1500-block / 125 KB
+ * document, `stampClaudeAuthorshipWholeDoc` ran 17.0 s with the content compare
+ * and 14.7 s with this guard (median of 5; the box was noisy, spread 11.6-24.4 s).
+ * Per call on the same document the guard costs 5.49 ms against 5.66 ms — only
+ * ~13% — because BOTH are dominated by the Y.js tree traversal rather than the
+ * string concatenation; what the guard removes is the 125 KB allocation per
+ * iteration, not the walk. And the loop's real cost is neither: it is already
+ * O(blocks²) in tree walks and always was, because `resolveToElement` and
+ * `flatOffsetToRelPos` each walk the fragment block-by-block on every call. The
+ * hoist is worth having; it is not what makes this loop expensive.
  *
  * Recovers by recomputing rather than throwing: this runs inside MCP tool
  * handlers, where a throw is a worse outcome than a slow correct answer.
@@ -343,18 +386,17 @@ function reportHoistMismatch(tag: string | undefined, detail: string): void {
 function resolveDocText(
   ydoc: Y.Doc,
   provided: string | undefined,
-  tag: string | undefined,
+  tag: HoistTag | undefined,
 ): string {
   if (provided === undefined) return extractText(ydoc);
-  const actual = extractText(ydoc);
-  if (provided === actual) return provided;
+  const trueLength = flatDocLength(ydoc);
+  if (provided.length === trueLength) return provided;
   reportHoistMismatch(
     tag,
-    provided.length !== actual.length
-      ? `length ${provided.length} != document length ${actual.length} — the document changed under the hoist.`
-      : `right LENGTH (${actual.length}) but the WRONG CONTENT — this is the dangerous shape: it would have passed a length-only guard and changed the staleness and surrogate verdicts.`,
+    `hoisted length ${provided.length} != document length ${trueLength} — the document ` +
+      "changed shape under the hoist.",
   );
-  return actual;
+  return extractText(ydoc);
 }
 
 /**
@@ -401,8 +443,9 @@ export function validateRange(
   // ONE materialization, shared by staleness, bounds and the surrogate check.
   // Previously computed only when a snapshot was given; making it unconditional
   // adds a full-document walk to every `anchoredRange` caller (~3.5 ms at
-  // 460 KB). Accepted — and note that `opts.text` does NOT buy it back, because
-  // verifying a hoisted string costs the same walk. See `resolveDocText`.
+  // 460 KB). Accepted. `opts.text` is what a loop uses to avoid paying it per
+  // iteration, and its guard costs a tree walk, not a string build — see
+  // `resolveDocText`.
   const fullText = resolveDocText(ydoc, opts?.text, opts?.textTag);
 
   // Staleness check
