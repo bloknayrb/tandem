@@ -423,4 +423,71 @@ describe("#1752: the relocation probe and its failure report", () => {
     expect(logs[0]).toContain("RANGE_GONE");
     expect(logs[0]).toMatch(/stale coordinates/i);
   });
+
+  it("REPORTS a RANGE_MOVED relocation the bounds check refuses, and leaves the record where it was", async () => {
+    // The twin of the arm above, on the RANGE_MOVED side: the text was FOUND,
+    // the relocation was computed, and `anchoredRange` still said no.
+    //
+    // What can still make it say no, after #1752's clamp: the clamp bounds
+    // `resolvedTo` from ABOVE (`Math.min(..., text.length)`) and nothing bounds
+    // it from below, so a stored range whose `to` precedes its `from` carries a
+    // NEGATIVE span and `resolvedFrom + span` lands before `resolvedFrom` —
+    // `inverted`, which `allowEmpty` does not excuse. That state is reachable
+    // rather than hypothetical: `refreshRange` has an explicit arm for an
+    // inverted CRDT resolution (it logs and returns `failed`, KEEPING the
+    // record's offsets), and the annotations Y.Map is writable by any connected
+    // client. The probe itself is unbothered — staleness runs before the shape
+    // and bound checks, so `fullText.slice(from, to)` on an inverted range is
+    // `""`, never the probe, and the answer is RANGE_MOVED.
+    const prefix = "Intro line.\n\n";
+    const { doc, filePath, triggerReload } = await setupOpenedFile(`${prefix}${LONG_BODY}\n`);
+    const staleFrom = extractText(doc).indexOf(LONG_BODY);
+    expect(staleFrom).toBeGreaterThan(5);
+    const staleTo = staleFrom - 5;
+    const id = "ann_inverted_relocation";
+    withMcp(doc, () =>
+      doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        author: "claude",
+        type: "comment",
+        range: { from: toFlatOffset(staleFrom), to: toFlatOffset(staleTo) },
+        content: "stored inverted",
+        status: "pending",
+        timestamp: 0,
+        textSnapshot: LONG_BODY.slice(0, SNAPSHOT_CAP),
+        textSnapshotTruncated: true,
+        rev: 1,
+      } as Annotation),
+    );
+
+    const logs = await watcherLogs(async () => {
+      // Same paragraph, shifted: the probe is found at a new offset, so the
+      // pass reaches the relocation call rather than RANGE_GONE.
+      await fs.writeFile(
+        filePath,
+        `# A heading that did not used to be here\n\n${prefix}${LONG_BODY}\n`,
+      );
+      await triggerReload();
+    });
+
+    const movedTo = expectedStart(doc);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain(`Relocation rejected for annotation ${id}`);
+    // The pair it refused, spelled out — this is what pins the clamp's
+    // arithmetic rather than merely the fact that something was logged.
+    expect(logs[0]).toContain(`[${movedTo}, ${movedTo - 5}]`);
+    expect(logs[0]).toMatch(/stale coordinates/i);
+
+    // The consequence the message claims, asserted rather than trusted: the
+    // record still carries its pre-reload offsets, they no longer describe the
+    // annotated text, and `refreshAllRanges` has already minted a relRange from
+    // them — so nothing will revisit it.
+    const ann = annOf(doc, id);
+    expect(ann.range.from, "not relocated").toBe(staleFrom);
+    expect(ann.range.to).toBe(staleTo);
+    expect(ann.relRange, "durably pinned, not merely left alone").toBeDefined();
+    expect(extractText(doc).slice(staleFrom, staleFrom + SNAPSHOT_CAP)).not.toBe(
+      LONG_BODY.slice(0, SNAPSHOT_CAP),
+    );
+  });
 });
