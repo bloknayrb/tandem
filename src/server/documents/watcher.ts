@@ -50,7 +50,12 @@ import { watchFile } from "../file-watcher.js";
 import { sanitizeAnnotation } from "../mcp/annotations.js";
 import { extractText } from "../mcp/document-model.js";
 import { pushNotification } from "../notifications.js";
-import { anchoredRange, refreshAllRanges, validateRange } from "../positions.js";
+import {
+  anchoredRange,
+  describeRangeFailure,
+  refreshAllRanges,
+  validateRange,
+} from "../positions.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
 import { flagExternalConflict, readPendingConflict } from "./conflict.js";
 import { isDirty, markClean } from "./dirty.js";
@@ -259,6 +264,7 @@ export async function reloadFromDisk(
           const vr = validateRange(doc, ann.range.from, probeTo, {
             textSnapshot: probe,
             text,
+            textTag: "watcher/relocation-probe",
           });
 
           if (vr.ok) continue; // Range is still valid
@@ -286,7 +292,12 @@ export async function reloadFromDisk(
             // prefix (#1486), which can be cut between the halves of a pair —
             // and the clamped `to` can land mid-pair too. Both are DERIVED
             // offsets and nothing here is serialized to a file.
-            const relocOpts = { allowEmpty: true, surrogates: "ignore" as const, text };
+            const relocOpts = {
+              allowEmpty: true,
+              surrogates: "ignore" as const,
+              text,
+              textTag: "watcher/relocation-anchor",
+            };
             const relocated = truncated
               ? anchoredRange(doc, vr.resolvedFrom, resolvedTo, undefined, relocOpts)
               : anchoredRange(doc, vr.resolvedFrom, resolvedTo, ann.textSnapshot, relocOpts);
@@ -300,14 +311,32 @@ export async function reloadFromDisk(
             } else {
               // Previously there was no `else` at all, so a rejected relocation
               // left the annotation durably pinned to stale offsets in silence.
+              //
+              // "Left at its previous offsets" would understate it: the
+              // `refreshAllRanges` pass above has ALREADY minted a fresh
+              // `relRange` from those stale flat offsets, so the record is now
+              // durably pinned to coordinates that describe different text, every
+              // later reload resolves that relRange cleanly, and nothing revisits
+              // it. Same consequence as the RANGE_GONE arm below.
               console.error(
                 `[watcher] Relocation rejected for annotation ${ann.id}: ` +
-                  `[${vr.resolvedFrom}, ${resolvedTo}] — ${relocated.code}. ` +
-                  "Left at its previous offsets.",
+                  `[${vr.resolvedFrom}, ${resolvedTo}] — ${describeRangeFailure(relocated)}. ` +
+                  "The annotation stays pinned to its stale coordinates and will not be revisited.",
               );
             }
+          } else {
+            // Everything that is not RANGE_MOVED — in practice RANGE_GONE, the
+            // annotated text being nowhere in the new file. This arm was SILENT
+            // while its RANGE_MOVED twin above logs, and the consequence is
+            // identical: `refreshAllRanges` has already re-anchored a fresh
+            // `relRange` onto the stale flat offsets, so the record is durably
+            // mispinned rather than benignly "left as-is".
+            console.error(
+              `[watcher] Snapshot relocation failed for annotation ${ann.id}: ` +
+                `[${ann.range.from}, ${probeTo}] — ${describeRangeFailure(vr)}. ` +
+                "The annotation stays pinned to its stale coordinates and will not be revisited.",
+            );
           }
-          // RANGE_GONE: annotation text was deleted entirely — leave as-is
         }
       });
     }

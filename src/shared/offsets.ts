@@ -26,6 +26,22 @@ export const FLAT_SEPARATOR = "\n";
  * `"#".repeat(-1)` THROWS), and a fractional level (length 2.5, so
  * `flatDocLength` went non-integer). Levels above 6 are left alone — Tiptap
  * will not emit one, but a longer prefix is at least self-consistent.
+ *
+ * **The CLIENT does not route through this predicate, and must not be "tidied"
+ * into doing so.** Three call sites normalize with `|| 1` before calling in —
+ * `src/client/positions.ts:128` (`headingPrefix`), `:232` and `:319`
+ * (`headingPrefixLength`) — so for `level: 0` the server charges 0 characters
+ * and the client charges 2. Unreachable from today's writers (ProseMirror
+ * defaults `level` to 1 and nothing emits 0), and recorded rather than fixed
+ * because fixing it is a coordinate-system change with no reachable bug behind
+ * it.
+ *
+ * What this docstring explicitly does NOT bless is the obvious-looking client
+ * tidy from `|| 1` to `?? 1`. That would let a literal 0 through to these
+ * functions, where it now means "not a heading" and charges 0 — the client would
+ * start agreeing with the server about the prefix LENGTH while still rendering a
+ * heading, which is a different disagreement, not a fix. No code change on
+ * either side belongs here.
  */
 function isHeadingLevel(level: number | null | undefined): level is number {
   return typeof level === "number" && Number.isInteger(level) && level >= 1;
