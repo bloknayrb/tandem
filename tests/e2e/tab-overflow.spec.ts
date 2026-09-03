@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import fs from "fs";
 import path from "path";
+import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -198,7 +199,34 @@ const FIXTURE_NAMES = [
   "notes.md",
 ];
 
-async function openFixtureTabs(page: Page, uniform: boolean) {
+/**
+ * Opens each name in `readOnlyNames` READ-ONLY, in addition to `FIXTURE_NAMES`.
+ *
+ * It has to go through `POST /api/open` — the route the "View Changelog" button
+ * uses — because `tandem_open` has NO `readOnly` parameter: its zod schema is
+ * `{ filePath, force, authoredBy }` and silently DROPS the extra key, so the
+ * MCP spelling yields a writable tab and a vacuously passing test. (A `.docx`
+ * fixture is not a shortcut either — `openFromDisk` sets `readOnly = false` for
+ * every disk open regardless of extension, #576.)
+ *
+ * Fetched from Node rather than in-page: 127.0.0.1 is loopback either way, and
+ * `open` is one of the routes that deliberately carries NO origin gate (the
+ * Tauri sidecar POSTs it without an `Origin`), so a Node-side call is not
+ * routing around a check. Doing it before `page.goto` also means the tab is
+ * present at first paint like every other fixture, rather than arriving after.
+ * The URL is built from the harness constant — a raw `:3479` literal here would
+ * aim the open at the developer's real desktop Tandem and SUCCEED there.
+ */
+async function openReadOnlyFixture(name: string) {
+  const res = await fetch(`http://127.0.0.1:${E2E_MCP_PORT}/api/open`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filePath: path.join(tmpDir, name), readOnly: true, force: false }),
+  });
+  expect(res.status, `/api/open refused the read-only fixture "${name}"`).toBe(200);
+}
+
+async function openFixtureTabs(page: Page, uniform: boolean, readOnlyNames: string[] = []) {
   // `tabEnter`/`tabExit` animate `width` and inject `min-width: 0`, so a pill
   // measured mid-transition reports a collapsing box rather than its resting
   // size. Zeroing both durations makes these measurements deterministic instead
@@ -211,9 +239,17 @@ async function openFixtureTabs(page: Page, uniform: boolean) {
     await mcp.callTool("tandem_open", { filePath });
   }
 
-  // Seed the setting before first paint. `schemaVersion` must be the CURRENT
-  // one: seed it lower and loadSettings migrates (fine), but seed it higher and
-  // the whole run silently goes `_readOnly`.
+  for (const name of readOnlyNames) {
+    fs.writeFileSync(path.join(tmpDir, name), `# ${name}\n\nRead-only sizing fixture.\n`);
+    await openReadOnlyFixture(name);
+  }
+
+  // Seed the setting before first paint. `schemaVersion` must be AT MOST the
+  // current one: seed it lower and loadSettings migrates (fine — 18 is two
+  // behind `CURRENT_SCHEMA_VERSION` today and migrates through), but seed it
+  // higher and the whole run silently goes `_readOnly`. This comment used to
+  // say "must be the CURRENT one", which stopped being what the code does the
+  // first time the schema was bumped past 18.
   await page.addInitScript(
     ([key, value]) => {
       window.localStorage.setItem(
@@ -228,7 +264,18 @@ async function openFixtureTabs(page: Page, uniform: boolean) {
   await page.waitForSelector("[data-testid='tab-scroll-container']");
   await expect
     .poll(() => page.locator(".tab-flip").count(), { timeout: 10_000 })
-    .toBeGreaterThanOrEqual(FIXTURE_NAMES.length);
+    .toBeGreaterThanOrEqual(FIXTURE_NAMES.length + readOnlyNames.length);
+  // SN Pro is self-hosted with `font-display: swap` (index.html), so first
+  // paint measures at FALLBACK metrics and the real face swaps in later.
+  // Production re-floors on `document.fonts.ready` (DocumentTabs' `fontsSettled`
+  // is a tracked dep of the floor effect) — but between those two moments the
+  // floors were computed against one font and the names render in another, and
+  // the residual slack in that window is NOT bounded by `measureTabFloor`'s
+  // deliberate 1px allowance. The adaptive gap assertion's `<= 8` has ~1px of
+  // measured headroom, so it is exactly what a mid-swap measurement lands on.
+  // Nothing above gates the swap: the selector wait and the count poll are both
+  // satisfied at first paint.
+  await page.evaluate(() => document.fonts.ready);
 }
 
 async function measureTabStrip(page: Page) {
@@ -237,6 +284,11 @@ async function measureTabStrip(page: Page) {
       if (!el) return null;
       const b = el.getBoundingClientRect();
       return { left: b.left, right: b.right, width: b.width };
+    };
+    const textRight = (el: Element) => {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      return r.getBoundingClientRect().right;
     };
     const scroller = document.querySelector("[data-testid='tab-scroll-container']") as HTMLElement;
     const actions = document.querySelector(".title-bar-actions") as HTMLElement;
@@ -249,16 +301,58 @@ async function measureTabStrip(page: Page) {
         const pill = wrapper.firstElementChild as HTMLElement;
         // Null while a tab is renaming — the span is swapped for an input.
         const name = pill.querySelector("[data-testid^='tab-name-']");
+        // Right edge of the pill's CONTENT box, read off computed style rather
+        // than restating TabItem's `padding: 0 10px 0 12px`. Reading it matters
+        // for more than tidiness: the active pill's border is 1px and every
+        // inactive one's is 2px (TabItem's `border-right` ternary), so a
+        // hardcoded offset would be off by a pixel on exactly one tab — which
+        // is the same size as the tolerance any flushness assertion needs.
+        const cs = getComputedStyle(pill);
+        const pillBox = box(pill)!;
         return {
           uniform: wrapper.classList.contains("uniform"),
+          // The span's FULL text — `textContent` is unaffected by the CSS
+          // ellipsis, so this is the fixture's real name even on the ten tabs
+          // that render truncated. Lets a test name the fixture it means
+          // instead of rediscovering it from pixel widths.
+          label: name?.textContent?.trim() ?? null,
           wrapper: box(wrapper)!,
-          pill: box(pill)!,
+          pill: pillBox,
           name: box(name),
+          // Null on every writable tab. Present, it sits BETWEEN the name and
+          // the ×, so it — not the name — is the last content box before the
+          // button, and `measureTabFloor` folds it into the chrome sum.
+          badge: box(pill.querySelector(".tab-ro-badge")),
+          // Right edge of the filename's actual GLYPHS, via a Range over the
+          // span's contents — not the span's box. The two part company exactly
+          // when this PR's bug is present, and `scrollWidth` cannot tell them
+          // apart: on a grown span it reports the box as well (that is the
+          // whole mechanism `measureTabFloor` documents), so it reads
+          // shrink-wrapped under the very fix it would need to catch.
+          nameTextRight: name ? textRight(name) : null,
           close: box(pill.querySelector("button[aria-label^='Close']"))!,
+          contentRight:
+            pillBox.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight),
         };
       }),
     };
   });
+}
+
+/**
+ * Shared by both modes: the × sits ON the pill's content edge, never floating
+ * inside it (#1736). Distinct from `assertNothingSpills`, which only catches a
+ * button that has escaped its pill — a button parked 38px short of the edge
+ * satisfies that one completely.
+ */
+function assertCloseFlush(measured: Awaited<ReturnType<typeof measureTabStrip>>) {
+  for (const tab of measured.tabs) {
+    // Sub-pixel only. A regression here is tens of pixels, not fractions.
+    expect(
+      Math.abs(tab.contentRight - tab.close.right),
+      `the close button drifted off the pill's content edge on "${tab.label}"`,
+    ).toBeLessThanOrEqual(1);
+  }
 }
 
 /** Shared by both modes: nothing escapes its pill, and the actions cluster survives. */
@@ -297,6 +391,137 @@ test("uniform mode: every tab is the same width, and the strip still scrolls", a
   // pin, which left read-only and renaming tabs 80-145px wider than the rest.
   expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
   expect(Math.max(...widths)).toBeCloseTo(FLOOR_PX, 0);
+
+  assertNothingSpills(measured);
+});
+
+/**
+ * #1736. A uniform-mode pill is padded out to 142px, so a short name leaves
+ * slack inside it — and that slack used to park after the last child, leaving
+ * ~38px of void between the × and the tab's right edge. `assertNothingSpills`
+ * is blind to it: nothing overflowed, it was just wrong.
+ *
+ * The second assertion is the load-bearing one, and it is here rather than in
+ * the adaptive tests on purpose. The rejected fix — growing the name span —
+ * produces close-button pixels identical to the shipped one, so `assertCloseFlush`
+ * passes under it; what it breaks is the adaptive floor (see `measureTabFloor` in
+ * `src/client/tabs/tab-floor.ts`, whose `scrollWidth` read is the canonical
+ * explanation). The adaptive tests below do go red, but they read as unrelated
+ * breakage. This assertion names the cause at the site of the change.
+ *
+ * Both assertions need real layout, so neither can move to the unit suite:
+ * happy-dom has no layout engine, and a vitest check on the style string would
+ * pin the fix's spelling rather than its effect.
+ */
+test("uniform mode: the close button sits flush at the tab's right edge whatever the name's length (#1736)", async ({
+  page,
+}) => {
+  await openFixtureTabs(page, true);
+  const measured = await measureTabStrip(page);
+
+  assertCloseFlush(measured);
+
+  // The slack must land BETWEEN the name and the ×, which is the same thing as
+  // saying the name span never absorbed it. `ab.md` is the declared dispersion
+  // probe: its name box stays shrink-wrapped at its text width while the pill
+  // around it is padded to 142px, so a real gap opens before the button.
+  const probe = measured.tabs.find((t) => t.label === "ab.md");
+  expect(probe, "the ab.md dispersion probe is missing from the strip").toBeDefined();
+  expect(
+    probe!.close.left - probe!.name!.right,
+    "ab.md's name span absorbed the slack — see `measureTabFloor`",
+  ).toBeGreaterThan(20);
+
+  assertNothingSpills(measured);
+});
+
+test("adaptive mode: the close button is flush there too, with no slack to absorb (#1736)", async ({
+  page,
+}) => {
+  await openFixtureTabs(page, false);
+  const measured = await measureTabStrip(page);
+
+  assertCloseFlush(measured);
+
+  // No fixture tab is renaming, so every tab has a name span. Asserted rather
+  // than filtered: skipping a nameless tab would silently skip the tab the
+  // assertion below exists for.
+  expect(
+    measured.tabs.every((t) => t.name),
+    "a tab was renaming mid-measurement",
+  ).toBe(true);
+
+  // The mode's own invariant, stated as geometry: nothing in the pill can park
+  // slack. It gets there two different ways, and the bound holds for both — on
+  // a SHORT name the floor is chrome + the name's natural width, so free space
+  // is only `measureTabFloor`'s deliberate 1px rounding allowance; on a LONG
+  // name the floor clamps to TAB_FLOOR_PX and the name span (`flex-shrink: 1;
+  // min-width: 0`) shrinks to fill and ellipsizes, so free space is ≤ 0.
+  // Either way the × lands right after the name with the 6px column gap
+  // between them. 8 = 6 gap + 1 rounding + 1 subpixel.
+  //
+  // Measured from the badge when there is one — it, not the name, is then the
+  // last content box before the ×. `FIXTURE_NAMES` opens no read-only tab, so
+  // this reduces to the name here; the read-only test below is where the badge
+  // branch is actually exercised.
+  for (const tab of measured.tabs) {
+    expect(
+      tab.close.left - (tab.badge ?? tab.name!).right,
+      `slack opened before the × on "${tab.label}"`,
+    ).toBeLessThanOrEqual(8);
+  }
+});
+
+/**
+ * Read-only is a distinct measurement regime, not a cosmetic variant: the RO
+ * badge is a real child, so it lands in `measureTabFloor`'s gap term AND its
+ * chrome sum, and `readOnly` is a tracked dep of DocumentTabs' floor effect.
+ *
+ * It is also the SECOND discriminator against the rejected fix, and the one
+ * that pins the reason #1736 went the way it did. Growing the name span carries
+ * the badge and the × to the pill's right edge together while the filename's
+ * glyphs stay at the left, opening a void between the name and the badge that
+ * labels it. An auto margin on the button opens the gap after both instead —
+ * the whole "keeps the RO badge beside the name it describes" claim, which was
+ * argued in the PR body and tested nowhere until here.
+ *
+ * Uniform mode on purpose: it pads the pill to `FLOOR_PX`, so a two-character
+ * name leaves ~38px of slack for the assertions to see the placement of.
+ */
+test("read-only mode: the RO badge stays beside its filename and the × stays flush (#1736)", async ({
+  page,
+}) => {
+  await openFixtureTabs(page, true, ["ro.md"]);
+  const measured = await measureTabStrip(page);
+
+  const ro = measured.tabs.find((t) => t.label === "ro.md");
+  expect(ro, "the read-only fixture is missing from the strip").toBeDefined();
+  expect(
+    ro!.badge,
+    "ro.md opened WRITABLE — the tab has no RO badge, so this test is vacuous",
+  ).not.toBeNull();
+
+  assertCloseFlush(measured);
+
+  // The claim, measured against the GLYPHS rather than the span's box, which is
+  // the difference between a guard and a decoration here. Two spellings were
+  // written first and both were measured passing under the rejected fix:
+  // `badge.left − name.right`, because the badge stays glued to the span's
+  // right EDGE while that edge travels to the far side of the pill; and
+  // `name.width − name.scrollWidth`, because `scrollWidth` reports the grown
+  // box too — the exact mechanism `measureTabFloor` is documented around, which
+  // makes it the one probe that cannot detect its own failure mode.
+  // 8 = the 6px column gap + 1 rounding + 1 subpixel.
+  expect(
+    ro!.badge!.left - ro!.nameTextRight!,
+    "the RO badge is no longer beside the filename's glyphs — the name span grew past its text",
+  ).toBeLessThanOrEqual(8);
+
+  // And the slack lands after BOTH of them, in the button's auto margin.
+  expect(
+    ro!.close.left - ro!.badge!.right,
+    "no gap before the × on a short read-only name — the slack went somewhere else",
+  ).toBeGreaterThan(20);
 
   assertNothingSpills(measured);
 });
@@ -376,6 +601,11 @@ test("toggling the setting live re-sizes the strip, stranding no per-tab floor",
   // min-width would still let the tabs agree with one another at the wrong size.
   expect(Math.max(...after.tabs.map((t) => t.wrapper.width))).toBeCloseTo(FLOOR_PX, 0);
   assertNothingSpills(after);
+  // #1736 through the ONE path where it meets a mid-flight DOM: the class flip
+  // and the inline-`min-width` clear land in separate flushes (see the poll
+  // above). Adding this to the two pre-seeded mode tests would be duplication —
+  // they measure the same settled DOM the dedicated tests already do.
+  assertCloseFlush(after);
 });
 
 /**
