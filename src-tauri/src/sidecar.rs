@@ -2932,8 +2932,17 @@ mod shutdown_guard_tests {
             // a comment, real call gone) that the previous mechanism died of.
             let macro_at = before_quote.len() - MACRO.len();
             let line_start = src[..macro_at].rfind('\n').map_or(0, |i| i + 1);
+            // `concat!`, not a spelled-out "//" literal. `tests/docs/rust-sources.ts`
+            // strips comments with a regex BEFORE it counts braces, and that
+            // regex is not string-aware: a line-comment marker inside a Rust
+            // string literal makes it delete the closing quote and the rest of
+            // the line, after which its brace matcher desynchronises and throws
+            // — taking all six suites built on that helper down with it. It
+            // fails loudly rather than silently, so this is a landmine and not a
+            // hole, but the crate has to step around it.
+            const LINE_COMMENT: &str = concat!("/", "/");
             assert!(
-                !src[line_start..macro_at].contains("//"),
+                !src[line_start..macro_at].contains(LINE_COMMENT),
                 "the log::warn! carrying {line:?} in {src_name} is commented out — the literal is \
                  still present but nothing emits it"
             );
