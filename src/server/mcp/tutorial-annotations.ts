@@ -5,7 +5,7 @@ import { withInternal } from "../../shared/origins.js";
 import type { Annotation, AnnotationType, HighlightColor } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
 import { nextRev } from "../annotations/schema.js";
-import { anchoredRange } from "../positions.js";
+import { anchoredRange, describeRangeFailure } from "../positions.js";
 import { extractText } from "./document-model.js";
 
 interface TutorialAnnotationDef {
@@ -75,7 +75,7 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
       );
       if (!result.ok) {
         console.error(
-          `[tutorial] anchoredRange failed for "${def.targetText}" — skipping ${def.id}`,
+          `[tutorial] anchoredRange failed for "${def.targetText}" — skipping ${def.id}: ${describeRangeFailure(result)}`,
         );
         continue;
       }

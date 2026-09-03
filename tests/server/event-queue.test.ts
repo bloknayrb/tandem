@@ -1201,12 +1201,23 @@ vi.mock("../../src/server/documents/registry.js", async (importOriginal) => ({
   getOpenDocs: () => new Map(),
 }));
 
-// Mock validateRange so we can control whether buffered selection offsets are kept or dropped.
-// Default: return { ok: true } so offsets pass through.
-let _validateRangeResult: { ok: boolean } = { ok: true };
-vi.mock("../../src/server/positions.js", () => ({
-  validateRange: () => _validateRangeResult,
-}));
+// Mock validateRange so we can control whether buffered selection offsets are kept
+// or dropped. Default: return { ok: true } so offsets pass through.
+//
+// SPREADS THE REAL MODULE, and `null` delegates to the real `validateRange`.
+// The all-stub version this replaced left every other export undefined, so the
+// moment `ctrl-chat.ts` reached for a second one (`describeRangeFailure`) the
+// observer threw — and it also meant no spec here could exercise the actual
+// bounds logic, only the mock's own return value.
+let _validateRangeResult: { ok: boolean } | null = { ok: true };
+vi.mock("../../src/server/positions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/positions.js")>();
+  return {
+    ...actual,
+    validateRange: (...args: Parameters<typeof actual.validateRange>) =>
+      _validateRangeResult ?? actual.validateRange(...args),
+  };
+});
 
 describe("attachCtrlObservers (CTRL_ROOM)", () => {
   beforeEach(() => {
@@ -1395,6 +1406,55 @@ describe("chat attaches buffered selection", () => {
     const chatEvents = events.filter((e) => e.type === "chat:message");
     expect(chatEvents).toHaveLength(1);
     expect(chatEvents[0].payload.selection).toBeUndefined();
+
+    cleanup();
+  });
+
+  it("drops the offsets when the document is shortened below the buffered selection", () => {
+    // The REAL `validateRange`, not the mock's canned answer: `_validateRangeResult
+    // = null` delegates. Without it this whole describe block only ever proves
+    // that the observer copies the mock's `ok` flag around.
+    //
+    // `getOrCreateDocument` is mocked to return `_ctrlTestDoc` for any id, so
+    // that doc is what the observer validates against.
+    const { events, cleanup } = collectEvents();
+    _validateRangeResult = null;
+
+    // A document long enough to hold [10, 50], then shortened under it.
+    const fragment = _ctrlTestDoc.getXmlFragment("default");
+    _ctrlTestDoc.transact(() => {
+      const para = new Y.XmlElement("paragraph");
+      fragment.insert(0, [para]);
+      const t = new Y.XmlText();
+      para.insert(0, [t]);
+      t.insert(0, "x".repeat(80));
+    });
+
+    const awareness = selDoc.getMap(Y_MAP_USER_AWARENESS);
+    awareness.set("selection", { from: 10, to: 50, selectedText: "xxxxxxxxxx" });
+    vi.advanceTimersByTime(SELECTION_DWELL_DEFAULT_MS);
+    expect(getBufferedSelection("sel-chat-doc")).toBeDefined();
+
+    // Now shorten it well below 50 — the offsets are past the end.
+    _ctrlTestDoc.transact(() => {
+      const para = fragment.get(0) as Y.XmlElement;
+      const t = para.get(0) as Y.XmlText;
+      t.delete(5, t.length - 5);
+    });
+
+    const chatMap = _ctrlTestDoc.getMap(Y_MAP_CHAT);
+    chatMap.set("msg_shortened", {
+      id: "msg_shortened",
+      author: "user",
+      text: "What about this?",
+      timestamp: Date.now(),
+      documentId: "sel-chat-doc",
+      read: false,
+    });
+
+    const chatEvents = events.filter((e) => e.type === "chat:message");
+    expect(chatEvents).toHaveLength(1);
+    expect(chatEvents[0].payload.selection).toEqual({ selectedText: "xxxxxxxxxx" });
 
     cleanup();
   });
