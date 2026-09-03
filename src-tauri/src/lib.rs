@@ -138,10 +138,10 @@ use tauri_plugin_updater::UpdaterExt;
 use tauri_plugin_window_state::StateFlags;
 
 use crate::sidecar::{
-    build_http_client, kill_sidecar, port_holder_for_dialog, start_sidecar,
+    build_http_client, port_holder_for_dialog, shutdown_sidecar_on_exit, start_sidecar,
     stop_sidecar_gracefully, wait_for_port_release, PortHolder, GRACEFUL_SHUTDOWN_DEADLINE_SECS,
-    HTTP_CLIENT_TIMEOUT, MCP_PORT, POST_KILL_PORT_RELEASE_SECS, RESTART_IN_PROGRESS,
-    SidecarState, WS_PORT,
+    HTTP_CLIENT_TIMEOUT, MCP_PORT, POST_KILL_PORT_RELEASE_SECS, RestartGate,
+    ShuttingDownGuard as SidecarShuttingDownGuard, SidecarState, SpawnOutcome, WS_PORT,
 };
 #[cfg(target_os = "windows")]
 use crate::sidecar::{wait_for_sidecar_unlock, SIDECAR_UNLOCK_DEADLINE_SECS};
@@ -329,7 +329,7 @@ pub(crate) fn promote_healthy_and_drain(state: &PendingOpens) -> Vec<ScreenedOpe
 /// (and the next promote_and_drain captures the path) or observes flag=false
 /// (and queues). Bare `SIDECAR_HEALTHY.store(false)` outside the lock would
 /// re-open the same TOCTOU window the lock was introduced to close: a
-/// producer could read flag=true between `kill_sidecar` and the clear, then
+/// producer could read flag=true between the sidecar kill and the clear, then
 /// POST to a sidecar that no longer exists. Used by `restart_sidecar`.
 ///
 /// Also clears `SIDECAR_GAVE_UP` (#1416): this call marks the start of a new
@@ -996,7 +996,7 @@ pub fn run() {
     // here (not in the fluent chain below) so the `#[cfg]` is a clean statement.
     // Held for the parent process's lifetime; the OS closes the job handle on
     // parent exit — graceful OR crash/taskkill — reaping the sidecar. macOS and
-    // Linux rely on the existing RunEvent::Exit + kill_sidecar path.
+    // Linux rely on the existing RunEvent::Exit + shutdown_sidecar_on_exit path.
     #[cfg(target_os = "windows")]
     {
         builder = builder.manage(sidecar_job::SidecarJob::new());
@@ -1267,48 +1267,67 @@ pub fn run() {
                 // start_sidecar concurrently, racing this one over SidecarState
                 // and orphaning a child. That is the exact failure the gate was
                 // added for; only this call site was outside it.
-                // CAS rather than a bare store, and release only what we took:
-                // a blind store would clear a gate held by someone else. And if
+                // `RestartGate` is a CAS, and it releases only what it took: a
+                // blind store would clear a gate held by someone else. And if
                 // the gate is already held — some other path won the race before
                 // we got here — we must NOT run start_sidecar anyway: doing so
                 // is the exact concurrent-spawn failure this gate exists to
                 // prevent, just from the other direction. Skip, like
                 // `restart_sidecar` itself does on a gate miss.
-                if RESTART_IN_PROGRESS
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_err()
-                {
+                let Some(gate) = RestartGate::try_acquire() else {
                     log::warn!(
                         "initial start_sidecar found RESTART_IN_PROGRESS already held — skipping to avoid a concurrent spawn"
                     );
                     return;
-                }
+                };
                 let start_result = start_sidecar(&handle, &client, cold_start_file.as_deref()).await;
-                RESTART_IN_PROGRESS.store(false, Ordering::Release);
+                drop(gate);
 
-                if let Err(e) = start_result {
-                    log::error!("Sidecar failed: {e}");
-                    // NOT terminal: the dialog below offers "Retry Server Start",
-                    // which re-runs `start_sidecar` with the queue intact. So this
-                    // warns (evidence for every exit, including the five `?`
-                    // bail-outs the old tail block sat past) without latching and
-                    // without destroying anything. The latch is set on the Close
-                    // branch of that dialog instead. #1416
-                    report_pending_opens_with(
-                        handle.state::<PendingOpens>().inner(),
-                        false,
-                        |_code| {
-                            // Deliberately no toast here: the modal is about to say
-                            // the server failed and offer the retry that would open
-                            // these files. "Some of those files couldn't be opened"
-                            // alongside it would contradict the button.
-                        },
-                    );
-                    // Ask the OS what is actually holding the port instead of
-                    // telling the user to go find out.
-                    let holder = port_holder_for_dialog().await;
-                    show_server_error_dialog(&handle, &e, holder, cold_start_file, true);
-                    return;
+                // Exhaustive on purpose. `SpawnOutcome`'s own contract is that
+                // every caller matches on it, and the `if let Err(..)` this
+                // replaces made that claim false: `Ok(Declined)` fell straight
+                // through to `check_for_update`, i.e. an update check fired on a
+                // session that is quitting. Reachable only when the quit lands
+                // while this initial spawn is still in flight, so the damage is
+                // small — but a contract with one silent exception is not one.
+                match start_result {
+                    Ok(SpawnOutcome::Started) => {}
+                    // No dialog and no update check: the thing that declined us
+                    // IS the shutdown (or the update install already in flight).
+                    // A "server failed" modal raised into a closing app is worse
+                    // than nothing, and the failure arm's
+                    // `report_pending_opens_with` would queue work for a session
+                    // that is ending anyway.
+                    Ok(SpawnOutcome::Declined) => {
+                        log::warn!(
+                            "Initial start_sidecar declined — the sidecar is shutting down; no dialog, no update check"
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        log::error!("Sidecar failed: {e}");
+                        // NOT terminal: the dialog below offers "Retry Server Start",
+                        // which re-runs `start_sidecar` with the queue intact. So this
+                        // warns (evidence for every exit, including the five `?`
+                        // bail-outs the old tail block sat past) without latching and
+                        // without destroying anything. The latch is set on the Close
+                        // branch of that dialog instead. #1416
+                        report_pending_opens_with(
+                            handle.state::<PendingOpens>().inner(),
+                            false,
+                            |_code| {
+                                // Deliberately no toast here: the modal is about to say
+                                // the server failed and offer the retry that would open
+                                // these files. "Some of those files couldn't be opened"
+                                // alongside it would contradict the button.
+                            },
+                        );
+                        // Ask the OS what is actually holding the port instead of
+                        // telling the user to go find out.
+                        let holder = port_holder_for_dialog().await;
+                        show_server_error_dialog(&handle, &e, holder, cold_start_file, true);
+                        return;
+                    }
                 }
 
                 // Auto-configuration of Claude on startup was removed in #477 PR
@@ -1610,7 +1629,18 @@ pub fn run() {
         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))
         .run(|_app, _event| {
             match _event {
-                tauri::RunEvent::Exit => kill_sidecar(_app),
+                // Graceful stop, then the hard kill as fallback (#1756). Every
+                // quit gesture reaches Exit — tray Quit, macOS ⌘Q/Dock Quit
+                // (which never raise ExitRequested), the Linux no-tray window
+                // close (which raises ExitRequested unreliably — twice on some
+                // desktops), and the updater's restart on non-Windows.
+                //
+                // The one exit that never arrives here, by design: the Windows
+                // updater restart. `download_and_install` ends in the plugin's
+                // own `std::process::exit(0)`, so the pre-install graceful stop
+                // in `perform_install` is the only flush on that path, and that
+                // function keeps its own gate for exactly that reason.
+                tauri::RunEvent::Exit => shutdown_sidecar_on_exit(_app),
                 // macOS: file paths from "Open With" arrive here, not on argv.
                 // The single-instance callback's args are empty for these events.
                 // RunEvent::Opened does not exist on Windows/Linux — gate with
@@ -1777,10 +1807,7 @@ fn show_server_error_dialog(
                 // thread can unwind, so a callback is not guaranteed to run. A
                 // gate acquired outside would then be stranded for the process
                 // lifetime, permanently disabling `restart_sidecar`.
-                if RESTART_IN_PROGRESS
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_err()
-                {
+                let Some(gate) = RestartGate::try_acquire() else {
                     // Do not just log: the modal is already dismissed, so a
                     // bare return means the user's explicit click produced
                     // nothing at all on screen. (Reachable when they hit
@@ -1794,23 +1821,57 @@ fn show_server_error_dialog(
                         false,
                     );
                     return;
-                }
+                };
                 let client = handle.state::<reqwest::Client>().inner().clone();
                 // Pass the cold-start file through, unlike `restart_sidecar`,
                 // which passes None because setup() already opened it. Here
                 // setup() FAILED, so nothing was opened — dropping it would
                 // silently land a user who double-clicked a .md on welcome.md.
                 let result = start_sidecar(&handle, &client, cold_start_file.as_deref()).await;
-                // Release before anything user-facing, so Settings → Restart
+                // Released before anything user-facing, so Settings → Restart
                 // server is usable again while the second dialog is on screen.
-                RESTART_IN_PROGRESS.store(false, Ordering::Release);
+                // Explicit `drop` rather than letting it fall out of scope: the
+                // early release is the point, and a dialog can sit on screen for
+                // minutes.
+                drop(gate);
 
                 match result {
-                    Ok(()) => {
+                    Ok(SpawnOutcome::Started) => {
                         log::info!("Server-start retry succeeded");
                         // setup()'s failure path returned before this; without
                         // it a recovered session gets no update check for 8h.
                         check_for_update(&handle, false).await;
+                    }
+                    // A decline is not a success. Reading it as one logged
+                    // "Server-start retry succeeded" and ran an update check on
+                    // the one dialog whose entire job is to say the server did
+                    // not start — and it is reachable, because `spawn_allowed()`
+                    // is false for the whole of an update download, not just
+                    // during an exit.
+                    Ok(SpawnOutcome::Declined) => {
+                        log::warn!(
+                            "Server-start retry declined — the sidecar is shutting down"
+                        );
+                        // No `check_for_update`: an install is already in flight
+                        // (or we are quitting), and that is what declined us.
+                        if !crate::sidecar::is_exiting() {
+                            // Same shape as the sibling gate a few lines up: the
+                            // modal is already dismissed, so a bare return means
+                            // the user's explicit click produced nothing at all
+                            // on screen.
+                            report_pending_opens_with(
+                                handle.state::<PendingOpens>().inner(),
+                                true,
+                                |code| surface_startup_rejection(&handle, code),
+                            );
+                            show_server_error_dialog(
+                                &handle,
+                                "The server can't be started right now — an update is being installed. Try again once it finishes.",
+                                None,
+                                cold_start_file,
+                                false,
+                            );
+                        }
                     }
                     Err(e) => {
                         log::error!("Server-start retry failed: {e}");
@@ -2169,6 +2230,30 @@ fn show_up_to_date_dialog(app: &tauri::AppHandle) {
     builder.show(|_| {});
 }
 
+/// Tell the user their install click landed on an install that is already
+/// running.
+///
+/// A dialog rather than a bare log or an `Err`, for the reason
+/// `RestartGate::try_acquire`'s decline states: the user's explicit click — the
+/// banner CTA, or OK on the tray's "install this update" prompt — would
+/// otherwise produce nothing at all on screen. Returning `Err` from
+/// `install_update` is not a substitute: `useUpdaterBanner.svelte.ts`'s `catch`
+/// only `console.warn`s, so the WebView half has no user-visible surface either.
+fn show_update_in_progress_dialog(app: &tauri::AppHandle) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    let mut builder = app
+        .dialog()
+        .message(
+            "An update is already being installed.\n\n\
+             Wait for it to finish — Tandem restarts on its own when it is done.",
+        )
+        .title("Update In Progress")
+        .kind(MessageDialogKind::Info);
+    builder = attach_main_window_or_warn(app, builder, "show_update_in_progress_dialog");
+    builder.show(|_| {});
+}
+
 /// Show an error dialog for failed update checks (manual check feedback only).
 fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
@@ -2358,17 +2443,82 @@ async fn perform_install(
     // Graceful first (#1088): POST /api/shutdown flushes dirty docs + saves
     // the session before the app restarts into the new version; hard kill is
     // the fallback on POST failure or timeout.
+    //
+    // Hold `SIDECAR_SHUTTING_DOWN` across the stop AND across the download so the
+    // three spawn producers (Settings -> Restart server, start_sidecar's retry
+    // loop, the Retry Server Start dialog) decline instead of racing a fresh
+    // child into the slot we are about to overwrite on disk.
+    //
+    // An RAII guard, not a store plus a clear on the failure arm: the flag spans
+    // `download_and_install(..).await`, so a panic or a dropped task would latch
+    // it for the process lifetime and leave `restart_sidecar` and Retry Server
+    // Start permanent silent no-ops. Its `Drop` keeps the `compare_exchange`,
+    // which is the `EXITING` interlock — an update that fails DURING an exit
+    // must not re-permit spawns. On the success arm the process exits — on
+    // Windows inside `download_and_install`'s own `std::process::exit(0)`, on
+    // other platforms inside `app.restart()` (which returns `!`) — so the guard
+    // never releases there, which is what we want. #1756.
+    //
+    // `try_acquire`, not a bare acquire: `install_update` is a plain command
+    // with no re-entrancy gate, so two clicks on "Restart to install" run two of
+    // these futures. Under a bare store, the first to finish would release the
+    // latch out from under the second — which is still downloading over the
+    // binary — and re-permit a spawn into that slot. See `ShuttingDownGuard`.
+    let Some(_shutting_down) = SidecarShuttingDownGuard::try_acquire() else {
+        // Do not just log. The modal is already dismissed (tray path) or the
+        // banner CTA is about to re-arm (`INSTALL_WATCHDOG_MS` = 30s, and a
+        // download longer than 30s is ordinary), so a bare return means the
+        // user's explicit click produced nothing at all on screen — the same
+        // decision already made for `RestartGate::try_acquire` above.
+        log::warn!("Update install to v{version} ignored — an install is already in flight");
+        show_update_in_progress_dialog(app);
+        return;
+    };
     let client = app.state::<reqwest::Client>().inner().clone();
-    stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS).await;
+
+    // Collect human-readable warnings so we can thread them into the failure
+    // dialog if download_and_install later fails. Declared before the graceful
+    // stop because that stop's verdict is the first thing that can go into it,
+    // and the cfg blocks below both contribute too.
+    let mut pre_install_warnings: Vec<String> = Vec::new();
+
+    // On Windows this is the ONLY flush on the update path: `download_and_install`
+    // ends in the updater plugin's own `std::process::exit(0)`, so `RunEvent::Exit`
+    // never fires and `shutdown_sidecar_on_exit` never runs. A dropped verdict
+    // here is an update that proceeds having discarded unsaved edits while every
+    // dialog says it worked — which is why `StopReport` is `#[must_use]`.
+    //
+    // BOTH outcomes are logged at `warn`, and the success half is not
+    // decoration. `smoke-lines.md` row 3 asks the tester to grep `tandem.log`
+    // for an update run with unsaved edits — and on Windows there is no verdict
+    // line to read, because `RunEvent::Exit` never fires. Every other line on
+    // this path is `info!`, below the release floor, so without this the row's
+    // positive half could not be satisfied at all and a silent log was
+    // indistinguishable from a stop that never ran.
+    //
+    // The success string below is a code↔doc pair like the respawn-guard lines,
+    // so it is pinned like one: `respawn_guard_lines_are_warns_and_match_the
+    // _smoke_checklist` in `sidecar.rs` requires it to appear exactly once here,
+    // as the first argument of an uncommented `log::warn!(`, and to be present
+    // in `smoke-lines.md`. Row 3 was prose when this string was added, which
+    // meant the commit whose subject was "add a guard for exactly this" created
+    // an unguarded instance of exactly this; the row now carries the literal.
+    match stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS)
+        .await
+        .unflushed_warning("Pre-install")
+    {
+        Some(msg) => {
+            log::warn!("{msg}");
+            pre_install_warnings.push(msg);
+        }
+        None => log::warn!(
+            "Pre-install: graceful sidecar shutdown complete — unsaved edits were flushed before the update"
+        ),
+    }
 
     // Wait for port release and (on Windows) file-lock release concurrently.
     // Port-down alone isn't sufficient on Windows: TerminateProcess returns
     // before the OS releases the exe file handle.
-    //
-    // Collect human-readable warnings so we can thread them into the failure
-    // dialog if download_and_install later fails. Declared outside the cfg
-    // block so the non-Windows branch contributes too.
-    let mut pre_install_warnings: Vec<String> = Vec::new();
 
     #[cfg(target_os = "windows")]
     {
@@ -2432,6 +2582,10 @@ async fn perform_install(
         }
         Err(e) => {
             log::error!("Update install failed: {e}");
+            // The app keeps running, so spawns must be re-permitted — done by
+            // `_shutting_down`'s `Drop` at the end of this function, not by an
+            // explicit clear here. An explicit clear covered only the path that
+            // reaches it; the guard also covers a panic and a dropped task.
             // We observed the failure in-process and are about to show a native
             // dialog about it, so a surviving marker would nag next boot about
             // something the user was just told.
@@ -2567,7 +2721,7 @@ mod pending_opens_tests {
         // holding the same mutex; once it does, it observes flag=false (set
         // inside the same lock by the clear) and queues the path. A bare
         // atomic store outside the lock would let a producer that read
-        // flag=true before kill_sidecar still POST to the dying server.
+        // flag=true before the sidecar kill still POST to the dying server.
         let _g = FLAG_LOCK.lock().unwrap();
         SIDECAR_HEALTHY.store(true, Ordering::Release);
 
