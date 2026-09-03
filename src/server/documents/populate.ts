@@ -132,6 +132,20 @@ function notifyIssue(issue: LoadIssue, ctx: PopulateContext): void {
         timestamp: Date.now(),
       });
       return;
+    case "comments-clamped":
+      pushNotification({
+        id: generateNotificationId(),
+        type: "annotation-error",
+        severity: "warning",
+        message:
+          `${issue.count === 1 ? "1 Word comment" : `${issue.count} Word comments`} from ` +
+          `${ctx.displayName} could not be placed where Word had ${issue.count === 1 ? "it" : "them"} ` +
+          `and ${issue.count === 1 ? "was" : "were"} moved to the end of the document ` +
+          `(largest move: ${issue.maxClamp} characters).`,
+        dedupKey: `docx-comments-clamped:${ctx.dedupSource}`,
+        timestamp: Date.now(),
+      });
+      return;
     case "other":
       pushNotification({
         id: generateNotificationId(),

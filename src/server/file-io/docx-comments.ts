@@ -15,7 +15,7 @@ import type { Annotation, AnnotationReply, FlatOffset } from "../../shared/types
 import { toFlatOffset } from "../../shared/types.js";
 import { IMPORT_AUTHOR_MAX, IMPORT_REPLY_BODY_CAP, nextRev } from "../annotations/schema.js";
 import { extractText } from "../mcp/document-model.js";
-import { anchoredRange } from "../positions.js";
+import { anchoredRange, describeRangeFailure } from "../positions.js";
 import { isCanonicalWordId } from "./docx-comment-id.js";
 import {
   findAllByName,
@@ -506,11 +506,19 @@ function writeImportReply(repliesMap: Y.Map<unknown>, id: string, record: Annota
  *
  * The fileName argument is best-effort — uploads and force-reload paths
  * that don't have a meaningful file name fall back to "unknown".
+ *
+ * `onClamp` fires at most ONCE, after the transact, when any comment's range
+ * had to be clamped to the document end. The per-comment stderr line is the
+ * detail; this is the aggregate signal, so a caller that surfaces
+ * `LoadIssue`s can tell the user their Word comments did not all land where
+ * Word put them. Kept a callback rather than folded into the return value
+ * because the return is the injected COUNT and several callers read it as one.
  */
 export function injectCommentsAsAnnotations(
   doc: Y.Doc,
   comments: DocxComment[],
   fileName?: string,
+  onClamp?: (info: { count: number; maxClamp: number }) => void,
 ): number {
   if (comments.length === 0) return 0;
 
@@ -521,6 +529,8 @@ export function injectCommentsAsAnnotations(
   let migrated = 0;
   let reanchored = 0;
   let injectedReplies = 0;
+  let clampedCount = 0;
+  let maxClamp = 0;
 
   // Secondary dedup axis (#1150): index existing imported records by their stable
   // Word `commentId`, so a comment whose flat offsets drifted between imports is
@@ -586,6 +596,8 @@ export function injectCommentsAsAnnotations(
       const from = toFlatOffset(Math.min(comment.from, flatText.length));
       const to = toFlatOffset(Math.min(comment.to, flatText.length));
       if (from !== comment.from || to !== comment.to) {
+        clampedCount++;
+        maxClamp = Math.max(maxClamp, comment.from - from, comment.to - to);
         console.error(
           `[docx-comments] Clamped imported comment ${comment.commentId}: ` +
             `[${comment.from}, ${comment.to}] → [${from}, ${to}] (document length ${flatText.length}).`,
@@ -594,13 +606,27 @@ export function injectCommentsAsAnnotations(
       // `allowEmpty`: `calculateCommentRanges` emits from === to for adjacent
       // commentRangeStart/End — a Word insertion-point comment. Dropping those
       // is the #1142 class of silent loss.
+      //
+      // `surrogates: "ignore"` for the SAME reason the clamp above exists. The
+      // OOXML-vs-mdast accounting divergence does not only overshoot the end; it
+      // can also land an offset between the halves of a pair, and the default
+      // "reject" would answer that with the skip below — the comment then never
+      // enters the map at all, so the #1448 scoreboard cannot score it -1 and the
+      // loss is invisible, exactly what the clamp comment argues against. Import
+      // therefore matches CAPTURE (`docx-capture.ts`), which also carries
+      // externally-supplied stored offsets and only scores. It differs from
+      // EXPORT (`docx-comment-export.ts`), which writes a file and so must SNAP
+      // outward and then reject a residual mid-pair offset loudly.
       const result = anchoredRange(doc, from, to, undefined, {
         allowEmpty: true,
+        surrogates: "ignore",
         text: flatText,
+        textTag: "docx-comments/inject",
       });
       if (!result.ok) {
         console.error(
-          `[docx-comments] Skipping imported comment ${comment.commentId}: range [${comment.from}, ${comment.to}] — ${result.code}`,
+          `[docx-comments] Skipping imported comment ${comment.commentId}: ` +
+            `range [${comment.from}, ${comment.to}] — ${describeRangeFailure(result)}`,
         );
         continue;
       }
@@ -857,6 +883,10 @@ export function injectCommentsAsAnnotations(
         (migrated > 0 ? ` (migrated ${migrated} legacy records to note shape)` : "") +
         (reanchored > 0 ? ` (re-anchored ${reanchored} drifted notes)` : ""),
     );
+  }
+
+  if (clampedCount > 0) {
+    onClamp?.({ count: clampedCount, maxClamp });
   }
 
   return injected;

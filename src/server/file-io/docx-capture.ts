@@ -203,6 +203,7 @@ export function captureModel(doc: Y.Doc): Capture {
       allowEmpty: true,
       surrogates: "ignore",
       text: flatText,
+      textTag: "docx-capture/score",
     });
     if (!resolved.ok) {
       // The annotation no longer resolves (range gone/moved/invalid/heading
