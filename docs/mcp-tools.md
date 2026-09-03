@@ -47,6 +47,9 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `FILE_TOO_LARGE` | Inline content exceeds the tool's size cap (e.g. `tandem_appendContent`). |
 | `INVALID_RANGE` | Offset out of bounds, non-integer, inverted, zero-length, splitting a surrogate pair, text not found, or a range overlapping heading markup. **Usually — not always — carries `details.reason`** (see `tandem_edit`): the two rejections that come from somewhere other than the range validator carry none, namely `tandem_resolveRange`'s "pattern not found" and `tandem_edit`'s heading-markup overlap. Treat `details.reason` as optional. |
 | `EMPTY_DOCUMENT` | `tandem_edit` called on an empty document — seed content with `tandem_appendContent` / `tandem_scratchpad({ content })` first. |
+| `EMPTY_CONVERSION` | `tandem_convertToMarkdown` produced no extractable text from the source `.docx`. |
+| `OPEN_FAILED` | `tandem_convertToMarkdown`'s converted file could not be reopened as a new tab. |
+| `CONFLICT` | `tandem_convertToMarkdown` could not find a free output filename after exhausting its numbered-suffix attempts. |
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
 | `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied, e.g., `EACCES`). |
@@ -539,7 +542,7 @@ Convert a `.docx` document to an editable Markdown file. Writes the `.md` file t
 
 **Notes:** The source document must be a `.docx` file. The converted Markdown file opens as a new editable tab alongside the original `.docx`.
 
-**Errors:** `NO_DOCUMENT` (no active document or `documentId` not found), `FORMAT_ERROR` (source is not `.docx`, invalid output path, or conversion produced empty result)
+**Errors:** `NO_DOCUMENT` (no active document, or `documentId` names a document that is not open; message names the id), `FILE_NOT_FOUND` (the `outputPath` directory does not exist; message names the resolved directory), `INVALID_PATH` (relative path, UNC path, an upload with no disk location, `outputPath` naming an existing file, or the resolved output directory failing `realpath` with `ENOTDIR`/`ELOOP`/`ENAMETOOLONG`), `PERMISSION_DENIED` (`EACCES`/`EPERM` on the output directory, from whichever syscall trips first — `realpath`, `findAvailablePath`'s existence probe, or the write itself. A directory the caller can read but not write gets all the way to the *write*, which is the ordinary Windows shape), `FORMAT_ERROR` (source is not `.docx`), `EMPTY_CONVERSION` (conversion produced no extractable text), `CONFLICT` (`findAvailablePath` could not find a free filename after 1000 attempts), `OPEN_FAILED` (converted file could not be reopened as a new tab), `INTERNAL_ERROR` (write-path filesystem failures that are not permission errnos, e.g. `ENOSPC`/`EROFS`)
 
 ---
 
