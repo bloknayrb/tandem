@@ -27,11 +27,17 @@
  * sitting right there: add the spec to that list, which carries its own drift
  * guard in `tests/scripts/windows-acl-proof-wiring.test.ts`. That gate demands
  * >=1 passed / 0 skipped / 0 failed per NAMED describe, so joining it means
- * committing to a describe that genuinely runs on the Windows runner. Not done
- * here: these branches need a real temp-dir watcher and 1.2 s settles per case,
- * which is a different cost profile from the two `icacls` specs the job exists
- * for. This is not the vacuous #1529 shape either — the branches genuinely run
- * and genuinely assert on a Windows box.
+ * committing to a describe that genuinely runs on the Windows runner.
+ *
+ * The job is NOT ACL-only despite its name — #1796 added
+ * `convert-output-acl-win.test.ts` for a Windows-vs-POSIX errno difference —
+ * so "it isn't about `icacls`" is not a reason to stay off the list. The
+ * reason these branches are off it is cost: each needs a real temp-dir watcher
+ * and a 1.2 s settle, against three specs that are all fast syscall checks.
+ * Revisit if the win32 semantics here ever regress in the field.
+ *
+ * This is not the vacuous #1529 shape either — the branches genuinely run and
+ * genuinely assert on a Windows box.
  */
 
 import fs from "node:fs";
