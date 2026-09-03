@@ -140,6 +140,15 @@ const MAX_RESTARTS: u32 = 3;
 /// against the URL constants by `port_constants_match_urls`.
 pub(crate) const WS_PORT: u16 = 3478;
 pub(crate) const MCP_PORT: u16 = 3479;
+/// The interface the sidecar is told to bind. Keep in sync with
+/// DEFAULT_BIND_HOST in src/shared/constants.ts, and with the loopback literal
+/// in the URL constants above — pinned by `port_constants_match_urls`.
+///
+/// Passed explicitly at the spawn site because the child inherits this process's
+/// environment (see the spawn-site comment), so an ambient `TANDEM_BIND_HOST`
+/// would otherwise move the sidecar off loopback under a shell that still polls
+/// 127.0.0.1.
+pub(crate) const SIDECAR_BIND_HOST: &str = "127.0.0.1";
 
 /// Total wall-clock budget for the graceful stop attempted from
 /// `RunEvent::Exit` (#1756), in seconds.
@@ -169,10 +178,42 @@ const EXIT_GRACEFUL_BUDGET: Duration = Duration::from_secs(EXIT_GRACEFUL_BUDGET_
 /// *during* an exit must not re-permit spawns.
 static EXITING: AtomicBool = AtomicBool::new(false);
 
-/// Set by `perform_install` around its pre-install graceful stop and cleared on
-/// the failure arm, where the app keeps running. Unlike `EXITING` this one has a
-/// bounded lifetime.
+/// Set by `perform_install` around its pre-install graceful stop and released by
+/// `ShuttingDownGuard`'s `Drop`. Unlike `EXITING` this one is meant to be
+/// bounded — **and only the guard makes that true.** Held across
+/// `download_and_install().await`, a panic or a dropped task would otherwise
+/// latch it for the process lifetime, leaving `restart_sidecar` and "Retry
+/// Server Start" permanent silent no-ops.
 pub(crate) static SIDECAR_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// RAII latch for `SIDECAR_SHUTTING_DOWN`.
+///
+/// `Drop` runs on the normal return, on an unwind, and when the enclosing future
+/// is dropped mid-await — which is the whole point: the flag is held across
+/// `download_and_install().await`, and the failure arm's explicit clear covered
+/// only the path that reaches it.
+///
+/// `Drop` keeps the `compare_exchange(true, false)` rather than a bare store,
+/// and that CAS is the `EXITING` interlock: if an exit began while the install
+/// ran, `EXITING` is already latched and `spawn_allowed()` stays false whatever
+/// this releases. On the success arm the process exits inside the updater
+/// (`std::process::exit` on Windows) or via `app.restart()`, which returns `!` —
+/// so `Drop` simply never runs there, which is correct.
+pub(crate) struct ShuttingDownGuard(());
+
+impl ShuttingDownGuard {
+    pub(crate) fn acquire() -> Self {
+        SIDECAR_SHUTTING_DOWN.store(true, Ordering::Release);
+        ShuttingDownGuard(())
+    }
+}
+
+impl Drop for ShuttingDownGuard {
+    fn drop(&mut self) {
+        let _ =
+            SIDECAR_SHUTTING_DOWN.compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire);
+    }
+}
 
 /// May a sidecar child be spawned right now?
 ///
@@ -183,6 +224,15 @@ pub(crate) static SIDECAR_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// the spawn site still reaps it).
 fn spawn_allowed() -> bool {
     !EXITING.load(Ordering::Acquire) && !SIDECAR_SHUTTING_DOWN.load(Ordering::Acquire)
+}
+
+/// Is the application on its way out?
+///
+/// The distinction a `SpawnOutcome::Declined` consumer needs: an update install
+/// declined the spawn and the user should be told, an exit declined it and there
+/// is nowhere to tell them. `spawn_allowed()` alone cannot separate the two.
+pub(crate) fn is_exiting() -> bool {
+    EXITING.load(Ordering::Acquire)
 }
 
 /// Tracks the sidecar child process so we can kill it on shutdown.
@@ -197,17 +247,43 @@ pub(crate) struct SidecarState(pub(crate) Mutex<Option<tauri_plugin_shell::proce
 /// further requests are logged no-ops.
 pub(crate) static RESTART_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
+/// RAII holder for `RESTART_IN_PROGRESS`.
+///
+/// The gate has to be released on **every** way out of a restart attempt —
+/// success, failure, and (since #1756) a decline. Three call sites each ending
+/// in a hand-written `store(false)` is three chances to add a fourth exit that
+/// forgets one, and a forgotten release is invisible: `RESTART_IN_PROGRESS`
+/// latches for the process lifetime and both the Restart button and "Retry
+/// Server Start" become permanent no-ops that look like they worked.
+///
+/// A dropped release is now a deleted `Drop` impl, which
+/// `restart_gate_releases_on_drop` catches.
+pub(crate) struct RestartGate(());
+
+impl RestartGate {
+    /// `None` when a restart is already in flight.
+    pub(crate) fn try_acquire() -> Option<Self> {
+        RESTART_IN_PROGRESS
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| RestartGate(()))
+    }
+}
+
+impl Drop for RestartGate {
+    fn drop(&mut self) {
+        RESTART_IN_PROGRESS.store(false, Ordering::Release);
+    }
+}
+
 /// Gracefully stop the sidecar (flush dirty docs + save session, #1088),
 /// hard-kill as fallback, then spawn it again.
 #[tauri::command]
 pub(crate) fn restart_sidecar(app: tauri::AppHandle) {
-    if RESTART_IN_PROGRESS
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
+    let Some(gate) = RestartGate::try_acquire() else {
         log::warn!("restart_sidecar ignored — a restart is already in flight");
         return;
-    }
+    };
     // Reset healthy flag FIRST so any RunEvent::Opened arriving mid-restart
     // queues instead of POSTing to a dying server. Must clear under the
     // PendingOpens mutex (see clear_healthy_under_lock) — a bare atomic store
@@ -223,13 +299,15 @@ pub(crate) fn restart_sidecar(app: tauri::AppHandle) {
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Moved into the task, so the gate is released on every way out of it —
+        // including the early return below and a panic. See `RestartGate`.
+        let _gate = gate;
         // The shutdown check belongs HERE, not in the command body above: the
         // command returns immediately and the WebView's click can land long
         // before this task is polled, so a check up there is stale by the time
         // it matters. #1756.
         if !spawn_allowed() {
             log::warn!("restart_sidecar ignored — the sidecar is shutting down");
-            RESTART_IN_PROGRESS.store(false, Ordering::Release);
             return;
         }
         // Graceful stop before the hard kill (#1088): POST /api/shutdown so
@@ -240,36 +318,72 @@ pub(crate) fn restart_sidecar(app: tauri::AppHandle) {
         stop_sidecar_gracefully(&handle, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS).await;
         // Restart never re-injects the cold-start file: the original `setup()`
         // invocation already opened it and registered it in `openDocuments`.
-        if let Err(e) = start_sidecar(&handle, &client, None).await {
-            // The emitted event carries a stable code, no error detail, so the
-            // WebView's toast can never leak paths, env vars, errno text, or
-            // the auth token.
+        match start_sidecar(&handle, &client, None).await {
+            Ok(SpawnOutcome::Started) => {}
+            // A decline is not a restart. By this point the command body has
+            // already run `clear_healthy_under_lock` and `clear_startup_rejection`,
+            // so `SIDECAR_HEALTHY` is false with no sidecar coming back: exactly
+            // #1416's condition (opens queue into a queue with no consumer) with
+            // a Restart button that looks like it worked — `NetworkSettings.svelte`
+            // only sees a resolved command and no error. So surface it the same
+            // way the failure arm does, with its own code.
             //
-            // NB: "the detail stays in the log sink" is not the same as "the
-            // detail is not user-visible" — `tauri-plugin-log` registers
-            // `TargetKind::Webview` at LevelFilter::Warn in release, so this
-            // `log::error!` is forwarded to the WebView as a `log://log` event
-            // (nothing in src/client currently listens). The emit below is what
-            // carries the contract; the log line is not a second, quieter
-            // channel. Keep sensitive detail out of both.
-            log::error!("[restart_sidecar] failed to restart sidecar: {e}");
-            eprintln!("[restart_sidecar] failed to restart sidecar: {e}");
-            // Terminal: nothing retries automatically from here. The queue is
-            // retained (Settings -> Network -> Restart server still delivers it),
-            // but until someone tries again a further open must fail fast rather
-            // than join a queue with no consumer. #1416
-            report_pending_opens_with(handle.state::<PendingOpens>().inner(), true, |code| {
-                surface_startup_rejection(&handle, code)
-            });
-            if let Err(emit_err) =
-                handle.emit("sidecar-restart-failed", "SIDECAR_RESTART_FAILED")
-            {
-                log::error!("[restart_sidecar] failed to emit failure event: {emit_err}");
+            // Except while EXITING: the app is quitting, a toast has nowhere to
+            // land, and `report_pending_opens_with(.., true, ..)` would latch a
+            // give-up verdict for a session that is ending anyway.
+            Ok(SpawnOutcome::Declined) => {
+                if EXITING.load(Ordering::Acquire) {
+                    log::info!(
+                        "[restart_sidecar] declined — the app is exiting; nothing to surface"
+                    );
+                } else {
+                    log::warn!(
+                        "[restart_sidecar] declined — the sidecar is shutting down (update install in flight)"
+                    );
+                    report_pending_opens_with(handle.state::<PendingOpens>().inner(), true, |code| {
+                        surface_startup_rejection(&handle, code)
+                    });
+                    // Same event as the failure arm, because the same toast is
+                    // the right surface: the button did not restart the server.
+                    // The distinct payload code is a log-side distinction only —
+                    // `App.svelte`'s listener ignores the payload and hardcodes
+                    // its message, so do not read this as a different toast.
+                    if let Err(emit_err) =
+                        handle.emit("sidecar-restart-failed", "SIDECAR_RESTART_DECLINED")
+                    {
+                        log::error!("[restart_sidecar] failed to emit decline event: {emit_err}");
+                    }
+                }
+            }
+            Err(e) => {
+                // The emitted event carries a stable code, no error detail, so
+                // the WebView's toast can never leak paths, env vars, errno
+                // text, or the auth token.
+                //
+                // NB: "the detail stays in the log sink" is not the same as "the
+                // detail is not user-visible" — `tauri-plugin-log` registers
+                // `TargetKind::Webview` at LevelFilter::Warn in release, so this
+                // `log::error!` is forwarded to the WebView as a `log://log`
+                // event (nothing in src/client currently listens). The emit
+                // below is what carries the contract; the log line is not a
+                // second, quieter channel. Keep sensitive detail out of both.
+                log::error!("[restart_sidecar] failed to restart sidecar: {e}");
+                eprintln!("[restart_sidecar] failed to restart sidecar: {e}");
+                // Terminal: nothing retries automatically from here. The queue
+                // is retained (Settings -> Network -> Restart server still
+                // delivers it), but until someone tries again a further open
+                // must fail fast rather than join a queue with no consumer.
+                // #1416
+                report_pending_opens_with(handle.state::<PendingOpens>().inner(), true, |code| {
+                    surface_startup_rejection(&handle, code)
+                });
+                if let Err(emit_err) =
+                    handle.emit("sidecar-restart-failed", "SIDECAR_RESTART_FAILED")
+                {
+                    log::error!("[restart_sidecar] failed to emit failure event: {emit_err}");
+                }
             }
         }
-        // Release the gate on success AND failure — a failed restart must
-        // leave the button usable for another attempt.
-        RESTART_IN_PROGRESS.store(false, Ordering::Release);
     });
 }
 
@@ -305,6 +419,48 @@ pub(crate) async fn port_holder_for_dialog() -> Option<PortHolder> {
     }
 }
 
+/// What a graceful stop actually achieved. Carried out of
+/// `stop_sidecar_gracefully` and into the single exit-path verdict line, because
+/// the release log floor is `Warn` (`lib.rs`'s `tauri_plugin_log` builder) and
+/// every step-by-step `info!` below it is invisible on an installed build — the
+/// build the smoke checklist is run against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GracefulStop {
+    /// No owned child, so nothing was POSTed. **Unsaved edits are not flushed.**
+    Skipped,
+    /// The POST failed or answered non-2xx; the hard kill is all that follows.
+    PostFailed,
+    /// POST accepted, but the server was still answering `/health` at the
+    /// deadline.
+    TimedOut,
+    /// POST accepted and the server stopped answering — the flush ran.
+    Flushed,
+}
+
+impl GracefulStop {
+    /// The token that appears in the verdict line, and therefore in
+    /// `docs/release-smoke-checklist.md`. Pinned by
+    /// `verdict_line_carries_the_substrings_the_smoke_checklist_greps`.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            GracefulStop::Skipped => "Skipped",
+            GracefulStop::PostFailed => "PostFailed",
+            GracefulStop::TimedOut => "TimedOut",
+            GracefulStop::Flushed => "Flushed",
+        }
+    }
+}
+
+/// The verdict plus the one field the 202 body carries.
+pub(crate) struct StopReport {
+    pub(crate) verdict: GracefulStop,
+    /// `data.alreadyInProgress` from the 202 (`src/server/mcp/routes/shutdown.ts`):
+    /// something else had already invoked the shutdown sequence. Worth carrying
+    /// because it is the difference between "our POST started the flush" and
+    /// "we joined one already running", which changes what a `TimedOut` means.
+    pub(crate) already_in_progress: bool,
+}
+
 /// Graceful-then-hard sidecar stop (#1088).
 ///
 /// When we own a sidecar child, POST `/api/shutdown` so the Node shutdown
@@ -322,27 +478,82 @@ pub(crate) async fn stop_sidecar_gracefully(
     handle: &tauri::AppHandle,
     client: &reqwest::Client,
     deadline_secs: u64,
-) {
+) -> StopReport {
     let state: tauri::State<'_, SidecarState> = handle.state();
     let owns_child = match state.0.lock() {
         Ok(guard) => guard.is_some(),
         Err(poisoned) => poisoned.into_inner().is_some(),
     };
+    let report = graceful_stop_request(client, deadline_secs, Endpoints::PRODUCTION, owns_child).await;
+    kill_sidecar_inner(handle);
+    report
+}
+
+/// The two sidecar URLs a graceful stop touches, kept together so a test can
+/// swap both at once and neither can be forgotten.
+///
+/// **Not #1825's fix.** `PRODUCTION` still holds the hardcoded :3479 constants;
+/// this only makes them injectable, which is what lets a unit test observe a
+/// real POST and a real port-release wait.
+#[derive(Clone, Copy)]
+struct Endpoints<'a> {
+    shutdown: &'a str,
+    health: &'a str,
+}
+
+impl Endpoints<'static> {
+    const PRODUCTION: Self = Endpoints {
+        shutdown: SHUTDOWN_URL,
+        health: HEALTH_URL,
+    };
+}
+
+/// The network half of the graceful stop, with no `AppHandle` and no kill.
+///
+/// Split out for two reasons. It is what `graceful::attempt` runs under the exit
+/// budget (the kill there is `kill_sidecar_on_exit`, which needs the witness
+/// token), and it is the only shape a unit test can drive — `AppHandle` is not
+/// constructible outside a running Tauri app, which is why the `owned_child`
+/// read and the URL are parameters rather than reads of module state.
+async fn graceful_stop_request(
+    client: &reqwest::Client,
+    deadline_secs: u64,
+    endpoints: Endpoints<'_>,
+    owns_child: bool,
+) -> StopReport {
+    let Endpoints {
+        shutdown: shutdown_url,
+        health: health_url,
+    } = endpoints;
     // Log the gate both ways with its target: after #1756 this decides whether a
     // Quit flushes the user's edits or silently skips the flush, and
     // `owns_child` is now pid-keyed (see `on_child_terminated_in`) so a crashed
     // sidecar reads as "not owned" rather than as a live handle.
     //
     // NB: `SHUTDOWN_URL` (and `HEALTH_URL`, which `wait_for_port_release` polls)
-    // hardcode :3479. With a non-default `TANDEM_MCP_PORT` the POST misses,
-    // costs its own 5s client timeout, `posted` stays false, the port wait is
-    // skipped and the hard kill follows — bounded, but not immediate. #1825.
-    // `wait_for_port_release` also polls `/health` with no identity check
-    // (#1812). Both are out of scope here.
+    // hardcode :3479 and **the shell never verifies it owns what answers there**.
+    // Two consequences, and #1756 widened the second from two explicit user
+    // actions (Restart server, Install update) to every Quit:
+    //   - with a non-default `TANDEM_MCP_PORT` the POST misses, costs its own 5s
+    //     client timeout, `posted` stays false, the port wait is skipped and the
+    //     hard kill follows — bounded, but not immediate;
+    //   - with a FOREIGN Tandem on :3479 (a `tandem start`, a second app-data
+    //     instance) the POST hits *that* server, which flushes and exits, while
+    //     this log line claims a graceful stop. `owns_child` only says we hold a
+    //     child handle, never that the child is what is listening.
+    // `wait_for_port_release` polls `/health` with the same absence of an
+    // identity check. #1825 (derive the URL) and #1812 (identity) are the fixes;
+    // both are out of scope here. The spawn site now pins `TANDEM_MCP_PORT` /
+    // `TANDEM_PORT` / `TANDEM_BIND_HOST` explicitly, which removes the ambient-env
+    // half of the first case but nothing of the second.
     if owns_child {
-        log::info!("Graceful stop: we own the sidecar child — POSTing {SHUTDOWN_URL}");
-        let posted = match client.post(SHUTDOWN_URL).send().await {
-            Ok(resp) if resp.status().is_success() => true,
+        log::info!("Graceful stop: we own the sidecar child — POSTing {shutdown_url}");
+        let mut already_in_progress = false;
+        let posted = match client.post(shutdown_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                already_in_progress = read_already_in_progress(resp).await;
+                true
+            }
             Ok(resp) => {
                 log::warn!(
                     "Graceful shutdown POST returned HTTP {} — falling back to hard kill",
@@ -355,28 +566,63 @@ pub(crate) async fn stop_sidecar_gracefully(
                 false
             }
         };
-        if posted {
-            if wait_for_port_release(client, deadline_secs).await {
-                log::info!("Sidecar exited gracefully after /api/shutdown");
-            } else {
-                log::warn!(
-                    "Sidecar still up {deadline_secs}s after /api/shutdown — falling back to hard kill"
-                );
-            }
+        let verdict = if !posted {
+            GracefulStop::PostFailed
+        } else if wait_for_server_gone(client, deadline_secs, health_url).await {
+            log::info!("Sidecar exited gracefully after /api/shutdown");
+            GracefulStop::Flushed
+        } else {
+            log::warn!(
+                "Sidecar still up {deadline_secs}s after /api/shutdown — falling back to hard kill"
+            );
+            GracefulStop::TimedOut
+        };
+        StopReport {
+            verdict,
+            already_in_progress,
         }
     } else {
-        log::info!("Graceful stop: no owned sidecar child — skipping POST to {SHUTDOWN_URL}");
+        // `warn`, not `info`: in release the log floor is Warn, and this is the
+        // branch on which a Quit silently loses work. Naming the consequence is
+        // the point — "skipping POST" alone reads like a tidy no-op.
+        log::warn!(
+            "Graceful stop: no owned sidecar child — skipping the graceful stop; unsaved edits are NOT flushed (would have POSTed {shutdown_url})"
+        );
+        StopReport {
+            verdict: GracefulStop::Skipped,
+            already_in_progress: false,
+        }
     }
-    kill_sidecar_inner(handle);
+}
+
+/// Read `data.alreadyInProgress` out of the 202 body, defaulting to `false`.
+///
+/// Deliberately total: a body we cannot read or parse is not a shutdown failure
+/// — the 202 already told us the sequence was accepted — so it costs one debug
+/// line and a `false`, never a changed verdict.
+async fn read_already_in_progress(resp: reqwest::Response) -> bool {
+    match resp.json::<serde_json::Value>().await {
+        Ok(body) => body
+            .get("data")
+            .and_then(|d| d.get("alreadyInProgress"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        Err(e) => {
+            log::debug!("Graceful shutdown 202 body unreadable ({e}) — assuming not already in progress");
+            false
+        }
+    }
 }
 
 /// Kill the sidecar process if one is running.
 ///
-/// Private on purpose. The two callers inside this module (`stop_sidecar_gracefully`
-/// and `start_sidecar`'s health-failure arm) have already done their own graceful
-/// work or are killing a child that never became healthy. Everything on the
-/// application's exit path must go through `kill_sidecar_on_exit`, which cannot be
-/// called without a `graceful::GracefulAttempted` token. See #1756.
+/// Private on purpose. Three functions in this module call it —
+/// `stop_sidecar_gracefully` (on both arms of its `owns_child` gate),
+/// `start_sidecar`'s health-failure arm, and `kill_sidecar_on_exit` — and the
+/// first two have already done their own graceful work or are killing a child
+/// that never became healthy. Everything on the application's exit path goes
+/// through `kill_sidecar_on_exit`, which cannot be called without a
+/// `graceful::GracefulAttempted` token. See #1756.
 fn kill_sidecar_inner(handle: &tauri::AppHandle) {
     let state: tauri::State<'_, SidecarState> = handle.state();
     let mut guard = match state.0.lock() {
@@ -395,17 +641,24 @@ fn kill_sidecar_inner(handle: &tauri::AppHandle) {
 }
 
 /// The hard kill, as the exit path's fallback. Takes a token that only
-/// `graceful::attempt` can mint, so an edit that drops the graceful stop from
-/// `shutdown_sidecar_on_exit` fails to compile rather than silently reinstating
-/// #1756.
+/// `graceful::attempt` can mint.
 ///
-/// **State the limit plainly.** The token proves `attempt` was *called*. It does
-/// not prove the call was meaningful: `attempt` invoked with a zero budget still
-/// hands back a token, and nothing in `cargo test` can tell a real flush from a
-/// neutered one. The detector for that is the smoke checklist's
-/// `Sidecar exited gracefully after /api/shutdown` grep, and it exists only if
-/// the smoke run happens. `#[must_use]` would be inert here — the token is
-/// consumed as an argument — so it is deliberately absent.
+/// **What the witness actually constrains, stated without overclaiming.** It
+/// constrains an author who keeps calling `kill_sidecar_on_exit`: they cannot
+/// reach it without going through `graceful::attempt` first. It does **not**
+/// make dropping the graceful stop a compile error — `kill_sidecar_inner` is
+/// private to this same module and callable directly, so an edit that swaps the
+/// exit path onto it compiles, leaving `kill_sidecar_on_exit` and
+/// `GracefulAttempted` behind as a `dead_code` *warning* (there is no
+/// `deny(warnings)` and neither CI nor pre-push runs clippy).
+///
+/// **And the token proves `attempt` was called, not that the call meant
+/// anything**: `attempt` invoked with a zero budget still hands one back. Two
+/// things do detect that now — `graceful_attempt_posts_and_waits_for_the_reply`
+/// (a real POST against a loopback listener, which a `timeout(1ms)` or a skipped
+/// POST fails), and the single exit verdict line, where a neutered attempt reads
+/// as `elapsed ≈ 1ms` with `timed_out=true`. `#[must_use]` would be inert here —
+/// the token is consumed as an argument — so it is deliberately absent.
 fn kill_sidecar_on_exit(handle: &tauri::AppHandle, _proof: graceful::GracefulAttempted) {
     kill_sidecar_inner(handle);
 }
@@ -414,7 +667,7 @@ fn kill_sidecar_on_exit(handle: &tauri::AppHandle, _proof: graceful::GracefulAtt
 /// `SidecarState` slot currently holding `slot_pid`.
 ///
 /// Extracted so it is testable: `CommandChild` has no public constructor, so a
-/// populated slot cannot be built in a unit test.
+/// populated slot cannot be built out of the real payload type.
 ///
 /// **A bare `take()` here would be a bug with teeth.** Drain tasks are per spawn
 /// attempt and are never cancelled, and `Terminated` is delivered over a
@@ -422,8 +675,49 @@ fn kill_sidecar_on_exit(handle: &tauri::AppHandle, _proof: graceful::GracefulAtt
 /// (`tauri-plugin-shell` `process/mod.rs`), so child A's `Terminated` can land
 /// *after* child B has been stored. Clearing the slot then would orphan B and
 /// make the next Quit skip the flush — #1756 reintroduced by its own fix.
+///
+/// **Accepted residual: OS pid reuse.** The key is the pid alone, so a recycled
+/// pid — child A dies, the OS hands its number to child B, then A's `Terminated`
+/// finally lands — would clear a live slot, and the next Quit would read "not
+/// owned" and skip the flush. It takes a pid reused inside one delivery window
+/// on a machine that just respawned the sidecar; noted rather than engineered
+/// around, since the alternative (a spawn generation counter alongside the pid)
+/// buys nothing else.
 fn terminated_clears_slot(slot_pid: Option<u32>, terminated_pid: u32) -> bool {
     slot_pid == Some(terminated_pid)
+}
+
+/// A slot payload that can name its pid.
+///
+/// Exists so `clear_terminated_slot`'s `take()` branch is reachable from a test.
+/// `CommandChild` has no public constructor, so before this a populated slot
+/// could not be built at all and inverting the predicate stayed green.
+trait SlotPid {
+    fn slot_pid(&self) -> u32;
+}
+
+impl SlotPid for tauri_plugin_shell::process::CommandChild {
+    fn slot_pid(&self) -> u32 {
+        self.pid()
+    }
+}
+
+/// The pid-keyed clear itself, generic over the slot payload so both branches
+/// are drivable from a unit test.
+fn clear_terminated_slot<T: SlotPid>(slot: &Mutex<Option<T>>, pid: u32) {
+    let mut guard = match slot.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let slot_pid = guard.as_ref().map(SlotPid::slot_pid);
+    if terminated_clears_slot(slot_pid, pid) {
+        guard.take();
+        log::info!("Sidecar pid {pid} terminated — cleared the owned-child slot");
+    } else {
+        log::info!(
+            "Sidecar pid {pid} terminated — slot holds {slot_pid:?}, leaving it (newer child)"
+        );
+    }
 }
 
 /// Clear the owned-child slot when the child we stored has died.
@@ -437,21 +731,7 @@ fn terminated_clears_slot(slot_pid: Option<u32>, terminated_pid: u32) -> bool {
 /// Deliberately does NOT kill anything — the child is already gone, and a kill
 /// attached to this aliasing window is the bug above with a weapon.
 fn on_child_terminated_in(state: &SidecarState, pid: u32) {
-    let mut guard = match state.0.lock() {
-        Ok(g) => g,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let slot_pid = guard
-        .as_ref()
-        .map(tauri_plugin_shell::process::CommandChild::pid);
-    if terminated_clears_slot(slot_pid, pid) {
-        guard.take();
-        log::info!("Sidecar pid {pid} terminated — cleared the owned-child slot");
-    } else {
-        log::info!(
-            "Sidecar pid {pid} terminated — slot holds {slot_pid:?}, leaving it (newer child)"
-        );
-    }
+    clear_terminated_slot(&state.0, pid);
 }
 
 /// `AppHandle` wrapper for `on_child_terminated_in`. The drain task is
@@ -473,7 +753,7 @@ fn on_child_terminated(handle: &tauri::AppHandle, pid: u32) {
 /// private field is unreachable from `shutdown_sidecar_on_exit`.
 mod graceful {
     use super::{
-        build_http_client, stop_sidecar_gracefully, SidecarState, EXIT_GRACEFUL_BUDGET_SECS,
+        build_http_client, graceful_stop_request, Endpoints, GracefulStop, SidecarState,
         HTTP_CLIENT_TIMEOUT,
     };
     use std::panic::AssertUnwindSafe;
@@ -484,15 +764,99 @@ mod graceful {
     /// public constructor.
     pub(super) struct GracefulAttempted(());
 
-    /// What the attempt actually did — logged verbatim so "0 ms, timed_out=false,
-    /// owned_child=false" is distinguishable from a real flush. A smoke check
-    /// that greps two static strings is defeated by any edit that keeps the
-    /// strings (#1746).
+    /// What the attempt actually did — rendered into the single exit verdict
+    /// line, so "0 ms, verdict=Skipped, owned_child=false" is distinguishable
+    /// from a real flush. A smoke check that greps static banner strings is
+    /// defeated by any edit that keeps the strings (#1746); the verdict is the
+    /// half that cannot be kept while changing what happened.
     pub(super) struct Outcome {
         pub(super) attempted: bool,
         pub(super) timed_out: bool,
         pub(super) owned_child: bool,
         pub(super) panicked: bool,
+        /// `None` when no `StopReport` came back: the outer budget fired
+        /// mid-flight, the body panicked, or there was no HTTP client to try
+        /// with. Rendered as `verdict=none`.
+        pub(super) verdict: Option<GracefulStop>,
+        pub(super) already_in_progress: bool,
+    }
+
+    /// Everything the attempt needs off the `AppHandle`, read **before** the
+    /// attempt so that `attempt` itself is `AppHandle`-free and therefore
+    /// unit-testable. Windows are hidden here too — see `prepare`.
+    pub(super) struct Prep {
+        pub(super) owned_child: bool,
+        /// `None` only when there is no managed client and building one failed.
+        pub(super) client: Option<reqwest::Client>,
+    }
+
+    /// Hide the windows and read what the attempt needs off the handle.
+    ///
+    /// Hide every window BEFORE blocking: `cleanup_before_exit` — which is what
+    /// hides them on Windows — runs AFTER this callback returns (`tauri`
+    /// `app.rs`, the `RuntimeRunEvent::Exit` arm), so without this a tray Quit
+    /// leaves a live, unresponsive window on screen for the whole budget and
+    /// Windows paints "Not Responding" past HungAppTimeout. `hide()` from the
+    /// main thread is handled inline, so it still works with the loop being
+    /// destroyed.
+    ///
+    /// Every read here is a `try_state` or a poison-tolerant lock, so none of
+    /// them panics on unmanaged state. It still carries its own `catch_unwind`
+    /// for the same reason `attempt` does — on macOS this whole callback runs
+    /// inside tao's `applicationWillTerminate:`, where an unwind is abort/UB
+    /// rather than "skips the rest", and `webview_windows()` takes a lock this
+    /// code does not own. A panic here degrades to "no client, nothing owned",
+    /// which `attempt` reports as `attempted=false, verdict=none`.
+    pub(super) fn prepare(handle: &tauri::AppHandle) -> Prep {
+        std::panic::catch_unwind(AssertUnwindSafe(|| prepare_inner(handle))).unwrap_or_else(
+            |payload| {
+                log::error!(
+                    "Exit: preparing the graceful stop panicked ({}) — skipping to the hard kill",
+                    panic_detail(payload.as_ref())
+                );
+                Prep {
+                    owned_child: false,
+                    client: None,
+                }
+            },
+        )
+    }
+
+    fn prepare_inner(handle: &tauri::AppHandle) -> Prep {
+        for window in handle.webview_windows().values() {
+            if let Err(e) = window.hide() {
+                // `warn`, not `debug`: `debug` is below the floor in EVERY build
+                // (dev is Info, release is Warn), so this line existed nowhere.
+                log::warn!("Exit: could not hide window before shutdown: {e}");
+            }
+        }
+
+        let owned_child = handle
+            .try_state::<SidecarState>()
+            .map(|state| match state.0.lock() {
+                Ok(guard) => guard.is_some(),
+                Err(poisoned) => poisoned.into_inner().is_some(),
+            })
+            .unwrap_or(false);
+
+        // Reuse the managed client so the exit path inherits the same 5s timeout
+        // the budget arithmetic assumes. Never `unwrap()` the fallback build: a
+        // failure there must skip to the kill, not abort inside an ObjC frame.
+        let client = match handle.try_state::<reqwest::Client>() {
+            Some(client) => Some(client.inner().clone()),
+            None => match build_http_client(HTTP_CLIENT_TIMEOUT) {
+                Ok(client) => Some(client),
+                Err(e) => {
+                    log::warn!("Exit: no HTTP client ({e}) — skipping the graceful stop");
+                    None
+                }
+            },
+        };
+
+        Prep {
+            owned_child,
+            client,
+        }
     }
 
     /// Run the bounded graceful stop on the calling (main) thread.
@@ -501,89 +865,122 @@ mod graceful {
     /// multi-thread tokio runtime and `main` is a plain `fn main` with no
     /// runtime `enter()` guard, so there is no "cannot block the current thread
     /// from within a runtime" panic and nothing in the awaited path touches the
-    /// event loop (every await is tokio IO/time; no lock is held across one;
-    /// `CommandChild::kill` is a direct syscall).
+    /// event loop (every await is tokio IO/time; no lock is held across one).
     ///
     /// The `catch_unwind` is not defensive tidiness. On macOS this runs inside
     /// tao's `applicationWillTerminate:`, i.e. inside an ObjC frame, where an
-    /// unwind is abort/UB rather than "skips the rest". `stop_sidecar_gracefully`
-    /// calls `handle.state::<SidecarState>()`, which panics when unmanaged, so
-    /// `try_state` on the HTTP client alone does not cover it.
+    /// unwind is abort/UB rather than "skips the rest".
+    ///
+    /// **No `AppHandle` on purpose.** `owned_child` and the `Endpoints` are
+    /// parameters rather than reads of module state precisely so this function
+    /// can be driven by a unit test against a loopback listener — which is what
+    /// catches the neutered attempt (zero budget, `timeout(1ms)`, a skipped
+    /// POST) that the witness token cannot. The budget and deadline are
+    /// interpolated from the PARAMETERS, never from `EXIT_GRACEFUL_BUDGET_SECS`:
+    /// logging the constant while running a different value is exactly how a
+    /// neutered call site would print "budget 17s".
     pub(super) fn attempt(
-        handle: &tauri::AppHandle,
+        prep: Prep,
         budget: Duration,
         deadline_secs: u64,
+        endpoints: Endpoints<'_>,
     ) -> (Outcome, GracefulAttempted) {
+        let Prep {
+            owned_child,
+            client,
+        } = prep;
+        let Some(client) = client else {
+            return (
+                Outcome {
+                    attempted: false,
+                    timed_out: false,
+                    owned_child,
+                    panicked: false,
+                    verdict: None,
+                    already_in_progress: false,
+                },
+                GracefulAttempted(()),
+            );
+        };
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            // Hide every window BEFORE blocking. `cleanup_before_exit` — which
-            // is what hides windows on Windows — runs AFTER this callback
-            // returns (`tauri` `app.rs`, the `RuntimeRunEvent::Exit` arm), so
-            // without this a tray Quit leaves a live, unresponsive window on
-            // screen for the whole budget and Windows paints "Not Responding"
-            // past HungAppTimeout. `hide()` from the main thread is handled
-            // inline, so it still works with the loop being destroyed.
-            for window in handle.webview_windows().values() {
-                if let Err(e) = window.hide() {
-                    log::debug!("Exit: could not hide window before shutdown: {e}");
+            let budget_secs = budget.as_secs_f64();
+            log::info!("Exit: stopping sidecar gracefully (budget {budget_secs}s, deadline {deadline_secs}s)");
+            // **`timeout()` is constructed INSIDE the async block, not passed
+            // into `block_on` as an argument.** `tokio::time::timeout` builds a
+            // `Sleep`, and `Sleep::new_timeout` calls `scheduler::Handle::
+            // current()` eagerly — which panics with "there is no reactor
+            // running" when there is no runtime on the calling thread. An
+            // argument is evaluated BEFORE `block_on` enters the runtime, and
+            // this runs on the tao main thread, so the argument form panicked
+            // every time: `catch_unwind` swallowed it, the outcome came back
+            // `panicked`, and the hard kill ran with no flush — #1756 intact
+            // behind a fix that looked right. Wrapping it in an `async` block
+            // defers construction to the first poll, which is inside the
+            // runtime. `graceful_attempt_posts_and_waits_for_the_reply` is what
+            // found this and is what keeps it found.
+            match tauri::async_runtime::block_on(async {
+                tokio::time::timeout(
+                    budget,
+                    graceful_stop_request(&client, deadline_secs, endpoints, owned_child),
+                )
+                .await
+            }) {
+                Ok(report) => Outcome {
+                    attempted: true,
+                    timed_out: false,
+                    owned_child,
+                    panicked: false,
+                    verdict: Some(report.verdict),
+                    already_in_progress: report.already_in_progress,
+                },
+                Err(_) => {
+                    log::warn!(
+                        "Exit: graceful sidecar stop exceeded its {budget_secs}s budget — hard kill follows"
+                    );
+                    Outcome {
+                        attempted: true,
+                        timed_out: true,
+                        owned_child,
+                        panicked: false,
+                        verdict: None,
+                        already_in_progress: false,
+                    }
                 }
             }
-
-            let owned_child = handle
-                .try_state::<SidecarState>()
-                .map(|state| match state.0.lock() {
-                    Ok(guard) => guard.is_some(),
-                    Err(poisoned) => poisoned.into_inner().is_some(),
-                })
-                .unwrap_or(false);
-
-            // Reuse the managed client so the exit path inherits the same 5s
-            // timeout the budget arithmetic assumes. Never `unwrap()` the
-            // fallback build: a failure there must skip to the kill, not abort
-            // inside an ObjC frame.
-            let client = match handle.try_state::<reqwest::Client>() {
-                Some(client) => client.inner().clone(),
-                None => match build_http_client(HTTP_CLIENT_TIMEOUT) {
-                    Ok(client) => client,
-                    Err(e) => {
-                        log::warn!("Exit: no HTTP client ({e}) — skipping the graceful stop");
-                        return Outcome {
-                            attempted: false,
-                            timed_out: false,
-                            owned_child,
-                            panicked: false,
-                        };
-                    }
-                },
-            };
-
-            log::info!("Exit: stopping sidecar gracefully (budget {EXIT_GRACEFUL_BUDGET_SECS}s)");
-            let timed_out = tauri::async_runtime::block_on(tokio::time::timeout(
-                budget,
-                stop_sidecar_gracefully(handle, &client, deadline_secs),
-            ))
-            .is_err();
-            if timed_out {
-                log::warn!(
-                    "Exit: graceful sidecar stop exceeded its {EXIT_GRACEFUL_BUDGET_SECS}s budget — hard kill follows"
-                );
-            }
-            Outcome {
-                attempted: true,
-                timed_out,
-                owned_child,
-                panicked: false,
-            }
         }));
-        let outcome = result.unwrap_or_else(|_| {
-            log::error!("Exit: graceful sidecar stop panicked — falling back to the hard kill");
+        let outcome = result.unwrap_or_else(|payload| {
+            // Carry the payload into the line. On the Windows GUI subsystem
+            // stderr is a closed handle and no `panic::set_hook` is installed,
+            // so the default hook's message goes nowhere — dropping the payload
+            // here (`|_|`) meant a panicking exit logged no cause at all.
+            let detail = panic_detail(payload.as_ref());
+            log::error!(
+                "Exit: graceful sidecar stop panicked ({detail}) — falling back to the hard kill"
+            );
             Outcome {
-                attempted: false,
+                // The attempt WAS made — it panicked partway. Reporting
+                // `attempted: false` here manufactured the exact "nothing
+                // happened" line the verdict is supposed to distinguish.
+                attempted: true,
                 timed_out: false,
-                owned_child: false,
+                owned_child,
                 panicked: true,
+                verdict: None,
+                already_in_progress: false,
             }
         });
         (outcome, GracefulAttempted(()))
+    }
+
+    /// The two payload shapes `panic!` produces in practice.
+    fn panic_detail(payload: &(dyn std::any::Any + Send)) -> String {
+        if let Some(s) = payload.downcast_ref::<&'static str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "non-string panic payload".to_string()
+        }
     }
 }
 
@@ -606,18 +1003,44 @@ pub(crate) fn shutdown_sidecar_on_exit(app: &tauri::AppHandle) {
     // Windows.
     EXITING.store(true, Ordering::Release);
     let started = std::time::Instant::now();
-    let (outcome, proof) = graceful::attempt(app, EXIT_GRACEFUL_BUDGET, GRACEFUL_SHUTDOWN_DEADLINE_SECS);
-    // Unconditional, and outside the `catch_unwind` above, so a panicked
-    // graceful stop still ends with the child dead.
+    let prep = graceful::prepare(app);
+    let (outcome, proof) = graceful::attempt(
+        prep,
+        EXIT_GRACEFUL_BUDGET,
+        GRACEFUL_SHUTDOWN_DEADLINE_SECS,
+        Endpoints::PRODUCTION,
+    );
+    // Unconditional, and outside the `catch_unwind` inside `attempt`, so a
+    // panicked graceful stop still ends with the child dead.
     kill_sidecar_on_exit(app, proof);
-    log::info!(
-        "Exit: sidecar shutdown complete (elapsed {}ms, attempted={}, timed_out={}, owned_child={}, panicked={})",
-        started.elapsed().as_millis(),
+    log::warn!("{}", exit_verdict_line(started.elapsed(), &outcome));
+}
+
+/// The one line that has to reach `tandem.log` on an installed build.
+///
+/// **`warn`, and a single line, because of the release log floor.** `lib.rs`
+/// builds `tauri_plugin_log` at `LevelFilter::Warn` in release, so every
+/// `log::info!` on the graceful path — including "Sidecar exited gracefully
+/// after /api/shutdown" — is invisible on exactly the build
+/// `docs/release-smoke-checklist.md` is run against. Three greps over three
+/// `info!` strings would have passed on a dev build and found nothing on an
+/// installer.
+///
+/// Built as a pure function so the format can be pinned by
+/// `verdict_line_carries_the_substrings_the_smoke_checklist_greps`: the
+/// checklist's grep and this string must agree byte-for-byte, and a test is the
+/// only thing that keeps them agreeing (#1746).
+fn exit_verdict_line(elapsed: std::time::Duration, outcome: &graceful::Outcome) -> String {
+    format!(
+        "Exit: sidecar shutdown complete (elapsed={}ms, verdict={}, attempted={}, timed_out={}, owned_child={}, already_in_progress={}, panicked={})",
+        elapsed.as_millis(),
+        outcome.verdict.map_or("none", GracefulStop::as_str),
         outcome.attempted,
         outcome.timed_out,
         outcome.owned_child,
+        outcome.already_in_progress,
         outcome.panicked
-    );
+    )
 }
 
 pub(crate) fn build_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
@@ -627,20 +1050,41 @@ pub(crate) fn build_http_client(timeout: Duration) -> Result<reqwest::Client, St
         .map_err(|e| format!("HTTP client error: {e}"))
 }
 
+/// What a `start_sidecar` success actually was.
+///
+/// **Never overload `Ok(())`.** A decline is not a start, and the two consumers
+/// that used to read it as one both misreported: "Retry Server Start" logged
+/// "Server-start retry succeeded" and ran an update check on the one dialog
+/// whose job is to say the server did not start, and `restart_sidecar` — which
+/// has already cleared `SIDECAR_HEALTHY` and the startup rejection in its
+/// command body — left the Restart button looking like it worked while opens
+/// queued into a queue with no consumer (#1416's condition).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpawnOutcome {
+    /// A healthy sidecar is available: we spawned one, or (debug builds only) an
+    /// external `dev:standalone` server was already answering `/health`.
+    Started,
+    /// `spawn_allowed()` was false — an exit or an update install is in flight —
+    /// so no child was spawned and none will be. **Not a failure and not a
+    /// success**; the caller decides what to surface, and during an exit the
+    /// answer is "nothing".
+    Declined,
+}
+
 /// Spawn the Node.js sidecar and wait for the health endpoint.
 /// Retries up to MAX_RESTARTS times with exponential backoff on crash.
 ///
-/// **Returns `Ok(())` without a sidecar when the app is shutting down** (#1756).
-/// That is not sloppiness: the terminal `Err` after the retry loop reaches
-/// `restart_sidecar`'s failure arm (`report_pending_opens_with(.., true, ..)`
-/// plus an emitted `sidecar-restart-failed`) and the "Retry Server Start"
+/// **Returns `Ok(SpawnOutcome::Declined)` when the app is shutting down**
+/// (#1756), rather than the terminal `Err` after the retry loop: that `Err`
+/// reaches `restart_sidecar`'s failure arm (`report_pending_opens_with(.., true,
+/// ..)` plus an emitted `sidecar-restart-failed`) and the "Retry Server Start"
 /// dialog, i.e. a user-facing rejection raised while the app is quitting.
-/// Declining to spawn is a success, and the log line is the trace.
+/// `Declined` is neither, and every caller must match on it.
 pub(crate) async fn start_sidecar(
     handle: &tauri::AppHandle,
     client: &reqwest::Client,
     cold_start_file: Option<&std::path::Path>,
-) -> Result<(), String> {
+) -> Result<SpawnOutcome, String> {
     // FIRST statement, before the debug fast path below returns: this call IS the
     // new attempt, so any earlier give-up verdict is withdrawn here. A clear
     // written after the fast path would never run on it. See `begin_start_attempt`.
@@ -661,7 +1105,7 @@ pub(crate) async fn start_sidecar(
         // Dev-only, but it is the one door in #1416 with nothing on screen at all.
         let drained = promote_healthy_and_drain(handle.state::<PendingOpens>().inner());
         post_batch_for_app("drain", handle.clone(), drained, RejectionBatch::default()).await;
-        return Ok(());
+        return Ok(SpawnOutcome::Started);
     }
 
     let resource_dir = handle
@@ -722,7 +1166,7 @@ pub(crate) async fn start_sidecar(
         // there. #1756.
         if !spawn_allowed() {
             log::info!("start_sidecar: shutdown in progress — not spawning");
-            return Ok(());
+            return Ok(SpawnOutcome::Declined);
         }
         if attempt > 0 {
             let backoff = Duration::from_secs(2u64.pow(attempt - 1));
@@ -738,7 +1182,28 @@ pub(crate) async fn start_sidecar(
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
             .args([server_js_str.as_str()])
             .env("TANDEM_TAURI_SIDECAR", "1")
-            .env("TANDEM_DATA_DIR", app_data_dir_str.as_str());
+            .env("TANDEM_DATA_DIR", app_data_dir_str.as_str())
+            // Pin the sidecar's listening addresses to the ones this shell has
+            // hardcoded in `HEALTH_URL` / `SHUTDOWN_URL` / `WS_PORT` / `MCP_PORT`.
+            //
+            // **`tauri-plugin-shell` DOES inherit the parent environment.**
+            // `Command::new` (`tauri-plugin-shell-2.3.5/src/process/mod.rs:162-179`)
+            // never calls `env_clear()`; `env_clear` (`:205-208`) runs only when
+            // the caller asks for it; `spawn` (`:305-320`) converts to a plain
+            // `std::process::Command` and hands it to `SharedChild::spawn`,
+            // which inherits by default. So an ambient `TANDEM_MCP_PORT` in the
+            // environment that launched the desktop app reached the child and
+            // moved it off :3479 (`src/server/index.ts:97-98`, `:503`); the
+            // shell would then miss its own child on every health poll and,
+            // after #1756, POST `/api/shutdown` at whatever else answers :3479
+            // on **every Quit**. Setting these explicitly is what makes the
+            // child's addresses the ones the constants above name. It does not
+            // fix #1825 (the URLs are still hardcoded) and gives the POST no
+            // identity check (#1812) — a foreign server already on :3479 is
+            // still mistaken for ours.
+            .env("TANDEM_PORT", WS_PORT.to_string())
+            .env("TANDEM_MCP_PORT", MCP_PORT.to_string())
+            .env("TANDEM_BIND_HOST", SIDECAR_BIND_HOST);
 
         if let Some(ref token) = auth_token {
             cmd = cmd.env("TANDEM_AUTH_TOKEN", token.as_str());
@@ -754,9 +1219,11 @@ pub(crate) async fn start_sidecar(
 
         // Crash reporting (#921): forward the opt-in DSN so the sidecar reports
         // to the SAME Sentry/GlitchTip project as the shell (separate event
-        // source). `tauri-plugin-shell` does NOT inherit the parent env, so we
-        // must pass it explicitly. Unset → not forwarded → sidecar reporting
-        // stays off (default posture).
+        // source). Passed explicitly because the shell reads it from its OWN
+        // process env and the child's copy must match this launch's opt-in
+        // state, not whatever was ambient — the plugin does inherit the parent
+        // env (see the port block above), so this is a pin, not a bridge.
+        // Unset → not forwarded → sidecar reporting stays off (default posture).
         if let Ok(dsn) = std::env::var(sentry_reporting::SENTRY_DSN_ENV) {
             if !dsn.trim().is_empty() {
                 cmd = cmd.env(sentry_reporting::SENTRY_DSN_ENV, dsn);
@@ -857,7 +1324,7 @@ pub(crate) async fn start_sidecar(
                 if let Err(e) = child.kill() {
                     log::error!("Failed to kill sidecar spawned during shutdown: {e}");
                 }
-                return Ok(());
+                return Ok(SpawnOutcome::Declined);
             }
             *guard = Some(child);
         }
@@ -877,7 +1344,7 @@ pub(crate) async fn start_sidecar(
                 post_batch_for_app("drain", handle.clone(), drained, RejectionBatch::default())
                     .await;
 
-                return Ok(());
+                return Ok(SpawnOutcome::Started);
             }
             Err(e) => {
                 log::error!("Health check failed: {e}");
@@ -934,7 +1401,11 @@ async fn wait_for_health(
 
 /// Single health check — returns true if server is already responding.
 async fn check_health(client: &reqwest::Client) -> bool {
-    if let Ok(resp) = client.get(HEALTH_URL).send().await {
+    check_health_at(client, HEALTH_URL).await
+}
+
+async fn check_health_at(client: &reqwest::Client, health_url: &str) -> bool {
+    if let Ok(resp) = client.get(health_url).send().await {
         return resp.status().is_success();
     }
     false
@@ -943,9 +1414,23 @@ async fn check_health(client: &reqwest::Client) -> bool {
 /// Poll until the health endpoint stops responding (port released).
 /// Returns true if released within the deadline, false on timeout.
 pub(crate) async fn wait_for_port_release(client: &reqwest::Client, deadline_secs: u64) -> bool {
+    wait_for_server_gone(client, deadline_secs, HEALTH_URL).await
+}
+
+/// `wait_for_port_release` with the polled URL as a parameter.
+///
+/// The parameter exists so `graceful_stop_request` can be pointed at a test
+/// listener; `wait_for_port_release` keeps the no-URL signature its four other
+/// callers use. Taking the URL rather than deriving it is deliberately NOT a fix
+/// for #1825 — the constants are still hardcoded at every production call site.
+async fn wait_for_server_gone(
+    client: &reqwest::Client,
+    deadline_secs: u64,
+    health_url: &str,
+) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(deadline_secs);
     while tokio::time::Instant::now() < deadline {
-        if !check_health(client).await {
+        if !check_health_at(client, health_url).await {
             return true;
         }
         tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
@@ -1497,16 +1982,25 @@ Active Connections
 /// A separate module from `port_holder_tests`, which is the netstat parser's.
 ///
 /// **What these tests cannot see, stated plainly.** The `RunEvent::Exit`
-/// handler cannot be driven without `tauri = { features = ["test"] }` and making
-/// `shutdown_sidecar_on_exit` / `graceful::attempt` / `kill_sidecar_on_exit`
-/// generic over `R: Runtime`; that is deliberately not done here. The
-/// `GracefulAttempted` witness turns "skipped the graceful stop entirely" into a
-/// compile error, but it does NOT catch a neutered attempt (a zero budget, a
-/// `timeout(1ms)`), and no unit test can. The sole detector of a real flush is
-/// the smoke checklist's `Sidecar exited gracefully after /api/shutdown` grep.
+/// handler itself cannot be driven without `tauri = { features = ["test"] }` and
+/// making `shutdown_sidecar_on_exit` / `graceful::prepare` /
+/// `kill_sidecar_on_exit` generic over `R: Runtime`; that is deliberately not
+/// done here, so nothing pins that `RunEvent::Exit` is wired to
+/// `shutdown_sidecar_on_exit` at all, nor that `graceful::prepare` hides the
+/// windows before blocking.
+///
+/// What they DO now see, and did not before: `graceful::attempt` is
+/// `AppHandle`-free, so `graceful_attempt_posts_and_waits_for_the_reply` drives
+/// a real POST against a loopback listener and fails on a zero budget, a
+/// `timeout(1ms)` or a skipped POST — the neutered attempt the
+/// `GracefulAttempted` witness cannot catch. The witness's own limit is stated
+/// on `kill_sidecar_on_exit`: it is not the compile error the first draft
+/// claimed.
 #[cfg(test)]
 mod shutdown_guard_tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
 
     /// `EXITING` and `SIDECAR_SHUTTING_DOWN` are process-wide statics; serialize
     /// the tests that write them.
@@ -1559,12 +2053,241 @@ mod shutdown_guard_tests {
 
     #[test]
     fn on_child_terminated_in_leaves_an_empty_slot_empty() {
-        // `CommandChild` has no public constructor, so a POPULATED slot cannot
-        // be built here — `terminated_clears_slot` above is where both halves of
-        // the decision are pinned. This covers the wrapper's lock handling.
         let state = SidecarState(Mutex::new(None));
         on_child_terminated_in(&state, 4242);
         assert!(state.0.lock().unwrap().is_none());
+    }
+
+    /// Stands in for `CommandChild`, which has no public constructor. Without
+    /// it the `guard.take()` branch of `clear_terminated_slot` was executed by
+    /// no test at all and inverting the predicate stayed green.
+    struct FakeChild(u32);
+
+    impl SlotPid for FakeChild {
+        fn slot_pid(&self) -> u32 {
+            self.0
+        }
+    }
+
+    #[test]
+    fn clear_terminated_slot_takes_a_matching_pid_and_keeps_a_newer_one() {
+        let matching = Mutex::new(Some(FakeChild(4242)));
+        clear_terminated_slot(&matching, 4242);
+        assert!(
+            matching.lock().unwrap().is_none(),
+            "the slot holds the child that died — it must be taken"
+        );
+
+        let newer = Mutex::new(Some(FakeChild(4243)));
+        clear_terminated_slot(&newer, 4242);
+        assert_eq!(
+            newer.lock().unwrap().as_ref().map(FakeChild::slot_pid),
+            Some(4243),
+            "a newer child is stored — taking it would orphan the live sidecar"
+        );
+    }
+
+    /// The exact substrings `docs/release-smoke-checklist.md` greps for.
+    ///
+    /// The checklist cannot read the code and the code cannot read the
+    /// checklist, so this test is the whole of the agreement between them: a
+    /// rename of any field, or a switch back to several `info!` lines, turns it
+    /// red instead of turning a smoke row into a grep that silently matches
+    /// nothing (#1746).
+    #[test]
+    fn verdict_line_carries_the_substrings_the_smoke_checklist_greps() {
+        let flushed = graceful::Outcome {
+            attempted: true,
+            timed_out: false,
+            owned_child: true,
+            panicked: false,
+            verdict: Some(GracefulStop::Flushed),
+            already_in_progress: false,
+        };
+        let line = exit_verdict_line(Duration::from_millis(1234), &flushed);
+        for needle in [
+            "Exit: sidecar shutdown complete",
+            "elapsed=1234ms",
+            "verdict=Flushed",
+            "timed_out=false",
+            "owned_child=true",
+            "already_in_progress=false",
+            "panicked=false",
+            "attempted=true",
+        ] {
+            assert!(line.contains(needle), "verdict line lost {needle:?}: {line}");
+        }
+
+        // The other half of the point: a neutered or skipped attempt must not be
+        // able to produce the string above.
+        let skipped = graceful::Outcome {
+            attempted: false,
+            timed_out: false,
+            owned_child: false,
+            panicked: false,
+            verdict: None,
+            already_in_progress: false,
+        };
+        let line = exit_verdict_line(Duration::from_millis(0), &skipped);
+        assert!(line.contains("verdict=none"), "{line}");
+        assert!(!line.contains("verdict=Flushed"), "{line}");
+        assert!(!line.contains("owned_child=true"), "{line}");
+    }
+
+    /// A real POST and a real port-release wait, against a loopback listener.
+    ///
+    /// This is what a `Duration::from_millis(1)` budget, a skipped POST or a
+    /// zero deadline cannot survive — the three mutants the witness token waves
+    /// through. It runs in ~250 ms.
+    #[test]
+    fn graceful_attempt_posts_and_waits_for_the_reply() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        // Non-blocking accept with its own deadline, so a regression that stops
+        // POSTing turns this test RED instead of hanging the suite forever on
+        // `join()` — a hung pre-push run is worse than a failing one.
+        listener.set_nonblocking(true).expect("set_nonblocking");
+        let server = std::thread::spawn(move || {
+            let accept_by = std::time::Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= accept_by {
+                            return "<no connection within 5s>".to_string();
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(e) => return format!("<accept failed: {e}>"),
+                }
+            };
+            // Stop listening the instant we have the connection. The health poll
+            // that follows must hit a CLOSED port and fail fast; a listener still
+            // accepting would leave that GET unanswered until the client's 5 s
+            // timeout, which is the only way this test could get slow or flaky.
+            drop(listener);
+            stream.set_nonblocking(false).expect("blocking stream");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("read timeout");
+            let mut buf = [0u8; 2048];
+            let n = match stream.read(&mut buf) {
+                Ok(n) => n,
+                Err(e) => return format!("<read failed: {e}>"),
+            };
+            let head = String::from_utf8_lossy(&buf[..n]).to_string();
+            // The delay is the assertion's teeth: `elapsed >= 200 ms` is only
+            // reachable by actually awaiting this reply.
+            std::thread::sleep(Duration::from_millis(200));
+            let body = br#"{"data":{"shuttingDown":true,"alreadyInProgress":true}}"#;
+            let resp = format!(
+                "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(resp.as_bytes()).expect("write head");
+            stream.write_all(body).expect("write body");
+            stream.flush().expect("flush");
+            head
+        });
+
+        let shutdown = format!("http://{addr}/api/shutdown");
+        let health = format!("http://{addr}/health");
+        let prep = graceful::Prep {
+            owned_child: true,
+            client: Some(build_http_client(HTTP_CLIENT_TIMEOUT).expect("build client")),
+        };
+
+        let started = std::time::Instant::now();
+        let (outcome, _proof) = graceful::attempt(
+            prep,
+            EXIT_GRACEFUL_BUDGET,
+            GRACEFUL_SHUTDOWN_DEADLINE_SECS,
+            Endpoints {
+                shutdown: &shutdown,
+                health: &health,
+            },
+        );
+        let elapsed = started.elapsed();
+
+        let head = server.join().expect("server thread");
+        assert!(
+            head.starts_with("POST /api/shutdown "),
+            "the graceful stop must POST /api/shutdown, got: {head:?}"
+        );
+        assert!(outcome.attempted, "the attempt must report itself attempted");
+        assert!(!outcome.timed_out, "17s is not a binding budget here");
+        assert!(!outcome.panicked);
+        assert!(outcome.owned_child, "owned_child is passed in, not re-read");
+        assert_eq!(
+            outcome.verdict,
+            Some(GracefulStop::Flushed),
+            "the port stopped answering after the 202 — that is a flush"
+        );
+        assert!(
+            outcome.already_in_progress,
+            "the 202 body said alreadyInProgress; discarding it must be visible"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(200),
+            "the reply was awaited, not skipped (elapsed {elapsed:?})"
+        );
+    }
+
+    /// The decline arm is not the only way out of `restart_sidecar`, and none of
+    /// them may leave the gate held. `RESTART_IN_PROGRESS` latching is invisible:
+    /// the Restart button and Retry Server Start both become no-ops that look
+    /// like they worked.
+    #[test]
+    fn restart_gate_releases_on_drop() {
+        let _serialise = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        RESTART_IN_PROGRESS.store(false, Ordering::Release);
+        {
+            let gate = RestartGate::try_acquire().expect("a free gate is acquirable");
+            assert!(RESTART_IN_PROGRESS.load(Ordering::Acquire));
+            assert!(
+                RestartGate::try_acquire().is_none(),
+                "a held gate must refuse a second acquire"
+            );
+            drop(gate);
+        }
+        assert!(
+            !RESTART_IN_PROGRESS.load(Ordering::Acquire),
+            "Drop must release the gate"
+        );
+    }
+
+    /// `SIDECAR_SHUTTING_DOWN` is held across `download_and_install(..).await`.
+    /// Before the guard, only the explicit clear on the `Err` arm released it, so
+    /// a panic or a dropped task latched it for the process lifetime and made
+    /// `spawn_allowed()` false forever.
+    #[test]
+    fn shutting_down_guard_releases_on_drop() {
+        let _serialise = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        set_flags(false, false);
+        {
+            let _guard = ShuttingDownGuard::acquire();
+            assert!(SIDECAR_SHUTTING_DOWN.load(Ordering::Acquire));
+            assert!(!spawn_allowed(), "the install must block spawns while held");
+        }
+        assert!(!SIDECAR_SHUTTING_DOWN.load(Ordering::Acquire));
+        assert!(spawn_allowed(), "and re-permit them once the install is done");
+    }
+
+    /// The `Drop` keeps the `compare_exchange`, and that CAS is the `EXITING`
+    /// interlock: an update that fails DURING an exit must not re-permit spawns.
+    #[test]
+    fn shutting_down_guard_drop_cannot_re_permit_spawns_during_an_exit() {
+        let _serialise = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        set_flags(false, false);
+        {
+            let _guard = ShuttingDownGuard::acquire();
+            EXITING.store(true, Ordering::Release);
+        }
+        assert!(
+            !spawn_allowed(),
+            "releasing the updater's flag must not unlatch EXITING"
+        );
+        set_flags(false, false);
     }
 
     #[test]
