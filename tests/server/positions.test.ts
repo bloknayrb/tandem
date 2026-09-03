@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { extractText, getOrCreateXmlText } from "../../src/server/mcp/document.js";
 import {
+  __testResetHoistMismatchCounts,
   anchoredRange,
   flatOffsetToRelPos,
   refreshAllRanges,
@@ -291,6 +292,13 @@ describe("validateRange — bounds, integrality, emptiness and surrogates", () =
   });
 
   describe("the hoisted `text` guard", () => {
+    // `hoistMismatchCounts` is module-global and deliberately never cleared in
+    // production, so the throttle spec's expected log count would otherwise
+    // depend on which tags earlier specs in the run touched.
+    beforeEach(() => {
+      __testResetHoistMismatchCounts();
+    });
+
     it("recomputes and warns when the supplied text has the wrong length", () => {
       doc = makeDoc("hello world");
       const spy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -375,9 +383,9 @@ describe("validateRange — bounds, integrality, emptiness and surrogates", () =
         // did not, since `n !== 1` also passes it.
         //
         // The tag must be one of the five `HoistTag` literals (the union exists
-        // so the module-global counter cannot grow unboundedly).
-        // `docx-capture/score` is used by no other spec in this file, so the
-        // count starts at zero.
+        // so the module-global counter cannot grow unboundedly). The count
+        // starts at zero because of the `beforeEach` reset above, not because
+        // this literal happens to be unique in the file.
         for (let i = 0; i < 100; i++) {
           validateRange(doc, off(0), off(5), {
             text: "hello worlds",

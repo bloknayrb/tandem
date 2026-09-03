@@ -313,6 +313,16 @@ export function validateFlatRange(
 const hoistMismatchCounts = new Map<HoistTag, number>();
 
 /**
+ * Test-only. Clears the counter above so a throttle spec's expected log count
+ * does not depend on which tags earlier specs in the run happened to touch —
+ * the alternative was a prose comment claiming a literal is unused elsewhere,
+ * which nothing enforces. Never called from production code.
+ */
+export function __testResetHoistMismatchCounts(): void {
+  hoistMismatchCounts.clear();
+}
+
+/**
  * First occurrence, then the 10th, 100th, 1000th … Everything else is counted
  * only.
  *
@@ -353,7 +363,11 @@ function reportHoistMismatch(tag: HoistTag | undefined, detail: string): void {
  * otherwise. It is simply not a shape any hoist caller produces, because none of
  * them writes document text at all. **A new `text:` call site that writes to the
  * fragment inside its own loop invalidates this argument, not merely this
- * guard.**
+ * guard** — and so does one that `await`s between hoisting and using the text.
+ * The scope is both halves: no document-text write in the loop, AND the
+ * `extractText` of THIS doc is hoisted immediately, with no `await` between the
+ * hoist and the use. An async hoist caller satisfies the first half alone and
+ * still lets another task mutate the fragment inside the window.
  *
  * Two earlier forms, recorded so neither comes back:
  *
@@ -372,9 +386,9 @@ function reportHoistMismatch(tag: HoistTag | undefined, detail: string): void {
  * reader should not re-derive an inflated one.** On a 1500-block / 125 KB
  * document, `stampClaudeAuthorshipWholeDoc` ran 17.0 s with the content compare
  * and 14.7 s with this guard (median of 5; the box was noisy, spread 11.6-24.4 s).
- * Per call on the same document the guard costs 5.49 ms against 5.66 ms — only
- * ~13% — because BOTH are dominated by the Y.js tree traversal rather than the
- * string concatenation; what the guard removes is the 125 KB allocation per
+ * Per call on the same document the guard costs 5.49 ms against 5.66 ms — about
+ * 3% per call, while the whole loop moved 13% — because BOTH are dominated by
+ * the Y.js tree traversal rather than the string concatenation; what the guard removes is the 125 KB allocation per
  * iteration, not the walk. And the loop's real cost is neither: it is already
  * O(blocks²) in tree walks and always was, because `resolveToElement` and
  * `flatOffsetToRelPos` each walk the fragment block-by-block on every call. The
