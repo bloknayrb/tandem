@@ -131,8 +131,73 @@ describe("MCP tool boundary rejects out-of-range offsets", () => {
     // A protocol-level -32602, surfaced as an isError envelope rather than an
     // INVALID_RANGE from the handler. Stated because the spec permits either.
     expect(res.isError).toBe(true);
-    expect(res.content[0]?.text).toContain("Expected integer, received float");
+    // Matched loosely. "Expected integer, received float" is Zod's wording, not
+    // this codebase's contract; pinning the literal makes a Zod bump read as a
+    // range-validation regression.
+    expect(res.content[0]?.text).toMatch(/integer/i);
     expect(extractText(ydoc)).toBe(before);
+  });
+
+  it("tandem_edit(n, n, 'x') INSERTS at n — point insertion is a supported capability", async () => {
+    // `replaceFlatRangeInElement` guards only its DELETE on `to > from` and
+    // always inserts, so this has always worked and is the only mid-document
+    // insert path (`tandem_appendContent` appends at the document END and is
+    // markdown-only). A blanket `from === to` refusal removed it with no
+    // replacement.
+    const ydoc = setupDoc("bounds-edit-point", "Alpha beta gamma");
+    const res = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 5, to: 5, newText: " INSERTED" },
+      }),
+    );
+    expect(res.error).toBe(false);
+    expect(res.data?.edited).toBe(true);
+    expect(extractText(ydoc)).toBe("Alpha INSERTED beta gamma");
+  });
+
+  it("tandem_edit(n, n, '') is the one genuine no-op and reports reason 'empty'", async () => {
+    const ydoc = setupDoc("bounds-edit-noop", "Alpha beta gamma");
+    const before = extractText(ydoc);
+    const res = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 5, to: 5, newText: "" },
+      }),
+    );
+    expect(res.error).toBe(true);
+    expect(res.code).toBe("INVALID_RANGE");
+    expect(res.details?.reason).toBe("empty");
+    expect(extractText(ydoc)).toBe(before);
+  });
+
+  it("tandem_edit(1, 1, 'x') inside a heading prefix is still HEADING_OVERLAP", async () => {
+    // The heading check runs AFTER the text-side checks, so `allowEmpty` (which
+    // point insertion needs) must not swallow it: an empty range inside `"## "`
+    // still answers HEADING_OVERLAP, exactly as master did.
+    const ydoc = setupDoc("bounds-edit-point-heading", "## Head\nBody text");
+    const before = extractText(ydoc);
+    const res = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 1, to: 1, newText: "x" },
+      }),
+    );
+    expect(res.error).toBe(true);
+    expect(res.code).toBe("INVALID_RANGE");
+    expect(res.message).toMatch(/heading markup/i);
+    expect(extractText(ydoc)).toBe(before);
+  });
+
+  it("tandem_getContext(5, 5) succeeds — a zero-length context query is legitimate", async () => {
+    // `allowEmpty: true` at the getContext call site was unpinned; nothing
+    // stopped a later tidy from dropping it and turning every cursor-position
+    // context read into INVALID_RANGE.
+    setupDoc("bounds-ctx-point", "Alpha beta gamma\nDelta");
+    const res = parseResult(
+      await client.callTool({ name: "tandem_getContext", arguments: { from: 5, to: 5 } }),
+    );
+    expect(res.error).toBe(false);
   });
 
   it("tandem_edit splitting a surrogate pair is refused, and writes no U+FFFD", async () => {
@@ -254,6 +319,46 @@ describe(".docx comment import", () => {
     expect(stored[0]?.range).toEqual({ from: len, to: len });
   });
 
+  it("imports a Word comment whose stored range splits an emoji, rather than skipping it", () => {
+    // The import site inherits the same OOXML-vs-mdast accounting divergence the
+    // clamp above exists for, and that divergence can land an offset BETWEEN the
+    // halves of a pair as easily as past the end. Under the default
+    // `surrogates: "reject"` the comment was never injected at all — absent from
+    // `Y.Map('annotations')`, so the #1448 scoreboard cannot score it -1 and the
+    // loss is invisible. Driven through `injectCommentsAsAnnotations`, NOT
+    // `captureModel`: capture reads what import already stored, so a capture-only
+    // spec passes vacuously on an empty map.
+    const d = makeDoc("Hello \u{1F44B} world");
+    expect(extractText(d)).toBe("Hello \u{1F44B} world");
+    const injected = injectCommentsAsAnnotations(d, [comment("c-emoji", 0, 7)], "review.docx");
+    expect(injected).toBe(1);
+    const stored = [...d.getMap(Y_MAP_ANNOTATIONS).values()] as Annotation[];
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.range).toEqual({ from: 0, to: 7 });
+  });
+
+  it("reports ONE aggregate clamp signal carrying the count, not one per comment", () => {
+    const d = makeDoc("Alpha beta gamma");
+    const len = extractText(d).length;
+    const clamps: Array<{ count: number; maxClamp: number }> = [];
+    injectCommentsAsAnnotations(
+      d,
+      [comment("c-oob1", 2, len + 5), comment("c-oob2", 3, len + 11)],
+      "review.docx",
+      (info) => clamps.push(info),
+    );
+    expect(clamps).toHaveLength(1);
+    expect(clamps[0]?.count).toBe(2);
+    expect(clamps[0]?.maxClamp).toBe(11);
+  });
+
+  it("fires no clamp signal when nothing was clamped", () => {
+    const d = makeDoc("Alpha beta gamma");
+    const clamps: unknown[] = [];
+    injectCommentsAsAnnotations(d, [comment("c-ok", 2, 7)], "review.docx", (i) => clamps.push(i));
+    expect(clamps).toEqual([]);
+  });
+
   it("captureModel scores an imported point comment with a real range, not -1/-1", () => {
     const d = makeDoc("Alpha beta gamma");
     injectCommentsAsAnnotations(d, [comment("c4", 6, 6)], "review.docx");
@@ -356,6 +461,66 @@ describe(".docx comment export resolver", () => {
     const skips: ExportSkipReason[] = [];
     prepareExportComments(d, (r) => skips.push(r));
     expect(skips).toEqual(["out-of-bounds"]);
+  });
+
+  it("counts an INVERTED stored range as invalid-range in onSkip", () => {
+    // The `invalid-range` arm of the skip taxonomy had no spec at all — every
+    // existing case landed in `out-of-bounds` or `range-failed`, so the arm was
+    // reachable only by reading the code.
+    const d = docWith("Alpha beta gamma", []);
+    const map = d.getMap(Y_MAP_ANNOTATIONS);
+    withInternal(d, () => {
+      map.set("inverted", {
+        id: "inverted",
+        author: "claude",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 9, to: 2 },
+        content: "backwards",
+        status: "pending",
+        timestamp: 1700000000000,
+        rev: 1,
+      });
+    });
+    const skips: ExportSkipReason[] = [];
+    prepareExportComments(d, (r) => skips.push(r));
+    expect(skips).toEqual(["invalid-range"]);
+  });
+
+  it("snaps the FROM half of a mid-pair range outward too", () => {
+    // The `from--` half of the snap had no spec: every existing case exercised
+    // only `to++`. On "Hello 👋 world" the pair occupies units 6-7, so from: 7
+    // is mid-pair and must snap DOWN to 6.
+    const d = docWith("Hello \u{1F44B} world", [{ from: 7, to: 13 }]);
+    const out = prepareExportComments(d);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.from).toBe(6);
+    expect(out[0]?.to).toBe(13);
+  });
+
+  it("does NOT snap at offset 0 of a text beginning with a lone low surrogate", () => {
+    // The one-sided `isLowSurrogate(charCodeAt(from))` predicate this replaced
+    // fired here, producing `from = -1` and then an `out-of-bounds` skip — a
+    // comment silently dropped from the exported file. The paired predicate
+    // returns false at i <= 0, so the comment exports unchanged.
+    const d = docWith("\uDC4B tail text", [{ from: 0, to: 5 }]);
+    const skips: ExportSkipReason[] = [];
+    const out = prepareExportComments(d, (r) => skips.push(r));
+    expect(skips).toEqual([]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.from).toBe(0);
+  });
+
+  it("does NOT widen a range whose boundary sits BETWEEN two adjacent astral characters", () => {
+    // Offset 2 of "😀😀" is the legal boundary between two emoji: the unit at 2
+    // is a high surrogate, and the unit at 1 is a LOW one, so the paired
+    // predicate correctly says no split. A one-sided check sees "surrogate at
+    // to" and snaps outward, silently widening the exported comment.
+    const d = docWith("\u{1F600}\u{1F600}", [{ from: 0, to: 2 }]);
+    const out = prepareExportComments(d);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.from).toBe(0);
+    expect(out[0]?.to).toBe(2);
   });
 
   it("snaps a stored range that ends mid-pair OUTWARD, keeping the emoji intact in the .docx", async () => {
