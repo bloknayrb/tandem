@@ -561,20 +561,49 @@ export async function saveDocumentToDisk(
     // conflict the save just resolved. What it DOES persist is a conflict that
     // landed mid-write (the guarded delete did not fire), which was previously
     // dropped across a restart.
+    const carriedConflict = readPendingConflict(doc);
     try {
       await saveSession(docState.filePath, docState.format, doc, {
         dirty: snapshotDirtyVersion(docId) !== dirtySnapshot,
-        conflict: readPendingConflict(doc),
+        conflict: carriedConflict,
       });
     } catch (err) {
       console.error("[Save] saveSession failed for", docState.filePath, err);
-      // Best-effort delete: a stale record can be `dirty: true` from the last
-      // 60 s tick, and `maybeRestoreSession` restores a dirty session
-      // regardless of `sourceFileChanged` — so leaving it would restore stale
-      // content over correctly-saved disk bytes and raise a keep-vs-reload
-      // banner on a file already in sync.
+      // Delete the stale record, then SAY SO. Both halves are load-bearing and
+      // neither is optional; this used to be the delete alone, which returned
+      // `{status:"saved"}` and told nobody.
+      //
+      // Delete, because the record on disk is the PREVIOUS tick's. It can be
+      // `dirty: true`, and `maybeRestoreSession` restores a dirty session
+      // regardless of `sourceFileChanged` — so keeping it would restore stale
+      // content over the bytes this save just wrote correctly, and raise a
+      // keep-vs-reload banner on a file already in sync.
+      //
+      // Keeping it would not rescue the conflict either, which is the thing
+      // worth rescuing: the conflict we failed to persist is the LIVE one in
+      // this Y.Doc, and the older record carries whatever was true a tick ago.
+      // So NO choice available here recovers the conflict record across a
+      // restart — and that is exactly why the notification is not a nicety.
+      // The banner is still up in this process; what is gone is its durability.
       await deleteSession(docState.filePath).catch((delErr) => {
+        // Reachable, narrowly: `deleteSession` catches per unlink and cannot
+        // reject on an unlink, but it derives both names first, and
+        // `legacySessionKey`'s `encodeURIComponent` throws `URIError` on a lone
+        // surrogate — one of the shapes that makes `saveSession` throw in the
+        // first place, so this is precisely the path that reaches it.
         console.error("[Save] deleteSession after failed saveSession:", delErr);
+      });
+      pushNotification({
+        id: generateNotificationId(),
+        type: "general-error",
+        severity: carriedConflict ? "error" : "warning",
+        message: carriedConflict
+          ? `Saved ${path.basename(docState.filePath)}, but Tandem could not record its recovery state. An unresolved external-edit conflict on this file will be lost if Tandem restarts before you resolve it.`
+          : `Saved ${path.basename(docState.filePath)}, but Tandem could not record its recovery state; unsaved-work tracking for this file will not survive a restart.`,
+        errorCode: (err as NodeJS.ErrnoException).code ?? "UNKNOWN",
+        documentId: docId,
+        dedupKey: `session-save-failed:${docId}`,
+        timestamp: Date.now(),
       });
     }
 
@@ -805,9 +834,16 @@ export async function saveDocumentAsToDisk(
     // Save-As has never wired a watcher for the new path (#1749): an external
     // edit to a just-saved-as document was invisible until the next reopen.
     // Placed AFTER the write — `fs.watch` on a not-yet-existing path throws
-    // ENOENT, which `watchFile` and `wireFileWatcher` would both swallow — and
-    // still inside the outer try, so the `finally` above keeps its no-op
-    // property.
+    // ENOENT — and still inside the outer try, so the `finally` above keeps its
+    // no-op property. Misplacing it before the write no longer fails silently:
+    // `watchFile` notifies the user on a refused arm. That is the safety net,
+    // not the design; the position is what makes the arm succeed.
+    //
+    // The arm can still legitimately fail here, and this is where it matters
+    // most: the target above is deliberately unconfined (external drives,
+    // network shares), and `fs.watch` is unsupported on SMB and returns
+    // EPERM/ENOSPC/EMFILE elsewhere. Nothing re-arms after an open, so the
+    // notification is the user's only signal that this document is deaf.
     wireFileWatcher(docId, resolved, format);
 
     // #1460: this promotion can hand a document a format it cannot represent.

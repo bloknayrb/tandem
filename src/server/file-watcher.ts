@@ -149,6 +149,33 @@ function attachWatcher(filePath: string, cb: fs.WatchListener<string>): fs.FSWat
 }
 
 /**
+ * Tell the user this path is not being watched.
+ *
+ * Shared by the two ways that happens — a re-arm that could not reattach
+ * (`notifyWatchLost`) and an INITIAL arm that never attached at all
+ * (`watchFile`) — because the consequence is identical and so is what the user
+ * has to do about it: reopen the document. The initial arm used to be a bare
+ * `console.error`, which meant a save-as onto a network share or an
+ * `fs.watch`-unsupported filesystem (EPERM/ENOSPC/EMFILE, SMB) left the
+ * document unwatched for its whole lifetime while the user believed save-as
+ * had wired it up. Nothing re-arms after an open, so there is no later chance
+ * to notice.
+ *
+ * One `dedupKey` for both, keyed by path: the two cases are the same fact
+ * about the same file, and a user who hits both wants one line about it.
+ */
+function notifyNotWatching(filePath: string): void {
+  pushNotification({
+    id: generateNotificationId(),
+    type: "general-error",
+    severity: "warning",
+    message: `Tandem is not watching ${path.basename(filePath)}; external edits will not be detected until the file is reopened.`,
+    dedupKey: `watch-lost:${filePath}`,
+    timestamp: Date.now(),
+  });
+}
+
+/**
  * The watch for `filePath` is gone and cannot be restored in place: log, tell
  * the user ONCE, and drop the entry so a reopen can watch again (`watchFile`
  * early-returns on an existing entry).
@@ -161,14 +188,7 @@ function attachWatcher(filePath: string, cb: fs.WatchListener<string>): fs.FSWat
  */
 function notifyWatchLost(filePath: string, err: unknown): void {
   console.error("[FileWatcher] Lost watch on %s (re-arm failed):", filePath, err);
-  pushNotification({
-    id: generateNotificationId(),
-    type: "general-error",
-    severity: "warning",
-    message: `Tandem lost its watch on ${path.basename(filePath)}; external edits will not be detected until the file is reopened.`,
-    dedupKey: `watch-lost:${filePath}`,
-    timestamp: Date.now(),
-  });
+  notifyNotWatching(filePath);
   unwatchFile(filePath);
 }
 
@@ -313,9 +333,19 @@ async function deliverChange(
  * Start watching a file for changes. Calls `onChanged` (debounced 500ms)
  * when the file is modified externally.
  * No-op if the file is already being watched.
+ *
+ * Returns whether the path is watched when this returns — true for a fresh
+ * arm AND for an already-watched path, false only when `fs.watch` threw. The
+ * boolean exists so a caller can branch; the user-facing half does not depend
+ * on anyone reading it, because the attach failure notifies from here (see
+ * `notifyNotWatching`). Both are wanted: `wireFileWatcher` swallows what it
+ * calls, so a return value alone would have been a second silent layer.
  */
-export function watchFile(filePath: string, onChanged: (filePath: string) => Promise<void>): void {
-  if (watched.has(filePath)) return;
+export function watchFile(
+  filePath: string,
+  onChanged: (filePath: string) => Promise<void>,
+): boolean {
+  if (watched.has(filePath)) return true;
 
   const cb: fs.WatchListener<string> = (eventType) => {
     const entry = watched.get(filePath);
@@ -354,8 +384,12 @@ export function watchFile(filePath: string, onChanged: (filePath: string) => Pro
   try {
     watcher = attachWatcher(filePath, cb);
   } catch (err) {
+    // No `unwatchFile` here, unlike `notifyWatchLost`: nothing was ever stored,
+    // so there is no entry to drop — and calling it would be a no-op that reads
+    // as if one existed.
     console.error("[FileWatcher] Failed to watch %s:", filePath, err);
-    return;
+    notifyNotWatching(filePath);
+    return false;
   }
 
   watched.set(filePath, {
@@ -367,6 +401,7 @@ export function watchFile(filePath: string, onChanged: (filePath: string) => Pro
     selfWrite: null,
   });
   console.error("[FileWatcher] Watching %s", filePath);
+  return true;
 }
 
 /**

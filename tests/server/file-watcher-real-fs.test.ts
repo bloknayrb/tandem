@@ -13,6 +13,15 @@
  * Expectations therefore branch on `process.platform`, and the reason is stated
  * at each branch. CI's ubuntu `check` job is the Linux evidence; a local run is
  * the Windows evidence.
+ *
+ * **"A local run" is the whole of the Windows evidence, and no CI job supplies
+ * it.** `check` is ubuntu-only and `windows-acl-proof` runs a script rather than
+ * vitest, so nothing in CI ever executes a win32 expectation in this repo. This
+ * is not the vacuous #1529 shape — these branches genuinely run and genuinely
+ * assert on a Windows box — but a change that broke only the Windows semantics
+ * would stay green in CI forever. Read a green `check` as evidence about Linux
+ * and nothing else. `session.test.ts`'s win32-gated `sessionKey` case is the
+ * other instance.
  */
 
 import fs from "node:fs";

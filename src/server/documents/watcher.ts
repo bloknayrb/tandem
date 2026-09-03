@@ -324,6 +324,14 @@ export async function reloadFromDisk(
  * synchronous temp write `rename, rename` — never a lone `change`. A
  * genuinely-changed file still reaches here — the fingerprint skips only bytes
  * identical to what Tandem just wrote. See file-watcher.ts.
+ *
+ * A failed INITIAL arm is no longer swallowed by the catch below: `watchFile`
+ * does not throw, and notifies the user itself when `fs.watch` refuses the
+ * path. That matters most for save-as, whose target is deliberately unconfined
+ * (network shares, external drives) — exactly where `fs.watch` is unsupported
+ * or returns EPERM/ENOSPC/EMFILE — and nothing re-arms after an open, so a
+ * silent failure there is permanent for the document's lifetime. The catch
+ * below covers the rest of this body.
  */
 export function wireFileWatcher(id: string, filePath: string, format: string): void {
   try {

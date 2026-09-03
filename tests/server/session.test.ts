@@ -114,6 +114,12 @@ describe("Session persistence", () => {
         // POSIX, where paths are case-sensitive: two spellings there still get
         // two session files and one room, which is pre-existing and not fixed
         // here.
+        //
+        // NO CI JOB RUNS THIS. `check` is ubuntu-only and `windows-acl-proof`
+        // runs a script, not vitest — so a change that stopped `docHash`
+        // lowercasing on win32 would be invisible to CI forever. Honest
+        // `skipIf` rather than the silently-vacuous #1529 shape, but a green
+        // `check` is not evidence about this case; a Windows dev box is.
         expect(sessionKey("C:\\Docs\\A.md")).toBe(sessionKey("c:/docs/a.md"));
       },
     );
@@ -218,6 +224,43 @@ describe("Session persistence", () => {
       await expect(fs.stat(newFile())).resolves.toBeDefined();
     });
 
+    it("the NEWER mtime wins in the OTHER direction: the new name beats a lingering legacy file", async () => {
+      // The mirror, and the case that makes the comparison provable at all.
+      // Every other mtime fixture here writes the NEW name first, so "the
+      // legacy file won" is the only proposition any of them assert — a mutant
+      // that deletes the comparison outright and always prefers the legacy path
+      // was measured green across the whole suite. This is the steady state
+      // after migration: `saveSession`'s unlink of the old name is best-effort
+      // and only logs a non-ENOENT, so a Windows AV/indexer EPERM leaves the
+      // superseded file on disk, and preferring it restores a stale session
+      // over correct disk bytes.
+      await writeRecord(oldFile(), { format: "old-name" });
+      await new Promise((r) => setTimeout(r, 20));
+      await writeRecord(newFile(), { format: "new-name" });
+
+      const loaded = await loadSession(migPath);
+      expect(loaded!.format).toBe("new-name");
+      await expect(fs.stat(oldFile())).resolves.toBeDefined();
+    });
+
+    it("falls back to the CURRENT key when the newer legacy file wins the tie-break and will not read", async () => {
+      // `mtimeOf` succeeds where `readFile` does not — a legacy file truncated
+      // by an interrupted pre-#1750 write, or EACCES to an AV/indexer — so the
+      // loser it beat is a perfectly good record at the current key. Without
+      // the fallback the SyntaxError branch unlinks the legacy file and returns
+      // null, discarding both.
+      await writeRecord(newFile(), { format: "new-name" });
+      await new Promise((r) => setTimeout(r, 20));
+      await fs.writeFile(oldFile(), "{ truncated", "utf-8");
+
+      const loaded = await loadSession(migPath);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.format).toBe("new-name");
+      // …and the corrupt one was quarantined on the way past, so the next load
+      // does not pay for it again.
+      await expect(fs.stat(oldFile())).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
     it("the first successful saveSession removes the old name", async () => {
       await writeRecord(oldFile());
       await saveSession(migPath, "md", createTestDoc());
@@ -253,6 +296,20 @@ describe("Session persistence", () => {
       await writeRecord(newFile(), { readOnly: true });
       await new Promise((r) => setTimeout(r, 20));
       await writeRecord(oldFile(), { readOnly: false });
+
+      const entries = (await listSessionFilePaths()).filter((e) => e.filePath === migPath);
+      expect(entries).toHaveLength(1);
+      expect(entries[0].readOnly).toBe(false);
+    });
+
+    it("listSessionFilePaths mirrors it: the NEW name's readOnly wins when the new name is newer", async () => {
+      // The stated design invariant is that the dedupe and `loadSession` use
+      // the SAME criterion, so it has to be provable in both directions here
+      // too — with only the one-directional fixture above, dropping the mtime
+      // comparison from `dedupeByFilePath` is green.
+      await writeRecord(oldFile(), { readOnly: true });
+      await new Promise((r) => setTimeout(r, 20));
+      await writeRecord(newFile(), { readOnly: false });
 
       const entries = (await listSessionFilePaths()).filter((e) => e.filePath === migPath);
       expect(entries).toHaveLength(1);

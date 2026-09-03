@@ -17,6 +17,11 @@
  *  3. `rearmWatch` must run even when the write throws, which is why it lives
  *     in a NEW INNER `finally` around exactly the suppress/write/record triple
  *     rather than in the function-level lock-release `finally`.
+ *  4. A failed `saveSession` DESTROYS the record it could not replace — the
+ *     delete is right (the record on disk is the previous tick's, and a stale
+ *     `dirty: true` restores over correct disk bytes), but nothing recovers the
+ *     conflict it was carrying, so the failure must not also be silent. It used
+ *     to return `{status:"saved"}` and tell nobody.
  *
  * **Everything platform-gated here runs under a linux stub**, because
  * `rearmWatch` is a win32 no-op by design: on Bryan's box these cases would be
@@ -80,10 +85,24 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
   };
 });
 
+// The binary/.docx arm, stubbed at its two expensive edges so the branch is
+// reachable without a real ZIP round-trip. Only the write triple's ORDERING is
+// under test here; a genuine mammoth export/re-import proves nothing extra
+// about it and costs seconds.
+vi.mock("../../src/server/file-io/docx-verify.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  verifyDocxRoundtrips: vi.fn(async () => ({ kind: "ok", metrics: {} })),
+}));
+
 vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/file-io/index.js")>();
   return {
     ...actual,
+    getAdapter: vi.fn((format: string) =>
+      format === "docx"
+        ? { saveBinary: async () => Buffer.from("not a real docx") }
+        : actual.getAdapter(format),
+    ),
     atomicWrite: vi.fn(async (...args: Parameters<typeof actual.atomicWrite>) => {
       order.push("atomicWrite");
       if (hooks.atomicWrite) return hooks.atomicWrite(args[0]);
@@ -188,6 +207,25 @@ function openMd(
   return { id, filePath, doc };
 }
 
+/** `openMd`'s binary twin — the `.docx` arm of `saveDocumentToDisk`. */
+function openDocx(name: string): { id: string; filePath: string; doc: Y.Doc } {
+  const filePath = path.join(tmpDir, name);
+  fsSync.writeFileSync(filePath, "PK original bytes");
+  const id = docIdFromPath(filePath);
+  addDoc(id, { id, filePath, format: "docx", readOnly: false, source: "file" });
+  const doc = getOrCreateDocument(id);
+  const frag = doc.getXmlFragment("default");
+  if (frag.length === 0) {
+    doc.transact(() => {
+      const p = new Y.XmlElement("paragraph");
+      p.insert(0, [new Y.XmlText("hello")]);
+      frag.insert(0, [p]);
+    }, "internal");
+  }
+  markDirty(id);
+  return { id, filePath, doc };
+}
+
 function sessionFileFor(filePath: string): string {
   return path.join(sessionDir, `${sessionKey(filePath)}.json`);
 }
@@ -235,6 +273,53 @@ describe("#1750 — saveSession is last, and its failure does not un-save the do
     // of `sourceFileChanged` — so leaving it would restore stale content over
     // correctly-saved disk bytes.
     expect(fsSync.existsSync(sessionFileFor(filePath))).toBe(false);
+    // …and it is NOT silent. `status: "saved"` is true about the disk and says
+    // nothing about the recovery record that was just destroyed, so the
+    // notification is the only surface this failure has.
+    const notes = getBuffer().filter((n) => n.dedupKey === `session-save-failed:${id}`);
+    expect(notes).toHaveLength(1);
+    expect(notes[0].severity).toBe("warning");
+  });
+
+  it("a failed saveSession carrying a LIVE conflict escalates the notification", async () => {
+    // The conflict is the unrecoverable half. `saveSession` stats the file at
+    // save time, so `sourceFileMtime` IS the external write's mtime and
+    // `sourceFileChanged` reads false on reopen — the session record is the
+    // only thing that remembers the conflict happened, and no choice available
+    // in the catch rescues it: the record on disk is the PREVIOUS tick's, while
+    // the conflict we failed to persist is the live one in this Y.Doc. Keeping
+    // the stale record would not carry it and would restore stale content over
+    // correct disk bytes. So the notification is the recovery path.
+    const { id, filePath, doc } = track(openMd("a-conflict.md"));
+    const landed: ExternalConflictState = {
+      kind: "external-edit",
+      diskChanged: true,
+      detectedAt: 7,
+    };
+    hooks.atomicWrite = async (target) => {
+      if (target !== filePath) return;
+      // Lands mid-write, so the guarded delete does not fire and the value is
+      // still on the map when the session write is attempted.
+      doc.transact(() => {
+        doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_EXTERNAL_CONFLICT, landed);
+      }, "internal");
+      hooks.atomicWrite = null;
+    };
+    hooks.saveSession = async () => {
+      throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+    };
+
+    const result = await saveDocumentToDisk(id, "manual");
+
+    expect(result.status).toBe("saved");
+    const notes = getBuffer().filter((n) => n.dedupKey === `session-save-failed:${id}`);
+    expect(notes).toHaveLength(1);
+    // Paired against the plain case above, which is a `warning`: without the
+    // escalation both branches collapse into one message and the losing-a-
+    // conflict case reads like a routine recovery-state hiccup.
+    expect(notes[0].severity).toBe("error");
+    expect(notes[0].message).toContain("conflict");
+    expect(notes[0].errorCode).toBe("ENOSPC");
   });
 
   it("a stale dirty session for the path is removed, so a reopen would not prompt", async () => {
@@ -451,6 +536,47 @@ describe("#1749 — the re-arm is unconditional, per required function", () => {
     expect(order.indexOf("atomicWrite")).toBeLessThan(order.indexOf("rearmWatch"));
   });
 
+  it("saveDocumentToDisk (.docx): rearmWatch runs from the finally and precedes saveSession", async () => {
+    // The binary arm's own row. `document-write-rearm.test.ts` pins its
+    // `finally` structurally by AST census, and its header enumerates what a
+    // census cannot see; before this pair the branch had ZERO behavioural
+    // cases, unlike the other three `required` rows which have two each.
+    stubLinux();
+    const { id } = track(openDocx("bin1.docx"));
+
+    const result = await saveDocumentToDisk(id, "manual");
+
+    expect(result.status).toBe("saved");
+    expect(order).toEqual(
+      expect.arrayContaining([
+        "suppressNextChange",
+        "atomicWriteBuffer",
+        "recordSelfWrite",
+        "rearmWatch",
+      ]),
+    );
+    expect(order.indexOf("recordSelfWrite")).toBeLessThan(order.indexOf("rearmWatch"));
+    expect(order.indexOf("rearmWatch")).toBeLessThan(order.indexOf("saveSession"));
+  });
+
+  it("saveDocumentToDisk (.docx): a throwing write still re-arms", async () => {
+    // The twin of the `.md` case above, and the discriminating half: dropping
+    // `rearmWatch` from the binary branch — or moving it out of the `finally`
+    // into the try body — leaves the success case green.
+    stubLinux();
+    const { id } = track(openDocx("bin2.docx"));
+    hooks.atomicWrite = async () => {
+      throw new Error("EIO");
+    };
+
+    const result = await saveDocumentToDisk(id, "manual");
+
+    expect(result.status).toBe("error");
+    expect(order).toContain("rearmWatch");
+    expect(order.indexOf("atomicWriteBuffer")).toBeLessThan(order.indexOf("rearmWatch"));
+    expect(order).not.toContain("saveSession");
+  });
+
   it("saveDocumentAsToDisk: rearmWatch runs from the finally, and the watcher is wired AFTER it", async () => {
     stubLinux();
     const target = path.join(tmpDir, "as-target.md");
@@ -475,8 +601,9 @@ describe("#1749 — the re-arm is unconditional, per required function", () => {
     expect(result.status).toBe("saved");
     expect(order.indexOf("recordSelfWrite")).toBeLessThan(order.indexOf("rearmWatch"));
     // Placed BEFORE the write, `fs.watch` on a not-yet-existing path throws
-    // ENOENT and both `watchFile` and `wireFileWatcher` swallow it — two
-    // catches, so misplacement is silent. Only the order proves it.
+    // ENOENT. `watchFile` now notifies rather than swallowing that, so
+    // misplacement is no longer silent — but the notification is a wrong-looking
+    // toast, not a watched file. Only the order proves the arm succeeds.
     expect(order.indexOf("atomicWrite")).toBeLessThan(order.indexOf("wireFileWatcher"));
     expect(order.indexOf("rearmWatch")).toBeLessThan(order.indexOf("wireFileWatcher"));
   });

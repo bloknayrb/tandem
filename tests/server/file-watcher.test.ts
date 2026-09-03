@@ -516,6 +516,44 @@ function lostWatchNotifications(file: string) {
   return getBuffer().filter((n) => n.dedupKey === `watch-lost:${file}`);
 }
 
+describe("the INITIAL arm reports its own failure", () => {
+  const file = "/tmp/initial-arm.md";
+
+  it("watchFile returns false and NOTIFIES when fs.watch refuses the path", () => {
+    // A failed re-arm has always routed to `notifyWatchLost`; the initial arm
+    // was a bare `console.error` with `wireFileWatcher`'s catch as a second
+    // silent layer — identical consequence, no user-facing signal. Save-as
+    // newly depends on this arm and its target is deliberately unconfined
+    // (network shares, external drives), which is exactly where `fs.watch` is
+    // unsupported or returns EPERM/ENOSPC/EMFILE. Nothing re-arms after an
+    // open, so the document stays unwatched for its whole lifetime.
+    mockWatch.mockImplementationOnce(() => {
+      throw emfile();
+    });
+
+    expect(watchFile(file, vi.fn().mockResolvedValue(undefined))).toBe(false);
+    expect(watchedCount()).toBe(0);
+    expect(lostWatchNotifications(file)).toHaveLength(1);
+  });
+
+  it("paired direction: a successful arm returns true and notifies nothing", () => {
+    // Without this, a `notifyNotWatching` moved out of the catch and fired
+    // unconditionally passes the case above.
+    freshWatcherPerCall();
+
+    expect(watchFile(file, vi.fn().mockResolvedValue(undefined))).toBe(true);
+    expect(watchedCount()).toBe(1);
+    expect(lostWatchNotifications(file)).toHaveLength(0);
+  });
+
+  it("an already-watched path returns true without a second fs.watch", () => {
+    freshWatcherPerCall();
+    expect(watchFile(file, vi.fn().mockResolvedValue(undefined))).toBe(true);
+    expect(watchFile(file, vi.fn().mockResolvedValue(undefined))).toBe(true);
+    expect(mockWatch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("rename re-arm (POSIX) / no-op (win32)", () => {
   const file = "/tmp/rearm.md";
 
@@ -699,6 +737,39 @@ describe("watcher error listeners and handle identity", () => {
 
       handles[1].errorHandler!(new Error("EBADF"));
       expect(watchedCount()).toBe(1);
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  it("swapHandle STORES the new handle before closing the old: a close-triggered error cannot unwatch it", () => {
+    // Row A asserts the recorded CALL order and that handle #1 ended closed;
+    // neither observes WHEN `entry.watcher` becomes `next`, and every other
+    // identity case fires its error handler after the swap has already
+    // finished — so the map holds `next` either way and storing AFTER the close
+    // is green across the whole suite (measured).
+    //
+    // Here handle #1 emits its own `error` from inside `close()`, which is the
+    // real shape: EBADF / close-after-unlink on the very handle the re-arm is
+    // retiring. Store-after-close leaves the map still holding `old` at that
+    // moment, so the identity check passes and `unwatchFile` kills the live,
+    // freshly-armed entry — the exact failure the source comment claims to
+    // prevent, and which nothing but that comment was holding up.
+    stubPlatform("linux");
+    try {
+      expect(process.platform).toBe("linux");
+      const handles = freshWatcherPerCall();
+      watchFile(file, vi.fn().mockResolvedValue(undefined));
+      handles[0].close.mockImplementation(() => {
+        handles[0].closed = true;
+        handles[0].errorHandler!(new Error("EBADF"));
+      });
+
+      rearmWatch(file);
+
+      expect(handles).toHaveLength(2);
+      expect(watchedCount()).toBe(1);
+      expect(handles[1].closed).toBe(false);
     } finally {
       restorePlatform();
     }

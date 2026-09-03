@@ -185,16 +185,46 @@ export async function saveSession(
  * loser is not deleted here — see `saveSession`, which removes the old name
  * only after a successful write under the new one. Until then every load pays
  * one extra `stat`, which is fine for a one-shot window.
+ *
+ * When the legacy file wins the tie-break and then cannot be READ, the current
+ * name is tried before giving up — see the comment at that fallback.
  */
 export async function loadSession(filePath: string): Promise<SessionData | null> {
-  let sessionPath = sessionPathFor(filePath);
+  const currentPath = sessionPathFor(filePath);
   const legacyPath = legacySessionPath(filePath);
+  let sessionPath = currentPath;
   if (legacyPath !== null) {
-    const [current, legacy] = await Promise.all([mtimeOf(sessionPath), mtimeOf(legacyPath)]);
+    const [current, legacy] = await Promise.all([mtimeOf(currentPath), mtimeOf(legacyPath)]);
     if (legacy !== null && (current === null || legacy > current)) {
       sessionPath = legacyPath;
     }
   }
+  const chosen = await readSessionFileAt(sessionPath, filePath);
+  if (chosen !== null || sessionPath !== legacyPath) return chosen;
+  // The legacy file won the mtime tie-break and then would not read — truncated
+  // by an interrupted pre-#1750 write (a SyntaxError, which `readSessionFileAt`
+  // has already unlinked), or EACCES to an AV/indexer while `fs.stat` still
+  // succeeded, which is what let it win in the first place. Without this the
+  // record at the CURRENT key — readable, merely older — is discarded along
+  // with it and the user loses their session outright.
+  //
+  // **One-directional on purpose; do not "fix" the asymmetry.** The mirror
+  // fallback (current unreadable → fall back to the legacy file) would restore
+  // a record that a later successful save had already superseded: `saveSession`
+  // unlinks the old name only AFTER the new one is written, so a legacy file
+  // surviving next to a newer current one is a best-effort-unlink leftover, not
+  // a candidate. Preferring it is the exact outcome the mtime tie-break exists
+  // to prevent. It is moot as well as wrong — a corrupt current file is
+  // unlinked by `readSessionFileAt`, so the legacy record wins the very next
+  // load on its own.
+  return await readSessionFileAt(currentPath, filePath);
+}
+
+/** Read and parse one session file, or null (quarantining a corrupt one). */
+async function readSessionFileAt(
+  sessionPath: string,
+  filePath: string,
+): Promise<SessionData | null> {
   try {
     const content = await fs.readFile(sessionPath, "utf-8");
     const data = JSON.parse(content) as SessionData;
