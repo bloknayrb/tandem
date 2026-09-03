@@ -83,10 +83,32 @@ function sessionPathFor(filePath: string): string {
  * the equality next to its rationale: an `encodeURIComponent` name of an
  * absolute path always contains `%2F`, so it can never equal 64 hex characters,
  * which makes the check belt-and-braces rather than a live case.
+ *
+ * **TOTAL: an unspellable old name is null, not a throw.** `legacySessionKey`
+ * is `encodeURIComponent`, which throws `URIError` on a lone surrogate — and
+ * that is the right answer to give here, because a path whose legacy encoding
+ * does not exist cannot have a legacy file on disk. Letting it throw instead
+ * put a landmine in all three callers, one of which is genuinely severe:
+ * `saveSession` derives this AFTER its `atomicWrite`, so the throw reported
+ * failure for a session write that had fully succeeded. That is the #1750 class
+ * this branch exists to close — a save that worked and said it didn't — and it
+ * also falsified `saveDocumentToDisk`'s catch, which tells the user their
+ * recovery state was not recorded while the current record sits on disk. The
+ * other two: `loadSession` would reject on open, and `deleteSession` (which
+ * derives both names outside its per-target `try`) would delete nothing.
+ *
+ * Narrowed to `URIError` on purpose. Anything else from `path.join` or
+ * `sessionPathFor` is unexpected and should still surface.
  */
 function legacySessionPath(filePath: string): string | null {
   if (isUploadPath(filePath)) return null;
-  const legacyPath = path.join(SESSION_DIR, `${legacySessionKey(filePath)}.json`);
+  let legacyPath: string;
+  try {
+    legacyPath = path.join(SESSION_DIR, `${legacySessionKey(filePath)}.json`);
+  } catch (err) {
+    if (!(err instanceof URIError)) throw err;
+    return null;
+  }
   return legacyPath === sessionPathFor(filePath) ? null : legacyPath;
 }
 
@@ -214,9 +236,17 @@ export async function loadSession(filePath: string): Promise<SessionData | null>
   // unlinks the old name only AFTER the new one is written, so a legacy file
   // surviving next to a newer current one is a best-effort-unlink leftover, not
   // a candidate. Preferring it is the exact outcome the mtime tie-break exists
-  // to prevent. It is moot as well as wrong — a corrupt current file is
-  // unlinked by `readSessionFileAt`, so the legacy record wins the very next
-  // load on its own.
+  // to prevent.
+  //
+  // The cost of that choice, stated rather than hidden: only the CORRUPT
+  // current-file case self-heals, because `readSessionFileAt` unlinks a
+  // `SyntaxError` and the legacy record then wins the very next load. An
+  // UNREADABLE current file does not — EACCES logs and returns null without
+  // unlinking — so a healthy older legacy record beside an AV-locked current
+  // one is discarded, on this load and every load while the lock persists.
+  // That is the same lock this comment cites two paragraphs up as motivating
+  // the other direction, and it is accepted here rather than solved: reading
+  // the superseded record would be worse than reading nothing.
   return await readSessionFileAt(currentPath, filePath);
 }
 

@@ -742,19 +742,26 @@ describe("watcher error listeners and handle identity", () => {
     }
   });
 
-  it("swapHandle STORES the new handle before closing the old: a close-triggered error cannot unwatch it", () => {
-    // Row A asserts the recorded CALL order and that handle #1 ended closed;
-    // neither observes WHEN `entry.watcher` becomes `next`, and every other
-    // identity case fires its error handler after the swap has already
-    // finished — so the map holds `next` either way and storing AFTER the close
-    // is green across the whole suite (measured).
+  it("swapHandle STORES the new handle before closing the old: re-entrant defence only", () => {
+    // **This shape is NOT reachable in production, and the case does not claim
+    // it is.** Node 24's `FSWatcher.close()` emits only `close`, on
+    // `nextTick`; `error` has one emission site, the constructor's libuv
+    // `onchange`, which is never entered from inside a `close()` frame, and
+    // `close()` nulls `_handle`. `attachWatcher`'s own docstring says exactly
+    // that. `swapHandle` is also synchronous end-to-end and both call sites
+    // reach it synchronously, so a real event-loop-delivered error on `old`
+    // lands after it returns, when the map holds `next` under EITHER ordering.
     //
-    // Here handle #1 emits its own `error` from inside `close()`, which is the
-    // real shape: EBADF / close-after-unlink on the very handle the re-arm is
-    // retiring. Store-after-close leaves the map still holding `old` at that
-    // moment, so the identity check passes and `unwatchFile` kills the live,
-    // freshly-armed entry — the exact failure the source comment claims to
-    // prevent, and which nothing but that comment was holding up.
+    // So this is defence-in-depth against a future re-entrant caller, not a
+    // regression pin for a live bug — and it should not be read as evidence
+    // that the store order protects the identity check, which was a genuine
+    // overclaim in the source docstrings until this round corrected them. The
+    // real reason for store-before-close is reachability by `unwatchFile`, and
+    // the existing row-A call-order case is what pins the half that matters.
+    //
+    // Kept because it costs nothing and the mutant does die on it — though by
+    // recursing `unwatchFile` → mock `close()` → `errorHandler` into a caught
+    // `RangeError`, which is itself a property of the mock rather than of Node.
     stubPlatform("linux");
     try {
       expect(process.platform).toBe("linux");

@@ -132,11 +132,19 @@ const watched = new Map<string, WatchEntry>();
  * Linux watcher failure into a context that cannot handle it.
  *
  * **The `error` handler identity-checks rather than detaching.** A handle this
- * module has already replaced can still emit; acting on that would `unwatchFile`
- * a live, freshly re-armed entry — #1749's own symptom with none of its signal.
- * This is also why `rearmWatch` and the delivery path STORE the new handle
- * before closing the old one: with `next` already in the map, a `close()`-adjacent
- * error on `old` fails the identity check and is discarded.
+ * module has already replaced can still emit — libuv delivers on the event
+ * loop, so an `onchange` error queued against `old` can land after a re-arm has
+ * moved on — and acting on it would `unwatchFile` a live, freshly re-armed
+ * entry: #1749's own symptom with none of its signal.
+ *
+ * That is the whole of the justification, and it does NOT extend to the store
+ * order. `swapHandle` is wholly synchronous and both call sites reach it
+ * synchronously, so any real error on `old` arrives after it has returned, when
+ * the map holds `next` under either ordering — this docstring used to claim the
+ * store-before-close was needed to make a "`close()`-adjacent error" fail the
+ * identity check, which cannot happen: per the first paragraph, `close()` emits
+ * `close`, never `error`. Store-before-close is still right, for the reason
+ * `swapHandle` gives (`next` must be reachable by `unwatchFile`), not this one.
  */
 function attachWatcher(filePath: string, cb: fs.WatchListener<string>): fs.FSWatcher {
   const handle = fs.watch(filePath, cb);
@@ -182,9 +190,16 @@ function notifyNotWatching(filePath: string): void {
  *
  * There is deliberately no "already notified" latch. The last act here is
  * `unwatchFile`, which deletes the map entry, so no later delivery for this
- * path can reach a notify site at all — the only route back is `watchFile`
- * minting a fresh entry, and a second lost watch after a reopen genuinely is a
- * second event worth reporting. `dedupKey` coalesces it client-side.
+ * path can reach a notify site at all — the only route back is `watchFile`,
+ * and a second lost watch after a reopen genuinely is a second event worth
+ * reporting. `dedupKey` coalesces it client-side.
+ *
+ * That route back is now wider than "minting a fresh entry": a `watchFile`
+ * whose `fs.watch` is REFUSED notifies without minting anything, so a caller
+ * retrying a permanently unwatchable path (an SMB share that stays down) can
+ * push repeatedly. The shared `dedupKey` is what makes that acceptable, and it
+ * is the reason the two sites deliberately share one — so if you ever split
+ * them, the latch this paragraph declines becomes necessary.
  */
 function notifyWatchLost(filePath: string, err: unknown): void {
   console.error("[FileWatcher] Lost watch on %s (re-arm failed):", filePath, err);
@@ -200,8 +215,11 @@ function notifyWatchLost(filePath: string, err: unknown): void {
  * `fs.watch` is seen by nobody, while an overlap can only double-deliver,
  * which the debounce coalesces. Storing before closing is what keeps `next`
  * reachable by `unwatchFile` — a handle that is neither stored nor closed
- * double-delivers for the life of the process — and what makes a
- * `close()`-adjacent error on `old` fail `attachWatcher`'s identity check.
+ * double-delivers for the life of the process. That reachability argument is
+ * the whole case for the store order; the "a `close()`-adjacent error on `old`
+ * then fails the identity check" line that used to sit here was wrong, because
+ * `close()` emits `close`, never `error`, and this function is synchronous
+ * end-to-end anyway. See `attachWatcher`.
  *
  * Returns false when the attach threw; the caller has already been notified
  * and the entry unwatched. Never throws: the two call sites are `deliverChange`
@@ -338,8 +356,9 @@ async function deliverChange(
  * arm AND for an already-watched path, false only when `fs.watch` threw. The
  * boolean exists so a caller can branch; the user-facing half does not depend
  * on anyone reading it, because the attach failure notifies from here (see
- * `notifyNotWatching`). Both are wanted: `wireFileWatcher` swallows what it
- * calls, so a return value alone would have been a second silent layer.
+ * `notifyNotWatching`). Both are wanted: the only caller today
+ * (`wireFileWatcher`) ignores the return, so a boolean alone would have left
+ * the failure exactly as silent as it was.
  */
 export function watchFile(
   filePath: string,

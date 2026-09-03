@@ -579,6 +579,16 @@ export async function saveDocumentToDisk(
       // content over the bytes this save just wrote correctly, and raise a
       // keep-vs-reload banner on a file already in sync.
       //
+      // "PREVIOUS tick's" is a claim about `saveSession`, and it holds only
+      // because every throw it can reach is at or before its `atomicWrite`.
+      // That was NOT true until `legacySessionPath` was made total: it is
+      // derived after the write, and its `encodeURIComponent` threw `URIError`
+      // on a lone-surrogate path — so the record was current and correct, this
+      // catch deleted nothing (the same throw takes `deleteSession` too), and
+      // the message below told the user their recovery state was lost while it
+      // sat on disk. If you add a post-write step to `saveSession`, this
+      // comment and that message are what you are invalidating.
+      //
       // Keeping it would not rescue the conflict either, which is the thing
       // worth rescuing: the conflict we failed to persist is the LIVE one in
       // this Y.Doc, and the older record carries whatever was true a tick ago.
@@ -586,18 +596,27 @@ export async function saveDocumentToDisk(
       // restart — and that is exactly why the notification is not a nicety.
       // The banner is still up in this process; what is gone is its durability.
       await deleteSession(docState.filePath).catch((delErr) => {
-        // Reachable, narrowly: `deleteSession` catches per unlink and cannot
-        // reject on an unlink, but it derives both names first, and
-        // `legacySessionKey`'s `encodeURIComponent` throws `URIError` on a lone
-        // surrogate — one of the shapes that makes `saveSession` throw in the
-        // first place, so this is precisely the path that reaches it.
+        // Defensive, with no demonstrated reachable path as of this commit.
+        // `deleteSession` catches per unlink, so an unlink cannot reject; it
+        // derives both names OUTSIDE that `try`, which used to make a
+        // lone-surrogate `URIError` reach here — that is now returned as null
+        // by `legacySessionPath` instead. Kept because the derivation sits
+        // outside the guard and a future name scheme could reintroduce a throw,
+        // not because a caller can hit it today.
         console.error("[Save] deleteSession after failed saveSession:", delErr);
       });
+      // Re-read rather than reusing the `carriedConflict` snapshot taken before
+      // the await: the file watcher can flag a conflict DURING `saveSession`,
+      // and that document does have an unpersisted live conflict even though
+      // the snapshot says otherwise. Same mid-await race the guarded delete
+      // above exists for. Falling back to the snapshot would only ever
+      // under-report, which is the direction that matters here.
+      const unpersistedConflict = readPendingConflict(doc) ?? carriedConflict;
       pushNotification({
         id: generateNotificationId(),
         type: "general-error",
-        severity: carriedConflict ? "error" : "warning",
-        message: carriedConflict
+        severity: unpersistedConflict ? "error" : "warning",
+        message: unpersistedConflict
           ? `Saved ${path.basename(docState.filePath)}, but Tandem could not record its recovery state. An unresolved external-edit conflict on this file will be lost if Tandem restarts before you resolve it.`
           : `Saved ${path.basename(docState.filePath)}, but Tandem could not record its recovery state; unsaved-work tracking for this file will not survive a restart.`,
         errorCode: (err as NodeJS.ErrnoException).code ?? "UNKNOWN",
@@ -701,8 +720,10 @@ export interface SaveAsResult {
  * skip that as "an intentional v1 limitation", which meant an external edit to
  * a just-saved-as document was invisible until the next reopen. It has to come
  * after the write because `fs.watch` on a path that does not exist yet throws
- * ENOENT — and both `watchFile` and `wireFileWatcher` swallow it, so getting
- * the order wrong fails silently.
+ * ENOENT. That no longer fails SILENTLY — `watchFile` notifies the user on a
+ * refused arm rather than swallowing it — but a notification about a file the
+ * user just saved successfully is a wrong-looking toast and still no watcher,
+ * so the order is the fix and the toast is only the alarm.
  */
 export async function saveDocumentAsToDisk(
   docId: string,

@@ -14,14 +14,24 @@
  * at each branch. CI's ubuntu `check` job is the Linux evidence; a local run is
  * the Windows evidence.
  *
- * **"A local run" is the whole of the Windows evidence, and no CI job supplies
- * it.** `check` is ubuntu-only and `windows-acl-proof` runs a script rather than
- * vitest, so nothing in CI ever executes a win32 expectation in this repo. This
- * is not the vacuous #1529 shape — these branches genuinely run and genuinely
- * assert on a Windows box — but a change that broke only the Windows semantics
- * would stay green in CI forever. Read a green `check` as evidence about Linux
- * and nothing else. `session.test.ts`'s win32-gated `sessionKey` case is the
- * other instance.
+ * **"A local run" is the whole of the Windows evidence for THIS file, and the
+ * reason is a list it is not on — not an absent mechanism.** The only vitest
+ * that CI runs on Windows is `WINDOWS_ACL_PROOF_SPECS` in
+ * `scripts/ci/windows-acl-proof.mjs`, spawned by the `windows-acl-proof` job on
+ * `windows-latest` as a required check; neither this file nor `session.test.ts`
+ * is on that list. Every other vitest job (`check`, `coverage`) is ubuntu; the
+ * `rust-test`/`reaper-build` matrix does reach Windows but runs cargo only.
+ *
+ * So a change breaking only the Windows semantics here stays green in CI — read
+ * a green `check` as evidence about Linux and nothing else — but the remedy is
+ * sitting right there: add the spec to that list, which carries its own drift
+ * guard in `tests/scripts/windows-acl-proof-wiring.test.ts`. That gate demands
+ * >=1 passed / 0 skipped / 0 failed per NAMED describe, so joining it means
+ * committing to a describe that genuinely runs on the Windows runner. Not done
+ * here: these branches need a real temp-dir watcher and 1.2 s settles per case,
+ * which is a different cost profile from the two `icacls` specs the job exists
+ * for. This is not the vacuous #1529 shape either — the branches genuinely run
+ * and genuinely assert on a Windows box.
  */
 
 import fs from "node:fs";

@@ -662,10 +662,12 @@ describe("saveDocumentAsToDisk", () => {
     // edit to a just-saved-as document was invisible until the next reopen.
     //
     // Real filesystem, real `fs.watch`, and an assertion on BEHAVIOUR rather
-    // than on `watchedCount()`, because both failure modes this pins are silent
-    // presence failures: omit the call and nothing watches, place it BEFORE the
-    // write and `fs.watch` throws ENOENT on a path that does not exist yet —
-    // swallowed once by `watchFile` and again by `wireFileWatcher`.
+    // than on `watchedCount()`, because both failure modes this pins leave the
+    // document unwatched: omit the call and nothing watches; place it BEFORE
+    // the write and `fs.watch` throws ENOENT on a path that does not exist yet.
+    // The second is no longer SILENT — `watchFile` notifies on a refused arm —
+    // but a toast is not a watcher, and only this assertion proves the arm
+    // actually succeeded.
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "tandem-save-as-watch-"));
     const target = path.join(dir, "promoted.md");
     addDoc("save-as-watch", {

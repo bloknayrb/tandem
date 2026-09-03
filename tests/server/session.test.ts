@@ -115,11 +115,17 @@ describe("Session persistence", () => {
         // two session files and one room, which is pre-existing and not fixed
         // here.
         //
-        // NO CI JOB RUNS THIS. `check` is ubuntu-only and `windows-acl-proof`
-        // runs a script, not vitest — so a change that stopped `docHash`
-        // lowercasing on win32 would be invisible to CI forever. Honest
-        // `skipIf` rather than the silently-vacuous #1529 shape, but a green
-        // `check` is not evidence about this case; a Windows dev box is.
+        // NO CI JOB RUNS THIS — because this file is not on a list, not
+        // because the mechanism is missing. The only vitest CI runs on Windows
+        // are the specs in `WINDOWS_ACL_PROOF_SPECS`
+        // (`scripts/ci/windows-acl-proof.mjs`, spawned by the
+        // `windows-acl-proof` job on `windows-latest`); this file is not one of
+        // them, and every other vitest job is ubuntu. So a change that stopped
+        // `docHash` lowercasing on win32 is invisible to CI — honest `skipIf`
+        // rather than the silently-vacuous #1529 shape, but a green `check` is
+        // not evidence about this case. Adding the spec to that list is the
+        // available fix, at the price of the >=1-passed/0-skipped-per-describe
+        // contract the job enforces.
         expect(sessionKey("C:\\Docs\\A.md")).toBe(sessionKey("c:/docs/a.md"));
       },
     );
@@ -201,6 +207,29 @@ describe("Session persistence", () => {
       atomicWriteMock.impl = null;
       await deleteSession(migPath);
       await fs.rm(migPath, { force: true });
+    });
+
+    it("a path with no spellable legacy name still saves, loads and deletes", async () => {
+      // `legacySessionKey` is `encodeURIComponent`, which throws `URIError` on a
+      // lone surrogate. That derivation happens AFTER `saveSession`'s
+      // `atomicWrite`, so the throw reported failure for a session write that
+      // had fully succeeded — the #1750 class this branch exists to close — and
+      // it falsified `saveDocumentToDisk`'s catch, which deletes the record it
+      // believes is stale (`deleteSession` throws the same `URIError`, so it
+      // deleted nothing) and tells the user their recovery state was not
+      // recorded while the current record sat on disk and correct.
+      //
+      // `legacySessionPath` now answers null: a path whose legacy encoding does
+      // not exist cannot have a legacy file. All three callers go total.
+      const lone = path.resolve(`C:/docs/lone-${String.fromCharCode(0xd800)}.md`);
+      expect(() => legacySessionKey(lone)).toThrow(URIError);
+
+      await expect(saveSession(lone, "md", createTestDoc())).resolves.toBeUndefined();
+      const loaded = await loadSession(lone);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.filePath).toBe(lone);
+      await expect(deleteSession(lone)).resolves.toBeUndefined();
+      expect(await loadSession(lone)).toBeNull();
     });
 
     it("loads a session written under the OLD name", async () => {

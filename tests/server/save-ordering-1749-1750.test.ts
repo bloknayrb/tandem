@@ -60,6 +60,8 @@ const hooks = vi.hoisted(() => ({
   atomicWrite: null as null | ((filePath: string) => Promise<void> | void),
   sessionAttempts: [] as string[],
   backupPath: "",
+  /** Verdict the mocked docx post-write verifier returns. */
+  verifyVerdict: { kind: "ok" } as { kind: string; reason?: string },
 }));
 
 // PARTIAL mock. `document-service.ts` and `autosave.ts` import `saveSession` as
@@ -91,7 +93,10 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
 // about it and costs seconds.
 vi.mock("../../src/server/file-io/docx-verify.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  verifyDocxRoundtrips: vi.fn(async () => ({ kind: "ok", metrics: {} })),
+  verifyDocxRoundtrips: vi.fn(async () => {
+    order.push("verifyDocxRoundtrips");
+    return { ...hooks.verifyVerdict, metrics: {} };
+  }),
 }));
 
 vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
@@ -238,6 +243,7 @@ beforeEach(() => {
   hooks.atomicWrite = null;
   hooks.sessionAttempts.length = 0;
   hooks.backupPath = "";
+  hooks.verifyVerdict = { kind: "ok" };
   resetNotifications();
   tmpDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "tandem-save-order-docs-"));
   fsSync.mkdirSync(sessionDir, { recursive: true });
@@ -275,7 +281,11 @@ describe("#1750 — saveSession is last, and its failure does not un-save the do
     expect(fsSync.existsSync(sessionFileFor(filePath))).toBe(false);
     // …and it is NOT silent. `status: "saved"` is true about the disk and says
     // nothing about the recovery record that was just destroyed, so the
-    // notification is the only surface this failure has.
+    // notification is the only surface this failure has — on an interactive
+    // save. Reached via the shutdown sequence (`server/index.ts` →
+    // `autoSaveAllToDisk` → here → `process.exit(0)`) nothing renders it, the
+    // same caveat `saveCurrentSession`'s twin states outright; the buffer entry
+    // is still the right shape, and it is what this case observes.
     const notes = getBuffer().filter((n) => n.dedupKey === `session-save-failed:${id}`);
     expect(notes).toHaveLength(1);
     expect(notes[0].severity).toBe("warning");
@@ -575,6 +585,32 @@ describe("#1749 — the re-arm is unconditional, per required function", () => {
     expect(order).toContain("rearmWatch");
     expect(order.indexOf("atomicWriteBuffer")).toBeLessThan(order.indexOf("rearmWatch"));
     expect(order).not.toContain("saveSession");
+  });
+
+  it("saveDocumentToDisk (.docx): a BLOCKED verify arms nothing and writes nothing", async () => {
+    // The other two .docx cases hard-stub the verdict to `ok`, which makes the
+    // post-write verifier invisible to them: a mutant hoisting
+    // `suppressNextChange` above the `verifyDocxRoundtrips` call stays green in
+    // both, while arming the arrival counter for 2 s on a save that then aborts
+    // — so the next genuine external change to that file is swallowed with no
+    // write ever having happened.
+    //
+    // The verify is deliberately ordered AFTER the pre-overwrite snapshot (the
+    // original stays recoverable) and BEFORE the write and the suppressor, so a
+    // blocking verdict aborts with the file untouched and the watcher un-armed.
+    // That is the whole proposition here.
+    stubLinux();
+    const { id, filePath } = track(openDocx("bin3.docx"));
+    hooks.verifyVerdict = { kind: "blocked", reason: "gross-text-loss" };
+
+    const result = await saveDocumentToDisk(id, "manual");
+
+    expect(result.status).toBe("error");
+    expect(order).toContain("verifyDocxRoundtrips");
+    expect(order).not.toContain("suppressNextChange");
+    expect(order).not.toContain("atomicWriteBuffer");
+    // The original bytes are still on disk, untouched.
+    expect(fsSync.readFileSync(filePath, "utf-8")).toBe("PK original bytes");
   });
 
   it("saveDocumentAsToDisk: rearmWatch runs from the finally, and the watcher is wired AFTER it", async () => {
