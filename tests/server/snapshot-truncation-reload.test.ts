@@ -332,3 +332,95 @@ describe("#1752: the relocation call keeps working under the new bounds", () => 
     expect(ann.range.to).toBeGreaterThan(ann.range.from);
   });
 });
+
+/**
+ * #1752 round 2: the relocation PROBE's own options, and the arm that reports a
+ * relocation it could not do.
+ *
+ * These two are a pair. The probe decides whether an annotation is healthy; the
+ * `else` arm below `RANGE_MOVED` is what SAYS SO when it is not. Get the probe's
+ * options wrong and that arm fires on a healthy annotation forever; delete the
+ * arm and a genuinely mispinned one goes back to being silent. Neither had a
+ * spec, and both were silent for months.
+ */
+describe("#1752: the relocation probe and its failure report", () => {
+  /** Every `[watcher]` line printed while `fn` runs. */
+  async function watcherLogs(fn: () => Promise<void>): Promise<string[]> {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await fn();
+      return spy.mock.calls
+        .map((args) => args.map((a) => String(a)).join(" "))
+        .filter((line) => line.includes("[watcher]"));
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("says NOTHING when a capped probe ends mid-pair and the document did not change", async () => {
+    // The probe range ends at `from + probe.length`, and `captureSnapshot` caps
+    // a snapshot at SNAPSHOT_CAP code units — so a body with an emoji straddling
+    // that boundary puts `probeTo` between the halves of a pair. On a reload
+    // that does NOT move the annotation, staleness passes and the surrogate
+    // check is the next thing to run: without `surrogates: "ignore"` on the
+    // PROBE it answers INVALID_RANGE, which is not RANGE_MOVED, so a perfectly
+    // healthy annotation takes the failure arm and is reported as durably
+    // mispinned — on every reload, forever.
+    const body = `${"x".repeat(SNAPSHOT_CAP - 1)}\u{1F600} and then some trailing words.`;
+    // Assert the fixture actually straddles the cap rather than trusting it:
+    // high surrogate at CAP-1, low at CAP.
+    expect(body.charCodeAt(SNAPSHOT_CAP - 1)).toBeGreaterThanOrEqual(0xd800);
+    expect(body.charCodeAt(SNAPSHOT_CAP - 1)).toBeLessThanOrEqual(0xdbff);
+    expect(body.charCodeAt(SNAPSHOT_CAP)).toBeGreaterThanOrEqual(0xdc00);
+
+    const { doc, filePath, triggerReload } = await setupOpenedFile(`${body}\n`);
+    const idx = extractText(doc).indexOf(body);
+    const id = "ann_probe_midpair";
+    withMcp(doc, () =>
+      doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        author: "claude",
+        type: "comment",
+        range: { from: toFlatOffset(idx), to: toFlatOffset(idx + body.length) },
+        content: "spans the whole body",
+        status: "pending",
+        timestamp: 0,
+        textSnapshot: body.slice(0, SNAPSHOT_CAP),
+        textSnapshotTruncated: true,
+        rev: 1,
+      } as Annotation),
+    );
+
+    // The same bytes back: nothing moved, nothing is stale.
+    const logs = await watcherLogs(async () => {
+      await fs.writeFile(filePath, `${body}\n`);
+      await triggerReload();
+    });
+
+    expect(logs, "a healthy annotation must not be reported as mispinned").toEqual([]);
+    const ann = annOf(doc, id);
+    expect(ann.range.from).toBe(idx);
+    expect(ann.range.to).toBe(idx + body.length);
+  });
+
+  it("REPORTS an annotation whose text is gone rather than leaving it silently mispinned", async () => {
+    // This arm was silent while its RANGE_MOVED twin logged, and the outcome is
+    // identical: `refreshAllRanges` has already re-anchored a fresh relRange
+    // onto the stale flat offsets, so the record is durably pinned to
+    // coordinates describing different text and nothing revisits it.
+    const { doc, filePath, triggerReload } = await setupOpenedFile(`${LONG_BODY}\n`);
+    const id = seedLongAnnotation(doc, { textSnapshotTruncated: true });
+
+    const logs = await watcherLogs(async () => {
+      // The annotated paragraph is gone entirely, so the staleness search finds
+      // the probe nowhere and answers RANGE_GONE.
+      await fs.writeFile(filePath, "# Something else entirely\n\nNothing of the original.\n");
+      await triggerReload();
+    });
+
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain(id);
+    expect(logs[0]).toContain("RANGE_GONE");
+    expect(logs[0]).toMatch(/stale coordinates/i);
+  });
+});

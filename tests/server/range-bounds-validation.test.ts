@@ -23,17 +23,20 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { __testNotifyIssue } from "../../src/server/documents/populate.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { captureModel } from "../../src/server/file-io/docx-capture.js";
 import type { ExportSkipReason } from "../../src/server/file-io/docx-comment-export.js";
 import { prepareExportComments } from "../../src/server/file-io/docx-comment-export.js";
 import { injectCommentsAsAnnotations } from "../../src/server/file-io/docx-comments.js";
 import { exportYDocToDocx } from "../../src/server/file-io/docx-export.js";
+import { getAdapter } from "../../src/server/file-io/index.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { getDocumentStore } from "../../src/server/mcp/document-store.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
+import { pushNotification } from "../../src/server/notifications.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
@@ -41,6 +44,13 @@ import { withInternal } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/index.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { off } from "../helpers/positions.js";
+
+// The clamp notification is asserted by what it PUSHES, so the sink is mocked
+// rather than the real notification queue inspected.
+vi.mock("../../src/server/notifications.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/server/notifications.js")>()),
+  pushNotification: vi.fn(),
+}));
 
 // ---------------------------------------------------------------------------
 // MCP tool boundary
@@ -156,6 +166,34 @@ describe("MCP tool boundary rejects out-of-range offsets", () => {
     expect(extractText(ydoc)).toBe("Alpha INSERTED beta gamma");
   });
 
+  it("tandem_edit(n, n) with a textSnapshot is refused rather than relocated", async () => {
+    // The collision between point insertion and the standing "always pass
+    // textSnapshot" rule, and it is destructive if allowed through: a
+    // zero-length range slices to "", which never equals a non-empty snapshot,
+    // so staleness fires and RANGE_MOVED names the span of the SNAPSHOT TEXT.
+    // An agent following the documented retry then replaces those 18 characters
+    // with newText — it asked to insert and got a deletion, having obeyed both
+    // documented rules.
+    const ydoc = setupDoc("bounds-edit-point-snap", "Revenue hit the $42,500 figure last year");
+    const before = extractText(ydoc);
+    const res = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: {
+          from: 16,
+          to: 16,
+          newText: "roughly ",
+          textSnapshot: "the $42,500 figure",
+        },
+      }),
+    );
+    expect(res.error).toBe(true);
+    expect(res.code).toBe("INVALID_ARGUMENT");
+    expect(res.code).not.toBe("RANGE_MOVED");
+    expect(res.message).toMatch(/omit textsnapshot/i);
+    expect(extractText(ydoc)).toBe(before);
+  });
+
   it("tandem_edit(n, n, '') is the one genuine no-op and reports reason 'empty'", async () => {
     const ydoc = setupDoc("bounds-edit-noop", "Alpha beta gamma");
     const before = extractText(ydoc);
@@ -243,6 +281,39 @@ describe("MCP tool boundary rejects out-of-range offsets", () => {
     // The discriminating assertion: a clamp at document-store.anchorRange would
     // pass every case above and still store a range spanning to end-of-document.
     expect(map.size).toBe(0);
+  });
+
+  it("LOGS the authorship stamp it skips after an edit, instead of dropping it silently", async () => {
+    // `stampClaudeRange` returns silently on `!ok`, and that stays the
+    // behaviour — the edit itself landed, so a missing overlay entry is
+    // cosmetic. What is NOT cosmetic is the skip being invisible: the argument
+    // for silence covers `surrogate` only, while `out-of-bounds` there would
+    // mean the caller derived `from + newText.length` against a document state
+    // it did not just write.
+    //
+    // Reaching it: the document holds a lone LOW surrogate at index 2, and
+    // `newText` ends on a lone HIGH one. After the edit the two are adjacent, so
+    // the stamp's end offset lands exactly between them.
+    const ydoc = setupDoc("bounds-stamp-log", "ab\uDE00cd");
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = parseResult(
+        await client.callTool({
+          name: "tandem_edit",
+          arguments: { from: 0, to: 2, newText: "Z\uD83D" },
+        }),
+      );
+      expect(res.error).toBe(false);
+      const lines = spy.mock.calls.map((a) => a.map(String).join(" "));
+      const stampLine = lines.find((l) => l.includes("Authorship stamp skipped"));
+      expect(stampLine, "the skip must not be silent").toBeDefined();
+      expect(stampLine).toContain("surrogate");
+      expect(stampLine).toContain("[0, 2]");
+    } finally {
+      spy.mockRestore();
+    }
+    // The edit itself still landed — the log is about the overlay, not the write.
+    expect(extractText(ydoc)).toBe("Z😀cd");
   });
 
   it("unit twin: store.anchorRange past the end is not ok", async () => {
@@ -357,6 +428,48 @@ describe(".docx comment import", () => {
     const clamps: unknown[] = [];
     injectCommentsAsAnnotations(d, [comment("c-ok", 2, 7)], "review.docx", (i) => clamps.push(i));
     expect(clamps).toEqual([]);
+  });
+
+  it("the docx adapter turns the clamp into a LoadIssue on its apply() return", () => {
+    // The seam between the callback and the issue list. `injectCommentsAsAnnotations`
+    // firing `onClamp` proves nothing on its own: the adapter is what has to
+    // catch it and put it where a caller will look.
+    const d = makeDoc("Alpha beta gamma");
+    const len = extractText(d).length;
+    const issues = getAdapter("docx").apply(
+      d,
+      {
+        format: "docx",
+        html: "<p>Alpha beta gamma</p>",
+        comments: [comment("c-adapter1", 2, len + 5), comment("c-adapter2", 3, len + 11)],
+        footnoteBodies: {},
+        issues: [],
+      },
+      { fileName: "review.docx" },
+    );
+    const clamped = issues.filter((i) => i.kind === "comments-clamped");
+    expect(clamped).toHaveLength(1);
+    expect(clamped[0]).toMatchObject({ count: 2, maxClamp: 11 });
+  });
+
+  it("the clamp LoadIssue reaches the user as a notification", () => {
+    // The other half, and the one nothing pinned: an arm that pushes no
+    // notification is a document that silently lost something. Asserted on the
+    // WORDING too, because "moved to the end" was wrong — the clamp is a
+    // `Math.min` per end, so a comment whose `from` is in range is STRETCHED to
+    // the end rather than moved there.
+    const pushed = vi.mocked(pushNotification);
+    pushed.mockClear();
+    __testNotifyIssue(
+      { kind: "comments-clamped", count: 2, maxClamp: 11 },
+      { displayName: "review.docx", dedupSource: "/tmp/review.docx" },
+    );
+    expect(pushed).toHaveBeenCalledTimes(1);
+    const msg = String(pushed.mock.calls[0]?.[0]?.message);
+    expect(msg).toContain("2 Word comments");
+    expect(msg).toContain("review.docx");
+    expect(msg).toMatch(/shortened or moved to the end/);
+    expect(msg).toContain("11 characters");
   });
 
   it("captureModel scores an imported point comment with a real range, not -1/-1", () => {
@@ -511,16 +624,23 @@ describe(".docx comment export resolver", () => {
     expect(out[0]?.from).toBe(0);
   });
 
-  it("does NOT widen a range whose boundary sits BETWEEN two adjacent astral characters", () => {
-    // Offset 2 of "😀😀" is the legal boundary between two emoji: the unit at 2
-    // is a high surrogate, and the unit at 1 is a LOW one, so the paired
-    // predicate correctly says no split. A one-sided check sees "surrogate at
-    // to" and snaps outward, silently widening the exported comment.
-    const d = docWith("\u{1F600}\u{1F600}", [{ from: 0, to: 2 }]);
-    const out = prepareExportComments(d);
+  it("does NOT widen a range ending on a lone low surrogate that splits nothing", () => {
+    // The second half of the one-sided predicate's defect, and the half a
+    // `"😀😀"` fixture cannot show: at offset 2 of two adjacent emoji the unit is
+    // a HIGH surrogate, so `isLowSurrogate` was already false there and such a
+    // spec is green under the OLD code too.
+    //
+    // `"a\uDC4B"` is the discriminating shape — a lone LOW surrogate at index 1,
+    // preceded by "a". `to = 1` splits nothing (there is no pair), but the old
+    // one-sided check sees a low surrogate at `to` and widens to 2. The paired
+    // predicate asks what precedes it, finds "a", and leaves the range alone.
+    const d = docWith("a\uDC4B tail", [{ from: 0, to: 1 }]);
+    const skips: ExportSkipReason[] = [];
+    const out = prepareExportComments(d, (r) => skips.push(r));
+    expect(skips).toEqual([]);
     expect(out).toHaveLength(1);
     expect(out[0]?.from).toBe(0);
-    expect(out[0]?.to).toBe(2);
+    expect(out[0]?.to).toBe(1);
   });
 
   it("snaps a stored range that ends mid-pair OUTWARD, keeping the emoji intact in the .docx", async () => {
