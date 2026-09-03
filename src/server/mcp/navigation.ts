@@ -33,10 +33,40 @@ export interface SearchMatch {
  * unguarded `new RegExp(query)` would leave a loaded gun for the next caller,
  * so the parameter is gone rather than merely unused.
  *
- * `escapeRegex` makes the compiled pattern a plain literal, which can neither
- * backtrack catastrophically nor throw — hence no try/catch and no time guard.
- * `error` stays in the RETURN TYPE (permanently `undefined` on this path) so
- * callers can treat both search paths uniformly.
+ * What `escapeRegex` buys is exactly one thing: the compiled pattern is a plain
+ * literal, so it cannot backtrack catastrophically. That is why there is no
+ * time guard. It does NOT make compilation infallible — V8 caps a compiled
+ * pattern at roughly 32,768 characters of source and escaping is
+ * length-increasing, so a long enough `query` raises "Regular expression too
+ * large" with a message that quotes the whole query back (33,062 characters,
+ * for a 33,000-character query).
+ *
+ * Hence the try/catch, which is not vestigial: without it the throw escapes to
+ * `withErrorBoundary` and a caller who merely typed too much gets
+ * INTERNAL_ERROR — "the server broke" for what is a bad input — with their
+ * entire query echoed into the envelope and into `console.error`. The mirror
+ * image of the cap/timeout rule below, and just as wrong.
+ *
+ * **The catch must cover the LOOP, and one around `new RegExp` alone would
+ * catch nothing at all.** V8 compiles a regex lazily — the same fact
+ * `search-worker.ts` leans on to keep the main thread out of the pattern — so
+ * the size failure surfaces from the FIRST `exec`, not from construction.
+ * Measured on Node v24.14.1 at 33,000 and 40,000 characters, in several orders
+ * including a cold first call: construction succeeded every time, `exec` raised
+ * every time.
+ *
+ * The `regex: true` path had the SAME hole and is fixed in the same change.
+ * That the worker wrapped its `new RegExp` in a try/catch at all is evidence
+ * the author already knew an oversized pattern raises — but that try stopped
+ * short of the loop, so it caught the EAGER SyntaxError from a malformed
+ * pattern and missed the LAZY one from an over-long pattern entirely. There it
+ * was worse than a mislabelled error: the throw was uncaught inside the worker,
+ * so one oversized pattern killed the thread. `findOccurrence` and
+ * `countOccurrences` share the class through `escapeRegex` and are still bare;
+ * pre-existing, not touched here.
+ *
+ * `error` is therefore reachable on this path after all, which is the same
+ * shape the worker returns, so callers can treat both search paths uniformly.
  */
 export function searchText(
   fullText: string,
@@ -44,17 +74,24 @@ export function searchText(
 ): { matches: SearchMatch[]; truncated?: "cap" | "timeout"; error?: string } {
   const MAX_MATCHES = 10_000;
   const matches: SearchMatch[] = [];
-  const pattern = new RegExp(escapeRegex(query), "gi");
-  let match;
-  while ((match = pattern.exec(fullText)) !== null) {
-    matches.push({
-      from: toFlatOffset(match.index),
-      to: toFlatOffset(match.index + match[0].length),
-      text: match[0],
-    });
-    if (matches.length >= MAX_MATCHES) return { matches, truncated: "cap" };
-    // Prevent infinite loops on zero-length matches
-    if (match[0].length === 0) pattern.lastIndex++;
+  try {
+    const pattern = new RegExp(escapeRegex(query), "gi");
+    let match;
+    while ((match = pattern.exec(fullText)) !== null) {
+      matches.push({
+        from: toFlatOffset(match.index),
+        to: toFlatOffset(match.index + match[0].length),
+        text: match[0],
+      });
+      if (matches.length >= MAX_MATCHES) return { matches, truncated: "cap" };
+      // Prevent infinite loops on zero-length matches
+      if (match[0].length === 0) pattern.lastIndex++;
+    }
+  } catch (err) {
+    // Only reachable for a query too long to compile. That fires on the first
+    // `exec` (see above) and is deterministic for the pattern, so it lands
+    // before any match — no partial results are being discarded here.
+    return { matches: [], error: `Invalid search query: ${getErrorMessage(err)}` };
   }
   return { matches };
 }

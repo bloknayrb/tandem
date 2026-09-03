@@ -136,6 +136,36 @@ describe("searchRegexInWorker — correctness", () => {
     expect(result.error).toMatch(/Invalid regex/);
     expect(result.matches).toHaveLength(0);
   });
+
+  it("reports an OVERSIZED pattern as an error and keeps the worker alive", async () => {
+    // The malformed-pattern case above throws EAGERLY from `new RegExp`; this
+    // one is well formed but merely too large, and V8 compiles lazily, so it
+    // raises from the first `exec`. With the worker's try/catch stopping at
+    // construction it caught the first and missed the second entirely: the
+    // throw was uncaught in the thread, killed it, and reached the caller as
+    // INTERNAL_ERROR. The follow-up search is the half that pins that — any MCP
+    // client could otherwise kill a worker per request with one long query.
+    //
+    // A sweep, not a boundary: the compile budget is engine-internal and moves.
+    const lengths = [33_000, 40_000];
+    const results = [];
+    for (const n of lengths) {
+      results.push(await searchRegexInWorker("hello world", "a".repeat(n)));
+    }
+    for (const result of results) {
+      expect(result.error).toBeDefined();
+      expect(result.matches).toHaveLength(0);
+    }
+    // Fails loudly rather than passing vacuously if the engine grows its budget.
+    expect(
+      results.filter((r) => r.error !== undefined).length,
+      "no length in the sweep exceeded the compile budget — widen it",
+    ).toBe(lengths.length);
+
+    const followUp = await searchRegexInWorker("cat and cat", "c.t");
+    expect(followUp.matches).toHaveLength(2);
+    expect(followUp.error).toBeUndefined();
+  }, 15_000);
 });
 
 describe("searchRegexInWorker — queueing", () => {
@@ -191,6 +221,26 @@ describe("searchRegexInWorker — queueing", () => {
     await expect(fifth).rejects.toMatchObject({ code: "SEARCH_BUSY" });
     const settled = await Promise.all(inFlight);
     for (const result of settled) expect(result.matches).toHaveLength(60);
+  }, 15_000);
+});
+
+describe("shutdownSearchWorker", () => {
+  it("fails outstanding work with a shutdown message, not the queue-full one", async () => {
+    // Same `code`, because the handler's mapping and the documented error set
+    // are per-code — but "Too many concurrent regex searches are queued. Retry."
+    // during a SIGTERM tells the client to retry against a server that is going
+    // away. The two producers must not collapse back into one.
+    const rejection = searchRegexInWorker(`${"a".repeat(28)}b`, "(a+)+$").then(
+      () => null,
+      (err: Error) => err,
+    );
+    await shutdownSearchWorker();
+    const err = await rejection;
+
+    expect(err).not.toBeNull();
+    expect((err as { code?: string } | null)?.code).toBe("SEARCH_BUSY");
+    expect(err?.message).toMatch(/shutting down/i);
+    expect(err?.message).not.toMatch(/queued/i);
   }, 15_000);
 });
 

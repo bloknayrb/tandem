@@ -865,6 +865,13 @@ came back are real; the set is just incomplete, so don't drive a replace-all fro
 it. A partial result is not an error, and `count` counts what was returned rather
 than what exists.
 
+"Truncated" says nothing about size. The cap bounds the match **count**, not the
+bytes: `g` matches never overlap, so the returned text is bounded by the document
+rather than by 10,000 of anything -- a 5 MB document searched for `x{500}` returns
+10,000 matches, 5,000,000 bytes of `text`, and `truncated: "cap"`. That is no more
+than `tandem_getTextContent` would hand you for the same document, so it is not a
+new capability, but do not read a truncated response as a small one.
+
 `count` is timing dependent on the regex path. A `regex: true` search runs on a
 worker thread with a wall-clock budget, so the same pattern over the same
 document can return a different number of matches on a slower machine or a busier
@@ -880,8 +887,9 @@ edited while it runs, and the offsets it returns may already have moved by the
 time you read them. Pass a match's `text` as `tandem_edit`'s `textSnapshot` so a
 moved range comes back as `RANGE_MOVED` instead of editing the wrong span.
 
-**Errors:** `SEARCH_BUSY` (the regex queue is full), `FORMAT_ERROR` (the pattern
-is not a valid regex).
+**Errors:** `SEARCH_BUSY` (the regex queue is full, or the server is shutting
+down), `FORMAT_ERROR` (the pattern is not a valid regex, or `query` is too long
+to compile -- roughly 32,000 characters, on either path).
 
 ---
 

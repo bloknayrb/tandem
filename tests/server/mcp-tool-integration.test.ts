@@ -884,6 +884,47 @@ describe("MCP tool integration — navigation tools", () => {
     expect(content[content.length - 1].text).toMatch(/Results are incomplete \(timeout\)/);
   }, 15_000);
 
+  it("tandem_search reports an oversized literal query as FORMAT_ERROR", async () => {
+    setupDoc("mcp-nav-oversized", "hello world");
+
+    // `regex: false` — the DEFAULT path. V8 caps a compiled pattern's source at
+    // 32,768 characters and `escapeRegex` only lengthens, so this throws at
+    // construction. Without the try/catch in `searchText` the throw reaches
+    // `withErrorBoundary` and comes back as INTERNAL_ERROR with all 33,000
+    // characters echoed into the envelope — which is the distinction this case
+    // exists to make. A query that is too long is the caller's fault, and
+    // INTERNAL_ERROR is not in this tool's documented error set.
+    const result = await client.callTool({
+      name: "tandem_search",
+      arguments: { query: "a".repeat(33_000) },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("FORMAT_ERROR");
+  }, 15_000);
+
+  it("tandem_search reports an oversized REGEX query as FORMAT_ERROR too", async () => {
+    setupDoc("mcp-nav-oversized-regex", "hello world");
+
+    // Same class on the worker path, and it used to be worse there: the throw
+    // comes from `exec`, outside the worker's construction-only try, so it went
+    // uncaught, killed the thread, and surfaced as INTERNAL_ERROR.
+    const result = await client.callTool({
+      name: "tandem_search",
+      arguments: { query: "a".repeat(40_000), regex: true },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("FORMAT_ERROR");
+
+    // And the worker survived it — the next regex search still works.
+    const after = await client.callTool({
+      name: "tandem_search",
+      arguments: { query: "w.rld", regex: true },
+    });
+    expect(parseResult(after).data.count).toBe(1);
+  }, 15_000);
+
   it("tandem_search returns SEARCH_BUSY once the regex queue is full", async () => {
     setupDoc("mcp-nav-busy", `${"a".repeat(18)}Q`.repeat(60));
 

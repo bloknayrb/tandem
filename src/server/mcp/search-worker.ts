@@ -97,37 +97,42 @@ export const WORKER_SOURCE = [
   "const port = wt.parentPort;",
   "port.on('message', function (msg) {",
   "  const id = msg.id;",
-  "  let re;",
+  // The try spans the LOOP, not just `new RegExp`. V8 compiles lazily, so a
+  // pattern that is well formed but merely too large raises from the FIRST
+  // `exec`, not from construction (measured — see `searchText`'s note). With
+  // the loop outside the try, that throw is uncaught inside the worker: the
+  // thread dies, `handleWorkerDeath` rejects the job, the handler rethrows a
+  // non-SEARCH_BUSY error and the caller is told INTERNAL_ERROR. It also lets
+  // any MCP client kill a worker per request with one oversized pattern.
   "  try {",
-  "    re = new RegExp(msg.query, 'gi');",
+  "    const re = new RegExp(msg.query, 'gi');",
+  "    const text = msg.text;",
+  "    const started = Date.now();",
+  "    let acc = [];",
+  "    let total = 0;",
+  "    let m;",
+  "    while ((m = re.exec(text)) !== null) {",
+  "      acc.push({ from: m.index, to: m.index + m[0].length, text: m[0] });",
+  "      total++;",
+  "      if (acc.length >= msg.batchSize) {",
+  "        port.postMessage({ id: id, batch: acc });",
+  "        acc = [];",
+  "      }",
+  "      if (total >= msg.maxMatches) {",
+  "        port.postMessage({ id: id, done: true, batch: acc, truncated: 'cap' });",
+  "        return;",
+  "      }",
+  "      if (Date.now() - started > msg.deadlineMs) {",
+  "        port.postMessage({ id: id, done: true, batch: acc, truncated: 'timeout' });",
+  "        return;",
+  "      }",
+  "      if (m[0].length === 0) re.lastIndex++;",
+  "    }",
+  "    port.postMessage({ id: id, done: true, batch: acc });",
   "  } catch (err) {",
   "    const detail = err && err.message ? err.message : String(err);",
   "    port.postMessage({ id: id, done: true, error: 'Invalid regex: ' + detail });",
-  "    return;",
   "  }",
-  "  const text = msg.text;",
-  "  const started = Date.now();",
-  "  let acc = [];",
-  "  let total = 0;",
-  "  let m;",
-  "  while ((m = re.exec(text)) !== null) {",
-  "    acc.push({ from: m.index, to: m.index + m[0].length, text: m[0] });",
-  "    total++;",
-  "    if (acc.length >= msg.batchSize) {",
-  "      port.postMessage({ id: id, batch: acc });",
-  "      acc = [];",
-  "    }",
-  "    if (total >= msg.maxMatches) {",
-  "      port.postMessage({ id: id, done: true, batch: acc, truncated: 'cap' });",
-  "      return;",
-  "    }",
-  "    if (Date.now() - started > msg.deadlineMs) {",
-  "      port.postMessage({ id: id, done: true, batch: acc, truncated: 'timeout' });",
-  "      return;",
-  "    }",
-  "    if (m[0].length === 0) re.lastIndex++;",
-  "  }",
-  "  port.postMessage({ id: id, done: true, batch: acc });",
   "});",
 ].join("\n");
 
@@ -167,6 +172,18 @@ let inFlight: { job: Job; matches: RawMatch[]; timer: NodeJS.Timeout } | null = 
 
 function searchBusyError(): Error {
   return Object.assign(new Error("Too many concurrent regex searches are queued. Retry."), {
+    code: "SEARCH_BUSY",
+  });
+}
+
+/**
+ * Distinct from `searchBusyError` on purpose. A job killed by shutdown is not a
+ * queueing problem, and telling a client to retry against a server that is
+ * going away is a lie it can act on. Same `code`, since the handler's mapping
+ * and the documented error set are per-code, but an honest message.
+ */
+function searchShutdownError(): Error {
+  return Object.assign(new Error("The search worker is shutting down."), {
     code: "SEARCH_BUSY",
   });
 }
@@ -325,7 +342,7 @@ export function shutdownSearchWorker(): Promise<void> {
   }
   outstanding.push(...queue);
   queue = [];
-  for (const job of outstanding) job.reject(searchBusyError());
+  for (const job of outstanding) job.reject(searchShutdownError());
   if (!w) return Promise.resolve();
   return w.terminate().then(
     () => undefined,
