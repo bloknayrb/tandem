@@ -124,11 +124,11 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 ```
 
 **Notes:**
-- Supported formats: `.md`, `.markdown`, `.txt`, `.html`, `.htm`, `.docx`. All open editable; `.docx` is written back only on an explicit save (auto-save skips it). `.markdown` and `.htm` are aliases — `detectFormat` folds them into `md` and `html`, and the file keeps its own extension on save.
+- Supported formats: `.md`, `.markdown`, `.txt`, `.html`, `.htm`, `.docx`. `.md`/`.txt` auto-save; `.docx` is editable but written back only on an explicit save (auto-save skips it); **`.html`/`.htm` open read-only (#1798)** — they are in neither save set, so nothing can write them back, and opening them editable meant edits that looked accepted and then vanished on tab close. Annotating an `.html` still works. `.markdown` and `.htm` are aliases — `detectFormat` folds them into `md` and `html`; a `.markdown` keeps its own extension on save.
 - Editor opens automatically in the Tauri WebView (desktop) or at `http://127.0.0.1:5173` (development) on the first call.
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
 - **Auto-reload:** Open documents are automatically reloaded when the file changes on disk (e.g., Claude's Edit tool, `git pull`). Annotations are preserved. A toast notification appears in the editor.
-- **Exception — unsaved edits:** if the document has body edits that haven't reached disk, the reload is held and the editor raises a keep-vs-reload banner instead (#1238). Until the user answers it, every save path is blocked, including `tandem_save`, which returns `EXTERNAL_CONFLICT`. Note that `tandem_edit` marks a document dirty, so editing through Tandem and then through your own file-editing tool raises this banner rather than auto-reloading. Read-only documents still reload unconditionally.
+- **Exception — unsaved edits:** if the document has body edits that haven't reached disk, the reload is held and the editor raises a keep-vs-reload banner instead (#1238). Until the user answers it, every save path is blocked, including `tandem_save`, which returns `EXTERNAL_CONFLICT`. Note that `tandem_edit` marks a document dirty, so editing through Tandem and then through your own file-editing tool raises this banner rather than auto-reloading. A document that is read-only because the *user* asked for it (View Changelog, an explicit `readOnly` open) still reloads unconditionally — but a `.html`, read-only only because its format cannot be written back, gets the banner like any other dirty document (#1798). Its Y.Doc is the only copy of those edits, so reloading over them would destroy them.
 - Pass `force: true` to manually reload from disk. Clears annotations and session. Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
 - Multiple documents can be open simultaneously -- each gets its own tab.
 - If a session exists for this file (and the source hasn't changed), annotations are restored.
@@ -386,8 +386,31 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 { "saved": true, "filePath": "C:\\Users\\bkolb\\docs\\report.md" }
 ```
 
+A save that did not reach disk answers `saved: false` with `sessionOnly: true` and a machine-readable `reason` (#1798 — it used to answer `saved: true`, which is why `.html` edits looked accepted and were then lost on tab close):
+
+```json
+{ "saved": false, "sessionOnly": true, "reason": "UNSUPPORTED_FORMAT",
+  "filePath": "C:\\Users\\bkolb\\docs\\report.html",
+  "message": "Session saved (annotations preserved). Source file unchanged — this format (html) cannot be written back to disk." }
+```
+
+`reason` is `"upload"` (no disk path), `"read-only"` (the user asked for read-only, and the format *is* writable), or one of the disk-save skip codes:
+
+| `reason` | Meaning |
+|---|---|
+| `NOT_OPEN` | No such open document |
+| `PROMOTION_REQUIRED` | Scratchpad/upload — needs Save As first |
+| `UNSUPPORTED_FORMAT` | The format has no path back to disk (`.html`) |
+| `ADAPTER_UNAVAILABLE` | The adapter cannot write this format |
+| `SAVE_IN_PROGRESS` | Another save is holding the per-document lock |
+| `FILE_MODIFIED` | The file's mtime moved under the save guard |
+| `SOURCE_MISSING` | The source file is gone |
+| `FILE_STATE_UNAVAILABLE` | The file's state could not be read |
+
+Three further skip codes exist on `SaveResult` but **cannot reach `tandem_save`'s `reason`**: `READ_ONLY` and `EXTERNAL_CONFLICT` are handled earlier (the first short-circuits to the read-only branch above, the second returns an `EXTERNAL_CONFLICT` *error*), and `EXPLICIT_ONLY` fires only for the auto-save trigger, which `tandem_save` never is.
+
 **Notes:**
-- Read-only documents save their session only (annotations persist), not the source file.
+- Read-only documents save their session only (annotations persist), not the source file, and answer `saved: false`.
 - Writable `.docx` documents save on **explicit save only** (never auto-save). The save writes the document body **plus pending `comment`-type annotations as Word comments** (`comments.xml` + range markers), anchored to their current ranges (#1068). `note` and `highlight` annotations are never written to the file (ADR-027), so un-promoted imported Word comments — which live as private notes until batch-promoted — are dropped from the saved file. Accepted/dismissed comments are dropped too (Word has no resolved-state channel we can write). Threaded replies flatten into the comment body with attribution lines; private replies (including imported Word reply threads) are never written.
 
 **Errors:** `FILE_LOCKED` (file open in another program)

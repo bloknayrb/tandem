@@ -20,7 +20,7 @@ action. They share nothing architecturally, so this track is a queue, not a desi
 | [#1795](https://github.com/bloknayrb/tandem/issues/1795) | Run user regexes off the event loop (worker) or under a real timeout; return partial matches with a `truncated` flag instead of `FORMAT_ERROR`. | [server-mcp](../areas/server-mcp.md) | `probe-redos.mts` |
 | [#1796](https://github.com/bloknayrb/tandem/issues/1796) | Stop mapping every `FILE_NOT_FOUND` to "No document is open"; convert reports the missing directory. | [server-mcp](../areas/server-mcp.md) | `probe-tools.mts` |
 | [#1797](https://github.com/bloknayrb/tandem/issues/1797) | `closeDocumentById` uses one id for lookup and cleanup. | [server-mcp](../areas/server-mcp.md) | `probe-tools.mts` |
-| [#1798](https://github.com/bloknayrb/tandem/issues/1798) | `.html` opens read-only; annotations still work; `sessionOnly` saves stop reporting `saved: true` (decision 2). | [server-mcp](../areas/server-mcp.md) | `probe-tools.mts` |
+| [#1798](https://github.com/bloknayrb/tandem/issues/1798) | `.html` opens read-only; annotations still work; `sessionOnly` saves stop reporting `saved: true` (decision 2). Fixed on `fix/html-read-only-1798`. | [server-mcp](../areas/server-mcp.md) | `probe-tools.mts` |
 | [#1800](https://github.com/bloknayrb/tandem/issues/1800) | Quarantine a corrupt `ydocState` (`.corrupt.<ts>`) and open from the markdown; toast once. | [server-data](../areas/server-data.md) | `exp3.ts` |
 
 ## Order

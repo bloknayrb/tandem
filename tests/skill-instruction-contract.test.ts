@@ -34,9 +34,13 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // bump ships to nobody. Pinning the current number forces a deliberate look here whenever
   // the version moves — including for an unrelated edit, which is the cost of the guard, not
   // a bug in it. When you land here: confirm the assertions below still describe the shipped
-  // wake instructions, then move the number. Last moved to 13 for the widened INVALID_RANGE
-  // recovery text (#1752), which does not touch this section.
-  expect(skill).toMatch(/^version:\s*13$/m);
+  // wake instructions, then move the number. Last moved to 14 by the MERGE of two independent
+  // bumps that both landed on 13: the widened INVALID_RANGE recovery text (#1752) and the
+  // `.html` read-only tier (#1798). Neither touches this section, and the wake assertions
+  // below were re-read against the merged file. The merge is why it is 14 and not 13 — the
+  // installed copy refreshes only when the bundled version is strictly NEWER, so a user
+  // holding either side's 13 would never receive the other side's changes.
+  expect(skill).toMatch(/^version:\s*14$/m);
   expect(wake).toMatch(/hand-started session/i);
   expect(wake).toMatch(/first successful read-mode `tandem_status`/i);
   expect(wake).toMatch(/read `wakeUrl`/i);
