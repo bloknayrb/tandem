@@ -12,7 +12,7 @@ import { basename, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
@@ -26,6 +26,7 @@ import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/docume
 import { extractMarkdown, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
+import { shutdownSearchWorker } from "../../src/server/mcp/search-worker.js";
 import {
   getBuffer as getNotificationBuffer,
   resetForTesting as resetNotifications,
@@ -108,6 +109,11 @@ beforeEach(async () => {
   withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE));
   client = await setupMcpClient();
 });
+
+// The `regex: true` cases spawn the #1795 search worker. Hygiene: the forks
+// pool would kill it anyway, but a bare `node` process (which is what the
+// production server is) stays alive on the leaked MessagePort.
+afterAll(() => shutdownSearchWorker());
 
 function setMode(mode: "solo" | "tandem") {
   const ctrl = getOrCreateDocument(CTRL_ROOM);
@@ -842,6 +848,59 @@ describe("MCP tool integration — navigation tools", () => {
     expect(parsed.data.count).toBe(1);
     expect(parsed.data.matches[0].text).toBe("quick");
   });
+
+  /**
+   * #1795, at the surface the bug actually lives on. Without this, an
+   * implementation that ships the worker but leaves `searchText` wired into the
+   * handler is green on every module-level assertion above.
+   */
+  it("tandem_search with regex: true leaves the event loop free", async () => {
+    setupDoc("mcp-nav-redos", `${"a".repeat(30)}!`);
+
+    let ticks = 0;
+    const interval = setInterval(() => {
+      ticks++;
+    }, 10);
+    const t0 = Date.now();
+    const result = await client.callTool({
+      name: "tandem_search",
+      arguments: { query: "^(a|a)+$", regex: true },
+    });
+    const elapsed = Date.now() - t0;
+    clearInterval(interval);
+
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.truncated).toBe(true);
+    expect(parsed.data.reason).toBe("timeout");
+    expect(elapsed).toBeGreaterThan(1500);
+    expect(ticks).toBeGreaterThan(10);
+
+    // The advice rides as an ADDITIONAL text block, so the envelope block that
+    // every helper reads at content[0] is untouched and `structuredContent`
+    // stays byte-identical to `data`.
+    const content = result.content as Array<{ type: string; text?: string }>;
+    expect(content.length).toBeGreaterThan(1);
+    expect(content[content.length - 1].text).toMatch(/Results are incomplete \(timeout\)/);
+  }, 15_000);
+
+  it("tandem_search returns SEARCH_BUSY once the regex queue is full", async () => {
+    setupDoc("mcp-nav-busy", `${"a".repeat(18)}Q`.repeat(60));
+
+    const call = () =>
+      client.callTool({
+        name: "tandem_search",
+        arguments: { query: "(a+)+z|Q", regex: true },
+      });
+    const results = await Promise.all([call(), call(), call(), call(), call()]);
+
+    // Same shape as `rawErrorText` elsewhere in this file: an error envelope has
+    // no `structuredContent`, so `withStructuredErrors` marks it `isError` and
+    // the structured helpers reject it by design. Read the text envelope.
+    const codes = results.map((r) => parseResult(r).code);
+    expect(codes.filter((c) => c === "SEARCH_BUSY")).toHaveLength(1);
+    expect(results.filter((r) => parseResult(r).error === false)).toHaveLength(4);
+  }, 15_000);
 
   it("tandem_resolveRange returns range for found text", async () => {
     setupDoc("mcp-nav-2", "Hello world");

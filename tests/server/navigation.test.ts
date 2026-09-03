@@ -180,27 +180,32 @@ describe("search on Y.Doc extracted text", () => {
 });
 
 describe("searchText — ReDoS protections", () => {
-  it("caps results at 10,000 matches and returns an error", () => {
+  it("caps results at 10,000 matches and flags the truncation", () => {
     // 10,001 single-char matches — each "a" matches once
     const text = "a".repeat(10_001);
     const result = searchText(text, "a");
     expect(result.matches).toHaveLength(10_000);
-    expect(result.error).toMatch(/capped at 10000/i);
+    // A cap is a PARTIAL result, not an error (#1795). It is reported
+    // structurally so the handler never string-matches a message to classify it.
+    expect(result.truncated).toBe("cap");
+    expect(result.error).toBeUndefined();
   });
 
-  it("zero-length regex match does not infinite loop", () => {
-    // "a*" matches empty string at every position in "bbb"
-    const result = searchText("bbb", "a*", true);
+  it("zero-length literal match does not infinite loop", () => {
+    // Literal-path smoke only: "a*" is escaped, so this looks for the two
+    // characters "a*". The regex zero-length guard now lives in the worker and
+    // is pinned in tests/server/search-worker.test.ts.
+    const result = searchText("bbb", "a*");
     // Should complete quickly and return a defined result
     expect(result.matches).toBeDefined();
     expect(result.error).toBeUndefined();
   });
 
-  it("returns matches alongside error when cap is hit", () => {
+  it("returns matches alongside the cap flag when the cap is hit", () => {
     const text = "x".repeat(10_001);
     const result = searchText(text, "x");
     // Matches are returned even though the cap was hit
     expect(result.matches.length).toBeGreaterThan(0);
-    expect(result.error).toBeTruthy();
+    expect(result.truncated).toBe("cap");
   });
 });

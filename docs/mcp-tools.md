@@ -59,6 +59,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
 | `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
 | `INVALID_PATH` | A supplied path was relative where an absolute one is required, or used a UNC / extended-length / device-namespace prefix. |
+| `SEARCH_BUSY` | `tandem_search` with `regex: true` was called while its worker queue -- one search running plus three waiting -- was already full. Retry. |
 
 ## Coordinate System
 
@@ -841,7 +842,7 @@ Search for text in the document. Returns all matching positions.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `query` | string | yes | Search query |
+| `query` | string | yes | Text to find (literal unless `regex: true`) |
 | `regex` | boolean | no | Treat query as regex (default: false) |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
@@ -852,9 +853,35 @@ Search for text in the document. Returns all matching positions.
     { "from": 42, "to": 55, "text": "$12.4 million" },
     { "from": 180, "to": 193, "text": "$12.4 million" }
   ],
-  "count": 2
+  "count": 2,
+  "truncated": true,
+  "reason": "timeout"
 }
 ```
+
+`truncated` and `reason` appear only when the result is **partial** -- either the
+10,000-match cap (`"cap"`) or the search deadline (`"timeout"`). The matches that
+came back are real; the set is just incomplete, so don't drive a replace-all from
+it. A partial result is not an error, and `count` counts what was returned rather
+than what exists.
+
+`count` is timing dependent on the regex path. A `regex: true` search runs on a
+worker thread with a wall-clock budget, so the same pattern over the same
+document can return a different number of matches on a slower machine or a busier
+one. Only a search that came back without `truncated` is a complete count.
+
+That worker takes one search at a time with three more queued; a fifth concurrent
+`regex: true` call returns `SEARCH_BUSY` rather than waiting. A queued search can
+therefore wait several seconds before its own budget even starts -- your client's
+tool timeout, not Tandem, is what bounds that wait.
+
+Because the regex search no longer blocks the main thread, the document can be
+edited while it runs, and the offsets it returns may already have moved by the
+time you read them. Pass a match's `text` as `tandem_edit`'s `textSnapshot` so a
+moved range comes back as `RANGE_MOVED` instead of editing the wrong span.
+
+**Errors:** `SEARCH_BUSY` (the regex queue is full), `FORMAT_ERROR` (the pattern
+is not a valid regex).
 
 ---
 

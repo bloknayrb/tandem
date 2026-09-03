@@ -42,6 +42,7 @@ import {
   docCount,
   getOpenDocs,
 } from "./mcp/document-service.js";
+import { shutdownSearchWorker } from "./mcp/search-worker.js";
 import {
   APP_VERSION,
   closeMcpSession,
@@ -225,6 +226,19 @@ async function shutdown(signal: string) {
     await closeMcpSession();
   } catch (err) {
     console.error("[Tandem] MCP session close on shutdown failed:", err);
+  }
+  // MCP is the only producer of search work, so the worker goes right after it.
+  // Its OWN try/catch, and not inside the first one: a rejection swallowed up
+  // there would be misreported as a failed session save AND would skip
+  // autoSaveAllToDisk/saveCurrentSession, while a bare await here would escape
+  // into the .catch-less SIGTERM handler and exit(1) past launcherSupervisor,
+  // releaseStoreLock and httpServer.close(). This is hygiene rather than
+  // liveness — process.exit(0) below is unconditional — so a bare-Node shutdown
+  // never carries a live worker handle into the exit.
+  try {
+    await shutdownSearchWorker();
+  } catch (err) {
+    console.error("[Tandem] search worker shutdown failed:", err);
   }
   // Stop the launcher BEFORE we tear down everything else — supervisor.stop()
   // sends SIGTERM to the reaper which gracefully reaps Claude. If we skip this

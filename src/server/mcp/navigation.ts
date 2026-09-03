@@ -14,6 +14,7 @@ import {
   withErrorBoundary,
   withStructuredErrors,
 } from "./response.js";
+import { searchRegexInWorker } from "./search-worker.js";
 
 export interface SearchMatch {
   from: FlatOffset;
@@ -21,36 +22,39 @@ export interface SearchMatch {
   text: string;
 }
 
-/** Search for text in a document. Pure logic extracted for testability. */
+/**
+ * Search for LITERAL text in a document. Pure logic extracted for testability.
+ *
+ * Literal-only by design (#1795). The `useRegex` branch used to live here and
+ * compiled the caller's pattern on the main thread, where a catastrophic
+ * backtrack froze the whole server — the old 2 s guard ran only BETWEEN
+ * matches, so a single pathological `exec` never reached it. Regex search now
+ * goes to `searchRegexInWorker`. Keeping the branch here as an exported,
+ * unguarded `new RegExp(query)` would leave a loaded gun for the next caller,
+ * so the parameter is gone rather than merely unused.
+ *
+ * `escapeRegex` makes the compiled pattern a plain literal, which can neither
+ * backtrack catastrophically nor throw — hence no try/catch and no time guard.
+ * `error` stays in the RETURN TYPE (permanently `undefined` on this path) so
+ * callers can treat both search paths uniformly.
+ */
 export function searchText(
   fullText: string,
   query: string,
-  useRegex?: boolean,
-): { matches: SearchMatch[]; error?: string } {
+): { matches: SearchMatch[]; truncated?: "cap" | "timeout"; error?: string } {
   const MAX_MATCHES = 10_000;
   const matches: SearchMatch[] = [];
-  try {
-    const pattern = useRegex ? new RegExp(query, "gi") : new RegExp(escapeRegex(query), "gi");
-    let match;
-    const start = Date.now();
-    while ((match = pattern.exec(fullText)) !== null) {
-      matches.push({
-        from: toFlatOffset(match.index),
-        to: toFlatOffset(match.index + match[0].length),
-        text: match[0],
-      });
-      if (matches.length >= MAX_MATCHES) {
-        return { matches, error: `Search capped at ${MAX_MATCHES} matches` };
-      }
-      // Guard against catastrophic backtracking — bail after 2s
-      if (Date.now() - start > 2000) {
-        return { matches, error: "Search timed out — simplify the regex pattern" };
-      }
-      // Prevent infinite loops on zero-length matches
-      if (match[0].length === 0) pattern.lastIndex++;
-    }
-  } catch (err) {
-    return { matches: [], error: `Invalid regex: ${getErrorMessage(err)}` };
+  const pattern = new RegExp(escapeRegex(query), "gi");
+  let match;
+  while ((match = pattern.exec(fullText)) !== null) {
+    matches.push({
+      from: toFlatOffset(match.index),
+      to: toFlatOffset(match.index + match[0].length),
+      text: match[0],
+    });
+    if (matches.length >= MAX_MATCHES) return { matches, truncated: "cap" };
+    // Prevent infinite loops on zero-length matches
+    if (match[0].length === 0) pattern.lastIndex++;
   }
   return { matches };
 }
@@ -126,8 +130,8 @@ export function registerNavigationTools(server: McpServer): void {
     {
       description: "Search for text in the document. Returns matching positions.",
       inputSchema: {
-        query: z.string().describe("Search query (supports regex)"),
-        regex: z.boolean().optional().describe("Treat query as regex"),
+        query: z.string().describe("Text to find (literal unless `regex: true`)"),
+        regex: z.boolean().default(false).describe("Treat query as regex"),
         documentId: z
           .string()
           .optional()
@@ -141,9 +145,47 @@ export function registerNavigationTools(server: McpServer): void {
         if (!store) return noDocumentError();
 
         const fullText = store.getText();
-        const result = searchText(fullText, query, regex);
+        let result: { matches: SearchMatch[]; truncated?: "cap" | "timeout"; error?: string };
+        if (regex) {
+          // The worker rejects with a tagged Error when its queue is full; a
+          // bare rejection would reach `withErrorBoundary` and be flattened to
+          // INTERNAL_ERROR, which says nothing the caller can act on.
+          try {
+            result = await searchRegexInWorker(fullText, query);
+          } catch (err) {
+            if ((err as { code?: string }).code === "SEARCH_BUSY") {
+              return mcpError("SEARCH_BUSY", getErrorMessage(err));
+            }
+            throw err;
+          }
+        } else {
+          result = searchText(fullText, query);
+        }
         if (result.error) return mcpError("FORMAT_ERROR", result.error);
-        return mcpStructured({ matches: result.matches, count: result.matches.length });
+        const truncated = result.truncated;
+        // A cap or a timeout is a PARTIAL result, never a FORMAT_ERROR: the
+        // matches collected so far are real and are returned. The spread must
+        // not emit `truncated: undefined` — `structuredContent` is validated
+        // with `additionalProperties: false` at the client (#1564).
+        const response = mcpStructured({
+          matches: result.matches,
+          count: result.matches.length,
+          ...(truncated ? { truncated: true, reason: truncated } : {}),
+        });
+        if (!truncated) return response;
+        // Appended as an ADDITIONAL text block, never merged into content[0]
+        // (four helpers index it) and never put in `data` (that is
+        // `structuredContent` verbatim).
+        return {
+          ...response,
+          content: [
+            ...response.content,
+            {
+              type: "text" as const,
+              text: `Results are incomplete (${truncated}). Do not use for replace-all; narrow the pattern.`,
+            },
+          ],
+        };
       }),
     ),
   );
