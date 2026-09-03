@@ -185,24 +185,18 @@ describe("MCP tool integration — tandem_convertToMarkdown error mapping (#1796
     }
   });
 
-  async function setupDocxDoc(id: string, dir: string) {
+  /** Register a .docx doc at an explicit filePath (the docx twin of setupDocAtPath). */
+  function setupDocxDoc(id: string, filePath: string, source: "file" | "upload" = "file") {
     const ydoc = getOrCreateDocument(id);
     populateYDoc(ydoc, "Hello world");
-    addDoc(id, {
-      id,
-      filePath: join(dir, `${id}.docx`),
-      format: "docx",
-      readOnly: false,
-      source: "file",
-    });
+    addDoc(id, { id, filePath, format: "docx", readOnly: false, source });
     setActiveDocId(id);
-    return ydoc;
   }
 
   it("missing outputPath directory: code FILE_NOT_FOUND, message names the directory, not the NO_DOCUMENT text", async () => {
     const base = await fs.mkdtemp(join(tmpdir(), "tandem-convert-"));
     convertTempDirs.push(base);
-    await setupDocxDoc("convert-missing-dir", base);
+    setupDocxDoc("convert-missing-dir", join(base, "convert-missing-dir.docx"));
     const missingDir = join(base, "does-not-exist");
 
     const result = await client.callTool({
@@ -261,16 +255,7 @@ describe("MCP tool integration — tandem_convertToMarkdown error mapping (#1796
   });
 
   it("an uploaded .docx: INVALID_PATH (over-fold negative)", async () => {
-    const ydoc = getOrCreateDocument("convert-upload-docx");
-    populateYDoc(ydoc, "Hello world");
-    addDoc("convert-upload-docx", {
-      id: "convert-upload-docx",
-      filePath: "upload://convert-upload-docx.docx",
-      format: "docx",
-      readOnly: false,
-      source: "upload",
-    });
-    setActiveDocId("convert-upload-docx");
+    setupDocxDoc("convert-upload-docx", "upload://convert-upload-docx.docx", "upload");
 
     const result = await client.callTool({ name: "tandem_convertToMarkdown", arguments: {} });
     const parsed = parseResult(result);
@@ -282,7 +267,7 @@ describe("MCP tool integration — tandem_convertToMarkdown error mapping (#1796
   it("outputPath naming an existing file: INVALID_PATH (over-fold negative)", async () => {
     const base = await fs.mkdtemp(join(tmpdir(), "tandem-convert-"));
     convertTempDirs.push(base);
-    await setupDocxDoc("convert-existing-file", base);
+    setupDocxDoc("convert-existing-file", join(base, "convert-existing-file.docx"));
     const decoy = join(base, "decoy.md");
     await fs.writeFile(decoy, "x");
 
