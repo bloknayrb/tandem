@@ -106,16 +106,22 @@ describe.runIf(WIN)("convert output permissions — Windows ACL proof (#1796)", 
    * and read intact. The difference between them is the entire point of this
    * suite — it decides WHICH syscall reports the failure.
    */
-  async function deniedOutputDir(denySpec: string): Promise<{ id: string; outDir: string }> {
+  async function deniedOutputDir(
+    denySpec: string,
+  ): Promise<{ id: string; outDir: string; canonicalOutDir: string }> {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-convert-acl-"));
     roots.push(root);
     const id = openDocxDoc(root);
     const outDir = path.join(root, "out");
     await fsp.mkdir(outDir);
+    // Captured BEFORE the deny goes on, so it does not depend on the ACL shape
+    // leaving `realpath` reachable. See the note on the write spec for why the
+    // canonical form is what the write-path message names.
+    const canonicalOutDir = await fsp.realpath(outDir);
     const sid = await currentUserSid();
     await icacls([outDir, "/deny", `*${sid}:${denySpec}`]);
     denied.push([outDir, sid]);
-    return { id, outDir };
+    return { id, outDir, canonicalOutDir };
   }
 
   /**
@@ -147,6 +153,10 @@ describe.runIf(WIN)("convert output permissions — Windows ACL proof (#1796)", 
     await assertDenyTook(outDir, () => fsp.realpath(outDir));
     await expect(fsp.realpath(outDir)).rejects.toMatchObject({ code: "EPERM" });
 
+    // The RAW path, deliberately, and this asymmetry with the write spec below
+    // is the contract rather than an oversight: this arm fires because
+    // `realpath` FAILED, so there is no canonical form to name and `convert.ts`
+    // echoes what the caller supplied (`resolvedOutput`, pre-realpath).
     await expect(convertToMarkdown(id, outDir)).rejects.toMatchObject({
       code: "PERMISSION_DENIED",
       message: expect.stringContaining(outDir),
@@ -158,7 +168,7 @@ describe.runIf(WIN)("convert output permissions — Windows ACL proof (#1796)", 
   });
 
   it("deny (WD,AD): realpath/stat/access all succeed and the WRITE fails as PERMISSION_DENIED", async () => {
-    const { id, outDir } = await deniedOutputDir("(WD,AD)");
+    const { id, outDir, canonicalOutDir } = await deniedOutputDir("(WD,AD)");
     // The shape that was reported wrongly. Every check `convert.ts` performs
     // BEFORE the write passes cleanly, which is why classifying `realpath`
     // alone could not catch it — pinned here so a "realpath already covers
@@ -167,9 +177,23 @@ describe.runIf(WIN)("convert output permissions — Windows ACL proof (#1796)", 
     await expect(fsp.stat(outDir).then((s) => s.isDirectory())).resolves.toBe(true);
     await assertDenyTook(outDir, () => fsp.writeFile(path.join(outDir, "probe.tmp"), "x"));
 
+    // The CANONICAL path, not the raw one. `convert.ts` rebuilds `resolvedOutput`
+    // on top of `realpath`'s answer before writing, so the write-path message
+    // names the canonical directory — and on Windows `realpath` EXPANDS an 8.3
+    // short name. CI failed here on exactly that: the runner user is
+    // `runneradmin` (>8 chars), so `mkdtemp` handed the fixture
+    // `C:\Users\RUNNER~1\…` while the message said `C:\Users\runneradmin\…`.
+    // Measured both ways — `path.resolve` does NOT expand 8.3, `fs.realpath`
+    // does — so a raw `stringContaining(outDir)` here is a silent function of
+    // how long the host's username is, and passes on any box without an 8.3
+    // alias. The macOS twin of the same trap is `/var/folders` being a symlink.
+    //
+    // Comparing against the canonical form keeps the assertion (the message
+    // must still name the output directory, which is the user-facing half of
+    // this fix) instead of loosening it to a basename.
     await expect(convertToMarkdown(id, outDir)).rejects.toMatchObject({
       code: "PERMISSION_DENIED",
-      message: expect.stringContaining(outDir),
+      message: expect.stringContaining(canonicalOutDir),
     });
     // Which arm fired: the writer's, not the resolver's. Without this the spec
     // above would pass on a build where only `realpath` is classified.

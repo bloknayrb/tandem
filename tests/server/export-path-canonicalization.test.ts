@@ -414,6 +414,14 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
         const id = openDocxDoc(base);
         const readOnlyDir = path.join(base, "read-only");
         await fsp.mkdir(readOnlyDir);
+        // The form the write-path message names: `convert.ts` rebuilds its
+        // output path on top of `realpath`'s answer before writing. Asserting
+        // the RAW path instead would pass here and fail wherever the temp base
+        // is not already canonical — macOS, where `/var/folders` is a symlink
+        // (see this file's header), and Windows CI, where `realpath` expands
+        // the 8.3 alias `C:\Users\RUNNER~1\…`. That mismatch is what turned the
+        // Windows twin of this spec red on its first CI run.
+        const canonicalDir = await fsp.realpath(readOnlyDir);
         // Traversable and readable, but nothing may be created inside it.
         await fsp.chmod(readOnlyDir, 0o555);
         try {
@@ -431,6 +439,10 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
             // Names the write, so this cannot pass on a build where only the
             // resolver is classified.
             message: expect.stringContaining("writing to output directory"),
+          });
+          // ...and names the directory, which is the user-facing half.
+          await expect(convertToMarkdown(id, readOnlyDir)).rejects.toMatchObject({
+            message: expect.stringContaining(canonicalDir),
           });
         } finally {
           await fsp.chmod(readOnlyDir, 0o755);
