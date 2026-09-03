@@ -852,6 +852,33 @@ then the hard kill as the fallback. Windows are hidden first because Tauri's own
 `cleanup_before_exit` — which hides them on Windows — runs *after* this callback,
 so otherwise a live unresponsive window sits on screen for the whole budget.
 
+One line records the result, at `warn` so it survives the release log floor:
+`Exit: sidecar shutdown complete (elapsed=…ms, verdict=…, attempted=…,
+timed_out=…, owned_child=…, already_in_progress=…, panicked=…)`. `verdict` is one
+of `Flushed`, `TimedOut`, `PostFailed`, `Skipped`, or `none` when no verdict came
+back (the budget fired, the body panicked, or there was no HTTP client). It is
+what `docs/release-smoke-checklist.md` greps.
+
+**The hidden-window limbo is the cost.** For up to 17 s the app has no visible
+window but still holds the single-instance lock, so a relaunch in that window is
+swallowed: the second process hands off to the first, whose event loop is already
+being destroyed, and the `run_on_main_thread` that would show a window goes
+nowhere. The user sees a double-click do nothing until the first process exits.
+The design is unchanged — a truncated flush is worse — but this is the caveat.
+
+**The POST targets a hardcoded `127.0.0.1:3479` the shell does not verify it
+owns.** `owns_child` says only that we hold a child handle; nothing checks that
+the child is what is answering. A foreign Tandem on :3479 (a `tandem start`, a
+second app-data instance) receives the shutdown, flushes and exits, while the log
+still says the stop was graceful. This is not new, but it used to be reachable
+only from two explicit user actions — Settings → Network → Restart server, and
+Install update — and #1756 widened it to **every Quit**. The spawn site now pins
+`TANDEM_PORT` / `TANDEM_MCP_PORT` / `TANDEM_BIND_HOST` on the child (the shell
+plugin inherits the parent environment, so an ambient value used to move the
+sidecar off :3479 under a shell still polling it), which removes the ambient-env
+half. The rest is #1825 (derive the URL from the port actually in use) and #1812
+(give the health poll and the POST an identity check); neither is fixed here.
+
 `RunEvent::Exit` rather than `ExitRequested` because it is the one event every
 quit gesture reaches: tray Quit, macOS ⌘Q / Dock Quit (which go through
 `applicationWillTerminate:` and never raise `ExitRequested`), and the window
