@@ -52,8 +52,17 @@ export interface DispatchDeps {
   editLink?: () => void;
 }
 
-function hasLiveEditableSelection(editor: Editor): boolean {
-  return !editor.isDestroyed && editor.isEditable && !editor.state.selection.empty;
+/**
+ * A selection that is still live and still worth acting on. Deliberately does
+ * NOT require `editor.isEditable`: its only callers are the three annotation /
+ * Ask-AI arms, and annotating a read-only document is the point of opening one
+ * (decision 2, #1798 — `.html` now opens read-only precisely so it can be read
+ * and annotated rather than silently edited). `isEditable` stays on the arms
+ * that actually mutate the document: `ctx:pastePlain`, `ctx:link:edit` and
+ * `ctx:link:remove` each carry their own check.
+ */
+function hasLiveSelection(editor: Editor): boolean {
+  return !editor.isDestroyed && !editor.state.selection.empty;
 }
 
 /** Resolve link state only when the native action fires. No href is retained. */
@@ -90,13 +99,13 @@ export async function dispatchContextAction(
     }
 
     case "ctx:selection:askAi":
-      if (hasLiveEditableSelection(editor)) deps.focusChat?.();
+      if (hasLiveSelection(editor)) deps.focusChat?.();
       return;
     case "ctx:selection:comment":
-      if (hasLiveEditableSelection(editor)) deps.composeAnnotation?.("comment");
+      if (hasLiveSelection(editor)) deps.composeAnnotation?.("comment");
       return;
     case "ctx:selection:privateNote":
-      if (hasLiveEditableSelection(editor)) deps.composeAnnotation?.("note");
+      if (hasLiveSelection(editor)) deps.composeAnnotation?.("note");
       return;
 
     case "ctx:table:insertRowAbove":

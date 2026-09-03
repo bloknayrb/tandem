@@ -118,6 +118,30 @@ console.log("== tool count:", tools.length);
   console.log("H52 disk after save:", JSON.stringify(await fs.readFile(fp, "utf-8")));
 }
 
+// H53 (#1798): the real .html open + edit + save sequence, through openFromDisk
+// rather than addDoc, so the readOnly derivation in resolveAndValidatePath is
+// the thing under observation.
+{
+  const { openFromDisk } = await import("../../../../src/server/documents/open.ts");
+  const fp = path.join(scratch, "h53.html");
+  await fs.writeFile(fp, "<p>original html</p>");
+  const opened = await openFromDisk(fp);
+  setActiveDocId(opened.documentId);
+  console.log("H53 open .html readOnly:", JSON.stringify(opened.readOnly));
+  const e = await call("tandem_edit", { from: 0, to: 8, newText: "EDITED" });
+  console.log("H53 edit:", JSON.stringify(e));
+  const s = await call("tandem_save", {});
+  console.log("H53 save:", JSON.stringify(s));
+  console.log("H53 disk after save:", JSON.stringify(await fs.readFile(fp, "utf-8")));
+  const { saveDocumentToDisk } = await import("../../../../src/server/mcp/document-service.ts");
+  console.log(
+    "H53 saveDocumentToDisk (the Ctrl+S path):",
+    JSON.stringify(await saveDocumentToDisk(opened.documentId, "mcp")),
+  );
+  const rn = await call("tandem_rename", { newName: "h53-renamed.html" });
+  console.log("H53 rename:", JSON.stringify(rn));
+}
+
 // H5: restoreBackup no-arg on a READ-ONLY docx with a sidecar present
 {
   const id = "h5";

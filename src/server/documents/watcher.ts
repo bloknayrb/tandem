@@ -25,6 +25,7 @@
 import fs from "fs/promises";
 import path from "path";
 import {
+  mayHoldUnsavedWork,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_DOCUMENT_META,
@@ -378,10 +379,16 @@ export async function reloadFromDisk(
  * widened in #1238): `reloadFromDisk` clears and repopulates the XmlFragment,
  * and the Y.Doc is the only copy of an unsaved edit whether that edit is bytes
  * in a ZIP or characters in Markdown. It gets an external-conflict flag the
- * client surfaces as a keep-vs-reload banner instead. Read-only docs are
- * excluded from the DIRTY check because they can never be saved
- * (`saveDocumentToDisk` refuses every source), so a SYNTHESIZED keep-vs-reload
- * prompt on one would be a dead end — a merely-dirty read-only doc reloads.
+ * client surfaces as a keep-vs-reload banner instead. EXPLICITLY read-only docs
+ * are excluded from the DIRTY check — the user asked not to touch them, so a
+ * merely-dirty one reloads.
+ *
+ * Since #1798 the check is `mayHoldUnsavedWork`, not `!readOnly`. "Can never be
+ * saved" used to be the stated reason for the exclusion and is now the reason
+ * AGAINST it for one tier: an `.html` opens read-only precisely because no save
+ * path exists, which makes its dirty Y.Doc the only copy of those edits. That
+ * tier gets the banner. Reloading over it would destroy the edits silently,
+ * which is the class of bug #1238 exists to prevent.
  *
  * That exclusion does NOT extend to an ALREADY-pending conflict (review
  * finding): a document closed mid-conflict carries its `dirty` + `conflict`
@@ -410,7 +417,13 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
         const doc = getDocument(id);
         if (!doc) return; // closed between arrival and delivery (or already evicted)
         const alreadyConflicted = readPendingConflict(doc) !== undefined;
-        if (alreadyConflicted || (isDirty(id) && !getOpenDocs().get(id)?.readOnly)) {
+        // An unregistered id keeps the old `!undefined` answer: flag rather than
+        // reload, the non-destructive direction when we cannot tell the tier.
+        const openDoc = getOpenDocs().get(id);
+        if (
+          alreadyConflicted ||
+          (isDirty(id) && (openDoc === undefined || mayHoldUnsavedWork(openDoc)))
+        ) {
           flagExternalConflict(id, doc, filePath, {
             kind: "external-edit",
             diskChanged: true,

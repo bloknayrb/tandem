@@ -116,10 +116,14 @@ export type Prepared =
  *      the populate is one atomic Y.Doc update (#609). Returns additional
  *      `LoadIssue[]` for apply-time failures (e.g. inject-failed).
  *
- * **Saveability is structural**: formats that can write back to disk
- * (.md, .txt) provide a `save` method. Read-only formats (.docx) omit
- * `save` entirely — callers check `if (adapter.save)` instead of a
- * boolean flag.
+ * **An adapter's methods say what it CAN do, not what policy ALLOWS.** Text
+ * adapters provide `save`; `docxAdapter` provides `saveBinary` instead, and
+ * callers check for the method rather than a boolean flag. But the presence of
+ * a method is not permission: `.html` routes to `plaintextAdapter` and so has a
+ * perfectly good `save`, while `saveDocumentToDisk` still refuses it, because
+ * `.html` is in neither `AUTO_SAVE_FORMATS` nor `BINARY_SAVE_FORMATS` (#1798).
+ * Ask `SAVEABLE_FORMATS`/`canSaveToDisk` whether a format may be written; ask
+ * the adapter only how.
  */
 /**
  * Optional apply-time context. Adapters that need source metadata (e.g. the

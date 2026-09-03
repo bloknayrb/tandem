@@ -246,11 +246,32 @@ describe("dispatchContextAction", () => {
     expect(note.deps.composeAnnotation).toHaveBeenCalledWith("note");
   });
 
-  it("revalidates selection/editability when collaboration events fire", async () => {
+  it("revalidates the selection when collaboration events fire", async () => {
     const { editor } = makeEditor();
-    (editor as { isEditable: boolean }).isEditable = false;
+    (editor as { state: { selection: { empty: boolean } } }).state.selection.empty = true;
     const deps = baseDeps(editor);
     await dispatchContextAction("ctx:selection:comment", deps);
+    expect(deps.composeAnnotation).not.toHaveBeenCalled();
+  });
+
+  // #1798. This assertion used to be its inverse: a non-editable editor made all
+  // three arms no-op. `.html` now opens read-only for the express purpose of
+  // being annotated (decision 2), so a read-only editor must still reach the
+  // composer — and a destroyed one still must not. `isEditable` stays on the
+  // arms that mutate (`ctx:pastePlain`, `ctx:link:edit`, `ctx:link:remove`),
+  // which the neighbouring cases pin.
+  it("still routes annotation actions on a READ-ONLY editor", async () => {
+    const readOnly = { editable: false };
+    const comment = await run("ctx:selection:comment", {}, readOnly);
+    expect(comment.deps.composeAnnotation).toHaveBeenCalledWith("comment");
+    const note = await run("ctx:selection:privateNote", {}, readOnly);
+    expect(note.deps.composeAnnotation).toHaveBeenCalledWith("note");
+    const ask = await run("ctx:selection:askAi", {}, readOnly);
+    expect(ask.deps.focusChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("still refuses annotation actions on a DESTROYED editor", async () => {
+    const { deps } = await run("ctx:selection:comment", {}, { destroyed: true });
     expect(deps.composeAnnotation).not.toHaveBeenCalled();
   });
 

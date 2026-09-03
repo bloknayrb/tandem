@@ -515,6 +515,11 @@ export const ZOOM_DEFAULT = 1.0;
 // Three tiers, not two — the restore prompt needs all three: "autosave will
 // persist these edits on its own" (`.md`/`.txt`), "only an explicit save will"
 // (`.docx`), and "nothing ever will" (`.html`).
+//
+// Since #1798 the third tier also opens READ-ONLY, which split a second
+// distinction out of the `readOnly` boolean: "you cannot edit this" and "there
+// is no unsaved work here worth protecting" used to be the same bit, and are
+// not any more. `mayHoldUnsavedWork` below is that second question.
 
 /** Formats eligible for disk auto-save (adapter.save defined && not binary). */
 export const AUTO_SAVE_FORMATS: ReadonlySet<string> = new Set(["md", "txt"]);
@@ -537,3 +542,36 @@ export const SAVEABLE_FORMATS: ReadonlySet<string> = new Set([
   ...AUTO_SAVE_FORMATS,
   ...BINARY_SAVE_FORMATS,
 ]);
+
+/**
+ * True when a document may be holding edits that are not on disk — so it keeps
+ * the synthesized restore prompt and the dirty external-conflict flag.
+ *
+ * This is NOT "can the user edit it". A format with no save path (#1798,
+ * `.html`) is read-only for editing purposes and STILL carries restored
+ * unsaved work: the restore prompt is what writes the conflict flag, and
+ * `closeDocumentById` preserves the session only while a conflict is pending,
+ * so suppressing the prompt deletes the edits on tab close. The tiers are
+ * saveable / unsaveable-but-protected / explicitly read-only; `readOnly` alone
+ * no longer distinguishes the last two.
+ *
+ * Uploads stay in the reload-freely tier. The disjunct is unreachable from both
+ * of today's two callers — the restore gate is always passed `source: "file"`,
+ * and uploads never get a watcher, so the watcher gate never sees one. It is
+ * here so the predicate stays correct for a future caller that does pass an
+ * upload. #1447's rationale (a dot no code path can clear) is why uploads
+ * belong in that tier at all: they can be PROMOTED via Save As, which `.html`
+ * cannot.
+ *
+ * Known aliasing: an explicitly-read-only `.html` (`POST /api/open` with
+ * `readOnly: true`) returns true here, because `OpenDoc` does not persist WHY
+ * a document is read-only. The direction is the safe one — it keeps the
+ * prompt, which is the non-destructive side.
+ */
+export function mayHoldUnsavedWork(doc: {
+  readOnly: boolean;
+  format: string;
+  source: string;
+}): boolean {
+  return !doc.readOnly || (doc.source !== "upload" && !SAVEABLE_FORMATS.has(doc.format));
+}

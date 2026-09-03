@@ -167,6 +167,24 @@ function structuralLossesOf(report: FidelityReport | undefined): number {
   return typeof value === "number" && value > 0 ? value : 0;
 }
 
+/**
+ * Machine-readable discriminator for a `skipped` save. Named so `tandem_save`
+ * can tether its own `reason` field to this union rather than restating eleven
+ * literals that would then drift (#1798).
+ */
+export type SkipCode =
+  | "NOT_OPEN"
+  | "PROMOTION_REQUIRED"
+  | "READ_ONLY"
+  | "EXPLICIT_ONLY"
+  | "UNSUPPORTED_FORMAT"
+  | "ADAPTER_UNAVAILABLE"
+  | "SAVE_IN_PROGRESS"
+  | "EXTERNAL_CONFLICT"
+  | "FILE_MODIFIED"
+  | "SOURCE_MISSING"
+  | "FILE_STATE_UNAVAILABLE";
+
 export interface SaveResult {
   status: "saved" | "skipped" | "error";
   reason?: string;
@@ -176,18 +194,7 @@ export interface SaveResult {
    * present an honest result without branching on mutable prose. Every skipped
    * path sets a code; `reason` remains useful for logs and older clients.
    */
-  skipCode?:
-    | "NOT_OPEN"
-    | "PROMOTION_REQUIRED"
-    | "READ_ONLY"
-    | "EXPLICIT_ONLY"
-    | "UNSUPPORTED_FORMAT"
-    | "ADAPTER_UNAVAILABLE"
-    | "SAVE_IN_PROGRESS"
-    | "EXTERNAL_CONFLICT"
-    | "FILE_MODIFIED"
-    | "SOURCE_MISSING"
-    | "FILE_STATE_UNAVAILABLE";
+  skipCode?: SkipCode;
   errorCode?: string;
   /**
    * Body-export fidelity warnings (#576, `.docx` only) — content the export
@@ -279,12 +286,26 @@ export async function saveDocumentToDisk(
 
   const isBinary = BINARY_SAVE_FORMATS.has(docState.format);
 
-  // Read-only blocks every save path. The read-only signal is the user's
-  // intent and dominates the format/source distinction: a read-only .docx is
-  // never overwritten, whether the trigger is auto-save or an explicit save.
-  // A writable .docx falls through to the binary branch below.
+  // Read-only blocks every save path, whether the trigger is auto-save or an
+  // explicit save: a read-only .docx is never overwritten, and a writable one
+  // falls through to the binary branch below.
+  //
+  // The skip CODE has to say WHY, though, and since #1798 read-only no longer
+  // means one thing. A doc read-only BECAUSE its format has no way back to disk
+  // reports UNSUPPORTED_FORMAT, so the client's existing copy ("this document
+  // format cannot be written to disk") fires instead of the circular "this
+  // document is read-only" — which names the mechanism to a user who never
+  // asked for read-only. Falling through to the real UNSUPPORTED_FORMAT branch
+  // below is not an option: this check has to run first, or an explicitly
+  // read-only .docx would reach the binary save.
   if (docState.readOnly) {
-    return { status: "skipped", reason: "Read-only document", skipCode: "READ_ONLY" };
+    return canSaveToDisk(docState.format)
+      ? { status: "skipped", reason: "Read-only document", skipCode: "READ_ONLY" }
+      : {
+          status: "skipped",
+          reason: `Format '${docState.format}' not eligible for disk save`,
+          skipCode: "UNSUPPORTED_FORMAT",
+        };
   }
 
   // Binary formats (.docx) write back only on an EXPLICIT user/agent save. The
@@ -966,7 +987,8 @@ export interface RenameResult {
  * clients keep their Y.Doc/room and just see a new tab label. See #1017.
  *
  * NOT for scratchpads/uploads (`source !== "file"` → use Save-As) or read-only
- * docs (incl. .docx). Renaming preserves bytes + extension — no format change.
+ * docs — which since #1798 includes every `.html`, and has never included
+ * `.docx` since #576. Renaming preserves bytes + extension — no format change.
  *
  * The ordering here is reviewed and load-bearing; see the inline notes
  * (flush-before-teardown, envelope move + meta heal-write) before changing it.

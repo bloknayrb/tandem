@@ -23,7 +23,8 @@ export interface OpenTab extends DocListEntry {
 /**
  * Single client-side definition of the rename affordance gate (#1017): only
  * real on-disk files (`source: "file"`) that aren't read-only can be renamed —
- * scratchpads/uploads use Save As, and `.docx`/changelog open read-only. The
+ * scratchpads/uploads use Save As, and the changelog plus every `.html` (#1798)
+ * open read-only. `.docx` has been writable since #576. The
  * server re-validates authoritatively in `renameDocument`; this mirrors it so
  * the three UI surfaces (TabItem `canRename`, the F2 handler, the
  * DocumentTabs trigger re-check) can't drift in what they offer.

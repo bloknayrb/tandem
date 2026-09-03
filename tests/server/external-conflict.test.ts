@@ -840,9 +840,18 @@ describe("watcher — external change with unsaved edits (.md, #1238)", () => {
     await fs.writeFile(filePath, "# Read only rewrite");
     await capturedWatcherCallback(watcherPath)(watcherPath);
 
-    // A read-only doc refuses every save path, so "Keep my edits" would clear
-    // the banner and still leave the edits unsavable. Reload is the honest
-    // outcome.
+    // "A read-only doc refuses every save path" used to be the reason here, and
+    // since #1798 it is the reason AGAINST reloading one whole tier: an `.html`
+    // is read-only precisely because nothing can write it back, which makes its
+    // dirty Y.Doc the only copy of those edits, and that tier now gets the
+    // banner. This fixture is a read-only `.md`, which is a different thing —
+    // the USER asked for read-only on a perfectly writable format, so "Keep my
+    // edits" would clear the banner over edits the user already declined to
+    // save. Reload stays the honest outcome.
+    //
+    // That makes this the named NEGATIVE CONTROL for the watcher gate: it is
+    // what kills `mayHoldUnsavedWork` widened to return true unconditionally.
+    // A change that reddens this is being told the predicate is too wide.
     expect(conflictOf(doc)).toBeUndefined();
     expect(extractText(doc)).toContain("Read only rewrite");
   });
@@ -1241,6 +1250,42 @@ describe("session restore across a restart (#1238)", () => {
       kind: "unsaved-restore",
       diskChanged: false,
     });
+  });
+
+  // THE NEGATIVE CONTROL for the restore gate, which nothing in the tree had
+  // before #1798. Without it, deleting the gate's read-only conjunct outright
+  // passes every other case here and the whole suite, while a dirty read-only
+  // CHANGELOG raises a keep-vs-reload banner over a document that refuses every
+  // save path — the noise the gate exists to suppress.
+  //
+  // The fixture is a read-only `.docx` over an UNCHANGED file, and the format
+  // choice is load-bearing. The gate is
+  //   `carried !== undefined || (<readOnly test> && dirty && (changed || !AUTO_SAVE_FORMATS.has(format)))`
+  // With a read-only `.md` over an unchanged file, `changed` is false and
+  // `!AUTO_SAVE_FORMATS.has("md")` is false, so the inner disjunction is already
+  // false and the case stays green with the conjunct DELETED — it would kill
+  // nothing. `!AUTO_SAVE_FORMATS.has("docx")` is TRUE (the gate keys on
+  // AUTO_SAVE_FORMATS, not SAVEABLE_FORMATS — that asymmetry is the point), so
+  // the mutant yields a prompt and this assertion goes red.
+  //
+  // It also fills the one partition cell nothing else reaches: read-only,
+  // `source: "file"`, saveable-but-explicit-save-only — the cell where the two
+  // format sets disagree and `mayHoldUnsavedWork` must still answer false.
+  it("does NOT prompt for a dirty read-only .docx over an unchanged file", async () => {
+    const filePath = path.join(tmpDir, "restore-readonly.docx");
+    await fs.writeFile(filePath, await buildSimpleDocx("Stable disk body"));
+
+    const first = await openFromDisk(filePath, { readOnly: true });
+    expect(first.readOnly).toBe(true);
+    const doc = getOrCreateDocument(first.documentId);
+    makeDirty(doc);
+    await saveSession(filePath, "docx", doc, { dirty: true });
+    removeDoc(first.documentId);
+    setActiveDocId(null);
+
+    const second = await openFromDisk(filePath, { readOnly: true });
+    expect(second.kind).toBe("restored");
+    expect(conflictOf(getOrCreateDocument(second.documentId))).toBeUndefined();
   });
 });
 

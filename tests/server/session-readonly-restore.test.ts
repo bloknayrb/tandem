@@ -196,6 +196,36 @@ describe("read-only survives a session restore", () => {
     expect(stateFor(filePath)?.readOnly).toBe(false);
   });
 
+  // #1798. `.html` opens read-only by DERIVATION, not by a stored flag, so the
+  // restore path must land on `true` from both on-disk shapes: the keyless
+  // legacy record, and an explicit `readOnly: false` written before the
+  // derivation existed. Both fall through to `resolveAndValidatePath`, which is
+  // what makes the fix migration-free. The `false` arm is the one that kills
+  // `options?.readOnly ?? derivedReadOnly`.
+  //
+  // The keyless shape has to be driven THROUGH `listSessionFilePaths`:
+  // `SessionFileEntry.readOnly` is a required boolean, normalized at
+  // `readOnly: data.readOnly === true`, so handing `openFromRestore` a keyless
+  // object directly is a type error rather than a reproduction.
+  it.each([
+    ["a legacy record with no readOnly field", undefined],
+    ["a record that explicitly says readOnly:false", false],
+  ])("restores an .html read-only from %s", async (_label, stored) => {
+    const filePath = await writeFixture("page.html", "<p>Body.</p>\n");
+    const opened = await openFromDisk(filePath);
+    expect(opened.readOnly).toBe(true);
+    await saveOpenedSession(filePath, opened);
+    await tamperReadOnly(filePath, stored);
+
+    // The normalized entry says false — the derivation, not the entry, is what
+    // has to produce the read-only document.
+    const entry = (await listSessionFilePaths()).find((r) => r.filePath === filePath);
+    expect(entry?.readOnly).toBe(false);
+
+    await restoreFresh();
+    expect(stateFor(filePath)?.readOnly).toBe(true);
+  });
+
   it("autosave refuses to write a restored read-only document to disk", async () => {
     const original = "# Changelog\n\nOriginal.\n";
     const filePath = await writeFixture("autosave.md", original);
