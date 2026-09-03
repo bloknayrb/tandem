@@ -560,6 +560,10 @@ export function injectCommentsAsAnnotations(
     }
   }
 
+  // Hoisted once: the loop never changes the document content (every write
+  // goes to the annotations map), so one materialization serves every call.
+  const flatText = extractText(doc);
+
   // `withInternal` here is the authoritative origin. When callers invoke
   // this function inside an outer `withInternal` or `withReload` transact
   // (`documents/open.ts` and `documents/populate.ts` use `withInternal`;
@@ -567,9 +571,6 @@ export function injectCommentsAsAnnotations(
   // origin — so the effective origin becomes whatever the outer call used.
   // This is intentional: a reload path calling this inside `withReload` wants
   // reload semantics (durable-sync persists, channel skips).
-  // Hoisted once: the loop never changes the document content (every write
-  // goes to the annotations map), so one materialization serves every call.
-  const flatText = extractText(doc);
 
   withInternal(doc, () => {
     for (const comment of comments) {

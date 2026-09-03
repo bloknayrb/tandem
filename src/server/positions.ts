@@ -104,12 +104,24 @@ export function relPosToFlatOffset(doc: Y.Doc, relPosJson: SerializedRelPos): Fl
 /** How `validateRange`/`validateFlatRange` treat an offset that splits a surrogate pair. */
 export type SurrogatePolicy = "reject" | "ignore";
 
-/** Options shared by `validateRange` and `anchoredRange`. */
-export interface RangeValidationOpts {
-  textSnapshot?: string;
-  rejectHeadingOverlap?: boolean;
+/** The opts that apply to the text-only checks, shared with `validateFlatRange`. */
+export interface FlatRangeOpts {
   /** Permit `from === to`. Point comments (Word insertion markers) need it. */
   allowEmpty?: boolean;
+  /**
+   * `"ignore"` skips the surrogate check. For STORED/derived offsets only —
+   * after a CRDT edit inside an emoji a refreshed range can legitimately end
+   * mid-pair (Word's own offsets are UTF-16), and rejecting those would score a
+   * real comment as lost. The new rule is for the caller-supplied tool
+   * boundary. Default `"reject"`.
+   */
+  surrogates?: SurrogatePolicy;
+}
+
+/** Options shared by `validateRange` and `anchoredRange`. */
+export interface RangeValidationOpts extends FlatRangeOpts {
+  textSnapshot?: string;
+  rejectHeadingOverlap?: boolean;
   /**
    * A pre-computed `extractText(ydoc)` for THIS call, so a loop over an
    * unchanging document builds the string once instead of per iteration.
@@ -121,21 +133,15 @@ export interface RangeValidationOpts {
    * genuine loop over a document that does not change across the loop.
    */
   text?: string;
-  /**
-   * `"ignore"` skips the surrogate check. For STORED/derived offsets only —
-   * after a CRDT edit inside an emoji a refreshed range can legitimately end
-   * mid-pair (Word's own offsets are UTF-16), and rejecting those would score a
-   * real comment as lost. The new rule is for the caller-supplied tool
-   * boundary. Default `"reject"`.
-   */
-  surrogates?: SurrogatePolicy;
 }
 
 function invalid(reason: RangeInvalidReason, message: string): RangeValidation & { ok: false } {
   return { ok: false, code: "INVALID_RANGE", message, reason };
 }
 
-const isHighSurrogate = (unit: number): boolean => unit >= 0xd800 && unit <= 0xdbff;
+function isHighSurrogate(unit: number): boolean {
+  return unit >= 0xd800 && unit <= 0xdbff;
+}
 
 /**
  * Is this UTF-16 code unit the TRAILING half of a surrogate pair?
@@ -143,7 +149,9 @@ const isHighSurrogate = (unit: number): boolean => unit >= 0xd800 && unit <= 0xd
  * Exported for the one caller that must SNAP rather than reject: the .docx
  * comment export resolver, which carries stored offsets and writes a file.
  */
-export const isLowSurrogate = (unit: number): boolean => unit >= 0xdc00 && unit <= 0xdfff;
+export function isLowSurrogate(unit: number): boolean {
+  return unit >= 0xdc00 && unit <= 0xdfff;
+}
 
 /**
  * Does offset `i` fall BETWEEN the two halves of a surrogate pair?
@@ -189,8 +197,7 @@ function checkAgainstText(
   text: string,
   from: number,
   to: number,
-  allowEmpty: boolean,
-  surrogates: SurrogatePolicy,
+  opts: FlatRangeOpts | undefined,
 ): (RangeValidation & { ok: false }) | null {
   if (to > text.length) {
     return invalid(
@@ -198,11 +205,11 @@ function checkAgainstText(
       `Invalid range: to (${to}) exceeds document length (${text.length}).`,
     );
   }
-  if (from === to && !allowEmpty) {
+  if (from === to && !opts?.allowEmpty) {
     return invalid("empty", `Invalid range: [${from}, ${to}) is empty.`);
   }
-  if (surrogates === "reject") {
-    if (from > 0 && splitsSurrogatePair(text, from)) {
+  if ((opts?.surrogates ?? "reject") === "reject") {
+    if (splitsSurrogatePair(text, from)) {
       return invalid("surrogate", `Invalid range: from (${from}) splits a surrogate pair.`);
     }
     if (splitsSurrogatePair(text, to)) {
@@ -226,17 +233,11 @@ export function validateFlatRange(
   text: string,
   from: number,
   to: number,
-  opts?: { allowEmpty?: boolean; surrogates?: SurrogatePolicy },
+  opts?: FlatRangeOpts,
 ): RangeValidation {
   const shape = checkOffsetShape(from, to);
   if (shape) return shape;
-  const against = checkAgainstText(
-    text,
-    from,
-    to,
-    opts?.allowEmpty ?? false,
-    opts?.surrogates ?? "reject",
-  );
+  const against = checkAgainstText(text, from, to, opts);
   if (against) return against;
   return { ok: true, range: { from: toFlatOffset(from), to: toFlatOffset(to) } };
 }
@@ -342,13 +343,7 @@ export function validateRange(
     }
   }
 
-  const against = checkAgainstText(
-    fullText,
-    from,
-    to,
-    opts?.allowEmpty ?? false,
-    opts?.surrogates ?? "reject",
-  );
+  const against = checkAgainstText(fullText, from, to, opts);
   if (against) return against;
 
   // Heading overlap check
