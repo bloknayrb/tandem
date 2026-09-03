@@ -45,7 +45,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `FILE_LOCKED` | File is open in another program (e.g., Word). Close it first. |
 | `FORMAT_ERROR` | Unsupported format, read-only / non-markdown document, file too large (>50MB), or invalid regex. |
 | `FILE_TOO_LARGE` | Inline content exceeds the tool's size cap (e.g. `tandem_appendContent`). |
-| `INVALID_RANGE` | Offset out of bounds, non-integer, inverted, zero-length, splitting a surrogate pair, text not found, or a range overlapping heading markup. Carries `details.reason` (see `tandem_edit`). |
+| `INVALID_RANGE` | Offset out of bounds, non-integer, inverted, zero-length, splitting a surrogate pair, text not found, or a range overlapping heading markup. **Usually — not always — carries `details.reason`** (see `tandem_edit`): the two rejections that come from somewhere other than the range validator carry none, namely `tandem_resolveRange`'s "pattern not found" and `tandem_edit`'s heading-markup overlap. Treat `details.reason` as optional. |
 | `EMPTY_DOCUMENT` | `tandem_edit` called on an empty document — seed content with `tandem_appendContent` / `tandem_scratchpad({ content })` first. |
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
@@ -272,9 +272,9 @@ An `INVALID_RANGE` carries `details.reason`, a closed enum you can branch on rat
 | `non-integer` | `from` or `to` is not an integer. (The schema also rejects this, so you normally see a protocol error first.) |
 | `inverted` | `from > to`. |
 | `out-of-bounds` | `from < 0`, or `to` past the end of the document. `to === length` is valid. |
-| `empty` | `from === to`. Editing needs a non-empty span; use `tandem_appendContent` to insert. |
+| `empty` | For `tandem_edit`, `from === to` **and** an empty `newText` — the one genuine no-op. **Point insertion is supported:** `tandem_edit({ from: n, to: n, newText: "X" })` inserts at `n`, and it is the only mid-document insert path. For `tandem_comment` / `tandem_suggest` / `tandem_flag`, `from === to` alone, since an annotation needs a span to anchor to. |
 | `surrogate` | An offset falls between the two halves of a surrogate pair (inside an emoji or other astral character). Move it to either side of the character. |
-| `unresolvable` | The offsets could not be resolved against the document structure. |
+| `unresolvable` | The offsets could not be resolved against the document structure. Reachable only on a document whose top-level fragment holds no elements at all, which no writer in Tandem produces. |
 
 **With a mismatched `textSnapshot`, a staleness outcome wins over `out-of-bounds`.** The staleness check runs first by design — after an external edit shortens the file, stale offsets past the new end must relocate rather than be refused — so the `reason` set above is exhaustive only for a call that supplies no `textSnapshot`.
 

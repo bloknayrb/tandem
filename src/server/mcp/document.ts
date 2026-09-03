@@ -27,7 +27,7 @@ import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast, buildListItemsFromTree } from "../file-io/mdast-ydoc.js";
 // Position system
-import { anchoredRange, validateRange } from "../positions.js";
+import { anchoredRange, describeRangeFailure, validateRange } from "../positions.js";
 import { saveSession } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { convertToMarkdown } from "./convert.js";
@@ -316,8 +316,21 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void 
     // so one materialization serves every iteration (#1752).
     const anchored = anchoredRange(doc, toFlatOffset(from), toFlatOffset(to), undefined, {
       text: flatText,
+      textTag: "document/stamp-whole-doc",
     });
-    if (!anchored.ok) continue;
+    if (!anchored.ok) {
+      // Skipping stays the behaviour — a missing authorship overlay entry is
+      // cosmetic, the document itself is untouched. But the skip is no longer
+      // SILENT: the "cosmetic" argument only covers `surrogate` (a block whose
+      // text ends mid-pair). `out-of-bounds` or `non-integer` here would mean
+      // this loop's own offset arithmetic disagrees with `extractText`, which is
+      // a coordinate-system bug and has no business being invisible (#1752).
+      console.error(
+        `[document] Authorship stamp skipped for block ${i}: range [${from}, ${to}] — ` +
+          describeRangeFailure(anchored),
+      );
+      continue;
+    }
 
     // Key on the fragment element index (not a running stamped-block counter)
     // so IDs stay stable across re-opens even when some blocks are skipped.
@@ -378,11 +391,21 @@ function stampClaudeRange(doc: Y.Doc, from: FlatOffset, to: FlatOffset): void {
   // guard, so nothing would catch the mistake. This is a single call, not a
   // loop — let it materialize.
   const anchored = anchoredRange(doc, from, to);
-  // Silent by design, and the one case worth naming: an edit whose `newText`
-  // ends on a lone high surrogate now fails the surrogate check and loses its
-  // authorship stamp. The edit itself already landed, so a missing overlay
-  // entry is a cosmetic loss, not a corrupt document (#1752).
-  if (!anchored.ok) return;
+  // Skipping stays the behaviour, and the one case worth naming is benign: an
+  // edit whose `newText` ends on a lone high surrogate fails the surrogate check
+  // and loses its authorship stamp. The edit itself already landed, so a missing
+  // overlay entry is a cosmetic loss, not a corrupt document (#1752).
+  //
+  // The skip is still LOGGED, because that argument covers `surrogate` only.
+  // `out-of-bounds` or `non-integer` here would mean the caller derived
+  // `from + newText.length` against a document state that is not the one it just
+  // wrote — a coordinate bug, not a cosmetic one.
+  if (!anchored.ok) {
+    console.error(
+      `[document] Authorship stamp skipped: range [${from}, ${to}] — ${describeRangeFailure(anchored)}`,
+    );
+    return;
+  }
   const authorshipMap = doc.getMap(Y_MAP_AUTHORSHIP);
   const rangeId = generateAuthorshipId("claude");
   withMcp(doc, () => {
@@ -638,9 +661,33 @@ export function registerDocumentTools(server: McpServer): void {
 
           const from = toFlatOffset(rawFrom);
           const to = toFlatOffset(rawTo);
+
+          // POINT INSERTION IS SUPPORTED, and the `allowEmpty` below is what keeps
+          // it so. `replaceFlatRangeInElement` guards only its DELETE on
+          // `to > from` and always inserts, so `tandem_edit(n, n, "X")` has always
+          // inserted at n — and it is the only mid-document insert this server
+          // has (`tandem_appendContent` appends at the document END and is
+          // markdown-only). Refusing every `from === to` removed a working
+          // capability with no replacement.
+          //
+          // The one genuine no-op is a point range with nothing to insert. It is
+          // answered HERE, ahead of `validateRange`, so the wire still carries
+          // `reason: "empty"` for it. Everything downstream then runs on the empty
+          // range exactly as before — in particular the heading-overlap check, so
+          // `(1, 1, "X")` inside `"## "` is still HEADING_OVERLAP.
+          if (from === to && newText === "") {
+            return mcpError(
+              "INVALID_RANGE",
+              `Invalid range: [${from}, ${to}) is empty and newText is empty — nothing to do. ` +
+                "Pass a non-empty newText to insert at this position, or a non-empty range to replace.",
+              { reason: "empty" },
+            );
+          }
+
           const v = validateRange(r.doc, from, to, {
             textSnapshot,
             rejectHeadingOverlap: true,
+            allowEmpty: true,
           });
           if (!v.ok) {
             if (v.code === "RANGE_GONE") {
