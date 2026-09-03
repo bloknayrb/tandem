@@ -52,13 +52,61 @@ export interface RelativeRange {
   toRel: SerializedRelPos;
 }
 
+/**
+ * Why a flat-offset range was rejected as INVALID_RANGE (#1752).
+ *
+ * Reaches the MCP wire as `details.reason`, so it is a closed enum an agent can
+ * branch on rather than a prose message it has to parse. The order of the arms
+ * below is the order the checks run in — see `validateRange`, where it is
+ * load-bearing rather than cosmetic.
+ *
+ * `"unresolvable"` is the pre-existing "Cannot resolve offset range" branch. It
+ * needs `rejectHeadingOverlap` AND `allowEmpty` AND a fragment `resolveToElement`
+ * cannot resolve against, and it is `allowEmpty` doing the work: on an
+ * element-free fragment `text.length === 0`, so every other range dies at the
+ * upper bound and `(0, 0)` would die at `"empty"`.
+ *
+ * **`tandem_edit` DOES pass both opts** — `allowEmpty` is what keeps point
+ * insertion working — so this is no longer unreachable by construction, only by
+ * data. What it still needs is a `default` fragment holding at least one child
+ * (an empty one is answered `EMPTY_DOCUMENT` before validation) whose children
+ * are not `Y.XmlElement`s, which `resolveToElement` walks past and then returns
+ * null for. Nothing in Tandem writes such a fragment — `populateYDoc`,
+ * `htmlToYDoc` and `appendMdast` all emit elements — so it stays an
+ * out-of-model shape rather than a reachable error, and it is NOT the
+ * heading-markup case an agent will actually hit.
+ */
+export type RangeInvalidReason =
+  | "non-integer"
+  | "inverted"
+  | "out-of-bounds"
+  | "empty"
+  | "surrogate"
+  | "unresolvable";
+
 /** Result of validating a flat-offset range against a document. */
 export type RangeValidation =
   | { ok: true; range: DocumentRange }
   | { ok: false; code: "RANGE_GONE" }
   | { ok: false; code: "RANGE_MOVED"; resolvedFrom: FlatOffset; resolvedTo: FlatOffset }
-  | { ok: false; code: "INVALID_RANGE"; message: string }
+  | { ok: false; code: "INVALID_RANGE"; message: string; reason: RangeInvalidReason }
   | { ok: false; code: "HEADING_OVERLAP" };
+
+/**
+ * Result of validating a range against a plain STRING (`validateFlatRange`).
+ *
+ * A strict subset of {@link RangeValidation}: with no Y.Doc there is no
+ * staleness gate and no heading fragment, so `RANGE_GONE`, `RANGE_MOVED` and
+ * `HEADING_OVERLAP` are all structurally unreachable. Declaring that in the type
+ * rather than in a comment is what lets `tandem_getContext` write
+ * `if (!validation.ok)` and still reach `.reason`. The form it replaced —
+ * `if (!ok && code === "INVALID_RANGE")` — carried a second conjunct the
+ * compiler could not see was dead, so a future arm on `validateFlatRange` would
+ * have turned a rejected range into a silent success (#1752).
+ */
+export type FlatRangeValidation =
+  | { ok: true; range: DocumentRange }
+  | { ok: false; code: "INVALID_RANGE"; message: string; reason: RangeInvalidReason };
 
 /** Result of anchoredRange: validated flat + CRDT-anchored range ready to store on an Annotation. */
 export type AnchoredRangeResult =
