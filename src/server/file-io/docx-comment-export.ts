@@ -65,7 +65,12 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/consta
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
 import { extractText } from "../mcp/document-model.js";
-import { isLowSurrogate, refreshRange, validateFlatRange } from "../positions.js";
+import {
+  describeRangeFailure,
+  refreshRange,
+  splitsSurrogatePair,
+  validateFlatRange,
+} from "../positions.js";
 import { isCanonicalWordId } from "./docx-comment-id.js";
 
 /**
@@ -342,21 +347,46 @@ export function prepareExportComments(
     // on a save that changed nothing else (#1448 class). So SNAP outward first,
     // then validate with the default `surrogates: "reject"` — a residual
     // mid-pair offset becomes a loud skip rather than a corrupt file (#1752).
-    if (isLowSurrogate(fullText.charCodeAt(from))) from--;
-    if (isLowSurrogate(fullText.charCodeAt(to))) to++;
+    //
+    // The predicate is the PAIRED one, the same `splitsSurrogatePair` the
+    // validator uses. A one-sided `isLowSurrogate(charCodeAt(i))` also fires on
+    // the legal boundary BETWEEN two adjacent astral characters — where the unit
+    // at `i` is a low surrogate but the unit at `i - 1` is too — and would snap a
+    // perfectly good offset outward, widening the exported comment by a
+    // character. It also fired at offset 0 on a text starting with a lone low
+    // surrogate, where `from--` produced -1 and the range was then rejected as
+    // `out-of-bounds` instead of exported.
+    const snappedFrom = from;
+    const snappedTo = to;
+    if (splitsSurrogatePair(fullText, from)) from--;
+    if (splitsSurrogatePair(fullText, to)) to++;
+    if (from !== snappedFrom || to !== snappedTo) {
+      // `warn`, so this is quiet on the counting call and printed once on the
+      // real export pass — the snap changes the bytes written to the user's file,
+      // so it belongs in the log the export owns, not in the count.
+      warn(
+        `[docx-comment-export] Snapped comment ${ann.id} off a surrogate pair: ` +
+          `[${snappedFrom}, ${snappedTo}] → [${from}, ${to}]`,
+      );
+    }
 
     // `allowEmpty`: a point comment (from === to) is legal here and always was.
     const validation = validateFlatRange(fullText, from, to, { allowEmpty: true });
     if (!validation.ok) {
-      // Exhaustive by construction: these counts feed the comment-loss advisory,
-      // and a reason with no arm would silently count as nothing.
+      // Every `RangeInvalidReason` has an arm here, and these counts feed the
+      // comment-loss advisory. Note what that advisory does with them, so the
+      // mapping is not over-read: `document-service.ts` collapses the whole
+      // `ExportSkipReason` set into `unresolved` / `malformed` under a catch-all
+      // `else`, so a NEW reason arriving with no arm would land in
+      // `invalid-range` here and still be counted as a loss — the exhaustiveness
+      // buys the right BUCKET, not the difference between counted and dropped.
       const reason: ExportSkipReason =
         validation.code === "INVALID_RANGE" && validation.reason === "out-of-bounds"
           ? "out-of-bounds"
           : "invalid-range";
       warn(
         `[docx-comment-export] Skipping comment ${ann.id}: range [${from}, ${to}] ` +
-          `rejected (${validation.code}) against document length ${docLength}`,
+          `rejected (${describeRangeFailure(validation)}) against document length ${docLength}`,
       );
       onSkip?.(reason);
       continue;
