@@ -156,9 +156,9 @@ pub(crate) const MCP_PORT: u16 = 3479;
 ///
 /// Pinned to the literal 17 by `shutdown_guard_tests` — a bare restatement of
 /// this expression would be a tautology.
-pub(crate) const EXIT_GRACEFUL_BUDGET_SECS: u64 =
+const EXIT_GRACEFUL_BUDGET_SECS: u64 =
     GRACEFUL_SHUTDOWN_DEADLINE_SECS + 2 * HTTP_CLIENT_TIMEOUT.as_secs() + 1;
-pub(crate) const EXIT_GRACEFUL_BUDGET: Duration = Duration::from_secs(EXIT_GRACEFUL_BUDGET_SECS);
+const EXIT_GRACEFUL_BUDGET: Duration = Duration::from_secs(EXIT_GRACEFUL_BUDGET_SECS);
 
 /// Set once, on the way out, by `shutdown_sidecar_on_exit`. **One-way: nothing
 /// ever clears it.** Read by `spawn_allowed`, so a spawn producer that wakes up
@@ -181,7 +181,7 @@ pub(crate) static SIDECAR_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// own retry loop, and the "Retry Server Start" dialog. A child that lands after
 /// the exit-path kill is orphaned on macOS/Linux (on Windows the job object at
 /// the spawn site still reaps it).
-pub(crate) fn spawn_allowed() -> bool {
+fn spawn_allowed() -> bool {
     !EXITING.load(Ordering::Acquire) && !SIDECAR_SHUTTING_DOWN.load(Ordering::Acquire)
 }
 
@@ -332,11 +332,7 @@ pub(crate) async fn stop_sidecar_gracefully(
     // Quit flushes the user's edits or silently skips the flush, and
     // `owns_child` is now pid-keyed (see `on_child_terminated_in`) so a crashed
     // sidecar reads as "not owned" rather than as a live handle.
-    if owns_child {
-        log::info!("Graceful stop: we own the sidecar child — POSTing {SHUTDOWN_URL}");
-    } else {
-        log::info!("Graceful stop: no owned sidecar child — skipping POST to {SHUTDOWN_URL}");
-    }
+    //
     // NB: `SHUTDOWN_URL` (and `HEALTH_URL`, which `wait_for_port_release` polls)
     // hardcode :3479. With a non-default `TANDEM_MCP_PORT` the POST misses,
     // costs its own 5s client timeout, `posted` stays false, the port wait is
@@ -344,6 +340,7 @@ pub(crate) async fn stop_sidecar_gracefully(
     // `wait_for_port_release` also polls `/health` with no identity check
     // (#1812). Both are out of scope here.
     if owns_child {
+        log::info!("Graceful stop: we own the sidecar child — POSTing {SHUTDOWN_URL}");
         let posted = match client.post(SHUTDOWN_URL).send().await {
             Ok(resp) if resp.status().is_success() => true,
             Ok(resp) => {
@@ -367,6 +364,8 @@ pub(crate) async fn stop_sidecar_gracefully(
                 );
             }
         }
+    } else {
+        log::info!("Graceful stop: no owned sidecar child — skipping POST to {SHUTDOWN_URL}");
     }
     kill_sidecar_inner(handle);
 }
@@ -515,12 +514,6 @@ mod graceful {
         budget: Duration,
         deadline_secs: u64,
     ) -> (Outcome, GracefulAttempted) {
-        let mut outcome = Outcome {
-            attempted: false,
-            timed_out: false,
-            owned_child: false,
-            panicked: false,
-        };
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
             // Hide every window BEFORE blocking. `cleanup_before_exit` — which
             // is what hides windows on Windows — runs AFTER this callback
@@ -553,7 +546,12 @@ mod graceful {
                     Ok(client) => client,
                     Err(e) => {
                         log::warn!("Exit: no HTTP client ({e}) — skipping the graceful stop");
-                        return (false, false, owned_child);
+                        return Outcome {
+                            attempted: false,
+                            timed_out: false,
+                            owned_child,
+                            panicked: false,
+                        };
                     }
                 },
             };
@@ -569,19 +567,22 @@ mod graceful {
                     "Exit: graceful sidecar stop exceeded its {EXIT_GRACEFUL_BUDGET_SECS}s budget — hard kill follows"
                 );
             }
-            (true, timed_out, owned_child)
+            Outcome {
+                attempted: true,
+                timed_out,
+                owned_child,
+                panicked: false,
+            }
         }));
-        match result {
-            Ok((attempted, timed_out, owned_child)) => {
-                outcome.attempted = attempted;
-                outcome.timed_out = timed_out;
-                outcome.owned_child = owned_child;
+        let outcome = result.unwrap_or_else(|_| {
+            log::error!("Exit: graceful sidecar stop panicked — falling back to the hard kill");
+            Outcome {
+                attempted: false,
+                timed_out: false,
+                owned_child: false,
+                panicked: true,
             }
-            Err(_) => {
-                outcome.panicked = true;
-                log::error!("Exit: graceful sidecar stop panicked — falling back to the hard kill");
-            }
-        }
+        });
         (outcome, GracefulAttempted(()))
     }
 }

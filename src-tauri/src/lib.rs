@@ -329,7 +329,7 @@ pub(crate) fn promote_healthy_and_drain(state: &PendingOpens) -> Vec<ScreenedOpe
 /// (and the next promote_and_drain captures the path) or observes flag=false
 /// (and queues). Bare `SIDECAR_HEALTHY.store(false)` outside the lock would
 /// re-open the same TOCTOU window the lock was introduced to close: a
-/// producer could read flag=true between `kill_sidecar` and the clear, then
+/// producer could read flag=true between the sidecar kill and the clear, then
 /// POST to a sidecar that no longer exists. Used by `restart_sidecar`.
 ///
 /// Also clears `SIDECAR_GAVE_UP` (#1416): this call marks the start of a new
@@ -996,7 +996,7 @@ pub fn run() {
     // here (not in the fluent chain below) so the `#[cfg]` is a clean statement.
     // Held for the parent process's lifetime; the OS closes the job handle on
     // parent exit — graceful OR crash/taskkill — reaping the sidecar. macOS and
-    // Linux rely on the existing RunEvent::Exit + kill_sidecar path.
+    // Linux rely on the existing RunEvent::Exit + shutdown_sidecar_on_exit path.
     #[cfg(target_os = "windows")]
     {
         builder = builder.manage(sidecar_job::SidecarJob::new());
@@ -2590,7 +2590,7 @@ mod pending_opens_tests {
         // holding the same mutex; once it does, it observes flag=false (set
         // inside the same lock by the clear) and queues the path. A bare
         // atomic store outside the lock would let a producer that read
-        // flag=true before kill_sidecar still POST to the dying server.
+        // flag=true before the sidecar kill still POST to the dying server.
         let _g = FLAG_LOCK.lock().unwrap();
         SIDECAR_HEALTHY.store(true, Ordering::Release);
 
