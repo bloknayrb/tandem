@@ -55,7 +55,8 @@ const {
 }: Props = $props();
 
 // Only real on-disk files are renamable; scratchpads/uploads use Save As, and
-// read-only docs (incl. .docx) can't be renamed. Mirrors the server gate.
+// read-only docs — the changelog, and since #1798 every .html — can't be
+// renamed. Mirrors the server gate.
 const canRename = $derived(isRenamable(tab));
 
 // ---- useTabDirty logic inlined (hooks can't be imported into Svelte) ----

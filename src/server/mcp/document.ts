@@ -45,8 +45,10 @@ import {
   replaceFlatRangeInElement,
 } from "./document-model.js";
 // Document service (state management)
+import type { SkipCode } from "./document-service.js";
 import {
   activateDocument,
+  canSaveToDisk,
   closeDocumentById,
   docCount,
   getActiveDocId,
@@ -59,6 +61,36 @@ import {
   saveDocumentToDisk,
   toDocListEntry,
 } from "./document-service.js";
+
+/**
+ * `tandem_save`'s machine-readable `reason` for a save that did not reach disk
+ * (#1798). Tethered to `SkipCode` so the skip branch — the one branch where the
+ * two can drift — cannot pass a code this union does not name. `"upload"` and
+ * `"read-only"` are this tool's own, for the two branches that short-circuit
+ * before `saveDocumentToDisk` runs and so have no skip code to forward.
+ */
+type SaveSkipReason = SkipCode | "upload" | "read-only";
+
+/**
+ * Why a tool is refusing to mutate a read-only document, for the tools gated on
+ * `readOnly` ALONE (#1798). Those gates fire for the read-only `CHANGELOG.md`
+ * and every upload too, so one dictated cause would be false for most callers:
+ * `md` is perfectly writable, it is this particular document that is not.
+ *
+ * The unsaveable arm deliberately states the consequence rather than naming
+ * `AUTO_SAVE_FORMATS`/`BINARY_SAVE_FORMATS` — a user-facing string that names a
+ * symbol goes stale silently on a rename, and the test asserting it goes with
+ * it. The wording is the client's own copy for the same condition, so the two
+ * surfaces say the same thing about the same document.
+ *
+ * `remedy` is a full capitalized sentence.
+ */
+function readOnlyToolMessage(format: string, remedy: string): string {
+  return canSaveToDisk(format)
+    ? `Document is read-only. ${remedy}`
+    : `Document is read-only (${format}) — this format cannot be written back to disk. ${remedy}`;
+}
+
 import { gatedTool, licenseGate } from "./license-gate.js";
 import {
   attachItems,
@@ -577,7 +609,7 @@ export function registerDocumentTools(server: McpServer): void {
           if (docState?.readOnly) {
             return mcpError(
               "FORMAT_ERROR",
-              "Document is read-only (.docx). Use annotations instead.",
+              readOnlyToolMessage(docState.format, "Use annotations instead."),
             );
           }
 
@@ -953,7 +985,10 @@ export function registerDocumentTools(server: McpServer): void {
 
         const docState = getCurrentDoc(documentId);
         if (docState?.readOnly) {
-          return mcpError("FORMAT_ERROR", "Document is read-only (.docx) — cannot append content.");
+          return mcpError(
+            "FORMAT_ERROR",
+            readOnlyToolMessage(docState.format, "Cannot append content."),
+          );
         }
         if (docState && docState.format !== "md") {
           return mcpError("FORMAT_ERROR", "tandem_appendContent supports markdown documents only.");
@@ -1012,29 +1047,47 @@ export function registerDocumentTools(server: McpServer): void {
       const format = docState?.format ?? "txt";
       const readOnly = docState?.readOnly ?? false;
 
+      // `saved` reports whether the DISK file changed, so every session-only
+      // branch below answers false (#1798). It used to answer true with
+      // `sessionOnly: true` beside it, and `sessionOnly` has no readers
+      // anywhere — so the only signal an agent actually reads said the save
+      // succeeded while the file on disk was untouched, and a tab close then
+      // deleted the session. `reason` is the machine-readable why.
+
       // Uploaded files have no disk path — session-only save
       if (docState?.source === "upload") {
         await saveSession(r.filePath, format, r.doc);
+        const reason: SaveSkipReason = "upload";
         return mcpSuccess({
-          saved: true,
+          saved: false,
           sessionOnly: true,
+          reason,
           filePath: r.filePath,
           message:
             "Session saved (annotations preserved). This file was uploaded — no disk path to save to.",
         });
       }
 
-      // Read-only documents (e.g. CHANGELOG, uploads) — session-only save.
-      // .docx is no longer read-only (#576); it round-trips through the binary
-      // save branch below.
+      // Read-only documents — session-only save. Two tiers, and telling them
+      // apart is the point: a doc the user asked to keep read-only (View
+      // Changelog, `POST /api/open {readOnly:true}`) gets the neutral fact,
+      // while one that is read-only BECAUSE its format has no way back to disk
+      // (#1798, `.html`) gets the cause. Saying "the document is read-only" to
+      // the second names the mechanism instead of the reason, and the user
+      // never asked for read-only. `.docx` is not read-only at all (#576); it
+      // round-trips through the binary save branch below.
       if (readOnly) {
         await saveSession(r.filePath, format, r.doc);
+        const unsaveable = !canSaveToDisk(format);
+        const reason: SaveSkipReason = unsaveable ? "UNSUPPORTED_FORMAT" : "read-only";
         return mcpSuccess({
-          saved: true,
+          saved: false,
           sessionOnly: true,
+          reason,
           filePath: r.filePath,
-          message:
-            "Session saved (annotations preserved). Source file unchanged — document is read-only.",
+          message: unsaveable
+            ? `Session saved (annotations preserved). Source file unchanged — this format (${format}) cannot be written back to disk.`
+            : "Session saved (annotations preserved). Source file unchanged — document is read-only.",
         });
       }
 
@@ -1095,9 +1148,13 @@ export function registerDocumentTools(server: McpServer): void {
             { documentId: r.docId, filePath: r.filePath },
           );
         }
+        // Verbatim, so the tool's `reason` cannot drift from the skip code the
+        // save path actually produced.
+        const reason: SaveSkipReason | undefined = result.skipCode;
         return mcpSuccess({
-          saved: true,
+          saved: false,
           sessionOnly: true,
+          reason,
           filePath: r.filePath,
           message: `Session saved. Disk save skipped: ${result.reason}`,
         });

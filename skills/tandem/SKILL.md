@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 12
+version: 13
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -23,7 +23,7 @@ These prevent the most common failures. Follow them always.
 2. **Pass `textSnapshot`.** Include the matched text as `textSnapshot` on mutations and annotations. If the text moved, the server returns `RANGE_MOVED` with relocated coordinates instead of corrupting the document.
 3. **Use `tandem_getTextContent` for document reads.** Use `getTextContent({ section: "Section Name" })` for targeted reads. The `section` parameter is case-insensitive.
 4. **`tandem_edit` cannot create paragraphs.** Newlines become literal characters. For multi-paragraph changes, use multiple `tandem_edit` calls or `tandem_comment` with `suggestedText`.
-5. **`.docx` files are editable, but only an explicit save writes them.** Edit them like any other document; edits are held in the Y.Doc and written back to the original `.docx` only when the user saves (or you call `tandem_save`). Auto-save deliberately skips `.docx`, so unsaved edits persist in the session and never silently overwrite the user's file. Conversion is lossy at the edges: `tandem_save` returns `fidelityWarnings` when the export downgraded anything, and the user sees a fidelity banner in the editor. Report those warnings rather than claiming a clean round-trip. A document can still be read-only for other reasons (uploads, an explicit `readOnly` flag); when it is, `tandem_edit` returns `FORMAT_ERROR` and annotations are the right surface.
+5. **`.docx` files are editable, but only an explicit save writes them.** Edit them like any other document; edits are held in the Y.Doc and written back to the original `.docx` only when the user saves (or you call `tandem_save`). Auto-save deliberately skips `.docx`, so unsaved edits persist in the session and never silently overwrite the user's file. Conversion is lossy at the edges: `tandem_save` returns `fidelityWarnings` when the export downgraded anything, and the user sees a fidelity banner in the editor. Report those warnings rather than claiming a clean round-trip. A document can still be read-only for other reasons: uploads, an explicit `readOnly` flag, or a format with no way back to disk — `.html` opens read-only for exactly that reason. When it is, `tandem_edit` returns `FORMAT_ERROR` and annotations are the right surface. `tandem_save` on such a document answers `saved: false` with a `reason`; only the session is written.
 
 ## Workflow
 
@@ -168,7 +168,7 @@ The wording above matches what the stdio bridge (`src/cli/mcp-stdio.ts`) already
 - **`RANGE_MOVED`** — Text shifted since you read it. The response includes `resolvedFrom`/`resolvedTo` — use those coordinates for your next call.
 - **`RANGE_GONE`** — The text was deleted. Re-read the section with `tandem_getTextContent` and re-assess.
 - **`INVALID_RANGE`** — You hit heading markup (e.g., `## `). Target text content only, not the heading prefix.
-- **`FORMAT_ERROR`** — The operation doesn't apply to this document. Most often the document is genuinely read-only (an upload, or opened with an explicit `readOnly` flag) — use annotations instead. Also returned by `tandem_appendContent` on a non-Markdown document, and by `tandem_applyChanges` on anything that isn't a `.docx` opened from disk. Note `.docx` alone no longer causes this: those open editable.
+- **`FORMAT_ERROR`** — The operation doesn't apply to this document. Most often the document is genuinely read-only (an upload, an explicit `readOnly` flag, or an `.html`, which opens read-only because no save path exists for it) — use annotations instead. Also returned by `tandem_appendContent` on a non-Markdown document, and by `tandem_applyChanges` on anything that isn't a `.docx` opened from disk. Note `.docx` alone no longer causes this: those open editable.
 
 ## Session Handoff
 
