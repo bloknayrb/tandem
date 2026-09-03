@@ -19,6 +19,13 @@
  * Related GH issue: #622 (pre-existing two-write crash window). The fix
  * merges the two MCP_ORIGIN transactions into one via `skipTransact` —
  * Test C below is the dedicated single-transaction regression guard.
+ *
+ * The two describes after those three are not about origins. They are the rest
+ * of `documents/watcher.ts`'s reload wiring, and they live here because this is
+ * the file that already drives a real `openFromDisk` + captured watcher
+ * callback: the sanitization relay that runs over every stored annotation on a
+ * reload, and the catch that keeps a watch that cannot be registered from
+ * taking the open down with it.
  */
 
 import fs from "node:fs/promises";
@@ -53,9 +60,12 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
   return { ...actual, pushNotification: vi.fn() };
 });
 
+import { docHash } from "../../src/server/annotations/doc-hash.js";
+import { resetMigrationLog } from "../../src/server/annotations/migration-log.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
-import { docIdFromPath } from "../../src/server/mcp/document-model.js";
+import { wireFileWatcher } from "../../src/server/documents/watcher.js";
+import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { anchoredRange, refreshRange } from "../../src/server/positions.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
@@ -258,5 +268,112 @@ describe("reloadFromDisk — origin sequence + persistence (PR-F1)", () => {
     // two RELOAD_ORIGIN transacts fire.
     const reloadTxns = records.filter((r) => r.origin === RELOAD_ORIGIN);
     expect(reloadTxns.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/** Every line `fn` printed to `console.error`, flattened. */
+async function capturedErrors(fn: () => Promise<void>): Promise<string[]> {
+  const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await fn();
+    return spy.mock.calls.map((args) => args.map((a) => String(a)).join(" "));
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+describe("reloadFromDisk — legacy annotations are sanitized under THIS document's hash", () => {
+  it("relays a flag→note migration keyed to the reloaded document, not anonymously", async () => {
+    // Step 3 of the reload sanitizes every stored annotation, and hands
+    // `sanitizeAnnotation` an `onLossy` that relays through the migration log.
+    // The relay's dedup key is `${docHash}:${kind}`, so passing `undefined`
+    // there instead of the reloaded document's hash still logs — it just logs
+    // "(no docHash)" and dedups nothing, which is why asserting that SOMETHING
+    // was written would not discriminate. The hash in the line is the contract.
+    resetMigrationLog();
+    const { doc, filePath, triggerReload } = await setupOpenedFile("Hello world foo bar");
+
+    // The reload is the first thing to see this record, so the migration log
+    // has not already fired (and been deduped) for this (doc, kind) pair.
+    const watchedPath = watcherMocks.watchFile.mock.calls.at(-1)?.[0] as string;
+    const id = "ann_legacy_flag";
+    doc.transact(() => {
+      doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        author: "user",
+        // The pre-v1 type. `sanitizeAnnotation` rewrites it to "note" and emits
+        // `flag-to-note` on the way past.
+        type: "flag",
+        range: { from: toFlatOffset(0), to: toFlatOffset(5) },
+        content: "legacy flag",
+        status: "pending",
+        timestamp: 0,
+        rev: 1,
+      } as unknown as Annotation);
+    }, MCP_ORIGIN);
+
+    const errors = await capturedErrors(async () => {
+      await fs.writeFile(filePath, "Hello brave world foo bar", "utf-8");
+      await triggerReload();
+    });
+
+    expect(errors).toContain(
+      `[ANNOTATION-STORE] legacy migration: flag-to-note in ${docHash(watchedPath)}`,
+    );
+    // The rewrite the log is a receipt for actually reached the Y.Map, so the
+    // line is evidence of a migration rather than of a discarded copy.
+    expect((doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).get(id) as Annotation).type).toBe("note");
+  });
+});
+
+describe("wireFileWatcher — a watch that cannot be registered", () => {
+  it("does not abort the open that asked for it, and names the file it failed on", async () => {
+    // `watchFile` throws for real: EMFILE, and on Windows an inaccessible
+    // directory. The catch around it is the reason an open still completes —
+    // without it `openFromDisk` rejects and the user gets no document at all,
+    // rather than a document with no watcher.
+    const filePath = path.join(tmpDir, "unwatchable.md");
+    await fs.writeFile(filePath, "Body text that must survive\n", "utf-8");
+    const boom = new Error("EMFILE: too many open files");
+    watcherMocks.watchFile.mockImplementationOnce(() => {
+      throw boom;
+    });
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(openFromDisk(filePath)).resolves.toBeDefined();
+      const reported = spy.mock.calls.find(
+        (args) => args[0] === "[FileWatcher] wireFileWatcher failed for %s:",
+      );
+      expect(reported, "the failure is reported, not swallowed silently").toBeDefined();
+      expect(String(reported?.[1])).toContain("unwatchable.md");
+      // The original error, not a re-wrapped one: it is the only thing that
+      // says WHY the watch could not be registered.
+      expect(reported?.[2]).toBe(boom);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The document is genuinely open and populated — the throw cost the watch,
+    // nothing else.
+    const opened = getOrCreateDocument(docIdFromPath(filePath));
+    expect(extractText(opened)).toContain("Body text that must survive");
+  });
+
+  it("is reached through wireFileWatcher itself, not only through openFromDisk", async () => {
+    // The direct call, so a future open path that stops wiring the watcher
+    // cannot quietly take this arm out of the suite with it.
+    const boom = new Error("watch registration refused");
+    watcherMocks.watchFile.mockImplementationOnce(() => {
+      throw boom;
+    });
+    const errors = await capturedErrors(async () => {
+      expect(() =>
+        wireFileWatcher("doc_direct", path.join(tmpDir, "direct.md"), "md"),
+      ).not.toThrow();
+    });
+    expect(errors.some((line) => line.includes("[FileWatcher] wireFileWatcher failed for"))).toBe(
+      true,
+    );
   });
 });

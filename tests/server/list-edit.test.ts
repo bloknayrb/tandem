@@ -216,6 +216,9 @@ describe("out-of-range offsets", () => {
     const doc = docFor("- alpha\n- beta\n- gamma\n");
     const flatLength = flatDocLength(doc);
     // `flatDocLength` must agree with the projection it is standing in for.
+    // The full equivalence table lives in the describe below — #1752 makes
+    // `flatDocLength` the bounds primitive for `validateRange` too, so a
+    // disagreement now decides whether a real edit is accepted.
     expect(flatLength).toBe(extractText(doc).length);
     for (const bad of [999, -5, 1.5, Number.NaN]) {
       expect(isRejected(bad, flatLength), `${bad} must be rejected`).toBe(true);
@@ -300,6 +303,82 @@ describe("offsets stay usable after an edit", () => {
     const again = targetFor(doc, "beta");
     if ("error" in again.target) throw new Error(again.target.error);
     expect(again.target.index).toBe(2);
+    doc.destroy();
+  });
+});
+
+/**
+ * #1752: `flatDocLength` is now the length `validateRange`'s hoisted-`text`
+ * guard compares against, so any block shape where it disagrees with
+ * `extractText(doc).length` silently changes a bounds verdict.
+ *
+ * The four heading rows at the end are unreachable from today's writers
+ * (`document-model.ts`, `mdast-ydoc.ts` and `docx-html.ts` all emit 1-6 or
+ * `?? 1`), and the VITEST-only equality check inside `validateRange` compares
+ * `extractText` to ITSELF and can never see them — so they are pinned here,
+ * against the OTHER length function, or nothing checks them at all.
+ */
+describe("flatDocLength agrees with extractText over every block shape", () => {
+  function para(text: string): Y.XmlElement {
+    const el = new Y.XmlElement("paragraph");
+    if (text.length > 0) el.insert(0, [new Y.XmlText(text)]);
+    return el;
+  }
+
+  function heading(level: unknown, text: string): Y.XmlElement {
+    const el = new Y.XmlElement("heading");
+    // biome-ignore lint/suspicious/noExplicitAny: Tiptap heading levels are numeric attributes.
+    el.setAttribute("level", level as any);
+    el.insert(0, [new Y.XmlText(text)]);
+    return el;
+  }
+
+  const cases: Array<[string, string]> = [
+    ["paragraph", "just a paragraph\n"],
+    ["empty paragraph", "one\n\n\ntwo\n"],
+    ["bullet list", "- alpha\n- beta\n"],
+    ["ordered list", "1. alpha\n2. beta\n"],
+    ["nested list", "- alpha\n  - nested\n- beta\n"],
+    ["table", "| a | b |\n|---|---|\n| 1 | 2 |\n"],
+    ["blockquote", "> quoted text\n"],
+    ["code block", "```js\nlet x = 1;\n```\n"],
+    ["hard break", "line one  \nline two\n"],
+    ["image-only paragraph", "![alt](x.png)\n"],
+    ["trailing empty paragraph", "text\n\n\n"],
+    ["heading level 1", "# One\n"],
+    ["heading level 2", "## Two\n"],
+    ["heading level 3", "### Three\n"],
+    ["heading level 4", "#### Four\n"],
+    ["heading level 5", "##### Five\n"],
+    ["heading level 6", "###### Six\n"],
+    ["mixed document", "# Title\n\nPara\n\n- a\n- b\n\n> q\n\n```\ncode\n```\n"],
+  ];
+
+  it.each(cases)("%s", (_label, md) => {
+    const doc = docFor(md);
+    expect(flatDocLength(doc)).toBe(extractText(doc).length);
+    doc.destroy();
+  });
+
+  const oddLevels: Array<[string, unknown]> = [
+    // headingPrefixLength(0) is 0 but headingPrefix(0) was `" "` — a 1-char
+    // disagreement on every heading with a falsy level.
+    ["level 0", 0],
+    // `Number(attr)` of a non-numeric attribute is NaN: length 0, prefix `" "`.
+    ["a non-numeric level", "abc"],
+    // `"#".repeat(-1)` THROWS, while headingPrefixLength(-1) is 0.
+    ["a negative level", -1],
+    // headingPrefixLength(1.5) is 2.5, so flatDocLength went non-integer.
+    ["a fractional level", 1.5],
+  ];
+
+  it.each(oddLevels)("heading with %s", (_label, level) => {
+    // Built directly: no parser in the tree emits a level outside 1-6.
+    const doc = new Y.Doc();
+    doc.getXmlFragment("default").insert(0, [heading(level, "Title"), para("body")]);
+    const text = extractText(doc);
+    expect(flatDocLength(doc)).toBe(text.length);
+    expect(Number.isInteger(flatDocLength(doc))).toBe(true);
     doc.destroy();
   });
 });
