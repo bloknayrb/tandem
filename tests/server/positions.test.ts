@@ -1,16 +1,22 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { extractText, getOrCreateXmlText } from "../../src/server/mcp/document.js";
 import {
+  __testResetHoistMismatchCounts,
   anchoredRange,
   flatOffsetToRelPos,
   refreshAllRanges,
   refreshRange,
   relPosToFlatOffset,
   resolveToElement,
+  validateFlatRange,
   validateRange,
 } from "../../src/server/positions.js";
-import type { FlatOffset, SerializedRelPos } from "../../src/shared/positions/types.js";
+import type {
+  FlatOffset,
+  RangeValidation,
+  SerializedRelPos,
+} from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { off } from "../helpers/positions.js";
 import {
@@ -96,15 +102,328 @@ describe("validateRange", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("returns INVALID_RANGE when rejectHeadingOverlap + unresolvable offset", () => {
+  it("rejects an offset past the end of an empty document before the heading walk", () => {
     doc = new Y.Doc();
-    // Empty fragment — no elements to resolve against
+    // Empty fragment — no elements to resolve against, so the flat projection
+    // is "" and every non-zero offset is out of bounds. Before #1752 this
+    // reached the `rejectHeadingOverlap` walk and came back "unresolvable";
+    // the upper bound now answers first, which is the more accurate reason.
     doc.getXmlFragment("default");
     const result = validateRange(doc, off(0), off(5), { rejectHeadingOverlap: true });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("INVALID_RANGE");
+      if (result.code === "INVALID_RANGE") expect(result.reason).toBe("out-of-bounds");
     }
+  });
+});
+
+/**
+ * #1752: `validateRange` used to check only ordering, staleness and heading
+ * overlap. Out-of-bounds, negative, fractional, zero-length and mid-surrogate
+ * offsets all passed and reached a Y.Doc write.
+ */
+describe("validateRange — bounds, integrality, emptiness and surrogates", () => {
+  /** The INVALID_RANGE reason, or the code when it is some other failure. */
+  function failure(result: RangeValidation): string {
+    if (result.ok) return "ok";
+    return result.code === "INVALID_RANGE" ? result.reason : result.code;
+  }
+
+  describe("one case per reason", () => {
+    it("non-integer: a fractional from", () => {
+      doc = makeDoc("hello world");
+      expect(failure(validateRange(doc, off(1.5), off(3)))).toBe("non-integer");
+    });
+
+    it("non-integer: NaN and Infinity", () => {
+      doc = makeDoc("hello world");
+      expect(failure(validateRange(doc, off(Number.NaN), off(3)))).toBe("non-integer");
+      expect(failure(validateRange(doc, off(0), off(Number.POSITIVE_INFINITY)))).toBe(
+        "non-integer",
+      );
+    });
+
+    it("inverted: from > to", () => {
+      doc = makeDoc("hello world");
+      expect(failure(validateRange(doc, off(5), off(0)))).toBe("inverted");
+    });
+
+    it("out-of-bounds: to past the end", () => {
+      doc = makeDoc("hello world");
+      expect(failure(validateRange(doc, off(0), off(99999)))).toBe("out-of-bounds");
+    });
+
+    it("out-of-bounds: a negative from", () => {
+      doc = makeDoc("hello world");
+      expect(failure(validateRange(doc, off(-3), off(5)))).toBe("out-of-bounds");
+    });
+
+    it("empty: from === to, with no snapshot", () => {
+      // Deliberately snapshot-free: with a snapshot the slice is "" and the
+      // staleness gate answers first, so the "empty" arm is unreachable.
+      doc = makeDoc("hello world");
+      expect(failure(validateRange(doc, off(3), off(3)))).toBe("empty");
+    });
+
+    it("surrogate: an offset between the halves of a pair", () => {
+      doc = makeDoc("a\u{1F600}b");
+      expect(failure(validateRange(doc, off(2), off(3)))).toBe("surrogate");
+    });
+
+    it("unresolvable: constructed directly — no caller reaches it", () => {
+      // Needs rejectHeadingOverlap AND allowEmpty AND an element-free fragment:
+      // on such a fragment text.length === 0, so every other range dies at the
+      // upper bound and (0, 0) dies at "empty". No production caller passes both.
+      doc = new Y.Doc();
+      doc.getXmlFragment("default");
+      const result = validateRange(doc, off(0), off(0), {
+        rejectHeadingOverlap: true,
+        allowEmpty: true,
+      });
+      expect(failure(result)).toBe("unresolvable");
+    });
+  });
+
+  describe("bounds", () => {
+    it("accepts to === text.length", () => {
+      doc = makeDoc("hello world");
+      const result = validateRange(doc, off(0), off(11));
+      expect(result.ok).toBe(true);
+    });
+
+    it("refuses from === to by default and accepts it with allowEmpty", () => {
+      doc = makeDoc("hello world");
+      expect(failure(validateRange(doc, off(3), off(3)))).toBe("empty");
+      expect(validateRange(doc, off(3), off(3), { allowEmpty: true }).ok).toBe(true);
+    });
+  });
+
+  describe("surrogates — the predicate is the PAIRED form", () => {
+    it('"a😀b": rejects at from and at to, accepts either side', () => {
+      doc = makeDoc("a\u{1F600}b");
+      expect(extractText(doc)).toBe("a\u{1F600}b");
+      expect(failure(validateRange(doc, off(2), off(3)))).toBe("surrogate");
+      expect(failure(validateRange(doc, off(0), off(2)))).toBe("surrogate");
+      expect(validateRange(doc, off(0), off(1)).ok).toBe(true);
+      expect(validateRange(doc, off(3), off(4)).ok).toBe(true);
+    });
+
+    it("accepts to === text.length when the document ends in an emoji", () => {
+      doc = makeDoc("hi \u{1F600}");
+      // charCodeAt(text.length) is NaN — not a low surrogate, so the end is legal.
+      expect(validateRange(doc, off(0), off(5)).ok).toBe(true);
+    });
+
+    it('"😀😀": the boundary BETWEEN two adjacent astral characters is legal', () => {
+      // The control that kills a one-sided "the unit at i is any surrogate"
+      // predicate: offset 2 has no alternative, so rejecting it is a bug.
+      doc = makeDoc("\u{1F600}\u{1F600}");
+      expect(validateRange(doc, off(0), off(2)).ok).toBe(true);
+      expect(validateRange(doc, off(2), off(4)).ok).toBe(true);
+      expect(validateRange(doc, off(0), off(4)).ok).toBe(true);
+      expect(failure(validateRange(doc, off(1), off(3)))).toBe("surrogate");
+    });
+
+    it("sees the heading prefix shift at document level", () => {
+      // Every other surrogate case runs on a raw string and cannot see the
+      // 3-char "## " prefix. The heading must be TOP-LEVEL — one nested in a
+      // list item gets no prefix.
+      doc = makeMarkdownDoc("## A\u{1F600}B\n\np\u{1F600}\n\n\u{1F600}q\n\nli\u{1F600}\n");
+      expect(extractText(doc)).toBe("## A\u{1F600}B\np\u{1F600}\n\u{1F600}q\nli\u{1F600}");
+      expect(failure(validateRange(doc, off(0), off(5)))).toBe("surrogate");
+      expect(validateRange(doc, off(0), off(6)).ok).toBe(true);
+    });
+  });
+
+  describe("check order", () => {
+    it("a negative from is answered before staleness, not relocated", () => {
+      // String.prototype.slice wraps a negative start:
+      // "hello world".slice(-3, 11) === "rld". Bounds-after-staleness would
+      // hand this back ok:true with {from: -3, to: 11} — which it did.
+      doc = makeDoc("hello world");
+      expect("hello world".slice(-3, 11)).toBe("rld");
+      expect(failure(validateRange(doc, off(-3), off(11), { textSnapshot: "rld" }))).toBe(
+        "out-of-bounds",
+      );
+    });
+
+    it("staleness is answered before the upper bound, so a shortened document relocates", () => {
+      // The watcher's relocation probe passes stale offsets past the new end
+      // with a snapshot and relies on RANGE_MOVED. Bounds-first would return
+      // INVALID_RANGE and pin the annotation to dead offsets.
+      doc = makeDoc("aaaa target bbbb cccc dddd");
+      const fragment = getFragment(doc);
+      const el = fragment.get(0) as Y.XmlElement;
+      const xmlText = el.get(0) as Y.XmlText;
+      xmlText.delete(11, 15); // drop " bbbb cccc dddd" → "aaaa target"
+      expect(extractText(doc)).toBe("aaaa target");
+      const result = validateRange(doc, off(20), off(26), { textSnapshot: "target" });
+      expect(result.ok).toBe(false);
+      expect(failure(result)).toBe("RANGE_MOVED");
+      if (!result.ok && result.code === "RANGE_MOVED") {
+        expect(result.resolvedFrom).toBe(5);
+        expect(result.resolvedTo).toBe(11);
+      }
+    });
+
+    it("integrality is answered before ordering", () => {
+      doc = makeDoc("hello world");
+      expect(failure(validateRange(doc, off(1.5), off(0)))).toBe("non-integer");
+    });
+
+    it("ordering is answered before the upper bound", () => {
+      doc = makeDoc("short");
+      expect(failure(validateRange(doc, off(99999), off(5)))).toBe("inverted");
+    });
+
+    it("the surrogate check is answered before emptiness is allowed to pass", () => {
+      doc = makeDoc("a\u{1F600}b");
+      expect(failure(validateRange(doc, off(2), off(2), { allowEmpty: true }))).toBe("surrogate");
+    });
+
+    it("bounds are answered before the heading walk", () => {
+      doc = makeDoc("## Title");
+      // Today this returns HEADING_OVERLAP — the offsets are nonsense first.
+      expect(failure(validateRange(doc, off(0), off(99999), { rejectHeadingOverlap: true }))).toBe(
+        "out-of-bounds",
+      );
+    });
+  });
+
+  describe("the hoisted `text` guard", () => {
+    // `hoistMismatchCounts` is module-global and deliberately never cleared in
+    // production, so the throttle spec's expected log count would otherwise
+    // depend on which tags earlier specs in the run touched.
+    beforeEach(() => {
+      __testResetHoistMismatchCounts();
+    });
+
+    it("recomputes and warns when the supplied text has the wrong length", () => {
+      doc = makeDoc("hello world");
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        // A longer `text` would make (0, 20) look in-bounds. It must not.
+        const result = validateRange(doc, off(0), off(20), {
+          text: "hello world and then some more",
+        });
+        expect(failure(result)).toBe("out-of-bounds");
+        expect(spy).toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("accepts a correct hoisted text without warning", () => {
+      doc = makeDoc("hello world");
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(validateRange(doc, off(0), off(5), { text: "hello world" }).ok).toBe(true);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("a stale hoist reaches the SAME verdict the un-hoisted call would", () => {
+      // The guard's contract in one line: passing `text` may make the call
+      // noisier, never wronger. A spec that only asserted the log would pass on
+      // a guard that logged and then used the stale string anyway.
+      doc = makeDoc("hello world");
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        // One character short — the smallest mismatch the length walk can see.
+        // (0, 11) is in bounds against the real document and out of bounds
+        // against the hoist, so the two answers are distinguishable.
+        const hoisted = validateRange(doc, off(0), off(11), { text: "hello worl" });
+        const unhoisted = validateRange(doc, off(0), off(11));
+        expect(hoisted).toEqual(unhoisted);
+        expect(hoisted.ok).toBe(true);
+        expect(spy).toHaveBeenCalled();
+        expect(spy.mock.calls.flat().join(" ")).toContain("changed shape under the hoist");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("does NOT build the projection string when the hoisted text matches", () => {
+      // This is the whole point of the option, and nothing else pins it: the
+      // guard shipped for one round as an unconditional `extractText` compare,
+      // which was correct and made `text` cost MORE than omitting it. Every
+      // other spec here is green under that version.
+      //
+      // `Y.XmlText.prototype.toDelta` is the observable: `extractText` reads the
+      // text through it (`document-model.ts:206`), while `flatDocLength` reads
+      // only `child.length`. Spying on the Y.js prototype rather than mocking
+      // `document-model` keeps the module under test unmocked.
+      doc = makeDoc("hello world");
+      const toDelta = vi.spyOn(Y.XmlText.prototype, "toDelta");
+      try {
+        expect(validateRange(doc, off(0), off(5), { text: "hello world" }).ok).toBe(true);
+        expect(toDelta).not.toHaveBeenCalled();
+
+        // Control: the same call WITHOUT the hoist does materialize, so the
+        // assertion above is about the hoist and not about `validateRange`
+        // having stopped reading the document.
+        toDelta.mockClear();
+        expect(validateRange(doc, off(0), off(5)).ok).toBe(true);
+        expect(toDelta).toHaveBeenCalled();
+      } finally {
+        toDelta.mockRestore();
+      }
+    });
+
+    it("throttles a tagged site to occurrences 1, 10 and 100 — and never throttles an untagged one", () => {
+      doc = makeDoc("hello world");
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        // 100 bad calls under one tag. A per-occurrence log prints 100 lines; a
+        // plain "log once" prints 1. Only `/^10*$/` prints exactly 3, so this
+        // discriminates the throttle from both alternatives — asserting 1-in-9
+        // did not, since `n !== 1` also passes it.
+        //
+        // The tag must be one of the five `HoistTag` literals (the union exists
+        // so the module-global counter cannot grow unboundedly). The count
+        // starts at zero because of the `beforeEach` reset above, not because
+        // this literal happens to be unique in the file.
+        for (let i = 0; i < 100; i++) {
+          validateRange(doc, off(0), off(5), {
+            text: "hello worlds",
+            textTag: "docx-capture/score",
+          });
+        }
+        expect(spy).toHaveBeenCalledTimes(3);
+
+        // An untagged call is a one-off, not a loop: it always reports, and is
+        // never silenced by an unrelated site's count.
+        spy.mockClear();
+        for (let i = 0; i < 5; i++) {
+          validateRange(doc, off(0), off(5), { text: "hello worlds" });
+        }
+        expect(spy).toHaveBeenCalledTimes(5);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  describe("anchoredRange passes every new opt through", () => {
+    it("allowEmpty", () => {
+      doc = makeDoc("hello world");
+      expect(anchoredRange(doc, off(3), off(3)).ok).toBe(false);
+      expect(anchoredRange(doc, off(3), off(3), undefined, { allowEmpty: true }).ok).toBe(true);
+    });
+
+    it('surrogates: "ignore"', () => {
+      doc = makeDoc("a\u{1F600}b");
+      expect(anchoredRange(doc, off(2), off(3)).ok).toBe(false);
+      expect(anchoredRange(doc, off(2), off(3), undefined, { surrogates: "ignore" }).ok).toBe(true);
+    });
+
+    it("text", () => {
+      doc = makeDoc("hello world");
+      expect(anchoredRange(doc, off(0), off(5), undefined, { text: "hello world" }).ok).toBe(true);
+    });
   });
 });
 
@@ -416,5 +735,36 @@ describe("list content positions (Phase B)", () => {
         expect(resolved).toBe(offset);
       }
     }
+  });
+});
+
+/**
+ * The pure core, for the two callers that hold the flat text but deliberately
+ * no `Y.Doc`: `tandem_getContext` (through a `YDocStore`) and the `.docx`
+ * comment export resolver.
+ */
+describe("validateFlatRange (pure)", () => {
+  function failure(result: RangeValidation): string {
+    if (result.ok) return "ok";
+    return result.code === "INVALID_RANGE" ? result.reason : result.code;
+  }
+
+  it("answers on the string it is given, in the same order", () => {
+    expect(validateFlatRange("hello world", 0, 5).ok).toBe(true);
+    expect(validateFlatRange("hello world", 0, 11).ok, "to === length").toBe(true);
+    expect(failure(validateFlatRange("hello world", 0, 12))).toBe("out-of-bounds");
+    expect(failure(validateFlatRange("hello world", -1, 5))).toBe("out-of-bounds");
+    expect(failure(validateFlatRange("hello world", 1.5, 5))).toBe("non-integer");
+    expect(failure(validateFlatRange("hello world", 7, 2))).toBe("inverted");
+    expect(failure(validateFlatRange("hello world", 3, 3))).toBe("empty");
+    expect(validateFlatRange("hello world", 3, 3, { allowEmpty: true }).ok).toBe(true);
+  });
+
+  it("applies the paired surrogate predicate, and honours the ignore policy", () => {
+    expect(failure(validateFlatRange("a\u{1F600}b", 2, 3))).toBe("surrogate");
+    expect(failure(validateFlatRange("a\u{1F600}b", 0, 2))).toBe("surrogate");
+    // The adjacent-astral control: offset 2 has no alternative and must pass.
+    expect(validateFlatRange("\u{1F600}\u{1F600}", 2, 4).ok).toBe(true);
+    expect(validateFlatRange("a\u{1F600}b", 2, 3, { surrogates: "ignore" }).ok).toBe(true);
   });
 });

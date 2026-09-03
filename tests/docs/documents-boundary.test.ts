@@ -433,7 +433,7 @@ const FAN_OUT = [
   "server/documents/watcher.ts -> server/events/queue.ts (value) x1",
   "server/documents/watcher.ts -> server/file-io/index.ts (value) x1",
   "server/documents/watcher.ts -> server/file-watcher.ts (value) x1",
-  // One of FIVE edges out of documents/ that point back at mcp/, and the
+  // One of SIX edges out of documents/ that point back at mcp/, and the
   // reason this list is phrased as residue rather than as a contract:
   // annotation sanitization has not been split out of the MCP layer yet.
   //
@@ -444,7 +444,12 @@ const FAN_OUT = [
   // corrected the count. Each has its own reason and they do not leave
   // together. Count them from the rows below rather than trusting this number:
   // review handed me "four" for the post-7c graph and the rows said five.
+  // #1752 added a sixth: the relocation pass now hoists one `extractText` for
+  // the whole per-annotation loop instead of letting `validateRange` rebuild
+  // the string per iteration, which is a read of the same flat projection
+  // `positions.ts` already imports from `mcp/document-model.ts`.
   "server/documents/watcher.ts -> server/mcp/annotations.ts (value) x1",
+  "server/documents/watcher.ts -> server/mcp/document-model.ts (value) x1",
   "server/documents/watcher.ts -> server/notifications.ts (value) x1",
   "server/documents/watcher.ts -> server/positions.ts (value) x1",
   "server/documents/watcher.ts -> server/yjs/provider.ts (value) x1",

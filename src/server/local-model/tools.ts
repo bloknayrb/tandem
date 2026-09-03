@@ -40,7 +40,7 @@ import { getOutline, getSection } from "../mcp/document.js";
 import { extractText } from "../mcp/document-model.js";
 import { licenseGate } from "../mcp/license-gate.js";
 import { countOccurrences, findOccurrence } from "../mcp/navigation.js";
-import { anchoredRange } from "../positions.js";
+import { anchoredRange, describeRangeFailure } from "../positions.js";
 import type { ToolSchema } from "./ollama-client.js";
 
 export interface DispatchCtx {
@@ -206,7 +206,7 @@ function resolveAnchor(ydoc: Y.Doc, rawQuote: string, rawOcc: number) {
     return {
       ok: false as const,
       errorCode: anchored.code,
-      message: `Range rejected: ${anchored.code}`,
+      message: `Range rejected: ${describeRangeFailure(anchored)}`,
       span: { from: hit.from, to: hit.to },
       occ,
     };
