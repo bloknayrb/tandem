@@ -245,6 +245,25 @@ rename without regenerating `tests/design-system-impl/__snapshots__/testid-set.s
 
 Do not commit secrets or local MCP credentials; start from `.env.example` and `.mcp.json.example`.
 
+**Reviewing a Dependabot `github-actions` bump takes two commands, and they are not optional.**
+Every action in `.github/workflows/` is pinned to a full commit SHA (#1745) because those steps run
+with the release signing material in scope. But a 40-hex ref is a *shape*, not an identity: GitHub
+resolves `owner/repo@<sha>` against the whole **fork network**, so a SHA that exists only in a fork
+of `actions/checkout` resolves and runs. No check in CI can detect that —
+`tests/scripts/workflow-action-pin.test.ts` validates the shape and the owner/repo set, and stops
+there. So for each bumped action, confirm the new SHA is reachable in the *upstream* repo and is
+what the trailing comment claims:
+
+```bash
+gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq .object.sha   # annotated tags: follow .object.sha through /git/tags/<sha>
+gh api repos/<owner>/<repo>/commits/<new-sha> --jq .sha
+```
+
+This is why the `github-actions` ecosystem is deliberately **ungrouped** in
+`.github/dependabot.yml`: a grouped PR mutating a dozen 40-hex strings is exactly the artifact in
+which one wrong SHA is invisible. Note also that `.github/workflows/claude-code-review.yml` skips
+PRs authored by a bot, so the automated reviewer never looks at these.
+
 If a change touches network posture, CORS, authentication, or the `/api` surface, read
 [docs/security.md](docs/security.md) first — several invariants there are enforced by review
 rather than by CI, and the enumerated route lists in [CLAUDE.md](CLAUDE.md) *are* that review. Do

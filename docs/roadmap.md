@@ -374,6 +374,7 @@ Future hardening (not blocking release):
 - Code-sign macOS `.app` + notarization (#428) — requires Apple Developer certificate; without it, Gatekeeper shows "damaged" error on download. v1.0 gate. Per-release hardware verification lives in [release-smoke-checklist.md](release-smoke-checklist.md).
 - Windows installer smoke test — NSIS covered per-release by [release-smoke-checklist.md](release-smoke-checklist.md); the MSI artifact (`targets: "all"` also builds one) is not covered
 - ~~Node.js 20 → 24 GitHub Actions migration (CI-wide, all workflow files) — deadline June 2, 2026~~ **Done 2026-06-11.** This was about the GitHub Actions *runtime* (JS actions), not the project's Node: GitHub forced the node24 default on 2026-06-02 and removes node20 entirely 2026-09-16. First-party actions bumped to node24 majors (`checkout@v6`, `setup-node@v6`, `upload-artifact@v7`) across all five workflow files; `node-version: 22` is unchanged and correct (matches `engines` + the bundled sidecar Node).
+  - *Appended 2026-09-02, not rewritten — the line above records what was done then and should keep saying so.* The current tree runs `upload-artifact@v6`, not `@v7`: v7 was never adopted. Every action in all five workflows is now SHA-pinned rather than tag-pinned (#1745), so the majors named above are what the trailing comment on each pin records, not what the ref resolves.
 
 ### Future Tauri Enhancements
 

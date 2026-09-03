@@ -1,11 +1,44 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
-
+# Dependabot version updates.
+#
+# This file was the unedited GitHub template until #1744 -- `package-ecosystem`
+# was the empty string, which is not a valid ecosystem, so no update PR has ever
+# been possible. That mattered once every action in .github/workflows/ became
+# SHA-pinned (#1745): a pin with nothing to bump it trades supply-chain risk for
+# silent staleness.
+#
+# `github-actions` is deliberately NOT grouped, while `npm` and `cargo` are.
+# Grouping turns a week of action bumps into one PR mutating a dozen 40-hex
+# strings -- precisely the artifact in which one wrong SHA is invisible. The
+# individual PRs are the point. See CONTRIBUTING.md for the provenance check
+# every github-actions bump needs before merge: GitHub resolves
+# `owner/repo@<sha>` against the whole fork network, so a SHA that exists only in
+# a fork resolves and runs, and no shape check in CI can detect that.
+#
+# tests/scripts/workflow-action-pin.test.ts pins the `github-actions` entry by
+# exact equality, so disabling it (`open-pull-requests-limit: 0`, an `ignore`
+# catch-all, a `target-branch`, a longer interval) fails `check` rather than
+# quietly producing zero PRs forever.
 version: 2
 updates:
-  - package-ecosystem: "" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
       interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo-dependencies:
+        patterns:
+          - "*"

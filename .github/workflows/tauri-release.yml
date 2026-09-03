@@ -56,7 +56,7 @@ jobs:
     outputs:
       release_id: ${{ steps.create.outputs.release_id }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       # The pushed tag now names the release (previously tauri-action derived it
       # from tauri.conf.json via `v__VERSION__`). That is the more correct
@@ -77,7 +77,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/github-script@v8
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         id: create
         with:
           script: |
@@ -126,9 +126,17 @@ jobs:
       id-token: write
     # `release` environment binds the OIDC token subject to
     # `repo:bloknayrb/tandem:environment:release`, matching the federated
-    # credential on the tandem-ci-trusted-signing service principal. No
-    # protection rules attached -- the environment exists solely as the
-    # subject anchor.
+    # credential on the tandem-ci-trusted-signing service principal.
+    #
+    # It DOES carry a protection rule, contrary to what this comment claimed
+    # until #1746: a deployment-branch policy limiting it to the `v*` tag
+    # pattern (measured 2026-09-02 via
+    # `gh api repos/bloknayrb/tandem/environments/release`). That is the
+    # "defense in depth" the "Refuse to sign outside tag builds" step below
+    # refers to. Reading this the old way invites deleting that step on the
+    # belief nothing else backs it -- or trusting an environment rule this
+    # comment said was absent. It holds no secrets of its own; every
+    # APPLE_*/AZURE_*/TAURI_SIGNING_* is repo-level.
     # CAUTION: renaming or deleting this environment silently breaks the
     # federated-credential subject match -- the Azure OIDC login fails
     # with a confusing token-validation error rather than a clear "no such
@@ -155,7 +163,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       # Enforce that Windows signing only runs on v* tag builds. The
       # `release` environment's UI deployment-branch rule is defense in
@@ -180,18 +188,21 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
           cache: npm
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        # `toolchain:` is required alongside the SHA pin -- see the note in
+        # ci.yml's rust-test job.
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: "./src-tauri -> target"
 
@@ -214,8 +225,16 @@ jobs:
       # `sign` tool picks it up via DefaultAzureCredential -> AzureCliCredential.
       - name: Azure OIDC login
         if: matrix.platform == 'windows-latest'
-        # SHA-pinned to the commit v2 (moving tag) resolves to at plan time.
-        # Re-resolve and re-pin deliberately when bumping major versions.
+        # Deliberately NOT re-resolved to current v2 (7184910... as of
+        # 2026-09-02) when every other action in this repo was pinned. This is
+        # the highest-privilege step here -- it mints the OIDC session that
+        # signs Windows binaries -- and a stale pin at a SHA that has been
+        # audited and in service since 2026-05-15 beats a fresh pin at an
+        # unaudited HEAD. "It works" would be an availability argument standing
+        # in for a security one; this is the security one. The upgrade path is
+        # a reviewed Dependabot bump, not a blind re-resolve. Residual carried
+        # knowingly: this misses any auth-handling fix shipped upstream since.
+        # Audited 2026-09-02.
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -296,13 +315,57 @@ jobs:
       # tag-triggered builds — from spawning. The empty-secret check now
       # happens inside the run script, where the secret has been materialized
       # via env.
+      # Mirror of "Validate updater signing key" above, for the Apple side.
+      # Every APPLE_* secret has existed since 2026-05-15 and the v0.24.1 run
+      # verified a real signed bundle on both macOS legs, so on the happy path
+      # this step is a no-op. What it catches is a rotation, an expiry, or a
+      # secret cleared by accident -- states in which the macOS legs used to
+      # build an unsigned .dmg, upload it, and go green, while the Windows leg
+      # already failed closed. The two platforms disagreeing is #1746.
+      #
+      # It names EVERY missing value rather than stopping at the first, because
+      # a rotation usually clears several at once. APPLE_SIGNING_IDENTITY is a
+      # repo Variable rather than a Secret -- included anyway, since
+      # tauri-action needs it and an empty one fails just as hard.
+      #
+      # As the NOTE below records, `secrets.*` cannot appear in a step-level
+      # `if:`, so the emptiness test lives in the run body where env has
+      # materialized it.
+      - name: Validate Apple signing material
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          # gate:apple-signing
+          missing=""
+          [ -z "$APPLE_CERTIFICATE" ] && missing="$missing APPLE_CERTIFICATE"
+          [ -z "$APPLE_CERTIFICATE_PASSWORD" ] && missing="$missing APPLE_CERTIFICATE_PASSWORD"
+          [ -z "$APPLE_TEAM_ID" ] && missing="$missing APPLE_TEAM_ID"
+          [ -z "$APPLE_API_KEY_BASE64" ] && missing="$missing APPLE_API_KEY_BASE64"
+          [ -z "$APPLE_API_KEY_ID" ] && missing="$missing APPLE_API_KEY_ID"
+          [ -z "$APPLE_API_ISSUER_ID" ] && missing="$missing APPLE_API_ISSUER_ID"
+          [ -z "$APPLE_SIGNING_IDENTITY" ] && missing="$missing APPLE_SIGNING_IDENTITY"
+          if [ -n "$missing" ]; then
+            echo "::error::Apple signing material missing:$missing. The macOS legs would build an unsigned, un-notarized bundle and the release would still go green (#1746). Populate these before tagging."
+            exit 1
+          fi
+          echo "Apple signing material present."
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+
       - name: Decode App Store Connect API key
         if: matrix.platform == 'macos-latest'
         shell: bash
         run: |
+          # gate:apple-decode
           if [ -z "$APPLE_API_KEY_BASE64" ]; then
-            echo "APPLE_API_KEY_BASE64 unset — skipping notarization key decode."
-            exit 0
+            echo "::error::APPLE_API_KEY_BASE64 is empty — notarization would be skipped and the release would still go green (#1746)."
+            exit 1
           fi
           umask 077
           mkdir -p "$RUNNER_TEMP/private_keys"
@@ -314,20 +377,22 @@ jobs:
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Apple code signing + notarization (issue #428 / macOS 26.1 Tahoe Gatekeeper).
-          # When these secrets are unset (current state) they expand to empty strings
-          # and tauri-action skips Apple signing entirely -- same unsigned behavior as
-          # before this change. When configured, tauri-action infers the signing
-          # identity from APPLE_CERTIFICATE and submits the .app to Apple's notary
-          # service using the App Store Connect API key (key ID + issuer + path
-          # to decoded .p8). APPLE_SIGNING_IDENTITY is a repo Variable, not a
-          # Secret -- the identity string is printed in every signed binary and
-          # is not sensitive material.
+          # These secrets have all been populated since 2026-05-15; the "unset
+          # (current state)" this comment used to describe ended then. If any of
+          # them were empty, tauri-action would silently skip Apple signing --
+          # which is why "Validate Apple signing material" above now refuses to
+          # reach this step in that state (#1746). tauri-action infers the
+          # signing identity from APPLE_CERTIFICATE and submits the .app to
+          # Apple's notary service using the App Store Connect API key (key ID +
+          # issuer + path to decoded .p8). APPLE_SIGNING_IDENTITY is a repo
+          # Variable, not a Secret -- the identity string is printed in every
+          # signed binary and is not sensitive material.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
@@ -387,7 +452,7 @@ jobs:
       # Runs after tauri-action so it tests the bytes that were actually
       # uploaded. The release is a DRAFT at this point, so failing here fails
       # `release-check` before anything is publishable.
-      # `success()`, unlike the macOS/Windows verify steps' `always()`. Those run
+      # `success()`, unlike the macOS verify step's `always()`. That one runs
       # unconditionally because tauri-action can exit 0 having produced an
       # unsigned/un-notarized bundle, so the build "succeeding" proves nothing.
       # Here, if the build failed there are simply no artifacts, and running
@@ -459,9 +524,12 @@ jobs:
       # `xcrun stapler validate` checks it fully offline, with none of the
       # network/policy flakiness `spctl --assess` exhibits on CI runners.
       #
-      # When APPLE_CERTIFICATE is unset (pre-cert state) the build ships
-      # unsigned BY DESIGN, so skip the gate with a ::notice:: to keep current
-      # releases green; the check auto-enforces the moment signing secrets land.
+      # This used to skip itself with a ::notice:: when APPLE_CERTIFICATE was
+      # empty, from the era before the certificate existed. The secrets landed
+      # 2026-05-15 and the v0.24.1 run verified a real bundle on both legs, so
+      # the skip branch was dead code that would have silently un-gated the
+      # macOS legs the moment a secret rotated out (#1746). It now fails closed,
+      # like the Windows leg always has.
       - name: Verify macOS signature + notarization
         if: always() && matrix.platform == 'macos-latest'
         shell: bash
@@ -469,8 +537,8 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
         run: |
           if [ -z "$APPLE_CERTIFICATE" ]; then
-            echo "::notice::APPLE_CERTIFICATE unset — macOS bundle ships unsigned/un-notarized by design (see #428). Skipping verification until signing secrets are populated."
-            exit 0
+            echo "::error::APPLE_CERTIFICATE is empty — this bundle is unsigned and un-notarized, and Gatekeeper will refuse it on every Mac (#1746)."
+            exit 1
           fi
           shopt -s nullglob
           apps=(src-tauri/target/*/release/bundle/macos/*.app src-tauri/target/release/bundle/macos/*.app)
@@ -525,17 +593,37 @@ jobs:
             fi
             echo "ok: $app code-signed + notarization-stapled + sidecar allow-jit + reaper bundled"
           done
-          # .dmg stapling is best-effort (tauri does not always staple the disk
-          # image itself); warn but do not fail — the stapled .app inside is the
-          # artifact Gatekeeper evaluates on first launch.
+          # The .app checked above is the staged bundle; what users download is
+          # the .dmg. Its SIGNATURE is now an error -- that fires only on a real
+          # defect. Its STAPLE stays a warning, deliberately: tauri does not
+          # always staple the disk image, and the embedded .app is the artifact
+          # Gatekeeper evaluates on first launch. That reasoning predates this
+          # change and there is no Apple hardware here to re-test it, so it is
+          # left standing rather than quietly overturned.
+          #
+          # "No .dmg found at all" is likewise a WARNING for one release, not an
+          # error: bundle.targets is "all" so one should always exist, but this
+          # is the only check here that could newly fail a previously-green
+          # release for a non-signing reason, and it cannot be exercised before
+          # a tag push. Promote it to an error once a release has shown it fires
+          # only when it should.
+          dmg_count=0
           for dmg in src-tauri/target/*/release/bundle/dmg/*.dmg src-tauri/target/release/bundle/dmg/*.dmg; do
             [ -e "$dmg" ] || continue
+            dmg_count=$((dmg_count + 1))
+            if ! codesign --verify --strict --verbose=2 "$dmg"; then
+              echo "::error::$dmg: codesign --verify failed — the disk image users download is not signed"
+              errors=1
+            fi
             if xcrun stapler validate "$dmg" >/dev/null 2>&1; then
-              echo "ok: $dmg stapled"
+              echo "ok: $dmg signed + stapled"
             else
               echo "::warning::$dmg: not stapled (acceptable — the embedded .app is stapled)"
             fi
           done
+          if [ "$dmg_count" -eq 0 ]; then
+            echo "::warning::Verify macOS: no .dmg found under src-tauri/target/**/release/bundle/dmg/ — bundle.targets is \"all\", so this is unexpected. Promote to an error once confirmed."
+          fi
           if [ "$errors" -ne 0 ]; then exit 1; fi
 
       # Headless runtime smoke (macOS arm64). The verify step above proves the
@@ -774,7 +862,7 @@ jobs:
     if: needs.build-tauri.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v8
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
             const EXPECTED = [

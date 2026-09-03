@@ -35,8 +35,13 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
  * must not be able to blind the guard, and a commented-out step simply does not
  * exist in the parsed document.
  *
- * Scope note: nothing else in `tests/` reads `.github/workflows/ci.yml`. This is
- * the first, which is part of why the gap survived as long as it did.
+ * Scope note: this was the first test in `tests/` to read
+ * `.github/workflows/ci.yml`, which is part of why the gap survived as long as
+ * it did. It is now one of six — the four coverage/typecheck/ACL wiring tests,
+ * plus `node-sidecar-pin-wiring.test.ts` (the advisory drift job's shape) and
+ * `workflow-action-pin.test.ts` (which reads all five workflow files). Each owns
+ * a distinct fact about the file; see ADR-051's one-owner-per-fact rule before
+ * adding an assertion here that another of them already makes.
  */
 
 type Step = {

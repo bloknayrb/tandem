@@ -8,7 +8,9 @@
  *   node scripts/download-node-sidecar.mjs [--target <triple>] [--node-version <version>]
  *
  * If --target is omitted, detects the host triple via `rustc -vV`.
- * Defaults to Node.js 22 (LTS).
+ * The version and the expected archive hashes come from
+ * scripts/node-sidecar-version.mjs -- see that file for why they live apart
+ * from this one, and why a fetched checksum is not an integrity control.
  */
 
 import { execSync } from "child_process";
@@ -23,11 +25,13 @@ import {
   rmSync,
   statSync,
   unlinkSync,
+  writeFileSync,
 } from "fs";
 import { dirname, join } from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { fileURLToPath } from "url";
+import { DEFAULT_NODE_VERSION, NODE_ARCHIVE_SHA256 } from "./node-sidecar-version.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, "..");
@@ -78,6 +82,58 @@ async function download(url, destPath) {
 }
 
 const isCI = process.env.CI === "true";
+
+/**
+ * Check the downloaded archive against the hash committed in
+ * node-sidecar-version.mjs. Unlike the fetched SHASUMS256.txt below, this one
+ * did not travel with the file it describes -- an adversary who can serve a
+ * malicious tarball from nodejs.org or its CDN can serve the matching fetched
+ * hash too, but cannot change a hash committed to this repository.
+ *
+ * Only applies when the version being downloaded is the pinned one; an explicit
+ * `--node-version` is a deliberate override and has no committed hash.
+ */
+function verifyCommittedChecksum(archivePath, archiveName, nodeVersion, targetTriple) {
+  if (nodeVersion !== DEFAULT_NODE_VERSION) {
+    // An explicit `--node-version` is a deliberate override and has no committed
+    // hash, so this check has nothing to compare against and steps aside.
+    //
+    // Say what that actually leaves, rather than "the fetched SHASUMS256.txt
+    // alone", which reads like a second line of defence and outside CI is not
+    // one: every failure branch in `verifyChecksum` below warns and RETURNS when
+    // `isCI` is false, so on a developer machine a failed or blocked fetch means
+    // the archive is verified by nothing at all. That degradation predates this
+    // change and is deliberate (it keeps an offline build working); what did not
+    // exist before was a comment implying coverage it does not have.
+    //
+    // The pinned path is unaffected either way -- it reaches the committed hash
+    // below, which throws on mismatch and never degrades.
+    console.warn(
+      `Node ${nodeVersion} was requested explicitly (pin is ${DEFAULT_NODE_VERSION}) -- ` +
+        "no committed hash to check against. Outside CI the fetched SHASUMS256.txt " +
+        "check also degrades to a warning if it cannot be reached, so this archive " +
+        "may end up verified by nothing. Build the pinned version for an integrity-checked binary.",
+    );
+    return;
+  }
+  const expected = NODE_ARCHIVE_SHA256[targetTriple];
+  if (!expected) {
+    throw new Error(
+      `No committed SHA-256 for ${targetTriple} in scripts/node-sidecar-version.mjs. ` +
+        "Add one before building this target -- see that file's bump instructions.",
+    );
+  }
+  const actual = createHash("sha256").update(readFileSync(archivePath)).digest("hex");
+  if (actual !== expected) {
+    throw new Error(
+      `Committed checksum mismatch for ${archiveName}!\n` +
+        `Expected: ${expected}\n` +
+        `Got:      ${actual}\n` +
+        "The downloaded archive is not the one this repository pinned. Do NOT bundle it.",
+    );
+  }
+  console.log(`Committed checksum verified: ${archiveName}`);
+}
 
 async function verifyChecksum(archivePath, archiveName, nodeVersion) {
   const shaUrl = `https://nodejs.org/dist/v${nodeVersion}/SHASUMS256.txt`;
@@ -169,7 +225,7 @@ function extractZip(archivePath, nodeVersion, info, outputPath) {
 
 // --- Main ---
 
-const nodeVersion = getArg("--node-version") || "22.17.0";
+const nodeVersion = getArg("--node-version") || DEFAULT_NODE_VERSION;
 const targetTriple = getArg("--target") || detectHostTriple();
 
 const info = TRIPLE_MAP[targetTriple];
@@ -183,15 +239,43 @@ const isWindows = info.platform === "win";
 const sidecarName = `node-sidecar-${targetTriple}${isWindows ? ".exe" : ""}`;
 const outputPath = join(BINARIES_DIR, sidecarName);
 
+// A marker recording which Node version produced the sidecar sitting on disk.
+// Before #1747 this check was size-only: any existing binary over the floor was
+// accepted and the script exited 0 before the version was ever consulted, so
+// bumping the pin was a silent no-op in every tree that already had a sidecar --
+// the old binary got bundled while CI's drift check reported green against the
+// constant. CI never saw it (fresh checkouts, and rust-cache scopes to
+// ./src-tauri -> target rather than binaries/), which is exactly why it could
+// persist. A MISSING marker counts as stale: that is the state every existing
+// checkout is in the first time this runs, and treating it as "fine" would let
+// the bug survive everywhere it currently lives.
+const versionMarkerPath = `${outputPath}.version`;
+
 // Validate existing binary — a truncated file from an interrupted build must be re-downloaded
 if (existsSync(outputPath)) {
   const size = statSync(outputPath).size;
-  if (size >= MIN_SIDECAR_SIZE) {
-    console.log(`Sidecar already exists (${(size / 1e6).toFixed(1)}MB): ${outputPath}`);
+  const recorded = existsSync(versionMarkerPath)
+    ? readFileSync(versionMarkerPath, "utf-8").trim()
+    : null;
+  if (size >= MIN_SIDECAR_SIZE && recorded === nodeVersion) {
+    console.log(
+      `Sidecar already exists (v${recorded}, ${(size / 1e6).toFixed(1)}MB): ${outputPath}`,
+    );
     process.exit(0);
   }
-  console.warn(`Existing sidecar is suspiciously small (${size} bytes) — re-downloading`);
+  if (size < MIN_SIDECAR_SIZE) {
+    console.warn(`Existing sidecar is suspiciously small (${size} bytes) — re-downloading`);
+  } else {
+    console.warn(
+      `Existing sidecar is v${recorded ?? "unknown"}, want v${nodeVersion} — re-downloading`,
+    );
+  }
   unlinkSync(outputPath);
+  try {
+    unlinkSync(versionMarkerPath);
+  } catch {
+    /* no marker to remove */
+  }
 }
 
 mkdirSync(BINARIES_DIR, { recursive: true });
@@ -204,6 +288,7 @@ const archivePath = join(BINARIES_DIR, archiveName);
 
 try {
   await download(url, archivePath);
+  verifyCommittedChecksum(archivePath, archiveName, nodeVersion, targetTriple);
   await verifyChecksum(archivePath, archiveName, nodeVersion);
 
   if (isWindows) {
@@ -212,7 +297,8 @@ try {
     extractTarGz(archivePath, nodeVersion, info, outputPath);
   }
 
-  console.log(`Sidecar ready: ${outputPath}`);
+  writeFileSync(versionMarkerPath, `${nodeVersion}\n`);
+  console.log(`Sidecar ready: ${outputPath} (v${nodeVersion})`);
 } finally {
   try {
     unlinkSync(archivePath);
