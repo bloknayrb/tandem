@@ -870,7 +870,10 @@ The design is unchanged — a truncated flush is worse — but this is the cavea
 owns.** `owns_child` says only that we hold a child handle; nothing checks that
 the child is what is answering. A foreign Tandem on :3479 (a `tandem start`, a
 second app-data instance) receives the shutdown, flushes and exits, while the log
-still says the stop was graceful. This is not new, but it used to be reachable
+still says the stop was graceful — though `on_child_terminated_in` clears the
+stored handle pid-keyed, so a sidecar that already died reads as `owns_child =
+false` and skips the POST altogether, which is what makes this case rare rather
+than routine. This is not new, but it used to be reachable
 only from two explicit user actions — Settings → Network → Restart server, and
 Install update — and #1756 widened it to **every Quit**. The spawn site now pins
 `TANDEM_PORT` / `TANDEM_MCP_PORT` / `TANDEM_BIND_HOST` on the child (the shell

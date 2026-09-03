@@ -995,25 +995,55 @@ mod graceful {
 /// Before this, Quit was a bare `kill_sidecar`, discarding up to ~60s of
 /// unsaved edits, the tab set, and leaving the store lock behind.
 pub(crate) fn shutdown_sidecar_on_exit(app: &tauri::AppHandle) {
-    // One-way, and set before the kill that takes the SidecarState lock. That
-    // ordering is what closes the respawn race: either the store site sees the
-    // flag under the lock and kills its fresh child, or the kill sees the stored
-    // child. The residual is a child between `cmd.spawn()` and the lock at the
-    // instant the process exits — unavoidable, and covered by the job object on
-    // Windows.
-    EXITING.store(true, Ordering::Release);
     let started = std::time::Instant::now();
-    let prep = graceful::prepare(app);
-    let (outcome, proof) = graceful::attempt(
-        prep,
-        EXIT_GRACEFUL_BUDGET,
-        GRACEFUL_SHUTDOWN_DEADLINE_SECS,
-        Endpoints::PRODUCTION,
-    );
+    let (outcome, proof) = exit_sequence(|| graceful::prepare(app), Endpoints::PRODUCTION);
     // Unconditional, and outside the `catch_unwind` inside `attempt`, so a
     // panicked graceful stop still ends with the child dead.
     kill_sidecar_on_exit(app, proof);
     log::warn!("{}", exit_verdict_line(started.elapsed(), &outcome));
+}
+
+/// The `AppHandle`-free middle of the exit sequence: latch `EXITING`, prepare,
+/// then run the bounded graceful stop with the parameters a real Quit uses.
+///
+/// **Hoisted out of `shutdown_sidecar_on_exit` because that function's body is
+/// reachable by no test** — it needs an `AppHandle` — and three edits inside it
+/// re-break #1756 while the whole suite stays green: passing
+/// `Duration::from_millis(1)` instead of `EXIT_GRACEFUL_BUDGET` (every Quit then
+/// times out in 1 ms and hard-kills), forwarding a zero deadline, and deleting
+/// the `EXITING` latch (the respawn race returns). `graceful::attempt` being
+/// well covered does not help: the defect lives in what the caller HANDS it.
+///
+/// So `prepare` and `endpoints` are parameters, and nothing else is: pointed at
+/// a loopback listener, the forwarded budget and deadline become *observable*
+/// rather than merely asserted-equal at a call site. A 1 ms budget cannot await
+/// a reply that arrives 200 ms later, and a zero deadline sends
+/// `wait_for_server_gone` through a loop body that never runs, so
+/// `exit_sequence_forwards_the_budget_and_deadline_a_real_quit_uses` reports
+/// `timed_out` / `verdict=TimedOut` where a real Quit reports a flush. `prepare`
+/// is a closure rather than a ready-made `Prep` so the `EXITING`-before-prepare
+/// ordering is observable too, not just the flag's final value.
+///
+/// The residual is the two arguments bound at the call site above, alongside the
+/// already documented `RunEvent::Exit` arm in `lib.rs`.
+fn exit_sequence(
+    prepare: impl FnOnce() -> graceful::Prep,
+    endpoints: Endpoints<'_>,
+) -> (graceful::Outcome, graceful::GracefulAttempted) {
+    // One-way, and set BEFORE anything that takes the SidecarState lock — which
+    // `prepare` does, to read `owned_child`. That ordering is what closes the
+    // respawn race: either the store site sees the flag under the lock and kills
+    // its fresh child, or the kill sees the stored child. The residual is a
+    // child between `cmd.spawn()` and the lock at the instant the process exits
+    // — unavoidable, and covered by the job object on Windows.
+    EXITING.store(true, Ordering::Release);
+    let prep = prepare();
+    graceful::attempt(
+        prep,
+        EXIT_GRACEFUL_BUDGET,
+        GRACEFUL_SHUTDOWN_DEADLINE_SECS,
+        endpoints,
+    )
 }
 
 /// The one line that has to reach `tandem.log` on an installed build.
@@ -2134,17 +2164,18 @@ mod shutdown_guard_tests {
         assert!(!line.contains("owned_child=true"), "{line}");
     }
 
-    /// A real POST and a real port-release wait, against a loopback listener.
+    /// A one-shot loopback stand-in for the sidecar's `/api/shutdown`, returning
+    /// its address and a handle yielding the request head it read.
     ///
-    /// This is what a `Duration::from_millis(1)` budget, a skipped POST or a
-    /// zero deadline cannot survive — the three mutants the witness token waves
-    /// through. It runs in ~250 ms.
-    #[test]
-    fn graceful_attempt_posts_and_waits_for_the_reply() {
+    /// Shared by the two tests that need a REAL POST and a real port-release
+    /// wait — `graceful::attempt` directly, and the whole `exit_sequence` — so
+    /// that both observe the same 200 ms reply delay and the same
+    /// closed-port-afterwards behaviour. Each runs in ~250 ms.
+    fn stub_shutdown_endpoint() -> (std::net::SocketAddr, std::thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let addr = listener.local_addr().expect("local_addr");
         // Non-blocking accept with its own deadline, so a regression that stops
-        // POSTing turns this test RED instead of hanging the suite forever on
+        // POSTing turns the caller RED instead of hanging the suite forever on
         // `join()` — a hung pre-push run is worse than a failing one.
         listener.set_nonblocking(true).expect("set_nonblocking");
         let server = std::thread::spawn(move || {
@@ -2189,6 +2220,17 @@ mod shutdown_guard_tests {
             stream.flush().expect("flush");
             head
         });
+        (addr, server)
+    }
+
+    /// A real POST and a real port-release wait, against a loopback listener.
+    ///
+    /// This is what a `Duration::from_millis(1)` budget, a skipped POST or a
+    /// zero deadline cannot survive — the three mutants the witness token waves
+    /// through. It runs in ~250 ms.
+    #[test]
+    fn graceful_attempt_posts_and_waits_for_the_reply() {
+        let (addr, server) = stub_shutdown_endpoint();
 
         let shutdown = format!("http://{addr}/api/shutdown");
         let health = format!("http://{addr}/health");
@@ -2231,6 +2273,124 @@ mod shutdown_guard_tests {
             elapsed >= Duration::from_millis(200),
             "the reply was awaited, not skipped (elapsed {elapsed:?})"
         );
+    }
+
+    /// The same POST and port-release wait, but driven through `exit_sequence` —
+    /// i.e. through the budget and deadline the exit path CHOOSES rather than the
+    /// ones a test hands `graceful::attempt`.
+    ///
+    /// `graceful_attempt_posts_and_waits_for_the_reply` is green for every one of
+    /// these mutants, because it supplies the constants itself. What this pins is
+    /// what `exit_sequence` forwards, and both values are pinned by CONSEQUENCE
+    /// rather than by an equality on a call site (which any literal substituted
+    /// one line later would still satisfy):
+    ///   - a `Duration::from_millis(1)` budget cannot await a reply that arrives
+    ///     200 ms later — `timed_out` becomes true and `verdict` becomes `none`;
+    ///   - a zero deadline sends `wait_for_server_gone` into a `while now <
+    ///     deadline` loop whose body never runs, so the closed port is never
+    ///     observed and the verdict is `TimedOut`, not `Flushed`.
+    /// Either one hard-kills every Quit with the user's edits unflushed (#1756).
+    #[test]
+    fn exit_sequence_forwards_the_budget_and_deadline_a_real_quit_uses() {
+        let _serialise = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        set_flags(false, false);
+        let (addr, server) = stub_shutdown_endpoint();
+
+        let shutdown = format!("http://{addr}/api/shutdown");
+        let health = format!("http://{addr}/health");
+        // Read INSIDE the closure: the flag's final value cannot tell a latch set
+        // before the `SidecarState` lock from one set after it, and "before" is
+        // the whole point of the latch.
+        let latched_before_prepare = std::cell::Cell::new(false);
+
+        let started = std::time::Instant::now();
+        let (outcome, _proof) = exit_sequence(
+            || {
+                latched_before_prepare.set(EXITING.load(Ordering::Acquire));
+                graceful::Prep {
+                    owned_child: true,
+                    client: Some(build_http_client(HTTP_CLIENT_TIMEOUT).expect("build client")),
+                }
+            },
+            Endpoints {
+                shutdown: &shutdown,
+                health: &health,
+            },
+        );
+        let elapsed = started.elapsed();
+
+        assert!(
+            latched_before_prepare.get(),
+            "EXITING must be latched BEFORE the prepare that takes the SidecarState lock — \
+             that ordering is what closes the respawn race"
+        );
+        assert!(
+            EXITING.load(Ordering::Acquire),
+            "and it must still be latched afterwards"
+        );
+
+        let head = server.join().expect("server thread");
+        assert!(
+            head.starts_with("POST /api/shutdown "),
+            "the exit sequence must POST /api/shutdown, got: {head:?}"
+        );
+        assert!(!outcome.timed_out, "a 1ms budget is what makes this true");
+        assert_eq!(
+            outcome.verdict,
+            Some(GracefulStop::Flushed),
+            "a zero deadline never polls the closed port, and reports TimedOut here"
+        );
+        assert!(outcome.attempted);
+        assert!(!outcome.panicked);
+        assert!(
+            elapsed >= Duration::from_millis(200),
+            "the reply was awaited under the real budget (elapsed {elapsed:?})"
+        );
+
+        set_flags(false, false);
+    }
+
+    /// A `prepare` that yields no client must stay DISTINGUISHABLE from a real
+    /// attempt, and must still latch `EXITING`.
+    ///
+    /// `graceful::prepare` itself is not reachable from a test — it needs an
+    /// `AppHandle` — so a `prepare` neutered to return `client: None`
+    /// unconditionally survives this suite. What does not survive is that
+    /// surviving *silently*: the exit verdict line then reads `attempted=false,
+    /// verdict=none`, which is the one string
+    /// `verdict_line_carries_the_substrings_the_smoke_checklist_greps` proves a
+    /// real flush cannot produce. The smoke checklist reads that line.
+    #[test]
+    fn exit_sequence_reports_a_clientless_prepare_as_no_attempt() {
+        let _serialise = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        set_flags(false, false);
+
+        // No client, so nothing is dialled and `Endpoints::PRODUCTION` is inert —
+        // this test never touches :3479.
+        let (outcome, _proof) = exit_sequence(
+            || graceful::Prep {
+                owned_child: true,
+                client: None,
+            },
+            Endpoints::PRODUCTION,
+        );
+
+        assert!(EXITING.load(Ordering::Acquire), "the latch is unconditional");
+        assert!(!outcome.attempted, "no client is not an attempt");
+        assert_eq!(outcome.verdict, None);
+        assert!(!outcome.timed_out);
+        assert!(!outcome.panicked);
+        assert!(
+            outcome.owned_child,
+            "owned_child comes from prepare and must survive the short-circuit — \
+             otherwise 'we owned a child and flushed nothing' is unreportable"
+        );
+
+        let line = exit_verdict_line(Duration::from_millis(0), &outcome);
+        assert!(line.contains("attempted=false"), "{line}");
+        assert!(line.contains("verdict=none"), "{line}");
+
+        set_flags(false, false);
     }
 
     /// The decline arm is not the only way out of `restart_sidecar`, and none of

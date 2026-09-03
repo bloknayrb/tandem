@@ -1283,29 +1283,51 @@ pub fn run() {
                 let start_result = start_sidecar(&handle, &client, cold_start_file.as_deref()).await;
                 drop(gate);
 
-                if let Err(e) = start_result {
-                    log::error!("Sidecar failed: {e}");
-                    // NOT terminal: the dialog below offers "Retry Server Start",
-                    // which re-runs `start_sidecar` with the queue intact. So this
-                    // warns (evidence for every exit, including the five `?`
-                    // bail-outs the old tail block sat past) without latching and
-                    // without destroying anything. The latch is set on the Close
-                    // branch of that dialog instead. #1416
-                    report_pending_opens_with(
-                        handle.state::<PendingOpens>().inner(),
-                        false,
-                        |_code| {
-                            // Deliberately no toast here: the modal is about to say
-                            // the server failed and offer the retry that would open
-                            // these files. "Some of those files couldn't be opened"
-                            // alongside it would contradict the button.
-                        },
-                    );
-                    // Ask the OS what is actually holding the port instead of
-                    // telling the user to go find out.
-                    let holder = port_holder_for_dialog().await;
-                    show_server_error_dialog(&handle, &e, holder, cold_start_file, true);
-                    return;
+                // Exhaustive on purpose. `SpawnOutcome`'s own contract is that
+                // every caller matches on it, and the `if let Err(..)` this
+                // replaces made that claim false: `Ok(Declined)` fell straight
+                // through to `check_for_update`, i.e. an update check fired on a
+                // session that is quitting. Reachable only when the quit lands
+                // while this initial spawn is still in flight, so the damage is
+                // small — but a contract with one silent exception is not one.
+                match start_result {
+                    Ok(SpawnOutcome::Started) => {}
+                    // No dialog and no update check: the thing that declined us
+                    // IS the shutdown (or the update install already in flight).
+                    // A "server failed" modal raised into a closing app is worse
+                    // than nothing, and the failure arm's
+                    // `report_pending_opens_with` would queue work for a session
+                    // that is ending anyway.
+                    Ok(SpawnOutcome::Declined) => {
+                        log::warn!(
+                            "Initial start_sidecar declined — the sidecar is shutting down; no dialog, no update check"
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        log::error!("Sidecar failed: {e}");
+                        // NOT terminal: the dialog below offers "Retry Server Start",
+                        // which re-runs `start_sidecar` with the queue intact. So this
+                        // warns (evidence for every exit, including the five `?`
+                        // bail-outs the old tail block sat past) without latching and
+                        // without destroying anything. The latch is set on the Close
+                        // branch of that dialog instead. #1416
+                        report_pending_opens_with(
+                            handle.state::<PendingOpens>().inner(),
+                            false,
+                            |_code| {
+                                // Deliberately no toast here: the modal is about to say
+                                // the server failed and offer the retry that would open
+                                // these files. "Some of those files couldn't be opened"
+                                // alongside it would contradict the button.
+                            },
+                        );
+                        // Ask the OS what is actually holding the port instead of
+                        // telling the user to go find out.
+                        let holder = port_holder_for_dialog().await;
+                        show_server_error_dialog(&handle, &e, holder, cold_start_file, true);
+                        return;
+                    }
                 }
 
                 // Auto-configuration of Claude on startup was removed in #477 PR
