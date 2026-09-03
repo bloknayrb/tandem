@@ -62,7 +62,10 @@ export async function convertToMarkdown(
 ): Promise<ConvertResult> {
   const docState = getCurrentDoc(documentId);
   if (!docState) {
-    throw Object.assign(new Error("Document not found."), { code: "FILE_NOT_FOUND" });
+    throw Object.assign(
+      new Error("No document is open, or documentId names a document that is not open."),
+      { code: "NO_DOCUMENT" },
+    );
   }
   if (docState.format !== "docx") {
     throw Object.assign(new Error("Only .docx documents can be converted to Markdown."), {

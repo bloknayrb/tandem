@@ -170,6 +170,132 @@ describe("MCP tool integration — document tools", () => {
   });
 });
 
+// #1796: tandem_convertToMarkdown's handler catch mapped every FILE_NOT_FOUND
+// (both "no document" and "missing output directory") onto noDocumentError(),
+// and flattened INVALID_PATH/EMPTY_CONVERSION/OPEN_FAILED to FORMAT_ERROR.
+// These pin the fixed 1:1 code mapping, and the over-fold negatives below
+// pin that UNSUPPORTED_FORMAT and upload INVALID_PATH did NOT get swept onto
+// NO_DOCUMENT by too-broad a fix.
+describe("MCP tool integration — tandem_convertToMarkdown error mapping (#1796)", () => {
+  const convertTempDirs: string[] = [];
+
+  afterEach(async () => {
+    for (const dir of convertTempDirs.splice(0)) {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  async function setupDocxDoc(id: string, dir: string) {
+    const ydoc = getOrCreateDocument(id);
+    populateYDoc(ydoc, "Hello world");
+    addDoc(id, {
+      id,
+      filePath: join(dir, `${id}.docx`),
+      format: "docx",
+      readOnly: false,
+      source: "file",
+    });
+    setActiveDocId(id);
+    return ydoc;
+  }
+
+  it("missing outputPath directory: code FILE_NOT_FOUND, message names the directory, not the NO_DOCUMENT text", async () => {
+    const base = await fs.mkdtemp(join(tmpdir(), "tandem-convert-"));
+    convertTempDirs.push(base);
+    await setupDocxDoc("convert-missing-dir", base);
+    const missingDir = join(base, "does-not-exist");
+
+    const result = await client.callTool({
+      name: "tandem_convertToMarkdown",
+      arguments: { outputPath: missingDir },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("FILE_NOT_FOUND");
+    expect(parsed.message).toContain(missingDir);
+    expect(parsed.message).not.toContain("No document is open");
+  });
+
+  it("no document open: the shared noDocumentError() text", async () => {
+    const result = await client.callTool({ name: "tandem_convertToMarkdown", arguments: {} });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NO_DOCUMENT");
+    expect(parsed.message).toBe("No document is open. Call tandem_open first.");
+  });
+
+  it("documentId naming a closed document: code NO_DOCUMENT, message mentions documentId", async () => {
+    const result = await client.callTool({
+      name: "tandem_convertToMarkdown",
+      arguments: { documentId: "not-open-anywhere" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NO_DOCUMENT");
+    expect(parsed.message).toContain("documentId");
+  });
+
+  // Pins the `??` (not `||`) reason in getCurrentDoc: a defined-but-empty
+  // documentId must NOT fall back to the active document.
+  it('documentId: "" does not fall back to the active document', async () => {
+    setupDoc("convert-active-fallback-check", "some content");
+
+    const result = await client.callTool({
+      name: "tandem_convertToMarkdown",
+      arguments: { documentId: "" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NO_DOCUMENT");
+  });
+
+  it("a .md document open: FORMAT_ERROR, not the NO_DOCUMENT text (over-fold negative)", async () => {
+    setupDoc("convert-md-doc", "Just markdown");
+
+    const result = await client.callTool({ name: "tandem_convertToMarkdown", arguments: {} });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("FORMAT_ERROR");
+    expect(parsed.message).toContain("Only .docx");
+    expect(parsed.message).not.toContain("No document is open");
+  });
+
+  it("an uploaded .docx: INVALID_PATH (over-fold negative)", async () => {
+    const ydoc = getOrCreateDocument("convert-upload-docx");
+    populateYDoc(ydoc, "Hello world");
+    addDoc("convert-upload-docx", {
+      id: "convert-upload-docx",
+      filePath: "upload://convert-upload-docx.docx",
+      format: "docx",
+      readOnly: false,
+      source: "upload",
+    });
+    setActiveDocId("convert-upload-docx");
+
+    const result = await client.callTool({ name: "tandem_convertToMarkdown", arguments: {} });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_PATH");
+    expect(parsed.message).toContain("Uploaded");
+  });
+
+  it("outputPath naming an existing file: INVALID_PATH (over-fold negative)", async () => {
+    const base = await fs.mkdtemp(join(tmpdir(), "tandem-convert-"));
+    convertTempDirs.push(base);
+    await setupDocxDoc("convert-existing-file", base);
+    const decoy = join(base, "decoy.md");
+    await fs.writeFile(decoy, "x");
+
+    const result = await client.callTool({
+      name: "tandem_convertToMarkdown",
+      arguments: { outputPath: decoy },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_PATH");
+  });
+});
+
 describe("MCP tool integration — annotation tools", () => {
   it("tandem_comment creates an annotation", async () => {
     setupDoc("mcp-ann-1", "Hello world test content");

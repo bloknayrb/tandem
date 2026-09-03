@@ -1338,15 +1338,19 @@ export function registerDocumentTools(server: McpServer): void {
         });
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
-        if (e.code === "FILE_NOT_FOUND") return noDocumentError();
-        if (
-          e.code === "UNSUPPORTED_FORMAT" ||
-          e.code === "INVALID_PATH" ||
-          e.code === "EMPTY_CONVERSION" ||
-          e.code === "OPEN_FAILED"
-        ) {
-          return mcpError("FORMAT_ERROR", e.message);
+        if (e.code === "NO_DOCUMENT") {
+          // `safeDocId` is what `convertToMarkdown` actually received —
+          // `getCurrentDoc` (registry.ts) resolves it with `??`, not `||`, so a
+          // defined-but-empty `""` does NOT fall back to the active document
+          // and correctly reaches this branch. A named-but-closed id gets the
+          // thrown message that says so; the no-arg case keeps the shared text.
+          return safeDocId !== undefined ? mcpError("NO_DOCUMENT", e.message) : noDocumentError();
         }
+        if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
+        if (e.code === "INVALID_PATH") return mcpError("INVALID_PATH", e.message);
+        if (e.code === "EMPTY_CONVERSION") return mcpError("EMPTY_CONVERSION", e.message);
+        if (e.code === "OPEN_FAILED") return mcpError("OPEN_FAILED", e.message);
+        if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
         throw err; // Let withErrorBoundary handle unexpected errors
       }
     }),

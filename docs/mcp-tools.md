@@ -47,6 +47,8 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `FILE_TOO_LARGE` | Inline content exceeds the tool's size cap (e.g. `tandem_appendContent`). |
 | `INVALID_RANGE` | Offset out of bounds, text not found, or range overlaps heading markup. |
 | `EMPTY_DOCUMENT` | `tandem_edit` called on an empty document — seed content with `tandem_appendContent` / `tandem_scratchpad({ content })` first. |
+| `EMPTY_CONVERSION` | `tandem_convertToMarkdown` produced no extractable text from the source `.docx`. |
+| `OPEN_FAILED` | `tandem_convertToMarkdown`'s converted file could not be reopened as a new tab. |
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
 | `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied, e.g., `EACCES`). |
@@ -526,7 +528,7 @@ Convert a `.docx` document to an editable Markdown file. Writes the `.md` file t
 
 **Notes:** The source document must be a `.docx` file. The converted Markdown file opens as a new editable tab alongside the original `.docx`.
 
-**Errors:** `NO_DOCUMENT` (no active document or `documentId` not found), `FORMAT_ERROR` (source is not `.docx`, invalid output path, or conversion produced empty result)
+**Errors:** `NO_DOCUMENT` (no active document, or `documentId` names a document that is not open), `FILE_NOT_FOUND` (the `outputPath` directory does not exist; message names the resolved directory), `INVALID_PATH` (relative path, UNC path, an upload with no disk location, or `outputPath` naming an existing file), `FORMAT_ERROR` (source is not `.docx`), `EMPTY_CONVERSION` (conversion produced no extractable text), `OPEN_FAILED` (converted file could not be reopened as a new tab), `INTERNAL_ERROR` (filesystem failures the resolver does not classify, e.g. `EACCES`/`ENOSPC`)
 
 ---
 

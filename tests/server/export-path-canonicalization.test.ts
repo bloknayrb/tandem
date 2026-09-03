@@ -287,5 +287,15 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
         code: "FILE_NOT_FOUND",
       });
     });
+
+    // #1796: this discriminating twin stays green (FILE_NOT_FOUND, above) while
+    // the no-document condition below gets its own code — a message-sniffing
+    // handler "fix" that leaves this throw site on FILE_NOT_FOUND would still
+    // pass the spec above and only be caught here.
+    it("reports no open document as NO_DOCUMENT, not FILE_NOT_FOUND (#1796)", async () => {
+      await expect(convertToMarkdown("no-such-doc-id")).rejects.toMatchObject({
+        code: "NO_DOCUMENT",
+      });
+    });
   });
 });
