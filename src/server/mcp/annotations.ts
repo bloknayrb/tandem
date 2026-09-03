@@ -232,16 +232,13 @@ export function registerAnnotationTools(server: McpServer): void {
     "DEPRECATED. Highlights are user-only. Use tandem_comment for text annotations.",
     {
       // All params optional: a deprecated stub must surface DEPRECATED for any
-      // call shape, including ones missing the legacy required params.
-      //
-      // `.int()` matches the three LIVE range-taking tools (#1752). It narrows
-      // "any call shape" by exactly one case — a fractional offset now answers a
-      // schema error instead of DEPRECATED — and that is the intended trade: the
-      // rule about offsets should not have a hole in it just because the tool
-      // behind it is a stub, and no legacy caller passed a fraction. Optionality,
-      // which is what the invariant is actually about, is untouched.
-      from: z.number().int().optional(),
-      to: z.number().int().optional(),
+      // call shape, including ones missing the legacy required params. That is
+      // why the LIVE tools' `.int()` is deliberately NOT mirrored here (#1752):
+      // a stub never validates a range, so `.int()` would close no drift and
+      // would answer a Zod protocol error where docs/mcp-tools.md promises
+      // "Always returns a DEPRECATED error".
+      from: z.number().optional(),
+      to: z.number().optional(),
       color: HighlightColorSchema.optional(),
       note: z.string().optional(),
       documentId: z.string().optional(),
@@ -339,16 +336,13 @@ export function registerAnnotationTools(server: McpServer): void {
     "DEPRECATED — use tandem_comment with suggestedText instead. Always returns an error.",
     {
       // All params optional: a deprecated stub must surface DEPRECATED for any
-      // call shape, including ones missing the legacy required params.
-      //
-      // `.int()` matches the three LIVE range-taking tools (#1752). It narrows
-      // "any call shape" by exactly one case — a fractional offset now answers a
-      // schema error instead of DEPRECATED — and that is the intended trade: the
-      // rule about offsets should not have a hole in it just because the tool
-      // behind it is a stub, and no legacy caller passed a fraction. Optionality,
-      // which is what the invariant is actually about, is untouched.
-      from: z.number().int().optional(),
-      to: z.number().int().optional(),
+      // call shape, including ones missing the legacy required params. That is
+      // why the LIVE tools' `.int()` is deliberately NOT mirrored here (#1752):
+      // a stub never validates a range, so `.int()` would close no drift and
+      // would answer a Zod protocol error where docs/mcp-tools.md promises
+      // "Always returns a DEPRECATED error".
+      from: z.number().optional(),
+      to: z.number().optional(),
       newText: z.string().optional(),
       reason: z.string().optional(),
       documentId: z.string().optional(),
@@ -368,16 +362,13 @@ export function registerAnnotationTools(server: McpServer): void {
     "DEPRECATED. Use tandem_comment instead.",
     {
       // All params optional: a deprecated stub must surface DEPRECATED for any
-      // call shape, including ones missing the legacy required params.
-      //
-      // `.int()` matches the three LIVE range-taking tools (#1752). It narrows
-      // "any call shape" by exactly one case — a fractional offset now answers a
-      // schema error instead of DEPRECATED — and that is the intended trade: the
-      // rule about offsets should not have a hole in it just because the tool
-      // behind it is a stub, and no legacy caller passed a fraction. Optionality,
-      // which is what the invariant is actually about, is untouched.
-      from: z.number().int().optional(),
-      to: z.number().int().optional(),
+      // call shape, including ones missing the legacy required params. That is
+      // why the LIVE tools' `.int()` is deliberately NOT mirrored here (#1752):
+      // a stub never validates a range, so `.int()` would close no drift and
+      // would answer a Zod protocol error where docs/mcp-tools.md promises
+      // "Always returns a DEPRECATED error".
+      from: z.number().optional(),
+      to: z.number().optional(),
       note: z.string().optional(),
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
