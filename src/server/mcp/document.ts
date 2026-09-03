@@ -27,7 +27,7 @@ import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast, buildListItemsFromTree } from "../file-io/mdast-ydoc.js";
 // Position system
-import { anchoredRange, validateRange } from "../positions.js";
+import { anchoredRange, describeRangeFailure, validateRange } from "../positions.js";
 import { saveSession } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { convertToMarkdown } from "./convert.js";
@@ -285,6 +285,9 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void 
   const authorshipMap = doc.getMap(Y_MAP_AUTHORSHIP);
   const timestamp = Date.now();
   const entries: Array<{ key: string; entry: AuthorshipRange }> = [];
+  // One materialization for the whole loop — the document is unchanged across
+  // it (every write goes to the authorship map, after the loop).
+  const flatText = extractText(doc);
 
   let flatCursor = 0;
   for (let i = 0; i < fragment.length; i++) {
@@ -309,8 +312,33 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void 
     // resolveAuthorshipRange rejects them anyway.
     if (from >= to) continue;
 
-    const anchored = anchoredRange(doc, toFlatOffset(from), toFlatOffset(to));
-    if (!anchored.ok) continue;
+    // Hoisted `text`: this loop walks the whole document without changing it,
+    // so one materialization serves every iteration (#1752).
+    const anchored = anchoredRange(doc, toFlatOffset(from), toFlatOffset(to), undefined, {
+      text: flatText,
+      textTag: "document/stamp-whole-doc",
+    });
+    if (!anchored.ok) {
+      // Skipping stays the behaviour — a missing authorship overlay entry is
+      // cosmetic, the document itself is untouched. But the skip is no longer
+      // SILENT: the "cosmetic" argument only covers `surrogate` (a block whose
+      // text ends mid-pair). `out-of-bounds` or `non-integer` here would mean
+      // this loop's own offset arithmetic disagrees with `extractText`, which is
+      // a coordinate-system bug and has no business being invisible (#1752).
+      //
+      // NOT pinned by a spec, deliberately: this arm has no constructible input.
+      // `from` starts after a heading prefix and `to` ends at the element's text
+      // end, so both land on a block boundary — a newline separator or the
+      // document edge — where `splitsSurrogatePair` cannot fire, and both offsets come
+      // from the same walk `extractText` does, so `out-of-bounds` and
+      // `non-integer` cannot either. The log exists for the day one of those
+      // stops being true, which is exactly when no spec would have covered it.
+      console.error(
+        `[document] Authorship stamp skipped for block ${i}: range [${from}, ${to}] — ` +
+          describeRangeFailure(anchored),
+      );
+      continue;
+    }
 
     // Key on the fragment element index (not a running stamped-block counter)
     // so IDs stay stable across re-opens even when some blocks are skipped.
@@ -365,8 +393,27 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void 
  */
 function stampClaudeRange(doc: Y.Doc, from: FlatOffset, to: FlatOffset): void {
   if (to <= from) return;
+  // No hoisted `text` opt, deliberately: `tandem_edit` holds only its PRE-edit
+  // text and the comment at the call site requires the stamp to read post-edit
+  // state. A same-length replacement ("2024" → "2025") would defeat the length
+  // guard, so nothing would catch the mistake. This is a single call, not a
+  // loop — let it materialize.
   const anchored = anchoredRange(doc, from, to);
-  if (!anchored.ok) return;
+  // Skipping stays the behaviour, and the one case worth naming is benign: an
+  // edit whose `newText` ends on a lone high surrogate fails the surrogate check
+  // and loses its authorship stamp. The edit itself already landed, so a missing
+  // overlay entry is a cosmetic loss, not a corrupt document (#1752).
+  //
+  // The skip is still LOGGED, because that argument covers `surrogate` only.
+  // `out-of-bounds` or `non-integer` here would mean the caller derived
+  // `from + newText.length` against a document state that is not the one it just
+  // wrote — a coordinate bug, not a cosmetic one.
+  if (!anchored.ok) {
+    console.error(
+      `[document] Authorship stamp skipped: range [${from}, ${to}] — ${describeRangeFailure(anchored)}`,
+    );
+    return;
+  }
   const authorshipMap = doc.getMap(Y_MAP_AUTHORSHIP);
   const rangeId = generateAuthorshipId("claude");
   withMcp(doc, () => {
@@ -550,8 +597,12 @@ export function registerDocumentTools(server: McpServer): void {
     "tandem_edit",
     "Edit text in the document at a specific range. For single-paragraph replacements only — newlines in newText are inserted as literal text.",
     {
-      from: z.number().describe("Start position (character offset)"),
-      to: z.number().describe("End position (character offset)"),
+      // `.int()` here rather than `.nonnegative()`: `validateRange` owns the
+      // bounds (and answers with a `reason` the agent can branch on), but a
+      // fractional offset has no meaningful coordinate at all — `String.slice`
+      // would silently truncate it (#1752).
+      from: z.number().int().describe("Start position (character offset)"),
+      to: z.number().int().describe("End position (character offset)"),
       newText: z.string().describe("Replacement text (single paragraph — no newlines)"),
       documentId: z
         .string()
@@ -618,9 +669,54 @@ export function registerDocumentTools(server: McpServer): void {
 
           const from = toFlatOffset(rawFrom);
           const to = toFlatOffset(rawTo);
+
+          // POINT INSERTION IS SUPPORTED, and the `allowEmpty` below is what keeps
+          // it so. `replaceFlatRangeInElement` guards only its DELETE on
+          // `to > from` and always inserts, so `tandem_edit(n, n, "X")` has always
+          // inserted at n — and it is the only mid-document insert this server
+          // has (`tandem_appendContent` appends at the document END and is
+          // markdown-only). Refusing every `from === to` removed a working
+          // capability with no replacement.
+          //
+          // The one genuine no-op is a point range with nothing to insert. It is
+          // answered HERE, ahead of `validateRange`, so the wire still carries
+          // `reason: "empty"` for it. Everything downstream then runs on the empty
+          // range exactly as before — in particular the heading-overlap check, so
+          // `(1, 1, "X")` inside `"## "` is still HEADING_OVERLAP.
+          if (from === to && newText === "") {
+            return mcpError(
+              "INVALID_RANGE",
+              `Invalid range: [${from}, ${to}) is empty and newText is empty — nothing to do. ` +
+                "Pass a non-empty newText to insert at this position, or a non-empty range to replace.",
+              { reason: "empty" },
+            );
+          }
+
+          // A point insertion collides with the standing "always pass
+          // textSnapshot" advice, and the collision is DESTRUCTIVE, so it is
+          // refused rather than papered over. A point range slices to `""`, which
+          // never equals a non-empty snapshot, so staleness fires and relocation
+          // answers RANGE_MOVED naming the span of the snapshot TEXT — and the
+          // documented retry ("use resolvedFrom/resolvedTo") then replaces those
+          // characters with `newText`. The agent asked to insert and got a
+          // deletion, having followed both documented rules.
+          //
+          // There is no coherent snapshot for a zero-length range to verify, so
+          // the fix is to omit it, and the message says so.
+          if (from === to && textSnapshot) {
+            return mcpError(
+              "INVALID_ARGUMENT",
+              `A point insertion at ${from} cannot carry a textSnapshot: a zero-length range ` +
+                "matches no text, so the snapshot would always look stale and the RANGE_MOVED " +
+                "retry would turn your insert into a replacement. Omit textSnapshot for a point " +
+                "insertion, or pass the range you mean to replace.",
+            );
+          }
+
           const v = validateRange(r.doc, from, to, {
             textSnapshot,
             rejectHeadingOverlap: true,
+            allowEmpty: true,
           });
           if (!v.ok) {
             if (v.code === "RANGE_GONE") {
@@ -640,7 +736,7 @@ export function registerDocumentTools(server: McpServer): void {
                   "Use tandem_resolveRange to find the text position.",
               );
             }
-            return mcpError("INVALID_RANGE", v.message);
+            return mcpError("INVALID_RANGE", v.message, { reason: v.reason });
           }
 
           const fragment = r.doc.getXmlFragment("default");
@@ -1338,15 +1434,32 @@ export function registerDocumentTools(server: McpServer): void {
         });
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
-        if (e.code === "FILE_NOT_FOUND") return noDocumentError();
-        if (
-          e.code === "UNSUPPORTED_FORMAT" ||
-          e.code === "INVALID_PATH" ||
-          e.code === "EMPTY_CONVERSION" ||
-          e.code === "OPEN_FAILED"
-        ) {
-          return mcpError("FORMAT_ERROR", e.message);
+        if (e.code === "NO_DOCUMENT") {
+          // `safeDocId` is what `convertToMarkdown` actually received. A
+          // named-but-closed id gets a message echoing the (possibly
+          // basename-rewritten) id itself, like `tandem_switchDocument` above —
+          // `convertToMarkdown`'s own thrown message is the generic "No
+          // document is open, or..." sentence, which never names the id that
+          // was actually looked up.
+          //
+          // TRUTHINESS, not `!== undefined`: `getCurrentDoc` (registry.ts)
+          // resolves `"" ?? activeDocId` to `""`, then returns null from its
+          // `if (!id)` guard WITHOUT consulting the open-document map — so an
+          // empty id genuinely took the no-document-at-all path and belongs on
+          // the shared text. Treating it as "named" printed
+          // `"Document  is not open."`: a sentence with a hole and a double
+          // space, naming an id the server never looked up.
+          return safeDocId
+            ? mcpError("NO_DOCUMENT", `Document ${safeDocId} is not open.`)
+            : noDocumentError();
         }
+        if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
+        if (e.code === "INVALID_PATH") return mcpError("INVALID_PATH", e.message);
+        if (e.code === "PERMISSION_DENIED") return mcpError("PERMISSION_DENIED", e.message);
+        if (e.code === "EMPTY_CONVERSION") return mcpError("EMPTY_CONVERSION", e.message);
+        if (e.code === "CONFLICT") return mcpError("CONFLICT", e.message);
+        if (e.code === "OPEN_FAILED") return mcpError("OPEN_FAILED", e.message);
+        if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
         throw err; // Let withErrorBoundary handle unexpected errors
       }
     }),
