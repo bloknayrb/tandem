@@ -2489,13 +2489,20 @@ async fn perform_install(
     // dialog says it worked — which is why `StopReport` is `#[must_use]`.
     //
     // BOTH outcomes are logged at `warn`, and the success half is not
-    // decoration. `smoke-lines.md` row 3 asks the tester to confirm "`tandem.log`
-    // shows a graceful sidecar shutdown" for an update run with unsaved edits —
-    // and on Windows there is no verdict line to read, because
-    // `RunEvent::Exit` never fires. Every other line on this path is `info!`,
-    // below the release floor, so without this the row's positive half could not
-    // be satisfied at all and a silent log was indistinguishable from a stop
-    // that never ran.
+    // decoration. `smoke-lines.md` row 3 asks the tester to grep `tandem.log`
+    // for an update run with unsaved edits — and on Windows there is no verdict
+    // line to read, because `RunEvent::Exit` never fires. Every other line on
+    // this path is `info!`, below the release floor, so without this the row's
+    // positive half could not be satisfied at all and a silent log was
+    // indistinguishable from a stop that never ran.
+    //
+    // The success string below is a code↔doc pair like the respawn-guard lines,
+    // so it is pinned like one: `respawn_guard_lines_are_warns_and_match_the
+    // _smoke_checklist` in `sidecar.rs` requires it to appear exactly once here,
+    // as the first argument of an uncommented `log::warn!(`, and to be present
+    // in `smoke-lines.md`. Row 3 was prose when this string was added, which
+    // meant the commit whose subject was "add a guard for exactly this" created
+    // an unguarded instance of exactly this; the row now carries the literal.
     match stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS)
         .await
         .unflushed_warning("Pre-install")

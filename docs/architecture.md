@@ -858,9 +858,13 @@ timed_out=…, owned_child=…, already_in_progress=…, panicked=…)`. `verdic
 of `Flushed`, `PostUnconfirmed`, `TimedOut`, `PostFailed`, `Skipped`, or `none`
 when no verdict came back (the budget fired, the body panicked, or there was no
 HTTP client). `already_in_progress` has a third value, `unknown`, and it is the
-*normal* one: the field reports what the 202 body said, so every path that read
-no 202 prints `unknown` — otherwise "the server said no" and "we never found out"
-printed identically, and `panicked` now covers a panic in the *prepare* half
+*normal* one: `false` means the 2xx body was read **and said false**, and every
+other outcome prints `unknown` — no POST, a POST that did not succeed, or a 2xx
+whose body was truncated or carried no such field. That last case is not
+hypothetical: the handler's `res.once("close", …)` calls `requestShutdown`, which
+exits the process, so a 202 head arriving without its body is the success path
+racing itself. Getting this wrong printed "the server said no" for "we never
+found out". `panicked` now covers a panic in the *prepare* half
 too, which used to degrade to a clientless attempt reporting `panicked=false`.
 The line is emitted **before** the hard kill, not after: the kill carries no
 `catch_unwind` of its own and on macOS this runs inside an ObjC frame where an

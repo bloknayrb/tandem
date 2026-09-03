@@ -460,8 +460,8 @@ pub(crate) enum GracefulStop {
     /// sequence certainly did not start. Exactly two causes, and the narrowness
     /// is the whole point: a connect-level failure (`is_connect()` — nothing was
     /// ever delivered), and a non-2xx (`src/server/mcp/routes/shutdown.ts`
-    /// returns its 403s at lines 44 and 62, strictly *before* the
-    /// `res.once("close", …)` registration at line 74). Every other error is
+    /// writes its 403s at lines 45 and 60, strictly *before* the
+    /// `res.once("close", …)` registration at line 75). Every other error is
     /// `PostUnconfirmed`, not this one.
     PostFailed,
     /// The server was still answering `/health` at the deadline, whether the
@@ -472,7 +472,7 @@ pub(crate) enum GracefulStop {
     ///
     /// Covers a client timeout, a connection reset, an incomplete message, a
     /// protocol error — anything where the request may have reached the handler
-    /// before the transport broke. `shutdown.ts:74` registers
+    /// before the transport broke. `shutdown.ts:75` registers
     /// `res.once("close", …)` with its own comment noting that close fires "also
     /// when the connection terminates prematurely", so every one of these is a
     /// case where `autoSaveAllToDisk` may already be running. Classifying them
@@ -514,13 +514,17 @@ impl GracefulStop {
 #[must_use = "a graceful stop that did not flush must be surfaced — see StopReport::unflushed_warning"]
 pub(crate) struct StopReport {
     pub(crate) verdict: GracefulStop,
-    /// `data.alreadyInProgress` from the 202 (`src/server/mcp/routes/shutdown.ts`):
-    /// something else had already invoked the shutdown sequence. Worth carrying
-    /// because it is the difference between "our POST started the flush" and
-    /// "we joined one already running", which changes what a `TimedOut` means.
+    /// `data.alreadyInProgress` from the 2xx body
+    /// (`src/server/mcp/routes/shutdown.ts`): something else had already invoked
+    /// the shutdown sequence. Worth carrying because it is the difference
+    /// between "our POST started the flush" and "we joined one already running",
+    /// which changes what a `TimedOut` means.
     ///
-    /// `None` when no 202 body was read at all — the POST timed out, so the
-    /// answer is genuinely unknown rather than false.
+    /// **`None` means we did not read it, for ANY reason** — no POST was made,
+    /// the POST did not succeed, or the 2xx body was truncated or carried no
+    /// such field. Deliberately not a list of causes: every previous phrasing
+    /// named some of them and a `false` promptly reappeared on one that was not
+    /// named.
     pub(crate) already_in_progress: Option<bool>,
 }
 
@@ -547,10 +551,13 @@ impl StopReport {
 /// When we own a sidecar child, POST `/api/shutdown` so the Node shutdown
 /// sequence runs (unwatchAll → stopAutoSave → autoSaveAllToDisk (5s-bounded)
 /// → saveCurrentSession) and wait up to `deadline_secs` for the port to
-/// release. Always finishes with `kill_sidecar`: on a graceful exit that just
-/// clears the stored child handle (killing an already-exited child is a
-/// logged no-op); on POST failure or timeout it is the hard-kill fallback —
-/// the old behavior.
+/// release. Always finishes with `kill_sidecar`: when the server did stop, that
+/// just clears the stored child handle (killing an already-exited child is a
+/// logged no-op); when it is still up, or the POST provably never reached the
+/// handler, it is the hard-kill fallback — the old behavior. Note that a POST
+/// which merely failed to answer is NOT in that second set: it waits for the
+/// port first and reports `PostUnconfirmed` if the server goes away. See
+/// `GracefulStop`.
 ///
 /// When no child is owned (debug builds running against an external
 /// `dev:standalone` server) this never POSTs — we must not shut down a server
@@ -615,9 +622,13 @@ impl Endpoints<'static> {
 /// cleared by `start_sidecar`'s own `kill_sidecar_inner` — so it does emit the
 /// loud "unsaved edits are NOT flushed" line, which after a failed cold start is
 /// a false positive (there was never a server). Passing `skip_expected` there
-/// would be dead code rather than a fix: `restart_sidecar` returns early when
-/// `!spawn_allowed()`, so `SIDECAR_SHUTTING_DOWN` is always false by the time
-/// its stop runs. Narrowing that line is #1812/#1825 territory (knowing what is
+/// would buy almost nothing: `restart_sidecar` returns early when
+/// `!spawn_allowed()`, so `SIDECAR_SHUTTING_DOWN` is false **at that check** and
+/// only racily true after it — the check and the load in `stop_sidecar_gracefully`
+/// are two unsynchronised reads with no lock across the gap, so a Quit that
+/// calls `try_acquire()` inside that window does make it true. Not "always
+/// false": that was the previous absolute, replaced rather than fixed.
+/// Narrowing that line properly is #1812/#1825 territory (knowing what is
 /// actually on the port), not this parameter's.
 async fn graceful_stop_request(
     client: &reqwest::Client,
@@ -639,9 +650,11 @@ async fn graceful_stop_request(
     // hardcode :3479 and **the shell never verifies it owns what answers there**.
     // Two consequences, and #1756 widened the second from two explicit user
     // actions (Restart server, Install update) to every Quit:
-    //   - with a non-default `TANDEM_MCP_PORT` the POST misses, costs its own 5s
-    //     client timeout, comes back `Posted::Refused`, the port wait is skipped
-    //     and the hard kill follows — bounded, but not immediate;
+    //   - with a non-default `TANDEM_MCP_PORT` the POST misses. Nothing is
+    //     listening, so it comes back a connect error — `Posted::Refused`, the
+    //     port wait skipped, the hard kill immediate. (If it instead burns the
+    //     full client timeout with no connect error, that is `Unconfirmed` now,
+    //     and it pays one extra `/health` poll before the same kill.);
     //   - with a FOREIGN Tandem on :3479 (a `tandem start`, a second app-data
     //     instance) the POST hits *that* server, which flushes and exits, while
     //     this log line claims a graceful stop. `owns_child` only says we hold a
@@ -659,7 +672,7 @@ async fn graceful_stop_request(
     if owns_child {
         log::info!("Graceful stop: we own the sidecar child — POSTing {shutdown_url}");
         // Three POST outcomes, and `Refused` is the NARROW one — an allowlist of
-        // two provable causes, not a catch-all. `shutdown.ts:74` registers
+        // two provable causes, not a catch-all. `shutdown.ts:75` registers
         // `res.once("close", () => requestShutdown(...))` and says in its own
         // comment that close fires "also when the connection terminates
         // prematurely", so ANY failure after the request was delivered leaves
@@ -667,8 +680,8 @@ async fn graceful_stop_request(
         // message, a protocol error, an idle keep-alive socket the server closed
         // as the POST landed. None of those is `is_timeout()`; only two things
         // prove nothing started — a connect-level failure (`is_connect()`) and a
-        // non-2xx, because both 403 returns (`shutdown.ts:44,62`) precede the
-        // registration at :74.
+        // non-2xx, because both 403 writes (`shutdown.ts:45,60`) precede the
+        // registration at :75.
         //
         // Keying the safe arm on `is_timeout()` was the first fix repeating the
         // defect one error class over: it skipped the port wait and hard-killed
@@ -680,7 +693,7 @@ async fn graceful_stop_request(
             }
             Ok(resp) => {
                 log::warn!(
-                    "Graceful shutdown POST returned HTTP {} — nothing was registered server-side; falling back to hard kill",
+                    "Graceful shutdown POST answered HTTP {} — not a 2xx, so this route registered no shutdown; falling back to hard kill",
                     resp.status()
                 );
                 Posted::Refused
@@ -713,11 +726,14 @@ async fn graceful_stop_request(
                 Posted::Unconfirmed
             }
         };
-        // `already_in_progress` is `Some` on exactly one arm, and that is the
-        // rule rather than a list of exceptions: it reports what the 202 body
-        // said, so every path that read no 202 is `None`. Enumerating the
-        // "unknown" cases instead is how `Some(false)` kept reappearing one
-        // branch over, which is the thing this field was widened to stop.
+        // `already_in_progress` can only be `Some` on the `Accepted` arm, and
+        // even there only when `read_already_in_progress` actually READ the
+        // field — it returns the `Option` rather than defaulting, so no arm here
+        // constructs a `Some`. That is the rule rather than a list of
+        // exceptions: the field reports what the body said, and every path that
+        // did not read one is `None`. Enumerating the "unknown" cases instead is
+        // how `Some(false)` kept reappearing one scope over, three rounds
+        // running, which is the thing this field was widened to stop.
         let (verdict, already_in_progress) = match posted {
             Posted::Refused => (GracefulStop::PostFailed, None),
             Posted::Accepted(already) => {
@@ -730,7 +746,11 @@ async fn graceful_stop_request(
                     );
                     GracefulStop::TimedOut
                 };
-                (verdict, Some(already))
+                // NOT `Some(already)`: a 2xx whose body never arrived or carried
+                // no such field is still "we never found out", and wrapping it
+                // here would have re-created `Some(false)` one function down
+                // from the rule below. `read_already_in_progress` owns that.
+                (verdict, already)
             }
             Posted::Unconfirmed => {
                 let verdict = if wait_for_server_gone(client, deadline_secs, health_url).await {
@@ -787,8 +807,12 @@ async fn graceful_stop_request(
 /// "did not succeed" splits into one case where the flush certainly never began
 /// and one where it may already be running — and only the first may be killed.
 enum Posted {
-    /// 2xx, carrying `data.alreadyInProgress`.
-    Accepted(bool),
+    /// 2xx. Carries `data.alreadyInProgress` when the body actually yielded it,
+    /// and `None` when it did not — a truncated body (the handler's `close` can
+    /// exit the process before the body lands) or a 2xx from something else on
+    /// :3479 with no such field. Never collapsed to `false`: that is the
+    /// substitution the `Option` exists to prevent.
+    Accepted(Option<bool>),
     /// Delivered (or possibly delivered) and then the transport broke. The
     /// handler's `res.once("close", …)` may already have fired.
     Unconfirmed,
@@ -797,21 +821,39 @@ enum Posted {
     Refused,
 }
 
-/// Read `data.alreadyInProgress` out of the 202 body, defaulting to `false`.
+/// Read `data.alreadyInProgress` out of the 2xx body. `None` means we did not
+/// read it — **never** that the server answered `false`.
 ///
-/// Deliberately total: a body we cannot read or parse is not a shutdown failure
-/// — the 202 already told us the sequence was accepted — so it costs one debug
-/// line and a `false`, never a changed verdict.
-async fn read_already_in_progress(resp: reqwest::Response) -> bool {
+/// The `Option` runs all the way down for the reason it exists at the top: a
+/// `false` returned for an unread body is "the server said no" standing in for
+/// "we never found out", and the only trace of that substitution was a
+/// `log::debug!`, below the release `Warn` floor and therefore invisible on an
+/// installed build. Two ordinary paths reach it — the server writes the 2xx
+/// headers, its `res.once("close", …)` fires and `requestShutdown` exits the
+/// process before the body lands; and a 2xx from a *foreign* process on :3479
+/// that has no such field at all (`owns_child` never established what is
+/// listening — see the block in `graceful_stop_request`).
+///
+/// Still deliberately total: an unreadable body is not a shutdown failure — the
+/// 2xx already said the sequence was accepted — so this costs a `None`, never a
+/// changed verdict.
+async fn read_already_in_progress(resp: reqwest::Response) -> Option<bool> {
     match resp.json::<serde_json::Value>().await {
-        Ok(body) => body
-            .get("data")
-            .and_then(|d| d.get("alreadyInProgress"))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
+        Ok(body) => {
+            let field = body
+                .get("data")
+                .and_then(|d| d.get("alreadyInProgress"))
+                .and_then(serde_json::Value::as_bool);
+            if field.is_none() {
+                log::debug!(
+                    "Graceful shutdown 2xx body carried no boolean data.alreadyInProgress — reporting unknown"
+                );
+            }
+            field
+        }
         Err(e) => {
-            log::debug!("Graceful shutdown 202 body unreadable ({e}) — assuming not already in progress");
-            false
+            log::debug!("Graceful shutdown 2xx body unreadable ({e}) — reporting unknown");
+            None
         }
     }
 }
@@ -1002,11 +1044,12 @@ mod graceful {
         /// mid-flight, the body panicked, or there was no HTTP client to try
         /// with. Rendered as `verdict=none`.
         pub(super) verdict: Option<GracefulStop>,
-        /// What the 202 body said, and `None` on every path that read no 202 —
-        /// which is all of them except a successful POST. Rendered as
-        /// `already_in_progress=unknown`. Stated as one rule rather than a list
-        /// of unknown cases, because an enumeration is what let `Some(false)`
-        /// keep coming back one branch over.
+        /// What the 2xx body said, and `None` whenever we did not read it — for
+        /// any reason, including a successful POST whose body was truncated or
+        /// carried no such field. Rendered as `already_in_progress=unknown`.
+        /// Stated as one rule rather than a list of unknown cases, because every
+        /// enumeration so far has let `Some(false)` come back on a case it did
+        /// not name.
         pub(super) already_in_progress: Option<bool>,
     }
 
@@ -2775,55 +2818,124 @@ mod shutdown_guard_tests {
         set_flags(false, false);
     }
 
-    /// The respawn-guard smoke row's two strings, and their LEVEL.
+    /// Every "grep this literal" a smoke row makes, and the LEVEL it is emitted
+    /// at. Three pairs today: the respawn-guard row's two strings, and the
+    /// pre-install flush line that `smoke-lines.md` row 3 reads.
     ///
-    /// The row asserts "Both are `warn!`, so both clear the release log floor",
-    /// and nothing pinned that: the first was `info!` under a `Warn` floor for a
-    /// whole review round, which is #1746 recreated on the row whose job is to
-    /// catch it. `verdict_line_carries_…` covers only the Quit row's verdict
-    /// line, so this is the second agreement, not an extension of the first.
+    /// The respawn-guard row asserts "Both are `warn!`, so both clear the
+    /// release log floor" and nothing pinned that: the first sat at `info!`
+    /// under a `Warn` floor for a whole review round, which is #1746 recreated
+    /// on the row whose job is to catch it. `verdict_line_carries_…` covers only
+    /// the Quit row's verdict line, so this is a separate agreement, not an
+    /// extension of that one.
     ///
-    /// Level is checked structurally rather than by matching `log::warn!(` text
-    /// near the literal: from each literal's position we walk BACKWARDS to the
-    /// nearest `log::` macro and require it to be the `warn` one. A rename to
-    /// `log::info!` moves that nearest token and turns this red; wrapping the
-    /// literal in a helper moves it too.
+    /// **The anchor, stated exactly, because the previous version's docstring
+    /// claimed more than it checked.** For each literal: it appears EXACTLY ONCE
+    /// in its whole source file, and the text immediately before it is
+    /// `log::warn!(` — opening quote, optional whitespace, then the macro. So the
+    /// literal must be that macro's first argument.
+    ///
+    /// That is deliberately not "the nearest preceding `log::` token", which was
+    /// the old rule and was an anchor failure rather than a matching one: it
+    /// stayed green when the literal was hoisted to a `let` (the nearest `log::`
+    /// was then some earlier `warn!`) and green when the call was deleted with
+    /// the literal left behind in a comment. Both are red now, as is a second
+    /// occurrence anywhere — including one added in a doc comment, which will
+    /// look like a false positive and is the price of the uniqueness rule.
+    ///
+    /// **The needles are `concat!`-ed rather than written whole**, so the
+    /// verbatim sequence never appears in this test. That is what lets the scan
+    /// read the ENTIRE file with no "production half" filter: the previous
+    /// version split at the first `#[cfg(test)]`, which is the test module in
+    /// `sidecar.rs` but is line 32 in `lib.rs`, so the same filter that worked
+    /// here silently excluded almost all of the other file. One fewer filter is
+    /// one fewer thing to attack.
+    ///
+    /// What it still does not check: `log::warn!(target: …, "literal")`, and a
+    /// comment interposed between the macro and its first argument. Neither
+    /// appears here, and both fail CLOSED — they turn this red rather than
+    /// letting a level change through.
     #[test]
     fn respawn_guard_lines_are_warns_and_match_the_smoke_checklist() {
-        const RESPAWN_GUARD_LINES: [&str; 2] = [
-            "start_sidecar: shutdown in progress — not spawning",
-            "start_sidecar: shutdown began while spawning — killing the fresh child",
-        ];
+        let sidecar_src = include_str!("sidecar.rs");
+        let lib_src = include_str!("lib.rs");
         let checklist = include_str!("../../docs/release-smoke-checklist.md");
-        let source = include_str!("sidecar.rs");
-        // Only the production half. The literals appear in this test too, and a
-        // scan that found those would be satisfied by its own fixture.
-        let production = source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element");
-        assert!(
-            production.len() < source.len(),
-            "the #[cfg(test)] marker must exist, or this scans the tests as well"
-        );
+        let smoke_lines =
+            include_str!("../../docs/reviews/2026-09-02-v1-review/smoke-lines.md");
 
-        for line in RESPAWN_GUARD_LINES {
+        // (literal, doc name, doc text, source name, source text)
+        let pairs: [(&str, &str, &str, &str, &str); 3] = [
+            (
+                concat!("start_sidecar: shutdown in progress", " — not spawning"),
+                "release-smoke-checklist.md",
+                checklist,
+                "sidecar.rs",
+                sidecar_src,
+            ),
+            (
+                concat!(
+                    "start_sidecar: shutdown began while spawning",
+                    " — killing the fresh child"
+                ),
+                "release-smoke-checklist.md",
+                checklist,
+                "sidecar.rs",
+                sidecar_src,
+            ),
+            (
+                concat!("Pre-install: graceful sidecar", " shutdown complete"),
+                "smoke-lines.md",
+                smoke_lines,
+                "lib.rs",
+                lib_src,
+            ),
+        ];
+
+        for (line, doc_name, doc, src_name, src) in pairs {
             assert!(
-                checklist.contains(line),
-                "the smoke checklist no longer greps for {line:?} — the row and the code have drifted"
+                doc.contains(line),
+                "{doc_name} no longer greps for {line:?} — the row and the code have drifted"
             );
-            let at = production.find(line).unwrap_or_else(|| {
-                panic!("{line:?} is gone from the production half of sidecar.rs, but the checklist still greps for it")
-            });
-            let preceding = &production[..at];
-            let macro_start = preceding
-                .rfind("log::")
-                .unwrap_or_else(|| panic!("{line:?} is not inside a log macro at all"));
+
+            let hits: Vec<usize> = src.match_indices(line).map(|(i, _)| i).collect();
+            assert_eq!(
+                hits.len(),
+                1,
+                "{line:?} must appear exactly once in {src_name} (found {}), or this guard can \
+                 anchor on a comment while the real call is gone",
+                hits.len()
+            );
+
+            let at = hits[0];
+            let before = &src[..at];
             assert!(
-                preceding[macro_start..].starts_with("log::warn!"),
-                "{line:?} must be logged at warn — the release floor is LevelFilter::Warn and the \
-                 smoke row greps an installed build; nearest macro was {:?}",
-                &preceding[macro_start..(macro_start + 12).min(preceding.len())]
+                before.ends_with('"'),
+                "{line:?} in {src_name} is not the start of a string literal"
+            );
+            let before_quote = before[..before.len() - 1].trim_end();
+            const MACRO: &str = "log::warn!(";
+            assert!(
+                before_quote.ends_with(MACRO),
+                "{line:?} must be the first argument of a log::warn!( in {src_name} — the release \
+                 floor is LevelFilter::Warn and {doc_name} greps an installed build; found {:?}",
+                &before_quote[before_quote
+                    .char_indices()
+                    .rev()
+                    .nth(23)
+                    .map_or(0, |(i, _)| i)..]
+            );
+            // …and that macro must not itself be commented out. Without this,
+            // deleting the call and leaving `// was: log::warn!("…");` behind
+            // satisfied every other rule here — measured, not reasoned: it was
+            // the one survivor of the first four mutations this guard was
+            // attacked with, and it is the exact anchor failure (guard pinned to
+            // a comment, real call gone) that the previous mechanism died of.
+            let macro_at = before_quote.len() - MACRO.len();
+            let line_start = src[..macro_at].rfind('\n').map_or(0, |i| i + 1);
+            assert!(
+                !src[line_start..macro_at].contains("//"),
+                "the log::warn! carrying {line:?} in {src_name} is commented out — the literal is \
+                 still present but nothing emits it"
             );
         }
     }
@@ -2937,6 +3049,194 @@ mod shutdown_guard_tests {
             }
         });
         addr
+    }
+
+    /// A loopback stand-in that breaks the POST connection AFTER reading the
+    /// request, and answers everything else 404 so the port reads as released.
+    ///
+    /// `shutdown_reply` is written before the close: `""` gives EOF with no
+    /// response at all, and a truncated 2xx head gives a body that never
+    /// completes. Both are DELIVERED requests — the server got them, its
+    /// `res.once("close", …)` would have fired — which is the class the whole
+    /// `PostFailed`/`PostUnconfirmed` split exists for.
+    fn stub_that_breaks_after_reading(
+        shutdown_reply: &'static str,
+        lifetime: Duration,
+    ) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        listener.set_nonblocking(true).expect("set_nonblocking");
+        std::thread::spawn(move || {
+            let until = std::time::Instant::now() + lifetime;
+            while std::time::Instant::now() < until {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).expect("blocking stream");
+                        let mut buf = [0u8; 2048];
+                        let read = stream.read(&mut buf).unwrap_or(0);
+                        let head = String::from_utf8_lossy(&buf[..read]).to_string();
+                        if head.starts_with("POST /api/shutdown") {
+                            if !shutdown_reply.is_empty() {
+                                let _ = stream.write_all(shutdown_reply.as_bytes());
+                                let _ = stream.flush();
+                            }
+                        } else {
+                            // 404: `check_health_at` requires a 2xx, so this
+                            // reads as "the port is released" and the wait
+                            // returns immediately instead of paying the OS's
+                            // ~2s connect refusal on every poll.
+                            let _ = stream.write_all(
+                                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                            );
+                            let _ = stream.flush();
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+        addr
+    }
+
+    /// **The case the round-3 fix was written for, and the one nothing covered.**
+    ///
+    /// A POST that is delivered and then loses its connection is neither
+    /// `is_timeout()` nor `is_connect()` — measured on this platform, an EOF
+    /// before any response byte surfaces as
+    /// `hyper::Error(IncompleteMessage)` with both predicates false. Round 3's
+    /// predecessor keyed the waiting arm on `is_timeout() && !is_connect()`, so
+    /// this fell through to the catch-all and hard-killed a sidecar that was
+    /// (per `shutdown.ts:75`'s `res.once("close", …)`) already running
+    /// `autoSaveAllToDisk`.
+    ///
+    /// The two POST tests that existed pinned neither direction of that split:
+    /// one drove a client timeout, which BOTH predicates route to the wait, and
+    /// the other drove a 403, which never reaches an `Err` arm at all. A full
+    /// revert to the old predicate left the suite green. This test is red under
+    /// it — verified by applying the revert, not by reading it.
+    #[test]
+    fn a_post_delivered_then_broken_is_unconfirmed_not_refused() {
+        let _serialise = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let addr = stub_that_breaks_after_reading("", Duration::from_secs(3));
+        let shutdown = format!("http://{addr}/api/shutdown");
+        let health = format!("http://{addr}/health");
+        let client = build_http_client(Duration::from_secs(5)).expect("build client");
+
+        let report = tauri::async_runtime::block_on(graceful_stop_request(
+            &client,
+            3,
+            Endpoints {
+                shutdown: &shutdown,
+                health: &health,
+            },
+            true,
+            false,
+        ));
+
+        assert_eq!(
+            report.verdict,
+            GracefulStop::PostUnconfirmed,
+            "a delivered request whose transport broke may have started the flush — killing it \
+             without waiting is #1756 inside its own fix"
+        );
+        assert_ne!(
+            report.verdict,
+            GracefulStop::PostFailed,
+            "PostFailed is reserved for causes that PROVE nothing started"
+        );
+        assert_eq!(report.already_in_progress, None);
+    }
+
+    /// The narrowed side of the same split: a connect-level failure really does
+    /// prove nothing was delivered, so it must classify `PostFailed`.
+    ///
+    /// Measured rather than assumed, because it is platform-shaped: on Windows
+    /// the OS takes ~2s of SYN retransmits to refuse a closed loopback port, so
+    /// the client timeout must be longer than that for the refusal to win. At
+    /// the production 5s it does, and reqwest reports `is_connect() == true`; at
+    /// 2s the request timeout wins first and reports `is_timeout()` instead —
+    /// which is why the timeout here is explicit and generous.
+    #[test]
+    fn a_connect_failure_reports_post_failed() {
+        let _serialise = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // Bind then drop: the port is dead but almost certainly unclaimed.
+        let addr = {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+            listener.local_addr().expect("local_addr")
+        };
+        let shutdown = format!("http://{addr}/api/shutdown");
+        let health = format!("http://{addr}/health");
+        let client = build_http_client(Duration::from_secs(8)).expect("build client");
+
+        let report = tauri::async_runtime::block_on(graceful_stop_request(
+            &client,
+            3,
+            Endpoints {
+                shutdown: &shutdown,
+                health: &health,
+            },
+            true,
+            false,
+        ));
+
+        assert_eq!(
+            report.verdict,
+            GracefulStop::PostFailed,
+            "nothing was ever delivered, so there is no flush to protect"
+        );
+        assert_eq!(report.already_in_progress, None);
+    }
+
+    /// A 2xx whose body never completes must report `already_in_progress`
+    /// UNKNOWN, not `false`.
+    ///
+    /// This is not hypothetical: the handler's `res.once("close", …)` calls
+    /// `requestShutdown`, which exits the process — so the server writing its
+    /// 202 head and dying before the body lands is the ordinary success path
+    /// racing itself. Measured: reqwest returns `Ok(resp)` with status 202 and
+    /// then fails the body read with `IncompleteBody`.
+    ///
+    /// Until this, `read_already_in_progress` returned a bare `bool` and
+    /// answered `false` here, which the verdict line printed as
+    /// `already_in_progress=false` — "the server said no" for "we never found
+    /// out", the exact substitution the `Option` was introduced to end, one
+    /// function below where it was introduced.
+    #[test]
+    fn a_truncated_2xx_body_reports_unknown_not_false() {
+        let _serialise = FLAG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let addr = stub_that_breaks_after_reading(
+            "HTTP/1.1 202 Accepted\r\nContent-Length: 100\r\n\r\n{\"data\":{\"shu",
+            Duration::from_secs(3),
+        );
+        let shutdown = format!("http://{addr}/api/shutdown");
+        let health = format!("http://{addr}/health");
+        let client = build_http_client(Duration::from_secs(5)).expect("build client");
+
+        let report = tauri::async_runtime::block_on(graceful_stop_request(
+            &client,
+            3,
+            Endpoints {
+                shutdown: &shutdown,
+                health: &health,
+            },
+            true,
+            false,
+        ));
+
+        assert_eq!(
+            report.verdict,
+            GracefulStop::Flushed,
+            "the POST was accepted and the port then read as released"
+        );
+        assert_eq!(
+            report.already_in_progress, None,
+            "the body never arrived, so this is unknown — printing `false` here is the server \
+             answering a question it was never asked"
+        );
     }
 
     /// The other half of the timeout finding: a REFUSED POST really does mean
