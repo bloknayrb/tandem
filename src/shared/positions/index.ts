@@ -5,6 +5,7 @@ export type {
   FlatOffset,
   PmPos,
   PmRangeResult,
+  RangeInvalidReason,
   RangeValidation,
   RefreshResult,
   RelativeRange,

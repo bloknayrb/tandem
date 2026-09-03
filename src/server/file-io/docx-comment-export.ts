@@ -65,7 +65,7 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/consta
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
 import { extractText } from "../mcp/document-model.js";
-import { refreshRange } from "../positions.js";
+import { isLowSurrogate, refreshRange, validateFlatRange } from "../positions.js";
 import { isCanonicalWordId } from "./docx-comment-id.js";
 
 /**
@@ -319,7 +319,8 @@ export function prepareExportComments(
   // function runs twice per save on the live doc (the downgrade count, then the
   // export — the verifier is handed the first result rather than recomputing),
   // so a wasted walk here is a wasted walk twice over.
-  const docLength = extractText(doc).length;
+  const fullText = extractText(doc);
+  const docLength = fullText.length;
 
   // Resolve each candidate's CURRENT range: relRange first, flat fallback
   // (refreshRange does both, read-only without a map argument).
@@ -331,18 +332,33 @@ export function prepareExportComments(
       onSkip?.("range-failed");
       continue;
     }
-    const { from, to } = refreshed.annotation.range;
-    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || from > to) {
-      warn(`[docx-comment-export] Skipping comment ${ann.id}: invalid range [${from}, ${to}]`);
-      onSkip?.("invalid-range");
-      continue;
-    }
-    if (to > docLength) {
+    let { from, to } = refreshed.annotation.range;
+
+    // Export is NOT symmetric with capture: capture only SCORES, this writes a
+    // file. A mid-pair offset reaches `emitTextSegments`, which splits a run
+    // with `s.slice(0, take)` — one TextRun ends on a lone high surrogate, the
+    // next starts on a lone low one, and the zip's UTF-8 encode turns both into
+    // U+FFFD. The emoji is destroyed in the saved .docx, caused by a comment,
+    // on a save that changed nothing else (#1448 class). So SNAP outward first,
+    // then validate with the default `surrogates: "reject"` — a residual
+    // mid-pair offset becomes a loud skip rather than a corrupt file (#1752).
+    if (isLowSurrogate(fullText.charCodeAt(from))) from--;
+    if (isLowSurrogate(fullText.charCodeAt(to))) to++;
+
+    // `allowEmpty`: a point comment (from === to) is legal here and always was.
+    const validation = validateFlatRange(fullText, from, to, { allowEmpty: true });
+    if (!validation.ok) {
+      // Exhaustive by construction: these counts feed the comment-loss advisory,
+      // and a reason with no arm would silently count as nothing.
+      const reason: ExportSkipReason =
+        validation.code === "INVALID_RANGE" && validation.reason === "out-of-bounds"
+          ? "out-of-bounds"
+          : "invalid-range";
       warn(
         `[docx-comment-export] Skipping comment ${ann.id}: range [${from}, ${to}] ` +
-          `exceeds document length ${docLength}`,
+          `rejected (${validation.code}) against document length ${docLength}`,
       );
-      onSkip?.("out-of-bounds");
+      onSkip?.(reason);
       continue;
     }
     resolved.push({ ann: refreshed.annotation, from, to });

@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 12
+version: 13
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -167,7 +167,7 @@ The wording above matches what the stdio bridge (`src/cli/mcp-stdio.ts`) already
 
 - **`RANGE_MOVED`** — Text shifted since you read it. The response includes `resolvedFrom`/`resolvedTo` — use those coordinates for your next call.
 - **`RANGE_GONE`** — The text was deleted. Re-read the section with `tandem_getTextContent` and re-assess.
-- **`INVALID_RANGE`** — You hit heading markup (e.g., `## `). Target text content only, not the heading prefix.
+- **`INVALID_RANGE`** — The range was refused. Read `details.reason`: `out-of-bounds` (negative, or past the end — `to === length` is fine), `inverted` (`from > to`), `empty` (`from === to`; use `tandem_appendContent` to insert), `surrogate` (the offset falls inside an emoji — move it to either side of the character), `non-integer`, or `unresolvable`. With no `reason`, or with `unresolvable`, the usual cause is heading markup (e.g. `## `) — target text content only, not the heading prefix. `tandem_resolveRange` gives you offsets that are correct by construction.
 - **`FORMAT_ERROR`** — The operation doesn't apply to this document. Most often the document is genuinely read-only (an upload, or opened with an explicit `readOnly` flag) — use annotations instead. Also returned by `tandem_appendContent` on a non-Markdown document, and by `tandem_applyChanges` on anything that isn't a `.docx` opened from disk. Note `.docx` alone no longer causes this: those open editable.
 
 ## Session Handoff

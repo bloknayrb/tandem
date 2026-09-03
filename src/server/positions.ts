@@ -22,6 +22,7 @@ import type {
   AnchoredRangeResult,
   DocumentRange,
   FlatOffset,
+  RangeInvalidReason,
   RangeValidation,
   RefreshResult,
   RelativeRange,
@@ -36,7 +37,7 @@ import {
   resolveToElement,
 } from "../shared/positions/ydoc.js";
 import type { Annotation } from "../shared/types.js";
-import { collectXmlTexts, extractText } from "./mcp/document-model.js";
+import { collectXmlTexts, extractText, flatDocLength } from "./mcp/document-model.js";
 
 // Moved to `src/shared/positions/ydoc.ts` — see that file's header for why the
 // move is a leaf extraction rather than a file move. Re-exported so existing
@@ -100,35 +101,225 @@ export function relPosToFlatOffset(doc: Y.Doc, relPosJson: SerializedRelPos): Fl
 // High-level: range validation
 // ---------------------------------------------------------------------------
 
+/** How `validateRange`/`validateFlatRange` treat an offset that splits a surrogate pair. */
+export type SurrogatePolicy = "reject" | "ignore";
+
+/** Options shared by `validateRange` and `anchoredRange`. */
+export interface RangeValidationOpts {
+  textSnapshot?: string;
+  rejectHeadingOverlap?: boolean;
+  /** Permit `from === to`. Point comments (Word insertion markers) need it. */
+  allowEmpty?: boolean;
+  /**
+   * A pre-computed `extractText(ydoc)` for THIS call, so a loop over an
+   * unchanging document builds the string once instead of per iteration.
+   *
+   * Two guards below, one of them in production — and the production one is a
+   * SMOKE ALARM, not a contract: it catches only a length-CHANGING mutation. A
+   * same-length edit, or a sibling document of equal length, passes it and
+   * silently changes the staleness and surrogate verdicts. Pass it only from a
+   * genuine loop over a document that does not change across the loop.
+   */
+  text?: string;
+  /**
+   * `"ignore"` skips the surrogate check. For STORED/derived offsets only —
+   * after a CRDT edit inside an emoji a refreshed range can legitimately end
+   * mid-pair (Word's own offsets are UTF-16), and rejecting those would score a
+   * real comment as lost. The new rule is for the caller-supplied tool
+   * boundary. Default `"reject"`.
+   */
+  surrogates?: SurrogatePolicy;
+}
+
+function invalid(reason: RangeInvalidReason, message: string): RangeValidation & { ok: false } {
+  return { ok: false, code: "INVALID_RANGE", message, reason };
+}
+
+const isHighSurrogate = (unit: number): boolean => unit >= 0xd800 && unit <= 0xdbff;
+
+/**
+ * Is this UTF-16 code unit the TRAILING half of a surrogate pair?
+ *
+ * Exported for the one caller that must SNAP rather than reject: the .docx
+ * comment export resolver, which carries stored offsets and writes a file.
+ */
+export const isLowSurrogate = (unit: number): boolean => unit >= 0xdc00 && unit <= 0xdfff;
+
+/**
+ * Does offset `i` fall BETWEEN the two halves of a surrogate pair?
+ *
+ * The paired form is the whole point. A one-sided "the unit at `i` is any
+ * surrogate" check passes every `"a<emoji>b"` case and then rejects offset 2 of
+ * `"<emoji><emoji>"` — the legal boundary between two adjacent astral
+ * characters, which has no alternative offset. At `i === text.length`
+ * `charCodeAt` is NaN, which is neither, so the document end is always legal.
+ */
+export function splitsSurrogatePair(text: string, i: number): boolean {
+  if (i <= 0) return false;
+  return isHighSurrogate(text.charCodeAt(i - 1)) && isLowSurrogate(text.charCodeAt(i));
+}
+
+/**
+ * The checks that need no document text: integrality, ordering, lower bound.
+ *
+ * Split out because `validateRange` must run these BEFORE the staleness gate
+ * and the rest AFTER it. `String.prototype.slice` wraps a negative start
+ * (`"hello world".slice(-3, 11) === "rld"`), so a negative `from` with a
+ * coincidentally matching snapshot would pass staleness, and a non-matching one
+ * would be answered with a relocation instead of `out-of-bounds`.
+ */
+function checkOffsetShape(from: number, to: number): (RangeValidation & { ok: false }) | null {
+  if (!Number.isInteger(from) || !Number.isInteger(to)) {
+    return invalid(
+      "non-integer",
+      `Invalid range: from (${from}) and to (${to}) must both be integers.`,
+    );
+  }
+  if (from > to) {
+    return invalid("inverted", `Invalid range: from (${from}) must be <= to (${to}).`);
+  }
+  if (from < 0) {
+    return invalid("out-of-bounds", `Invalid range: from (${from}) must be >= 0.`);
+  }
+  return null;
+}
+
+/** Upper bound, emptiness and surrogate safety, against the materialized text. */
+function checkAgainstText(
+  text: string,
+  from: number,
+  to: number,
+  allowEmpty: boolean,
+  surrogates: SurrogatePolicy,
+): (RangeValidation & { ok: false }) | null {
+  if (to > text.length) {
+    return invalid(
+      "out-of-bounds",
+      `Invalid range: to (${to}) exceeds document length (${text.length}).`,
+    );
+  }
+  if (from === to && !allowEmpty) {
+    return invalid("empty", `Invalid range: [${from}, ${to}) is empty.`);
+  }
+  if (surrogates === "reject") {
+    if (from > 0 && splitsSurrogatePair(text, from)) {
+      return invalid("surrogate", `Invalid range: from (${from}) splits a surrogate pair.`);
+    }
+    if (splitsSurrogatePair(text, to)) {
+      return invalid("surrogate", `Invalid range: to (${to}) splits a surrogate pair.`);
+    }
+  }
+  return null;
+}
+
+/**
+ * Validate a flat-offset range against a plain string — no Y.Doc needed.
+ *
+ * The pure core of {@link validateRange}, and the entry point for the two
+ * callers that hold the flat text but deliberately no `Y.Doc`
+ * (`tandem_getContext` through a `YDocStore`, and the `.docx` comment export
+ * resolver, which resolves through `refreshRange`).
+ *
+ * Order: integer, ordering, lower bound, upper bound, emptiness, surrogate.
+ */
+export function validateFlatRange(
+  text: string,
+  from: number,
+  to: number,
+  opts?: { allowEmpty?: boolean; surrogates?: SurrogatePolicy },
+): RangeValidation {
+  const shape = checkOffsetShape(from, to);
+  if (shape) return shape;
+  const against = checkAgainstText(
+    text,
+    from,
+    to,
+    opts?.allowEmpty ?? false,
+    opts?.surrogates ?? "reject",
+  );
+  if (against) return against;
+  return { ok: true, range: { from: toFlatOffset(from), to: toFlatOffset(to) } };
+}
+
+/**
+ * The flat text for this call, honouring a hoisted `opts.text` when it is safe.
+ *
+ * Guard (a) runs ALWAYS and costs no materialization: `flatDocLength` walks the
+ * tree reading `child.length` and builds no string. It is still a walk per
+ * call — the hoist buys one string build per loop, not one walk.
+ *
+ * Guard (b) runs under `process.env.VITEST === "true"` — deliberately not
+ * `NODE_ENV` (a tsup-built server started without one evaluates
+ * `!== "production"` as true; precedent: `integrations/api-routes.ts`).
+ *
+ * Both recover by recomputing rather than throwing: this runs inside MCP tool
+ * handlers, where a throw is a worse outcome than a slow correct answer.
+ */
+function resolveDocText(ydoc: Y.Doc, provided: string | undefined): string {
+  if (provided === undefined) return extractText(ydoc);
+  const trueLength = flatDocLength(ydoc);
+  if (provided.length !== trueLength) {
+    console.error(
+      `[positions] validateRange: hoisted text length ${provided.length} != document length ` +
+        `${trueLength} — recomputing. The caller's document changed under the hoist.`,
+    );
+    return extractText(ydoc);
+  }
+  if (process.env.VITEST === "true") {
+    const actual = extractText(ydoc);
+    if (provided !== actual) {
+      console.error(
+        "[positions] validateRange: hoisted text has the right LENGTH but the wrong content — recomputing.",
+      );
+      return actual;
+    }
+  }
+  return provided;
+}
+
 /**
  * Validate a flat-offset range against a Y.Doc.
  *
- * Checks: ordering, textSnapshot staleness (with relocation), and optionally
- * heading-prefix overlap. Returns a structured RangeValidation.
+ * Order (#1752), and the order is the contract:
+ *   integer → ordering → lower bound → **staleness** → upper bound → empty →
+ *   surrogate → heading overlap.
  *
+ * Two placements are load-bearing rather than arbitrary:
+ *
+ *  - **Lower bound BEFORE staleness**, because `slice` wraps a negative start.
+ *  - **Upper bound AFTER staleness.** After an external edit shortens the file,
+ *    the watcher's relocation probe passes stale offsets past the new end WITH
+ *    a snapshot and relies on `RANGE_MOVED`. Bounds-first would answer
+ *    `INVALID_RANGE` and pin the annotation to dead offsets — silent annotation
+ *    loss. Same for `tandem_edit`'s documented retry path. So with a mismatched
+ *    `textSnapshot`, a staleness outcome WINS over `out-of-bounds`, and the
+ *    surrogate check applies only to a range about to be returned `ok`;
+ *    relocated coordinates are re-checked on the caller's retry.
+ *
+ * Two accidents are pinned by tests rather than redesigned: the staleness gate
+ * is truthiness-checked, so an empty `textSnapshot` skips it (do not change to
+ * `!== undefined`); and with a snapshot `from === to` never reaches `"empty"`,
+ * because the slice is `""` and staleness fires first.
  */
 export function validateRange(
   ydoc: Y.Doc,
   from: FlatOffset,
   to: FlatOffset,
-  opts?: {
-    textSnapshot?: string;
-    rejectHeadingOverlap?: boolean;
-  },
+  opts?: RangeValidationOpts,
 ): RangeValidation {
   const rejectHeadingOverlap = opts?.rejectHeadingOverlap ?? false;
 
-  if (from > to) {
-    return {
-      ok: false,
-      code: "INVALID_RANGE",
-      message: `Invalid range: from (${from}) must be <= to (${to}).`,
-    };
-  }
+  const shape = checkOffsetShape(from, to);
+  if (shape) return shape;
+
+  // ONE materialization, shared by staleness, bounds and the surrogate check.
+  // Previously computed only when a snapshot was given; making it unconditional
+  // adds a full-document walk to every `anchoredRange` caller (~3.5 ms at
+  // 460 KB per `flatDocLength`'s own docstring). Accepted.
+  const fullText = resolveDocText(ydoc, opts?.text);
 
   // Staleness check
   if (opts?.textSnapshot) {
-    const fullText = extractText(ydoc);
     if (fullText.slice(from, to) !== opts.textSnapshot) {
       const candidates: number[] = [];
       let searchFrom = 0;
@@ -151,17 +342,22 @@ export function validateRange(
     }
   }
 
+  const against = checkAgainstText(
+    fullText,
+    from,
+    to,
+    opts?.allowEmpty ?? false,
+    opts?.surrogates ?? "reject",
+  );
+  if (against) return against;
+
   // Heading overlap check
   if (rejectHeadingOverlap) {
     const fragment = ydoc.getXmlFragment("default");
     const startPos = resolveToElement(fragment, from);
     const endPos = resolveToElement(fragment, to);
     if (!startPos || !endPos) {
-      return {
-        ok: false,
-        code: "INVALID_RANGE",
-        message: `Cannot resolve offset range [${from}, ${to}] in document.`,
-      };
+      return invalid("unresolvable", `Cannot resolve offset range [${from}, ${to}] in document.`);
     }
     if (startPos.clampedFromPrefix || endPos.clampedFromPrefix) {
       return { ok: false, code: "HEADING_OVERLAP" };
@@ -191,12 +387,9 @@ export function anchoredRange(
   from: FlatOffset,
   to: FlatOffset,
   textSnapshot?: string,
-  opts?: { rejectHeadingOverlap?: boolean },
+  opts?: Omit<RangeValidationOpts, "textSnapshot">,
 ): AnchoredRangeResult | (RangeValidation & { ok: false }) {
-  const validation = validateRange(ydoc, from, to, {
-    textSnapshot,
-    rejectHeadingOverlap: opts?.rejectHeadingOverlap,
-  });
+  const validation = validateRange(ydoc, from, to, { ...opts, textSnapshot });
   if (!validation.ok) return validation;
 
   const range: DocumentRange = { from, to };

@@ -108,7 +108,9 @@ function rangeFailureToError(result: Extract<RangeValidation, { ok: false }>) {
     });
   }
   if (result.code === "INVALID_RANGE") {
-    return mcpError("INVALID_RANGE", result.message);
+    // `reason` rides on `details`, not a `data` key — there is no `data` on the
+    // wire; precedent is the RANGE_MOVED arm above (#1752).
+    return mcpError("INVALID_RANGE", result.message, { reason: result.reason });
   }
   // HEADING_OVERLAP
   return mcpError(
@@ -251,8 +253,8 @@ export function registerAnnotationTools(server: McpServer): void {
     "tandem_comment",
     "Add a comment to a text range. Optionally include suggestedText for a replacement proposal.",
     {
-      from: z.number().describe("Start position"),
-      to: z.number().describe("End position"),
+      from: z.number().int().describe("Start position"),
+      to: z.number().int().describe("End position"),
       text: z.string().describe("Comment text"),
       suggestedText: z
         .string()

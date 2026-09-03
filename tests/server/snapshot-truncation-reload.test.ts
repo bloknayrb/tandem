@@ -223,3 +223,112 @@ describe("#1486: reload relocation skips truncated snapshots", () => {
     expect(annOf(doc, id).range.from).toBe(expectedStart(doc));
   });
 });
+
+/**
+ * #1752: the relocation call below the fixed one must survive the new rules.
+ *
+ * `resolvedTo = resolvedFrom + span` carries the ORIGINAL span, so if the
+ * external edit deleted text INSIDE the annotated region the computed end now
+ * exceeds the new document length. Before this change `resolveToElement`'s
+ * clamp made `anchoredRange` succeed anyway; after it, an unclamped call
+ * returns INVALID_RANGE — and `if (relocated.ok)` has no `else`, while
+ * `refreshAllRanges` has already minted a fresh `relRange` from the STALE flat
+ * offsets. That is the durable mispin the #1486 comment describes as the first
+ * draft's bug, re-opened by a bounds check.
+ *
+ * Every fixture here is TRUNCATED on purpose. On the non-truncated branch
+ * `resolvedTo = best + snapshot.length` can never exceed the length (the
+ * snapshot was just found in the text) and can never be empty, so a
+ * non-truncated fixture passes vacuously.
+ */
+describe("#1752: the relocation call keeps working under the new bounds", () => {
+  it("clamps a relocated end past the new document length instead of mispinning", async () => {
+    const { doc, filePath, triggerReload } = await setupOpenedFile(`${LONG_BODY}\n`);
+    const id = seedLongAnnotation(doc, { textSnapshotTruncated: true });
+
+    // Shift the start AND delete text from inside the annotated region, so the
+    // carried span overshoots the end of the shorter document.
+    const shortened = LONG_BODY.slice(0, SNAPSHOT_CAP + 20);
+    await fs.writeFile(filePath, `# Heading\n\n${shortened}\n`);
+    await triggerReload();
+
+    const ann = annOf(doc, id);
+    const len = extractText(doc).length;
+    expect(ann.range.from, "relocated to where the prefix now is").toBe(
+      extractText(doc).indexOf(shortened.slice(0, SNAPSHOT_CAP)),
+    );
+    expect(ann.range.to, "clamped to the document end, not left past it").toBeLessThanOrEqual(len);
+    expect(ann.range.to).toBeGreaterThan(ann.range.from);
+  });
+
+  it("relocates a COLLAPSED annotation (span 0) rather than dropping it into the no-else hole", async () => {
+    // `refreshRange` can resolve a relRange to newFrom === newTo (#1764's
+    // acknowledged zero-length output) while the annotation keeps its older
+    // non-empty snapshot: it passes the `!ann.textSnapshot` guard and the
+    // `probe.length === 0` guard, reaches this call with span 0, and the new
+    // `empty` rule would reject it. Hence `allowEmpty: true` here.
+    const { doc, filePath, triggerReload } = await setupOpenedFile(`${LONG_BODY}\n`);
+    const text = extractText(doc);
+    const idx = text.indexOf(LONG_BODY);
+    const id = "ann_collapsed";
+    withMcp(doc, () =>
+      doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        author: "claude",
+        type: "comment",
+        // Collapsed range, non-empty truncated snapshot.
+        range: { from: toFlatOffset(idx), to: toFlatOffset(idx) },
+        content: "collapsed",
+        status: "pending",
+        timestamp: 0,
+        textSnapshot: LONG_BODY.slice(0, SNAPSHOT_CAP),
+        textSnapshotTruncated: true,
+        rev: 1,
+      } as Annotation),
+    );
+
+    await fs.writeFile(filePath, `# Heading\n\n${LONG_BODY}\n`);
+    await triggerReload();
+
+    const ann = annOf(doc, id);
+    expect(ann.range.from, "relocated, not left at the stale offset").toBe(expectedStart(doc));
+    expect(ann.range.to).toBe(ann.range.from);
+  });
+
+  it("relocates when the capped probe starts mid-emoji instead of mispinning", async () => {
+    // `resolvedFrom` is `fullText.indexOf(probe)` and the probe is a
+    // character-count-capped PREFIX (#1486), so it can be cut between the
+    // halves of a pair. These are derived offsets and nothing here is
+    // serialized to a file, so the relocation call takes surrogates: "ignore".
+    const body = `\u{1F600}${LONG_BODY}`;
+    const { doc, filePath, triggerReload } = await setupOpenedFile(`${body}\n`);
+    const text = extractText(doc);
+    const idx = text.indexOf(body);
+    const id = "ann_midpair";
+    withMcp(doc, () =>
+      doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        author: "claude",
+        type: "comment",
+        // Starts on the LOW half of the leading pair.
+        range: { from: toFlatOffset(idx + 1), to: toFlatOffset(idx + 1 + SNAPSHOT_CAP) },
+        content: "starts mid-pair",
+        status: "pending",
+        timestamp: 0,
+        textSnapshot: body.slice(1, 1 + SNAPSHOT_CAP),
+        textSnapshotTruncated: true,
+        rev: 1,
+      } as Annotation),
+    );
+
+    await fs.writeFile(filePath, `# Heading\n\n${body}\n`);
+    await triggerReload();
+
+    const ann = annOf(doc, id);
+    const now = extractText(doc);
+    expect(ann.range.from, "relocated to the shifted mid-pair start").toBe(
+      now.indexOf(body.slice(1, 1 + SNAPSHOT_CAP)),
+    );
+    expect(ann.range.to).toBeGreaterThan(ann.range.from);
+  });
+});

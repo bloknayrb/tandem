@@ -14,6 +14,7 @@ import { withInternal } from "../../shared/origins.js";
 import type { Annotation, AnnotationReply, FlatOffset } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
 import { IMPORT_AUTHOR_MAX, IMPORT_REPLY_BODY_CAP, nextRev } from "../annotations/schema.js";
+import { extractText } from "../mcp/document-model.js";
 import { anchoredRange } from "../positions.js";
 import { isCanonicalWordId } from "./docx-comment-id.js";
 import {
@@ -566,9 +567,36 @@ export function injectCommentsAsAnnotations(
   // origin — so the effective origin becomes whatever the outer call used.
   // This is intentional: a reload path calling this inside `withReload` wants
   // reload semantics (durable-sync persists, channel skips).
+  // Hoisted once: the loop never changes the document content (every write
+  // goes to the annotations map), so one materialization serves every call.
+  const flatText = extractText(doc);
+
   withInternal(doc, () => {
     for (const comment of comments) {
-      const result = anchoredRange(doc, toFlatOffset(comment.from), toFlatOffset(comment.to));
+      // Clamp BOTH ends, not just `to` (#1752). `calculateCommentRanges` counts
+      // flat characters by walking OOXML while the Y.Doc comes from
+      // mammoth → HTML → mdast, so the two accountings can diverge past the
+      // end. Today the resolver's own clamp lands such a comment at the
+      // document end; the new upper bound would turn it into a logged skip that
+      // the #1448 scoreboard cannot see (a comment never injected is ABSENT
+      // from the map, so it does not score -1). And clamping `to` alone leaves a
+      // divergent `from` greater than it — `inverted`, which is answered BEFORE
+      // the upper bound, i.e. exactly the invisible loss the clamp prevents.
+      const from = toFlatOffset(Math.min(comment.from, flatText.length));
+      const to = toFlatOffset(Math.min(comment.to, flatText.length));
+      if (from !== comment.from || to !== comment.to) {
+        console.error(
+          `[docx-comments] Clamped imported comment ${comment.commentId}: ` +
+            `[${comment.from}, ${comment.to}] → [${from}, ${to}] (document length ${flatText.length}).`,
+        );
+      }
+      // `allowEmpty`: `calculateCommentRanges` emits from === to for adjacent
+      // commentRangeStart/End — a Word insertion-point comment. Dropping those
+      // is the #1142 class of silent loss.
+      const result = anchoredRange(doc, from, to, undefined, {
+        allowEmpty: true,
+        text: flatText,
+      });
       if (!result.ok) {
         console.error(
           `[docx-comments] Skipping imported comment ${comment.commentId}: range [${comment.from}, ${comment.to}] — ${result.code}`,

@@ -45,7 +45,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `FILE_LOCKED` | File is open in another program (e.g., Word). Close it first. |
 | `FORMAT_ERROR` | Unsupported format, read-only / non-markdown document, file too large (>50MB), or invalid regex. |
 | `FILE_TOO_LARGE` | Inline content exceeds the tool's size cap (e.g. `tandem_appendContent`). |
-| `INVALID_RANGE` | Offset out of bounds, text not found, or range overlaps heading markup. |
+| `INVALID_RANGE` | Offset out of bounds, non-integer, inverted, zero-length, splitting a surrogate pair, text not found, or a range overlapping heading markup. Carries `details.reason` (see `tandem_edit`). |
 | `EMPTY_DOCUMENT` | `tandem_edit` called on an empty document — seed content with `tandem_appendContent` / `tandem_scratchpad({ content })` first. |
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
@@ -263,7 +263,20 @@ Replace text at a specific range. Single-paragraph replacements only.
 { "edited": true, "from": 42, "to": 67, "newTextLength": 31 }
 ```
 
-**Errors:** `INVALID_RANGE` (offsets out of bounds, overlaps heading markup), `FORMAT_ERROR` (read-only document), `INVALID_ARGUMENT` (`newText` contains a line break in a plaintext document — see below), and — only when `textSnapshot` is supplied — `RANGE_MOVED` (the text shifted; the error carries the relocated `resolvedFrom` / `resolvedTo`) or `RANGE_GONE` (the text was deleted)
+**Errors:** `INVALID_RANGE`, `FORMAT_ERROR` (read-only document), `INVALID_ARGUMENT` (`newText` contains a line break in a plaintext document — see below), and — only when `textSnapshot` is supplied — `RANGE_MOVED` (the text shifted; the error carries the relocated `resolvedFrom` / `resolvedTo`) or `RANGE_GONE` (the text was deleted)
+
+An `INVALID_RANGE` carries `details.reason`, a closed enum you can branch on rather than parse:
+
+| `details.reason` | Meaning |
+|---|---|
+| `non-integer` | `from` or `to` is not an integer. (The schema also rejects this, so you normally see a protocol error first.) |
+| `inverted` | `from > to`. |
+| `out-of-bounds` | `from < 0`, or `to` past the end of the document. `to === length` is valid. |
+| `empty` | `from === to`. Editing needs a non-empty span; use `tandem_appendContent` to insert. |
+| `surrogate` | An offset falls between the two halves of a surrogate pair (inside an emoji or other astral character). Move it to either side of the character. |
+| `unresolvable` | The offsets could not be resolved against the document structure. |
+
+**With a mismatched `textSnapshot`, a staleness outcome wins over `out-of-bounds`.** The staleness check runs first by design — after an external edit shortens the file, stale offsets past the new end must relocate rather than be refused — so the `reason` set above is exhaustive only for a call that supplies no `textSnapshot`.
 
 **Example:**
 ```
@@ -897,6 +910,8 @@ Read content around a range without pulling the full document.
   "selectionRange": { "from": 42, "to": 55 }
 }
 ```
+
+**Errors:** `INVALID_RANGE` — the range is validated against the document rather than clamped (`details.reason` as for `tandem_edit`). A zero-length range is accepted here: reading context around a cursor position is a legitimate query.
 
 ---
 

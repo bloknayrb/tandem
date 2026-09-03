@@ -52,12 +52,34 @@ export interface RelativeRange {
   toRel: SerializedRelPos;
 }
 
+/**
+ * Why a flat-offset range was rejected as INVALID_RANGE (#1752).
+ *
+ * Reaches the MCP wire as `details.reason`, so it is a closed enum an agent can
+ * branch on rather than a prose message it has to parse. The order of the arms
+ * below is the order the checks run in — see `validateRange`, where it is
+ * load-bearing rather than cosmetic.
+ *
+ * `"unresolvable"` is the pre-existing "Cannot resolve offset range" branch. It
+ * needs `rejectHeadingOverlap` AND `allowEmpty` AND an element-free fragment,
+ * and it is `allowEmpty` doing the work: on such a fragment `text.length === 0`,
+ * so every other range dies at the upper bound and `(0, 0)` dies at `"empty"`.
+ * No current caller passes both opts, so nothing in production reaches it.
+ */
+export type RangeInvalidReason =
+  | "non-integer"
+  | "inverted"
+  | "out-of-bounds"
+  | "empty"
+  | "surrogate"
+  | "unresolvable";
+
 /** Result of validating a flat-offset range against a document. */
 export type RangeValidation =
   | { ok: true; range: DocumentRange }
   | { ok: false; code: "RANGE_GONE" }
   | { ok: false; code: "RANGE_MOVED"; resolvedFrom: FlatOffset; resolvedTo: FlatOffset }
-  | { ok: false; code: "INVALID_RANGE"; message: string }
+  | { ok: false; code: "INVALID_RANGE"; message: string; reason: RangeInvalidReason }
   | { ok: false; code: "HEADING_OVERLAP" };
 
 /** Result of anchoredRange: validated flat + CRDT-anchored range ready to store on an Annotation. */

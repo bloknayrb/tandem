@@ -285,6 +285,9 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void 
   const authorshipMap = doc.getMap(Y_MAP_AUTHORSHIP);
   const timestamp = Date.now();
   const entries: Array<{ key: string; entry: AuthorshipRange }> = [];
+  // One materialization for the whole loop — the document is unchanged across
+  // it (every write goes to the authorship map, after the loop).
+  const flatText = extractText(doc);
 
   let flatCursor = 0;
   for (let i = 0; i < fragment.length; i++) {
@@ -309,7 +312,11 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void 
     // resolveAuthorshipRange rejects them anyway.
     if (from >= to) continue;
 
-    const anchored = anchoredRange(doc, toFlatOffset(from), toFlatOffset(to));
+    // Hoisted `text`: this loop walks the whole document without changing it,
+    // so one materialization serves every iteration (#1752).
+    const anchored = anchoredRange(doc, toFlatOffset(from), toFlatOffset(to), undefined, {
+      text: flatText,
+    });
     if (!anchored.ok) continue;
 
     // Key on the fragment element index (not a running stamped-block counter)
@@ -365,7 +372,16 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void 
  */
 function stampClaudeRange(doc: Y.Doc, from: FlatOffset, to: FlatOffset): void {
   if (to <= from) return;
+  // No hoisted `text` opt, deliberately: `tandem_edit` holds only its PRE-edit
+  // text and the comment at the call site requires the stamp to read post-edit
+  // state. A same-length replacement ("2024" → "2025") would defeat the length
+  // guard, so nothing would catch the mistake. This is a single call, not a
+  // loop — let it materialize.
   const anchored = anchoredRange(doc, from, to);
+  // Silent by design, and the one case worth naming: an edit whose `newText`
+  // ends on a lone high surrogate now fails the surrogate check and loses its
+  // authorship stamp. The edit itself already landed, so a missing overlay
+  // entry is a cosmetic loss, not a corrupt document (#1752).
   if (!anchored.ok) return;
   const authorshipMap = doc.getMap(Y_MAP_AUTHORSHIP);
   const rangeId = generateAuthorshipId("claude");
@@ -550,8 +566,12 @@ export function registerDocumentTools(server: McpServer): void {
     "tandem_edit",
     "Edit text in the document at a specific range. For single-paragraph replacements only — newlines in newText are inserted as literal text.",
     {
-      from: z.number().describe("Start position (character offset)"),
-      to: z.number().describe("End position (character offset)"),
+      // `.int()` here rather than `.nonnegative()`: `validateRange` owns the
+      // bounds (and answers with a `reason` the agent can branch on), but a
+      // fractional offset has no meaningful coordinate at all — `String.slice`
+      // would silently truncate it (#1752).
+      from: z.number().int().describe("Start position (character offset)"),
+      to: z.number().int().describe("End position (character offset)"),
       newText: z.string().describe("Replacement text (single paragraph — no newlines)"),
       documentId: z
         .string()
@@ -640,7 +660,7 @@ export function registerDocumentTools(server: McpServer): void {
                   "Use tandem_resolveRange to find the text position.",
               );
             }
-            return mcpError("INVALID_RANGE", v.message);
+            return mcpError("INVALID_RANGE", v.message, { reason: v.reason });
           }
 
           const fragment = r.doc.getXmlFragment("default");

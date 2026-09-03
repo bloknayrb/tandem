@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { FlatOffset } from "../../shared/positions/types.js";
 import { toFlatOffset } from "../../shared/positions/types.js";
+import { validateFlatRange } from "../positions.js";
 import { getDocumentStore } from "./document-store.js";
 import { searchOutputShape } from "./output-schemas.js";
 import {
@@ -174,8 +175,8 @@ export function registerNavigationTools(server: McpServer): void {
     "tandem_getContext",
     "Read content around a range without pulling the full document. Reduces token usage.",
     {
-      from: z.number().describe("Start position"),
-      to: z.number().describe("End position"),
+      from: z.number().int().describe("Start position"),
+      to: z.number().int().describe("End position"),
       windowSize: z
         .number()
         .optional()
@@ -194,6 +195,15 @@ export function registerNavigationTools(server: McpServer): void {
         const from = toFlatOffset(rawFrom);
         const to = toFlatOffset(rawTo);
         const fullText = store.getText();
+        // #1752: this used to CLAMP. (`extractContext` still clamps the context
+        // WINDOW — a different job.) A `YDocStore` deliberately exposes no
+        // `Y.Doc`, so the pure validator runs on the text the store already
+        // handed over. `allowEmpty` because reading context around a cursor
+        // position is a legitimate zero-length query.
+        const validation = validateFlatRange(fullText, from, to, { allowEmpty: true });
+        if (!validation.ok && validation.code === "INVALID_RANGE") {
+          return mcpError("INVALID_RANGE", validation.message, { reason: validation.reason });
+        }
         return mcpSuccess(extractContext(fullText, from, to, windowSize));
       },
     ),

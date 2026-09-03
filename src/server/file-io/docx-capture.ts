@@ -193,7 +193,17 @@ export function captureModel(doc: Y.Doc): Capture {
     if (ann.type !== "comment" && ann.author !== "import") continue;
     // Resolve through the real positions path, freshly per generation
     // (RelativePositions cannot cross a from-scratch Y.Doc rebuild).
-    const resolved = anchoredRange(doc, ann.range.from, ann.range.to);
+    // STORED offsets, not caller-supplied. `allowEmpty` because an imported
+    // point comment would otherwise score -1/-1 in the #1448 scoreboard, and
+    // `surrogates: "ignore"` because after a CRDT edit inside an emoji a
+    // refreshed range can legitimately end mid-pair (Word's own offsets are
+    // UTF-16) — rejecting it here would score a real comment as lost. The new
+    // surrogate rule is for the caller-supplied tool boundary (#1752).
+    const resolved = anchoredRange(doc, ann.range.from, ann.range.to, undefined, {
+      allowEmpty: true,
+      surrogates: "ignore",
+      text: flatText,
+    });
     if (!resolved.ok) {
       // The annotation no longer resolves (range gone/moved/invalid/heading
       // overlap). Record it as an unanchorable degradation rather than crashing
