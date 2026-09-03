@@ -692,7 +692,13 @@ let lastSeenCommentTrigger = 0;
 function openRequestedComposer(kind: "comment" | "note"): void {
   if (!editor) return;
   const { from, to } = editor.state.selection;
-  if (from === to || !editor.isEditable) return;
+  // A selection is all this needs. No `isEditable` term: this opens the
+  // ANNOTATION composer, and a read-only document is exactly the one you
+  // annotate rather than edit (decision 2, #1798 — `.html` opens read-only, and
+  // before this the Ctrl+Alt+M and right-click routes both dead-ended on it).
+  // The popup's own gate, `canAnnotate`, has never had an `isEditable` term
+  // either, so this was the layer that diverged from it.
+  if (from === to) return;
   captureSelectionRange();
   annotationIntent = kind;
   annotateMode = true;

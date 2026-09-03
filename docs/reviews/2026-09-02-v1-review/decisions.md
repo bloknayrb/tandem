@@ -8,7 +8,7 @@ the issue each item names; this file is the snapshot at 2026-09-02.
 | # | Decision | Recorded in | Unblocks |
 |---|---|---|---|
 | 1 | `tandem_restoreBackup()` with no argument on a `.docx` with no snapshot from this run **lists** the sidecar as an entry and never restores; the path honours `readOnly`. | #1768 | Track A |
-| 2 | `.html` opens **read-only**; annotations still work; no HTML save adapter for v1. | #1798 | Track A |
+| 2 | `.html` opens **read-only**; annotations still work; `.html` stays out of both save sets for v1, so `saveDocumentToDisk` keeps refusing it — a policy exclusion, not a missing adapter (it routes to `plaintextAdapter`, whose `save` is the one `.txt` uses). | #1798 | Track A |
 | 3 | Claude may **dismiss or withdraw** its own annotations, never **accept**. Claude-resolved records leave `userResponses` and `applyChanges`. The MCP accept path then applies only to user-authored records and must either apply `suggestedText` or refuse. | #1770 | Track C |
 | 4 | `tandem_editAnnotation` and `tandem_annotationReply` are scoped to annotations **Claude authored**. | #1770 | Track C |
 | 5 | The soft trial clock stays (ADR-040 §3). The falsy-`firstRunAt` reset path is closed as a two-byte edit; an empty string is treated like an unparseable value. | #1788 | Track H |

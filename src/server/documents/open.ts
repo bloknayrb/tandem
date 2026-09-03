@@ -74,6 +74,8 @@ import {
   CHARS_PER_PAGE,
   LARGE_FILE_PAGE_THRESHOLD,
   MAX_FILE_SIZE,
+  mayHoldUnsavedWork,
+  SAVEABLE_FORMATS,
   SUPPORTED_EXTENSIONS,
   VERY_LARGE_FILE_PAGE_THRESHOLD,
   Y_MAP_DOCUMENT_META,
@@ -666,12 +668,27 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
   }
 
   const format = detectFormat(resolved);
-  // .docx is now editable (#576): edits are held in the Y.Doc and written back
-  // to the original on EXPLICIT save (`saveDocumentToDisk` binary branch). The
-  // protective layer is "never overwrite without an explicit save", not
-  // read-only — so .docx opens writable like .md / .txt. (Auto-save still skips
+  // A format with no path back to disk opens read-only (#1798). `.html` is the
+  // only one today: it is in neither AUTO_SAVE_FORMATS nor BINARY_SAVE_FORMATS,
+  // so `saveDocumentToDisk` refuses it — a POLICY exclusion, not a missing
+  // adapter (`getAdapter("html")` returns plaintextAdapter, whose `save` is the
+  // same one .txt uses). Opening it editable meant edits that looked accepted
+  // and vanished on tab close.
+  //
+  // Annotations still work — nothing in the annotation paths reads this flag,
+  // and nothing should. NOT the annotation store's own module-level `readOnly`
+  // (`annotations/store.ts`), which is lock-acquisition state.
+  //
+  // `.docx` stays EDITABLE (#576) — it is in BINARY_SAVE_FORMATS. Its edits are
+  // held in the Y.Doc and written back to the original on EXPLICIT save
+  // (`saveDocumentToDisk`'s binary branch); the protective layer is "never
+  // overwrite without an explicit save", not read-only. (Auto-save still skips
   // .docx via BINARY_SAVE_FORMATS being disjoint from AUTO_SAVE_FORMATS.)
-  const readOnly = false;
+  //
+  // Keyed on the save sets rather than `format === "html"` because the set
+  // membership is the reason: a future extension added to SUPPORTED_EXTENSIONS
+  // without a save-set entry would otherwise reintroduce #1798 silently.
+  const readOnly = !SAVEABLE_FORMATS.has(format);
   const id = docIdFromPath(resolved);
 
   return { resolved, format, readOnly, id };
@@ -799,9 +816,25 @@ async function maybeRestoreSession(
         //     edits sit unpersisted with no banner. That gap is ACCEPTED, not
         //     handled: both sub-cases are already unreconcilable.
         //
-        // `readOnly` gates only (b), the SYNTHESIZED prompt: a read-only doc
-        // refuses every save path, so raising a fresh keep-vs-reload choice
-        // over restored-but-unpersistable edits is noise.
+        // Read-only-ness gates only (b), the SYNTHESIZED prompt: an EXPLICITLY
+        // read-only doc (View Changelog, `POST /api/open {readOnly:true}`) is
+        // one the user asked not to touch, so raising a fresh keep-vs-reload
+        // choice over restored edits is noise.
+        //
+        // But `!readOnly` is the wrong question since #1798, which is why this
+        // reads `mayHoldUnsavedWork` instead. An `.html` is now read-only
+        // BECAUSE its format cannot be written back, not because anyone asked
+        // — and it is exactly the tier whose restored edits need protecting.
+        // Suppressing the prompt there is not "less noise", it is data loss:
+        // the prompt is what writes the conflict flag, and `closeDocumentById`
+        // preserves the session ONLY while a conflict is pending, so no prompt
+        // means the restored edits die on the next tab close.
+        //
+        // `source` is the literal "file" because `openFromDisk` is this
+        // function's only caller and uploads never restore a session. Reading
+        // it off the registry instead would find nothing — `openDocument` runs
+        // AFTER this call — and an optional chain would make the predicate
+        // falsy for every document, reinstating the suppression in reverse.
         //
         // It must NOT gate (a). Suppressing a CARRIED conflict does not defer
         // it, it DESTROYS it: `writeDocMeta` has already tombstoned the flag
@@ -816,7 +849,9 @@ async function maybeRestoreSession(
         const carried = narrowConflict(session.conflict);
         const needsPrompt =
           carried !== undefined ||
-          (!readOnly && dirtySession && (changed || !AUTO_SAVE_FORMATS.has(format)));
+          (mayHoldUnsavedWork({ readOnly, format, source: "file" }) &&
+            dirtySession &&
+            (changed || !AUTO_SAVE_FORMATS.has(format)));
         return {
           restored: true,
           sessionDirty: dirtySession,

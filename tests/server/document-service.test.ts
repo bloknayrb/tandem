@@ -508,6 +508,32 @@ describe("saveDocumentToDisk", () => {
     expect(result.skipCode).toBe("READ_ONLY");
   });
 
+  // #1798, and the half `tandem_save` cannot pin: `document.ts` short-circuits
+  // on `readOnly` BEFORE calling `saveDocumentToDisk`, so every tool-level case
+  // is satisfied by editing `document.ts` alone. Ctrl+S does not go through the
+  // tool — it is `POST /api/save` → here → `skipCode` → `saveSkippedMessage`.
+  // Without this the browser regresses from "this document format cannot be
+  // written to disk" to the circular "this document is read-only".
+  //
+  // Its two neighbours are the controls: "skips read-only documents" above
+  // (a read-only `.md`) must keep answering READ_ONLY, which kills an
+  // unconditional UNSUPPORTED_FORMAT; "skips .html format" below is a WRITABLE
+  // `.html` reaching the real `!AUTO_SAVE_FORMATS` branch, unaffected because
+  // `addDoc` bypasses the `open.ts` derivation.
+  it("reports a read-only .html as UNSUPPORTED_FORMAT, not READ_ONLY", async () => {
+    addDoc("ro-html-doc", {
+      id: "ro-html-doc",
+      filePath: "/tmp/readonly.html",
+      format: "html",
+      readOnly: true,
+      source: "file",
+    });
+    const result = await saveDocumentToDisk("ro-html-doc");
+    expect(result.status).toBe("skipped");
+    expect(result.skipCode).toBe("UNSUPPORTED_FORMAT");
+    expect(result.reason).toContain("not eligible");
+  });
+
   it("skips .html format", async () => {
     addDoc("html-doc", {
       id: "html-doc",
