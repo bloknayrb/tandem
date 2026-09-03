@@ -11,6 +11,7 @@ import type { Response } from "express";
 import { describe, expect, it, vi } from "vitest";
 import {
   ERROR_LABELS,
+  errorCodeToHttpStatus,
   errorCodeToLabel,
   GENERIC_ERROR_MESSAGE,
   isLoopbackRequest,
@@ -204,12 +205,45 @@ describe("GENERIC_ERROR_MESSAGE is keyed on labels, exhaustively", () => {
       "EPERM",
       "EACCES",
       "BACKUP_FAILED",
+      "PERMISSION_DENIED",
+      "CONFLICT",
+      "EMPTY_CONVERSION",
+      "OPEN_FAILED",
       "SOMETHING_UNMAPPED",
       "",
     ];
     for (const code of codes) {
       expect(ERROR_LABELS).toContain(errorCodeToLabel(code));
     }
+  });
+});
+
+describe("errorCodeToHttpStatus / errorCodeToLabel — POST /api/convert's codes (#1796)", () => {
+  // Each of these codes reaches `sendApiError` unmapped as of this PR's fix:
+  // the route half of the mapping (`POST /api/convert` -> `handleConvert` ->
+  // `sendApiError`) previously fell through to the 500 default arm and the
+  // catch-all INTERNAL label for every one of them. Pinning status AND label
+  // per code so a deleted case goes red rather than silently degrading.
+  it("EMPTY_CONVERSION is a 422 with its own label, not the 500 default arm", () => {
+    expect(errorCodeToHttpStatus("EMPTY_CONVERSION")).toBe(422);
+    expect(errorCodeToLabel("EMPTY_CONVERSION")).toBe("EMPTY_CONVERSION");
+  });
+
+  it("CONFLICT is a 409, not the 500 default arm", () => {
+    expect(errorCodeToHttpStatus("CONFLICT")).toBe(409);
+    expect(errorCodeToLabel("CONFLICT")).toBe("CONFLICT");
+  });
+
+  it("OPEN_FAILED is a 500 with its own label, not the bare INTERNAL catch-all", () => {
+    expect(errorCodeToHttpStatus("OPEN_FAILED")).toBe(500);
+    expect(errorCodeToLabel("OPEN_FAILED")).toBe("OPEN_FAILED");
+  });
+
+  it("PERMISSION_DENIED (convert's realpath classification) is a 403 with its own label", () => {
+    // Distinct from the raw `EACCES` errno case, which already mapped to the
+    // same status/label pair — this pins the second producer independently.
+    expect(errorCodeToHttpStatus("PERMISSION_DENIED")).toBe(403);
+    expect(errorCodeToLabel("PERMISSION_DENIED")).toBe("PERMISSION_DENIED");
   });
 });
 

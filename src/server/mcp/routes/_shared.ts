@@ -148,6 +148,10 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
       return 400;
     case "READ_ONLY":
       return 403;
+    // Convert's realpath classification (#1796) — a distinct producer from
+    // the raw `EACCES` errno case below, but the same actionable meaning.
+    case "PERMISSION_DENIED":
+      return 403;
     case "ANNOTATION_RESOLVED":
     case "NOT_RENAMABLE":
     case "ALREADY_EXISTS":
@@ -155,7 +159,16 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "RELOAD_IN_PROGRESS":
     case "EXTERNAL_CONFLICT":
     case "FILE_MODIFIED":
+    // `findAvailablePath` (convert.ts) exhausted its numbered-suffix budget —
+    // a naming collision the caller can resolve (move/rename), same class of
+    // "conflicting state" as the rename/reload codes above it.
+    case "CONFLICT":
       return 409;
+    // `tandem_convertToMarkdown`'s empty-output guard (#1796) — a content
+    // condition on the source `.docx`, not a server fault, so this must not
+    // fall through to the 500 default arm (see DOCX_TOO_LARGE's note below).
+    case "EMPTY_CONVERSION":
+      return 422;
     // DOCX_TOO_LARGE (#1310) is the decompressed-size sibling of FILE_TOO_LARGE's compressed cap.
     // Without this case it falls through to 500, which makes sendApiError log
     // "[Tandem] Unhandled API error:" with a stack — reporting a policy refusal of hostile input as
@@ -169,6 +182,12 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "EACCES":
       return 403;
     case "BACKUP_FAILED":
+      return 500;
+    // `tandem_convertToMarkdown`'s .md write succeeded and the file could not
+    // be reopened as a tab — genuinely a server fault (500), but given its
+    // own case rather than falling into the default arm, so it gets a label
+    // that isn't the bare INTERNAL catch-all (see errorCodeToLabel below).
+    case "OPEN_FAILED":
       return 500;
     default:
       return 500;
@@ -187,6 +206,10 @@ export function errorCodeToLabel(code: string): string {
     case "INVALID_PATH":
     case "BACKUP_SYMLINK":
       return "INVALID_PATH";
+    // Convert's realpath classification (#1796): EACCES/EPERM resolving the
+    // output directory itself, as opposed to the raw errno case below.
+    case "PERMISSION_DENIED":
+      return "PERMISSION_DENIED";
     case "UNSUPPORTED_FORMAT":
     case "NO_SUGGESTIONS":
     case "INVALID_ARGUMENT":
@@ -213,6 +236,18 @@ export function errorCodeToLabel(code: string): string {
     case "EXTERNAL_CONFLICT":
     case "FILE_MODIFIED":
       return "EXTERNAL_CONFLICT";
+    // `findAvailablePath` (convert.ts) exhausted its numbered-suffix budget.
+    // Its own label, not folded onto EXTERNAL_CONFLICT: the two are different
+    // conditions ("the file changed under us" vs. "every candidate name was
+    // already taken") and a caller can only act on CONFLICT by renaming, not
+    // by reloading.
+    case "CONFLICT":
+      return "CONFLICT";
+    // `tandem_convertToMarkdown`'s empty-output guard (#1796) — a content
+    // condition, not "the operation failed" (see errorCodeToHttpStatus above:
+    // must not fall through to the 500 default arm's INTERNAL label either).
+    case "EMPTY_CONVERSION":
+      return "EMPTY_CONVERSION";
     // Deliberately the SAME label as the compressed-size cap rather than a new one: both are
     // "this file is too big to open", the distinction between them is in `message`, and a novel
     // label would be an unrecognized string to every existing client while changing nothing a
@@ -227,6 +262,13 @@ export function errorCodeToLabel(code: string): string {
       return "PERMISSION_DENIED";
     case "BACKUP_FAILED":
       return "INTERNAL";
+    // `tandem_convertToMarkdown`'s .md write succeeded and reopening it
+    // failed. Its own label so `sendApiError`'s Copy-Diagnostics-visible log
+    // line, and the response body, distinguish "we wrote your file but
+    // couldn't open it" from an undifferentiated internal failure — it is
+    // still a 500 (errorCodeToHttpStatus above), but not the default arm.
+    case "OPEN_FAILED":
+      return "OPEN_FAILED";
     default:
       return "INTERNAL";
   }
@@ -287,6 +329,9 @@ export const GENERIC_ERROR_MESSAGE: Record<string, string> = {
   FILE_TOO_LARGE: "The file is too large.",
   FILE_LOCKED: "File is locked by another program.",
   PERMISSION_DENIED: "Permission denied.",
+  CONFLICT: "Could not find an available filename.",
+  EMPTY_CONVERSION: "Conversion produced no extractable text.",
+  OPEN_FAILED: "The file was written but could not be reopened.",
   INTERNAL: "The operation failed.",
 };
 
@@ -302,5 +347,8 @@ export const ERROR_LABELS = [
   "FILE_TOO_LARGE",
   "FILE_LOCKED",
   "PERMISSION_DENIED",
+  "CONFLICT",
+  "EMPTY_CONVERSION",
+  "OPEN_FAILED",
   "INTERNAL",
 ] as const;
