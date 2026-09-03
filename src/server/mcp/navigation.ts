@@ -15,6 +15,7 @@ import {
   withErrorBoundary,
   withStructuredErrors,
 } from "./response.js";
+import { searchRegexInWorker } from "./search-worker.js";
 
 export interface SearchMatch {
   from: FlatOffset;
@@ -22,36 +23,76 @@ export interface SearchMatch {
   text: string;
 }
 
-/** Search for text in a document. Pure logic extracted for testability. */
+/**
+ * Search for LITERAL text in a document. Pure logic extracted for testability.
+ *
+ * Literal-only by design (#1795). The `useRegex` branch used to live here and
+ * compiled the caller's pattern on the main thread, where a catastrophic
+ * backtrack froze the whole server — the old 2 s guard ran only BETWEEN
+ * matches, so a single pathological `exec` never reached it. Regex search now
+ * goes to `searchRegexInWorker`. Keeping the branch here as an exported,
+ * unguarded `new RegExp(query)` would leave a loaded gun for the next caller,
+ * so the parameter is gone rather than merely unused.
+ *
+ * What `escapeRegex` buys is exactly one thing: the compiled pattern is a plain
+ * literal, so it cannot backtrack catastrophically. That is why there is no
+ * time guard. It does NOT make compilation infallible — V8 caps a compiled
+ * pattern at roughly 32,768 characters of source and escaping is
+ * length-increasing, so a long enough `query` raises "Regular expression too
+ * large" with a message that quotes the whole query back (33,062 characters,
+ * for a 33,000-character query).
+ *
+ * Hence the try/catch, which is not vestigial: without it the throw escapes to
+ * `withErrorBoundary` and a caller who merely typed too much gets
+ * INTERNAL_ERROR — "the server broke" for what is a bad input — with their
+ * entire query echoed into the envelope and into `console.error`. The mirror
+ * image of the cap/timeout rule below, and just as wrong.
+ *
+ * **The catch must cover the LOOP, and one around `new RegExp` alone would
+ * catch nothing at all.** V8 compiles a regex lazily — the same fact
+ * `search-worker.ts` leans on to keep the main thread out of the pattern — so
+ * the size failure surfaces from the FIRST `exec`, not from construction.
+ * Measured on Node v24.14.1 at 33,000 and 40,000 characters, in several orders
+ * including a cold first call: construction succeeded every time, `exec` raised
+ * every time.
+ *
+ * The `regex: true` path had the SAME hole and is fixed in the same change.
+ * That the worker wrapped its `new RegExp` in a try/catch at all is evidence
+ * the author already knew an oversized pattern raises — but that try stopped
+ * short of the loop, so it caught the EAGER SyntaxError from a malformed
+ * pattern and missed the LAZY one from an over-long pattern entirely. There it
+ * was worse than a mislabelled error: the throw was uncaught inside the worker,
+ * so one oversized pattern killed the thread. `findOccurrence` and
+ * `countOccurrences` share the class through `escapeRegex` and are still bare;
+ * pre-existing, not touched here.
+ *
+ * `error` is therefore reachable on this path after all, which is the same
+ * shape the worker returns, so callers can treat both search paths uniformly.
+ */
 export function searchText(
   fullText: string,
   query: string,
-  useRegex?: boolean,
-): { matches: SearchMatch[]; error?: string } {
+): { matches: SearchMatch[]; truncated?: "cap" | "timeout"; error?: string } {
   const MAX_MATCHES = 10_000;
   const matches: SearchMatch[] = [];
   try {
-    const pattern = useRegex ? new RegExp(query, "gi") : new RegExp(escapeRegex(query), "gi");
+    const pattern = new RegExp(escapeRegex(query), "gi");
     let match;
-    const start = Date.now();
     while ((match = pattern.exec(fullText)) !== null) {
       matches.push({
         from: toFlatOffset(match.index),
         to: toFlatOffset(match.index + match[0].length),
         text: match[0],
       });
-      if (matches.length >= MAX_MATCHES) {
-        return { matches, error: `Search capped at ${MAX_MATCHES} matches` };
-      }
-      // Guard against catastrophic backtracking — bail after 2s
-      if (Date.now() - start > 2000) {
-        return { matches, error: "Search timed out — simplify the regex pattern" };
-      }
+      if (matches.length >= MAX_MATCHES) return { matches, truncated: "cap" };
       // Prevent infinite loops on zero-length matches
       if (match[0].length === 0) pattern.lastIndex++;
     }
   } catch (err) {
-    return { matches: [], error: `Invalid regex: ${getErrorMessage(err)}` };
+    // Only reachable for a query too long to compile. That fires on the first
+    // `exec` (see above) and is deterministic for the pattern, so it lands
+    // before any match — no partial results are being discarded here.
+    return { matches: [], error: `Invalid search query: ${getErrorMessage(err)}` };
   }
   return { matches };
 }
@@ -127,8 +168,8 @@ export function registerNavigationTools(server: McpServer): void {
     {
       description: "Search for text in the document. Returns matching positions.",
       inputSchema: {
-        query: z.string().describe("Search query (supports regex)"),
-        regex: z.boolean().optional().describe("Treat query as regex"),
+        query: z.string().describe("Text to find (literal unless `regex: true`)"),
+        regex: z.boolean().default(false).describe("Treat query as regex"),
         documentId: z
           .string()
           .optional()
@@ -142,9 +183,47 @@ export function registerNavigationTools(server: McpServer): void {
         if (!store) return noDocumentError();
 
         const fullText = store.getText();
-        const result = searchText(fullText, query, regex);
+        let result: { matches: SearchMatch[]; truncated?: "cap" | "timeout"; error?: string };
+        if (regex) {
+          // The worker rejects with a tagged Error when its queue is full; a
+          // bare rejection would reach `withErrorBoundary` and be flattened to
+          // INTERNAL_ERROR, which says nothing the caller can act on.
+          try {
+            result = await searchRegexInWorker(fullText, query);
+          } catch (err) {
+            if ((err as { code?: string }).code === "SEARCH_BUSY") {
+              return mcpError("SEARCH_BUSY", getErrorMessage(err));
+            }
+            throw err;
+          }
+        } else {
+          result = searchText(fullText, query);
+        }
         if (result.error) return mcpError("FORMAT_ERROR", result.error);
-        return mcpStructured({ matches: result.matches, count: result.matches.length });
+        const truncated = result.truncated;
+        // A cap or a timeout is a PARTIAL result, never a FORMAT_ERROR: the
+        // matches collected so far are real and are returned. The spread must
+        // not emit `truncated: undefined` — `structuredContent` is validated
+        // with `additionalProperties: false` at the client (#1564).
+        const response = mcpStructured({
+          matches: result.matches,
+          count: result.matches.length,
+          ...(truncated ? { truncated: true, reason: truncated } : {}),
+        });
+        if (!truncated) return response;
+        // Appended as an ADDITIONAL text block, never merged into content[0]
+        // (four helpers index it) and never put in `data` (that is
+        // `structuredContent` verbatim).
+        return {
+          ...response,
+          content: [
+            ...response.content,
+            {
+              type: "text" as const,
+              text: `Results are incomplete (${truncated}). Do not use for replace-all; narrow the pattern.`,
+            },
+          ],
+        };
       }),
     ),
   );

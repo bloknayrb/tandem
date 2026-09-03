@@ -284,7 +284,16 @@ export const listDocumentsOutputShape = {
 
 export const searchOutputShape = {
   matches: z.array(z.object({ from: z.number(), to: z.number(), text: z.string() })),
+  /**
+   * How many matches were ACTUALLY RETURNED. With `truncated` set this is a
+   * floor, not the document's true total — and on the regex path it is timing
+   * dependent, because the worker's deadline is a wall-clock budget (#1795).
+   */
   count: z.number(),
+  /** Set only when the result is partial; never emitted as `undefined`. */
+  truncated: z.boolean().optional(),
+  /** Why it is partial: the 10,000-match cap, or the search deadline. */
+  reason: z.enum(["cap", "timeout"]).optional(),
 };
 
 // ---------------------------------------------------------------------------
