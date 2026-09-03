@@ -302,7 +302,15 @@ function handleMouseLeaveClose() {
          wrapper's min-content, so no CSS can express "floor at my own natural
          width". `max-width` is the opposite end: the most filename a tab shows
          when the strip has width to spare (unreachable under `uniformTabWidth`,
-         which pins every tab to the floor). -->
+         which pins every tab to the floor).
+
+         `flex-grow` belongs on that prohibited list too, and is the tempting
+         one: adding it here would neatly absorb the slack a short name leaves
+         inside a uniform-mode pill (#1736) — and would silently collapse
+         ADAPTIVE mode into uniform, because `measureTabFloor` reads this
+         span's natural width as `scrollWidth`, which reports a grown BOX.
+         `tab-floor.ts` states the mechanism in full at that read. The slack is
+         absorbed by an auto margin on the close button below instead. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <span
       data-testid={`tab-name-${tab.id}`}
@@ -327,6 +335,23 @@ function handleMouseLeaveClose() {
     </span>
   {/if}
 
+  <!-- `margin-left: auto` pins this button to the pill's right padding (#1736).
+       Under `uniformTabWidth` the wrapper is pinned to 142px and the pill fills
+       it, so a short name leaves slack inside the pill; with every child at
+       `flex-grow: 0` and `justify-content` at its default `flex-start`, that
+       slack parked after the LAST child — this button — leaving ~38px of void
+       between the × and the tab's right edge.
+
+       An auto margin rather than growing the name span, because it is the only
+       sink `measureTabFloor` cannot see: auto margins resolve AFTER flex
+       grow/shrink, so at the adaptive floor the free space is 0 and this
+       collapses to 0, and they count as 0 for intrinsic sizing. See the name
+       span's comment above, and `tab-floor.ts` for what growing it would break.
+
+       This RELOCATES the whitespace rather than removing it: the gap now sits
+       between the filename (or the RO badge) and the ×, which is the
+       conventional browser-tab layout and keeps the RO badge beside the name
+       it describes. -->
   <button
     bind:this={closeBtn}
     onclick={(e) => {
@@ -336,7 +361,7 @@ function handleMouseLeaveClose() {
     onpointerdown={(e) => e.stopPropagation()}
     onmouseenter={handleMouseEnterClose}
     onmouseleave={handleMouseLeaveClose}
-    style="background: none; border: none; cursor: pointer; font-size: var(--tandem-text-md); line-height: 1; color: var(--tandem-fg-muted); padding: 0 2px; border-radius: var(--tandem-r-1);"
+    style="background: none; border: none; cursor: pointer; font-size: var(--tandem-text-md); line-height: 1; color: var(--tandem-fg-muted); padding: 0 2px; border-radius: var(--tandem-r-1); margin-left: auto;"
     title="Close document"
     aria-label={`Close ${tab.fileName}`}
   >

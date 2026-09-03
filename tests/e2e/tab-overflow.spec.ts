@@ -211,9 +211,12 @@ async function openFixtureTabs(page: Page, uniform: boolean) {
     await mcp.callTool("tandem_open", { filePath });
   }
 
-  // Seed the setting before first paint. `schemaVersion` must be the CURRENT
-  // one: seed it lower and loadSettings migrates (fine), but seed it higher and
-  // the whole run silently goes `_readOnly`.
+  // Seed the setting before first paint. `schemaVersion` must be AT MOST the
+  // current one: seed it lower and loadSettings migrates (fine — 18 is two
+  // behind `CURRENT_SCHEMA_VERSION` today and migrates through), but seed it
+  // higher and the whole run silently goes `_readOnly`. This comment used to
+  // say "must be the CURRENT one", which stopped being what the code does the
+  // first time the schema was bumped past 18.
   await page.addInitScript(
     ([key, value]) => {
       window.localStorage.setItem(
@@ -249,16 +252,45 @@ async function measureTabStrip(page: Page) {
         const pill = wrapper.firstElementChild as HTMLElement;
         // Null while a tab is renaming — the span is swapped for an input.
         const name = pill.querySelector("[data-testid^='tab-name-']");
+        // Right edge of the pill's CONTENT box, read off computed style rather
+        // than restating TabItem's `padding: 0 10px 0 12px`. Reading it matters
+        // for more than tidiness: the active pill's border is 1px and every
+        // inactive one's is 2px (TabItem's `border-right` ternary), so a
+        // hardcoded offset would be off by a pixel on exactly one tab — which
+        // is the same size as the tolerance any flushness assertion needs.
+        const cs = getComputedStyle(pill);
+        const pillBox = box(pill)!;
         return {
           uniform: wrapper.classList.contains("uniform"),
+          // The filename as rendered, so a test can name the fixture it means
+          // instead of rediscovering it from pixel widths.
+          label: name?.textContent?.trim() ?? null,
           wrapper: box(wrapper)!,
-          pill: box(pill)!,
+          pill: pillBox,
           name: box(name),
           close: box(pill.querySelector("button[aria-label^='Close']"))!,
+          contentRight:
+            pillBox.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight),
         };
       }),
     };
   });
+}
+
+/**
+ * Shared by both modes: the × sits ON the pill's content edge, never floating
+ * inside it (#1736). Distinct from `assertNothingSpills`, which only catches a
+ * button that has escaped its pill — a button parked 38px short of the edge
+ * satisfies that one completely.
+ */
+function assertCloseFlush(measured: Awaited<ReturnType<typeof measureTabStrip>>) {
+  for (const tab of measured.tabs) {
+    // Sub-pixel only. A regression here is tens of pixels, not fractions.
+    expect(
+      Math.abs(tab.contentRight - tab.close.right),
+      `the close button drifted off the pill's content edge on "${tab.label}"`,
+    ).toBeLessThanOrEqual(1);
+  }
 }
 
 /** Shared by both modes: nothing escapes its pill, and the actions cluster survives. */
@@ -299,6 +331,72 @@ test("uniform mode: every tab is the same width, and the strip still scrolls", a
   expect(Math.max(...widths)).toBeCloseTo(FLOOR_PX, 0);
 
   assertNothingSpills(measured);
+});
+
+/**
+ * #1736. A uniform-mode pill is padded out to 142px, so a short name leaves
+ * slack inside it — and that slack used to park after the last child, leaving
+ * ~38px of void between the × and the tab's right edge. `assertNothingSpills`
+ * is blind to it: nothing overflowed, it was just wrong.
+ *
+ * The second assertion is the load-bearing one, and it is here rather than in
+ * the adaptive tests on purpose. The rejected fix — growing the name span —
+ * produces close-button pixels identical to the shipped one, so `assertCloseFlush`
+ * passes under it; what it breaks is the adaptive floor (see `measureTabFloor`,
+ * whose `scrollWidth` read is the canonical explanation). The adaptive tests
+ * below do go red, but they read as unrelated breakage. This assertion names
+ * the cause at the site of the change.
+ *
+ * Both assertions need real layout, so neither can move to the unit suite:
+ * happy-dom has no layout engine, and a vitest check on the style string would
+ * pin the fix's spelling rather than its effect.
+ */
+test("uniform mode: the close button sits flush at the tab's right edge whatever the name's length (#1736)", async ({
+  page,
+}) => {
+  await openFixtureTabs(page, true);
+  const measured = await measureTabStrip(page);
+
+  assertCloseFlush(measured);
+
+  // The slack must land BETWEEN the name and the ×, which is the same thing as
+  // saying the name span never absorbed it. `ab.md` is the declared dispersion
+  // probe: its name box stays shrink-wrapped at its text width while the pill
+  // around it is padded to 142px, so a real gap opens before the button.
+  const probe = measured.tabs.find((t) => t.label === "ab.md");
+  expect(probe, "the ab.md dispersion probe is missing from the strip").toBeDefined();
+  expect(
+    probe!.close.left - probe!.name!.right,
+    "ab.md's name span absorbed the slack — see `measureTabFloor`",
+  ).toBeGreaterThan(20);
+
+  assertNothingSpills(measured);
+});
+
+test("adaptive mode: the close button is flush there too, with no slack to absorb (#1736)", async ({
+  page,
+}) => {
+  await openFixtureTabs(page, false);
+  const measured = await measureTabStrip(page);
+
+  assertCloseFlush(measured);
+
+  // No fixture tab is renaming, so every tab has a name span. Asserted rather
+  // than filtered: skipping a nameless tab would silently skip the tab the
+  // assertion below exists for.
+  expect(
+    measured.tabs.every((t) => t.name),
+    "a tab was renaming mid-measurement",
+  ).toBe(true);
+
+  // The mode's own invariant, stated as geometry: the measured floor IS
+  // chrome + the name's natural width, so the × lands right after the name with
+  // only the 6px column gap between them (plus `measureTabFloor`'s 1px
+  // rounding allowance). Nothing to absorb, nothing to park. If this ever
+  // grows, the floor and the rendered pill have desynchronised.
+  for (const tab of measured.tabs) {
+    expect(tab.close.left - tab.name!.right).toBeLessThanOrEqual(8);
+  }
 });
 
 test("adaptive mode: tabs size to their own name, and long ones still compress", async ({
