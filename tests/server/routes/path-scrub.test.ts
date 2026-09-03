@@ -7,6 +7,8 @@
  * renamed out from under the test — which is how a scrub test silently stops
  * testing the scrub.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { Response } from "express";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -21,6 +23,10 @@ import {
   scrubUrlForCaller,
   sendApiError,
 } from "../../../src/server/mcp/routes/_shared.js";
+
+const SHARED_TS_PATH = fileURLToPath(
+  new URL("../../../src/server/mcp/routes/_shared.ts", import.meta.url),
+);
 
 const LOCAL = { socket: { remoteAddress: "127.0.0.1" } };
 const LAN = { socket: { remoteAddress: "192.168.1.50" } };
@@ -235,8 +241,22 @@ describe("errorCodeToHttpStatus / errorCodeToLabel — POST /api/convert's codes
   });
 
   it("OPEN_FAILED is a 500 with its own label, not the bare INTERNAL catch-all", () => {
+    // The status half of this pin (`toBe(500)`) is unkillable on its own --
+    // the unmapped default arm is ALSO 500, so deleting OPEN_FAILED's case
+    // from `errorCodeToHttpStatus` entirely would still pass it. The label
+    // assertion below IS killable (the default arm returns "INTERNAL"), and
+    // the source check after this `it` pins the status arm structurally.
     expect(errorCodeToHttpStatus("OPEN_FAILED")).toBe(500);
     expect(errorCodeToLabel("OPEN_FAILED")).toBe("OPEN_FAILED");
+  });
+
+  it('errorCodeToHttpStatus has its own `case "OPEN_FAILED":` arm, not just a status equal to the default', () => {
+    const source = readFileSync(SHARED_TS_PATH, "utf8");
+    const fnStart = source.indexOf("export function errorCodeToHttpStatus");
+    expect(fnStart, "errorCodeToHttpStatus not found in _shared.ts").toBeGreaterThan(-1);
+    const fnEnd = source.indexOf("\n}", fnStart);
+    const fnBody = source.slice(fnStart, fnEnd);
+    expect(fnBody).toContain('case "OPEN_FAILED":');
   });
 
   it("PERMISSION_DENIED (convert's realpath classification) is a 403 with its own label", () => {

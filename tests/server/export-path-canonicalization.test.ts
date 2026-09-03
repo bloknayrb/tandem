@@ -299,12 +299,20 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
     });
 
     // #1796: convert.ts's realpath catch classified only ENOENT. ENOTDIR,
-    // ELOOP and EACCES/EPERM from that same call all fell through to the
-    // bare `throw err` and surfaced as an uncoded 500. `runIf(POSIX)`: on
-    // Windows `fs.realpath` reports ENOENT, not ENOTDIR, for a path that
-    // walks through a non-directory component, so this is not constructible
+    // ELOOP, ENAMETOOLONG and EACCES/EPERM from that same call all fell
+    // through to the bare `throw err` and surfaced as an uncoded 500.
+    // `runIf(POSIX)`: on Windows `fs.realpath` reports ENOENT, not any of
+    // these, for the equivalent path shapes, so they are not constructible
     // there — see #1529 on why a Windows-gated real-fs case would be worse
-    // than no case at all.
+    // than no case at all. `tests/server/convert-error-mapping.test.ts`
+    // mocks `convert.js` wholesale, so it never executes this realpath
+    // classification at all -- these four specs are its only coverage.
+    // EPERM is not among them: unlike EACCES it isn't reliably
+    // constructible from an unprivileged test (it isn't `realpath`'s
+    // permission-check errno on Linux, and provoking it needs a condition
+    // -- e.g. an immutable-flag or NFS/quota edge -- this suite can't set
+    // up); `convert.ts:173`'s EPERM arm rests on it being the same
+    // "caller can't get here" errno EACCES is, unverified beyond that.
     it.runIf(POSIX)(
       "outputPath walking through a non-directory: INVALID_PATH naming the CALLER's path",
       async () => {
@@ -339,6 +347,28 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
     );
 
     it.runIf(POSIX)(
+      "outputPath component too long: INVALID_PATH, not an uncoded 500 (ENAMETOOLONG)",
+      async () => {
+        // Confirmed with the reviewer: Linux's realpath answers ENAMETOOLONG
+        // for a single path component over NAME_MAX (255); Windows answers
+        // ENOENT for the same shape, so this stays POSIX-only rather than
+        // becoming a third Windows-gated case nothing runs (#1529).
+        const base = await makeDir();
+        const id = openDocxDoc(base);
+        const tooLong = path.join(base, "x".repeat(300));
+
+        await expect(convertToMarkdown(id, tooLong)).rejects.toMatchObject({
+          code: "INVALID_PATH",
+        });
+      },
+    );
+
+    // Running as root defeats the chmod below (root ignores directory
+    // permissions: `realpath` would answer ENOENT on the missing leaf
+    // instead of EACCES, and this would go hard red rather than skip) --
+    // `getuid` is POSIX-only, hence the optional call. Current `check` runs
+    // unprivileged, so this is a genuine skip guard, not dead code.
+    it.runIf(POSIX && process.getuid?.() !== 0)(
       "outputPath in an unsearchable directory: PERMISSION_DENIED, not an uncoded 500 (EACCES)",
       async () => {
         const base = await makeDir();
@@ -346,10 +376,7 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
         const restricted = path.join(base, "restricted");
         await fsp.mkdir(restricted);
         const target = path.join(restricted, "sub");
-        // Strip the execute bit so `realpath` can't traverse into it. Running
-        // as root defeats this (root ignores directory permissions), so the
-        // assertion is skipped rather than false-failing under CI's `check`
-        // if that ever changes -- current `check` runs unprivileged.
+        // Strip the execute bit so `realpath` can't traverse into it.
         await fsp.chmod(restricted, 0o000);
         try {
           await expect(convertToMarkdown(id, target)).rejects.toMatchObject({
