@@ -840,9 +840,94 @@ The window hides (rather than closes) when the user clicks the OS close button �
 | Setup AI Assistant | Re-run MCP config (with result dialog) |
 | Check for Updates | Manual update check |
 | About Tandem | Version dialog |
-| Quit | Kill sidecar, then exit |
+| Quit | Graceful sidecar stop, then hard kill (see Shutdown below) |
 
 Left-clicking the tray icon shows the main window. On Linux, `libappindicator3-dev` is required; if unavailable the app continues without a tray icon (not a hard failure).
+
+### Shutdown
+
+On `RunEvent::Exit` the shell hides every window, then runs a bounded graceful
+sidecar stop (POST `/api/shutdown`, wait for the port to release, ≈17 s ceiling),
+then the hard kill as the fallback. Windows are hidden first because Tauri's own
+`cleanup_before_exit` — which hides them on Windows — runs *after* this callback,
+so otherwise a live unresponsive window sits on screen for the whole budget.
+
+One line records the result, at `warn` so it survives the release log floor:
+`Exit: sidecar shutdown complete (elapsed=…ms, verdict=…, attempted=…,
+timed_out=…, owned_child=…, already_in_progress=…, panicked=…)`. `verdict` is one
+of `Flushed`, `PostUnconfirmed`, `TimedOut`, `PostFailed`, `Skipped`, or `none`
+when no verdict came back (the budget fired, the body panicked, or there was no
+HTTP client). `already_in_progress` has a third value, `unknown`, and it is the
+*normal* one: `false` means the 2xx body was read **and said false**, and every
+other outcome prints `unknown` — no POST, a POST that did not succeed, or a 2xx
+whose body was truncated or carried no such field. That last case is not
+hypothetical: the handler's `res.once("close", …)` calls `requestShutdown`, which
+exits the process, so a 202 head arriving without its body is the success path
+racing itself. Getting this wrong printed "the server said no" for "we never
+found out". `panicked` now covers a panic in the *prepare* half
+too, which used to degrade to a clientless attempt reporting `panicked=false`.
+The line is emitted **before** the hard kill, not after: the kill carries no
+`catch_unwind` of its own and on macOS this runs inside an ObjC frame where an
+unwind aborts, so a line logged afterwards would be lost on the run that most
+needs it. It is what `docs/release-smoke-checklist.md` greps.
+
+**`PostUnconfirmed` exists so the fix cannot eat its own flush, and `PostFailed`
+is an allowlist rather than a catch-all.** `src/server/mcp/routes/shutdown.ts:74`
+registers `res.once("close", () => requestShutdown(...))`, and its own comment
+notes that close fires "also when the connection terminates prematurely" — so
+*any* failure after the request was delivered leaves `autoSaveAllToDisk` running:
+a client timeout, a connection reset, an incomplete message, a protocol error, an
+idle keep-alive socket the server closed as the POST landed. All of those are
+`PostUnconfirmed`, and the port wait runs before the hard kill.
+
+Exactly two things prove the sequence never started, and only they are
+`PostFailed`: a connect-level failure (reqwest's `is_connect()` — nothing was
+delivered), and a non-2xx, because both 403 returns (`shutdown.ts:44,62`) precede
+the registration at :74. Note that `is_timeout()` is *not* the discriminator —
+it is true for a connect-phase stall and false for every post-delivery break, so
+keying the safe arm on it reproduced the original defect one error class over,
+skipping the wait and killing the flush for a reset or a protocol error.
+
+**The hidden-window limbo is the cost.** For up to 17 s the app has no visible
+window but still holds the single-instance lock, so a relaunch in that window is
+swallowed: the second process hands off to the first, whose event loop is already
+being destroyed, and the `run_on_main_thread` that would show a window goes
+nowhere. The user sees a double-click do nothing until the first process exits.
+The design is unchanged — a truncated flush is worse — but this is the caveat.
+
+**The POST targets a hardcoded `127.0.0.1:3479` the shell does not verify it
+owns.** `owns_child` says only that we hold a child handle; nothing checks that
+the child is what is answering. A foreign Tandem on :3479 (a `tandem start`, a
+second app-data instance) receives the shutdown, flushes and exits, while the log
+still says the stop was graceful — though `on_child_terminated_in` clears the
+stored handle pid-keyed, so a sidecar that already died reads as `owns_child =
+false` and skips the POST altogether, which is what makes this case rare rather
+than routine. **One window needs no misconfiguration at all:** `start_sidecar`
+stores the child into `SidecarState` *before* `wait_for_health` (up to 30 s), so
+for that whole window `owns_child` is true while a different process may still be
+the one answering :3479 — a Quit there POSTs at, waits on and reports a flush of
+someone else's server. This is not new, but it used to be reachable
+only from two explicit user actions — Settings → Network → Restart server, and
+Install update — and #1756 widened it to **every Quit**. The spawn site now pins
+`TANDEM_PORT` / `TANDEM_MCP_PORT` / `TANDEM_BIND_HOST` on the child (the shell
+plugin inherits the parent environment, so an ambient value used to move the
+sidecar off :3479 under a shell still polling it), which removes the ambient-env
+half. The rest is #1825 (derive the URL from the port actually in use) and #1812
+(give the health poll and the POST an identity check); neither is fixed here.
+
+`RunEvent::Exit` rather than `ExitRequested` because it is the one event every
+quit gesture reaches: tray Quit, macOS ⌘Q / Dock Quit (which go through
+`applicationWillTerminate:` and never raise `ExitRequested`), and the window
+close on a Linux desktop with no tray.
+
+What it does **not** cover:
+
+- **macOS logout / restart / shutdown.** The system's own quit timeout can
+  force-terminate the app before the flush finishes.
+- **Windows logoff / shutdown.** `WM_ENDSESSION` is handled inside the wndproc,
+  so the flush is best-effort and likely truncated near `HungAppTimeout` (≈5 s).
+- **Forced termination** — Task Manager "End task", `kill -9`, power loss. On
+  Windows the job object (#987) still reaps the sidecar; there is no flush.
 
 ### Auto-Updater
 
@@ -858,7 +943,18 @@ Install flow:
 ```
 Auto-check → tandem://update-available banner → "Restart to install"
   (manual/tray check instead shows a native Ok/Cancel dialog)
+    → ShuttingDownGuard::try_acquire() — a second concurrent install is refused
+      with a native "Update In Progress" dialog, never a bare return: the
+      banner's 30s watchdog re-arms the CTA, and useUpdaterBanner's catch only
+      console.warns, so a silent Err has no user-visible surface either
     → stop_sidecar_gracefully() — POST /api/shutdown, hard kill on timeout
+      (its verdict is NOT dropped, and BOTH outcomes log at warn: anything but
+       Flushed joins pre_install_warnings and reaches the failure dialog, and
+       Flushed logs "Pre-install: graceful sidecar shutdown complete" so
+       smoke-lines.md row 3 has something to read. On Windows this is the ONLY
+       flush on the update path, because install_inner ends in
+       std::process::exit(0) and RunEvent::Exit never fires — so there is no
+       verdict line here at all)
     → Poll /health until server stops responding (POST_KILL_PORT_RELEASE_SECS = 15s)
       + on Windows, concurrently poll until the sidecar exe unlocks (15s)
     → download_and_install()
