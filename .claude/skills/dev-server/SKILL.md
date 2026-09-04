@@ -12,7 +12,7 @@ Start the Tandem development servers and verify everything is connected.
 - The server MUST be running before Claude Code connects via MCP
 - `freePort()` kills any existing process on :3478/:3479 at startup — you cannot run two instances
 - `freePort()` does NOT cover :5173 — an orphaned Vite from a killed `dev:standalone` survives, and because `vite.config.ts` sets `strictPort: true` the new Vite **exits with an error** rather than falling back to another port. The symptom is a dev server that won't start, not a silently-wrong URL (see step 2)
-- E2E tests (`npm run test:e2e`) will also kill dev servers on those ports
+- E2E tests (`npm run test:e2e`) do NOT touch :3478/:3479 — since #1492 they run on the reserved harness pair in `scripts/test-ports.ts` (Vite 4573, backend 4728/4729), so a suite run and a dev server coexist. What the harness does SIGKILL is anything holding 4728/4729.
 
 ## Steps
 

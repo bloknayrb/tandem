@@ -553,7 +553,13 @@ export function registerDocumentTools(server: McpServer): void {
     "tandem_getTextContent",
     {
       description:
-        "Read document as plain text whose offsets match the annotation coordinate system.",
+        "Read the document as plain text whose character offsets are the coordinate system every " +
+        "range-taking tool uses (tandem_edit, tandem_comment, tandem_resolveRange). This is the " +
+        'read to use before anchoring: the text includes heading prefixes such as "## " and ' +
+        "joins blocks with newlines, so offsets taken from it line up exactly. Pass `section` " +
+        "with a heading's text (case-insensitive) to read just that section. It never returns " +
+        "Markdown, even for .md files — Markdown syntax would shift offsets out of this " +
+        "coordinate system; call tandem_save and read the file if you need real Markdown.",
       inputSchema: {
         section: z.string().optional().describe("Optional heading text to read only that section"),
         documentId: z
@@ -1125,7 +1131,13 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_save",
-    "Save the current document back to disk",
+    "Write the document's current content back to its file on disk. Tandem snapshots the file's " +
+      "original bytes before its first write each server run, so a save is reversible via " +
+      "tandem_restoreBackup. On .docx this also writes shared comments back as native Word " +
+      "comments and returns `fidelityWarnings` when the export downgraded anything — report those " +
+      "rather than claiming a clean round-trip. If the file changed on disk since it was opened " +
+      "the save is REFUSED and a conflict is reported instead; it is never silently overwritten. " +
+      "Uploaded (upload://) documents have no path, so the save is session-only.",
     {
       documentId: z
         .string()

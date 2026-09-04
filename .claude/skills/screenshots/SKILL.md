@@ -26,11 +26,9 @@ It brings its own server, so there is **no** `dev:standalone` precondition, and
 it runs against an isolated per-run `TANDEM_APP_DATA_DIR`, so it cannot capture
 the operator's real chat history into a public image.
 
-`scripts/take-screenshots.mjs` no longer exists. It was deleted in the
-post-v0.22.1 documentation overhaul: two pipelines writing the same filenames
-meant whichever ran last decided what the README showed, and for the three shots
-they shared they used different framing and different seed data. Its unique
-recipes were ported into the spec first.
+There is exactly one capture pipeline, and a second one must not be added: two
+pipelines writing the same filenames means whichever ran last decides what the
+README shows, with different framing and seed data per shot.
 
 ## Critical warning — the reserved harness ports
 

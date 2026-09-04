@@ -115,11 +115,17 @@ You are a specialized reviewer for Svelte 5 reactive patterns in the Tandem code
   ```
 - **Also:** In tests, async `onMount` requires `await new Promise(r => setTimeout(r, 0))` + `tick()` before asserting on state it sets.
 
+### 7. $state Written From a Tiptap Event Handler
+- **Rule:** Never write `$state` synchronously from a Tiptap event handler — bridge through `createCoalescingTick` (`src/client/utils/coalescing-tick.ts`).
+- **Why:** a `$state` write inside an active Svelte reaction throws `state_unsafe_mutation` **in production too**. The error text names only `$derived`/`$inspect`, but a plain `{#if}` block triggers it, so the message misdirects.
+- **Check:** `transaction` subscribers are the exposed ones — the blur transaction carries no doc change while `update` is gated on `docChanged`. `transaction` also fires on every cursor move, which is why the tick coalesces.
+- **Non-finding:** writing state from `update` is the same class with no observed instance. Do not propose migrating handlers onto `transaction`.
+
 ## Output Format
 
 For each finding:
 - **Severity**: Critical / High / Medium / Low / Info
-- **Pattern**: Which focus area (1-6) is violated
+- **Pattern**: Which focus area (1-7) is violated
 - **Location**: file:line
 - **Description**: What the reactive bug is
 - **Proof**: What user-visible behavior breaks (stale UI, crash, infinite loop)
