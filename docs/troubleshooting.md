@@ -466,6 +466,10 @@ To reset only chat history without losing per-document state, delete just `CTRL_
 
 Durable annotations live in a separate `annotations/` directory alongside `sessions/`. Corrupted annotation files are quarantined automatically (renamed to `.corrupt.json`) instead of being deleted, so you can recover them by hand if needed.
 
+## A document will not open / a tab did not come back
+
+If a saved session file is corrupt, Tandem quarantines it instead of failing the open: the file is renamed to `<name>.json.corrupt.<timestamp>` in the sessions directory (per-OS paths above) and the document opens from disk (or from the surviving pre-upgrade session record when one exists). A warning toast appears only when the app was already running — tabs restored during startup have nothing connected yet to receive it, so a tab that comes back with disk content and no toast was most likely a quarantined session. The `.corrupt.<timestamp>` files are reclaimed automatically after 30 days; delete one sooner only if you are sure you do not need to inspect it.
+
 ## Recovering a previous version of a document
 
 Before Tandem's **first** write to a `.md`/`.txt`/`.docx` file in a server run, it copies the file's current on-disk bytes to a backup folder (for `.docx` this is a verbatim, byte-identical copy of the ZIP). If a save ever mangles your file — especially a `.docx`, where exporting can drop Word features Tandem doesn't model — or you just want yesterday's version back, there are three ways to restore:
