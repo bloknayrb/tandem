@@ -275,12 +275,15 @@ export function buildSchemaExtensions(): AnyExtension[] {
     // link:false + underline:false — v3 StarterKit bundles both, and our
     // explicit LinkWithHoverTitle / Underline would register twice
     // ("Duplicate extension names", undefined schema behavior).
+    // trailingNode:false — v3 StarterKit appends a trailing paragraph the v2
+    // schema never had; every doc would gain a phantom `<p></p>`.
     StarterKit.configure({
       undoRedo: false,
       listItem: false,
       paragraph: false,
       link: false,
       underline: false,
+      trailingNode: false,
     }),
     SoftWrapParagraph,
     ListItemCheckbox,
