@@ -1,12 +1,12 @@
 import { type AnyExtension, mergeAttributes, type RawCommands } from "@tiptap/core";
 import Highlight from "@tiptap/extension-highlight";
 import Image from "@tiptap/extension-image";
-import Link, { isAllowedUri as tiptapDefaultIsAllowedUri } from "@tiptap/extension-link";
+import Link from "@tiptap/extension-link";
 import Paragraph from "@tiptap/extension-paragraph";
 import Placeholder from "@tiptap/extension-placeholder";
 import Subscript from "@tiptap/extension-subscript";
 import Superscript from "@tiptap/extension-superscript";
-import Table from "@tiptap/extension-table";
+import { Table } from "@tiptap/extension-table";
 import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
@@ -25,6 +25,13 @@ import {
   isSafeExternalHref,
   isSchemelessPathHref,
 } from "./utils/url-safety";
+
+// Autolink gate pinned to v2's URI guard (see the `shouldAutoLink` site).
+// Verbatim core of `isAllowedUri` from `@tiptap/extension-link@2.27.2`:
+// the `.-:` inside the run class is the RANGE U+002E-U+003A (the template
+// literal collapsed `\-`), which is exactly the quirk the gate depends on.
+const V2_AUTOLINK_GUARD =
+  /^(?:(?:http|https|ftp|ftps|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z0-9+.-]+(?:[^a-z+.-:]|$))/i;
 
 // Link mark that surfaces the destination URL on hover via a native `title`
 // tooltip (issue #996). The base `@tiptap/extension-link` renderHTML emits the
@@ -263,9 +270,21 @@ export function buildSchemaExtensions(): AnyExtension[] {
     // `listItem:false` disables StarterKit's stock ListItem so our
     // ListItemCheckbox (same node name "listItem", + a `checked` tri-state
     // attribute for GFM task lists, #982) owns the schema. `paragraph:false`
-    // hands the paragraph node to SoftWrapParagraph below. history:false — Yjs
-    // handles undo/redo.
-    StarterKit.configure({ history: false, listItem: false, paragraph: false }),
+    // hands the paragraph node to SoftWrapParagraph below. undoRedo:false —
+    // Yjs handles undo/redo (v3 renamed StarterKit's `history` option).
+    // link:false + underline:false — v3 StarterKit bundles both, and our
+    // explicit LinkWithHoverTitle / Underline would register twice
+    // ("Duplicate extension names", undefined schema behavior).
+    // trailingNode:false — v3 StarterKit appends a trailing paragraph the v2
+    // schema never had; every doc would gain a phantom `<p></p>`.
+    StarterKit.configure({
+      undoRedo: false,
+      listItem: false,
+      paragraph: false,
+      link: false,
+      underline: false,
+      trailingNode: false,
+    }),
     SoftWrapParagraph,
     ListItemCheckbox,
     ListSpreadExtension,
@@ -318,14 +337,14 @@ export function buildSchemaExtensions(): AnyExtension[] {
       // whitespace first) is load-bearing, and it deliberately does NOT use
       // `URL_HOSTILE_CHARS`.
       //
-      // `isRenderableLinkScheme` is the one term that NARROWS, and it was added
-      // in #1537 precisely because the paragraph above is a complete
-      // description of an expression that could only ever grow. Tiptap's
-      // `defaultValidate` is NOT the scheme authority the paragraph claims: the
-      // escape collapse described above also puts the hyphen OUTSIDE its
-      // negated class, so `ms-msdt:`, `ms-appinstaller:`, `search-ms:`,
-      // `view-source:` and `itms-services:` all satisfied it and rendered live
-      // with the href verbatim. ANDing can only subtract — measured over a
+      // `isRenderableLinkScheme` is the one term that NARROWS, added in #1537
+      // when v2's `defaultValidate` waved the Follina-class through (its
+      // template-literal escape collapse put the hyphen OUTSIDE the negated
+      // class, so `ms-msdt:`, `ms-appinstaller:`, `search-ms:`,
+      // `view-source:` and `itms-services:` all satisfied it and rendered
+      // live). v3 rewrote the validator as an explicit scheme allowlist, so
+      // upstream rejects those itself now — this term stays as defense in
+      // depth, and ANDing can only subtract anyway.
       // 68-case corpus and re-measured over 800k generated hrefs, nothing
       // master rejects becomes accepted. Those two runs predate #1420; the
       // property was re-measured against post-#1420 master over ~14k cases
@@ -366,19 +385,18 @@ export function buildSchemaExtensions(): AnyExtension[] {
       // typing `example.com/path ` auto-create a link — writing markdown link
       // syntax into the user's file on a keystroke, entirely outside #1377.
       //
-      // Substituting the vendored default URI GUARD here pins that gate. Note
-      // it is not the vendored `shouldAutoLink` default (that one is
-      // `url => !!url`): autolink's effective gate is `validate && shouldAutoLink`,
-      // so widened-validate AND default-guard re-composes to exactly the
-      // default. The `!!` is required, not decorative — `isAllowedUri` returns
-      // `RegExpMatchArray | null`, and this option is typed boolean.
-      //
-      // The `[]` is the `protocols` argument, and it is correct only because we
-      // never configure `protocols` (asserted in the test file). If a custom
-      // protocol is ever added above, it must be threaded through here too or
-      // autolink will silently ignore it — an option literal cannot reach
-      // `this.options`.
-      shouldAutoLink: (url) => !!tiptapDefaultIsAllowedUri(url, []),
+      // This used to substitute the vendored default URI guard
+      // (`url => !!isAllowedUri(url, [])`), which pinned the gate for free.
+      // v3 rewrote that guard (explicit scheme allowlist, escaped hyphen), so
+      // the substitution now answers differently on bare domains. The gate is
+      // therefore pinned VERBATIM to v2's pattern
+      // (`@tiptap/extension-link@2.27.2`, `isAllowedUri` core): measured
+      // example.com/path → false, notes.md → true, docs/spec.md → false,
+      // https/mailto///ftp → true. Do NOT "simplify" this back to the vendored
+      // guard — that re-opens #1377 silently. If a custom protocol is ever
+      // configured above it must be threaded through here too, exactly as
+      // before.
+      shouldAutoLink: (url) => V2_AUTOLINK_GUARD.test(url.replace(/\s/g, "")),
     }),
     // Block-level image node (issue #153). Renders `![alt](url)` markdown
     // (round-tripped through mdast-ydoc) and embedded .docx images (mammoth

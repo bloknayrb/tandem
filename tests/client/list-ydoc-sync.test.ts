@@ -1,5 +1,5 @@
+import { initProseMirrorDoc } from "@tiptap/y-tiptap";
 import { describe, expect, it } from "vitest";
-import { initProseMirrorDoc } from "y-prosemirror";
 import * as Y from "yjs";
 import { exportYDocToDocx } from "../../src/server/file-io/docx-export.js";
 import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";

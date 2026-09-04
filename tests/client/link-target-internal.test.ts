@@ -182,20 +182,22 @@ describe("link target attribute", () => {
 });
 
 describe("the premise of #1377 (Tiptap's default guard)", () => {
-  // The whole fix rests on `defaultValidate("docs/spec.md")` being FALSE. That
-  // is genuinely surprising, and reading the vendored regex to confirm it gives
-  // the WRONG answer — the pattern is assembled in a template literal, so the
-  // hyphen escape you see is gone before `new RegExp` runs and `.-:` becomes a
-  // range. So assert it against the real dependency instead of re-deriving it:
-  // if a `@tiptap/extension-link` upgrade widens the default, this row flips
-  // and the union above becomes dead weight worth deleting.
+  // v2's guard rejected `docs/spec.md` (the template-literal escape collapse
+  // put `/` and the digits inside the run class, so a bare path died in it) —
+  // and the union's `isSchemelessPathHref` half existed to rescue exactly
+  // those rows. v3 rewrote the guard as an explicit allowlist and ACCEPTS
+  // them now, so the attribution flipped: the schemeless half carries these
+  // rows and the default half is dead weight FOR THESE ROWS ONLY. The union
+  // outcome is unchanged, and the end-to-end rows below still pin it. If a
+  // future upgrade narrows the default again, these flip back and the union
+  // earns its keep twice over — either direction stays green here.
   it.each([
     "docs/spec.md",
     "a/b.md",
     "Docs/spec.md",
     "example.com/path",
-  ])("rejects %j, which is why the union exists", (href) => {
-    expect(tiptapDefaultIsAllowedUri(href, [])).toBeFalsy();
+  ])("v3 accepts %j itself; the union's schemeless half carries it", (href) => {
+    expect(tiptapDefaultIsAllowedUri(href, [])).toBeTruthy();
   });
 
   it.each([
@@ -214,13 +216,16 @@ describe("the premise of #1377 (Tiptap's default guard)", () => {
     expect(tiptapDefaultIsAllowedUri(href, [])).toBeTruthy();
   });
 
-  it("returns a match array, not a boolean — which is why `!!` is load-bearing", () => {
-    // `shouldAutoLink` is typed boolean, so `editor-extensions.ts` coerces.
-    // A reader who assumes this returns a boolean will "simplify" the `!!`
-    // away; this makes that a red test rather than a silent type lie. It is
-    // also why the rows above use toBeFalsy/toBeTruthy — `toBe(false)` fails.
+  it("returns a match array, not a boolean — the shape the gate relies on", () => {
+    // Pre-v3, `shouldAutoLink` substituted this function directly and coerced
+    // with `!!` (typed boolean vs `RegExpMatchArray | null`). The gate is now
+    // `V2_AUTOLINK_GUARD.test(...)`, boolean by construction — but this row
+    // stays: it pins the vendored return shape, so a future "simplification"
+    // back to substituting the vendored guard raw reintroduces the type lie
+    // AND re-opens #1377 in one edit. The rows above use toBeFalsy/toBeTruthy
+    // for the same reason — `toBe(false)` fails on a match array.
     expect(tiptapDefaultIsAllowedUri("notes.md", [])).toBeInstanceOf(Array);
-    expect(tiptapDefaultIsAllowedUri("docs/spec.md", [])).toBeNull();
+    expect(tiptapDefaultIsAllowedUri("ms-msdt:/id", [])).toBeNull();
   });
 });
 

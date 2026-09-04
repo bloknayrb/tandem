@@ -43,16 +43,16 @@
 
 import { getSchema } from "@tiptap/core";
 import {
+  prosemirrorToYXmlFragment,
+  updateYFragment,
+  yXmlFragmentToProsemirrorJSON,
+} from "@tiptap/y-tiptap";
+import {
   DOMSerializer,
   DOMParser as PMDOMParser,
   Node as PMNode,
   type Schema,
 } from "prosemirror-model";
-import {
-  prosemirrorToYXmlFragment,
-  updateYFragment,
-  yXmlFragmentToProsemirrorJSON,
-} from "y-prosemirror";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions.js";
 import { loadMarkdown, saveMarkdown } from "../../src/server/file-io/markdown.js";
