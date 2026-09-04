@@ -303,7 +303,13 @@ describe("T7 — the decoration cannot leak into the document", () => {
       const role = node.type.spec.tableRole;
       if (role !== "cell" && role !== "header_cell") return true;
       cells++;
-      expect(Object.keys(node.attrs).sort()).toEqual(["colspan", "colwidth", "rowspan"]);
+      // v3 TableCell carries a fourth, native `align` attr (default null,
+      // parsed from inline style / align attribute). The decoration adds a
+      // CSS class only, so re-parsing must leave it null: alignment lives in
+      // annotations, and a populated value here would be a leak of
+      // presentation into the document (and from there into markdown).
+      expect(Object.keys(node.attrs).sort()).toEqual(["align", "colspan", "colwidth", "rowspan"]);
+      expect(node.attrs.align).toBeNull();
       return true;
     });
     expect(cells).toBe(6);

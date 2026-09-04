@@ -16,7 +16,8 @@ import { DOCX_INLINE_MARKS } from "../../src/shared/constants";
  * REAL Collaboration sync of marked content rather than only checking that the
  * mark types exist (a registered-but-attrs-incompatible mark would still throw on
  * sync). The CONTROL test proves the guard isn't a tautology: a schema missing
- * `underline` actually drops the underlined text on the same sync path.
+ * marks (bare StarterKit: superscript/subscript/footnote-ref under v3)
+ * actually drops the text on the same sync path.
  *
  * Regression guard for the gap that shipped undetected: the `.docx` import emitted
  * superscript (footnote markers) and — after the underline fix — underline, but
@@ -102,13 +103,17 @@ describe("editor schema ⊇ DOCX_INLINE_MARKS", () => {
     expect(ydoc.getXmlFragment("default").toString()).toContain("[1]");
   });
 
-  it("CONTROL: a schema missing underline silently drops the marked text on sync", () => {
-    // Without the marks registered, y-prosemirror's catch deletes the offending
+  it("CONTROL: a schema missing marks silently drops the marked text on sync", () => {
+    // Without the marks registered, the sync catch deletes the offending
     // Y.XmlText — proving the guard above detects the real failure mode rather
-    // than passing vacuously.
+    // than passing vacuously. (Pre-v3 this was phrased as "missing underline":
+    // bare StarterKit didn't bundle it. v3 bundles underline and link, so the
+    // missing marks here are superscript/subscript/footnote-ref — the
+    // mechanism is identical, and "under" still vanishes with the whole
+    // XmlText, which is what the assertions below check.)
     const ydoc = new Y.Doc();
     htmlToYDoc(ydoc, MARKED_HTML, FOOTNOTE_BODIES);
-    const editor = mount([StarterKit.configure({ history: false })], ydoc);
+    const editor = mount([StarterKit.configure({ undoRedo: false })], ydoc);
 
     const html = editor.getHTML();
     // The underlined run's text is gone...
