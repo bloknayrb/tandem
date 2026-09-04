@@ -14,12 +14,14 @@ import {
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
 import type { ExternalConflictState, SessionData } from "../../shared/types.js";
+import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash, ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
 import { parseAnnotationDoc } from "../annotations/schema.js";
 import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
 import { atomicWrite } from "../file-io/index.js";
+import { pushNotification } from "../notifications.js";
 import { SESSION_DIR } from "../platform.js";
 
 const AUTO_SAVE_INTERVAL = 60 * 1000; // 60 seconds
@@ -200,7 +202,24 @@ export async function saveSession(
 }
 
 /**
- * Load a session file if it exists.
+ * What `loadSessionWithPath` returns: the mtime-winning record alongside the
+ * absolute path it was actually read from, plus the migration loser as a
+ * fallback candidate when it also parsed. `null` when neither file exists.
+ *
+ * The path rides along because the quarantine must rename the file that was
+ * actually parsed — post-#1750 arbitration picks between two names, and a
+ * second resolver called later could pick a different winner if the mtimes
+ * moved between the two reads. `{ session, path }`, not a standalone
+ * resolver.
+ */
+export interface LoadedSession {
+  session: SessionData;
+  path: string;
+  fallback?: { session: SessionData; path: string };
+}
+
+/**
+ * Load a session file if it exists, reporting which file won.
  *
  * Reads BOTH the current (`docHash`) name and the pre-#1750
  * `encodeURIComponent` name; when both exist the newer file MTIME wins. The
@@ -208,10 +227,12 @@ export async function saveSession(
  * only after a successful write under the new one. Until then every load pays
  * one extra `stat`, which is fine for a one-shot window.
  *
- * When the legacy file wins the tie-break and then cannot be READ, the current
- * name is tried before giving up — see the comment at that fallback.
+ * Each candidate's read+parse is INDEPENDENTLY guarded: a winner that parses
+ * alongside a fallback that is `{` keeps the winner, and the unparseable
+ * fallback is quarantined and simply absent from the result. One `try`
+ * around both reads would lose a good winner.
  */
-export async function loadSession(filePath: string): Promise<SessionData | null> {
+export async function loadSessionWithPath(filePath: string): Promise<LoadedSession | null> {
   const currentPath = sessionPathFor(filePath);
   const legacyPath = legacySessionPath(filePath);
   let sessionPath = currentPath;
@@ -221,40 +242,85 @@ export async function loadSession(filePath: string): Promise<SessionData | null>
       sessionPath = legacyPath;
     }
   }
-  const chosen = await readSessionFileAt(sessionPath, filePath);
-  if (chosen !== null || sessionPath !== legacyPath) return chosen;
-  // The legacy file won the mtime tie-break and then would not read — truncated
-  // by an interrupted pre-#1750 write (a SyntaxError, which `readSessionFileAt`
-  // has already unlinked), or EACCES to an AV/indexer while `fs.stat` still
-  // succeeded, which is what let it win in the first place. Without this the
-  // record at the CURRENT key — readable, merely older — is discarded along
-  // with it and the user loses their session outright.
+  const loserPath = sessionPath === currentPath ? legacyPath : currentPath;
+
+  const winner = await readSessionFile(sessionPath, filePath);
+  if (winner.ok) {
+    if (loserPath === null) return { session: winner.session, path: sessionPath };
+    const loser = await readSessionFile(loserPath, filePath);
+    if (loser.ok) {
+      return {
+        session: winner.session,
+        path: sessionPath,
+        fallback: { session: loser.session, path: loserPath },
+      };
+    }
+    if (loser.reason === "unparseable") {
+      await quarantineSession(loserPath, { documentName: path.basename(filePath) });
+    }
+    return { session: winner.session, path: sessionPath };
+  }
+
+  // The winner did not read. Quarantine it when it is corrupt JSON (a rename,
+  // not the old unlink — the evidence stays on disk for 30 days), then try
+  // the loser's JSON once before giving up.
   //
-  // **One-directional on purpose; do not "fix" the asymmetry.** The mirror
-  // fallback (current unreadable → fall back to the legacy file) would restore
-  // a record that a later successful save had already superseded: `saveSession`
-  // unlinks the old name only AFTER the new one is written, so a legacy file
-  // surviving next to a newer current one is a best-effort-unlink leftover, not
-  // a candidate. Preferring it is the exact outcome the mtime tie-break exists
-  // to prevent.
+  // An unparseable winner is quarantined, dropped, and the fallback is
+  // PROMOTED into `session`/`path` with no `fallback` in the result: the
+  // declared type has no representation for "winner absent, fallback
+  // present", so promotion is the only consistent reading. The promoted
+  // record returns through here as an ordinary winner and re-enters
+  // `sessionModelIsStale` and the `sourceFileChanged`/`dirty` gates in the
+  // caller — which is why the SyntaxError fallback IS gated.
   //
-  // The cost of that choice, stated rather than hidden: only the CORRUPT
-  // current-file case self-heals, because `readSessionFileAt` unlinks a
-  // `SyntaxError` and the legacy record then wins the very next load. An
-  // UNREADABLE current file does not — EACCES logs and returns null without
-  // unlinking — so a healthy older legacy record beside an AV-locked current
-  // one is discarded, on this load and every load while the lock persists.
-  // That is the same lock this comment cites two paragraphs up as motivating
-  // the other direction, and it is accepted here rather than solved: reading
-  // the superseded record would be worse than reading nothing.
-  return await readSessionFileAt(currentPath, filePath);
+  // This supersedes the old one-directional fallback (legacy-unreadable tries
+  // current, never the reverse): that asymmetry belonged to the unlink world,
+  // where falling back to a surviving legacy record on every load would
+  // resurrect a superseded record indefinitely. Here the corrupt winner is
+  // renamed away first, so a promoted loser is the only candidate left, not
+  // a resurrection — and promotion happens ONLY on that axis. For a
+  // missing/unreadable winner (notably EACCES under an AV lock, the #1599
+  // shape) nothing is renamed away, so consulting the loser would restore a
+  // superseded legacy record with `restored: true`; like the old code, fall
+  // to disk instead. That includes the torn-read race (winner statted, then
+  // vanished): a vanished winner is torn state, and disk is the safe answer.
+  // Never a third candidate.
+  if (winner.reason !== "unparseable") return null;
+  await quarantineSession(sessionPath, { documentName: path.basename(filePath) });
+  if (loserPath === null) return null;
+  const loser = await readSessionFile(loserPath, filePath);
+  if (loser.ok) return { session: loser.session, path: loserPath };
+  if (loser.reason === "unparseable") {
+    await quarantineSession(loserPath, { documentName: path.basename(filePath) });
+  }
+  return null;
 }
 
-/** Read and parse one session file, or null (quarantining a corrupt one). */
-async function readSessionFileAt(
+/**
+ * Load a session file if it exists. Same shape as before — the ~22 call
+ * sites (`session.test.ts`, `external-conflict.test.ts`,
+ * `unc-guard-ordering.test.ts`, `open.ts`) are untouched; `loadSession`
+ * wraps `loadSessionWithPath`.
+ */
+export async function loadSession(filePath: string): Promise<SessionData | null> {
+  const loaded = await loadSessionWithPath(filePath);
+  return loaded?.session ?? null;
+}
+
+/**
+ * Read and parse one session file, or a discriminated failure. Never throws
+ * and never quarantines: quarantining needs the per-caller notification opts
+ * (`documentId`/`documentName`), so the CALLER decides after inspecting the
+ * reason. ENOENT is "missing" (tolerated everywhere); any other non-syntax
+ * failure is logged here and reported as "unreadable".
+ */
+async function readSessionFile(
   sessionPath: string,
   filePath: string,
-): Promise<SessionData | null> {
+): Promise<
+  | { ok: true; session: SessionData }
+  | { ok: false; reason: "missing" | "unparseable" | "unreadable" }
+> {
   try {
     const content = await fs.readFile(sessionPath, "utf-8");
     const data = JSON.parse(content) as SessionData;
@@ -267,21 +333,141 @@ async function readSessionFileAt(
     // are equivalent by construction, since `sessionKey` normalizes separators,
     // so this cannot change which document is restored. `narrowConflict` below
     // is the same don't-trust-loadSession-fields rule applied to `conflict`.
+    // BOTH candidates are sanitized: an unsanitized fallback carrying
+    // `filePath: "upload://…"` would short-circuit `sessionModelIsStale`
+    // (uploads are exempt) and `sourceFileChanged` (false for uploads) and be
+    // cloned over the user's newer disk content whatever its revision.
     data.filePath = filePath;
-    return data;
+    return { ok: true, session: data };
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return null;
-    if (err instanceof SyntaxError) {
-      console.error(`[Tandem] Corrupted session file ${sessionPath}, removing:`, err.message);
-      await fs.unlink(sessionPath).catch((unlinkErr) => {
-        console.error(`[Tandem] Failed to remove corrupted session ${sessionPath}:`, unlinkErr);
-      });
-      return null;
-    }
+    if (code === "ENOENT") return { ok: false, reason: "missing" };
+    if (err instanceof SyntaxError) return { ok: false, reason: "unparseable" };
     console.error(`[Tandem] Failed to read session ${sessionPath}:`, err);
-    return null;
+    return { ok: false, reason: "unreadable" };
   }
+}
+
+/**
+ * Quarantine a corrupt session file: rename it to
+ * `<name>.json.corrupt.<Date.now()>` and touch the quarantine's mtime to now.
+ * Never rejects — a failing quarantine must not re-break the open it runs
+ * inside of (the EPERM/EBUSY shape when a second instance or an AV scanner
+ * holds the file is the ordinary Windows case, the #1599 race).
+ *
+ * The single producer of the `session-corrupt` notification (three callers:
+ * the open-path recovery, `loadSessionWithPath`'s SyntaxError branch, and
+ * `listSessionFilePaths`' parse catch). `open.ts` pushes nothing of its own.
+ *
+ * Per caller (post-#1750 the session basename is 64 hex and `documentId` is
+ * a hash too, so nothing inside here can name the document without `opts`):
+ *   - open-path recovery passes `{ documentId, documentName }`: doc-keyed
+ *     `session-corrupt:<docId>`, message names the DOCUMENT basename.
+ *   - `loadSessionWithPath`'s SyntaxError branch passes `{ documentName }`
+ *     (the document basename — `id` is computed in `resolveAndValidatePath`
+ *     and never passed down, and `sessionKey` is a different value):
+ *     file-keyed `session-corrupt-file:<document basename>`, message names
+ *     the document basename.
+ *   - `listSessionFilePaths` passes no opts (it reads `data.filePath` out of
+ *     the JSON it could not parse): file-keyed on the SESSION basename, and
+ *     only there the message names the session file instead.
+ *
+ * `severity: "warning"` persists in the activity tray, which is a log — so
+ * the past-tense wording ("was set aside") is a contract, not style. When
+ * the rename itself fails the message carries the failure wording instead
+ * ("could not be read; see the server log", never "was set aside").
+ *
+ * The name's suffix ORDER is the exclusion mechanism: `listSessionFilePaths`
+ * filters on `file.endsWith(".json")` alone, so `<key>.json.corrupt.<ts>`
+ * is invisible because it does not end in `.json` — while
+ * `<key>.corrupt.<ts>.json` would be listed, parsed (it parses; only
+ * `ydocState` is bad) and restored as a duplicate of the live path. Do not
+ * "keep the extension".
+ *
+ * `utimes` takes Date objects, NOT `Date.now()`: numeric `utimes` arguments
+ * are SECONDS, so a millisecond epoch either throws `EINVAL` (Windows — the
+ * swallow below keeps the rename-preserved mtime and the next
+ * `cleanupSessions` reaps the quarantine, the opposite failure) or stamps
+ * year ~57000 (POSIX — the quarantine is immortal). `rename` preserves
+ * mtime, and `cleanupSessions` filters on age only, so without the touch a
+ * session last written 31 days ago is quarantined and unlinked by the very
+ * next boot; with it the 30-day GC runs from the quarantine (intended).
+ *
+ * Proceeds regardless of `isStoreReadOnly()`: a rename is not a content
+ * write, and a lock-losing second instance renaming a file that is corrupt
+ * either way is benign.
+ *
+ * Delivery bound: `pushNotification` has no server-side dedup and the SSE
+ * route has no backlog replay, and `restoreOpenDocuments` runs before the
+ * HTTP binds — so for the boot-restore case the toast reaches nobody. The
+ * user sees the tab come back with disk content; the record is the
+ * `console.error` line plus the `.corrupt.<ts>` file plus the
+ * troubleshooting entry. The toast IS delivered for the live paths (Recents,
+ * `tandem_open`, a `.corrupt` produced mid-session). A client-visible
+ * boot-time carrier is a client change and out of scope.
+ *
+ * `clearAllSessions` consequence: a file quarantined during its own listing
+ * no longer ends in `.json`, so "Clear all" neither deletes nor counts it;
+ * it is reclaimed by `cleanupSessions` 30 days from the refreshed mtime.
+ * Acceptable (corrupt, invisible to every listing, eventually GC'd).
+ *
+ * `reportOnly` (open-path recovery when the eviction itself failed): the doc
+ * may still hold partial state, so neither the fallback clone nor a rename
+ * is safe — but the toast must still fire, and this function is the single
+ * producer. Reports with the failure wording without touching the file.
+ * (Deviates from the A11 spec's two-field `opts`: the spec's "Fix 1 pushes
+ * nothing", "single producer", "file remains on evict failure" and
+ * "failure-worded toast" are jointly unsatisfiable without it.)
+ */
+export async function quarantineSession(
+  sessionPath: string,
+  opts?: { documentId?: string; documentName?: string; reportOnly?: boolean },
+): Promise<void> {
+  const sessionBase = path.basename(sessionPath);
+  const name = opts?.documentName ?? sessionBase;
+  const dedupKey = opts?.documentId
+    ? `session-corrupt:${opts.documentId}`
+    : `session-corrupt-file:${name}`;
+  const namesDocument = opts?.documentId !== undefined || opts?.documentName !== undefined;
+  const successMessage = namesDocument
+    ? `Recovered ${name} from disk; its unsaved session state could not be read and was set aside.`
+    : `A saved session file could not be read and was set aside (${sessionBase}).`;
+  const failureMessage = namesDocument
+    ? `Recovered ${name} from disk; its unsaved session state could not be read; see the server log.`
+    : `A saved session file could not be read (${sessionBase}); see the server log.`;
+  const notify = (message: string): void => {
+    pushNotification({
+      id: generateNotificationId(),
+      type: "general-error",
+      severity: "warning",
+      message,
+      ...(opts?.documentId ? { documentId: opts.documentId } : {}),
+      dedupKey,
+      timestamp: Date.now(),
+    });
+  };
+
+  if (opts?.reportOnly === true) {
+    notify(failureMessage);
+    return;
+  }
+
+  try {
+    const quarantinePath = `${sessionPath}.corrupt.${Date.now()}`;
+    await fs.rename(sessionPath, quarantinePath);
+    await fs.utimes(quarantinePath, new Date(), new Date());
+  } catch (err: unknown) {
+    // ENOENT-tolerant: the file vanished mid-flight (a concurrent listing
+    // already quarantined it) — nothing corrupt is lying around, so there is
+    // nothing to report either.
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return;
+    // Logged the way annotations/store.ts does, then swallowed: the open
+    // this runs inside of must still resolve.
+    console.error("[Tandem] Failed to quarantine corrupt session %s:", sessionPath, err);
+    notify(failureMessage);
+    return;
+  }
+  notify(successMessage);
 }
 
 /**
@@ -311,6 +497,25 @@ export function narrowConflict(value: unknown): ExternalConflictState | undefine
 export function restoreYDoc(doc: Y.Doc, session: SessionData): void {
   const state = Buffer.from(session.ydocState, "base64");
   Y.applyUpdate(doc, new Uint8Array(state));
+}
+
+/**
+ * Decode a session's `ydocState` into a throwaway scratch doc, for the
+ * corrupt-winner fallback path (#1800). Throws on corrupt state exactly the
+ * way `restoreYDoc` does — the caller catches and quarantines the fallback's
+ * path too.
+ *
+ * Lives here (not in `documents/open.ts`) so `open.ts` keeps its type-only
+ * yjs import and the `open.ts → session/manager.ts` boundary pin stays x1.
+ * The caller wraps the clone in `try { … } finally { scratch.destroy(); }`
+ * with the destroy in its OWN inner try/catch: a throw out of `finally`
+ * would override the restore result and re-break the open.
+ */
+export function decodeSessionToScratchDoc(session: SessionData): Y.Doc {
+  const scratch = new Y.Doc();
+  const state = Buffer.from(session.ydocState, "base64");
+  Y.applyUpdate(scratch, new Uint8Array(state));
+  return scratch;
 }
 
 /** Check if the source file has changed since the session was saved
@@ -594,6 +799,10 @@ export async function loadCtrlSession(): Promise<string | null> {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return null;
     if (err instanceof SyntaxError) {
+      // Stays `unlink`, deliberately NOT quarantined like document sessions:
+      // the ctrl record is small and rebuilt from defaults on the next save,
+      // so a 30-day quarantine would preserve nothing worth diagnosing.
+      // (Kept distinct so /simplify does not "align" it with quarantineSession.)
       console.error(`[Tandem] Corrupted ctrl session ${sessionPath}, removing:`, err.message);
       await fs.unlink(sessionPath).catch((unlinkErr) => {
         console.error(
@@ -691,6 +900,21 @@ export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
           readOnly: data.readOnly === true,
         });
       } catch (err) {
+        // The boot sweep never reaches loadSession for an unparseable file —
+        // its own JSON.parse throws first — so without this third quarantine
+        // caller the corrupt-JSON class still silently loses the tab at
+        // startup. Stays BROAD: ENOENT/EACCES on a file that vanished
+        // mid-sweep must still `continue`; only the quarantine is
+        // SyntaxError-gated. NOTE the absolute path: `file` is a bare
+        // `readdir` name, and passing it would resolve against cwd, ENOENT,
+        // and be swallowed by the tolerance below into a silent no-quarantine.
+        // This list has three callers (restoreOpenDocuments,
+        // listSessionsMetadata, clearAllSessions), so a Recents refresh can
+        // quarantine mid-session — a live, deliverable toast path, and why a
+        // quarantine can originate from a listing, not only from an open.
+        if (err instanceof SyntaxError) {
+          await quarantineSession(path.join(SESSION_DIR, file));
+        }
         console.error(`[Tandem] Skipping unreadable session file ${file}:`, err);
       }
     }

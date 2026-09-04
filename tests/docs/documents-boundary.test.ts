@@ -379,6 +379,11 @@ const FAN_OUT = [
   "server/documents/annotation-wiring.ts -> server/annotations/store.ts (value) x1",
   "server/documents/annotation-wiring.ts -> server/annotations/sync.ts (value) x1",
   "server/documents/annotation-wiring.ts -> server/events/queue.ts (value) x1",
+  // #1800: the fallback-anchor repair helper. ONE statement covering both
+  // symbols (collectAnnotations + refreshAllRanges re-exported from one
+  // module), so the row stays x1; `map` is a parameter so no
+  // shared/constants.ts row is added for it.
+  "server/documents/annotation-wiring.ts -> server/mcp/annotations.ts (value) x1",
   "server/documents/annotation-wiring.ts -> server/notifications.ts (value) x1",
   "server/documents/annotation-wiring.ts -> shared/utils.ts (value) x1",
   "server/documents/conflict.ts -> server/notifications.ts (value) x1",
@@ -422,6 +427,10 @@ const FAN_OUT = [
   // detection/id derivation, and the welcome-doc tutorial annotations.
   "server/documents/open.ts -> server/mcp/document-model.ts (value) x1",
   "server/documents/open.ts -> server/mcp/tutorial-annotations.ts (value) x1",
+  // #1800: the authorship relRange re-mint runs inside the clone transact in
+  // open.ts (it cannot be laundered through the annotation-wiring row:
+  // mcp/annotations.ts re-exports everything EXCEPT anchoredRange).
+  "server/documents/open.ts -> server/positions.ts (value) x1",
   "server/documents/open.ts -> server/session/manager.ts (value) x1",
   "server/documents/open.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/open.ts -> shared/constants.ts (value) x1",
