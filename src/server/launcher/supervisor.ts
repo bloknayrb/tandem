@@ -379,6 +379,93 @@ export function sessionCwdMatches(
 }
 
 /**
+ * Attach the one listener that turns a child-stdin write failure into
+ * "this child is gone" instead of an uncaughtException (#1757).
+ *
+ * Any 'error' on the child's stdin means the pipe peer is gone or has stopped
+ * accepting writes; nothing we can do with this child recovers it, and
+ * index.ts's fatal handler would otherwise exit the whole server. Codes seen:
+ * EOF (Windows, libuv UV_EOF — the write raced the child's exit; measured
+ * 12/12 in probe-a5-r1/p10-exit-race.mjs on Node 24.14.1), EPIPE (POSIX). The
+ * code is logged verbatim so an unseen one is visible rather than fatal.
+ *
+ * Ordering, measured: the write CALLBACK in sendTurn fires first (one per
+ * queued write), then this event once, in a later tick. Both re-arm the wake;
+ * running the pair 1..N times is idempotent because `stdin.writable` is
+ * already false by the first callback, so a flushPendingWake() interleaved
+ * from a `result` envelope takes sendTurn's early return and leaves the flag
+ * set — do not move the re-arm above clearLatch() or relax that guard.
+ */
+export function attachChildStreamErrorHandlers(
+  child: {
+    stdin?: NodeJS.WritableStream | null;
+    stdout?: NodeJS.ReadableStream | null;
+    stderr?: NodeJS.ReadableStream | null;
+  },
+  onChildGone: (err: NodeJS.ErrnoException) => void,
+): void {
+  if (child.stdin) {
+    child.stdin.on("error", (err: NodeJS.ErrnoException) => {
+      console.error(
+        `[Launcher] Claude stdin write failed (${err.code ?? err.name}) — treating the session as gone`,
+      );
+      onChildGone(err);
+    });
+  }
+  // The READ halves are log-only and deliberately NOT routed through
+  // onChildGone: a read error is not evidence the child stopped accepting
+  // writes, and killing on one would be new behaviour with nothing measured
+  // behind it. They still need a listener — a Readable emitting 'error' with
+  // zero listeners throws by EventEmitter contract, which is #1757's exact
+  // mechanism and exact blast radius, one stream over.
+  for (const [name, stream] of [
+    ["stdout", child.stdout],
+    ["stderr", child.stderr],
+  ] as const) {
+    stream?.on("error", (err: NodeJS.ErrnoException) => {
+      console.error(
+        `[Launcher] Claude ${name} error (${err.code ?? err.name}) — logged only; a read error is not evidence this child stopped accepting writes, so it is not killed here`,
+      );
+    });
+  }
+}
+
+// Exported rather than an inline arrow inside `spawnOnce` so each guard is
+// driven directly: as an anonymous arrow its guards would be reachable only
+// through a full spawn and testable only through a mirror asserting nothing
+// about the shipped code. `isCurrent` is a thunk, not a captured boolean:
+// `child` is reassigned by later spawns and a snapshot would freeze the
+// identity check into always-true, which is the guard's whole point.
+export function makeStdinGoneHandler(
+  spawned: Pick<ChildProcess, "exitCode" | "signalCode" | "kill">,
+  isCurrent: () => boolean,
+): (err: NodeJS.ErrnoException) => void {
+  return () => {
+    // A child whose stdin refuses writes can never be woken again, alive or
+    // not: end it and let the exit handler run the restart ladder. Identity- and
+    // liveness-guarded like the resets at :1104-1109; try/catch because this
+    // runs inside a stream 'error' emit and a throw here IS an
+    // uncaughtException (the :1221-1230 hazard, measured in probe-a5-r1/p2-throw.mjs).
+    // ZERO-ARG on purpose. Root tsconfig sets `noUnusedParameters: true` and
+    // tsconfig.server.json extends it, so naming an unread `err` here is a
+    // day-one TS6133 (measured on the repo's own toolchain: typescript 5.9.3,
+    // `'err' is declared but its value is never read`, exit 2; renaming to
+    // `_err` clears it). A zero-arg function is assignable to
+    // `(err: NodeJS.ErrnoException) => void`, and it also documents that this
+    // handler ignores the error object — the logging already happened in
+    // attachChildStreamErrorHandlers. Round 6 widened this parameter's TYPE;
+    // nobody attacked the PARAMETER.
+    if (!isCurrent()) return;
+    if (spawned.exitCode !== null || spawned.signalCode !== null) return;
+    try {
+      spawned.kill("SIGTERM");
+    } catch {
+      // best-effort, same as stopInternal
+    }
+  };
+}
+
+/**
  * Full argument vector handed to the `claude` binary, in order.
  *
  * Module-scope and exported (mirroring `resolveSafeCwd` below) so the wire
@@ -827,6 +914,26 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     });
     child = spawned;
 
+    // In `spawnOnce`, TWO bare statements at the same indentation as
+    // `child = spawned;`. NEVER the single-line
+    // `attachChildStreamErrorHandlers(spawned, makeStdinGoneHandler(...))`
+    // form: it is exactly 100 characters at this indent and biome rewraps it
+    // across four lines, which no source-order pin can match.
+    //
+    // The POSITION — above the bootstrap write below — is what covers it, not
+    // merely the presence: the listeners beside stdout/stderr further down run
+    // AFTER that first write, so a seam placed there leaves the first write's
+    // error to reach uncaughtException.
+    //
+    // macOS caveat (unverified — no hardware here): reaper/src/macos.rs has no
+    // SIGTERM handler and no PDEATHSIG equivalent, so killing the reaper can
+    // orphan Claude and the ladder spawns a second one beside it. Windows (job
+    // object + KILL_ON_JOB_CLOSE) and Linux (PR_SET_PDEATHSIG, and the reaper
+    // execvps in place so `spawned` IS Claude) are safe. stopInternal has the
+    // same hole once per deliberate stop; this fix makes it error-triggered.
+    const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned);
+    attachChildStreamErrorHandlers(spawned, onStdinGone);
+
     // A spawn that reached this point supersedes whatever went wrong before it;
     // leaving the old code set would make it resurface on the next clean stop
     // (see the note on SupervisorStatus).
@@ -896,7 +1003,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * Recovery is by retry, not by queueing, and that works only because the
      * wake carries no payload: `tandem_checkInbox` returns everything pending,
      * so ONE later successful wake subsumes every dropped one. A payload-
-     * carrying design would have to buffer here instead. */
+     * carrying design would have to buffer here instead.
+     *
+     * A write that fails while the child is still alive ends the child, and
+     * the owed wake crosses to the next spawn via `wakeOwedAcrossSpawns`; a
+     * callback that lands after `teardownTurnDelivery` already ran strands it
+     * (pre-existing, #1866 follow-up). */
     function sendTurn(text: string): boolean {
       const stdin = spawned.stdin;
       if (!stdin?.writable) {

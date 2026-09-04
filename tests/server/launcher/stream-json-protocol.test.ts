@@ -48,6 +48,7 @@ const ENV_KEYS = [
   "TANDEM_CLAUDE_CMD",
   "TANDEM_STUB_CLAUDE_RECORD_DIR",
   "TANDEM_STUB_CLAUDE_TURN_DELAY_MS",
+  "TANDEM_STUB_CLAUDE_CLOSE_STDIN_AFTER_FIRST_TURN",
 ] as const;
 
 let tmpDir: string;
@@ -102,15 +103,17 @@ function turnsFromPid(pid: number): TurnRecord[] {
  * `event-queue.test.ts`. These tests own the other half: given an event that
  * has already cleared those gates, what does the supervisor do with it?
  */
-function supervisorWithEventSink(extra?: { wakeLatchMs?: number }): {
+function supervisorWithEventSink(extra?: Partial<Parameters<typeof createSupervisor>[0]>): {
   sup: Supervisor;
   emit: (event: TandemEvent) => void;
   subscriberCount: () => number;
 } {
   const callbacks = new Set<(event: TandemEvent) => void>();
   const sup = createSupervisor({
+    // Spread first so a caller cannot silently replace the event sink or the
+    // integrations base the whole fixture rests on.
+    ...extra,
     integrationsBase: tmpDir,
-    wakeLatchMs: extra?.wakeLatchMs,
     subscribeToEvents: (cb) => {
       callbacks.add(cb);
       return () => callbacks.delete(cb);
@@ -690,6 +693,120 @@ describe("supervisor-owned turn delivery (#1266)", () => {
         "the orphaned reaper to die",
         10_000,
       );
+    }
+  }, 30_000);
+});
+
+describe.skipIf(process.platform === "win32")("stdin EPIPE end-to-end (#1757) — POSIX only", () => {
+  it("a failed wake write ends the child and the ladder brings a resumed one back, server intact", async () => {
+    // POSIX-only by measurement: on Windows a write racing the child's exit
+    // produces EOF (libuv UV_EOF) only in a race no test can drive
+    // deterministically, while an alive child that closed fd 0 accepts a small
+    // write with no error at all. The Windows path is pinned by the unit layer
+    // in supervisor.test.ts instead.
+    process.env.TANDEM_STUB_CLAUDE_CLOSE_STDIN_AFTER_FIRST_TURN = "1";
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await writeClaudeIntegration();
+    // wakeLatchMs: 500 BOUNDS the failure mode — without it a coalesced write
+    // defers to the 10-minute latch-breaker and this case hangs. It is not the
+    // measured common path (the stub answers at turnDelayMs = 50 ms, long
+    // before the +250 ms liveness tick this case waits for), so justify it as
+    // the bound, or a later /simplify removes the option.
+    const { sup, emit } = supervisorWithEventSink({ wakeLatchMs: 500, restartBackoffsMs: [0] });
+    try {
+      await sup.startFresh(spawnDir);
+      const first = sup.status();
+      if (!first.running) throw new Error("expected a running supervisor");
+      const pid1 = first.reaperPid;
+
+      // Pre-emit gate: the bootstrap turn recorded AND the stub's stdin close
+      // observed AND the first liveness record present. The liveness record is
+      // written SYNCHRONOUSLY at the close, before the interval — a stub that
+      // died at the close cannot produce it, with no timing dependency.
+      await waitFor(() => {
+        const hasInitial = turnsFromPid(pid1).some((t) => t.text === SUPERVISOR_INITIAL_PROMPT);
+        let closed = false;
+        let alive = false;
+        for (const n of fs.readdirSync(recordDir)) {
+          if (n === `closed-stdin-${pid1}.json`) closed = true;
+          if (n === `alive-${pid1}.json`) alive = true;
+        }
+        return hasInitial && closed && alive ? true : null;
+      }, "the bootstrap turn and the stub's stdin close");
+
+      interface AliveRecord {
+        devNullFd: number;
+        at: number;
+      }
+      const readAlive = (): AliveRecord =>
+        JSON.parse(fs.readFileSync(path.join(recordDir, `alive-${pid1}.json`), "utf8"));
+      const firstAlive = readAlive();
+      // Second record — the +250 ms interval tick — with a strictly greater
+      // `at` proves the stub SURVIVED its stdin close (a stub that process.
+      // exit()s right after writing both records never produces it). Compared
+      // on the record's own `at` field, never on mtime: ext4 stamps at jiffy
+      // granularity (4 ms on Ubuntu's HZ=250 kernel), so EQUAL mtimes are the
+      // expected outcome there and an mtime assertion reds a correct build.
+      const secondAlive = await waitFor(() => {
+        const rec = readAlive();
+        return rec.at > firstAlive.at ? rec : null;
+      }, "a second liveness record proving the stub survived its stdin close");
+      // Proof fd 0 was free at reopen, i.e. closeSync(0) succeeded. Strictly
+      // it does not by itself prove no other descriptor still references the
+      // pipe's read end; that holds here because Node does not dup fd 0.
+      expect(secondAlive.devNullFd).toBe(0);
+
+      emit(annotationEvent());
+
+      // Proximate detector FIRST: the supervisor's own log line, captured by
+      // spying console.error for the duration of the case.
+      await waitFor(
+        () =>
+          errSpy.mock.calls.flat().join("\n").includes("[Launcher] Claude stdin write failed (")
+            ? true
+            : null,
+        "the stdin-gone log line",
+      );
+
+      const second = await waitFor(() => {
+        const s = sup.status();
+        return s.running && s.reaperPid !== pid1 ? s : null;
+      }, "an automatic restart with a new reaper");
+      const pid2 = second.reaperPid;
+      // Give a crash loop time to reveal a third spawn before pinning the
+      // stable count. Without this settle, the assertion can win the race.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Exactly two spawns: no crash loop, no missing restart.
+      expect(recordsWithPrefix("spawn-")).toHaveLength(2);
+      // The restart after the kill is a RESUMING spawn — narrowed off the
+      // discriminated union, never read as sup.status().resuming (TS2339).
+      expect(second.resuming).toBe(true);
+      // Documentation, not one of the discriminating assertions: vacuous once
+      // running is asserted, since the running branch carries no lastError.
+      // Read off the un-narrowed union — declared on both branches, so it
+      // typechecks where `resuming` does not.
+      expect(sup.status().lastError).toBeUndefined();
+
+      // Case 2, same run: the owed wake crosses the kill, and it is the ONLY
+      // turn the resumed child gets. Deleting the wake carry (or the teardown
+      // promotion behind it) yields zero turns; a respawn that came back fresh
+      // instead yields the initial prompt. Both directions discriminate.
+      const pid2turns = await waitFor(() => {
+        const recs = turnsFromPid(pid2);
+        return recs.length > 0 ? recs : null;
+      }, "the owed wake on the resumed child");
+      expect(pid2turns).toHaveLength(1);
+      expect(pid2turns[0].problems).toEqual([]);
+      expect(pid2turns[0].text).toBe(SUPERVISOR_WAKE_PROMPT);
+      expect(pid2turns[0].text).not.toBe(SUPERVISOR_INITIAL_PROMPT);
+    } finally {
+      errSpy.mockRestore();
+      try {
+        fs.unlinkSync(path.join(spawnDir, String(process.pid)));
+      } catch {
+        // already removed
+      }
+      await sup.stop();
     }
   }, 30_000);
 });
