@@ -1253,8 +1253,11 @@ async function maybeRestoreSession(
       // dirtySession)` (which is what guarantees `restoreYDoc` ran): the
       // shared return below is also reached by the no-session and `changed
       // && !dirtySession` cases, where `restoreYDoc` never ran and a clear
-      // (with its `clearFileSyncContext`) would be wrong.
-      evictPartialDocStateAndAuthorship(doc, id);
+      // (with its `clearFileSyncContext`) would be wrong. Best-effort: only
+      // the `restoreYDoc` call above is guarded, so a throwing evict here
+      // would propagate out of `maybeRestoreSession` and reject the open —
+      // the #1800 symptom on a path that opened fine before this PR.
+      evictBestEffort(doc, id);
     }
   }
   return { restored: false };

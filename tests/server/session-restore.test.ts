@@ -678,6 +678,44 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     expect(ids).toEqual(["seed-2"]);
   });
 
+  it("evict failure on the empty-fragment path still opens from disk", async () => {
+    const { resolved } = await writeDocFile("emptyfrag-evict.md", DISK_TEXT);
+    // Same legitimately-empty dirty fixture as the fall-through case above:
+    // restoreYDoc SUCCEEDS (no throw), so the fall-through's evict is the
+    // only evict on this path — and it was bare before the R1 fix, which
+    // rejected the open with the #1800 symptom.
+    const seed = new Y.Doc();
+    seed.getMap(Y_MAP_AUTHORSHIP).set("frag-auth", {
+      id: "frag-auth",
+      author: "claude",
+      range: { from: 0, to: 1 },
+      timestamp: 1700000000000,
+    });
+    await writeSessionFile(resolved, "md", seed, true);
+
+    evictShouldThrow = true;
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await openFromDisk(resolved);
+      expect(res.kind).toBe("fresh");
+      const doc = getOrCreateDocument(res.documentId);
+      expect(extractText(doc)).toBe(extractText(textDoc(DISK_TEXT)));
+      // The healthy session file is untouched (no quarantine on this path),
+      // the open reached the fall-through (which logs before evicting), and
+      // no spurious session-corrupt toast fires.
+      expect(
+        await fs.stat(path.join(SESSION_DIR, `${sessionKey(resolved)}.json`)).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(true);
+      expect(errSpy).toHaveBeenCalled();
+      expect(sessionNotifications(`session-corrupt:${res.documentId}`)).toHaveLength(0);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
   it("EPERM on the quarantine rename still opens from disk with a failure toast", async () => {
     const { resolved, sessionPath } = await writeCorruptSession("eperm.md", "len-1");
 
@@ -1075,6 +1113,60 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     const discardNotes = sessionNotifications(`session-corrupt:${res.documentId}`);
     expect(discardNotes).toHaveLength(1);
     expect(discardNotes[0].message).toContain("discard.md");
+  });
+
+  it("EACCES-locked winner falls to disk instead of promoting the legacy record", async () => {
+    const { resolved } = await writeDocFile("avlocked.md", DISK_TEXT);
+    const { older, newer } = buildDualBranches();
+    const { winnerPath } = await writeDualSessions({
+      resolved,
+      format: "md",
+      older,
+      newer,
+      olderDirty: false,
+      newerDirty: true,
+      corruptWinner: null,
+      corruptFallback: null,
+    });
+
+    // Narrowest faithful simulation of the #1599 AV-lock shape: the winner
+    // file exists and won arbitration by mtime, but reads throw EACCES.
+    // Scoped to the winner path and installed AFTER fixture construction —
+    // the open itself reads the disk file through the same module.
+    const origReadFile = fs.readFile;
+    const eacces = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    const readSpy = vi.spyOn(fs, "readFile");
+    readSpy.mockImplementation(((p: string, ...rest: unknown[]) => {
+      if (p === winnerPath) throw eacces;
+      return (origReadFile as (...args: unknown[]) => unknown)(p, ...rest);
+    }) as unknown as typeof fs.readFile);
+    try {
+      const res = await openFromDisk(resolved);
+      const doc = getOrCreateDocument(res.documentId);
+      // DISK content, not the superseded legacy record: the old code
+      // returned null here and let the open fall to disk.
+      expect(extractText(doc)).toBe(extractText(textDoc(DISK_TEXT)));
+      expect(extractText(doc)).not.toContain("Older divergent");
+      // Nothing renamed away (the file is locked, not corrupt): the legacy
+      // record is untouched and no quarantine or toast exists.
+      expect(
+        await fs.stat(path.join(SESSION_DIR, `${legacySessionKey(resolved)}.json`)).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(true);
+      expect(
+        await fs.stat(winnerPath).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(true);
+      const files = await fs.readdir(SESSION_DIR);
+      expect(files.filter((f) => f.includes(".corrupt."))).toHaveLength(0);
+      expect(sessionNotifications(`session-corrupt:${res.documentId}`)).toHaveLength(0);
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("upload-stamped fallback is sanitized to the caller path and discarded", async () => {

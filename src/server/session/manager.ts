@@ -278,10 +278,15 @@ export async function loadSessionWithPath(filePath: string): Promise<LoadedSessi
   // where falling back to a surviving legacy record on every load would
   // resurrect a superseded record indefinitely. Here the corrupt winner is
   // renamed away first, so a promoted loser is the only candidate left, not
-  // a resurrection. Never a third candidate.
-  if (winner.reason === "unparseable") {
-    await quarantineSession(sessionPath, { documentName: path.basename(filePath) });
-  }
+  // a resurrection — and promotion happens ONLY on that axis. For a
+  // missing/unreadable winner (notably EACCES under an AV lock, the #1599
+  // shape) nothing is renamed away, so consulting the loser would restore a
+  // superseded legacy record with `restored: true`; like the old code, fall
+  // to disk instead. That includes the torn-read race (winner statted, then
+  // vanished): a vanished winner is torn state, and disk is the safe answer.
+  // Never a third candidate.
+  if (winner.reason !== "unparseable") return null;
+  await quarantineSession(sessionPath, { documentName: path.basename(filePath) });
   if (loserPath === null) return null;
   const loser = await readSessionFile(loserPath, filePath);
   if (loser.ok) return { session: loser.session, path: loserPath };
