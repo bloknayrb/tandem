@@ -1008,7 +1008,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * A write that fails while the child is still alive ends the child, and
      * the owed wake crosses to the next spawn via `wakeOwedAcrossSpawns`; a
      * callback that lands after `teardownTurnDelivery` already ran strands it
-     * (pre-existing, #TBD follow-up). */
+     * (pre-existing, #1866 follow-up). */
     function sendTurn(text: string): boolean {
       const stdin = spawned.stdin;
       if (!stdin?.writable) {

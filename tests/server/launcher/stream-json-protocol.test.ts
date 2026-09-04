@@ -773,6 +773,9 @@ describe.skipIf(process.platform === "win32")("stdin EPIPE end-to-end (#1757) â€
         return s.running && s.reaperPid !== pid1 ? s : null;
       }, "an automatic restart with a new reaper");
       const pid2 = second.reaperPid;
+      // Give a crash loop time to reveal a third spawn before pinning the
+      // stable count. Without this settle, the assertion can win the race.
+      await new Promise((resolve) => setTimeout(resolve, 500));
       // Exactly two spawns: no crash loop, no missing restart.
       expect(recordsWithPrefix("spawn-")).toHaveLength(2);
       // The restart after the kill is a RESUMING spawn â€” narrowed off the

@@ -913,7 +913,7 @@ describe("attachChildStreamErrorHandlers — a child-stdin write error is a chil
     expect(child.stderr.listenerCount("error")).toBe(1);
   });
 
-  it("leaves a read error to the existing handlers — stdout/stderr errors are log-only and never reach onChildGone", () => {
+  it("logs and consumes stdout/stderr errors without calling onChildGone", () => {
     // A read error is not evidence the child stopped accepting writes, and
     // killing on one would be #1757 with the polarity reversed. The assertion
     // pins the read half's OWN text: copying the stdin message into the
