@@ -28,7 +28,11 @@ function makeEditor(opts: { content: string; withHandler: boolean }): {
     element: container,
     extensions: buildSchemaExtensions(),
     content: opts.content,
-    editorProps: opts.withHandler ? makeEditorProps(true) : undefined,
+    // `{}` and not `undefined`: v3's createView reads
+    // `editorProps.dispatchTransaction` unconditionally, so explicit
+    // undefined explodes. An empty object wires no custom handlePaste —
+    // which is the probe's actual question — while staying constructible.
+    editorProps: opts.withHandler ? makeEditorProps(true) : {},
   });
   return { editor, schema: editor.state.schema, container };
 }

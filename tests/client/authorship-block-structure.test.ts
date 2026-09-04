@@ -4,8 +4,8 @@ import { Editor, Extension } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import { Slice } from "@tiptap/pm/model";
 import { Plugin } from "@tiptap/pm/state";
+import { ySyncPluginKey } from "@tiptap/y-tiptap";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ySyncPluginKey } from "y-prosemirror";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import {

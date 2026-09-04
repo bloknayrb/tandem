@@ -63,9 +63,11 @@ function inlineShape(editor: Editor): string {
   return blocks
     .map(
       (b) =>
+        // v3: `NodeType.type` is `string`, so `c.type === "text"` no longer
+        // narrows the `NodeType | TextType` union — presence-narrow instead.
         `${b.type}(${(b.content ?? [])
           .map((c) =>
-            c.type === "text"
+            "text" in c && typeof c.text === "string"
               ? `${JSON.stringify(c.text)}${c.marks?.length ? `^${c.marks.map((m) => m.type).join(",")}` : ""}`
               : `<${c.type}>`,
           )

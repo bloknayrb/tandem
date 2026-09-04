@@ -1,6 +1,6 @@
 import { Extension, type Editor as TiptapEditor } from "@tiptap/core";
 import { type EditorState, Plugin, PluginKey, type Transaction } from "@tiptap/pm/state";
-import { ySyncPluginKey } from "y-prosemirror";
+import { ySyncPluginKey } from "@tiptap/y-tiptap";
 import {
   filterSlashCommands,
   findSlashCommandMatch,

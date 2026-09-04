@@ -41,7 +41,16 @@ function makeEditor(opts: { extensions?: AnyExtension[]; content?: Content } = {
   editor = new Editor({
     element: container,
     extensions: opts.extensions ?? [
-      StarterKit.configure({ history: false, listItem: false }),
+      // v3: `history` became `undoRedo`; TrailingNode/Link/Underline are
+      // bundled now and disabled here to keep the v2 test schema
+      // (production does the same in buildSchemaExtensions()).
+      StarterKit.configure({
+        undoRedo: false,
+        listItem: false,
+        link: false,
+        underline: false,
+        trailingNode: false,
+      }),
       ListItemCheckbox,
     ],
     content: opts.content ?? "",

@@ -29,7 +29,9 @@ function mount(extensions: AnyExtension[], editorProps?: EditorProps): Editor {
   const editor = new Editor({
     element: container,
     extensions,
-    editorProps,
+    // v3's createView reads `editorProps.dispatchTransaction`
+    // unconditionally — explicit undefined explodes. Default to `{}`.
+    editorProps: editorProps ?? {},
   });
   mounted.push({ editor, container });
   return editor;
