@@ -25,9 +25,91 @@ import { SESSION_DIR } from "../platform.js";
 const AUTO_SAVE_INTERVAL = 60 * 1000; // 60 seconds
 let sessionDirReady = false;
 
-/** Generate a session key from a file path */
+/**
+ * Generate a session key (= the session FILENAME stem) from a file path.
+ *
+ * **Disk paths hash; upload paths keep the legacy encoding (#1750).**
+ * `encodeURIComponent` turns every `/` into a 3-byte `%2F`, so a 90-character
+ * path became a 200+-byte filename and ext4/NTFS refused it at 255 —
+ * `saveSession` threw `ENAMETOOLONG` on paths that are not unusual, and
+ * (before the per-document try/catch in the autosave loop) that one throw took
+ * the whole 60 s flush down with it. `docHash` is a fixed 64 hex characters,
+ * no separators, no encoding, and it CONVERGES this key with the two other
+ * per-document keys that already use it: durable annotations and doc-backups.
+ *
+ * Uploads deliberately do NOT hash. `docHash` collapses every scratchpad to the
+ * single key `upload_scratchpad` (they are all `upload://scratchpad/<uuid>/…`),
+ * and sessions ARE written for scratchpads, so two open scratchpads would
+ * clobber one file every 60 s. Upload paths are ~60 synthetic characters and
+ * were never in #1750's scope.
+ *
+ * Two identity changes for disk paths, both intended: on win32 `docHash`
+ * lowercases, so `C:\Docs\A.md` and `c:\docs\a.md` now share one session —
+ * matching `docIdFromPath`, which already gives them one Hocuspocus room. On
+ * POSIX they remain distinct (paths are case-sensitive), which is unchanged.
+ *
+ * The two namespaces cannot collide: an `encodeURIComponent` name of an
+ * absolute path always contains `%2F`, so it can never look like 64 hex.
+ */
 export function sessionKey(filePath: string): string {
+  if (isUploadPath(filePath)) return legacySessionKey(filePath);
+  return docHash(filePath);
+}
+
+/**
+ * The pre-#1750 key. Still the live key for `upload://` paths, and still read
+ * for disk paths during the one-shot migration (`loadSession` looks for both
+ * names; `saveSession` removes this one after the first successful write under
+ * the new key; `deleteSession` unlinks both).
+ */
+export function legacySessionKey(filePath: string): string {
   return encodeURIComponent(filePath.replace(/\\/g, "/"));
+}
+
+/** The session file for `filePath` under the current (`sessionKey`) name. */
+function sessionPathFor(filePath: string): string {
+  return path.join(SESSION_DIR, `${sessionKey(filePath)}.json`);
+}
+
+/**
+ * The old-name session path for a disk path, or null when there is no distinct
+ * old name (uploads, whose key never changed, and the ctrl session, which has
+ * its own literal name).
+ *
+ * "Distinct" is decided HERE, not at each of the three call sites: all of them
+ * want the same question answered — is there a SECOND file to migrate, prefer
+ * or unlink — and each used to re-derive it as
+ * `legacyPath !== null && legacyPath !== sessionPath`. Folding it in also keeps
+ * the equality next to its rationale: an `encodeURIComponent` name of an
+ * absolute path always contains `%2F`, so it can never equal 64 hex characters,
+ * which makes the check belt-and-braces rather than a live case.
+ *
+ * **TOTAL: an unspellable old name is null, not a throw.** `legacySessionKey`
+ * is `encodeURIComponent`, which throws `URIError` on a lone surrogate — and
+ * that is the right answer to give here, because a path whose legacy encoding
+ * does not exist cannot have a legacy file on disk. Letting it throw instead
+ * put a landmine in all three callers, one of which is genuinely severe:
+ * `saveSession` derives this AFTER its `atomicWrite`, so the throw reported
+ * failure for a session write that had fully succeeded. That is the #1750 class
+ * this branch exists to close — a save that worked and said it didn't — and it
+ * also falsified `saveDocumentToDisk`'s catch, which tells the user their
+ * recovery state was not recorded while the current record sits on disk. The
+ * other two: `loadSession` would reject on open, and `deleteSession` (which
+ * derives both names outside its per-target `try`) would delete nothing.
+ *
+ * Narrowed to `URIError` on purpose. Anything else from `path.join` or
+ * `sessionPathFor` is unexpected and should still surface.
+ */
+function legacySessionPath(filePath: string): string | null {
+  if (isUploadPath(filePath)) return null;
+  let legacyPath: string;
+  try {
+    legacyPath = path.join(SESSION_DIR, `${legacySessionKey(filePath)}.json`);
+  } catch (err) {
+    if (!(err instanceof URIError)) throw err;
+    return null;
+  }
+  return legacyPath === sessionPathFor(filePath) ? null : legacyPath;
 }
 
 /**
@@ -66,7 +148,6 @@ export async function saveSession(
   doc: Y.Doc,
   opts?: { dirty?: boolean; conflict?: ExternalConflictState },
 ): Promise<void> {
-  const key = sessionKey(filePath);
   let sourceFileMtime = 0;
   // Upload paths have no disk file — skip stat
   if (!isUploadPath(filePath)) {
@@ -101,14 +182,79 @@ export async function saveSession(
     await fs.mkdir(SESSION_DIR, { recursive: true });
     sessionDirReady = true;
   }
-  const sessionPath = path.join(SESSION_DIR, `${key}.json`);
-  await atomicWrite(sessionPath, JSON.stringify(data));
+  await atomicWrite(sessionPathFor(filePath), JSON.stringify(data));
+
+  // One-shot #1750 migration, ORDERED AFTER the successful write: a failed
+  // new-key save must leave the old file intact, or an ENOSPC destroys the only
+  // record. `loadSession` deliberately does not delete the loser at load time —
+  // a "successful load" is only a successful `JSON.parse`, and a record whose
+  // `ydocState` is corrupt parses fine and throws later in `restoreYDoc`.
+  const legacyPath = legacySessionPath(filePath);
+  if (legacyPath !== null) {
+    await fs.unlink(legacyPath).catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== "ENOENT") {
+        console.error("[Tandem] Failed to remove migrated session", legacyPath, err);
+      }
+    });
+  }
 }
 
-/** Load a session file if it exists */
+/**
+ * Load a session file if it exists.
+ *
+ * Reads BOTH the current (`docHash`) name and the pre-#1750
+ * `encodeURIComponent` name; when both exist the newer file MTIME wins. The
+ * loser is not deleted here — see `saveSession`, which removes the old name
+ * only after a successful write under the new one. Until then every load pays
+ * one extra `stat`, which is fine for a one-shot window.
+ *
+ * When the legacy file wins the tie-break and then cannot be READ, the current
+ * name is tried before giving up — see the comment at that fallback.
+ */
 export async function loadSession(filePath: string): Promise<SessionData | null> {
-  const key = sessionKey(filePath);
-  const sessionPath = path.join(SESSION_DIR, `${key}.json`);
+  const currentPath = sessionPathFor(filePath);
+  const legacyPath = legacySessionPath(filePath);
+  let sessionPath = currentPath;
+  if (legacyPath !== null) {
+    const [current, legacy] = await Promise.all([mtimeOf(currentPath), mtimeOf(legacyPath)]);
+    if (legacy !== null && (current === null || legacy > current)) {
+      sessionPath = legacyPath;
+    }
+  }
+  const chosen = await readSessionFileAt(sessionPath, filePath);
+  if (chosen !== null || sessionPath !== legacyPath) return chosen;
+  // The legacy file won the mtime tie-break and then would not read — truncated
+  // by an interrupted pre-#1750 write (a SyntaxError, which `readSessionFileAt`
+  // has already unlinked), or EACCES to an AV/indexer while `fs.stat` still
+  // succeeded, which is what let it win in the first place. Without this the
+  // record at the CURRENT key — readable, merely older — is discarded along
+  // with it and the user loses their session outright.
+  //
+  // **One-directional on purpose; do not "fix" the asymmetry.** The mirror
+  // fallback (current unreadable → fall back to the legacy file) would restore
+  // a record that a later successful save had already superseded: `saveSession`
+  // unlinks the old name only AFTER the new one is written, so a legacy file
+  // surviving next to a newer current one is a best-effort-unlink leftover, not
+  // a candidate. Preferring it is the exact outcome the mtime tie-break exists
+  // to prevent.
+  //
+  // The cost of that choice, stated rather than hidden: only the CORRUPT
+  // current-file case self-heals, because `readSessionFileAt` unlinks a
+  // `SyntaxError` and the legacy record then wins the very next load. An
+  // UNREADABLE current file does not — EACCES logs and returns null without
+  // unlinking — so a healthy older legacy record beside an AV-locked current
+  // one is discarded, on this load and every load while the lock persists.
+  // That is the same lock this comment cites two paragraphs up as motivating
+  // the other direction, and it is accepted here rather than solved: reading
+  // the superseded record would be worse than reading nothing.
+  return await readSessionFileAt(currentPath, filePath);
+}
+
+/** Read and parse one session file, or null (quarantining a corrupt one). */
+async function readSessionFileAt(
+  sessionPath: string,
+  filePath: string,
+): Promise<SessionData | null> {
   try {
     const content = await fs.readFile(sessionPath, "utf-8");
     const data = JSON.parse(content) as SessionData;
@@ -226,16 +372,36 @@ export function sessionModelIsStale(session: SessionData): boolean {
   return (session.modelRevision ?? 0) < DOCUMENT_MODEL_REVISION;
 }
 
-/** Delete a session file */
-export async function deleteSession(filePath: string): Promise<void> {
-  const key = sessionKey(filePath);
-  const sessionPath = path.join(SESSION_DIR, `${key}.json`);
+/** Modification time of a file in ms, or null when it cannot be stat'd. */
+async function mtimeOf(p: string): Promise<number | null> {
   try {
-    await fs.unlink(sessionPath);
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      console.error("[Tandem] deleteSession: failed to delete", sessionPath, err);
+    return (await fs.stat(p)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Delete a session file.
+ *
+ * Unlinks BOTH names unconditionally, ENOENT-tolerant on each (#1750). A
+ * first-found return would leave an old-name orphan that `listSessionFilePaths`
+ * still enumerates, so "Clear all" would appear to work and the document would
+ * be back on the next restart.
+ *
+ * For an upload path `legacySessionPath` returns null and only the one name is
+ * unlinked — uploads keep the legacy key, so the two names are the same file.
+ */
+export async function deleteSession(filePath: string): Promise<void> {
+  for (const target of [sessionPathFor(filePath), legacySessionPath(filePath)]) {
+    if (target === null) continue;
+    try {
+      await fs.unlink(target);
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.error("[Tandem] deleteSession: failed to delete", target, err);
+      }
     }
   }
 }
@@ -474,15 +640,24 @@ export interface SessionFileEntry {
   readOnly: boolean;
 }
 
+/** A `SessionFileEntry` still carrying the filename it came from, for the
+ *  MTIME-keyed migration dedupe. Never leaves this module. */
+interface RawSessionFileEntry extends SessionFileEntry {
+  file: string;
+}
+
 export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
   try {
     await fs.mkdir(SESSION_DIR, { recursive: true });
     const files = await fs.readdir(SESSION_DIR);
-    const results: SessionFileEntry[] = [];
+    const results: RawSessionFileEntry[] = [];
 
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
-      // Skip ctrl session (key is the CTRL_ROOM name)
+      // Skip ctrl session. Keyed on the LITERAL name `saveCtrlSession` writes
+      // (`CTRL_SESSION_KEY = CTRL_ROOM = "__tandem_ctrl__"`, encode-invariant).
+      // #1750 rehashed DOCUMENT keys only — the ctrl session deliberately keeps
+      // its literal name, so this stays literal too.
       if (file === `${encodeURIComponent(CTRL_ROOM)}.json`) continue;
 
       try {
@@ -504,6 +679,7 @@ export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
           continue;
         }
         results.push({
+          file,
           filePath: data.filePath,
           lastAccessed: data.lastAccessed ?? 0,
           // Strict `=== true`, same don't-trust-a-bare-`JSON.parse` rule as
@@ -519,12 +695,55 @@ export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
       }
     }
 
-    results.sort((a, b) => b.lastAccessed - a.lastAccessed);
-    return results;
+    const deduped = await dedupeByFilePath(results);
+    // The sort keeps `lastAccessed`; the dedupe above uses file MTIME. The two
+    // clocks answer different questions — "when did the user last touch this
+    // document" versus "which of these two files was written more recently" —
+    // and the migration criterion has to be the same one `loadSession` uses.
+    deduped.sort((a, b) => b.lastAccessed - a.lastAccessed);
+    return deduped.map(({ file: _file, ...entry }) => entry);
   } catch (err) {
     console.error("[Tandem] Failed to read session directory:", err);
     return [];
   }
+}
+
+/**
+ * Collapse records that describe the same `filePath` to one, keeping the file
+ * with the newer MTIME — the same criterion `loadSession`'s migration uses, so
+ * the restore list and the restore itself cannot pick different records and
+ * restore with the loser's `readOnly` (#1591's class).
+ *
+ * Duplicates exist only inside the #1750 migration window, so the `stat` is
+ * LAZY: groups of one are passed through untouched. The session directory is
+ * bounded only by the 30-day GC, and an unconditional per-file stat would be a
+ * permanent boot cost for a one-shot need.
+ */
+async function dedupeByFilePath(entries: RawSessionFileEntry[]): Promise<RawSessionFileEntry[]> {
+  const groups = new Map<string, RawSessionFileEntry[]>();
+  for (const entry of entries) {
+    const group = groups.get(entry.filePath);
+    if (group) group.push(entry);
+    else groups.set(entry.filePath, [entry]);
+  }
+  const out: RawSessionFileEntry[] = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      out.push(group[0]);
+      continue;
+    }
+    let best = group[0];
+    let bestMtime = (await mtimeOf(path.join(SESSION_DIR, best.file))) ?? -1;
+    for (const candidate of group.slice(1)) {
+      const mtime = (await mtimeOf(path.join(SESSION_DIR, candidate.file))) ?? -1;
+      if (mtime > bestMtime) {
+        best = candidate;
+        bestMtime = mtime;
+      }
+    }
+    out.push(best);
+  }
+  return out;
 }
 
 /** Metadata for a single persisted document session, surfaced in the Sessions UI. */

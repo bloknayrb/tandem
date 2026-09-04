@@ -7,7 +7,13 @@ import JSZip from "jszip";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { sendNoteToClaude } from "../../src/client/panels/annotation-actions.js";
+import {
+  clearDirtyState,
+  markDirty,
+  registerDirtyObserver,
+} from "../../src/server/documents/dirty.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { wireFileWatcher } from "../../src/server/documents/watcher.js";
 import { listDocBackups } from "../../src/server/file-io/doc-backup.js";
 import {
   applySingleSuggestion,
@@ -19,6 +25,7 @@ import {
   importAnnotationId,
   injectCommentsAsAnnotations,
 } from "../../src/server/file-io/docx-comments.js";
+import { unwatchFile } from "../../src/server/file-watcher.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { applyChangesCore } from "../../src/server/mcp/docx-apply.js";
@@ -1097,6 +1104,86 @@ describe("applyChangesCore — write guards", () => {
       expect(meta.get(Y_MAP_SAVED_AT_VERSION)).toBe(baseline);
       const stat = await fsp.stat(docPath);
       expect(stat.mtimeMs).toBeGreaterThan(baseline + 1000);
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
+
+  it(
+    "the watcher reload that completes an apply finally lands (#1749) — clean doc",
+    async () => {
+      // RED before #1749 on EVERY platform, which is the point. `applyChangesCore`
+      // carries no `suppressNextChange` and no `recordSelfWrite` BY DESIGN — its
+      // own comment says "between this write and the watcher's reload, the Y.Doc
+      // is genuinely STALE … The reload re-baselines when it lands." That reload
+      // had never landed: the write is a tmp+rename, so it emits only `rename`,
+      // and `rename` was dropped at arrival.
+      //
+      // This is also the REAL gate for the `forbidden` rows in
+      // `document-write-rearm.test.ts`. A symmetry-minded fold that adds
+      // `rearmWatch` here closes the old inotify handle with the write's own
+      // `rename` still queued against it — `uv_fs_event_stop` discards it, there
+      // is no replay, and this test goes red in ubuntu `check` while passing on
+      // Windows, where `rearmWatch` is a no-op.
+      const doc = getOrCreateDocument(DOC_ID);
+      const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      const before = extractText(doc);
+      const baseline = Date.now() - 60_000;
+      meta.set(Y_MAP_SAVED_AT_VERSION, baseline);
+      await fsp.utimes(docPath, new Date(baseline), new Date(baseline));
+
+      wireFileWatcher(DOC_ID, docPath, "docx");
+      try {
+        await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
+        // Immediately after the apply the baseline is deliberately STALE — that
+        // is what makes a Ctrl+S in this window refuse.
+        expect(meta.get(Y_MAP_SAVED_AT_VERSION)).toBe(baseline);
+
+        await vi.waitFor(
+          () => {
+            expect(meta.get(Y_MAP_SAVED_AT_VERSION)).not.toBe(baseline);
+          },
+          { timeout: 20_000, interval: 100 },
+        );
+        // The Y.Doc stopped being stale: mammoth re-imported the tracked-changes
+        // markup this apply wrote.
+        expect(extractText(doc)).not.toBe(before);
+        // A clean document reloads rather than raising a banner.
+        expect(meta.get(Y_MAP_EXTERNAL_CONFLICT)).toBeUndefined();
+      } finally {
+        unwatchFile(docPath);
+      }
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
+
+  it(
+    "the watcher reload that completes an apply flags a conflict on a DIRTY doc (#1749)",
+    async () => {
+      // The dirty twin, and a genuine choice rather than a bug: the unsaved
+      // Y.Doc edits were not written, and the disk now holds revisions. The
+      // banner's "changed on disk" wording reads as external, which is out of
+      // scope to reword here.
+      const doc = getOrCreateDocument(DOC_ID);
+      const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      const before = extractText(doc);
+      registerDirtyObserver(DOC_ID, doc);
+      markDirty(DOC_ID);
+
+      wireFileWatcher(DOC_ID, docPath, "docx");
+      try {
+        await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
+        await vi.waitFor(
+          () => {
+            expect(meta.get(Y_MAP_EXTERNAL_CONFLICT)).toBeDefined();
+          },
+          { timeout: 20_000, interval: 100 },
+        );
+        // Flagged, NOT reloaded.
+        expect(extractText(doc)).toBe(before);
+      } finally {
+        unwatchFile(docPath);
+        clearDirtyState(DOC_ID);
+      }
     },
     REAL_APPLY_TIMEOUT_MS,
   );

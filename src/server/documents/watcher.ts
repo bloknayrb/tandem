@@ -404,11 +404,26 @@ export async function reloadFromDisk(
  *
  * Tandem's own saves are filtered
  * out before this callback by the file-watcher's two-layer self-write defense:
- * the arrival-time `suppressNextChange` counter swallows the rename events, and
- * a delivery-time content fingerprint (`recordSelfWrite`) catches any event
- * that leaks past it (NTFS fires ~2 events per atomic rename but the counter is
- * armed once). A genuinely-changed file still reaches here — the fingerprint
- * skips only bytes identical to what Tandem just wrote. See file-watcher.ts.
+ * the arrival-time `suppressNextChange` counter swallows the first N events,
+ * and a delivery-time content fingerprint (`recordSelfWrite`) catches any that
+ * leak past it. Two corrections to what this comment used to claim (#1749).
+ * The counter does not swallow "the rename events" on the POSIX path at all:
+ * `rearmWatch` CLEARS it after every self-write, because the write replaced the
+ * inode and the old handle never saw its own events — so on POSIX the
+ * fingerprint is the only layer between a self-write echo and a reload. And
+ * NTFS does not fire "~2 change events per atomic rename": measured on Node 24,
+ * a `fs.promises` self-write delivers `rename, rename, change` and a
+ * synchronous temp write `rename, rename` — never a lone `change`. A
+ * genuinely-changed file still reaches here — the fingerprint skips only bytes
+ * identical to what Tandem just wrote. See file-watcher.ts.
+ *
+ * A failed INITIAL arm is no longer swallowed by the catch below: `watchFile`
+ * does not throw, and notifies the user itself when `fs.watch` refuses the
+ * path. That matters most for save-as, whose target is deliberately unconfined
+ * (network shares, external drives) — exactly where `fs.watch` is unsupported
+ * or returns EPERM/ENOSPC/EMFILE — and nothing re-arms after an open, so a
+ * silent failure there is permanent for the document's lifetime. The catch
+ * below covers the rest of this body.
  */
 export function wireFileWatcher(id: string, filePath: string, format: string): void {
   try {

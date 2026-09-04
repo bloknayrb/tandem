@@ -398,6 +398,7 @@ const FAN_OUT = [
   //
   // This comment read "Autosave is the ONLY thing" until 7c made it false.
   "server/documents/autosave.ts -> server/mcp/document-service.ts (value) x1",
+  "server/documents/autosave.ts -> server/notifications.ts (value) x1",
   "server/documents/autosave.ts -> server/session/manager.ts (value) x1",
   // The reload family, moved here by Unit 7c. Eight of these eleven are new
   // edges OUT of documents/ that did not exist before, because the code that
@@ -415,6 +416,7 @@ const FAN_OUT = [
   "server/documents/reload-family.ts -> shared/origins.ts (value) x1",
   "server/documents/reload-family.ts -> shared/utils.ts (value) x1",
   "server/documents/autosave.ts -> server/yjs/provider.ts (value) x1",
+  "server/documents/autosave.ts -> shared/utils.ts (value) x1",
   "server/documents/open.ts -> server/file-io/index.ts (value) x1",
   // Two edges from the seam back into mcp/, both ADR-034 residue: format
   // detection/id derivation, and the welcome-doc tutorial annotations.

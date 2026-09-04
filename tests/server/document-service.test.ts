@@ -1,3 +1,6 @@
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
@@ -5,6 +8,7 @@ import {
   resetForTesting as resetDirtyState,
 } from "../../src/server/documents/dirty.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { extractText } from "../../src/server/mcp/document-model.js";
 import type { OpenDoc } from "../../src/server/mcp/document-service.js";
 import {
   autoSaveAllToDisk,
@@ -62,8 +66,13 @@ vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
 });
 
 // Mock file-watcher
+// `watchFile`, `recordSelfWrite` and `rearmWatch` stay REAL: the save-as case
+// above wires a genuine `fs.watch` against a temp directory, which is the only
+// way to see the #1749 fix rather than a spy that was called.
+const unwatchFileReal = vi.hoisted(() => ({ fn: (_p: string) => {} }));
 vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+  const actual = await importOriginal<typeof import("../../src/server/file-watcher.js")>();
+  unwatchFileReal.fn = actual.unwatchFile;
   return {
     ...actual,
     suppressNextChange: vi.fn(),
@@ -674,6 +683,55 @@ describe("broadcastStoreReadOnly", () => {
 });
 
 describe("saveDocumentAsToDisk", () => {
+  it("wires a file watcher for the new path (#1749)", async () => {
+    // Save-As never wired one: "an intentional v1 limitation" meant an external
+    // edit to a just-saved-as document was invisible until the next reopen.
+    //
+    // Real filesystem, real `fs.watch`, and an assertion on BEHAVIOUR rather
+    // than on `watchedCount()`, because both failure modes this pins leave the
+    // document unwatched: omit the call and nothing watches; place it BEFORE
+    // the write and `fs.watch` throws ENOENT on a path that does not exist yet.
+    // The second is no longer SILENT — `watchFile` notifies on a refused arm —
+    // but a toast is not a watcher, and only this assertion proves the arm
+    // actually succeeded.
+    const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "tandem-save-as-watch-"));
+    const target = path.join(dir, "promoted.md");
+    addDoc("save-as-watch", {
+      id: "save-as-watch",
+      filePath: "upload://scratchpad/w/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    const doc = getOrCreateDocument("save-as-watch");
+    doc.transact(() => {
+      const para = new Y.XmlElement("paragraph");
+      para.insert(0, [new Y.XmlText("before")]);
+      doc.getXmlFragment("default").insert(0, [para]);
+    }, INTERNAL_ORIGIN);
+
+    try {
+      const result = await saveDocumentAsToDisk("save-as-watch", target, "md");
+      expect(result.status).toBe("saved");
+
+      // An external atomic replace — what every atomic-saving editor does, and
+      // the write that used to kill an inode-bound watcher outright.
+      const tmp = path.join(dir, ".ext-tmp");
+      fsSync.writeFileSync(tmp, "externally rewritten\n");
+      fsSync.renameSync(tmp, target);
+
+      await vi.waitFor(
+        () => {
+          expect(extractText(doc)).toContain("externally rewritten");
+        },
+        { timeout: 15_000, interval: 100 },
+      );
+    } finally {
+      unwatchFileReal.fn(target);
+      fsSync.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("rejects unsupported formats", async () => {
     addDoc("save-as-doc", {
       id: "save-as-doc",
