@@ -15,7 +15,57 @@ import { recoverRenamedEnvelope } from "../annotations/rename-recovery.js";
 import { annotationFileExists, createStore } from "../annotations/store.js";
 import { loadAndMerge } from "../annotations/sync.js";
 import { setFileSyncContext } from "../events/queue.js";
+import { collectAnnotations, refreshAllRanges } from "../mcp/annotations.js";
 import { pushNotification } from "../notifications.js";
+
+/**
+ * Re-anchor every annotation whose relRange belongs to a destroyed lineage
+ * (#1800 fallback restore). The clone copies annotation RECORDS byte-exact
+ * but their CRDT anchors point at the scratch doc's lineage, so
+ * `createAbsolutePositionFromRelativePosition` returns null on the live doc
+ * and every restored annotation would take `refreshRange`'s dead-relRange
+ * branch — re-anchored from stored flat offsets, which is only safe because
+ * the clone is byte-exact. Byte-exactness expires at the first edit, so the
+ * repair cannot wait for whoever calls `refreshAllRanges` next: nothing on
+ * the open path calls it (every server caller is downstream of a later
+ * action and the client never writes back), while `loadAndMerge` snapshots
+ * the dead relRange into the durable envelope on this very open.
+ *
+ * `map` is a PARAMETER, not `doc.getMap(Y_MAP_ANNOTATIONS)` computed here:
+ * this module has no `shared/constants.ts` edge and computing it here would
+ * add a second boundary row. The caller already holds the map.
+ *
+ * The hash is `docHash(filePath)`, mirroring the watcher's reload hash — not
+ * the document id, which is a different key entirely.
+ *
+ * `MCP_ORIGIN` over note records is correct: `collectAnnotations` does not
+ * filter notes, anchor maintenance is not an edit/resolve/remove (ADR-027
+ * guards those, and the watcher's reload already refreshes under the same
+ * default origin), `MCP_ORIGIN` is in `CHANNEL_SKIP` (no spurious channel
+ * event), and the dirty observer watches the body fragment only.
+ *
+ * The repair rewrites every record through `sanitizeAnnotation` (inside
+ * `collectAnnotations`) and persists the normalized shape — a silent legacy
+ * migration on the recovery path, and with the post-merge call site reaching
+ * DISK, broader than "on the recovery path". A "byte-identical to the
+ * fallback's record" assertion would therefore be wrong; assert resolution.
+ *
+ * Two call sites in `documents/open.ts`: (a) inside the clone transact with
+ * `skipTransact: true` (the default would re-tag with `withMcp`, the wrong
+ * origin here and a nested re-tag) — persisted because `loadAndMerge` runs
+ * later and reads the Y.Maps directly, origin-blind; (b) after the merge,
+ * gated on `fallbackRestored`, with the DEFAULT transact — by then the
+ * durable observer is attached and only a non-`DURABLE_SKIP` origin queues
+ * the repaired state to disk.
+ */
+export function repairClonedAnchors(
+  doc: Y.Doc,
+  map: Y.Map<unknown>,
+  filePath: string,
+  opts: { skipTransact: boolean },
+): void {
+  refreshAllRanges(collectAnnotations(map, docHash(filePath)), doc, map, opts);
+}
 
 /**
  * Wire a document's annotations to the durable per-doc store.

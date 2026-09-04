@@ -2,7 +2,7 @@
 
 import { Editor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import {
@@ -14,7 +14,9 @@ import {
 import { flatOffsetToPmPos, relRangeToPmPositions } from "../../src/client/positions";
 import { loadMarkdown } from "../../src/server/file-io/markdown";
 import { Y_MAP_AUTHORSHIP } from "../../src/shared/constants";
+import { anchorFlatRange } from "../../src/shared/positions/ydoc";
 import type { AuthorshipRange } from "../../src/shared/types";
+import { off } from "../helpers/positions";
 
 /**
  * Client authorship stamps carry a CRDT anchor (#1471 gap 1).
@@ -147,6 +149,35 @@ describe("client stamps are CRDT-anchored", () => {
     expect(decoratedTextByAuthor(ydoc, editor).claude).toEqual(["BOLDLY "]);
   });
 
+  it("renders a recovered live anchor without a flat-offset degradation warning", () => {
+    const { ydoc, editor } = boundEditor("alpha bravo charlie\n");
+    const from = editor.getText().indexOf("bravo");
+    const relRange = anchorFlatRange(ydoc, off(from), off(from + "bravo".length));
+    if (!relRange) throw new Error("recovered fixture failed to mint a live server-shaped anchor");
+
+    ydoc.getMap(Y_MAP_AUTHORSHIP).set("recovered", {
+      id: "recovered",
+      author: "claude",
+      range: { from: off(from), to: off(from + "bravo".length) },
+      relRange,
+      timestamp: 1700000000000,
+    } satisfies AuthorshipRange);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(decoratedTextByAuthor(ydoc, editor).claude).toEqual(["bravo"]);
+      editor.view.dispatch(editor.state.tr.insertText("12345", 1));
+      expect(decoratedTextByAuthor(ydoc, editor).claude).toEqual(["bravo"]);
+      expect(
+        warn.mock.calls.filter(([message]) =>
+          String(message).includes("Falling back to flat offsets for range"),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("paints nothing when a DRIFTED entry loses its text, instead of painting elsewhere", () => {
     // THE RESOLVER FIX, and getting this scenario right took two attempts.
     //
@@ -211,11 +242,28 @@ describe("client stamps are CRDT-anchored", () => {
     });
     live.push(editor);
 
-    editor.view.dispatch(editor.state.tr.insertText("X", 1));
-    const entries = [...ydoc.getMap(Y_MAP_AUTHORSHIP).values()] as AuthorshipRange[];
-    expect(entries).toHaveLength(1);
-    expect(entries[0].relRange, "no fragment to anchor into").toBeUndefined();
-    expect(entries[0].range, "but the flat stamp must still happen").toBeDefined();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      editor.view.dispatch(editor.state.tr.insertText("X", 1));
+      const entries = [...ydoc.getMap(Y_MAP_AUTHORSHIP).values()] as AuthorshipRange[];
+      expect(entries).toHaveLength(1);
+      expect(entries[0].relRange, "no fragment to anchor into").toBeUndefined();
+      expect(entries[0].range, "but the flat stamp must still happen").toBeDefined();
+
+      // Unlike an out-of-bounds fallback entry dropped by the server recovery,
+      // a valid client stamp whose mint declined still reaches the renderer.
+      // It must remain visible, but the once-per-session warning makes the
+      // flat-offset degradation observable instead of silently drifting.
+      expect(decoratedTextByAuthor(ydoc, editor).user).toEqual(["X"]);
+      expect(decoratedTextByAuthor(ydoc, editor).user).toEqual(["X"]);
+      expect(
+        warn.mock.calls.filter(([message]) =>
+          String(message).includes("Falling back to flat offsets for range"),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("anchors against the final frame, not a per-step intermediate", () => {
