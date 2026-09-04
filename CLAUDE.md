@@ -58,9 +58,6 @@ These WILL break things if violated:
 
 ## Development Workflow
 
-Quality over speed. Claude is an AI — time and effort have no cost. Never abbreviate steps.
-The only goal is the best possible work product.
-
 For every feature or fix: draft a plan (`/plan`), **spawn adversarial agents to review the plan
 from multiple angles before writing any code**, implement, run `/simplify`, then verify (`npm run typecheck` +
 `npm test`; add `npm run test:e2e` for client/integration changes), do whatever manual testing

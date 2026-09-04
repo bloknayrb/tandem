@@ -14,10 +14,10 @@ You are a security reviewer for Tandem, a collaborative AI-human document editor
 
 ## Existing Mitigations (verify these still work)
 - DNS rebinding protection on `/mcp` routes (via `createMcpExpressApp({ host })`)
-- DNS rebinding protection on `/api` routes (Host-header validation in `apiMiddleware`)
-- CORS on `/api` reflects `http://127.0.0.1:*` origins only (bare `localhost` was narrowed out in PR #637)
+- DNS rebinding protection on `/api` routes: the load-bearing control is `isLoopback(req.socket.remoteAddress)` in `src/server/auth/middleware.ts` — the `Host` header is deliberately never consulted for it, and that is what makes rebinding non-exploitable. `apiMiddleware`'s `isHostAllowed()` check is a second layer, not the primary one; a change that "simplifies" loopback detection onto the Host header is the regression to look for.
+- CORS on `/api` reflects only `127.0.0.1` and `tauri.localhost` origins (plus `TAURI_LINUX_ORIGIN`); bare `localhost` is rejected. Denial is by ABSENCE of `Access-Control-Allow-Origin` — emitting `null` is a grant, not a refusal (#1291).
 - UNC path rejection on Windows (prevents NTLM hash leakage)
-- File extension allowlist: `.md`, `.txt`, `.html`, `.htm`, `.docx`
+- File extension allowlist (`SUPPORTED_EXTENSIONS`, `src/shared/constants.ts`): `.md`, `.markdown`, `.txt`, `.html`, `.htm`, `.docx`
 - File size limit: 50MB
 - Atomic file writes (temp + rename)
 

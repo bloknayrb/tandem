@@ -1752,16 +1752,29 @@ $effect(() => {
   const saved = scrollMemory.get(nextId) ?? 0;
 
   // Content height isn't final synchronously after the `{#key}` content swap,
-  // so re-apply the saved offset across a few frames until the container can
+  // so re-apply the saved offset across frames until the container can
   // actually hold it (the browser clamps scrollTop to scrollHeight -
-  // clientHeight otherwise). Bounded so a now-shorter document can't loop.
+  // clientHeight otherwise). The loop does NOT exit on the first stick:
+  // post-mount work (editor autofocus scrolls the fresh top-of-doc selection
+  // into view — v3's focus command appends an explicit scrollIntoView where
+  // v2 focused without scrolling) can move scrollTop again within ~100ms, so
+  // it keeps asserting until the position holds for a few consecutive frames.
+  // Bounded (30 frames) so a now-shorter document can't loop, and torn down
+  // by the effect cleanup on the next switch — which is also what stops it
+  // yanking back a deliberate user scroll made mid-window.
   let frame = 0;
+  let stableFrames = 0;
   let cancelled = false;
   const apply = (): void => {
     if (cancelled || scrollMemoryDocId !== nextId) return;
-    el.scrollTop = saved;
-    if (el.scrollTop < saved && frame < 30) {
-      frame += 1;
+    if (el.scrollTop < saved) {
+      el.scrollTop = saved;
+      stableFrames = 0;
+    } else {
+      stableFrames += 1;
+    }
+    frame += 1;
+    if (frame < 30 && stableFrames < 5) {
       requestAnimationFrame(apply);
     }
   };

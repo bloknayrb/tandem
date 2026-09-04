@@ -57,8 +57,12 @@ function shape(editor: Editor): string {
   return (editor.getJSON().content ?? [])
     .map(
       (b) =>
+        // v3: `NodeType.type` is `string`, so `c.type === "text"` no longer
+        // narrows the `NodeType | TextType` union — presence-narrow instead.
         `${b.type}(${(b.content ?? [])
-          .map((c) => (c.type === "text" ? JSON.stringify(c.text) : `<${c.type}>`))
+          .map((c) =>
+            "text" in c && typeof c.text === "string" ? JSON.stringify(c.text) : `<${c.type}>`,
+          )
           .join("+")})`,
     )
     .join(" ");

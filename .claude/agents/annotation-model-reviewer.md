@@ -10,7 +10,7 @@ You are a specialized reviewer for Tandem's annotation data model and lifecycle 
 - Annotations are stored in `Y.Map('annotations')` keyed by annotation ID
 - Each annotation has: `id`, `type` ("highlight"|"comment"|"note"), `range` (flat offsets), optional `relRange` (CRDT-anchored), `status` ("pending"|"accepted"|"dismissed"), `author` ("user"|"claude"|"import"), optional `audience` ("private"|"outbound" — derived by sanitizeAnnotation on read; notes/highlights are always private, comments default to outbound)
 - All annotation creation must produce both flat `range` and CRDT `relRange` via `anchoredRange()`
-- Server-side Y.Map mutations must be wrapped in `doc.transact(() => { ... }, MCP_ORIGIN)` to prevent channel echo
+- Server-side Y.Map mutations must go through an origin-tagging helper from `src/shared/origins.ts` (`withMcp` for MCP tool handlers) — raw `doc.transact(...)` is forbidden anywhere in `src/`, client included (ADR-031, #1482)
 - Notes (`type: "note"`) are user-private per ADR-027 — never exposed to MCP tool responses or channel events
 - The annotations observer in `src/server/events/observers/annotations.ts` skips transactions with `MCP_ORIGIN` and `FILE_SYNC_ORIGIN`, and filters notes structurally (only `type: "comment"` events reach the channel)
 - `sanitizeAnnotation()` in `src/shared/sanitize.ts` normalizes legacy shapes and derives `audience`; note filtering for MCP responses happens in `tandem_getAnnotations`/`tandem_exportAnnotations` in `annotations.ts`
@@ -40,8 +40,8 @@ Read these before reviewing changes:
 - **Exception:** `refreshRange()` updates flat offsets on any annotation (this keeps coordinates fresh, not content).
 
 ### 3. Origin-Tagged Transaction Wrappers (ADR-031)
-- **Rule:** Every Y.Doc write goes through one of the five wrapper helpers in `src/shared/origins.ts` — `withMcp` / `withFileSync` / `withInternal` / `withReload` / `withBrowser`. Raw `doc.transact(...)` is forbidden outside `src/shared/origins.ts` (caught by `.claude/hooks/check-raw-transact.sh`).
-- **Check:** Grep for `.transact(` in `src/server/mcp/`. Every callsite should be a `withX` helper. MCP tool handlers must use `withMcp` (Claude-initiated user intent).
+- **Rule:** Every Y.Doc write goes through one of the six wrapper helpers in `src/shared/origins.ts` — `withMcp` / `withFileSync` / `withInternal` / `withReload` / `withBrowser` / `withModeRelease`. Raw `doc.transact(...)` is forbidden outside `src/shared/origins.ts`. Enforcement is warn-only and PostToolUse-only (`.claude/hooks/check-raw-transact.sh` never sees code no agent edited), so a clean hook run is not evidence — the CI gate is `tests/scripts/audit-origins.test.ts`.
+- **Check:** Grep for `.transact(` across all of `src/`, `.svelte` files included — there is no `src/client` exemption (#1482), and three raw client calls survived for months precisely because sweeps were scoped to the server. Every callsite should be a `withX` helper. MCP tool handlers must use `withMcp` (Claude-initiated user intent). A bare `map.set(...)` is invisible to this grep; the DEV-only `installUntaggedWriteWarning` is its complement.
 - **Skip-set matrix:** channel event queue skips `mcp / file-sync / internal / reload` (only `browser` emits). Durable-sync observer skips `file-sync / internal`. Tombstone observer skips `file-sync / internal`. Picking the wrong helper is a silent bug.
 - **Shared helpers** (e.g. `addReplyToAnnotation`) accept a `wrap: (doc, fn) => void` parameter — caller supplies `withMcp` or `withBrowser`. Verify the helper signature passes the wrapper through to the actual `transact`.
 
@@ -49,8 +49,8 @@ Read these before reviewing changes:
 - **Rule:** Annotations with `type: "note"` must never appear in:
   - MCP tool responses (`tandem_getAnnotations`, `tandem_checkInbox`, `tandem_exportAnnotations`)
   - Channel SSE events (`annotation:created`, `annotation:edited`)
-- **Check:** Verify `tandem_getAnnotations`/`tandem_exportAnnotations` in `src/server/mcp/annotations.ts` filter notes before returning. Verify the annotations observer in `src/server/events/observers/annotations.ts` only emits events for `type: "comment"` (the `if (ann.type !== "comment") continue` guard on line 39).
-- **Also check:** `tandem_editAnnotation` should reject edits to notes (they're user-private, Claude can't modify them).
+- **Check:** Verify `tandem_getAnnotations`/`tandem_exportAnnotations` in `src/server/mcp/annotations.ts` filter notes before returning. Verify the annotations observer in `src/server/events/observers/annotations.ts` only emits events for `type: "comment"` — grep the file for the `ann.type !== "comment"` guard rather than trusting a line number.
+- **Also check the other three write families — a read filter is not a write guard, and covering only the edit path is what let three write paths disagree until #1680.** The guards sit on `editPending`, `transitionPending`, `AnnotationLifecycle.remove` and `AnnotationLifecycle.reply`, and each must run AFTER `sanitizeAnnotation` (a legacy `flag` is only a note once normalized). Two omissions are deliberate, so flagging them is a regression rather than a finding: `removeAnnotationRecord` is unguarded because the browser's Archive calls it directly, and `addUserReply` is unguarded because replying inside one's own note thread is what #1000 permits. The reply guard tests `type === "note"` OR `type === "comment" && audience !== "outbound"` — not `type !== "comment"`, which would make a highlight parent answer `invalid-note` instead of `not-repliable`.
 
 ### 5. Channel Event Origin Filtering (ADR-031)
 - **Rule:** Channel-event observers (in `src/server/events/observers/`) must call `shouldSkipChannel(txn.origin)` and early-return when true. This skips mcp / file-sync / internal / reload, leaving only browser-origin writes to project to channel events.

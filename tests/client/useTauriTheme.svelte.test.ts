@@ -91,9 +91,13 @@ vi.mock("@tauri-apps/api/core", async () => {
   };
 });
 
-// The single backstop for both seams above, at FILE level so it covers every describe in
-// this file rather than the one that happens to use them today. Registered here, beside
-// the mock it protects, rather than inside a describe, so the pairing is visible.
+// Several cases deliberately reject the Tauri IPC call. Their delayed retry callbacks can
+// log after an individual test's cleanup, so this has to last for the isolated test file:
+// sending those expected logs through Vitest's worker RPC during a parallel coverage teardown
+// can turn an otherwise-passing suite into an EnvironmentTeardownError. The state assertions
+// below are the contract here.
+vi.spyOn(console, "warn").mockImplementation(() => {});
+
 afterEach(() => {
   coreImportBroken.current = false;
   coreImportGate.current = null;
@@ -2224,29 +2228,24 @@ describe("forced-colors re-push (#1364)", () => {
   // returns Err whenever the High Contrast probe yields `Unknown`, so on such a machine
   // every toggle lands here.
   it("GUARD: after a rejected forced re-push, a further change no-ops (no claim to re-assert)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const fc = installForcedColorsFake();
-      const { initTauriTheme, setNativeTheme, _resetForTests } = await import(
-        "../../src/client/hooks/useTauriTheme.svelte.js"
-      );
-      _resetForTests();
-      initTauriTheme(pushSpy);
-      setNativeTheme("dark");
-      await flushAsync();
+    const fc = installForcedColorsFake();
+    const { initTauriTheme, setNativeTheme, _resetForTests } = await import(
+      "../../src/client/hooks/useTauriTheme.svelte.js"
+    );
+    _resetForTests();
+    initTauriTheme(pushSpy);
+    setNativeTheme("dark");
+    await flushAsync();
 
-      invoke.mockImplementationOnce(() => Promise.reject(new Error("ipc failed")));
-      fc.fire();
-      await flushAsync();
-      expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
+    invoke.mockImplementationOnce(() => Promise.reject(new Error("ipc failed")));
+    fc.fire();
+    await flushAsync();
+    expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
 
-      fc.fire();
-      await flushAsync();
+    fc.fire();
+    await flushAsync();
 
-      expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
-    } finally {
-      warn.mockRestore();
-    }
+    expect(callsFor(invoke, "set_native_theme")).toHaveLength(2);
   });
 
   // RED BEFORE THE FIX (the `toBe(1)` sees 0). The leak class #1413's landed half closed
