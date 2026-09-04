@@ -877,7 +877,10 @@ async function abandonFallbackToDisk(
   err: unknown,
 ): Promise<RestoreResult> {
   console.error(
-    `[Tandem] ${subject} for ${fileName} ${predicate}, falling back to source file:`,
+    "[Tandem] %s for %s %s, falling back to source file:",
+    subject,
+    fileName,
+    predicate,
     (err as Error)?.message ?? err,
   );
   await quarantineSession(fallbackPath, { documentId: id, documentName: fileName });
@@ -1083,7 +1086,8 @@ async function maybeRestoreSession(
         // Hocuspocus-provided instance authoritative, and a live client may
         // be attached to the room) and fall back to disk.
         console.error(
-          `[Tandem] Session restore failed for ${fileName}, quarantining:`,
+          "[Tandem] Session restore failed for %s, quarantining:",
+          fileName,
           (restoreErr as Error)?.message ?? restoreErr,
         );
         // Evict FIRST (synchronous), then quarantine (async `fs.rename` +
@@ -1098,8 +1102,8 @@ async function maybeRestoreSession(
           evictPartialDocStateAndAuthorship(doc, id);
         } catch (evictErr) {
           console.error(
-            `[Tandem] Session restore recovery for ${fileName}: eviction failed, ` +
-              `falling back to source file:`,
+            "[Tandem] Session restore recovery for %s: eviction failed, falling back to source file:",
+            fileName,
             evictErr,
           );
           // The doc may still hold partial state, so neither the fallback

@@ -463,7 +463,7 @@ export async function quarantineSession(
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return;
     // Logged the way annotations/store.ts does, then swallowed: the open
     // this runs inside of must still resolve.
-    console.error(`[Tandem] Failed to quarantine corrupt session ${sessionPath}:`, err);
+    console.error("[Tandem] Failed to quarantine corrupt session %s:", sessionPath, err);
     notify(failureMessage);
     return;
   }
