@@ -40,6 +40,7 @@ vi.mock("../../src/server/documents/populate.js", async (importOriginal) => {
 });
 
 import { docHash } from "../../src/server/annotations/doc-hash.js";
+import type { AnnotationDocV1 } from "../../src/server/annotations/schema.js";
 import {
   closeStore,
   createStore,
@@ -89,6 +90,7 @@ import {
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
+import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { AuthorshipRange } from "../../src/shared/types.js";
 import { useTmpAnnotationsEnvWithFlag } from "../helpers/annotation-store-env.js";
 import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
@@ -375,7 +377,10 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     });
   }
 
-  async function seedEnvelope(filePath: string, annotations: unknown[]): Promise<void> {
+  async function seedEnvelope(
+    filePath: string,
+    annotations: AnnotationDocV1["annotations"],
+  ): Promise<void> {
     const hash = docHash(filePath);
     const store = createStore(hash, { filePath });
     store.queueWrite(() => ({
@@ -565,7 +570,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
         id: "seed-1",
         author: "user",
         type: "highlight",
-        range: { from: seedFrom, to: seedFrom + 5 },
+        range: { from: toFlatOffset(seedFrom), to: toFlatOffset(seedFrom + 5) },
         content: "",
         status: "pending",
         timestamp: 1700000000000,
@@ -630,7 +635,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
         id: "seed-2",
         author: "user",
         type: "highlight",
-        range: { from: seedFrom, to: seedFrom + 5 },
+        range: { from: toFlatOffset(seedFrom), to: toFlatOffset(seedFrom + 5) },
         content: "",
         status: "pending",
         timestamp: 1700000000000,
@@ -741,7 +746,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
         id: "survivor",
         author: "user",
         type: "highlight",
-        range: { from: seedFrom, to: seedFrom + 5 },
+        range: { from: toFlatOffset(seedFrom), to: toFlatOffset(seedFrom + 5) },
         content: "",
         status: "pending",
         timestamp: 1700000000000,
@@ -785,7 +790,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
   }
 
   function liveRelRange(doc: Y.Doc, from: number, to: number) {
-    const anchored = anchoredRange(doc, from, to);
+    const anchored = anchoredRange(doc, toFlatOffset(from), toFlatOffset(to));
     if (!anchored.ok || !anchored.fullyAnchored || !anchored.relRange) {
       throw new Error(`fixture range [${from}, ${to}] did not fully anchor`);
     }
@@ -1263,15 +1268,15 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     // different doc (unknown client/clock), so it resolves null on the live
     // doc while staying shape-valid through schema normalization.
     const otherDoc = textDoc("alpha beta gamma\n");
-    const deadFrom = flatOffsetToRelPos(otherDoc, 6, 0);
-    const deadTo = flatOffsetToRelPos(otherDoc, 10, -1);
+    const deadFrom = flatOffsetToRelPos(otherDoc, toFlatOffset(6), 0);
+    const deadTo = flatOffsetToRelPos(otherDoc, toFlatOffset(10), -1);
     if (!deadFrom || !deadTo) throw new Error("dead-relRange fixture failed to mint");
     await seedEnvelope(resolved, [
       {
         id: "ann-E",
         author: "user",
         type: "highlight",
-        range: { from: 6, to: 10 },
+        range: { from: toFlatOffset(6), to: toFlatOffset(10) },
         content: "",
         status: "pending",
         timestamp: 1700000000000,
@@ -1332,15 +1337,15 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     });
 
     const otherDoc = textDoc("alpha beta gamma\n");
-    const deadFrom = flatOffsetToRelPos(otherDoc, 6, 0);
-    const deadTo = flatOffsetToRelPos(otherDoc, 10, -1);
+    const deadFrom = flatOffsetToRelPos(otherDoc, toFlatOffset(6), 0);
+    const deadTo = flatOffsetToRelPos(otherDoc, toFlatOffset(10), -1);
     if (!deadFrom || !deadTo) throw new Error("dead-relRange fixture failed to mint");
     await seedEnvelope(resolved, [
       {
         id: "ann-E",
         author: "user",
         type: "highlight",
-        range: { from: 6, to: 10 },
+        range: { from: toFlatOffset(6), to: toFlatOffset(10) },
         content: "",
         status: "pending",
         timestamp: 1700000000000,
