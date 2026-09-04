@@ -250,15 +250,29 @@ describe("isRenderableLinkScheme — the allowlist posture (#1537)", () => {
 
 describe("the premise: what Tiptap's defaultValidate actually accepts", () => {
   // Asserted against the REAL dependency, never re-derived from the vendored
-  // source: the pattern is assembled in a template literal where `\-` collapses
-  // to a bare `-`, so `[^a-z+.-:]` parses `.-:` as the range U+002E-U+003A and
-  // the hyphen falls OUT of the negated set. Reading the source gives the wrong
-  // answer; only `new RegExp` gives the right one.
-  it.each([
-    ...REFUSED_SCHEME_HREFS,
-    ...NEVER_WORKED_SCHEME_HREFS,
-  ])("accepts %j — which is why the narrowing term exists", (href) => {
+  // source. v2's pattern was assembled in a template literal where `\-`
+  // collapsed to a bare `-`, so `[^a-z+.-:]` parsed `.-:` as the range
+  // U+002E-U+003A and the hyphen fell OUT of the negated set; reading that
+  // source gave the wrong answer and only `new RegExp` gave the right one.
+  // v3 rewrote the validator as an explicit scheme allowlist (http, https,
+  // ftp, ftps, mailto, tel, callto, sms, cid, xmpp) with the hyphen properly
+  // escaped — so the Follina-class below is now rejected by UPSTREAM itself,
+  // and the drift row for `ms2:x` flipped the other way (see below).
+  it.each(
+    NEVER_WORKED_SCHEME_HREFS,
+  )("accepts %j — which is why the narrowing term exists", (href) => {
     expect(tiptapDefaultIsAllowedUri(href, [])).toBeTruthy();
+  });
+
+  it.each(
+    REFUSED_SCHEME_HREFS,
+  )("v3 rejects %j itself — and the narrowing term rejects it independently", (href) => {
+    // Defense in depth, not a redundant pin: upstream's allowlist and our
+    // WHATWG-scheme predicate now agree on these, so the union outcome is
+    // unchanged either way. If upstream ever widens again, our term still
+    // subtracts them — that is the property being preserved.
+    expect(tiptapDefaultIsAllowedUri(href, [])).toBeFalsy();
+    expect(isRenderableLinkScheme(href)).toBe(false);
   });
 
   it.each(
@@ -273,24 +287,28 @@ describe("the premise: what Tiptap's defaultValidate actually accepts", () => {
     expect(isRenderableLinkScheme(href)).toBe(true);
   });
 
-  // UPSTREAM-DRIFT DETECTORS. These four are rejected by `defaultValidate`
-  // today because a terminator INSIDE `[a-z+./0-9:]` cannot end the
-  // `[a-z0-9+.-]+` run. They are rejected by `isRenderableLinkScheme`
+  // UPSTREAM-DRIFT DETECTORS. `coap+tcp:x`, `a.b:c` and `x+y:z` are rejected
+  // by `defaultValidate` because a terminator INSIDE `[a-z+./0-9:]` cannot end
+  // the `[a-z0-9+.-]+` run. They are rejected by `isRenderableLinkScheme`
   // independently of that, so the union is unaffected either way — the point
-  // is to NOTICE. If a `@tiptap/extension-link` upgrade changes that
-  // terminator set in EITHER direction these flip and the paragraph above
-  // stops describing the dependency. The narrowing direction counts: upstream
-  // escaping `\-` properly removes the `.-:` RANGE, which takes `/` and the
-  // digits back out of the excluded set, so `ms2:x` moves too — not only a
-  // widening upgrade can break this.
+  // is to NOTICE. `ms2:x` is the v3-flipped row the old comment predicted
+  // ("the narrowing direction counts"): with the hyphen properly escaped the
+  // run backtracks (`ms` + terminator `2`), so upstream ACCEPTS it now, while
+  // our WHATWG predicate still rejects it (`ms2` is a syntactically valid
+  // scheme and not an allowlisted one). If a future upgrade moves any of
+  // these again, the paragraph above stops describing the dependency.
   it.each([
     "coap+tcp:x",
     "a.b:c",
     "x+y:z",
-    "ms2:x",
   ])("rejects %j today — a terminator inside [a-z+./0-9:] does not end the run", (href) => {
     expect(tiptapDefaultIsAllowedUri(href, [])).toBeFalsy();
     expect(isRenderableLinkScheme(href)).toBe(false);
+  });
+
+  it("accepts ms2:x upstream since v3, but the narrowing term still subtracts it", () => {
+    expect(tiptapDefaultIsAllowedUri("ms2:x", [])).toBeTruthy();
+    expect(isRenderableLinkScheme("ms2:x")).toBe(false);
   });
 });
 

@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import { Editor, Extension } from "@tiptap/core";
 import type { Transaction } from "@tiptap/pm/state";
 import { findWrapping, Mapping, StepMap } from "@tiptap/pm/transform";
+import { ySyncPluginKey } from "@tiptap/y-tiptap";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ySyncPluginKey } from "y-prosemirror";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import {

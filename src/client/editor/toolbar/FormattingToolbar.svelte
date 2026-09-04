@@ -1,7 +1,7 @@
 <script lang="ts">
 import "./toolbar-chrome.css";
 import type { Editor as TiptapEditor } from "@tiptap/core";
-import { yUndoPluginKey } from "y-prosemirror";
+import { yUndoPluginKey } from "@tiptap/y-tiptap";
 import type { TandemNotification } from "../../../shared/types.js";
 import { clickOutside } from "../../actions/clickOutside.svelte";
 import { createCoalescingTick } from "../../utils/coalescing-tick";
