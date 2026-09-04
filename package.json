@@ -155,7 +155,6 @@
     "unist-util-visit": "^5.1.0",
     "update-notifier": "^7.3.1",
     "ws": "^8.21.0",
-    "y-prosemirror": "1.3.7",
     "y-protocols": "1.0.7",
     "yjs": "13.6.30",
     "zod": "^3.23.0"

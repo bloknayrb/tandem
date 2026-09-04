@@ -2,8 +2,8 @@
 
 import { Editor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
+import { yUndoPluginKey } from "@tiptap/y-tiptap";
 import { afterEach, describe, expect, it } from "vitest";
-import { yUndoPluginKey } from "y-prosemirror";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import {
