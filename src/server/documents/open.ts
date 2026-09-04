@@ -78,33 +78,48 @@ import {
   SAVEABLE_FORMATS,
   SUPPORTED_EXTENSIONS,
   VERY_LARGE_FILE_PAGE_THRESHOLD,
+  Y_MAP_ANNOTATION_REPLIES,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_AUTHORSHIP,
   Y_MAP_DOCUMENT_META,
   Y_MAP_EXTERNAL_CONFLICT,
+  Y_MAP_FIDELITY_REPORT,
+  Y_MAP_FOOTNOTE_BODIES,
+  Y_MAP_LINE_ENDING,
   Y_MAP_READ_ONLY,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
 import { crossBasename } from "../../shared/cross-basename.js";
-import { withInternal } from "../../shared/origins.js";
+import { withFileSync, withInternal } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
-import type { ExternalConflictState } from "../../shared/types.js";
+import type { ExternalConflictState, FlatOffset } from "../../shared/types.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { getAdapter } from "../file-io/index.js";
 import { detectFormat, docIdFromPath, extractText } from "../mcp/document-model.js";
 import { injectTutorialAnnotations } from "../mcp/tutorial-annotations.js";
+import { anchoredRange } from "../positions.js";
 import {
-  loadSession,
+  decodeSessionToScratchDoc,
+  type LoadedSession,
+  loadSessionWithPath,
   narrowConflict,
+  quarantineSession,
   restoreYDoc,
   type SessionFileEntry,
   sessionModelIsStale,
   sourceFileChanged,
 } from "../session/manager.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
-import { wireAnnotationStore } from "./annotation-wiring.js";
+import { repairClonedAnchors, wireAnnotationStore } from "./annotation-wiring.js";
 import { ensureAutoSave } from "./autosave.js";
 import { flagExternalConflict } from "./conflict.js";
 import { markDirty, registerDirtyObserver } from "./dirty.js";
-import { clearAndReload, loadContentIntoDoc, populateDocFromContent } from "./populate.js";
+import {
+  clearAndReload,
+  evictPartialDocState,
+  loadContentIntoDoc,
+  populateDocFromContent,
+} from "./populate.js";
 import {
   activateDocument,
   getOpenDocs,
@@ -401,12 +416,39 @@ export async function openFromDisk(
 
   // Normal open
   const doc = getOrCreateDocument(id);
-  const restore = await maybeRestoreSession(resolved, doc, fileName, format, readOnly);
+  const restore = await maybeRestoreSession(resolved, doc, fileName, format, readOnly, id);
   const restoredFromSession = restore.restored;
   if (!restoredFromSession) {
     await loadContentIntoDoc(doc, format, resolved, id);
   }
   await finalizeDocOpen(id, doc, resolved, fileName, format, readOnly);
+
+  // Second half of the fallback-anchor repair (#1800, site b). The clone-time
+  // repair (site a) ran BEFORE wireAnnotationStore, whose loadAndMerge then
+  // puts the durable envelope's dead relRange straight back for every
+  // annotation the file wins (rev tie: session records lack editedAt). This
+  // call re-anchors those post-merge — gated on the flag rather than
+  // unconditional, because an every-open refresh is a wider behaviour change
+  // than this fix is scoped to make.
+  //
+  // Placed AFTER finalizeDocOpen rather than threaded through it as a seventh
+  // parameter: wireAnnotationStore runs inside finalizeDocOpen, which receives
+  // no restore result. openDocumentWhenReady awaits prepare() before
+  // broadcastOpenDocs(), so this is genuinely after the merge on every path
+  // it can run on. Residual: a Hocuspocus onLoadDocument doc swap landing
+  // between the two lines writes the repair into an orphan — narrow, stated.
+  //
+  // DEFAULT transact (withMcp), NOT skipTransact: the durable observer is
+  // attached by now, and only a non-DURABLE_SKIP origin queues the repaired
+  // state to disk. A withFileSync repair here would mutate the Y.Map and
+  // queue nothing, and the post-merge write cannot cover for it (mergeMap
+  // sets needsWrite false when the file wins) — the envelope would keep the
+  // dead relRange permanently.
+  if (restore.fallbackRestored === true) {
+    repairClonedAnchors(doc, doc.getMap(Y_MAP_ANNOTATIONS), resolved, {
+      skipTransact: false,
+    });
+  }
 
   // A restored session that carried unsaved edits re-arms the module-state
   // dirty flag (#1069) — it was lost with the previous process. Must run AFTER
@@ -753,11 +795,188 @@ function handleAlreadyOpen(
 interface RestoreResult {
   restored: boolean;
   sessionDirty?: boolean;
+  /** Set when the migration-loser fallback was cloned in after the winner's
+   * `ydocState` threw (#1800). Gates the post-merge anchor repair at the
+   * normal-open call site. */
+  fallbackRestored?: boolean;
   unsavedRestore?: {
     diskChanged: boolean;
     sessionMtime: number;
     conflict?: ExternalConflictState;
   };
+}
+
+/**
+ * Evict partial Y.Doc state PLUS the fifth per-document map (#1800).
+ *
+ * `evictPartialDocState` clears four maps (annotations, replies, awareness,
+ * user-awareness) and the fragment — and NOT `Y_MAP_AUTHORSHIP`, which is
+ * cleared by NOTHING under `documents/` or `file-io` (the adapters clear
+ * only the fragment). Measured: after a len-1 throw and the evict,
+ * authorship ghosts survive while every other family reads 0 — turning the
+ * open into a success carrying authorship ranges anchored into a dead
+ * lineage. So the recovery clears authorship itself, under `withFileSync`
+ * matching the eviction two lines earlier (a bare `map.delete` is invisible
+ * to both `audit:origins` and the PostToolUse hook, per Critical Rule 2).
+ *
+ * Do NOT widen the shared `clearDocMaps`: `clearAndReload` and
+ * `populateDocFromContent` also call it and their re-import semantics for
+ * authorship are a separate decision.
+ *
+ * No test can discriminate this helper from `withInternal(clearDocMaps)` —
+ * both origins skip both observer families — so the helper choice is a
+ * review-enforced decision, stated here, not a pinned one. The
+ * durable-envelope tests catch "no clear at all"; nothing finer.
+ *
+ * Used at THREE sites: the corrupt-restore recovery block, the
+ * empty-fragment fall-through, and the fallback-clone failure catch (where
+ * `restoreYDoc` succeeded and the authorship map is fully populated from the
+ * session, so every entry is a ghost over disk-loaded text — a worse
+ * instance than the throwing one).
+ */
+function evictPartialDocStateAndAuthorship(doc: Y.Doc, id: string): void {
+  evictPartialDocState(doc, id);
+  withFileSync(doc, () => {
+    const authorship = doc.getMap(Y_MAP_AUTHORSHIP);
+    authorship.forEach((_, k) => authorship.delete(k));
+  });
+}
+
+/**
+ * Clone the fallback (migration-loser) scratch doc into the live doc (#1800).
+ *
+ * NEVER by `applyUpdate` onto the poisoned doc: after the corrupt winner's
+ * partial structs were integrated and then tombstoned by the eviction,
+ * applying the fallback update to the SAME doc re-integrates the shared
+ * structs DEAD (measured: a divergent legacy branch came back truncated with
+ * `restored: true`, and autosave would then persist it and delete the legacy
+ * file — silent content loss). Instead the fallback decodes into a scratch
+ * doc and the live fragment is repopulated from CONTENT under a fresh
+ * lineage: `Y.XmlElement.clone()` preserves node names, attributes and
+ * marks with byte-identical text (multi-segment `XmlText` comes out in
+ * order; attach-before-populate holds).
+ *
+ * NOT a content round-trip: re-rendering is undefined for `.docx`/`.html`
+ * (`prepareContent` throws `INVALID_SOURCE` without a Buffer, and nothing
+ * here serializes back to `.docx`) and a `remark-stringify` re-render for
+ * text is the #1448 class on the one path that must not lose the user's
+ * only copy.
+ *
+ * Honest statement of what the fallback restores (authorship included — its
+ * entries carry the same `range` + optional `relRange`, and the client's
+ * `buildAuthorshipDecorations` returns silently on an unresolvable range, so
+ * it is safe, not a crash): content (byte-exact via clone) plus annotation
+ * RECORDS and REPLY records. The records' CRDT anchors are DESTROYED — their
+ * `relRange` points at the scratch lineage and resolves null on the live
+ * doc — so every fallback-restored annotation takes `refreshRange`'s
+ * dead-relRange branch and is re-anchored from its stored FLAT offsets,
+ * which is only safe BECAUSE the clone is byte-exact. That justification
+ * covers the session-only records (site a, below) and NOT the durable
+ * envelope's: site (b) re-anchors records whose flat offsets were computed
+ * against the WINNER's text, actively re-minting a fresh `relRange` from
+ * those offsets and queueing it to disk — cementing a wrong anchor rather
+ * than leaving it detectably dead. Stated sharp (see the follow-up issue in
+ * the PR body: the session record should win over the envelope for cloned
+ * ids); not worse than the status quo, which had no anchor at all.
+ *
+ * `documentMeta` is MIRRORED, not copied-when-present, for exactly the three
+ * keys written only by an adapter import (`Y_MAP_FOOTNOTE_BODIES`,
+ * `Y_MAP_FIDELITY_REPORT`, `Y_MAP_LINE_ENDING` — same inertness, no observer
+ * on the server): set when the scratch has the key, `delete` when it does
+ * not. The partial `applyUpdate` integrates all seven winner keys and the
+ * evict never touches `documentMeta`, so a "copy when present" clone would
+ * leave the WINNER's value live over the FALLBACK's fragment (for
+ * `footnoteBodies` that is the export mismatch the mirror exists to
+ * prevent). The `delete` transition is client-observable and correct (the
+ * fidelity banner hides), so it is a pin, not a hazard.
+ *
+ * Authorship is RE-MINTED, not stripped: `resolveAuthorshipRange` returns
+ * null on a present-but-dead `relRange` before the flat fallback is ever
+ * consulted (silently, permanently LOST), while a stripped entry keeps flat
+ * offsets nothing ever repairs — the first edit then mis-attributes text for
+ * the life of the document. At clone time the flat offsets ARE correct, so a
+ * fresh `relRange` is computed against the live lineage with `anchoredRange`
+ * (Critical Rule 4's spelling; what the only existing producer uses). On a
+ * failed re-mint the entry is DROPPED with one warn per document carrying
+ * the count: flat offsets already outside the recovered content guarantee
+ * mis-attribution, while dropping degrades to "unattributed", which the
+ * client renders correctly.
+ *
+ * Runs under one `withFileSync` transact (the clone is the same family of
+ * write as the eviction; Critical Rule 2 forbids an untagged write), with
+ * the site-(a) anchor repair inside it (`skipTransact: true` — the default
+ * would re-tag with `withMcp`, the wrong origin here and a nested re-tag;
+ * persisted because `loadAndMerge` runs later and reads the Y.Maps directly,
+ * origin-blind).
+ *
+ * documentMeta residue table (why neither this clone nor the disk path
+ * strands a stale winner value — seven keys, four mechanisms, so nobody
+ * "simplifies" one away): `readOnly`/`format`/`documentId`/`fileName`/
+ * `externalConflict` by `writeDocMeta`; `savedAtVersion` by
+ * `initSavedBaseline` and then the explicit-save guard write; `dirtyState`
+ * by `registerDirtyObserver`'s unconditional `publishDirty` (the heal
+ * point — the only thing standing between this fix and a permanent false
+ * unsaved-edits dot); `lineEnding`/`fidelityReport`/`footnoteBodies` by the
+ * adapter import on the disk path or by this mirror on the fallback path.
+ * The partial state IS emitted before the throw (measured), so the clear is
+ * what converges an attached client — not an optimisation to remove later.
+ */
+function cloneFallbackIntoDoc(doc: Y.Doc, scratch: Y.Doc, resolved: string): void {
+  let droppedAuthorship = 0;
+  withFileSync(doc, () => {
+    const liveFragment = doc.getXmlFragment("default");
+    // Top-level fragment children are elements in practice (every adapter
+    // builds element structure; bare text/hooks cannot occur at the top
+    // level) — the yjs types admit hooks, so narrow to what insert takes.
+    const clones = scratch
+      .getXmlFragment("default")
+      .toArray()
+      .map((c) => c.clone()) as Array<Y.XmlElement | Y.XmlText>;
+    liveFragment.insert(0, clones);
+    for (const key of [Y_MAP_ANNOTATIONS, Y_MAP_ANNOTATION_REPLIES] as const) {
+      const source = scratch.getMap(key);
+      const target = doc.getMap(key);
+      source.forEach((value, mapKey) => {
+        target.set(mapKey, value);
+      });
+    }
+    const scratchMeta = scratch.getMap(Y_MAP_DOCUMENT_META);
+    const liveMeta = doc.getMap(Y_MAP_DOCUMENT_META);
+    for (const key of [Y_MAP_FOOTNOTE_BODIES, Y_MAP_FIDELITY_REPORT, Y_MAP_LINE_ENDING] as const) {
+      if (scratchMeta.has(key)) liveMeta.set(key, scratchMeta.get(key));
+      else liveMeta.delete(key);
+    }
+    const scratchAuth = scratch.getMap(Y_MAP_AUTHORSHIP);
+    const liveAuth = doc.getMap(Y_MAP_AUTHORSHIP);
+    scratchAuth.forEach((raw: unknown, mapKey: string) => {
+      const entry = raw as { range?: { from?: unknown; to?: unknown } };
+      const from = entry?.range?.from;
+      const to = entry?.range?.to;
+      // Branded-offset casts are plumbing only: anchoredRange re-validates
+      // via validateRange and returns ok:false on bad input (dropped below),
+      // so no unvalidated offset reaches a write.
+      const anchored =
+        typeof from === "number" && typeof to === "number"
+          ? anchoredRange(doc, from as FlatOffset, to as FlatOffset)
+          : { ok: false as const };
+      if (anchored.ok && anchored.fullyAnchored && anchored.relRange) {
+        liveAuth.set(mapKey, {
+          ...(raw as Record<string, unknown>),
+          range: { from, to },
+          relRange: anchored.relRange,
+        });
+      } else {
+        droppedAuthorship += 1;
+      }
+    });
+    repairClonedAnchors(doc, doc.getMap(Y_MAP_ANNOTATIONS), resolved, { skipTransact: true });
+  });
+  if (droppedAuthorship > 0) {
+    console.warn(
+      `[Tandem] Fallback session restore dropped ${droppedAuthorship} authorship range(s) ` +
+        `that could not be anchored to the recovered content.`,
+    );
+  }
 }
 
 /**
@@ -779,9 +998,13 @@ async function maybeRestoreSession(
   fileName: string,
   format: string,
   readOnly: boolean,
+  id: string,
 ): Promise<RestoreResult> {
-  const session = await loadSession(resolved);
-  if (session && sessionModelIsStale(session)) {
+  const loaded: LoadedSession | null = await loadSessionWithPath(resolved);
+  // `sessionModelIsStale` stays FIRST: a stale-model session returns before
+  // `restoreYDoc` and never reaches the catch below — which is also why the
+  // catch is not wrapped around it.
+  if (loaded && sessionModelIsStale(loaded.session)) {
     // #1448 W3. Falling through to a fresh parse of the source file, which is
     // the same content read by a load path that no longer damages it. Only
     // clean, on-disk sessions reach here — see `sessionModelIsStale`.
@@ -790,11 +1013,129 @@ async function maybeRestoreSession(
     );
     return { restored: false };
   }
-  if (session) {
-    const changed = await sourceFileChanged(session);
-    const dirtySession = session.dirty === true;
+  if (loaded) {
+    // `active` is the record every later read is off: the mtime winner, or
+    // the fallback once the winner's `ydocState` throws below. `changed` and
+    // `dirtySession` are recomputed from `active` on that path — the `let`
+    // swap alone does not update the locals captured here.
+    let active = loaded.session;
+    const fallback = loaded.fallback;
+    let fallbackRestored = false;
+    let changed = await sourceFileChanged(active);
+    let dirtySession = active.dirty === true;
     if (!changed || dirtySession) {
-      restoreYDoc(doc, session);
+      try {
+        restoreYDoc(doc, active);
+      } catch (restoreErr) {
+        // #1800: a truncated or bit-flipped `ydocState` throws out of
+        // `restoreYDoc` — and a missing/non-string one throws out of
+        // `Buffer.from` before `applyUpdate` is reached, which is why the
+        // `try` wraps the CALL here rather than the `applyUpdate` inside
+        // `restoreYDoc`, with no `instanceof` narrowing. Uncaught, the throw
+        // propagates out of `openFromDisk`: Recents fails, `tandem_open` by
+        // path fails, `restoreOpenDocuments` skips the tab — and nothing
+        // quarantines the file, so every retry fails identically. Recover on
+        // the SAME doc (re-minting is unnecessary: `getOrCreateDocument`
+        // returns the map-held instance, `onLoadDocument` makes the
+        // Hocuspocus-provided instance authoritative, and a live client may
+        // be attached to the room) and fall back to disk.
+        console.error(
+          `[Tandem] Session restore failed for ${fileName}, quarantining:`,
+          (restoreErr as Error)?.message ?? restoreErr,
+        );
+        // Evict FIRST (synchronous), then quarantine (async `fs.rename` +
+        // `utimes`), each step in its OWN try/catch — the round-5 twin
+        // passes either way, and evict-first closes the window in which
+        // already-integrated partial state sits live on the doc across an
+        // await that is slowest under exactly the EPERM/AV condition, on the
+        // one path where a client is attached (the `conflictAtClose`
+        // reopen). A failed recovery logs and still returns
+        // `{ restored: false }`; nothing bubbles.
+        let evictOk = true;
+        try {
+          evictPartialDocStateAndAuthorship(doc, id);
+        } catch (evictErr) {
+          evictOk = false;
+          console.error(
+            `[Tandem] Session restore recovery for ${fileName}: eviction failed, ` +
+              `falling back to source file:`,
+            evictErr,
+          );
+        }
+        if (!evictOk) {
+          // The doc may still hold partial state, so neither the fallback
+          // clone nor a rename is safe. Report through the single producer
+          // without touching the file — the record re-throws on every later
+          // open, and the toast carries the failure wording.
+          await quarantineSession(loaded.path, {
+            documentId: id,
+            documentName: fileName,
+            reportOnly: true,
+          });
+          return { restored: false };
+        }
+        // Never rejects; pushes the notification itself — this block pushes
+        // NOTHING of its own and this module gains no `notifications` import.
+        await quarantineSession(loaded.path, { documentId: id, documentName: fileName });
+        if (fallback === undefined) return { restored: false };
+        // Before cloning, the fallback passes the SAME gates the winner
+        // passed: an ungated fallback is a pre-`DOCUMENT_MODEL_REVISION`
+        // legacy record replaying parser defects, or a session whose
+        // `sourceFileMtime` predates a later external edit — cloned in over
+        // the user's newer on-disk content with `restored: true`.
+        if (sessionModelIsStale(fallback.session)) return { restored: false };
+        const fallbackChanged = await sourceFileChanged(fallback.session);
+        const fallbackDirty = fallback.session.dirty === true;
+        if (fallbackChanged && !fallbackDirty) return { restored: false };
+        let scratch: Y.Doc | null = null;
+        try {
+          scratch = decodeSessionToScratchDoc(fallback.session);
+        } catch (decodeErr) {
+          console.error(
+            `[Tandem] Fallback session for ${fileName} is also corrupt, ` +
+              `falling back to source file:`,
+            (decodeErr as Error)?.message ?? decodeErr,
+          );
+          await quarantineSession(fallback.path, { documentId: id, documentName: fileName });
+          // Defence, not correction: a failing decode touches only the
+          // scratch doc, which is discarded, and the live doc was evicted
+          // above. Kept as cheap defence; UNPINNED — every assertion in the
+          // both-corrupt twin is green with or without it.
+          try {
+            evictPartialDocStateAndAuthorship(doc, id);
+          } catch {
+            // Already falling back to disk; nothing left to protect.
+          }
+          return { restored: false };
+        }
+        try {
+          cloneFallbackIntoDoc(doc, scratch, resolved);
+        } catch (cloneErr) {
+          console.error(
+            `[Tandem] Fallback session clone for ${fileName} failed, ` +
+              `falling back to source file:`,
+            (cloneErr as Error)?.message ?? cloneErr,
+          );
+          await quarantineSession(fallback.path, { documentId: id, documentName: fileName });
+          try {
+            evictPartialDocStateAndAuthorship(doc, id);
+          } catch {
+            // Already falling back to disk; nothing left to protect.
+          }
+          return { restored: false };
+        } finally {
+          try {
+            scratch.destroy();
+          } catch {
+            // A throw out of `finally` would override the restore result
+            // and re-break the open; the scratch doc is fully cloned by now.
+          }
+        }
+        active = fallback.session;
+        changed = fallbackChanged;
+        dirtySession = fallbackDirty;
+        fallbackRestored = true;
+      }
       const fragment = doc.getXmlFragment("default");
       if (fragment.length > 0) {
         // Two independent reasons to prompt:
@@ -846,7 +1187,7 @@ async function maybeRestoreSession(
         // reachable via View Changelog or any `POST /api/open {readOnly:true}`.
         // The banner is not a dead end here either: "Reload from file" is a
         // working branch on a read-only document.
-        const carried = narrowConflict(session.conflict);
+        const carried = narrowConflict(active.conflict);
         const needsPrompt =
           carried !== undefined ||
           (mayHoldUnsavedWork({ readOnly, format, source: "file" }) &&
@@ -855,11 +1196,12 @@ async function maybeRestoreSession(
         return {
           restored: true,
           sessionDirty: dirtySession,
+          ...(fallbackRestored ? { fallbackRestored: true as const } : {}),
           ...(needsPrompt
             ? {
                 unsavedRestore: {
                   diskChanged: changed,
-                  sessionMtime: session.sourceFileMtime,
+                  sessionMtime: active.sourceFileMtime,
                   ...(carried ? { conflict: carried } : {}),
                 },
               }
@@ -869,6 +1211,21 @@ async function maybeRestoreSession(
       console.error(
         `[Tandem] Session restore yielded empty doc for ${fileName}, falling back to source file`,
       );
+      // The empty-fragment fall-through takes the same two-step clear as the
+      // recovery block — the branch returns `{ restored: false }` with a
+      // restored session's map state still in the doc otherwise. Behaviour
+      // decision, stated as one: a legitimately-empty session (the user
+      // deleted all text, session-only annotations and replies still in the
+      // maps) drops them along with the disk fallback. The bound is what
+      // makes it cheap — only entries that never reached the durable
+      // envelope, anchored to content being replaced by disk bytes; `.docx`
+      // comments re-import from the file and durable annotations re-hydrate
+      // via `wireAnnotationStore`. Stays inside `if (!changed ||
+      // dirtySession)` (which is what guarantees `restoreYDoc` ran): the
+      // shared return below is also reached by the no-session and `changed
+      // && !dirtySession` cases, where `restoreYDoc` never ran and a clear
+      // (with its `clearFileSyncContext`) would be wrong.
+      evictPartialDocStateAndAuthorship(doc, id);
     }
   }
   return { restored: false };
