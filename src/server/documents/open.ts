@@ -843,6 +843,49 @@ function evictPartialDocStateAndAuthorship(doc: Y.Doc, id: string): void {
 }
 
 /**
+ * Best-effort eviction for the fallback-failure tails below: already falling
+ * back to disk, so a throwing evict leaves nothing left to protect.
+ */
+function evictBestEffort(doc: Y.Doc, id: string): void {
+  try {
+    evictPartialDocStateAndAuthorship(doc, id);
+  } catch {
+    // Already falling back to disk; nothing left to protect.
+  }
+}
+
+/**
+ * Give up on the fallback and fall back to disk (#1800): log, quarantine the
+ * fallback's path, best-effort evict, return `{ restored: false }`.
+ *
+ * `subject`/`predicate` preserve the two call sites' distinct log lines
+ * ("Fallback session for <file> is also corrupt" vs "Fallback session clone
+ * for <file> failed") without duplicating the quarantine+evict tail.
+ *
+ * Defence, not correction: a failing decode touches only the
+ * scratch doc, which is discarded, and the live doc was evicted
+ * above. Kept as cheap defence; UNPINNED — every assertion in the
+ * both-corrupt twin is green with or without it.
+ */
+async function abandonFallbackToDisk(
+  doc: Y.Doc,
+  id: string,
+  fileName: string,
+  fallbackPath: string,
+  subject: string,
+  predicate: string,
+  err: unknown,
+): Promise<RestoreResult> {
+  console.error(
+    `[Tandem] ${subject} for ${fileName} ${predicate}, falling back to source file:`,
+    (err as Error)?.message ?? err,
+  );
+  await quarantineSession(fallbackPath, { documentId: id, documentName: fileName });
+  evictBestEffort(doc, id);
+  return { restored: false };
+}
+
+/**
  * Clone the fallback (migration-loser) scratch doc into the live doc (#1800).
  *
  * NEVER by `applyUpdate` onto the poisoned doc: after the corrupt winner's
@@ -1051,18 +1094,14 @@ async function maybeRestoreSession(
         // one path where a client is attached (the `conflictAtClose`
         // reopen). A failed recovery logs and still returns
         // `{ restored: false }`; nothing bubbles.
-        let evictOk = true;
         try {
           evictPartialDocStateAndAuthorship(doc, id);
         } catch (evictErr) {
-          evictOk = false;
           console.error(
             `[Tandem] Session restore recovery for ${fileName}: eviction failed, ` +
               `falling back to source file:`,
             evictErr,
           );
-        }
-        if (!evictOk) {
           // The doc may still hold partial state, so neither the fallback
           // clone nor a rename is safe. Report through the single producer
           // without touching the file — the record re-throws on every later
@@ -1091,38 +1130,28 @@ async function maybeRestoreSession(
         try {
           scratch = decodeSessionToScratchDoc(fallback.session);
         } catch (decodeErr) {
-          console.error(
-            `[Tandem] Fallback session for ${fileName} is also corrupt, ` +
-              `falling back to source file:`,
-            (decodeErr as Error)?.message ?? decodeErr,
+          return abandonFallbackToDisk(
+            doc,
+            id,
+            fileName,
+            fallback.path,
+            "Fallback session",
+            "is also corrupt",
+            decodeErr,
           );
-          await quarantineSession(fallback.path, { documentId: id, documentName: fileName });
-          // Defence, not correction: a failing decode touches only the
-          // scratch doc, which is discarded, and the live doc was evicted
-          // above. Kept as cheap defence; UNPINNED — every assertion in the
-          // both-corrupt twin is green with or without it.
-          try {
-            evictPartialDocStateAndAuthorship(doc, id);
-          } catch {
-            // Already falling back to disk; nothing left to protect.
-          }
-          return { restored: false };
         }
         try {
           cloneFallbackIntoDoc(doc, scratch, resolved);
         } catch (cloneErr) {
-          console.error(
-            `[Tandem] Fallback session clone for ${fileName} failed, ` +
-              `falling back to source file:`,
-            (cloneErr as Error)?.message ?? cloneErr,
+          return abandonFallbackToDisk(
+            doc,
+            id,
+            fileName,
+            fallback.path,
+            "Fallback session clone",
+            "failed",
+            cloneErr,
           );
-          await quarantineSession(fallback.path, { documentId: id, documentName: fileName });
-          try {
-            evictPartialDocStateAndAuthorship(doc, id);
-          } catch {
-            // Already falling back to disk; nothing left to protect.
-          }
-          return { restored: false };
         } finally {
           try {
             scratch.destroy();

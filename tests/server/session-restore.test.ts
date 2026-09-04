@@ -345,6 +345,18 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     await fs.writeFile(sessionPath, JSON.stringify(rec), "utf-8");
   }
 
+  /** Disk file + dirty session + rewritten `ydocState`: the standard corrupt-record fixture. */
+  async function writeCorruptSession(
+    name: string,
+    shape: CorruptShape,
+  ): Promise<{ resolved: string; seed: Y.Doc; sessionPath: string }> {
+    const { resolved } = await writeDocFile(name, DISK_TEXT);
+    const seed = textDoc(SESSION_TEXT);
+    const sessionPath = await writeSessionFile(resolved, "md", seed, true);
+    await corruptSessionFile(sessionPath, seed, shape);
+    return { resolved, seed, sessionPath };
+  }
+
   function sessionNotifications(dedupKey: string) {
     return getBuffer().filter((n) => n.dedupKey === dedupKey);
   }
@@ -404,6 +416,54 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     return (JSON.parse(raw) as { annotations: Array<Record<string, unknown>> }).annotations;
   }
 
+  /** One-highlight envelope over the DISK_TEXT needle the durable-half cases share. */
+  async function seedDiskNeedleEnvelope(resolved: string, id: string): Promise<void> {
+    const diskFlat = extractText(textDoc(DISK_TEXT));
+    const seedFrom = diskFlat.indexOf("actually on disk");
+    await seedEnvelope(resolved, [
+      {
+        id,
+        author: "user",
+        type: "highlight",
+        range: { from: toFlatOffset(seedFrom), to: toFlatOffset(seedFrom + 5) },
+        content: "",
+        status: "pending",
+        timestamp: 1700000000000,
+        textSnapshot: "",
+        color: "yellow",
+        rev: 1,
+      },
+    ]);
+  }
+
+  /**
+   * Envelope carrying ann-E with a DEAD relRange: minted on a different doc
+   * (unknown client/clock), so it resolves null on the live doc while staying
+   * shape-valid through schema normalization.
+   */
+  async function seedDeadAnnEEnvelope(resolved: string): Promise<void> {
+    const otherDoc = textDoc("alpha beta gamma\n");
+    const deadFrom = flatOffsetToRelPos(otherDoc, toFlatOffset(6), 0);
+    const deadTo = flatOffsetToRelPos(otherDoc, toFlatOffset(10), -1);
+    if (!deadFrom || !deadTo) throw new Error("dead-relRange fixture failed to mint");
+    await seedEnvelope(resolved, [
+      {
+        id: "ann-E",
+        author: "user",
+        type: "highlight",
+        range: { from: toFlatOffset(6), to: toFlatOffset(10) },
+        content: "",
+        status: "pending",
+        timestamp: 1700000000000,
+        textSnapshot: "beta",
+        color: "yellow",
+        rev: 1,
+        editedAt: 1700000000001,
+        relRange: { fromRel: deadFrom, toRel: deadTo },
+      },
+    ]);
+  }
+
   function insertTextPrefix(doc: Y.Doc, s: string): void {
     const frag = doc.getXmlFragment("default");
     const first = frag.get(0) as Y.XmlElement;
@@ -427,10 +487,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     "deleted",
     "empty-object",
   ] as CorruptShape[])("corrupt ydocState (%s) opens from disk with a quarantine file and one toast", async (shape) => {
-    const { resolved } = await writeDocFile("note.md", DISK_TEXT);
-    const seed = textDoc(SESSION_TEXT);
-    const sessionPath = await writeSessionFile(resolved, "md", seed, true);
-    await corruptSessionFile(sessionPath, seed, shape);
+    const { resolved, sessionPath } = await writeCorruptSession("note.md", shape);
 
     const res = await openFromDisk(resolved);
     expect(res.kind).toBe("fresh");
@@ -461,10 +518,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
   });
 
   it("quarantine refreshes the mtime so a back-dated session survives the next GC", async () => {
-    const { resolved } = await writeDocFile("aging.md", DISK_TEXT);
-    const seed = textDoc(SESSION_TEXT);
-    const sessionPath = await writeSessionFile(resolved, "md", seed, true);
-    await corruptSessionFile(sessionPath, seed, "len-1");
+    const { resolved, sessionPath } = await writeCorruptSession("aging.md", "len-1");
     const old = new Date(Date.now() - (SESSION_MAX_AGE + 86_400_000));
     await fs.utimes(sessionPath, old, old);
 
@@ -563,22 +617,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     await corruptSessionFile(sessionPath, seed, "len-1");
 
     // Durable half: one annotation in the on-disk envelope for the same doc.
-    const diskFlat = extractText(textDoc(DISK_TEXT));
-    const seedFrom = diskFlat.indexOf("actually on disk");
-    await seedEnvelope(resolved, [
-      {
-        id: "seed-1",
-        author: "user",
-        type: "highlight",
-        range: { from: toFlatOffset(seedFrom), to: toFlatOffset(seedFrom + 5) },
-        content: "",
-        status: "pending",
-        timestamp: 1700000000000,
-        textSnapshot: "",
-        color: "yellow",
-        rev: 1,
-      },
-    ]);
+    await seedDiskNeedleEnvelope(resolved, "seed-1");
 
     const res = await openFromDisk(resolved);
     const doc = getOrCreateDocument(res.documentId);
@@ -628,22 +667,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     });
     await writeSessionFile(resolved, "md", seed, true);
 
-    const diskFlat = extractText(textDoc(DISK_TEXT));
-    const seedFrom = diskFlat.indexOf("actually on disk");
-    await seedEnvelope(resolved, [
-      {
-        id: "seed-2",
-        author: "user",
-        type: "highlight",
-        range: { from: toFlatOffset(seedFrom), to: toFlatOffset(seedFrom + 5) },
-        content: "",
-        status: "pending",
-        timestamp: 1700000000000,
-        textSnapshot: "",
-        color: "yellow",
-        rev: 1,
-      },
-    ]);
+    await seedDiskNeedleEnvelope(resolved, "seed-2");
 
     const res = await openFromDisk(resolved);
     const doc = getOrCreateDocument(res.documentId);
@@ -655,10 +679,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
   });
 
   it("EPERM on the quarantine rename still opens from disk with a failure toast", async () => {
-    const { resolved } = await writeDocFile("eperm.md", DISK_TEXT);
-    const seed = textDoc(SESSION_TEXT);
-    const sessionPath = await writeSessionFile(resolved, "md", seed, true);
-    await corruptSessionFile(sessionPath, seed, "len-1");
+    const { resolved, sessionPath } = await writeCorruptSession("eperm.md", "len-1");
 
     // Installed AFTER fixture construction and scoped to the quarantine
     // target: saveSession and the annotation store flush both go through
@@ -700,10 +721,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
   });
 
   it("evict failure still opens from disk with a failure toast", async () => {
-    const { resolved } = await writeDocFile("evictfail.md", DISK_TEXT);
-    const seed = textDoc(SESSION_TEXT);
-    const sessionPath = await writeSessionFile(resolved, "md", seed, true);
-    await corruptSessionFile(sessionPath, seed, "len-1");
+    const { resolved, sessionPath } = await writeCorruptSession("evictfail.md", "len-1");
 
     evictShouldThrow = true;
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -734,27 +752,9 @@ describe("corrupt ydocState quarantine (#1800)", () => {
   });
 
   it("seeded durable annotation survives a corrupt-session open", async () => {
-    const { resolved } = await writeDocFile("survive.md", DISK_TEXT);
-    const seed = textDoc(SESSION_TEXT);
-    const sessionPath = await writeSessionFile(resolved, "md", seed, true);
-    await corruptSessionFile(sessionPath, seed, "half");
+    const { resolved } = await writeCorruptSession("survive.md", "half");
 
-    const diskFlat = extractText(textDoc(DISK_TEXT));
-    const seedFrom = diskFlat.indexOf("actually on disk");
-    await seedEnvelope(resolved, [
-      {
-        id: "survivor",
-        author: "user",
-        type: "highlight",
-        range: { from: toFlatOffset(seedFrom), to: toFlatOffset(seedFrom + 5) },
-        content: "",
-        status: "pending",
-        timestamp: 1700000000000,
-        textSnapshot: "",
-        color: "yellow",
-        rev: 1,
-      },
-    ]);
+    await seedDiskNeedleEnvelope(resolved, "survivor");
 
     const res = await openFromDisk(resolved);
     const doc = getOrCreateDocument(res.documentId);
@@ -1264,29 +1264,9 @@ describe("corrupt ydocState quarantine (#1800)", () => {
       corruptFallback: null,
     });
 
-    // The envelope carries the same id with a DEAD relRange: minted on a
-    // different doc (unknown client/clock), so it resolves null on the live
-    // doc while staying shape-valid through schema normalization.
-    const otherDoc = textDoc("alpha beta gamma\n");
-    const deadFrom = flatOffsetToRelPos(otherDoc, toFlatOffset(6), 0);
-    const deadTo = flatOffsetToRelPos(otherDoc, toFlatOffset(10), -1);
-    if (!deadFrom || !deadTo) throw new Error("dead-relRange fixture failed to mint");
-    await seedEnvelope(resolved, [
-      {
-        id: "ann-E",
-        author: "user",
-        type: "highlight",
-        range: { from: toFlatOffset(6), to: toFlatOffset(10) },
-        content: "",
-        status: "pending",
-        timestamp: 1700000000000,
-        textSnapshot: "beta",
-        color: "yellow",
-        rev: 1,
-        editedAt: 1700000000001,
-        relRange: { fromRel: deadFrom, toRel: deadTo },
-      },
-    ]);
+    // Same id in session and envelope (tie rationale above): the envelope's
+    // DEAD relRange is minted in seedDeadAnnEEnvelope.
+    await seedDeadAnnEEnvelope(resolved);
 
     const res = await openFromDisk(resolved);
     const doc = getOrCreateDocument(res.documentId);
@@ -1336,26 +1316,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
       corruptFallback: null,
     });
 
-    const otherDoc = textDoc("alpha beta gamma\n");
-    const deadFrom = flatOffsetToRelPos(otherDoc, toFlatOffset(6), 0);
-    const deadTo = flatOffsetToRelPos(otherDoc, toFlatOffset(10), -1);
-    if (!deadFrom || !deadTo) throw new Error("dead-relRange fixture failed to mint");
-    await seedEnvelope(resolved, [
-      {
-        id: "ann-E",
-        author: "user",
-        type: "highlight",
-        range: { from: toFlatOffset(6), to: toFlatOffset(10) },
-        content: "",
-        status: "pending",
-        timestamp: 1700000000000,
-        textSnapshot: "beta",
-        color: "yellow",
-        rev: 1,
-        editedAt: 1700000000001,
-        relRange: { fromRel: deadFrom, toRel: deadTo },
-      },
-    ]);
+    await seedDeadAnnEEnvelope(resolved);
 
     const res = await openFromDisk(resolved);
     const doc = getOrCreateDocument(res.documentId);
