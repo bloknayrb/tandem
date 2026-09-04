@@ -38,6 +38,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const recordDir = process.env.TANDEM_STUB_CLAUDE_RECORD_DIR;
@@ -190,6 +191,32 @@ process.stdin.on("data", (chunk) => {
       problems,
       text,
     });
+    // #1757 end-to-end trigger (POSIX only, default off). On the first stdin
+    // line — the bootstrap turn on child #1, the owed wake on a respawned
+    // child #2, which re-closing is harmless for — the stub closes its own fd
+    // 0 and keeps lingering, so the supervisor's NEXT write fails with EPIPE.
+    //
+    // Windows measurement behind the recipe: after pause(); destroy() alone,
+    // reopening os.devNull returned fd 3, not 0 — i.e. destroy() had NOT freed
+    // fd 0, the pipe read end survived, and no error was ever produced. Hence
+    // the explicit closeSync(0) as the very next statement in the same
+    // synchronous block (nothing can interleave to steal the freed slot), and
+    // the reopened devNull fd is RECORDED, not assumed. The test asserts
+    // devNullFd === 0 on POSIX.
+    if (process.env.TANDEM_STUB_CLAUDE_CLOSE_STDIN_AFTER_FIRST_TURN === "1" && seq === 0) {
+      process.stdin.pause();
+      process.stdin.destroy();
+      try {
+        fs.closeSync(0);
+      } catch {
+        /* destroy may already have closed it */
+      }
+      const devNullFd = fs.openSync(os.devNull, "r"); // 0 on POSIX — asserted, not assumed
+      writeRecord(`closed-stdin-${process.pid}.json`, { at: Date.now() }); // written FIRST, before the block below
+      writeRecord(`alive-${process.pid}.json`, { devNullFd, at: Date.now() }); // first record AFTER the close, synchronous
+      setInterval(() => writeRecord(`alive-${process.pid}.json`, { devNullFd, at: Date.now() }), 250)
+        .unref?.();
+    }
     // Real ordering: the turn arrives, THEN `init`, then the result.
     emitInit();
     setTimeout(() => {

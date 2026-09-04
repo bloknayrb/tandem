@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emptyIntegrationsFile,
@@ -10,10 +11,12 @@ import {
 } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import {
+  attachChildStreamErrorHandlers,
   buildClaudeArgs,
   createLineFramer,
   createSupervisor,
   homeCwd,
+  makeStdinGoneHandler,
   RESUME_CONFIRM_MS,
   resolveRouteCwd,
   resolveSafeCwd,
@@ -823,4 +826,247 @@ describe("circuit breaker — trip-time CLI diagnosis (#1268 follow-up)", () => 
       await r.stop();
     }
   }, 30_000);
+});
+
+describe("attachChildStreamErrorHandlers — a child-stdin write error is a child exit, not a server crash (#1757)", () => {
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    errSpy.mockRestore();
+  });
+
+  function makeErr(code?: string): NodeJS.ErrnoException {
+    const err = new Error("boom") as NodeJS.ErrnoException;
+    if (code !== undefined) err.code = code;
+    return err;
+  }
+
+  function fakeChild() {
+    return {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+    };
+  }
+
+  function logText(): string {
+    return errSpy.mock.calls.flat().join("\n");
+  }
+
+  it.each(["EOF", "EPIPE", "ERR_STREAM_DESTROYED", "EACCES", undefined] as Array<
+    string | undefined
+  >)("routes a stdin %s error to onChildGone exactly once and logs its code", (code) => {
+    // A direct emit is synchronous by EventEmitter contract, which is what
+    // the production path's onwriteError ultimately does. A bare PassThrough
+    // never errors on its own (nothing writes to it), and a cb(err)-driven
+    // Writable delivers asynchronously — so neither can drive this table.
+    const child = fakeChild();
+    const onGone = vi.fn();
+    attachChildStreamErrorHandlers(child, onGone);
+    const err = makeErr(code);
+    child.stdin.emit("error", err);
+    expect(onGone).toHaveBeenCalledTimes(1);
+    expect(onGone).toHaveBeenCalledWith(err);
+    // err.code ?? err.name yields the generic token "Error" for a bare
+    // Error, so the log line must carry the whole substring — a "does not
+    // print undefined" assertion would be satisfied by almost any message.
+    expect(logText()).toContain(`[Launcher] Claude stdin write failed (${code ?? "Error"})`);
+  });
+
+  it("reaches the handler again on a second stdin error (.on, not .once)", () => {
+    const child = fakeChild();
+    const onGone = vi.fn();
+    attachChildStreamErrorHandlers(child, onGone);
+    child.stdin.emit("error", makeErr("EPIPE"));
+    child.stdin.emit("error", makeErr("EPIPE"));
+    expect(onGone).toHaveBeenCalledTimes(2);
+  });
+
+  it("is reachable by the mechanism production actually uses — a real Writable whose write calls back with an error", async () => {
+    // The only cb(err)-driven case in this suite, kept as the proof that the
+    // seam is reachable through Writable's async onwriteError rather than only
+    // through a synchronous test-body emit.
+    const { Writable } = await import("node:stream");
+    const err = makeErr("EPIPE");
+    const stream = new Writable({
+      write(_chunk, _encoding, cb) {
+        cb(err);
+      },
+    });
+    const onGone = vi.fn();
+    attachChildStreamErrorHandlers({ stdin: stream, stdout: null, stderr: null }, onGone);
+    stream.write("x");
+    await new Promise((r) => setImmediate(r));
+    expect(onGone).toHaveBeenCalledTimes(1);
+    expect(onGone).toHaveBeenCalledWith(err);
+  });
+
+  it("registers exactly one error listener on each of the three streams", () => {
+    // The only registration pin: deleting the read-half loop takes two of the
+    // three counts to 0 while every stdin-only assertion stays green.
+    const child = fakeChild();
+    attachChildStreamErrorHandlers(child, vi.fn());
+    expect(child.stdin.listenerCount("error")).toBe(1);
+    expect(child.stdout.listenerCount("error")).toBe(1);
+    expect(child.stderr.listenerCount("error")).toBe(1);
+  });
+
+  it("leaves a read error to the existing handlers — stdout/stderr errors are log-only and never reach onChildGone", () => {
+    // A read error is not evidence the child stopped accepting writes, and
+    // killing on one would be #1757 with the polarity reversed. The assertion
+    // pins the read half's OWN text: copying the stdin message into the
+    // stdout/stderr branch would pass a "code appears verbatim" check and then
+    // let the end-to-end proximate detector be satisfied by a benign read error
+    // instead of by the seam under test.
+    const child = fakeChild();
+    const onGone = vi.fn();
+    attachChildStreamErrorHandlers(child, onGone);
+    child.stdout.emit("error", makeErr("EPIPE"));
+    child.stderr.emit("error", makeErr("EPIPE"));
+    expect(onGone).not.toHaveBeenCalled();
+    expect(logText()).toContain("[Launcher] Claude stdout error (EPIPE)");
+    expect(logText()).not.toContain("stdin write failed");
+  });
+
+  it("keeps listening on the read halves after a first read error (.on, not .once)", () => {
+    // The stdin half has its double-emit discriminator; the read halves need
+    // the same, or a second stdout error reaches zero listeners and throws by
+    // EventEmitter contract — #1757 verbatim, one stream over.
+    const child = fakeChild();
+    const onGone = vi.fn();
+    attachChildStreamErrorHandlers(child, onGone);
+    child.stdout.emit("error", makeErr("EPIPE"));
+    child.stdout.emit("error", makeErr("EPIPE"));
+    expect(onGone).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("is a no-op when no stream is piped (stdio not pipe)", () => {
+    // The shape Node hands back when stdio is not "pipe". Not a bare-null
+    // child: the helper opens with `if (child.stdin)` and no null guard on
+    // `child` itself, so attachChildStreamErrorHandlers(null, fn) throws and
+    // cannot be a prescribed case without changing the shipped signature.
+    expect(() =>
+      attachChildStreamErrorHandlers({ stdin: null, stdout: null, stderr: null }, vi.fn()),
+    ).not.toThrow();
+  });
+
+  it("lets a throwing onChildGone propagate — which is why the production callback wraps its kill in try/catch", () => {
+    const child = fakeChild();
+    const onGone = vi.fn(() => {
+      throw new Error("boom");
+    });
+    attachChildStreamErrorHandlers(child, onGone);
+    expect(() => child.stdin.emit("error", makeErr("EPIPE"))).toThrow("boom");
+  });
+
+  it("makeStdinGoneHandler kills a current live child with SIGTERM (the positive control)", () => {
+    // Without this, makeStdinGoneHandler = () => () => {} passes every other
+    // guard case: they all assert kill was NOT called. A SIGKILL substitution
+    // is invisible here too — and to the end-to-end layer, since SIGKILL also
+    // yields code === null — so the signal is pinned by exact-argument match.
+    const kill = vi.fn();
+    const handler = makeStdinGoneHandler({ exitCode: null, signalCode: null, kill }, () => true);
+    handler(makeErr("EPIPE"));
+    expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+  });
+
+  it("makeStdinGoneHandler ignores an error from a superseded spawn", () => {
+    const kill = vi.fn();
+    const handler = makeStdinGoneHandler({ exitCode: null, signalCode: null, kill }, () => false);
+    handler(makeErr("EPIPE"));
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("makeStdinGoneHandler ignores an error for an already-exited child (documents intent — kill() there is a measured no-op)", () => {
+    // Deleting the liveness guard breaks no prescribed case and changes no
+    // behaviour: kill() on an exited child returns false without throwing, so
+    // this case pins the guard's intent, not a behavioural kill it makes.
+    const kill = vi.fn();
+    const handler = makeStdinGoneHandler({ exitCode: 1, signalCode: null, kill }, () => true);
+    handler(makeErr("EPIPE"));
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("makeStdinGoneHandler survives a throwing kill — a throw inside a stream error emit is uncaughtException (#1757 with the fix nominally present)", () => {
+    const kill = vi.fn().mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
+    const handler = makeStdinGoneHandler({ exitCode: null, signalCode: null, kill }, () => true);
+    expect(() => handler(makeErr("EPIPE"))).not.toThrow();
+  });
+
+  it("attaches the seam in spawnOnce as two bare statements above the bootstrap write", () => {
+    // SUPERVISOR_SRC is not a repo constant — this IS a real statement.
+    // Source order IS execution order here: the attach and the bootstrap write
+    // are both straight-line statements in one function body, and the POSITION
+    // (above the bootstrap write) is what covers the first write — a seam
+    // placed beside the stdout/stderr listeners below it ships the exact hole
+    // this pin exists to close while passing every behavioural case.
+    //
+    // Residual evasions this text pin cannot see, named so no later round
+    // mistakes coverage for proof: a thunk forged behind an alias (so the
+    // pinned `() => child === spawned` text is present but the wired callback
+    // is `() => true`, killing the CURRENT child on a superseded spawn's late
+    // error), a `const child = spawned;` shadowing `child` inside spawnOnce
+    // (making the pinned text byte-identical and permanently true), both
+    // pinned lines — correctly indented, adjacent, above the bootstrap index —
+    // inside a sibling helper declared in createSupervisor and never called
+    // (green on uniqueness, indentation, adjacency, ordering and both text
+    // pins while #1757 is fully alive), moving the bootstrap write itself into
+    // a helper (so the ordering index compares against a stale line), and a
+    // SIGKILL-for-SIGTERM substitution (invisible here and to the POSIX-only
+    // end-to-end layer, which sees code === null either way). On Windows, where
+    // the end-to-end layer does not run, only reading covers these.
+    const SUPERVISOR_SRC = fileURLToPath(
+      new URL("../../../src/server/launcher/supervisor.ts", import.meta.url),
+    );
+    const src = fs.readFileSync(SUPERVISOR_SRC, "utf8");
+    const line = src.split("\n").find((l) => /^\s*attachChildStreamErrorHandlers\(/.test(l));
+    expect(line, "the call must be a bare statement, not nested or conditional").toBeDefined();
+    // Same indentation as `child = spawned;` — kills nesting under any if/try block.
+    expect(line!.match(/^\s*/)![0]).toBe(
+      src
+        .split("\n")
+        .find((l) => /^\s*child = spawned;/.test(l))!
+        .match(/^\s*/)![0],
+    );
+    // NOT `src.indexOf("attachChildStreamErrorHandlers(")` — that matches the
+    // helper's own DECLARATION above spawnOnce, so the forbidden placement
+    // (the call moved below the bootstrap write) still measures GREEN.
+    // Compare LINE INDICES of the two statements, using `line` above.
+    const lines = src.split("\n");
+    const callIdx = lines.findIndex((l) => /^\s*attachChildStreamErrorHandlers\(/.test(l));
+    // `findIndex` takes the FIRST match and a COMMENT matches as readily as
+    // the statement, so anchor on a statement shape and require uniqueness, or
+    // `callIdx < bootIdx` reds against a correct implementation.
+    const bootMatches = lines.filter((l) => /^\s*sendTurn\(SUPERVISOR_INITIAL_PROMPT\)/.test(l));
+    expect(bootMatches, "the bootstrap write must be a single bare statement").toHaveLength(1);
+    const bootIdx = lines.findIndex((l) => /^\s*sendTurn\(SUPERVISOR_INITIAL_PROMPT\)/.test(l));
+    expect(callIdx, "the attach call statement must exist").toBeGreaterThanOrEqual(0);
+    expect(bootIdx, "the bootstrap write must exist").toBeGreaterThanOrEqual(0);
+    expect(callIdx).toBeLessThan(bootIdx);
+    // A correctly-indented decoy near `child = spawned;` passes everything
+    // above while the REAL attach sits below the bootstrap write. Uniqueness.
+    expect(lines.filter((l) => /^\s*attachChildStreamErrorHandlers\(/.test(l))).toHaveLength(1);
+    // The single-line call form is exactly 100 characters at this indent and
+    // biome rewraps it across four lines, which no source-order pin can match
+    // — so the handler is bound to a const first, and these pin TWO short
+    // formatter-stable lines. Indentation is asserted separately from text:
+    // the text pins compare TRIMMED lines, since a raw-line comparison against
+    // an unindented literal is red against a correct 4-space implementation.
+    const bindIdx = lines.findIndex((l) => /^\s*const onStdinGone = /.test(l));
+    expect(bindIdx, "the handler must be bound to a const first").toBeGreaterThanOrEqual(0);
+    expect(callIdx, "the two statements must be adjacent").toBe(bindIdx + 1);
+    const childIndent = lines.find((l) => /^\s*child = spawned;/.test(l))!.match(/^\s*/)![0];
+    expect(lines[bindIdx].match(/^\s*/)![0]).toBe(childIndent);
+    expect(lines[bindIdx].trim()).toBe(
+      "const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned);",
+    );
+    expect(lines[callIdx].trim()).toBe("attachChildStreamErrorHandlers(spawned, onStdinGone);");
+    // Even an exact text pin cannot see a thunk forged behind an alias; the
+    // POSIX-only end-to-end Case 1 is what catches `() => true`.
+  });
 });
