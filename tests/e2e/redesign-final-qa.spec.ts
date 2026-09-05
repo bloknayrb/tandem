@@ -49,8 +49,8 @@ async function openSample(page: import("@playwright/test").Page): Promise<void> 
 }
 
 /** Force theme to "system" via localStorage before the page loads. */
-function setSystemTheme(page: import("@playwright/test").Page): Promise<void> {
-  return page.addInitScript(() => {
+async function setSystemTheme(page: import("@playwright/test").Page): Promise<void> {
+  await page.addInitScript(() => {
     try {
       localStorage.setItem("tandem:settings", JSON.stringify({ theme: "system" }));
     } catch {
