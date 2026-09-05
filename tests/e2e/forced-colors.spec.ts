@@ -336,20 +336,27 @@ test("destination markers stay distinguishable by shape, not colour", async ({ p
   // is the only thing left saying so. Its ModeToggle twin carries an identical
   // rule and an in-source note that this spec pins it; without the assertion
   // below, deleting the rule here would stay green.
-  const pressedOutline = await page
-    .locator("[data-testid='popup-comment-submit']")
-    .evaluate((el) => getComputedStyle(el).outlineWidth);
-  const unpressedOutline = await page
-    .locator("[data-testid='popup-note-submit']")
-    .evaluate((el) => getComputedStyle(el).outlineWidth);
+  const readOutline = async (testid: string) =>
+    page.locator(`[data-testid='${testid}']`).evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { style: cs.outlineStyle, width: cs.outlineWidth };
+    });
+  const pressedOutline = await readOutline("popup-comment-submit");
+  const unpressedOutline = await readOutline("popup-note-submit");
   expect(
-    parseFloat(pressedOutline),
+    parseFloat(pressedOutline.width),
     "the selected audience segment must carry a forced-colors outline — it is the only selection indicator there",
   ).toBeGreaterThan(0);
+  expect(pressedOutline.style, "the selected audience segment must use an explicit outline").toBe(
+    "solid",
+  );
+  // Chromium 1.62 computes the browser's focus-only `outline: auto` as 3px,
+  // even when this segment is not focused. A selection rule is a solid outline;
+  // `auto` remains available exclusively as the keyboard focus indicator.
   expect(
-    parseFloat(unpressedOutline),
-    "the unselected segment must NOT be outlined, or the indicator distinguishes nothing",
-  ).toBe(0);
+    unpressedOutline.style,
+    "the unselected segment must not carry the solid outline that marks selection",
+  ).not.toBe("solid");
 
   // The card's Send carries the same disc, and has no other E2E coverage at
   // all. It renders only for a USER-authored pending note — an imported one
