@@ -33,18 +33,17 @@ backoff that is already there. No supervisor, no new abstraction, no new constan
   `Math.min(CHANNEL_RETRY_DELAY_MS * 2 ** (retries - 1), RETRY_MAX_DELAY_MS)` delay and the
   `await new Promise(r => setTimeout(r, delay))`. Both `process.exit(1)` calls go, and with them the
   post-loop "retry loop exited unexpectedly" fallback (now unreachable by construction).
-- **Report exactly once per outage, at the same threshold — and the comparison must be `>=`.** A
+- **Report exactly once per outage, at the same threshold — keep the `>=`.** A
   module-level `let reportedExhaustion = false`. When
   `retries >= CHANNEL_MAX_RETRIES && !reportedExhaustion`, set it, POST `/api/channel-error` with
   `opts.errorCode` as today, and call `opts.onExhaustion?.({ everConnected })` — then **continue
-  looping**. **The `>=` is load-bearing, not style.** `retries` is reset only by `onStable`
-  (`src/shared/sse-consumer.ts:173-175`, armed 60 s after a handshake at `:278`), and the bullet
-  below deliberately does not reset it on reconnect — so after the first outage carries `retries` to
-  5, any recovery shorter than `STABLE_CONNECTION_MS` leaves it at 5, the next failure makes it 6,
-  and a `===` test would never be true again for the life of the process: no report, no
-  `onExhaustion`, no stdout notice, ever again, and the latch-clear below would be dead code. The
-  `!reportedExhaustion` latch is what makes the report once-per-outage; the threshold comparison is
-  not. `CHANNEL_MAX_RETRIES` keeps its name and value and becomes "how many failures before we say
+  looping**. The `!reportedExhaustion` latch is what makes the report once-per-outage; the threshold
+  comparison is not. Since the recovery bullet below clears the latch in `onStable` — the same
+  callback that already does `retries = 0` — the two are now reset **together**, so a `===` test
+  would also be satisfiable on the next outage. Keep `>=` anyway: it is the form that cannot go
+  permanently silent if a later edit ever breaks that coupling (reset one without the other and
+  `===` is never true again for the life of the process), and it costs nothing.
+  `CHANNEL_MAX_RETRIES` keeps its name and value and becomes "how many failures before we say
   something out loud", which the log line must reflect:
   `SSE connection lost after ${CHANNEL_MAX_RETRIES} retries; still retrying` replaces
   `SSE connection exhausted, reporting error and exiting`.
@@ -54,16 +53,35 @@ backoff that is already there. No supervisor, no new abstraction, no new constan
   unbounded those read "(47/5)", and at the 30 s cap they are two stderr lines every 30 s forever
   for a session whose Tandem is simply not running. Drop the `/${CHANNEL_MAX_RETRIES}` denominator
   from both (they are an attempt counter now, not a budget), and **suppress both while
-  `reportedExhaustion` is set**, re-enabling them when the recovery line clears it. A long outage
-  then costs a bounded five failure lines, one "still retrying" line, and one "restored" line —
-  which is the wave-table's "single legible log line", not a flood.
-- **Say so on recovery.** In `connectAndStreamOnce`, at the existing `everConnected = true` line
-  (immediately after a successful handshake): if `reportedExhaustion`, clear it and
-  `console.error(\`${opts.logPrefix} SSE connection restored\`)`. Putting it here rather than in the
-  retry loop is deliberate — `connectAndStreamOnce` resolves only when the *stream ends*, so a
-  recovery line driven from the loop would print at the wrong moment. Reset `retries = 0` there too
-  is **not** wanted: `onStable` (60 s of uptime) already owns the retry-budget reset and a flapping
-  server must keep escalating.
+  `reportedExhaustion` is set**, re-enabling them in `onStable` when the recovery clears it. A long
+  outage then costs a bounded five failure lines, one "still retrying" line, and one "restored" line
+  — which is the wave-table's "single legible log line", not a flood.
+- **Say so on recovery — in `onStable`, not at the handshake.** The `onStable` callback in
+  `runEventConsumer` (`src/shared/sse-consumer.ts:173-175`, armed at `:278` and cleared in
+  `connectAndStreamOnce`'s `finally` at `:499`, so it fires only after `STABLE_CONNECTION_MS` of
+  *continuous* uptime) already owns `retries = 0`. Add to it: if `reportedExhaustion`, clear it —
+  which re-enables the per-failure lines — and
+  `console.error(\`${opts.logPrefix} SSE connection restored\`)`.
+  **Do not put any of this on the `everConnected = true` line (`:274`).** That line runs on *every*
+  successful handshake, not the first — its own in-place comment says so. A link that handshakes and
+  dies inside `STABLE_CONNECTION_MS` (a permanently-replayed oversize frame, `:382-386`; a server
+  restarting in a loop; `tests/monitor/retry.test.ts:38-71`'s stub, which is exactly this shape)
+  would then clear the latch on every cycle, so `retries >= CHANNEL_MAX_RETRIES &&
+  !reportedExhaustion` goes true again on every cycle and the report **and the stdout notice** fire
+  every ~30 s forever. Each of those stdout writes becomes a model turn on CC 2.1.226
+  (`docs/architecture.md`, Plugin Monitor section), so that variant is an unbounded stream of
+  unsolicited model turns and one `/api/channel-error` POST per cycle — strictly worse than today's
+  single line and exit, and the exact regression this issue must not trade for. Clearing the latch
+  where `retries` is reset makes the two reset together and makes "once per outage" literally true,
+  an outage ending only when the link has been healthy for `STABLE_CONNECTION_MS`. The visible cost
+  is that the restored line arrives 60 s after the reconnect rather than at once; that is the right
+  trade for a line whose whole job is to be true when it is read.
+- **Correct `runEventConsumer`'s own doc comment** (`src/shared/sse-consumer.ts:150-156`), which
+  states the deleted behaviour verbatim: "Reports `opts.errorCode` to `/api/channel-error` and calls
+  `process.exit(1)` after `CHANNEL_MAX_RETRIES` consecutive failures." It becomes: reports once to
+  `/api/channel-error` after `CHANNEL_MAX_RETRIES` consecutive failures and keeps retrying at the
+  capped backoff; it never exits, and it reports again after an outage that follows
+  `STABLE_CONNECTION_MS` of recovered uptime.
 - Add `reportedExhaustion = false` to `_resetSseConsumerStateForTests` (currently `:684`), whose
   doc comment promises it "clears every byte of state below in one call".
 - `src/monitor/run.ts` — rewrite the `onExhaustion` stdout notice. Keep the `if (!everConnected)
@@ -80,6 +98,10 @@ backoff that is already there. No supervisor, no new abstraction, no new constan
   deliver, and the file's comment already explains why that one is a clean shutdown rather than a
   bid for a respawn.
 - `src/channel/event-bridge.ts` needs no change — it passes no `onExhaustion` and inherits the loop.
+  **Say this in the PR body**, along with the file correction: the wave-table names
+  `src/monitor/sse-consumer.ts`, which does not exist; the module is `src/shared/sse-consumer.ts`
+  and it has two hosts (`src/monitor/run.ts:193` and `src/channel/event-bridge.ts:19-33`), so the
+  shim inherits the fix with no shim edit — which is what test 6 below proves.
 - **Two tracked docs become false and are corrected in the same PR.** This PR also closes #1794,
   whose entire content is "a doc describes behaviour that does not exist", so leaving these is not
   an option. `docs/architecture.md:530-535` currently enumerates "On exhaustion
@@ -121,43 +143,72 @@ Sites, all of which need exactly that change:
   `runEventConsumer` directly, `src/channel/event-bridge.ts:19-33`), plus the exit assertion at
   `:566`.
 
-The five specs below are the ones whose *assertions* change, over and above that sweep.
+The seven specs below are the ones whose *assertions* change, over and above that sweep.
 
-1. `tests/monitor/retry.test.ts` — the spec at `:63-70` asserts `connectAttempts` is **exactly**
-   `CHANNEL_MAX_RETRIES` because `process.exit` threw out of the loop. Rewrite it: with a
-   fail-always connect, assert attempts exceed `CHANNEL_MAX_RETRIES` (e.g. ≥ 8) and the
-   `process.exit` spy is **never** called. That inequality is the discriminator — an upper bound
-   alone would pass for a fix that still exits.
-2. Same file — assert the `/api/channel-error` POST happens **once** across ≥ 8 failures, and that
-   its body still carries `opts.errorCode`. Kills a naive `while (true)` that re-reports every
-   fifth failure, which would spam a route that `console.error`s on the server.
-3. `tests/monitor/index.test.ts:446` — the exhaustion suite: keep the `MONITOR_CONNECT_FAILED` POST
-   assertion, drop the exit assertion, assert the stdout notice matches
-   `/retrying in the background/` and `/tandem_checkInbox/`, and assert it is written **once**.
-   Kills a fix that changes the retry loop but leaves the misleading remedy text.
-4. New spec (same file, or `tests/monitor/retry.test.ts`) — **recovery**: fail 6 times, then let a
-   connect succeed; assert stderr contains `SSE connection restored` exactly once, and that a
-   *second* outage reports to `/api/channel-error` again. That second half is what kills a latch
-   that is set but never cleared — **and it is only reachable because the report tests `>=`**, so
-   the recovered connection must NOT be held for `STABLE_CONNECTION_MS`: the spec ends the stream
-   after a few seconds of fake time, leaving `retries` at 6+, which is precisely the state a `===`
-   threshold could never report from again. Also assert the per-failure lines resume after the
-   restored line (they are suppressed while the latch is set).
-5. `tests/channel/event-bridge.test.ts:551-567` — `"POSTs CHANNEL_CONNECT_FAILED after exhausting
+**Every string these specs negate must be updated in the same edit that changes the line it
+negates.** Two of them today assert the absence of `"Tandem monitor disconnected"` /
+`/disconnected/i`; the new notice contains neither substring, so leaving them as they are makes both
+vacuous and leaves the `!everConnected` silence guard pinned by nothing. Items 2 and 3 below carry
+that.
+
+1. `tests/monitor/retry.test.ts:38-71` — **keep the existing connect-then-die fetch stub exactly as
+   it is** (each `/api/events` attempt emits one frame, then `s.error(...)`). Do **not** replace it
+   with a fail-always connect: that stub is the only *connect*-then-fail shape in the suite, and it
+   is the only shape that can catch a latch cleared on the handshake rather than on `onStable`.
+   Under a fail-always stub the latch is never cleared and every other spec here passes while that
+   regression is invisible. Drop the `await mainPromise` and the exit assertion (per the sweep),
+   rename, and assert across ≥ 8 connect/fail cycles:
+   - `connectAttempts` ≥ 8 and the `process.exit` spy is **never** called. That inequality is the
+     unbounded-retry discriminator; an upper bound alone would pass for a fix that still exits.
+   - `/api/channel-error` is POSTed **exactly once**, and its body still carries `opts.errorCode`.
+   - `process.stdout.write` receives the monitor's notice **exactly once** (the handshake succeeds
+     each cycle, so `everConnected` is true and the guard does not suppress it). This pair is what
+     discriminates a per-cycle latch clear from a per-outage one; no other specced test does.
+   - stderr: lines matching `/SSE connection failed/` number **exactly `CHANNEL_MAX_RETRIES`** (the
+     suppression holds after the report), and **no** emitted line matches `/\/5\b/`. That is the
+     "single legible log line" half of Done-when, which nothing pinned before.
+2. `tests/monitor/retry.test.ts:83-98` (`"stays silent on stdout when it never connected"`) — the
+   never-connected arm. Drop the `await mainPromise` and the exit assertion; assert attempts ≥ 8.
+   **Replace the negated string**: it looks for `"Tandem monitor disconnected"`, which the new line
+   does not contain. Assert stdout matches neither `/retrying in the background/` nor
+   `/tandem_checkInbox/`.
+3. `tests/monitor/index.test.ts:488-506` (`"…but stays SILENT when it never connected"`) — keep the
+   `MONITOR_CONNECT_FAILED` POST assertion, drop the exit assertion, and **replace
+   `not.toMatch(/disconnected/i)`** with `not.toMatch(/retrying in the background/)` and
+   `not.toMatch(/tandem_checkInbox/)`. This is the spec that keeps the `if (!everConnected) return`
+   guard honest.
+4. `tests/monitor/index.test.ts:512-529` (`"writes the stdout notice when a live stream is lost"`) —
+   drop the exit assertion; assert the notice matches `/retrying in the background/` **and**
+   `/tandem_checkInbox/`, and that it is written **once**. Kills a fix that changes the retry loop
+   but leaves the misleading remedy text.
+5. New spec (`tests/monitor/retry.test.ts`) — **recovery, and the recovery must survive
+   `STABLE_CONNECTION_MS`.** Fail 6 times, then let a connect succeed and **hold the stream open
+   past `STABLE_CONNECTION_MS`** (advance fake time > 60 s with the `ControllableStream` alive) so
+   `onStable` fires. Assert stderr contains `SSE connection restored` **exactly once**, that the
+   per-failure lines resume afterwards (they were suppressed while the latch was set), and that a
+   *second* outage of `CHANNEL_MAX_RETRIES` failures POSTs `/api/channel-error` a **second** time.
+   That last half kills a latch that is set and never cleared. State the hold requirement in the
+   spec's own comment: a recovery shorter than `STABLE_CONNECTION_MS` deliberately reports nothing
+   new — that is the anti-flap property item 1 pins, and the two specs are the two halves of one
+   contract.
+6. `tests/channel/event-bridge.test.ts:551-567` — `"POSTs CHANNEL_CONNECT_FAILED after exhausting
    CHANNEL_MAX_RETRIES and exits 1"`: keep the POST assertion, rename, and assert the process does
    not exit. The shim shares the consumer, so this is the second host's proof that one fix covered
    both.
-6. `tests/monitor/shutdown.test.ts` untouched: SIGINT/SIGTERM and EPIPE still exit.
+7. `tests/monitor/shutdown.test.ts` untouched: SIGINT/SIGTERM and EPIPE still exit.
    `tests/monitor/index.test.ts` is **not** untouched — see the sweep above.
 
 ## Done when
 
 The consumer retries past `CHANNEL_MAX_RETRIES` without exiting on both hosts; the error report and
-the stdout notice fire once per outage and again after a recovery **that did not last
-`STABLE_CONNECTION_MS`**; the monitor's notice names `tandem_checkInbox`; a permanently-unreachable
-server produces a bounded number of stderr lines, none of them carrying a `/5` denominator;
-`docs/architecture.md` and `docs/mcp-tools.md` no longer describe the exit; `npm run typecheck` +
-`npx vitest run tests/monitor tests/channel` + `node scripts/ci/monitor-smoke.mjs` green.
+the stdout notice fire **once per outage**, where an outage ends only at `STABLE_CONNECTION_MS` of
+continuous uptime — so a connect-then-die flap reports once, not once per cycle — and fire again on
+the next outage after such a recovery; the monitor's notice names `tandem_checkInbox`; a server that
+is unreachable, or that flaps without ever staying up 60 s, produces a bounded stderr trail
+(`CHANNEL_MAX_RETRIES` failure lines plus one "still retrying" line, then silence), none of them
+carrying a `/5` denominator; `docs/architecture.md` and `docs/mcp-tools.md` no longer describe the
+exit; `npm run typecheck` + `npx vitest run tests/monitor tests/channel` +
+`node scripts/ci/monitor-smoke.mjs` green.
 
 ## Not in scope
 
@@ -165,6 +216,17 @@ server produces a bounded number of stderr lines, none of them carrying a `/5` d
 `onStable` 60 s stable-uptime reset; `ensureTandemServer`'s fail-fast for `tandem channel`'s own
 startup (the shim's stdio transport genuinely cannot answer); making `/api/channel-error` visible
 in the browser.
+
+**One trade this change makes, named so a reviewer does not have to find it.** The oversize-buffer
+throw at `src/shared/sse-consumer.ts:382-386` fires *before* any frame boundary is found, so it is
+the one remaining throw that cannot advance `lastEventId`; the reconnect re-sends the same
+`Last-Event-ID` and `replaySince` (`src/server/events/queue.ts:416`) re-delivers the same frame.
+Today `CHANNEL_MAX_RETRIES` gives that a bounded death; after this change it becomes a permanent
+re-fetch of a >1 MB frame every 30 s for the life of the session. That scenario, and its fix
+(dropping the over-length buffer and continuing, matching the file's own "advance past garbage"
+frame-skip policy at `:38-44`), are already recorded at
+`docs/plans/2026-08-07-channel-flag-removal.md` Stage 1b item 3 and are deliberately left there —
+this PR is the minimal exit removal, not the frame-skip widening.
 
 ## Review corrections (round 1)
 
@@ -177,7 +239,9 @@ in the browser.
   every handshake. Adopted: the trigger is now `retries >= CHANNEL_MAX_RETRIES &&
   !reportedExhaustion`, with the reason stated inline so it is not "simplified" back, and test 4
   now says explicitly that the recovery need not survive `STABLE_CONNECTION_MS`. (Three separate
-  findings made this point; one correction covers all three.)
+  findings made this point; one correction covers all three.) **Partly superseded in round 2:** the
+  `>=` stays, but the latch clear moved from the handshake to `onStable`, so a recovery must now
+  survive `STABLE_CONNECTION_MS` to re-arm the report. See round 2 below.
 - *The test inventory is incomplete and "index.test.ts untouched" is false; ~17 specs terminate only
   because the `process.exit` spy throws.* Verified by reading each site. Adopted: the Tests section
   now opens with a preamble naming the termination mechanism and the mechanical change, enumerates
@@ -202,3 +266,57 @@ in the browser.
   it buys nothing the "still retrying" line plus the restored line do not already give. The
   suppress-while-latched form adopted above achieves the same bound with the state that already
   exists.
+
+## Review corrections (round 2)
+
+**Adopted**
+
+- *Clearing `reportedExhaustion` at `everConnected = true` fires the report and the stdout notice
+  once per retry CYCLE on any connect-then-fail loop, not once per outage — an unbounded stream of
+  unsolicited model turns — and rewriting test 1 to a fail-always stub deletes the only spec that
+  exercises that shape.* Verified: `src/shared/sse-consumer.ts:274` runs on every handshake (its own
+  comment says so), `retries` is reset only by `onStable` at `:173-175`, and
+  `tests/monitor/retry.test.ts:38-71` is exactly the connect-then-die shape. Adopted in full: the
+  latch clear and the `SSE connection restored` line moved into the `onStable` callback, which
+  already owns `retries = 0`, so both reset together; test 1 now **keeps** the existing stub and
+  asserts one POST and one stdout write across ≥ 8 cycles; test 5 (was 4) holds the recovered stream
+  past `STABLE_CONNECTION_MS`; Done-when restated. (Two findings made this point; one correction
+  covers both.)
+- *The `>=` rationale is now wrong in its own terms.* Adopted: `>=` is kept, but as defence in depth
+  — with the latch and `retries` reset together by `onStable`, `===` would also work; `>=` is the
+  form that cannot go permanently silent if that coupling is ever broken.
+- *The two never-connected SILENCE specs negate `"Tandem monitor disconnected"` / `/disconnected/i`,
+  strings the new notice does not contain, so both become vacuous and the `!everConnected` guard
+  ends up pinned by nothing.* Verified at `tests/monitor/retry.test.ts:95` and
+  `tests/monitor/index.test.ts:506`. Adopted: Tests items 2 and 3 now replace the negated strings
+  with `/retrying in the background/` and `/tandem_checkInbox/`, under a general rule stated in the
+  preamble.
+- *Test 3 conflated the two specs inside the exhaustion describe; one of them must stay silent on
+  stdout.* Verified: `tests/monitor/index.test.ts:488-506` is the never-connected arm, `:512-529`
+  the notice arm. Adopted: split into items 3 and 4.
+- *Done-when's "bounded stderr lines, none carrying a `/5` denominator" is asserted by no test.*
+  Adopted: item 1 now spies `console.error` and asserts exactly `CHANNEL_MAX_RETRIES` lines matching
+  `/SSE connection failed/` and zero matching `/\/5\b/`.
+- *The `runEventConsumer` JSDoc at `src/shared/sse-consumer.ts:150-156` states the deleted behaviour
+  verbatim and is not in the fix's file set.* Verified. Adopted as a new Fix bullet.
+- *The unbounded loop turns the oversize-frame case into a permanent 30 s replay, and the spec does
+  not record it.* Verified at `:382-386` (throw before any frame boundary, so `lastEventId` cannot
+  advance) and `src/server/events/queue.ts:416`. Adopted as a named trade in Not-in-scope, pointing
+  at the existing record in `docs/plans/2026-08-07-channel-flag-removal.md` Stage 1b item 3. The
+  mitigation itself is not taken here: widening the frame-skip policy to the buffer-overflow branch
+  is a second behaviour change in a different bug class, and the wave-table's rule for this track is
+  minimal fixes in the named files.
+- *The wave-table names `src/monitor/sse-consumer.ts`, which does not exist.* Verified: the module
+  is `src/shared/sse-consumer.ts`, hosted by both `src/monitor/run.ts` and
+  `src/channel/event-bridge.ts`. Adopted as a PR-body note on the `event-bridge.ts` Fix bullet.
+- *The `>=` plus no-reset-on-reconnect means a flapping server reports per blip rather than per
+  outage.* Adopted, and resolved rather than merely recorded: moving the latch clear to `onStable`
+  is precisely what makes a blip report nothing. Test 1 is the spec that pins it.
+
+**Not adopted**
+
+- *Keep the `SSE connection restored` stderr line at the handshake "if a prompt signal is wanted",
+  moving only the latch.* Not adopted. A handshake-time line reintroduces the flood the same
+  finding's main half removes — the connect-then-die loop would print `restored` every ~30 s
+  forever. The line goes where the latch goes, and the spec now states the 60 s delay as the
+  deliberate price of a line that is true when it is read.

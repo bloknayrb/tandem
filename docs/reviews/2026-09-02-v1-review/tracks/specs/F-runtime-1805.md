@@ -46,11 +46,23 @@ All in `src/cli/mcp-stdio.ts`. Two changes at the preflight site plus one helper
   (`preReadyBuffer.splice(0)`, `:656-657`), so with the exit removed every request arriving *after*
   the grace window would sit in that buffer with no reply, no timeout and no close — a host-side
   hang for the whole outage, and an unbounded buffer that `:1272-1273` would then replay in one
-  burst on recovery. Latch `preflightFailed = true` alongside the first `deferredSynthesize(...)`;
-  while it is set, the `!httpReady` branch answers `-32000` immediately via `sendErrorResponse`
-  (dropping id-less notifications, exactly as `synthesizeBuffered` already does) instead of
-  buffering. Clear it where `httpReady = true` is assigned. `captureHandshake` still runs first, so
-  an `initialize` arriving during the outage is still captured for replay.
+  burst on recovery. Add a `preflightFailed` latch; while it is set, the `!httpReady` branch answers
+  `-32000` immediately via `sendErrorResponse` (dropping id-less notifications, exactly as
+  `synthesizeBuffered` already does) instead of buffering. Clear it where `httpReady = true` is
+  assigned. `captureHandshake` still runs first, so an `initialize` arriving during the outage is
+  still captured for replay.
+  **Set the latch inside the `deferredSynthesize` callback, after `synthesizeBuffered` runs — not
+  at the moment the timer is armed — and guard that callback on `!httpReady`.** Arming and latching
+  together would mean the client's `initialize` almost never reaches `synthesizeBuffered`:
+  `probeTandemServer` (`src/cli/preflight.ts:33-57`) resolves in ~1 ms against a dead port, so the
+  latch would be set within milliseconds of spawn and every subsequent message would take the
+  immediate-answer branch, leaving the grace window (`PREFLIGHT_GRACE_MS` = 1500,
+  `src/cli/mcp-stdio.ts:67`) with an empty buffer. Latching after the synthesis keeps the existing
+  grace-window semantics that `tests/cli/mcp-stdio.test.ts:425-452` pins, and only *then* switches
+  to immediate answers. The `!httpReady` guard covers the other ordering: `BACKOFF_INITIAL_MS` is
+  1000, so a recovery on the first retry probe sets `httpReady = true` and drains the buffer at
+  ~1 s — before the 1.5 s grace timer fires — and the callback must not then synthesize errors for
+  requests that were already forwarded, nor arm a latch on a healthy bridge.
 - **Seed the handshake baseline on the first post-recovery reconnect, or nothing works.** This is
   the load-bearing half. `synthesizeBuffered` consumes the client's `initialize` and answers it
   locally, so it is never forwarded and `captureNegotiated` (`:740-748`) never runs —
@@ -61,7 +73,8 @@ All in `src/cli/mcp-stdio.ts`. Two changes at the preflight site plus one helper
   throws at `:1093-1099` (`no handshake baseline to verify the new upstream against ... refusing to
   adopt`), and the catch re-arms unconditionally at `:1200`. The result is a 30 s ladder minting a
   fresh server-side MCP session forever — strictly worse than today's exit. **Fix:** latch
-  `deferredHandshake = true` when the grace-window synthesis answers a captured `initialize`, and in
+  `deferredHandshake = true` **on every path where the bridge answers the captured `initialize`
+  locally**, and in
   `runReconnect`'s `negotiatedProtocolVersion === undefined` branch, *when that latch is set*, seed
   `negotiatedProtocolVersion` / `negotiatedServerName` / `negotiatedServerVersion` from `identity`,
   clear the latch, write one stderr line (`deferred handshake completed against <url>; upstream
@@ -74,6 +87,20 @@ All in `src/cli/mcp-stdio.ts`. Two changes at the preflight site plus one helper
   replay-id / deadline / `initialized` machinery. The price is one 404 round-trip on the first
   post-recovery request; that request is queued for replay (`canReplay` is true, the 404 carries
   `-32001`) and gets a real answer.
+  **"Every path" is two paths, and naming only the grace-window one is the bug this sentence
+  prevents.** The bullet above adds a *second* sink for a locally-answered `initialize` — the
+  `preflightFailed` immediate-answer branch — and an `initialize` that lands after the grace window
+  (Claude Desktop and Tandem both login items on a cold boot is exactly that timing; the window is
+  ~1.5 s from spawn because `probeTandemServer` fails in milliseconds against a dead port) takes
+  that branch, not `synthesizeBuffered`. With the latch set only in the grace-window path,
+  `captureHandshake` still stores `handshakeInit` (`:733-737`), `captureNegotiated` (`:740-748`)
+  never runs, and the first post-recovery request lands on the 30 s "no handshake baseline" ladder
+  this bullet exists to close. So: set `deferredHandshake = true` **wherever a `-32000` is
+  synthesized for a request whose id is the captured `handshakeInit`'s id** — inside
+  `synthesizeBuffered` (check the buffered messages for `method === "initialize"` before the splice)
+  **and** in the `preflightFailed` immediate-answer branch (check the message being answered). One
+  small shared predicate over the message, used at both sites, is the implementation; two
+  independent conditions is how they drift.
 - **Log once, naming both steps.** A latched `warnedPreflight` flag (same shape as
   `warnedNoHandshake` / `warnedUnrecognized404`) gates three stderr lines written on the *first*
   failure only:
@@ -88,6 +115,11 @@ All in `src/cli/mcp-stdio.ts`. Two changes at the preflight site plus one helper
   future SDK that performs I/O there; retrying an unknown future failure is speculation. Replace
   its `deferredShutdown` with an inline `setTimeout(() => void shutdown(1, {…}), PREFLIGHT_GRACE_MS)`
   so the helper can go. Stated in the PR body so a reviewer does not read it as an oversight.
+- **Export `PREFLIGHT_GRACE_MS`.** It is a module-private `const` at `:67`, and tests 5, 6 and 8
+  below have to straddle that deadline. `tests/cli/mcp-stdio.test.ts:8` already imports
+  `describeServerInfo` / `isReplayId` / `nextBackoffMs` from this module, so a test-visible export is
+  the existing pattern; the alternative — hard-coding 2500 in three specs — silently decouples them
+  from the constant they are timing against.
 - Not engaged: Y.Doc writes, Y.Map keys, `/api` routes, MCP tools, `data-testid`,
   `NON_LOOPBACK_ALLOWED`, the shipped skill.
 
@@ -111,27 +143,56 @@ All in `src/cli/mcp-stdio.ts`. Two changes at the preflight site plus one helper
    `preflight failed` exactly once. Kills a per-attempt logger (a 30 s-cap ladder writing three
    lines forever into a log the user is reading to find the one that matters).
 3. **Backoff is capped and does not hot-loop — bounded on both sides.** Count `/health` requests
-   reaching a server that answers 503 for 6 s: **at least 3 and at most 4** (1 s + 2 s + 4 s). The
-   upper bound alone kills a per-tick storm; the lower bound kills the opposite regression — an
-   implementation that logs once and returns without looping makes exactly one request and would
-   pass an upper bound. (`tests/monitor/retry.test.ts:66-68` states the same principle for the
-   monitor.)
+   reaching a server that answers 503 over an **8 s** window: **at least 4 and at most 5**. The
+   count **includes the initial preflight probe** — `waitForUpstream` sleeps *before* probing, so
+   the probes land at t≈0 (preflight), 1 s, 3 s and 7 s, and t≈15 s is outside the window. Say that
+   in the spec's comment: a 6 s window with an "at least 3" bound lands exactly on the observed
+   value with zero margin in a real-timer subprocess test, and the arithmetic reads as though the
+   t≈7 s probe were inside it. The upper bound kills a per-tick storm; the lower bound kills the
+   opposite regression — an implementation that logs once and returns without looping makes exactly
+   one request and would pass an upper bound. (`tests/monitor/retry.test.ts:66-68` states the same
+   principle for the monitor.)
 4. **Rewrite `:425-452`** (`"synthesizes -32000 … on preflight failure"`): keep every existing
-   assertion — id 99, code `-32000`, message `/not (running|ready)/i` — and add `expect(child.exitCode).toBeNull()` after it. This is the spec that stops a "just defer everything"
-   implementation.
+   assertion — id 99, code `-32000`, message `/not (running|ready)/i` — and then, **after a further
+   `await sleep(PREFLIGHT_GRACE_MS + 1000)` so the window straddles the old grace deadline**, assert
+   `child.exitCode` is `null`. The wait is what makes this the spec it claims to be: `shutdown()`
+   synthesizes the `-32000` *first* and only then awaits `http.close()` and `stdio.close()` before
+   `process.exit` (`:699-720`, reached from `deferredShutdown` at `:725-727`), so an assertion made
+   at the moment `readOneLine` resolves passes against today's unfixed code and discriminates
+   nothing.
 5. **Rewrite `:530`** (`"does not synthesize for notifications (no id) on preflight failure"`): it
    currently `await awaitClose(child)`, which can no longer happen. **The replacement window must
    straddle the grace deadline** — the `preflight failed` line and the grace timer are armed in the
    same block (`:1234-1243`) and `PREFLIGHT_GRACE_MS` is 1500, so "poll for the line, then wait
    1 s" asserts ~500 ms *before* `synthesizeBuffered` runs and would read empty even for an
    implementation that emits an id-less `-32000` — the one regression this spec exists to pin. Poll
-   for `/preflight failed/i` on stderr, then wait `PREFLIGHT_GRACE_MS + 1000` (import the constant
-   rather than hard-coding 2.5 s), then assert `errorReplies(output.stdout(), -32000)` is `[]`
-   **and** `child.exitCode` is `null`. Strictly stronger than what it pinned before.
+   for `/preflight failed/i` on stderr, then wait `PREFLIGHT_GRACE_MS + 1000` (imported from
+   `src/cli/mcp-stdio.ts` per the export bullet in Fix, not hard-coded as 2.5 s), then assert
+   `errorReplies(output.stdout(), -32000)` is `[]` **and** `child.exitCode` is `null`. Strictly
+   stronger than what it pinned before.
 6. **The buffer does not swallow later requests.** With the upstream still down, write `tools/list`
    2 s after the `preflight failed` line (i.e. past the grace window) and assert it is answered
    `-32000` rather than nothing at all. Pins the `preflightFailed` latch; without it that request is
    buffered silently for the life of the outage.
+7. **The no-baseline branch still throws when the latch is clear** — the mutation that separates
+   "seed only when `deferredHandshake` is set" from "always seed", and the only thing standing
+   between #1805 and the fail-open #1759's check exists to stop. `grep -rn "no handshake baseline"`
+   over `tests/` returns nothing today, so this branch has **zero** test referents and a fix that
+   simply deletes the latch passes every other spec here. Spawn against a **healthy**
+   `makeSessionServer` (preflight succeeds, so `preflightFailed` and `deferredHandshake` are never
+   set), call `fake.retireSession()` before the client's `initialize` POST lands so
+   `captureNegotiated` never runs, then send `tools/list` id 2 and assert it answers `-32000`,
+   stderr contains `no handshake baseline`, and stderr does **not** contain `deferred handshake
+   completed`.
+8. **An `initialize` that arrives after the grace window still recovers.** Variant of test 1 for the
+   second local-answer sink: dead port, poll stderr for `/preflight failed/i`, wait
+   `PREFLIGHT_GRACE_MS + 500` (so `synthesizeBuffered` has already run against an empty buffer),
+   *then* write `initialize` id 1 and assert it is answered `-32000` promptly by the
+   `preflightFailed` branch. Bring the server up, then write `tools/list` id 2 and assert it gets a
+   real, non-`-32000` answer and that stderr contains `deferred handshake completed`. Without the
+   latch being set on that second sink, id 2 answers `-32000` and stderr carries `no handshake
+   baseline` — the failure test 1 cannot see because its `initialize` goes through the grace-window
+   path.
 
 ## Done when
 
@@ -189,6 +250,51 @@ the `PREFLIGHT_GRACE_MS` value.
 - *The headline "serves tools ... with no client restart" is not established for Claude Desktop.*
   Adopted: "Done when" now scopes the claim to the bridge and records the host-behaviour half as
   unverified.
+
+**Not adopted**
+
+- None.
+
+## Review corrections (round 2)
+
+**Adopted**
+
+- *The `preflightFailed` latch, armed at the same moment as the grace timer, means the client's
+  `initialize` almost never reaches `synthesizeBuffered` — so `deferredHandshake` is never set and
+  the post-recovery path lands on exactly the 30 s "no handshake baseline" ladder round 1 claimed to
+  close; spec test 1 would fail.* Verified: `probeTandemServer` (`src/cli/preflight.ts:33-57`)
+  resolves in ~1 ms against a dead port, `deferredSynthesize` is armed at `:1243` before the 1500 ms
+  `PREFLIGHT_GRACE_MS` (`:67`) elapses, `:750-755` is the only producer of `preReadyBuffer`, and
+  `tests/cli/mcp-stdio.test.ts:439-441` already records both orderings. Adopted: the latch is now set
+  **inside** the `deferredSynthesize` callback, after `synthesizeBuffered` runs, and that callback is
+  guarded on `!httpReady` so a recovery faster than `PREFLIGHT_GRACE_MS` (possible —
+  `BACKOFF_INITIAL_MS` is 1000) cannot arm it.
+- *The spec adds a second sink that answers `initialize` locally, and only one of the two sets the
+  latch, so an `initialize` arriving after `PREFLIGHT_GRACE_MS` still dead-ends.* Verified against
+  `captureHandshake` (`:733-737`), `captureNegotiated` (`:740-748`) and `runReconnect:1093-1099`.
+  Adopted: the `deferredHandshake` bullet now says the latch is set wherever a `-32000` is
+  synthesized for the captured `handshakeInit`'s id — both `synthesizeBuffered` and the
+  `preflightFailed` immediate-answer branch, via one shared predicate — and new test 8 drives an
+  `initialize` written *after* the grace window. (Two findings made this point; one correction
+  covers both.)
+- *Nothing pins the THROW side of the no-baseline branch, so a fix that drops the latch and seeds
+  unconditionally passes every specced test — the fail-open #1759's check exists to stop.* Verified:
+  `grep -rn "no handshake baseline\|refusing to adopt" tests/` returns nothing. Adopted as new test 7
+  (healthy preflight, `retireSession` before the `initialize` POST lands, assert `-32000` +
+  `no handshake baseline` + absence of `deferred handshake completed`).
+- *Test 4's `expect(child.exitCode).toBeNull()` passes on today's unfixed code, so it is not the
+  discriminator it claims to be.* Verified: `shutdown()` (`:699-720`) writes the `-32000` before
+  awaiting `http.close()` / `stdio.close()`, so the child has certainly not exited when
+  `readOneLine` resolves. Adopted: test 4 now waits `PREFLIGHT_GRACE_MS + 1000` past the reply
+  before asserting non-exit, the same straddle test 5 already specifies.
+- *Test 3's bounds are met only by counting the initial preflight probe, and land exactly on the
+  lower bound with no margin.* Verified: `waitForUpstream` sleeps before probing, so retry probes
+  land at t≈1 s, 3 s, 7 s. Adopted: the window widens to 8 s, the bound becomes at least 4 / at most
+  5, and the spec states that the t≈0 preflight probe is included.
+- *Test 5 asks the spec to import `PREFLIGHT_GRACE_MS`, which is module-private and which the Fix
+  section never exports.* Verified at `:67` (no `export`). Adopted as a new Fix bullet exporting it,
+  matching how `nextBackoffMs` and friends are already test-visible; tests 5, 6 and 8 all rely on it.
+  (Three findings made this point; one correction covers all three.)
 
 **Not adopted**
 

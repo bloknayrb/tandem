@@ -67,6 +67,16 @@ the version is logged, never compared.
   measured is a *consequence* of the version comparison: once an upgrade is adopted, there is no
   identity-fail loop to cap. Against a genuinely foreign server a 30 s probe is the price of
   healing when the real server returns. Recorded as an assumption.
+- **`CLAUDE.md:181` becomes false and is corrected in the same PR**, on the same rule #1804 applies
+  to `docs/architecture.md` and `docs/mcp-tools.md`: a doc a change falsifies is fixed by that
+  change. It reads "it replays the captured handshake under a private id and **fails closed if
+  `serverInfo`/`protocolVersion` changed**, never exiting on failure". After this fix the compared
+  identity is `serverInfo.name` + `protocolVersion`, and a changed version is deliberately adopted
+  and logged. Rewrite that clause as: **fails closed if the server *name* or `protocolVersion`
+  changed — a version change is adopted and logged (#1759)**. Keep the rest of the sentence,
+  including "never exiting on failure", which #1805 and #1804 make more true rather than less. No
+  test reads this line (`grep` for the phrase returns only `CLAUDE.md` itself), which is exactly why
+  it would otherwise rot.
 - Rules that bite: **stdout is reserved** (Critical Rule 3) — every line above goes to
   `process.stderr.write`, never `console.log`. No Y.Doc write, no Y.Map key, no `/api` route, no
   MCP tool, so Critical Rules 1, 2 and 9 are not engaged.
@@ -102,8 +112,8 @@ All in `tests/cli/mcp-stdio.test.ts`, reusing `makeSessionServer` / `setServerIn
 
 A reconnect across a version-only change succeeds and says so; name-only and protocol-only changes
 still fail closed with the unchanged message; no repeated `initialize` after an adopted upgrade;
-`describeServerInfo` has no remaining referents; `npm run typecheck` + `npx vitest run
-tests/cli/mcp-stdio.test.ts` green.
+`describeServerInfo` has no remaining referents; `CLAUDE.md:181` no longer says the version is
+compared; `npm run typecheck` + `npx vitest run tests/cli/mcp-stdio.test.ts` green.
 
 ## Not in scope
 
@@ -121,6 +131,20 @@ version pin.
 - *"two specs and the PR body grep for" the fail-closed literal overstates the count.* Verified:
   `grep -rn "upstream identity changed across re-initialize"` finds exactly one spec,
   `tests/cli/mcp-stdio.test.ts:2123`. Corrected to one today / two after spec test 2 lands.
+
+**Not adopted**
+
+- None.
+
+## Review corrections (round 2)
+
+**Adopted**
+
+- *#1759 falsifies `CLAUDE.md:181` ("fails closed if `serverInfo`/`protocolVersion` changed") in the
+  same PR that treats a doc made false by the change as a must-fix (#1804's precedent).* Verified
+  verbatim, and verified that nothing pins the sentence — `grep` for the phrase returns only
+  `CLAUDE.md`, so it would rot silently. Adopted: `CLAUDE.md` joins the fix's file set with the
+  replacement wording, and "Done when" names it.
 
 **Not adopted**
 
