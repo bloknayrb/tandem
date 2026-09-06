@@ -62,10 +62,10 @@ redirectConsoleToStderr();
 
 // After preflight or http.start() fails we wait ~1.5s for any already-in-
 // flight `initialize` from the plugin loader to land on stdin and receive
-// a -32000 reply before tear-down. Sizing covers stdin-read lag between
-// preflight resolution and first message arrival — independent of
-// preflight's own fetch timeout.
-const PREFLIGHT_GRACE_MS = 1500;
+// a -32000 reply. Sizing covers stdin-read lag between preflight resolution
+// and first message arrival — independent of preflight's own fetch timeout.
+// Exported because the preflight specs straddle this deadline.
+export const PREFLIGHT_GRACE_MS = 1500;
 
 // Per-request timeout. Node's setTimeout uses a 32-bit signed integer
 // internally — values above this constant are silently clamped to 1ms,
@@ -423,6 +423,25 @@ export async function runMcpStdio(): Promise<void> {
   let negotiatedProtocolVersion: string | undefined;
   let negotiatedServerName: string | undefined;
   let negotiatedServerVersion: string | undefined;
+  /**
+   * The preflight's grace window has closed and the upstream is still down
+   * (#1805). While set, arriving requests are answered `-32000` immediately
+   * rather than joining the one-shot `preReadyBuffer` — which is drained only
+   * once, at startup, so anything landing after the window would otherwise sit
+   * there unanswered for the whole outage and then replay in one burst.
+   */
+  let preflightFailed = false;
+  /** The `-32000` the `preflightFailed` branch answers with. */
+  let preflightSynth: { message: string; detail?: string } | undefined;
+  /** Latched so the preflight guidance is written once, not once per retry. */
+  let warnedPreflight = false;
+  /**
+   * The client's `initialize` was answered locally with `-32000` rather than
+   * forwarded, so `captureNegotiated` never ran and there is no handshake
+   * baseline (#1805). The first reconnect after the upstream returns *is* the
+   * first handshake, so it seeds the baseline instead of failing closed.
+   */
+  let deferredHandshake = false;
   /** Set in the trigger, cleared when the attempt starts. Suppresses duplicate scheduling. */
   let reconnectPending = false;
   /** Set when the attempt begins, cleared in its finally. This is what queueing keys on. */
@@ -669,8 +688,27 @@ export async function runMcpStdio(): Promise<void> {
     }
   }
 
+  /**
+   * Is this the client's captured `initialize`?
+   *
+   * One predicate for both sinks that answer a request locally — the buffered
+   * synthesis and the `preflightFailed` branch — because two independent
+   * conditions on "was the handshake answered locally?" is how they drift, and
+   * the one that drifts leaves `runReconnect` throwing `no handshake baseline`
+   * in a 30 s loop forever.
+   */
+  function isCapturedHandshake(msg: JSONRPCMessage): boolean {
+    if (handshakeInit === undefined) return false;
+    const captured = getRequestId(handshakeInit);
+    const id = getRequestId(msg);
+    return captured !== undefined && id !== undefined && captured === id;
+  }
+
   async function synthesizeBuffered(message: string, detail?: string): Promise<void> {
     const buffered = preReadyBuffer.splice(0);
+    for (const msg of buffered) {
+      if (isCapturedHandshake(msg)) deferredHandshake = true;
+    }
     const ids = buffered
       .map((msg) => getRequestId(msg))
       .filter((id): id is string | number => id !== undefined);
@@ -734,12 +772,54 @@ export async function runMcpStdio(): Promise<void> {
   };
 
   // Plugin hosts typically send `initialize` immediately after spawn (MCP
-  // lifecycle §initialization). Deferring shutdown by PREFLIGHT_GRACE_MS
-  // lets that request land during the preflight/start window and receive
-  // a -32000 reply rather than a silent stdio close. stdio.onclose
-  // short-circuits this if the loader closes stdin first.
-  function deferredShutdown(synth: { message: string; detail?: string }): void {
-    setTimeout(() => void shutdown(1, synth), PREFLIGHT_GRACE_MS);
+  // lifecycle §initialization). Waiting PREFLIGHT_GRACE_MS lets that request
+  // land during the preflight window and receive a -32000 reply — an
+  // actionable error, where deferring it instead trades for a host-side hang
+  // (#336) and fabricating a handshake is worse still.
+  //
+  // It does NOT exit any more (#1805): Claude Desktop spawns this bridge once
+  // at app start and never respawns a stdio server that exited, so a Desktop
+  // that started before Tandem lost the tools for the rest of its run. The
+  // preflight retries in the background instead.
+  //
+  // Guarded on `!httpReady`: BACKOFF_INITIAL_MS (1s) is shorter than
+  // PREFLIGHT_GRACE_MS (1.5s), so a recovery on the first retry probe can beat
+  // this timer, and it must not synthesize errors for requests already
+  // forwarded.
+  function deferredSynthesize(synth: { message: string; detail?: string }): void {
+    setTimeout(() => {
+      if (httpReady) return;
+      void (async () => {
+        await synthesizeBuffered(synth.message, synth.detail);
+        // After the synthesis, never when the timer is armed: latching early
+        // would empty the grace window, since the probe fails in ~1ms against
+        // a dead port.
+        preflightFailed = true;
+      })();
+    }, PREFLIGHT_GRACE_MS);
+  }
+
+  /** Timers here are always `.unref()`d — stdin is what keeps the loop alive. */
+  function sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      setTimeout(resolve, ms).unref();
+    });
+  }
+
+  /**
+   * Probe until the upstream answers, at the reconnect ladder's own backoff.
+   *
+   * Uncapped on purpose. A budget here would produce a bridge that can never
+   * heal, which is the regression this whole module's header forbids.
+   */
+  async function waitForUpstream(url: string): Promise<void> {
+    let delay = BACKOFF_INITIAL_MS;
+    for (;;) {
+      await sleep(delay);
+      const probe = await probeTandemServer({ url });
+      if (probe.ok) return;
+      delay = Math.min(delay * 2, BACKOFF_MAX_MS);
+    }
   }
 
   /**
@@ -767,6 +847,18 @@ export async function runMcpStdio(): Promise<void> {
   stdio.onmessage = (msg: JSONRPCMessage) => {
     captureHandshake(msg);
     if (!httpReady) {
+      // The grace window closed with the upstream still down (#1805). The
+      // buffer is a one-shot drained only at startup, so parking anything here
+      // now would hang the host for the whole outage; answer immediately
+      // instead, dropping id-less notifications as `synthesizeBuffered` does.
+      if (preflightFailed && preflightSynth) {
+        if (isCapturedHandshake(msg)) deferredHandshake = true;
+        const id = getRequestId(msg);
+        if (id !== undefined) {
+          void sendErrorResponse(id, preflightSynth.message, preflightSynth.detail);
+        }
+        return;
+      }
       preReadyBuffer.push(msg);
       return;
     }
@@ -1108,11 +1200,28 @@ export async function runMcpStdio(): Promise<void> {
       // (One clause, not two: `captureNegotiated` writes every field together
       // or none, so `negotiatedServerName` cannot be set on its own.)
       if (negotiatedProtocolVersion === undefined) {
-        throw new Error(
-          `no handshake baseline to verify the new upstream against ` +
-            `(the original initialize never completed); refusing to adopt ` +
-            `${identity.protocolVersion}/${identity.serverName}`,
-        );
+        // Unless the handshake was answered locally because the upstream was
+        // down at startup (#1805). Then this replay *is* the first handshake,
+        // so it seeds the baseline rather than failing closed — not the
+        // fail-open the check guards, which is "we had a session, lost it, and
+        // never learned what to expect". With the latch clear it still throws
+        // exactly as before.
+        if (deferredHandshake && identity.protocolVersion !== undefined) {
+          negotiatedProtocolVersion = identity.protocolVersion;
+          negotiatedServerName = identity.serverName;
+          negotiatedServerVersion = identity.serverVersion;
+          deferredHandshake = false;
+          process.stderr.write(
+            `[tandem mcp-stdio] deferred handshake completed against ${baseUrl}; ` +
+              `upstream session established\n`,
+          );
+        } else {
+          throw new Error(
+            `no handshake baseline to verify the new upstream against ` +
+              `(the original initialize never completed); refusing to adopt ` +
+              `${identity.protocolVersion}/${identity.serverName}`,
+          );
+        }
       }
       // A normal Tandem upgrade changes the version and nothing else. That is
       // not an identity change (#1759): adopt it, log it once, and keep the
@@ -1269,16 +1378,30 @@ export async function runMcpStdio(): Promise<void> {
       probe.kind === "unreachable"
         ? "Start the Tauri app or run `tandem start` on the host, then retry."
         : "The Tandem server is running but unhealthy — check the host logs.";
-    process.stderr.write(
-      `[tandem mcp-stdio] Tandem server preflight failed at ${probe.url} (${probe.reason}).\n` +
-        `[tandem mcp-stdio] ${guidance}\n`,
-    );
+    // Once, not once per retry: the retry ladder runs for as long as the
+    // outage lasts, and the third line is the half that names the step the
+    // old guidance left out — following step one alone changed nothing
+    // visible, because the process it was talking to had exited (#1805).
+    if (!warnedPreflight) {
+      warnedPreflight = true;
+      process.stderr.write(
+        `[tandem mcp-stdio] Tandem server preflight failed at ${probe.url} (${probe.reason}).\n` +
+          `[tandem mcp-stdio] ${guidance}\n` +
+          `[tandem mcp-stdio] Tandem's tools will not appear in this session until the ` +
+          `server is reachable; if they are still missing after Tandem is running, restart ` +
+          `the client (Claude Desktop does not respawn this bridge). Retrying in the background.\n`,
+      );
+    }
     const synthMessage =
       probe.kind === "unreachable"
         ? "Tandem server not running. Start the Tauri app or run `tandem start`."
         : "Tandem server unhealthy (check host logs).";
-    deferredShutdown({ message: synthMessage, detail: probe.reason });
-    return;
+    preflightSynth = { message: synthMessage, detail: probe.reason };
+    deferredSynthesize(preflightSynth);
+    await waitForUpstream(baseUrl);
+    process.stderr.write(
+      `[tandem mcp-stdio] Tandem server reachable at ${baseUrl}; upstream ready.\n`,
+    );
   }
 
   // The current @modelcontextprotocol/sdk's StreamableHTTPClientTransport.start()
@@ -1289,10 +1412,17 @@ export async function runMcpStdio(): Promise<void> {
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[tandem mcp-stdio] upstream http start failed: ${detail}\n`);
-    deferredShutdown({ message: "Tandem HTTP upstream failed to start", detail });
+    // Still an exit, deliberately: unreachable with the current SDK and
+    // defensive for a future one, where a transport that cannot start is not
+    // something retrying a health probe would fix.
+    setTimeout(
+      () => void shutdown(1, { message: "Tandem HTTP upstream failed to start", detail }),
+      PREFLIGHT_GRACE_MS,
+    );
     return;
   }
   httpReady = true;
+  preflightFailed = false;
 
   // Held to preserve forwarding semantics — push through the normal path
   // now that upstream is ready. Note: forwardToUpstream does not await the
