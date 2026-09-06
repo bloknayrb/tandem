@@ -242,7 +242,13 @@ const result = {
 phase("Plan");
 log(`Group ${g.id}: ${issueList} → ${BRANCH}`);
 
-const plan = await run(
+// Resume switch: a parked group whose specs were fixed by hand re-enters at Build.
+// known.specs lists the spec paths (repo-relative); known.filesTouched the planned files.
+const resumeAtBuild = !!(g.known && g.known.skipPlanAndReview);
+
+const plan = resumeAtBuild
+  ? { ok: true, specs: (g.known.specs || []).map((path) => ({ issue: 0, path })), filesTouched: g.known.filesTouched || [], risks: [], assumptions: g.known.assumptions || [], bryan: [] }
+  : await run(
   "plan",
   `You are the planning agent for one PR group in the open-issues sweep of ${REPO}.
 ${GROUP}
@@ -304,7 +310,7 @@ const LENS_DOMAIN = `Your own agent specialty (coordinate systems / annotation l
 
 let round = 0;
 let blocking = [];
-while (round < 3) {
+while (!resumeAtBuild && round < 3) {
   round += 1;
   result.reviewRounds = round;
   const reviewers = [];
