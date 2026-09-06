@@ -468,7 +468,7 @@ if (g.e2e) {
   phase("E2E");
   let e2e = await run(
     "e2e",
-    `E2E agent. In ${WT}: run \`npm run test:e2e\` (Playwright, reserved harness ports; Chromium is at $PLAYWRIGHT_BROWSERS_PATH). Do not start a dev server. Return {green, ran:["npm run test:e2e"], failures:[{command, summary, ours}]}.`,
+    `E2E agent. In ${WT}: first make sure the browser build Playwright expects exists: \`ls $PLAYWRIGHT_BROWSERS_PATH\`; if the installed build number differs from the one \`npx playwright test --list\` or a launch error names, alias it in place (mkdir <name>-<expected>; ln -s the installed chrome-linux dir as chrome-linux64 / chrome-headless-shell-linux64; touch INSTALLATION_COMPLETE DEPENDENCIES_VALIDATED) — never download browsers. Then run \`TANDEM_APP_DATA_DIR=$(mktemp -d /tmp/tandem-sweep-XXXXXX) npm run test:e2e\` (reserved harness ports). Do not start a dev server. Return {green, ran:["npm run test:e2e"], failures:[{command, summary, ours}]}.`,
     { label: `e2e:${g.id}:1`, phase: "E2E", model: M.review, effort: "medium", schema: S_VERIFY },
     { green: false, ran: [], failures: [] }
   );
