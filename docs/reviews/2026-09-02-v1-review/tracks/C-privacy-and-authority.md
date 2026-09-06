@@ -52,3 +52,5 @@ on the `useTandemModeBroadcast` and `Toolbar` changes.
 ## Status
 
 _(empty)_
+
+Live status for this track's groups is the ledger in [docs/plans/2026-09-06-open-issues-sweep.md](../../../plans/2026-09-06-open-issues-sweep.md); this section is not updated.

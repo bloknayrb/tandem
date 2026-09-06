@@ -38,6 +38,7 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 
 ### PostToolUse — `Edit|Write` matcher
 
+- **Worktree guard (all four edit-time checkers below):** `typecheck-on-edit`, `svelte-check-on-edit`, `related-test` and `format-on-edit` exit 0 for a file under `.claude/worktrees/` or outside `$CLAUDE_PROJECT_DIR`. The hook runs with the main checkout as cwd, so it would typecheck or test a tree that does not contain the edit; the worktree's own verify stage is the check (see `docs/plans/2026-09-06-open-issues-sweep.md`).
 - **`typecheck-on-edit.sh`** — Runs `tsc --noEmit` after `.ts`/`.tsx` edits. Uses the appropriate tsconfig based on file path.
 - **`svelte-check-on-edit.sh`** — Runs `svelte-check` after `.svelte` edits. Opt-out: `TANDEM_SKIP_SVELTE_CHECK=1`.
 - **`format-on-edit.sh`** — Runs Biome format on edited files.

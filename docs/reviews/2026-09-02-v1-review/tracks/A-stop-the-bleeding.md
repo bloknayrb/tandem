@@ -51,3 +51,5 @@ reach on disk) and on #1797 (a route-reachable id). `annotation-model-reviewer` 
 ## Status
 
 _(empty; fill in as issues close, or trust the tracker)_
+
+Live status for this track's groups is the ledger in [docs/plans/2026-09-06-open-issues-sweep.md](../../../plans/2026-09-06-open-issues-sweep.md); this section is not updated.

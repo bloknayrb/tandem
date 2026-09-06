@@ -21,6 +21,20 @@ FILE_PATH=$(echo "$INPUT" | node -e "
   });
 ")
 
+# Worktree guard (open-issues sweep, docs/plans/2026-09-06-open-issues-sweep.md):
+# an edit inside a git worktree under .claude/worktrees/ (or anywhere outside
+# $CLAUDE_PROJECT_DIR) is checked here against the MAIN checkout, which does
+# not contain the edit — the result is noise at best and a wrong verdict at
+# worst, and it burns CPU the worktree's own verify stage needs. Skip; the
+# worktree runs its own typecheck/format/tests before pushing. Backslashes are
+# normalised FIRST so a Windows path cannot slip past the segment match.
+FILE_PATH="${FILE_PATH//\\//}"
+case "$FILE_PATH" in */.claude/worktrees/*) exit 0 ;; esac
+_PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"; _PROJECT_DIR="${_PROJECT_DIR//\\//}"; _PROJECT_DIR="${_PROJECT_DIR%/}"
+if [[ -n "$_PROJECT_DIR" && "$FILE_PATH" == /* && "$FILE_PATH" != "$_PROJECT_DIR"/* ]]; then
+  exit 0
+fi
+
 # Only typecheck TypeScript files, skip non-source paths
 if [[ -z "$FILE_PATH" || ! "$FILE_PATH" =~ \.(ts|tsx)$ ]]; then
   exit 0

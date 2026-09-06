@@ -95,3 +95,5 @@ since 2026-05-27 and would skip every Dependabot PR anyway, so it does not cover
 check this track relies on) and [#1832](https://github.com/bloknayrb/tandem/issues/1832)
 (`npm ci` runs lifecycle scripts in the same job as the signing secrets — a cheaper path to the
 same outcome than moving an action tag).
+
+Live status for this track's groups is the ledger in [docs/plans/2026-09-06-open-issues-sweep.md](../../../plans/2026-09-06-open-issues-sweep.md); this section is not updated.
