@@ -847,6 +847,23 @@ export interface SessionFileEntry {
   filePath: string;
   lastAccessed: number;
   readOnly: boolean;
+  /**
+   * True when this session is the only copy of something the user has not
+   * written to disk — `dirty` body edits, or an unresolved external conflict
+   * carried across the restart.
+   *
+   * Exposed here because `restoreOpenDocuments` bounds which sessions it
+   * reopens, and this is the carve-out that bound must never apply to. Both
+   * facts live in `SessionData` and were read by the scan already; before this
+   * they were dropped on the floor here, so the bound had no way to see them
+   * and would have silently discarded exactly the session `closeDocumentById`
+   * deliberately KEEPS for holding unsaved work.
+   *
+   * One flag rather than re-exporting `dirty` and `conflict` separately: every
+   * consumer wants the same question answered — must this be restored
+   * regardless of anything else — and two fields invite a caller to check one.
+   */
+  holdsUnsavedWork: boolean;
 }
 
 /** A `SessionFileEntry` still carrying the filename it came from, for the
@@ -898,6 +915,10 @@ export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
           // Absent → false, which is every record written before this field
           // existed, and every writable document today.
           readOnly: data.readOnly === true,
+          // `conflict` is an object when present, so its mere presence is the
+          // signal; `dirty` gets the same strict `=== true` as `readOnly`
+          // above, for the same don't-trust-a-bare-`JSON.parse` reason.
+          holdsUnsavedWork: data.dirty === true || data.conflict != null,
         });
       } catch (err) {
         // The boot sweep never reaches loadSession for an unparseable file —
