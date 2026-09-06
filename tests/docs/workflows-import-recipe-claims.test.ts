@@ -52,4 +52,26 @@ describe("docs/workflows.md Word-comment import recipe (#1771)", () => {
     expect(section).toContain("notesExcluded");
     expect(section).toContain("importSource");
   });
+
+  /**
+   * Review finding (annotation-model-reviewer-1): the closing sentence claimed
+   * Bryan can "accept/dismiss both types using the same accept/dismiss
+   * shortcuts". `promotedAnnotation()` (annotation-actions.ts) flips a
+   * promoted import's `author` to "user", and `canAccept`/`canDismiss`
+   * (annotation-context-menu.ts) both gate on `author !== "user"` — so the
+   * promoted state this section requires strips accept/dismiss rather than
+   * sharing it. The section must not restate that false claim, and must say
+   * a promoted import loses accept/dismiss.
+   */
+  it("does not claim accept/dismiss applies to both filtered types", () => {
+    const section = readSection();
+    expect(section).not.toMatch(/accept\/dismiss both types/i);
+  });
+
+  it("says a promoted import no longer takes accept/dismiss", () => {
+    const section = readSection();
+    expect(section).toMatch(
+      /promoted[\s\S]{0,120}(not|no longer|instead of)[\s\S]{0,80}accept\/dismiss|accept\/dismiss[\s\S]{0,120}(promoted|Claude's comments)/i,
+    );
+  });
 });

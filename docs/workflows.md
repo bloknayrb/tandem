@@ -340,7 +340,7 @@ Claude: tandem_comment({
 })
 ```
 
-Bryan filters annotations by author in the SidePanel — "Imported" shows the original Word comments, "Claude" shows new findings. He can accept/dismiss both types using the same accept/dismiss shortcuts.
+Bryan filters annotations by author in the SidePanel — "Imported" shows the original Word comments, "Claude" shows new findings. Accept/dismiss and the same shortcuts apply to Claude's comments; an unpromoted import is a private note with no accept/dismiss action, and once promoted it becomes Bryan's own `author: "user"` annotation, which the review queue and Edit/Remove/Reply flow — not accept/dismiss — apply to.
 
 ## Onboarding Tutorial (First Run)
 
