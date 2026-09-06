@@ -1,8 +1,37 @@
 name: Publish to npm
 
+# Authentication is npm Trusted Publishing (OIDC) — there is no NPM_TOKEN. The
+# secret this replaced was a granular write token, which npm caps at 90 days;
+# it lapsed silently and v0.25.0's publish failed with a 404 on PUT after the
+# GitHub release was already public (#1748 item 3).
+#
+# THREE THINGS LIVE ON npmjs.com, NOT HERE, and npm validates none of them when
+# you save them — a mistake in any one surfaces only at publish time, as an
+# auth-shaped error indistinguishable from the dead token above:
+#   1. Repository `bloknayrb/tandem` and workflow filename `publish.yml`.
+#   2. Environment `npm`, matching this job's `environment:`. Leaving it blank
+#      WIDENS access rather than narrowing it: the OIDC claim would then prove
+#      only "this repo, this workflow file", dropping the environment's
+#      protection rules from the check.
+#   3. Allowed action `npm publish`. Configurations created after 2026-09-03
+#      default to `npm stage publish` ONLY, so a fresh config that is not
+#      explicitly widened rejects the publish step below.
+
 on:
   release:
     types: [published]
+  # Recovery path. A `release` event runs the workflow file FROM THE TAG
+  # (measured: run 34007101172 for v0.25.0 has headSha == the tag commit, while
+  # master had already moved on), so a publish that failed under an old
+  # publish.yml can never be retried with a fixed one — which is exactly the
+  # situation this file was written in. A dispatch runs master's copy against a
+  # tag resolved below.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published release tag to publish to npm (e.g. v0.25.0)"
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -12,16 +41,81 @@ jobs:
       id-token: write
     environment: npm
     steps:
+      # The dispatch input is free text, and `ref:` would accept a branch or a
+      # bare SHA just as happily as a tag — so the input is resolved through the
+      # TAG namespace only, dereferenced to a commit, and required to have a
+      # published (non-draft) release. Without this the recovery path could ship
+      # a tree no release names, and the version check further down would not
+      # catch it: it compares the input against the package.json of whatever was
+      # checked out, so any ref carrying a matching version passes.
+      - name: Resolve dispatched tag
+        id: resolve
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "refusing '$TAG': expected a v-prefixed release tag" >&2; exit 1 ;;
+          esac
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG")
+          sha=$(echo "$ref" | jq -r '.object.sha')
+          if [ "$(echo "$ref" | jq -r '.object.type')" = "tag" ]; then
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '.object.sha')
+          fi
+          # 404s on a draft, which `set -e` turns into a failure here.
+          draft=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.draft')
+          if [ "$draft" != "false" ]; then
+            echo "$TAG has no published release" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Empty for a `release` event, where GITHUB_REF is already the tag.
+          ref: ${{ steps.resolve.outputs.sha || github.ref }}
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
-          cache: npm
+          node-version: 24
           registry-url: https://registry.npmjs.org
+          # No dependency cache in the job that publishes: `prepublishOnly`
+          # builds the tree we ship, so a poisoned or stale cache entry would be
+          # restored into it. npm's own trusted-publishing example sets
+          # `package-manager-cache: false` for this reason; omitting `cache:` is
+          # the same thing.
+
+      # Trusted publishing needs npm >= 11.5.1. Node 24 bundles a newer npm
+      # today, but that is the runner image's choice and not ours. Without this
+      # step an older npm ignores OIDC entirely and fails at `npm publish` with
+      # a bare auth error — the same shape as a dead token and as a misconfigured
+      # publisher above, which is the wrong diagnosis for the next person.
+      - name: Require npm >= 11.5.1
+        run: |
+          node -e 'const v=process.argv[1].split(".").map(Number),m=[11,5,1];for(let i=0;i<3;i++){if(v[i]>m[i])process.exit(0);if(v[i]<m[i]){console.error(`npm ${process.argv[1]} is older than 11.5.1, which trusted publishing requires`);process.exit(1);}}' "$(npm --version)"
+
+      # A `release` event fires for a release on ANY tag, and nothing else here
+      # binds the published version to the tag it is named after.
+      - name: Tag and package.json version must agree
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          pkg="v$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$pkg" ]; then
+            echo "tag $TAG does not match package.json $pkg" >&2
+            exit 1
+          fi
 
       - run: npm ci
 
+      # `--provenance` is redundant under trusted publishing — npm generates the
+      # attestation either way — but it is kept because it is the fail-closed
+      # form: with the flag, a publish that cannot produce provenance errors
+      # instead of silently shipping without it. It has always been driven by
+      # the same `id-token: write` OIDC token, so it is orthogonal to the auth
+      # change.
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

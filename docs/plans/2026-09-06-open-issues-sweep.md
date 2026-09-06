@@ -242,7 +242,7 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | 6 | H the flip | #1788 → #1785 → #1793+#1786 (+#1825 infra section, same ledger row; code only, **no deploy**) → #1789 #1819 — three PRs in the ledger | — | — | — | — | planned-not-started | |
 | 6 | CI-trust | #1862 #1673 | — | — | — | — | planned-not-started | |
 | 7 | G8 docx comments | #1693 | — | — | — | — | planned-not-started | |
-| 7 | I-release | #1748 (+G) #1856 #1830 #1831 #1832 (fix halves; policy halves to Bryan) + #1825 CI section | — | — | — | — | planned-not-started | |
+| 7 | I-release | #1748 (+G) #1856 #1830 #1831 #1832 (fix halves; policy halves to Bryan) + #1825 CI section | — | — | — | — | planned-not-started | **#1748 item 3 is already done** — the `NPM_TOKEN` expired mid-release and `publish.yml` moved to npm Trusted Publishing out of band on 2026-09-06. Items 1, 2 and 4 remain. |
 | 7 | E2-rust | #1762 #1808 #1809 #1810 + #1455 pointer (Refs) + #1825 Tauri section | — | — | — | — | planned-not-started | |
 | 7 | K-client | #1824 remainder #1713 #1724 #1727-split (Refs) #1709 #1544 | — | — | — | — | planned-not-started | |
 | 7 | K-tests | #1825 Tests remainder #1855 #1861 #1734 (e2e) #1584 #1599 checkboxes (Refs) | — | — | — | — | planned-not-started | |
