@@ -16,7 +16,12 @@ import {
 } from "../../shared/constants.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { restoreDocumentFromBackup } from "../documents/reload-family.js";
-import { listDocBackups, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
+import {
+  type DocBackupSnapshot,
+  docxSidecarBackupPath,
+  listDocBackups,
+  snapshotBeforeFirstWrite,
+} from "../file-io/doc-backup.js";
 import {
   type AcceptedSuggestion,
   applyTrackedChanges,
@@ -363,8 +368,9 @@ export async function applyChangesCore(
     // Something is already there — anything at all, not just a regular file, so
     // a directory does not fall through to `copyFile` and throw a raw EISDIR
     // that no error mapping below recognises. Keep the default name pointing at
-    // the FIRST backup: `tandem_restoreBackup`'s .docx fallback derives that
-    // name and derives it only, so a uniquified sidecar is write-only.
+    // the FIRST backup: `tandem_restoreBackup` lists and restores exactly the
+    // name `docxSidecarBackupPath` derives, and derives it only, so a
+    // uniquified sidecar is write-only.
     resolvedBackup = uniqueBackupPath(defaultBackup);
   }
   // COPYFILE_EXCL closes the check-then-act between the lstat above and this
@@ -432,6 +438,34 @@ export async function applyChangesCore(
   return output;
 }
 
+/**
+ * The `{name}.backup.docx` sidecar as a listable backup entry, or null when the
+ * document is not a .docx or has no sidecar beside it.
+ *
+ * Lives HERE, in the tool's own response mapping, and never inside
+ * `listDocBackups` — that function also serves GET /api/backups, which feeds
+ * the palette action that restores `backups[0]`.
+ *
+ * `lstat` + `isFile()` only: a symlinked sidecar is not listed. The named
+ * restore refuses it too, at the open syscall.
+ */
+async function docxSidecarEntry(filePath: string): Promise<DocBackupSnapshot | null> {
+  const sidecar = docxSidecarBackupPath(filePath);
+  if (!sidecar) return null;
+  try {
+    const st = await fs.lstat(sidecar);
+    if (!st.isFile()) return null;
+    return {
+      name: path.basename(sidecar),
+      timestamp: new Date(st.mtimeMs).toISOString(),
+      size: st.size,
+    };
+  } catch {
+    // No sidecar is the normal case, not an error.
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // MCP tool registration
 // ---------------------------------------------------------------------------
@@ -493,9 +527,9 @@ export function registerApplyTools(server: McpServer): void {
     "Restore a document from a backup. Tandem snapshots a document's on-disk bytes before its " +
       "first overwrite each server run (.md/.txt/.docx). Call without `backup` to list available " +
       "snapshots (newest first), then call again with `backup` set to a snapshot name to restore " +
-      "it. For .docx with no snapshots yet, falls back to the {name}.backup.docx sidecar written " +
-      "by tandem_applyChanges. Restoring reloads the open document in place — annotations are " +
-      "preserved and re-anchored.",
+      "it. For .docx the list also includes the {name}.backup.docx sidecar written by " +
+      "tandem_applyChanges, listed last; restore it by name like any snapshot. Restoring " +
+      "reloads the open document in place — annotations are preserved and re-anchored.",
     {
       documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),
       backup: z
@@ -514,112 +548,13 @@ export function registerApplyTools(server: McpServer): void {
 
       const { filePath } = docState;
 
-      // .docx gains the same pre-overwrite doc-backups snapshots as .md/.txt
-      // (#1086 extended). The {name}.backup.docx sidecar written by
-      // tandem_applyChanges is preserved as a fallback when no snapshots exist.
-      if (docState.format === "docx") {
-        if (docState.source !== "file") {
-          return mcpError(
-            "FORMAT_ERROR",
-            "Uploaded documents and scratchpads have no on-disk backup file.",
-          );
-        }
-        // A named snapshot restores through the shared reload lifecycle below
-        // (re-parses the .docx, re-injects Word comments, re-anchors annotations).
-        if (args.backup === undefined) {
-          const snapshots = await listDocBackups(filePath, resolveAppDataDir());
-          if (snapshots.length > 0) {
-            return mcpSuccess({
-              filePath,
-              backups: snapshots,
-              message:
-                "Snapshots listed newest first. Call tandem_restoreBackup again with `backup` " +
-                "set to one of these names to restore it.",
-            });
-          }
-          // No doc-backups snapshots — fall back to the applyChanges sidecar.
-          const backupPath = filePath.replace(/\.docx$/i, ".backup.docx");
-          // Open the sidecar WITHOUT following symlinks, and read from that
-          // handle. The check and the read are then the same syscall, which is
-          // what makes this safe rather than merely checked.
-          //
-          // `access` — what this used to do — follows links, so a link planted
-          // here read as a present backup, `copyFile` read THROUGH it, and the
-          // size check compared the link's target against the file it had just
-          // written from that same target: identical by construction, so it
-          // verified. The user's document was silently replaced by an
-          // attacker-chosen file and the tool reported "Restored ... from
-          // backup."
-          //
-          // An `lstat`-then-`copyFile` pair fixes the steady state and leaves
-          // the race: a link planted between the two is still followed. Opening
-          // with O_NOFOLLOW closes that, because there is no window between
-          // deciding and reading.
-          let backupBytes: Buffer;
-          try {
-            // O_NOFOLLOW is POSIX-only; on Windows the constant is undefined
-            // and `open` has no equivalent flag, so there the leaf check falls
-            // back to `lstat` below and the race remains. Creating a symlink on
-            // Windows needs a privilege that is not granted by default, which
-            // is the reason this is an acceptable asymmetry rather than a
-            // silent gap — but it IS an asymmetry, so it is written down.
-            const noFollow = fs.constants.O_NOFOLLOW ?? 0;
-            const handle = await fs.open(backupPath, fs.constants.O_RDONLY | noFollow);
-            try {
-              if (noFollow === 0 && (await fs.lstat(backupPath)).isSymbolicLink()) {
-                return mcpError(
-                  "INVALID_PATH",
-                  `${path.basename(backupPath)} is a symbolic link, not a backup Tandem wrote. ` +
-                    "Refusing to restore through it.",
-                );
-              }
-              backupBytes = await handle.readFile();
-            } finally {
-              await handle.close();
-            }
-          } catch (err) {
-            const code = (err as NodeJS.ErrnoException).code;
-            if (code === "ENOENT") {
-              return mcpError(
-                "FILE_NOT_FOUND",
-                `No backups found for ${path.basename(filePath)}. Tandem snapshots a .docx ` +
-                  "before its first overwrite each server run; tandem_applyChanges also writes a " +
-                  "{name}.backup.docx sidecar.",
-              );
-            }
-            // O_NOFOLLOW turns "it is a symlink" into ELOOP at open time. That
-            // is the refusal, not an error — report it as one the caller can act
-            // on rather than as a Tandem fault.
-            if (code === "ELOOP") {
-              return mcpError(
-                "INVALID_PATH",
-                `${path.basename(backupPath)} is a symbolic link, not a backup Tandem wrote. ` +
-                  "Refusing to restore through it.",
-              );
-            }
-            throw err;
-          }
-
-          await atomicWriteBuffer(filePath, backupBytes);
-          // Verify against the bytes we actually read, not a re-stat of the
-          // source: re-statting reintroduces the very indirection this branch
-          // just eliminated.
-          const restoredStat = await fs.stat(filePath);
-          if (restoredStat.size !== backupBytes.length) {
-            throw new Error("Restore verification failed: file sizes do not match.");
-          }
-          return mcpSuccess({
-            message: `Restored ${path.basename(filePath)} from backup.`,
-            restoredFrom: backupPath,
-          });
-        }
-        // args.backup provided → fall through to the shared named-snapshot restore.
-      }
-
-      // Shared snapshot path: .md/.txt list-or-restore, plus the named-snapshot
-      // restore .docx falls through to from above. Snapshots live under
-      // {APP_DATA}/doc-backups (#1086). No `backup` arg = list mode (.md/.txt
-      // only — .docx no-arg returned above).
+      // One code path for every format (#1768). .docx gains the same
+      // pre-overwrite doc-backups snapshots as .md/.txt (#1086 extended), and
+      // the {name}.backup.docx sidecar tandem_applyChanges writes is an
+      // ordinary NAMED entry in that same list — restored, like any snapshot,
+      // only through restoreDocumentFromBackup. The no-`backup` call lists and
+      // never writes; it used to fall through to a private copy-back that
+      // ignored readOnly and every other guard.
       try {
         if (args.backup === undefined) {
           if (docState.source !== "file") {
@@ -629,19 +564,35 @@ export function registerApplyTools(server: McpServer): void {
             );
           }
           const backups = await listDocBackups(filePath, resolveAppDataDir());
+          // Append the sidecar LAST, after the mtime-sorted snapshots, and do
+          // NOT re-sort the merged array. The sidecar's timestamp is an mtime
+          // on a file in the user's own document directory, settable by any
+          // local process; a re-sort would let it take index 0 of a list this
+          // response tells an agent to trust.
+          const sidecar = await docxSidecarEntry(filePath);
+          if (sidecar) backups.push(sidecar);
           if (backups.length === 0) {
             return mcpError(
               "FILE_NOT_FOUND",
-              `No backups found for ${path.basename(filePath)}. Tandem snapshots a text ` +
-                "document's on-disk bytes before its first overwrite each server run.",
+              `No backups found for ${path.basename(filePath)}. Tandem snapshots a ` +
+                "document's on-disk bytes before its first overwrite each server run." +
+                (docState.format === "docx"
+                  ? " tandem_applyChanges also writes a {name}.backup.docx sidecar beside the " +
+                    "document, which is listed here whenever it exists."
+                  : ""),
             );
           }
           return mcpSuccess({
             filePath,
             backups,
             message:
-              "Snapshots listed newest first. Call tandem_restoreBackup again with `backup` " +
-              "set to one of these names to restore it.",
+              "Snapshots listed newest first." +
+              (sidecar
+                ? " The {name}.backup.docx sidecar is listed last and is not a Tandem-managed" +
+                  " snapshot."
+                : "") +
+              " Call tandem_restoreBackup again with `backup` set to one of these names to" +
+              " restore it.",
           });
         }
         const result = await restoreDocumentFromBackup(docState.id, path.basename(args.backup));
@@ -650,6 +601,12 @@ export function registerApplyTools(server: McpServer): void {
         const e = err as Error & { code?: string };
         if (e.code === "NO_DOCUMENT") return noDocumentError();
         if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
+        // A symlinked sidecar — or a FIFO / directory wearing the sidecar's name
+        // — is a path refusal the caller can act on, not a format problem, the
+        // same distinction tandem_applyChanges draws above.
+        if (e.code === "BACKUP_SYMLINK" || e.code === "BACKUP_NOT_A_FILE") {
+          return mcpError("INVALID_PATH", e.message);
+        }
         if (e.code === "INVALID_PATH" || e.code === "UNSUPPORTED_FORMAT") {
           return mcpError("FORMAT_ERROR", e.message);
         }

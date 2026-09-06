@@ -4,10 +4,13 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
+  isDirty,
+  markDirty,
   registerDirtyObserver,
   resetForTesting as resetDirtyState,
 } from "../../src/server/documents/dirty.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { clearFileSyncContext } from "../../src/server/events/queue.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import type { OpenDoc } from "../../src/server/mcp/document-service.js";
 import {
@@ -77,6 +80,17 @@ vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
     ...actual,
     suppressNextChange: vi.fn(),
     unwatchFile: vi.fn(),
+  };
+});
+
+// Partial mock of the event queue: `attachObservers` stays REAL (save-as and
+// rename wire it), only `clearFileSyncContext` becomes a spy so the close specs
+// can see WHICH id the per-doc file-sync observer was torn down under (#1797).
+vi.mock("../../src/server/events/queue.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    clearFileSyncContext: vi.fn(),
   };
 });
 
@@ -382,6 +396,71 @@ describe("closeDocumentById", () => {
     }
   });
 
+  // #1797. `closeDocumentById` resolved the registry entry with
+  // `path.basename(id)` but tore down with the RAW `id`, so a path-prefixed id
+  // — `POST /api/close` passes its body value through unnormalised — unwatched
+  // the file, closed the durable annotation store and deleted the session while
+  // leaving the document registered and open in every tab. It returned
+  // success: true. One resolved id now covers the lookup and every step.
+  it("closes fully when given a path-prefixed id", async () => {
+    vi.mocked(clearFileSyncContext).mockClear();
+    addDoc("close-prefixed", makeOpenDoc("close-prefixed", "/tmp/close-prefixed.md"));
+    setActiveDocId("close-prefixed");
+    markDirty("close-prefixed");
+
+    const result = await closeDocumentById("dir/close-prefixed");
+    expect(result.success).toBe(true);
+    expect(hasDoc("close-prefixed")).toBe(false);
+    expect(docCount()).toBe(0);
+    expect(getActiveDocId()).toBeNull();
+    // `clearDirtyState` deletes the map entry, and `isDirty` is false only once
+    // it is gone — a raw-id call would leave the real doc's entry behind.
+    expect(isDirty("close-prefixed")).toBe(false);
+    // The per-doc file-sync observer is torn down under the REGISTERED id;
+    // "dir/close-prefixed" would leave `tombstonesByDoc[hash]` and the observer
+    // alive, which is the durability the close depends on.
+    expect(vi.mocked(clearFileSyncContext)).toHaveBeenCalledWith("close-prefixed");
+  });
+
+  // The save lock gets its own spec: `savingDocs` is module-private with no
+  // reset seam and no reader, and a save driven to completion empties it in its
+  // own `finally` — so a completed-save fixture is green either way. The only
+  // way to observe the miss is to hold a save in flight ACROSS the close.
+  it("releases the save lock when given a path-prefixed id", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    vi.mocked(atomicWrite).mockClear();
+    addDoc("close-prefixed", makeOpenDoc("close-prefixed", "/tmp/close-prefixed.md"));
+    setActiveDocId("close-prefixed");
+
+    let release!: () => void;
+    vi.mocked(atomicWrite).mockImplementationOnce(
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+        }),
+    );
+    const inFlight = saveDocumentToDisk("close-prefixed");
+    // The lock is taken synchronously, but the deferred resolver is not
+    // assigned until the write is reached.
+    await vi.waitFor(() => expect(release).toBeDefined());
+
+    try {
+      await closeDocumentById("dir/close-prefixed");
+      addDoc("close-prefixed", makeOpenDoc("close-prefixed", "/tmp/close-prefixed.md"));
+      const next = await saveDocumentToDisk("close-prefixed");
+      // The positive, not "not SAVE_IN_PROGRESS": every earlier skip arm
+      // satisfies the negative. Unfixed, `savingDocs` still holds the id and
+      // this is SAVE_IN_PROGRESS.
+      expect(next.status).toBe("saved");
+    } finally {
+      // Unconditional: there is no `savingDocs` reset seam and no
+      // clearMocks/restoreMocks, so a failed assertion would otherwise leak
+      // this id into every later save spec.
+      release();
+      await inFlight;
+    }
+  });
+
   it("picks a new active doc when closing the active one", async () => {
     addDoc("active-close", makeOpenDoc("active-close"));
     addDoc("other-doc", makeOpenDoc("other-doc"));
@@ -478,6 +557,37 @@ describe("saveDocumentToDisk", () => {
     expect(result.status).toBe("skipped");
     expect(result.reason).toContain("not open");
     expect(result.skipCode).toBe("NOT_OPEN");
+  });
+
+  // #1797, the same defect class as `closeDocumentById` with a worse outcome.
+  // `POST /api/save` type-checks `documentId` and passes it through, so
+  // "dir/<realId>" RESOLVED to the real document and its real filePath while
+  // `getOrCreateDocument(docId)` minted a brand-new EMPTY Y.Doc for the unknown
+  // room name — which the adapter serialized over the user's file. The
+  // external-modification guard could not stop it: it read
+  // Y_MAP_SAVED_AT_VERSION off that same fresh doc and found nothing.
+  it("does not empty the file when given a path-prefixed id", async () => {
+    const { saveSession } = await import("../../src/server/session/manager.js");
+    vi.mocked(saveSession).mockClear();
+    const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "tandem-save-prefixed-"));
+    const target = path.join(dir, "save-prefixed.md");
+    addDoc("save-prefixed", makeOpenDoc("save-prefixed", target));
+    editBody("save-prefixed", "real content");
+
+    const result = await saveDocumentToDisk("dir/save-prefixed", "manual");
+    expect(result.status).toBe("saved");
+    expect(fsSync.readFileSync(target, "utf8")).toContain("real content");
+    // And the session record is clean. `snapshotDirtyVersion` CREATES a zeroed
+    // entry on a miss, so a `:588`-style raw-id read compares 0 against the real
+    // key's snapshot, persists `dirty: true` after a clean save — which
+    // `maybeRestoreSession` then restores over correct bytes — and leaks one
+    // unreclaimable dirty-state entry per distinct prefix.
+    expect(vi.mocked(saveSession)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ dirty: false }),
+    );
   });
 
   it("skips upload-only documents", async () => {
