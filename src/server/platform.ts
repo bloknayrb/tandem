@@ -5,7 +5,18 @@ import path from "path";
 
 /**
  * Resolve the Tandem app-data root directory. `TANDEM_APP_DATA_DIR` overrides
- * the `env-paths` default. Not memoised so tests can swap tempdirs mid-run.
+ * the `env-paths` default.
+ *
+ * **The function is not memoised; the two constants below ARE.** That
+ * distinction used to be written here as a flat "not memoised so tests can swap
+ * tempdirs mid-run", which is true of this function and false of `SESSION_DIR`
+ * and `LAST_SEEN_VERSION_FILE` — they are computed once at module load, so a
+ * test setting the variable in a `beforeEach` gets an isolated annotations
+ * directory and a REAL session directory. That is not hypothetical: it put ~40
+ * test fixtures into a real user's session store, where the next restart
+ * reopened them as tabs. Isolation for the whole vitest run now comes from
+ * `test.env` + `tests/setup/app-data-isolation.ts`, which land before any
+ * import; `tests/scripts/app-data-isolation-wiring.test.ts` is the guard.
  */
 export function resolveAppDataDir(): string {
   const envOverride = process.env.TANDEM_APP_DATA_DIR;

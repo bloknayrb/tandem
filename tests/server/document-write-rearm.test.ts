@@ -190,6 +190,13 @@ const CENSUS: Acknowledged[] = [
   },
   {
     file: "server/session/manager.ts",
+    key: "touchSession",
+    count: 1,
+    rearm: "n/a",
+    reason: "session file in SESSION_DIR — rewrites one metadata field, never a user document",
+  },
+  {
+    file: "server/session/manager.ts",
     key: "persistCtrlSnapshot",
     count: 1,
     rearm: "n/a",
@@ -429,10 +436,10 @@ describe("document write / rearmWatch site pin (#1749)", () => {
     );
 
     expect(observed).toEqual(expected);
-    // 18 write CALL sites. A `git grep` returns 21 lines; the three extra are
+    // 19 write CALL sites. A `git grep` returns 22 lines; the three extra are
     // the definitions at `file-io/index.ts` (×2) and `integrations/apply.ts`,
     // which the walk skips by construction.
-    expect(sites).toHaveLength(18);
+    expect(sites).toHaveLength(19);
   });
 
   it("no write site keys to <module>", () => {

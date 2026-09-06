@@ -56,6 +56,7 @@ import { rearmWatch, recordSelfWrite, suppressNextChange, unwatchFile } from "..
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
+import type { SessionFileEntry } from "../session/manager.js";
 import {
   deleteSession,
   listSessionFilePaths,
@@ -65,6 +66,7 @@ import {
   saveCtrlSession,
   saveSession,
   stopAutoSave,
+  touchSession,
 } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 
@@ -1772,6 +1774,87 @@ export function broadcastStoreReadOnly(readOnly: boolean): void {
 }
 
 /**
+ * How far behind the newest session a session may be and still be reopened at
+ * startup.
+ *
+ * **The bound is relative to the newest session, never to the wall clock.**
+ * That is what makes it correct for a user who has not opened Tandem in a
+ * month: every session written by the same run shares roughly one timestamp, so
+ * the whole working set moves together and an absolute age test would throw all
+ * of it away.
+ *
+ * Why the working set clusters that tightly: `ensureAutoSave` rewrites EVERY
+ * open document's session on each 60s tick, dirty or not, and `saveCurrentSession`
+ * writes all of them again at shutdown. So documents open together are written
+ * together, and 30 minutes is ~30 ticks of slack over a spread that is normally
+ * one tick wide.
+ *
+ * What this exists to stop: a session file that entered the directory from
+ * somewhere other than the user's own working set. The vitest suite wrote ~40
+ * of them into a real user's store, and because a restored document is then
+ * autosaved like any other, its mtime kept refreshing and the 30-day
+ * `cleanupSessions` GC could never reclaim it — restore-then-autosave made them
+ * immortal. Bounding the reopen is what breaks that cycle; the GC then collects
+ * them normally.
+ */
+const RESTORE_WINDOW_MS = 30 * 60_000;
+
+/**
+ * Split `listSessionFilePaths()` output into the sessions startup should reopen
+ * and the ones it should leave on disk.
+ *
+ * Two rules, and the second is load-bearing:
+ *
+ * 1. Reopen anything within `RESTORE_WINDOW_MS` of the newest session.
+ * 2. **Always reopen a session that holds unsaved work**, however old.
+ *    `closeDocumentById` deliberately keeps the session of a document closed
+ *    with an unresolved external conflict, because it is the only copy of those
+ *    edits — and its `lastAccessed` is frozen at close time and never
+ *    refreshed, so rule 1 alone would discard precisely the session that was
+ *    kept on purpose.
+ *
+ * Nothing here deletes: a session outside the window stays on disk and stays in
+ * `listSessionFilePaths()`, so it is still offered by the Sessions UI. The
+ * filtering belongs to the restore decision, NOT to the enumeration — the
+ * listing is shared with `listSessionsMetadata`, and narrowing it there would
+ * make a recoverable document look like data loss.
+ *
+ * Returned as ONE partition rather than a predicate called twice. The log line
+ * naming what was skipped and the loop deciding what to reopen must describe
+ * the same split, and `Date.now()` below means a predicate re-evaluated a
+ * moment later can legitimately answer differently.
+ *
+ * `newest` is derived defensively in two ways, because both failure modes end
+ * in the user silently getting one tab back instead of eight:
+ *
+ * - **`reduce`, not `Math.max(...spread)`.** The bug this bound exists to fix
+ *   put 4,469 stray directories in a real app-data store, so the session
+ *   directory is not something to assume stays small. A spread large enough to
+ *   exceed the argument limit throws `RangeError` out of `restoreOpenDocuments`
+ *   and into `index.ts`'s bare `.catch`, which restores nothing at all.
+ * - **Clamped to now.** One record stamped in the future — clock skew, an NTP
+ *   correction, a session copied from another machine — would otherwise put
+ *   `newest` ahead of real time and push every genuine session outside the
+ *   window. The clamp is provably one-directional: lowering `newest` can only
+ *   shrink `newest - lastAccessed`, so it can only move sessions INTO the
+ *   restore set, never out of it.
+ */
+function partitionByRestoreWindow(sessions: SessionFileEntry[]): {
+  restore: SessionFileEntry[];
+  skip: SessionFileEntry[];
+} {
+  const newestOnDisk = sessions.reduce((max, s) => Math.max(max, s.lastAccessed), 0);
+  const newest = Math.min(Date.now(), newestOnDisk);
+  const restore: SessionFileEntry[] = [];
+  const skip: SessionFileEntry[] = [];
+  for (const session of sessions) {
+    const keep = session.holdsUnsavedWork || newest - session.lastAccessed <= RESTORE_WINDOW_MS;
+    (keep ? restore : skip).push(session);
+  }
+  return { restore, skip };
+}
+
+/**
  * Scan sessions and re-open previously open documents.
  * Called during startup to restore the working set.
  */
@@ -1779,8 +1862,18 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
   const sessions = await listSessionFilePaths();
   if (sessions.length === 0) return 0;
 
+  const { restore, skip } = partitionByRestoreWindow(sessions);
+
+  for (const skipped of skip) {
+    console.error(
+      "[Tandem] Not reopening %s: its session predates the last working set by more than %d minutes. It remains available under Recent sessions.",
+      path.basename(skipped.filePath),
+      RESTORE_WINDOW_MS / 60_000,
+    );
+  }
+
   let restoredCount = 0;
-  for (const { filePath, readOnly } of sessions) {
+  for (const { filePath, readOnly } of restore) {
     try {
       // Carry the persisted read-only flag back through: without it every
       // restored document takes `resolveAndValidatePath`'s hardcoded `false`,
@@ -1796,6 +1889,14 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
         });
       } else {
         console.error("[Tandem] Failed to restore %s:", filePath, err);
+        // The failure may be transient — an antivirus lock, a network drive
+        // not mounted yet, a file held by another process. Without this bump
+        // the record keeps its old `lastAccessed` while every session that DID
+        // reopen is autosaved forward, so the next boot finds it outside the
+        // window and never retries it: one momentary lock costs the tab
+        // permanently. `touchSession` never throws — a throw here would escape
+        // the loop and abandon every session after this one.
+        await touchSession(filePath);
       }
     }
   }
