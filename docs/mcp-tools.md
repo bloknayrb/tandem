@@ -841,7 +841,7 @@ tandem_applyChanges({ author: "Claude Review" })
 
 Restore a document from a backup. Tandem copies a document's on-disk bytes to `{APP_DATA}/doc-backups/` before its first overwrite each server run (`.md`/`.txt` verbatim text, `.docx` verbatim binary — byte-identical), up to 3 snapshots per document. Call without `backup` to list the available snapshots (newest first), then call again with `backup` set to a snapshot name to restore it.
 
-- **`.docx` fallback** — when no pre-overwrite snapshots exist yet, calling without `backup` restores the `{name}.backup.docx` sidecar written by `tandem_applyChanges`.
+- **`.docx` sidecar** — the list also includes the `{name}.backup.docx` sidecar written by `tandem_applyChanges`, listed last (after the snapshots, and never re-sorted among them); restore it by name like any snapshot. Calling without `backup` never restores anything, on any format.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -855,7 +855,7 @@ Restore a document from a backup. Tandem copies a document's on-disk bytes to `{
   "backups": [
     { "name": "thesis-20260609-141500-ab12cd34.md", "timestamp": "2026-06-09T14:15:00.000Z", "size": 18234 }
   ],
-  "message": "Snapshots listed newest first. Call tandem_restoreBackup again with `backup` set to one of these names to restore it."
+  "message": "Snapshots listed newest first; the {name}.backup.docx sidecar is listed last and is not a Tandem-managed snapshot. Call tandem_restoreBackup again with `backup` set to one of these names to restore it."
 }
 ```
 
@@ -864,10 +864,10 @@ Restore a document from a backup. Tandem copies a document's on-disk bytes to `{
 { "message": "Restored thesis.md from backup thesis-20260609-141500-ab12cd34.md.", "restoredFrom": "…/doc-backups/<hash>/thesis-20260609-141500-ab12cd34.md", "filePath": "/home/user/docs/thesis.md" }
 ```
 
-**Errors:** `FILE_NOT_FOUND` if no backup exists for the document (or the named snapshot doesn't exist); `FORMAT_ERROR` for upload-source documents or unsupported formats; `READ_ONLY` for read-only documents; `RELOAD_IN_PROGRESS` when a concurrent reload holds the per-document guard.
+**Errors:** `FILE_NOT_FOUND` if no backup exists for the document (or the named snapshot doesn't exist); `FORMAT_ERROR` for upload-source documents or unsupported formats; `INVALID_PATH` when the named `.docx` sidecar is a symbolic link rather than a file Tandem wrote; `READ_ONLY` for read-only documents; `RELOAD_IN_PROGRESS` when a concurrent reload holds the per-document guard.
 
 **Notes:**
-- `.docx`: copies the sidecar back over the modified file, undoing `tandem_applyChanges`. The sidecar is not deleted after restore — you can restore multiple times.
+- `.docx`: the `{name}.backup.docx` sidecar restores through the same reload lifecycle as a snapshot (#1768) — `readOnly` is honoured, the pre-restore bytes are snapshotted first, and the watcher's self-write filter is armed. It used to be a private copy-back on the no-`backup` call that took none of those. The sidecar is not deleted after restore — you can restore multiple times. `POST /api/backups/restore` accepts the sidecar name too; `GET /api/backups` deliberately still lists snapshots only, because the palette action restores `backups[0]`.
 - `.md`/`.txt`: the restore routes through the file-watcher reload lifecycle — the open document reloads in place, annotations are preserved and re-anchored, and Tandem's own write is not misread as an external edit. The pre-restore on-disk bytes are snapshotted first (when the once-per-run gate allows), so a restore is itself reversible.
 - The command palette action "Restore a backup of this document…" is a thin client of the same machinery (`GET /api/backups` + `POST /api/backups/restore`); it restores the most recent snapshot.
 

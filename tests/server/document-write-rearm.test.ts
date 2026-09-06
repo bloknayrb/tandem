@@ -94,11 +94,12 @@
  * `recordSelfWrite(p, "")` would disarm layer 2, now the ONLY thing between a
  * self-write echo and a reload on POSIX.
  *
- * ## A6 coupling
+ * ## A6 (#1768), applied
  *
- * A6 deletes the `tandem_restoreBackup` row AND decrements `docx-apply.ts`'s
- * count 2 → 1. Two edits, both inside the table. `reload-family.ts` stays at 2
- * because A6 adds no write.
+ * `tandem_restoreBackup` no longer writes: its private sidecar copy-back is
+ * gone and the sidecar restores through `restoreDocumentFromBackup` like any
+ * snapshot. Its row left this table and `docx-apply.ts` went 2 → 1;
+ * `reload-family.ts` stayed at 2, because the change added no write.
  */
 
 import fs from "node:fs";
@@ -150,14 +151,6 @@ const CENSUS: Acknowledged[] = [
     rearm: "forbidden",
     reason:
       "the watcher reload IS this write's designed completion; a re-arm discards the pending event",
-  },
-  {
-    file: "server/mcp/docx-apply.ts",
-    key: "tandem_restoreBackup",
-    count: 1,
-    rearm: "forbidden",
-    reason:
-      "sidecar restore, same shape as applyChangesCore — A6 deletes this row and the count with it",
   },
   {
     file: "server/documents/reload-family.ts",
@@ -429,10 +422,10 @@ describe("document write / rearmWatch site pin (#1749)", () => {
     );
 
     expect(observed).toEqual(expected);
-    // 18 write CALL sites. A `git grep` returns 21 lines; the three extra are
+    // 17 write CALL sites. A `git grep` returns 20 lines; the three extra are
     // the definitions at `file-io/index.ts` (×2) and `integrations/apply.ts`,
     // which the walk skips by construction.
-    expect(sites).toHaveLength(18);
+    expect(sites).toHaveLength(17);
   });
 
   it("no write site keys to <module>", () => {

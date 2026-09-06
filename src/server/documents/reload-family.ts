@@ -45,7 +45,11 @@ import {
 } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
-import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
+import {
+  docBackupSnapshotPath,
+  docxSidecarBackupPath,
+  snapshotBeforeFirstWrite,
+} from "../file-io/doc-backup.js";
 import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
 import { atomicWrite, atomicWriteBuffer } from "../file-io/index.js";
 import { rearmWatch, recordSelfWrite, suppressNextChange } from "../file-watcher.js";
@@ -188,6 +192,60 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
  *  is format-agnostic (raw bytes), so a .docx snapshot restores byte-identical. */
 const RESTORE_FORMATS = new Set(["md", "txt", "docx"]);
 
+/**
+ * Read the `{name}.backup.docx` sidecar, refusing a symlink.
+ *
+ * Open the sidecar WITHOUT following symlinks, and read from that handle. The
+ * check and the read are then the same syscall, which is what makes this safe
+ * rather than merely checked. A plain `fs.readFile` here — the shape the
+ * snapshot branch can use, because snapshots live in a directory only Tandem
+ * writes — re-opens the vulnerability this block exists to close.
+ *
+ * `access` — what this used to do — follows links, so a link planted here read
+ * as a present backup, `copyFile` read THROUGH it, and the size check compared
+ * the link's target against the file it had just written from that same
+ * target: identical by construction, so it verified. The user's document was
+ * silently replaced by an attacker-chosen file and the tool reported
+ * "Restored ... from backup."
+ *
+ * An `lstat`-then-`copyFile` pair fixes the steady state and leaves the race: a
+ * link planted between the two is still followed. Opening with O_NOFOLLOW
+ * closes that, because there is no window between deciding and reading.
+ */
+async function readDocxSidecarBytes(backupPath: string): Promise<Buffer> {
+  const symlinkRefusal = () =>
+    Object.assign(
+      new Error(
+        `${path.basename(backupPath)} is a symbolic link, not a backup Tandem wrote. ` +
+          "Refusing to restore through it.",
+      ),
+      { code: "BACKUP_SYMLINK" },
+    );
+  // O_NOFOLLOW is POSIX-only; on Windows the constant is undefined and `open`
+  // has no equivalent flag, so there the leaf check falls back to `lstat` below
+  // and the race remains. Creating a symlink on Windows needs a privilege that
+  // is not granted by default, which is the reason this is an acceptable
+  // asymmetry rather than a silent gap — but it IS an asymmetry, so it is
+  // written down.
+  const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(backupPath, fs.constants.O_RDONLY | noFollow);
+  } catch (err) {
+    // O_NOFOLLOW turns "it is a symlink" into ELOOP at open time. That is the
+    // refusal, not an error — report it as one the caller can act on rather
+    // than as a Tandem fault.
+    if ((err as NodeJS.ErrnoException).code === "ELOOP") throw symlinkRefusal();
+    throw err;
+  }
+  try {
+    if (noFollow === 0 && (await fs.lstat(backupPath)).isSymbolicLink()) throw symlinkRefusal();
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
+}
+
 export interface RestoreBackupResult {
   message: string;
   /** Absolute path of the snapshot file the content was restored from. */
@@ -197,9 +255,14 @@ export interface RestoreBackupResult {
 }
 
 /**
- * Restore an open text document (.md/.txt) from a pre-overwrite snapshot
- * (#1086 — snapshots written by `snapshotBeforeFirstWrite`, see
- * `file-io/doc-backup.ts`).
+ * Restore an open document from one of its two on-disk backup namespaces,
+ * selected by exact-basename match on `backupName`: a pre-overwrite snapshot
+ * under `{APP_DATA}/doc-backups/` (#1086 — written by
+ * `snapshotBeforeFirstWrite`, see `file-io/doc-backup.ts`), or, for a .docx,
+ * the `{name}.backup.docx` sidecar `tandem_applyChanges` writes beside the
+ * document. The namespaces cannot collide (`SNAPSHOT_TAIL_RE` vs the fixed
+ * sidecar suffix), and the sidecar is derived from the document's own path
+ * rather than taken from the caller.
  *
  * Routes through the file-watcher reload lifecycle (`reloadFromDisk`) rather
  * than writing bytes under an open document: annotations survive and re-anchor
@@ -216,6 +279,7 @@ export interface RestoreBackupResult {
  *  - READ_ONLY           — read-only docs must not be overwritten
  *  - RELOAD_IN_PROGRESS  — a concurrent reload holds the per-doc guard
  *  - FILE_NOT_FOUND      — `backupName` is not an existing snapshot for this doc
+ *  - BACKUP_SYMLINK      — the resolved .docx sidecar is a symbolic link
  */
 export async function restoreDocumentFromBackup(
   id: string,
@@ -251,18 +315,29 @@ export async function restoreDocumentFromBackup(
   }
 
   const appDataDir = resolveAppDataDir();
-  const snapshotPath = docBackupSnapshotPath(existing.filePath, appDataDir, backupName);
+  // .docx snapshots are raw ZIP bytes — a utf-8 round-trip would corrupt them,
+  // so read/write them as a Buffer (mirrors the binary branch in reloadFromDisk).
+  const isDocx = existing.format === "docx";
+  // Two namespaces, one exact-basename decision. The sidecar path is derived
+  // from the document's own filePath, so `backupName` selects between the
+  // namespaces and never contributes a path component to either.
+  const sidecarPath = isDocx ? docxSidecarBackupPath(existing.filePath) : null;
+  const useSidecar = sidecarPath !== null && backupName === path.basename(sidecarPath);
+  const snapshotPath = useSidecar
+    ? sidecarPath
+    : docBackupSnapshotPath(existing.filePath, appDataDir, backupName);
   if (!snapshotPath) {
     throw Object.assign(new Error(`"${backupName}" is not a valid backup snapshot name.`), {
       code: "FILE_NOT_FOUND",
     });
   }
-  // .docx snapshots are raw ZIP bytes — a utf-8 round-trip would corrupt them,
-  // so read/write them as a Buffer (mirrors the binary branch in reloadFromDisk).
-  const isDocx = existing.format === "docx";
   let content: string | Buffer;
   try {
-    content = isDocx ? await fs.readFile(snapshotPath) : await fs.readFile(snapshotPath, "utf-8");
+    if (useSidecar) {
+      content = await readDocxSidecarBytes(snapshotPath);
+    } else {
+      content = isDocx ? await fs.readFile(snapshotPath) : await fs.readFile(snapshotPath, "utf-8");
+    }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       throw Object.assign(

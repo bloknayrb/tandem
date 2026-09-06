@@ -394,6 +394,25 @@ export function docBackupSnapshotPath(
 }
 
 /**
+ * The `{name}.backup.docx` sidecar `tandem_applyChanges` writes beside a .docx
+ * document, or null when `filePath` is not a .docx.
+ *
+ * A second, older backup namespace than the snapshots above: it lives beside
+ * the user's document rather than under `{APP_DATA}/doc-backups/`, and Tandem
+ * neither prunes nor caps it. It is DERIVED, never caller-supplied, which is
+ * what makes it safe to list and restore by name — `tandem_applyChanges`'s own
+ * `backupPath` override deliberately does NOT route through here, so only the
+ * default-named sidecar is ever listed or restorable.
+ *
+ * The two namespaces cannot collide: `SNAPSHOT_TAIL_RE` requires a
+ * `-YYYYMMDD-HHMMSS-<hex8>` tail, which `<name>.backup.docx` never matches.
+ */
+export function docxSidecarBackupPath(filePath: string): string | null {
+  if (!/\.docx$/i.test(filePath)) return null;
+  return filePath.replace(/\.docx$/i, ".backup.docx");
+}
+
+/**
  * Human cause clause for a snapshot failure, keyed on errno. Deliberately
  * NOT the raw `err.message`: Node's fs errors serialize as
  * `EPERM: operation not permitted, open 'C:\\Users\\<name>\\AppData\\...'`,
